@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.TreeFolderPage"
+             Title=""
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ContentPage.ToolbarItems>
+        <ToolbarItem IconImageSource="icon_new_article.svg" AutomationId="NewArticleButton" Clicked="OnNewArticleClicked" Order="Primary" />
+        <ToolbarItem IconImageSource="icon_new_folder.svg" AutomationId="NewFolderButton" Clicked="OnNewFolderClicked" Order="Primary" />
+    </ContentPage.ToolbarItems>
+
+    <Grid RowDefinitions="Auto,*">
+
+        <ActivityIndicator x:Name="LoadingIndicator"
+                           Grid.Row="0" Grid.RowSpan="2"
+                           IsRunning="False"
+                           IsVisible="False"
+                           Color="{StaticResource PrimaryColor}"
+                           VerticalOptions="Center"
+                           HorizontalOptions="Center"
+                           ZIndex="10" />
+
+        <CollectionView Grid.Row="1" x:Name="FolderList"
+                        AutomationId="FolderList"
+                        SelectionMode="None"
+                        EmptyView="No items found."
+                        Margin="8,8,8,0">
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Frame Style="{StaticResource CardFrame}" Margin="0,4">
+                        <Frame.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnItemTapped" />
+                            <TapGestureRecognizer Tapped="OnItemLongPressed" NumberOfTapsRequired="2" />
+                        </Frame.GestureRecognizers>
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                            <Image Grid.Column="0"
+                                   Source="{Binding IconSource}"
+                                   WidthRequest="20" HeightRequest="20"
+                                   VerticalOptions="Center" />
+                            <Label Grid.Column="1"
+                                   Text="{Binding DisplayName}"
+                                   FontSize="15"
+                                   LineBreakMode="TailTruncation"
+                                   VerticalOptions="Center">
+                                <Label.Triggers>
+                                    <DataTrigger TargetType="Label" Binding="{Binding IsFolder}" Value="True">
+                                        <Setter Property="FontAttributes" Value="Bold" />
+                                    </DataTrigger>
+                                </Label.Triggers>
+                            </Label>
+                            <Label Grid.Column="2"
+                                   Text="{Binding RightText}"
+                                   FontSize="15"
+                                   TextColor="{StaticResource SecondaryTextColor}"
+                                   VerticalOptions="Center" />
+                        </Grid>
+                    </Frame>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+
+    </Grid>
+
+</ContentPage>

@@ -1,0 +1,338 @@
+@page
+@model BeeMemoryBank.Web.Pages.Article.HistoryModel
+@{
+    ViewData["Title"] = "History — " + (Model.Article?.Title ?? "Article");
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+        <sl-button size="small" variant="default" href="/Article/View?id=@Model.Article?.Id">
+            <sl-icon slot="prefix" name="arrow-left"></sl-icon> Back
+        </sl-button>
+        <h2 style="margin:0;font-size:1.2rem;">
+            <sl-icon name="clock-history"></sl-icon>
+            History — @(Model.Article?.Title ?? "Article")
+        </h2>
+    </div>
+
+    <!-- Versions Section -->
+    <h3 style="font-size:1rem;margin-bottom:12px;">
+        <sl-icon name="git-branch"></sl-icon> Versions (@Model.Versions.Count)
+    </h3>
+
+    @if (Model.Versions.Count > 0)
+    {
+        <div class="card" id="versions-list">
+            @foreach (var v in Model.Versions.OrderByDescending(x => x.VersionNumber))
+            {
+                <div class="article-list-item" style="flex-wrap:wrap;gap:8px;" data-version="@v.VersionNumber">
+                    <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+                        <sl-badge variant="primary" pill>@v.VersionNumber</sl-badge>
+                        <strong style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@v.Title</strong>
+                    </div>
+                    @if (!string.IsNullOrEmpty(v.UpdatedBy))
+                    {
+                        <sl-badge variant="neutral" pill>@v.UpdatedBy</sl-badge>
+                    }
+                    <span class="text-muted text-sm" style="white-space:nowrap;">@v.CreatedAt.ToString("g")</span>
+                    <div style="display:flex;gap:4px;flex-shrink:0;">
+                        <sl-button size="small" variant="default" class="btn-view-version" data-version="@v.VersionNumber">
+                            <sl-icon slot="prefix" name="eye"></sl-icon> View
+                        </sl-button>
+                        <sl-button size="small" variant="default" class="btn-diff-version" data-version="@v.VersionNumber">
+                            <sl-icon slot="prefix" name="diff"></sl-icon> Diff
+                        </sl-button>
+                        <sl-button size="small" variant="default" class="btn-download-version" data-version="@v.VersionNumber">
+                            <sl-icon slot="prefix" name="download"></sl-icon> ZIP
+                        </sl-button>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;">
+            <sl-icon name="git-branch" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No version history available</p>
+        </div>
+    }
+
+    <!-- Activity Log Section -->
+    <h3 style="font-size:1rem;margin:24px 0 12px;">
+        <sl-icon name="clock-history"></sl-icon> Activity Log (@Model.Events.Count)
+    </h3>
+
+    @if (Model.Events.Count > 0)
+    {
+        <div class="card">
+            @foreach (var item in Model.Events)
+            {
+                <div class="article-list-item" style="flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;flex-wrap:wrap;">
+                        <sl-badge variant="@HistoryModel.GetEventVariant(item.EventType)" pill>@item.EventType</sl-badge>
+                        @if (!string.IsNullOrEmpty(item.ActorType))
+                        {
+                            <sl-badge variant="@(item.ActorType == "agent" ? "primary" : "neutral")" pill>@item.ActorType@(item.ActorName != null ? $": {item.ActorName}" : "")</sl-badge>
+                        }
+                        @if (!string.IsNullOrEmpty(item.TreePath))
+                        {
+                            <span class="text-muted text-sm"><sl-icon name="folder2"></sl-icon> @item.TreePath</span>
+                        }
+                    </div>
+                    <span class="text-muted text-sm" style="white-space:nowrap;">@item.Timestamp.ToString("g")</span>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;">
+            <sl-icon name="clock-history" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No history events found</p>
+        </div>
+    }
+</div>
+</div>
+
+<!-- Version Dialog -->
+<sl-dialog id="versionDialog" style="--width:90vw; --body-spacing:0;" class="fullscreen-dialog">
+    <div slot="label" id="versionDialogTitle">Version</div>
+    <div style="display:flex;justify-content:center;padding:12px 16px;border-bottom:1px solid var(--border-color, #333);">
+        <sl-button-group>
+            <sl-button size="small" id="tabRendered" variant="primary">Rendered</sl-button>
+            <sl-button size="small" id="tabRaw" variant="default">Raw</sl-button>
+            <sl-button size="small" id="tabDiff" variant="default">Diff</sl-button>
+        </sl-button-group>
+    </div>
+    <div id="versionDialogLoading" style="text-align:center;padding:40px;display:none;">
+        <sl-spinner style="font-size:2rem;"></sl-spinner>
+    </div>
+    <div id="versionDialogContent" style="flex:1;overflow:auto;"></div>
+</sl-dialog>
+
+<script src="/lib/jsdiff/diff.min.js"></script>
+<script src="/lib/jszip/jszip.min.js"></script>
+<script src="/lib/file-saver/FileSaver.min.js"></script>
+<style>
+    .fullscreen-dialog::part(panel) { height:90vh; max-height:90vh; display:flex; flex-direction:column; }
+    .fullscreen-dialog::part(body) { flex:1; overflow:hidden; display:flex; flex-direction:column; padding:0; }
+
+    /* Diff split layout */
+    .diff-split { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:auto 1fr; gap:0; font-family:monospace; font-size:0.82rem; line-height:1.5; flex:1; min-height:0; }
+    .diff-split-header { padding:10px 16px; font-weight:600; font-size:0.85rem; background:var(--bg-secondary, #1a1a2e); border-bottom:1px solid var(--border-color, #333); color:var(--text-primary, #eee); }
+    .diff-split-header:first-child { border-right:1px solid var(--border-color, #333); }
+    .diff-split-col { overflow:auto; min-height:0; }
+    .diff-split-col:first-of-type { border-right:1px solid var(--border-color, #333); }
+    .diff-line { padding:2px 16px; white-space:pre-wrap; word-break:break-all; min-height:1.5em; }
+    .diff-line-num { display:inline-block; width:3em; color:var(--text-secondary, #666); text-align:right; margin-right:12px; user-select:none; opacity:0.6; }
+    .diff-line-added { background:var(--diff-added-bg, rgba(46,160,67,0.12)); }
+    .diff-line-removed { background:var(--diff-removed-bg, rgba(248,81,73,0.12)); }
+
+    /* Single-pane content (Rendered / Raw) */
+    .dialog-single-pane { padding:20px 24px; overflow:auto; flex:1; min-height:0; }
+    .raw-content { font-family:monospace; font-size:0.85rem; white-space:pre-wrap; word-break:break-all; line-height:1.6; padding:16px; background:var(--bg-secondary, #1a1a2e); border-radius:6px; }
+</style>
+<script>
+(function () {
+    var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
+    var dialog = document.getElementById('versionDialog');
+    var dialogTitle = document.getElementById('versionDialogTitle');
+    var dialogContent = document.getElementById('versionDialogContent');
+    var dialogLoading = document.getElementById('versionDialogLoading');
+    var tabRendered = document.getElementById('tabRendered');
+    var tabRaw = document.getElementById('tabRaw');
+    var tabDiff = document.getElementById('tabDiff');
+
+    var currentContent = null;
+    var activeVersionData = null;
+    var activeTab = 'rendered';
+    var requestId = 0;
+
+    function setActiveTab(tab) {
+        activeTab = tab;
+        tabRendered.variant = tab === 'rendered' ? 'primary' : 'default';
+        tabRaw.variant = tab === 'raw' ? 'primary' : 'default';
+        tabDiff.variant = tab === 'diff' ? 'primary' : 'default';
+        renderActiveTab();
+    }
+
+    tabRendered.addEventListener('click', function () { setActiveTab('rendered'); });
+    tabRaw.addEventListener('click', function () { setActiveTab('raw'); });
+    tabDiff.addEventListener('click', function () { setActiveTab('diff'); });
+
+    function renderActiveTab() {
+        if (!activeVersionData) return;
+        if (activeTab === 'rendered') {
+            dialogContent.innerHTML = '<div class="dialog-single-pane article-content">' + renderMarkdown(activeVersionData.content || '') + '</div>';
+        } else if (activeTab === 'raw') {
+            dialogContent.innerHTML = '<div class="dialog-single-pane"><div class="raw-content">' + escHtml(activeVersionData.content || '') + '</div></div>';
+        } else if (activeTab === 'diff') {
+            if (currentContent === null) {
+                dialogContent.innerHTML = '';
+                dialogLoading.style.display = 'block';
+                loadCurrentContent(function (curr) {
+                    dialogLoading.style.display = 'none';
+                    renderDiffSplit(activeVersionData.content || '', curr);
+                }, function () {
+                    dialogLoading.style.display = 'none';
+                    dialogContent.innerHTML = '<p class="text-muted" style="padding:24px;text-align:center;">Failed to load current content for diff.</p>';
+                });
+            } else {
+                renderDiffSplit(activeVersionData.content || '', currentContent);
+            }
+        }
+    }
+
+    function renderDiffSplit(oldText, newText) {
+        // Current (newText) on LEFT, version (oldText) on RIGHT
+        var changes = Diff.diffLines(newText, oldText);
+        var leftLines = [], rightLines = [];
+        var leftNum = 0, rightNum = 0;
+
+        changes.forEach(function (part) {
+            var lines = part.value.replace(/\n$/, '').split('\n');
+            if (part.removed) {
+                lines.forEach(function (line) {
+                    leftNum++;
+                    leftLines.push({ num: leftNum, text: line, type: 'added' });
+                    rightLines.push({ num: '', text: '', type: 'pad' });
+                });
+            } else if (part.added) {
+                lines.forEach(function (line) {
+                    rightNum++;
+                    leftLines.push({ num: '', text: '', type: 'pad' });
+                    rightLines.push({ num: rightNum, text: line, type: 'removed' });
+                });
+            } else {
+                lines.forEach(function (line) {
+                    leftNum++;
+                    rightNum++;
+                    leftLines.push({ num: leftNum, text: line, type: '' });
+                    rightLines.push({ num: rightNum, text: line, type: '' });
+                });
+            }
+        });
+
+        var html = '<div class="diff-split">';
+        html += '<div class="diff-split-header">Current</div>';
+        html += '<div class="diff-split-header">Version ' + activeVersionData.versionNumber + '</div>';
+        html += '<div class="diff-split-col">';
+        leftLines.forEach(function (l) {
+            var cls = l.type === 'added' ? ' diff-line-added' : '';
+            html += '<div class="diff-line' + cls + '">';
+            html += '<span class="diff-line-num">' + l.num + '</span>';
+            html += escHtml(l.text);
+            html += '</div>';
+        });
+        html += '</div>';
+        html += '<div class="diff-split-col">';
+        rightLines.forEach(function (l) {
+            var cls = l.type === 'removed' ? ' diff-line-removed' : '';
+            html += '<div class="diff-line' + cls + '">';
+            html += '<span class="diff-line-num">' + l.num + '</span>';
+            html += escHtml(l.text);
+            html += '</div>';
+        });
+        html += '</div>';
+        html += '</div>';
+        dialogContent.innerHTML = html;
+    }
+
+    function openDialog(versionNum, startTab) {
+        var myId = ++requestId;
+        activeVersionData = null;
+        dialogContent.innerHTML = '';
+        dialogLoading.style.display = 'block';
+        dialogTitle.textContent = 'Version ' + versionNum;
+        dialog.show();
+        setActiveTab(startTab);
+
+        loadVersionContent(versionNum, function (data) {
+            if (requestId !== myId) return;
+            activeVersionData = { content: data.content || '', title: data.title, versionNumber: versionNum };
+            dialogTitle.textContent = 'Version ' + versionNum + ' \u2014 ' + data.title;
+            dialogLoading.style.display = 'none';
+
+            if (startTab === 'diff') {
+                loadCurrentContent(function () { renderActiveTab(); }, function () {
+                    dialogContent.innerHTML = '<p class="text-muted" style="padding:24px;text-align:center;">Failed to load current content.</p>';
+                });
+            } else {
+                renderActiveTab();
+            }
+        }, function () {
+            if (requestId !== myId) return;
+            dialogLoading.style.display = 'none';
+            dialogContent.innerHTML = '<p class="text-muted" style="padding:24px;text-align:center;">Failed to load version content. Is the session unlocked?</p>';
+        });
+    }
+
+    document.querySelectorAll('.btn-view-version').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openDialog(parseInt(this.getAttribute('data-version')), 'rendered');
+        });
+    });
+
+    document.querySelectorAll('.btn-diff-version').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openDialog(parseInt(this.getAttribute('data-version')), 'diff');
+        });
+    });
+
+    document.querySelectorAll('.btn-download-version').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var ver = parseInt(this.getAttribute('data-version'));
+            this.loading = true;
+            var self = this;
+            var onErr = function () { self.loading = false; alert('Failed to load content for download.'); };
+            loadVersionContent(ver, function (data) {
+                loadCurrentContent(function (curr) {
+                    var zip = new JSZip();
+                    zip.file('version_' + ver + '.md', data.content || '');
+                    zip.file('current.md', curr || '');
+                    zip.generateAsync({ type: 'blob' }).then(function (blob) {
+                        saveAs(blob, 'article_compare_v' + ver + '_vs_current.zip');
+                        self.loading = false;
+                    });
+                }, onErr);
+            }, onErr);
+        });
+    });
+
+    function loadCurrentContent(cb, errCb) {
+        if (currentContent !== null) { cb(currentContent); return; }
+        fetch('/api-proxy/article/' + articleId)
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (data) { currentContent = data.content || ''; cb(currentContent); })
+            .catch(function () { if (errCb) errCb(); else alert('Failed to load article content'); });
+    }
+
+    function loadVersionContent(versionNum, cb, errCb) {
+        fetch('/api-proxy/articles/' + articleId + '/versions/' + versionNum)
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(function (data) { cb(data); })
+            .catch(function () { if (errCb) errCb(); else alert('Failed to load version content'); });
+    }
+
+    function renderMarkdown(md) {
+        if (typeof marked !== 'undefined' && marked.parse) {
+            var renderer = new marked.Renderer();
+            var origImage = renderer.image.bind(renderer);
+            renderer.image = function (token) {
+                if (token && token.href && token.href.startsWith('/api/media/')) {
+                    token.href = '/api-proxy/media/' + token.href.substring('/api/media/'.length);
+                }
+                return origImage(token);
+            };
+            return DOMPurify.sanitize(marked.parse(md, { breaks: true, renderer: renderer }));
+        }
+        return '<pre>' + escHtml(md) + '</pre>';
+    }
+
+    function escHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+})();
+</script>

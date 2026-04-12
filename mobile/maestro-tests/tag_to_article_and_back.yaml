@@ -1,0 +1,40 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tags"
+    timeout: 30000
+- tapOn:
+    text: "Tags"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TagsList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "classic"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "classic"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TagArticlesList"
+    timeout: 30000
+- tapOn:
+    text: "The Shawshank Redemption"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TitleLabel"
+    timeout: 30000
+- assertVisible:
+    text: "The Shawshank Redemption"
+- back
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TagArticlesList"
+    timeout: 30000
+- takeScreenshot: tag_article_back

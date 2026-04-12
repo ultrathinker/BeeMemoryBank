@@ -1,0 +1,341 @@
+@page
+@model BeeMemoryBank.Web.Pages.Article.EditModel
+@{
+    ViewData["Title"] = Model.IsNew ? "New Article" : "Edit Article";
+    var cancelUrl = Model.IsNew
+        ? $"/Folder?path={Uri.EscapeDataString(Model.TreePath)}"
+        : $"/Article/View?id={Model.ArticleId}";
+}
+
+@section HeadStyles {
+<link rel="stylesheet" href="/lib/easymde/easymde.min.css" />
+<link rel="stylesheet" href="/lib/tagify/tagify.css" />
+}
+
+<partial name="Shared/_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <button type="button" class="btn-draft-recovery" id="btn-draft-recovery"
+            onclick="document.getElementById('dlg-draft-compare').show()">
+        <sl-icon name="exclamation-triangle"></sl-icon>
+        Draft found — show comparison?
+    </button>
+
+    <sl-dialog id="dlg-draft-compare" label="Compare versions" style="--width: 90vw;">
+        <div class="draft-compare-actions">
+            <sl-button variant="primary" size="medium" id="btn-draft-pick-current">
+                <sl-icon slot="prefix" name="file-earmark-text"></sl-icon> Use current
+            </sl-button>
+            <sl-button variant="default" size="medium" id="btn-draft-cancel">Cancel</sl-button>
+            <sl-button variant="warning" size="medium" id="btn-draft-pick-draft">
+                <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Use draft
+            </sl-button>
+        </div>
+        <div class="draft-compare-container">
+            <div class="draft-compare-col">
+                <div class="draft-compare-header">Current version</div>
+                <div class="draft-compare-content article-content" id="draft-current-panel"></div>
+            </div>
+            <div class="draft-compare-col">
+                <div class="draft-compare-header" id="draft-saved-label">Draft</div>
+                <div class="draft-compare-content article-content" id="draft-saved-panel"></div>
+            </div>
+        </div>
+    </sl-dialog>
+
+    <form method="post" class="sl-form" id="edit-form">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <h2 style="font-size:1.3rem;">
+                <sl-icon name="@(Model.IsNew ? "file-earmark-plus" : "pencil-square")"></sl-icon>
+                @ViewData["Title"]
+            </h2>
+            <div class="toolbar">
+                <sl-button type="submit" size="small" variant="primary">
+                    <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
+                </sl-button>
+                <sl-button size="small" variant="default" href="@cancelUrl">Cancel</sl-button>
+            </div>
+        </div>
+
+        <input type="hidden" name="id" value="@Model.ArticleId" />
+        <input type="hidden" name="treePath" value="@Model.TreePath" />
+
+        <div style="margin-bottom:16px;">
+            <sl-input name="title" label="Title" value="@Model.Title" required size="medium" autofocus></sl-input>
+        </div>
+
+        <div style="margin-bottom:16px;">
+            <span style="font-size:0.88rem;color:var(--text-secondary);">
+                <sl-icon name="folder2"></sl-icon> @Model.TreePath
+            </span>
+        </div>
+
+        <div style="margin-bottom:16px;">
+            <label style="display:block;font-size:0.88rem;color:var(--text-secondary);margin-bottom:6px;">Content (Markdown)</label>
+            <textarea name="content" id="md-editor">@Model.Content</textarea>
+        </div>
+
+        <div style="margin-bottom:20px;">
+            <label style="display:block;font-size:0.88rem;color:var(--text-secondary);margin-bottom:6px;">Tags</label>
+            <input type="text" name="tags" id="tags-input" value="@Model.Tags" placeholder="Add tags..." />
+        </div>
+
+        <div style="display:flex;justify-content:center;gap:12px;padding-top:8px;">
+            <sl-button type="submit" variant="primary" size="large">
+                <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
+            </sl-button>
+            <sl-button variant="default" size="large" href="@cancelUrl">Cancel</sl-button>
+        </div>
+    </form>
+</div>
+</div>
+
+<script src="/lib/editor.min.js"></script>
+<script>
+(function() {
+    var imageCounter = 0;
+    // Count existing images in content to continue numbering
+    var existingImages = (document.getElementById('md-editor').value || '').match(/!\[image-\d+\]/g);
+    if (existingImages) {
+        existingImages.forEach(function(m) {
+            var n = parseInt(m.match(/\d+/)[0]);
+            if (n >= imageCounter) imageCounter = n + 1;
+        });
+    }
+
+    function uploadImage(file) {
+        var formData = new FormData();
+        formData.append('file', file);
+        var artId = document.querySelector('input[name="id"]');
+        if (artId && artId.value) formData.append('articleId', artId.value);
+
+        return fetch('/api-proxy/media/upload', {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(r) {
+            if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || 'Upload failed'); });
+            return r.json();
+        });
+    }
+
+    function insertImageAtCursor(cm, file) {
+        var name = file.name || 'image';
+        // Validate size
+        if (file.size > 5 * 1024 * 1024) {
+            showToast('File size exceeds 5 MB limit.'); return;
+        }
+        var allowed = ['image/png','image/jpeg','image/gif','image/webp','image/svg+xml'];
+        if (allowed.indexOf(file.type) < 0) {
+            showToast('File type ' + file.type + ' is not allowed.'); return;
+        }
+
+        var placeholder = '![Uploading ' + name + '...]()';
+        var cursor = cm.getCursor();
+        cm.replaceRange(placeholder + '\n', cursor);
+
+        uploadImage(file).then(function(data) {
+            imageCounter++;
+            var altText = 'image-' + String(imageCounter).padStart(3, '0');
+            var md = '![' + altText + '](/api/media/' + data.id + ')';
+            // Find and replace placeholder
+            var content = cm.getValue();
+            var idx = content.indexOf(placeholder);
+            if (idx >= 0) {
+                var from = cm.posFromIndex(idx);
+                var to = cm.posFromIndex(idx + placeholder.length);
+                cm.replaceRange(md, from, to);
+            }
+        }).catch(function(err) {
+            // Remove placeholder on error
+            var content = cm.getValue();
+            var idx = content.indexOf(placeholder);
+            if (idx >= 0) {
+                var from = cm.posFromIndex(idx);
+                var to = cm.posFromIndex(idx + placeholder.length + 1);
+                cm.replaceRange('', from, to);
+            }
+            showToast(err.message || 'Upload failed');
+        });
+    }
+
+    function showToast(msg) {
+        var alert = Object.assign(document.createElement('sl-alert'), {
+            variant: 'danger', closable: true, duration: 5000,
+            innerHTML: '<sl-icon name="exclamation-triangle" slot="icon"></sl-icon>' + msg
+        });
+        document.body.append(alert);
+        alert.toast();
+    }
+
+    var easyMDE = new EasyMDE({
+        element: document.getElementById('md-editor'),
+        spellChecker: false,
+        autofocus: false,
+        status: false,
+        minHeight: '350px',
+        toolbar: [
+            'bold', 'italic', 'heading', '|',
+            'code', 'quote', 'unordered-list', 'ordered-list', '|',
+            'link', {
+                name: 'upload-image',
+                action: function(editor) {
+                    var input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml';
+                    input.onchange = function() {
+                        if (input.files[0]) insertImageAtCursor(editor.codemirror, input.files[0]);
+                    };
+                    input.click();
+                },
+                className: 'fa fa-image',
+                title: 'Upload Image'
+            }, 'table', '|',
+            'preview', 'side-by-side', 'fullscreen', '|',
+            'guide'
+        ],
+        previewRender: function(text) {
+            // Rewrite /api/media/ to /api-proxy/media/ for preview
+            var html = DOMPurify.sanitize(marked.parse(text, { breaks: true }));
+            return html.replace(/src="\/api\/media\//g, 'src="/api-proxy/media/');
+        }
+    });
+
+    // Handle paste (Ctrl+V with image from clipboard)
+    easyMDE.codemirror.on('paste', function(cm, e) {
+        var items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image/') === 0) {
+                e.preventDefault();
+                var file = items[i].getAsFile();
+                if (file) insertImageAtCursor(cm, file);
+                return;
+            }
+        }
+    });
+
+    // Handle drag & drop
+    easyMDE.codemirror.on('drop', function(cm, e) {
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (!files || !files.length) return;
+        for (var i = 0; i < files.length; i++) {
+            if (files[i].type.indexOf('image/') === 0) {
+                e.preventDefault();
+                insertImageAtCursor(cm, files[i]);
+            }
+        }
+    });
+
+    var tagify = new Tagify(document.getElementById('tags-input'), {
+        delimiters: ',|\t',
+        trim: true,
+        originalInputValueFormat: function(values) {
+            return values.map(function(item) { return item.value; }).join(', ');
+        }
+    });
+
+    var form = document.getElementById('edit-form');
+    var titleInput = form.querySelector('sl-input[name="title"]');
+    var articleId = form.querySelector('input[name="id"]').value;
+    var draftKey = articleId ? 'draft-article-' + articleId : 'draft-article-new-' + @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.TreePath));
+    var originalTitle = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Title));
+    var originalContent = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content));
+    var originalTags = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Tags));
+    var isDirty = false;
+
+    function showSaveIndicator() {
+        var indicator = document.getElementById('save-indicator');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.id = 'save-indicator';
+            indicator.style.cssText = 'position:fixed;bottom:15px;right:15px;padding:5px 10px;background-color:var(--sl-color-success-200);color:var(--sl-color-success-800);border-radius:var(--sl-border-radius-medium);font-size:var(--sl-font-size-small);opacity:0;transition:opacity 0.5s;';
+            document.body.appendChild(indicator);
+        }
+        indicator.textContent = 'Draft saved';
+        indicator.style.opacity = '1';
+        setTimeout(function() { indicator.style.opacity = '0'; }, 2000);
+    }
+
+    function saveDraft() {
+        var currentTitle = titleInput.value;
+        var currentContent = easyMDE.value();
+        var currentTags = tagify.value.map(function(t) { return t.value; }).join(',');
+        if (currentTitle === originalTitle && currentContent === originalContent && currentTags === originalTags) {
+            localStorage.removeItem(draftKey);
+            isDirty = false;
+            return;
+        }
+        localStorage.setItem(draftKey, JSON.stringify({
+            title: currentTitle, content: currentContent, tags: currentTags,
+            savedAt: new Date().toISOString()
+        }));
+        isDirty = false;
+        showSaveIndicator();
+    }
+
+    function checkForDraft() {
+        var savedDraft = localStorage.getItem(draftKey);
+        if (!savedDraft) return;
+        var draft = JSON.parse(savedDraft);
+        var btn = document.getElementById('btn-draft-recovery');
+        btn.style.display = 'flex';
+
+        btn.addEventListener('click', function() {
+            var curContent = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content));
+            document.getElementById('draft-current-panel').innerHTML = DOMPurify.sanitize(marked.parse(curContent, { breaks: true }));
+            document.getElementById('draft-saved-panel').innerHTML = DOMPurify.sanitize(marked.parse(draft.content || '', { breaks: true }));
+            document.getElementById('draft-saved-label').textContent = 'Draft from ' + new Date(draft.savedAt).toLocaleString();
+        });
+
+        document.getElementById('btn-draft-pick-current').addEventListener('click', function() {
+            localStorage.removeItem(draftKey);
+            btn.style.display = 'none';
+            document.getElementById('dlg-draft-compare').hide();
+        });
+        document.getElementById('btn-draft-cancel').addEventListener('click', function() {
+            document.getElementById('dlg-draft-compare').hide();
+        });
+        document.getElementById('btn-draft-pick-draft').addEventListener('click', function() {
+            titleInput.value = draft.title;
+            easyMDE.value(draft.content);
+            tagify.loadOriginalValues(draft.tags);
+            localStorage.removeItem(draftKey);
+            btn.style.display = 'none';
+            document.getElementById('dlg-draft-compare').hide();
+        });
+    }
+
+    easyMDE.codemirror.on('change', function() { isDirty = true; });
+    titleInput.addEventListener('sl-input', function() { isDirty = true; });
+    tagify.on('change', function() { isDirty = true; });
+
+    setInterval(function() { if (isDirty) saveDraft(); }, 3000);
+
+    form.addEventListener('submit', function() {
+        isDirty = false;
+        localStorage.removeItem(draftKey);
+    });
+
+    form.querySelectorAll('sl-button[href]').forEach(function(b) {
+        b.addEventListener('click', function() {
+            isDirty = false;
+            localStorage.removeItem(draftKey);
+        });
+    });
+
+    window.addEventListener('beforeunload', function(e) {
+        if (isDirty) { e.preventDefault(); e.returnValue = ''; }
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+            e.preventDefault();
+            form.requestSubmit();
+        }
+    });
+
+    checkForDraft();
+})();
+</script>

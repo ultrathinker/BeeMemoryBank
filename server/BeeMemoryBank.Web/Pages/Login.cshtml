@@ -1,0 +1,32 @@
+@page
+@model LoginModel
+@{
+    ViewData["Title"] = "Login";
+}
+
+<div class="login-wrapper">
+    <div class="login-card">
+        <h2><sl-icon name="shield-lock" style="margin-right:6px;"></sl-icon> Login</h2>
+
+        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <sl-alert variant="danger" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @Model.ErrorMessage
+            </sl-alert>
+        }
+
+        <form method="post" class="sl-form">
+            <div style="margin-bottom:16px;">
+                <sl-input name="username" label="Login" required autofocus></sl-input>
+            </div>
+            <div style="margin-bottom:20px;">
+                <sl-input name="password" label="Password" type="password" required password-toggle></sl-input>
+            </div>
+            <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+            <sl-button type="submit" variant="primary" style="width:100%;">
+                <sl-icon slot="prefix" name="box-arrow-in-right"></sl-icon> Sign In
+            </sl-button>
+        </form>
+    </div>
+</div>

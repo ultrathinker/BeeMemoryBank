@@ -1,0 +1,59 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tree"
+    timeout: 30000
+- tapOn:
+    text: "Tree"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Health"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Health"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 30000
+- back
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Travel"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Travel"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 30000
+- back
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Finance"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Finance"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 30000
+- takeScreenshot: multi_folder_nav

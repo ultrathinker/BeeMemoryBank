@@ -1,0 +1,34 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Articles"
+    timeout: 30000
+- tapOn:
+    text: "Articles"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/ArticlesList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Interstellar"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Interstellar"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TitleLabel"
+    timeout: 30000
+- assertVisible:
+    text: "Interstellar"
+- back
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/ArticlesList"
+    timeout: 30000
+- takeScreenshot: articles_nav_back

@@ -1,0 +1,291 @@
+@page
+@model BeeMemoryBank.Web.Pages.Article.ViewModel
+@{
+    ViewData["Title"] = Model.Article?.Title ?? "Article";
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+@if (Model.Article != null)
+{
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;">
+        <div>
+            <h1 class="article-title">@Model.Article.Title</h1>
+            <div class="article-meta">
+                <span class="article-id-badge" title="Click to copy"
+                      onclick="navigator.clipboard.writeText('@Model.Article.Id')">
+                    id: @Model.Article.Id
+                </span>
+                <span><sl-icon name="folder2"></sl-icon> @Model.Article.TreePath</span>
+            </div>
+        </div>
+        <div class="toolbar">
+            <sl-button size="small" variant="primary" href="/Article/Edit?id=@Model.Article.Id">
+                <sl-icon slot="prefix" name="pencil"></sl-icon> Edit
+            </sl-button>
+            <sl-button size="small" variant="default" href="/Article/History?id=@Model.Article.Id">
+                <sl-icon slot="prefix" name="clock-history"></sl-icon> History
+            </sl-button>
+            <sl-button size="small" variant="default" href="/Folder?path=@Uri.EscapeDataString(Model.Article.TreePath)">
+                <sl-icon slot="prefix" name="arrow-left"></sl-icon> Folder
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-article').show()">
+                <sl-icon slot="prefix" name="arrows-move"></sl-icon> Move
+            </sl-button>
+            <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-article').show()">
+                <sl-icon slot="prefix" name="trash"></sl-icon> Delete
+            </sl-button>
+        </div>
+    </div>
+
+    @if (Model.Article.Tags.Count > 0)
+    {
+        <div class="tag-list mb-md">
+            @foreach (var tag in Model.Article.Tags)
+            {
+                <sl-tag size="small" variant="primary" pill>@tag</sl-tag>
+            }
+        </div>
+    }
+
+    <div class="card">
+        @if (Model.Content == null)
+        {
+            <sl-alert variant="warning" open>
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                Content cannot be decrypted. This article was created on a node with a different encryption key.
+            </sl-alert>
+        }
+        <div class="article-content" id="article-body"></div>
+    </div>
+
+    <!-- Comments -->
+    <div class="card mt-md">
+        <h4 style="font-size:0.95rem;margin-bottom:14px;">
+            <sl-icon name="chat-dots"></sl-icon> Comments (@Model.Comments.Count)
+        </h4>
+
+        <div id="comments-list">
+        @foreach (var comment in Model.Comments)
+        {
+            <div class="comment-item" id="comment-@comment.Id">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div>
+                        <span class="comment-author">owner</span>
+                        <span class="comment-date">@comment.CreatedAt.ToString("g")</span>
+                    </div>
+                    <sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;"
+                        onclick="deleteComment(@comment.Id)"></sl-icon-button>
+                </div>
+                <p class="comment-text">@comment.Text</p>
+            </div>
+        }
+        </div>
+
+        <div style="margin-top:14px;">
+            <sl-textarea id="new-comment-text" rows="2" placeholder="Add a comment..." style="margin-bottom:8px;"></sl-textarea>
+            <sl-button id="btn-add-comment" size="small" variant="primary">
+                <sl-icon slot="prefix" name="send"></sl-icon> Add Comment
+            </sl-button>
+        </div>
+    </div>
+}
+else
+{
+    <p>Article not found.</p>
+}
+
+<!-- Move dialog -->
+<sl-dialog id="dlg-move-article" label="Move Article">
+    <sl-input id="move-article-path" label="New path" value="@Model.Article?.TreePath" required></sl-input>
+    <sl-button id="btn-move-article" slot="footer" variant="primary">Move</sl-button>
+</sl-dialog>
+
+<!-- Delete dialog -->
+<sl-dialog id="dlg-delete-article" label="Delete Article">
+    <sl-alert variant="danger" open>
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Delete «@Model.Article?.Title»?
+    </sl-alert>
+    <sl-button id="btn-confirm-delete-article" slot="footer" variant="danger">Delete</sl-button>
+</sl-dialog>
+
+<div id="syncToast" class="sync-toast" style="display:none;">
+    <div class="sync-toast-content">
+        <span class="sync-toast-label">Syncing</span>
+        <div class="sync-toast-circles" id="syncToastCircles"></div>
+    </div>
+</div>
+
+<sl-dialog label="Sync Delivery Status" id="syncModal" class="sync-modal">
+    <div id="syncModalContent" class="sync-modal-content">Loading...</div>
+    <sl-button slot="footer" variant="primary" onclick="document.getElementById('syncModal').hide()">Close</sl-button>
+</sl-dialog>
+
+<script>
+(function() {
+    var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
+    var content = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""));
+    var treePath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"));
+
+    if (content) {
+        var body = document.getElementById('article-body');
+        var renderer = new marked.Renderer();
+        var origImage = renderer.image.bind(renderer);
+        renderer.image = function(token) {
+            if (token && token.href && token.href.startsWith('/api/media/')) {
+                token.href = '/api-proxy/media/' + token.href.substring('/api/media/'.length);
+            }
+            return origImage(token);
+        };
+        body.innerHTML = DOMPurify.sanitize(marked.parse(content, { breaks: true, renderer: renderer }));
+    }
+
+    // Move
+    var moveBtn = document.getElementById('btn-move-article');
+    if (moveBtn) {
+        moveBtn.addEventListener('click', function() {
+            var newPath = document.getElementById('move-article-path').value.trim();
+            if (!newPath) return;
+            moveBtn.loading = true;
+            fetch('/api-proxy/article/' + articleId + '/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ newPath: newPath })
+            }).then(function(r) {
+                if (r.ok) window.location.reload();
+                else alert('Move failed');
+            }).catch(function() { alert('Error'); }).finally(function() { moveBtn.loading = false; });
+        });
+    }
+
+    // Delete
+    var deleteBtn = document.getElementById('btn-confirm-delete-article');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function() {
+            deleteBtn.loading = true;
+            fetch('/api-proxy/article/' + articleId, {
+                method: 'DELETE'
+            }).then(function(r) {
+                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(treePath);
+                else alert('Delete failed');
+            }).catch(function() { alert('Error'); }).finally(function() { deleteBtn.loading = false; });
+        });
+    }
+
+    // Add comment
+    var addCommentBtn = document.getElementById('btn-add-comment');
+    if (addCommentBtn) {
+        addCommentBtn.addEventListener('click', function() {
+            var textarea = document.getElementById('new-comment-text');
+            var text = textarea.value.trim();
+            if (!text) return;
+            addCommentBtn.loading = true;
+            fetch('/api-proxy/comments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ articleId: articleId, text: text })
+            }).then(function(r) {
+                if (r.ok) return r.json();
+                throw new Error('Failed');
+            }).then(function(comment) {
+                textarea.value = '';
+                var list = document.getElementById('comments-list');
+                var div = document.createElement('div');
+                div.className = 'comment-item';
+                div.id = 'comment-' + comment.id;
+                var d = new Date(comment.createdAt);
+                div.innerHTML =
+                    '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+                    '<div><span class="comment-author">owner</span>' +
+                    '<span class="comment-date">' + d.toLocaleString() + '</span></div>' +
+                    '<sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;" onclick="deleteComment(' + comment.id + ')"></sl-icon-button>' +
+                    '</div>' +
+                    '<p class="comment-text">' + escHtml(comment.text) + '</p>';
+                list.appendChild(div);
+                // Update count heading
+                var h4 = list.closest('.card').querySelector('h4');
+                if (h4) {
+                    var cnt = list.querySelectorAll('.comment-item').length;
+                    h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
+                }
+            }).catch(function() { alert('Error adding comment'); })
+            .finally(function() { addCommentBtn.loading = false; });
+        });
+    }
+
+    window.deleteComment = function(id) {
+        if (!confirm('Delete this comment?')) return;
+        fetch('/api-proxy/comments/' + id, { method: 'DELETE' })
+            .then(function(r) {
+                if (r.ok || r.status === 204) {
+                    var el = document.getElementById('comment-' + id);
+                    if (el) el.remove();
+                    var list = document.getElementById('comments-list');
+                    var h4 = list.closest('.card').querySelector('h4');
+                    if (h4) {
+                        var cnt = list.querySelectorAll('.comment-item').length;
+                        h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
+                    }
+                } else { alert('Delete failed'); }
+            });
+    };
+
+    function escHtml(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+})();
+
+(function() {
+    var params = new URLSearchParams(window.location.search);
+    if (!params.has('justSaved')) return;
+
+    var url = new URL(window.location);
+    url.searchParams.delete('justSaved');
+    history.replaceState(null, '', url);
+
+    var toast = document.getElementById('syncToast');
+    if (!toast) return;
+
+    toast.style.display = 'flex';
+    var polling = true;
+    var fadeTimer = setTimeout(function() {
+        if (!toast.classList.contains('sync-toast-pinned')) {
+            toast.style.display = 'none';
+            polling = false;
+        }
+    }, 5000);
+
+    toast.addEventListener('click', function() {
+        toast.classList.add('sync-toast-pinned');
+        clearTimeout(fadeTimer);
+        toast.style.display = 'none';
+        polling = false;
+        var modal = document.getElementById('syncModal');
+        if (modal) {
+            modal.show();
+            if (typeof updateSyncModal === 'function') updateSyncModal();
+        }
+    });
+
+    function updateSyncToast() {
+        if (!polling) return;
+        fetch('/api-proxy/sync/delivery-status')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var circles = document.getElementById('syncToastCircles');
+                if (!circles || !data.nodes) return;
+                circles.innerHTML = data.nodes.map(function(n) {
+                    var color = n.isSynced ? 'var(--sl-color-success-600)' : 'var(--sl-color-warning-500)';
+                    var title = escHtml(n.displayName) + (n.isSynced ? ' ✓' : ' pending');
+                    return '<span class="sync-circle" style="background:' + color + ';" title="' + title + '"></span>';
+                }).join('');
+                if (polling) setTimeout(updateSyncToast, 3000);
+            })
+            .catch(function() { if (polling) setTimeout(updateSyncToast, 5000); });
+    }
+    updateSyncToast();
+})();
+</script>
+</div>
+</div>

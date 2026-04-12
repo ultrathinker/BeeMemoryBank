@@ -1,0 +1,38 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Status"
+    timeout: 3000
+- tapOn:
+    text: "Status"
+- extendedWaitUntil:
+    visible:
+      text: "Node Info"
+    timeout: 10000
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "🔒  Lock"
+    timeout: 10000
+- tapOn:
+    text: "🔒  Lock"
+- extendedWaitUntil:
+    visible:
+      text: "Enter password to unlock"
+    timeout: 10000
+- tapOn:
+    id: "com.beememorybank.mobile:id/PasswordEntry"
+- inputText: "${BMB_TEST_PASSWORD}"
+- pressKey: back
+- tapOn:
+    id: "com.beememorybank.mobile:id/UnlockButton"
+- extendedWaitUntil:
+    visible:
+      text: "Node Info"
+    timeout: 30000
+- takeScreenshot: lock_reunlock

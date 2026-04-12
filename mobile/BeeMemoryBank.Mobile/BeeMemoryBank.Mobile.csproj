@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework></TargetFramework>
+    <TargetFrameworks>net10.0-android</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <UseMaui>true</UseMaui>
+    <ApplicationId>com.beememorybank.mobile</ApplicationId>
+    <ApplicationTitle>BeeMemoryBank</ApplicationTitle>
+    <ApplicationVersion>1</ApplicationVersion>
+    <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
+    <RootNamespace>BeeMemoryBank.Mobile</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <MauiIcon Include="Resources\AppIcon\appicon.svg" />
+    <MauiImage Include="Resources\Images\*.svg" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$(TargetFramework.Contains('-android'))">
+    <AndroidResource Include="Platforms\Android\Resources\xml\network_security_config.xml" LogicalName="res\xml\network_security_config.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Maui.Controls" Version="10.*" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.*" />
+    <PackageReference Include="Xamarin.AndroidX.Core" Version="*" />
+    <PackageReference Include="Xamarin.AndroidX.Biometric" Version="*" />
+    <PackageReference Include="Markdig" Version="0.40.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
+  </ItemGroup>
+
+</Project>

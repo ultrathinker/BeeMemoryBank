@@ -1,0 +1,70 @@
+<div class="sidebar" id="app-sidebar">
+    <div class="sidebar-header">
+        <sl-input id="sidebar-search-input" placeholder="Search..." size="small" clearable autocomplete="off" name="sidebar-tree-search">
+            <sl-icon name="search" slot="prefix"></sl-icon>
+        </sl-input>
+        <button id="btn-last-search" type="button" title="Restore last search" style="display: none;">
+            <sl-icon name="arrow-counterclockwise"></sl-icon>
+        </button>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 4px 0 8px;">
+        <div style="display:flex;gap:12px;">
+            <a href="/Article/Edit" style="font-size:0.78rem;color:var(--accent);text-decoration:none;display:flex;align-items:center;gap:3px;">
+                <sl-icon name="file-earmark-plus" style="font-size:0.85rem;"></sl-icon> New article
+            </a>
+            <a href="#" id="btn-add-folder-sidebar" style="font-size:0.78rem;color:var(--accent);text-decoration:none;display:flex;align-items:center;gap:3px;">
+                <sl-icon name="folder-plus" style="font-size:0.85rem;"></sl-icon> Add folder
+            </a>
+        </div>
+        <div style="display:flex;align-items:center;">
+            <sl-icon-button id="btn-tree-refresh" name="arrow-clockwise" label="Refresh tree" title="Refresh tree"></sl-icon-button>
+            <sl-icon-button id="btn-sidebar-collapse" name="chevron-left" label="Collapse panel" title="Collapse panel"></sl-icon-button>
+        </div>
+    </div>
+    <div class="sidebar-tree" id="tree-container"></div>
+
+    <!-- Add folder dialog (sidebar) -->
+    <sl-dialog id="dlg-add-folder-sidebar" label="Add Folder">
+        <sl-input id="add-folder-sidebar-name" label="Folder name" placeholder="My Folder" required autofocus></sl-input>
+        <p class="text-muted text-sm" style="margin-top:8px;">Creates a folder at the root level.</p>
+        <sl-button id="btn-create-folder-sidebar" slot="footer" variant="primary">Create</sl-button>
+    </sl-dialog>
+
+    <script>
+    (function() {
+        var link = document.getElementById('btn-add-folder-sidebar');
+        if (link) {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                document.getElementById('dlg-add-folder-sidebar').show();
+            });
+        }
+        var btn = document.getElementById('btn-create-folder-sidebar');
+        if (btn) {
+            btn.addEventListener('click', function() {
+                var nameInput = document.getElementById('add-folder-sidebar-name');
+                var name = (nameInput.value || '').trim();
+                if (!name) return;
+                btn.loading = true;
+                var path = '/' + name;
+                fetch('/api-proxy/folders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: path })
+                }).then(function(r) {
+                    if (r.ok) {
+                        document.getElementById('dlg-add-folder-sidebar').hide();
+                        nameInput.value = '';
+                        window.location.href = '/Folder?path=' + encodeURIComponent(path);
+                    } else {
+                        r.json().then(function(d) { alert(d.error || 'Failed to create folder'); }).catch(function() { alert('Failed to create folder'); });
+                    }
+                }).catch(function() { alert('Error'); }).finally(function() { btn.loading = false; });
+            });
+        }
+    })();
+    </script>
+</div>
+<button id="sidebar-expand-tab" title="Show sidebar" aria-label="Expand sidebar">
+    <sl-icon name="chevron-right"></sl-icon>
+</button>

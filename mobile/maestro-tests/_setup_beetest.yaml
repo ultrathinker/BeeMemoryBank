@@ -1,0 +1,63 @@
+appId: com.beememorybank.mobile
+---
+- launchApp:
+    appId: "com.beememorybank.mobile"
+# Dismiss notification permission dialog if shown on fresh install
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn:
+          text: "Allow"
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn:
+          text: "Allow"
+- extendedWaitUntil:
+    visible:
+      text: "Setup your node"
+    timeout: 15000
+- tapOn:
+    id: "com.beememorybank.mobile:id/SetupNameEntry"
+- inputText: "${BMB_TEST_NODE_NAME}"
+- tapOn:
+    id: "com.beememorybank.mobile:id/ServerUrlEntry"
+- eraseText: 50
+- inputText: "${BMB_TEST_SERVER}"
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: "com.beememorybank.mobile:id/SetupPasswordEntry"
+    direction: DOWN
+    timeout: 5000
+- tapOn:
+    id: "com.beememorybank.mobile:id/SetupPasswordEntry"
+- inputText: "${BMB_TEST_PASSWORD}"
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: "com.beememorybank.mobile:id/SetupButton"
+    direction: DOWN
+    timeout: 5000
+- tapOn:
+    id: "com.beememorybank.mobile:id/SetupButton"
+# Handle battery optimization dialog if shown
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn:
+          text: "Allow"
+# Handle notification permission dialog
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn:
+          text: "Allow"
+- extendedWaitUntil:
+    visible:
+      text: "Node Info"
+    timeout: 60000

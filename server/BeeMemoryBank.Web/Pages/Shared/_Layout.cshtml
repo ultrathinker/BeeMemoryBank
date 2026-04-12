@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] - BeeMemoryBank</title>
+    <script type="module">
+        import { setBasePath } from '/lib/shoelace/shoelace-bundle.js';
+        setBasePath('/lib/shoelace');
+    </script>
+    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
+    <link href="/css/site.css" rel="stylesheet" asp-append-version="true" />
+    @await RenderSectionAsync("HeadStyles", required: false)
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <script src="/lib/marked/marked.umd.js"></script>
+    <script src="/lib/dompurify/purify.min.js"></script>
+</head>
+@{var themeUser = User.Identity?.Name ?? "";}
+<script>
+    (function(){var u=@Html.Raw(System.Text.Json.JsonSerializer.Serialize(themeUser));var k='bee-theme'+(u?'-'+u:'');var t=localStorage.getItem(k)||'ocean';document.documentElement.setAttribute('data-theme',t);})();
+</script>
+<body class="sl-theme-dark" data-username="@themeUser">
+    <header class="app-header">
+        <div class="header-left">
+            <a href="/Tree" class="app-logo">
+                <img src="/images/web-app-manifest-192x192.png" alt="Bee" class="app-logo-img" />
+                <span>Bee Memory Bank</span>
+            </a>
+        </div>
+        @if (User.Identity?.IsAuthenticated == true)
+        {
+        <div class="header-right">
+            <div class="theme-picker">
+                <sl-dropdown id="theme-dropdown" placement="bottom-end">
+                    <sl-button slot="trigger" size="small" variant="text" caret>
+                        <sl-icon name="palette" slot="prefix"></sl-icon>
+                        <span id="theme-label">Theme</span>
+                    </sl-button>
+                    <sl-menu id="theme-menu">
+                        <sl-menu-item data-theme="dark-classic" type="checkbox"><span class="theme-color-dot" style="background:#569cd6"></span>Dark Classic</sl-menu-item>
+                        <sl-menu-item data-theme="dark-bee" type="checkbox"><span class="theme-color-dot" style="background:#f0a500"></span>Dark Bee</sl-menu-item>
+                        <sl-divider></sl-divider>
+                        <sl-menu-item data-theme="ocean" type="checkbox"><span class="theme-color-dot" style="background:#6c63ff"></span>Deep Ocean</sl-menu-item>
+                        <sl-menu-item data-theme="emerald" type="checkbox"><span class="theme-color-dot" style="background:#4caf50"></span>Emerald Forest</sl-menu-item>
+                        <sl-menu-item data-theme="sunset" type="checkbox"><span class="theme-color-dot" style="background:#ff8f00"></span>Sunset Amber</sl-menu-item>
+                        <sl-menu-item data-theme="nord" type="checkbox"><span class="theme-color-dot" style="background:#88c0d0"></span>Nord Frost</sl-menu-item>
+                        <sl-menu-item data-theme="crimson" type="checkbox"><span class="theme-color-dot" style="background:#e91e63"></span>Crimson Night</sl-menu-item>
+                        <sl-menu-item data-theme="mono" type="checkbox"><span class="theme-color-dot" style="background:#888"></span>Midnight Mono</sl-menu-item>
+                        <sl-divider></sl-divider>
+                        <sl-menu-item data-theme="purple" type="checkbox"><span class="theme-color-dot" style="background:#9c27b0"></span>Royal Purple</sl-menu-item>
+                        <sl-menu-item data-theme="teal" type="checkbox"><span class="theme-color-dot" style="background:#00bcd4"></span>Cyber Teal</sl-menu-item>
+                        <sl-menu-item data-theme="gold" type="checkbox"><span class="theme-color-dot" style="background:#ffd600"></span>Solar Gold</sl-menu-item>
+                        <sl-menu-item data-theme="volcanic" type="checkbox"><span class="theme-color-dot" style="background:#ff5722"></span>Volcanic</sl-menu-item>
+                        <sl-menu-item data-theme="arctic" type="checkbox"><span class="theme-color-dot" style="background:#90a4ae"></span>Arctic Silver</sl-menu-item>
+                        <sl-divider></sl-divider>
+                        <sl-menu-item data-theme="hacker" type="checkbox"><span class="theme-color-dot" style="background:#00ff41"></span>Hacker Terminal</sl-menu-item>
+                    </sl-menu>
+                </sl-dropdown>
+            </div>
+            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            {
+            <div class="sync-status-wrapper" id="syncStatusWidget" style="position: relative; margin-right: 8px;">
+                <sl-icon-button name="arrow-repeat" label="Sync status" id="syncStatusBtn" style="font-size: 1.2rem;"></sl-icon-button>
+                <span class="sync-badge" id="syncBadge" style="display:none;"></span>
+                <div class="sync-dropdown" id="syncDropdown" style="display:none;">
+                    <div class="sync-dropdown-header">Sync Status</div>
+                    <div id="syncNodeList" class="sync-node-list">Loading...</div>
+                </div>
+            </div>
+            }
+            <a href="/Search" class="header-link">
+                <sl-icon name="search"></sl-icon> Search
+            </a>
+            <a href="/Profile" class="header-link">
+                <sl-icon name="person-circle"></sl-icon> Profile
+            </a>
+            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            {
+            <a href="/Users" class="header-link">
+                <sl-icon name="people"></sl-icon> Users
+            </a>
+            }
+            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            {
+            <a href="/Activity" class="header-link">
+                <sl-icon name="activity"></sl-icon> Activity
+            </a>
+            }
+            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            {
+            <a href="/Admin" class="header-link">
+                <sl-icon name="gear"></sl-icon> Admin
+            </a>
+            }
+            <a href="/Logout" class="header-link">
+                <sl-icon name="box-arrow-right"></sl-icon> Logout
+            </a>
+
+        </div>
+        }
+    </header>
+
+    <div class="app-body">
+        @RenderBody()
+    </div>
+
+    <script src="/lib/vendor.min.js"></script>
+    <script src="/js/site.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

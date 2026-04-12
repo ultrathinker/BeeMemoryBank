@@ -1,0 +1,659 @@
+@page
+@model BeeMemoryBank.Web.Pages.AdminModel
+@{
+    ViewData["Title"] = "Admin";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <h2 style="margin-bottom:20px;"><sl-icon name="gear"></sl-icon> Admin</h2>
+
+    @if (!string.IsNullOrEmpty(Model.SuccessMessage))
+    {
+        <sl-alert variant="success" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="check-circle"></sl-icon>
+            @Model.SuccessMessage
+        </sl-alert>
+    }
+    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+    {
+        <sl-alert variant="danger" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            @Model.ErrorMessage
+        </sl-alert>
+    }
+
+    <!-- Node Identity -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="fingerprint"></sl-icon> Node Identity</h3>
+    @if (Model.Identity != null)
+    {
+        <div class="card" style="margin-bottom:32px;">
+            <div class="article-meta">
+                <span><strong>ID:</strong>
+                    <span class="article-id-badge" title="Click to copy"
+                          data-id="@Model.Identity.NodeId" onclick="navigator.clipboard.writeText(this.dataset.id)">
+                        @Model.Identity.NodeId
+                    </span>
+                </span>
+                <span><strong>Name:</strong> @Model.Identity.DisplayName</span>
+            </div>
+            <div style="margin-top:12px;">
+                <label style="font-size:0.85rem;color:var(--text-secondary);">Ed25519 Public Key</label>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                    <code style="font-size:0.78rem;word-break:break-all;flex:1;" id="pubkey-val">@Model.Identity.Ed25519PublicKeyB64</code>
+                    <sl-icon-button name="clipboard" label="Copy"
+                        onclick="navigator.clipboard.writeText(document.getElementById('pubkey-val').textContent)">
+                    </sl-icon-button>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <sl-alert variant="warning" open style="margin-bottom:32px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            Could not retrieve node identity. Check API connection.
+        </sl-alert>
+    }
+
+    <!-- Sync Status -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="arrow-repeat"></sl-icon> Sync Status</h3>
+    <div class="card" id="sync-status-card" style="margin-bottom:32px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+            <sl-spinner id="sync-spinner" style="font-size:1rem;display:none;"></sl-spinner>
+            <span id="sync-summary" class="text-muted text-sm">Loading sync status...</span>
+            <sl-icon-button name="arrow-clockwise" label="Refresh" id="btn-refresh-sync" style="margin-left:auto;"></sl-icon-button>
+        </div>
+        <div id="sync-nodes-list"></div>
+    </div>
+    <script>
+    (function() {
+        function loadSyncStatus() {
+            var spinner = document.getElementById('sync-spinner');
+            spinner.style.display = '';
+            fetch('/api-proxy/sync/status')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    spinner.style.display = 'none';
+                    var summary = document.getElementById('sync-summary');
+                    summary.textContent = 'Local events: ' + data.totalLocalEvents + ' | Connected nodes: ' + data.connectedNodes;
+
+                    var list = document.getElementById('sync-nodes-list');
+                    if (!data.nodes || data.nodes.length === 0) {
+                        list.innerHTML = '<p class="text-muted text-sm">No sync peers configured.</p>';
+                        return;
+                    }
+                    var html = '<table class="version-table" style="margin:0;"><thead><tr><th>Node</th><th>Last Synced Seq</th><th>Last Sync</th></tr></thead><tbody>';
+                    data.nodes.forEach(function(n) {
+                        var ago = n.lastSyncedAt ? timeAgo(new Date(n.lastSyncedAt)) : 'never';
+                        html += '<tr><td><strong>' + escHtml(n.displayName) + '</strong><br/><span class="text-muted text-sm">' + escHtml(n.apiAddress || '') + '</span></td>';
+                        html += '<td>' + n.lastSyncedSequence + '</td>';
+                        html += '<td class="text-muted text-sm">' + ago + '</td></tr>';
+                    });
+                    html += '</tbody></table>';
+                    list.innerHTML = html;
+                })
+                .catch(function() {
+                    spinner.style.display = 'none';
+                    document.getElementById('sync-summary').textContent = 'Failed to load sync status.';
+                });
+        }
+        function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+        function timeAgo(date) {
+            var sec = Math.floor((Date.now() - date.getTime()) / 1000);
+            if (sec < 60) return sec + 's ago';
+            if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+            if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+            return Math.floor(sec / 86400) + 'd ago';
+        }
+        loadSyncStatus();
+        document.getElementById('btn-refresh-sync').addEventListener('click', loadSyncStatus);
+        // Auto-refresh every 30 seconds
+        setInterval(loadSyncStatus, 30000);
+    })();
+    </script>
+
+    <!-- Trusted Nodes -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;"><sl-icon name="people"></sl-icon> Trusted Nodes</h3>
+        <sl-button size="small" variant="success" onclick="document.getElementById('dlg-add-node').show()">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Node
+        </sl-button>
+    </div>
+    @if (Model.Whitelist != null && Model.Whitelist.Count > 0)
+    {
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Node ID</th>
+                        <th>API Address</th>
+                        <th>Status</th>
+                        <th>Added</th>
+                        <th>Last Sync</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var entry in Model.Whitelist)
+                    {
+                        var isSelf = Model.Identity != null && entry.NodeId == Model.Identity.NodeId;
+                        DateTime lastSync = DateTime.MinValue;
+                        if (!isSelf && Model.NodeSyncStatus != null)
+                            Model.NodeSyncStatus.TryGetValue(entry.NodeId, out lastSync);
+                        <tr>
+                            <td><strong>@entry.DisplayName</strong></td>
+                            <td><code class="text-sm">@entry.NodeId.ToString()[..8]&hellip;</code></td>
+                            <td class="text-muted text-sm">@(entry.ApiAddress ?? "\u2014")</td>
+                            <td>
+                                <sl-badge variant="@(entry.Status == "active" ? "success" : "neutral")" pill>
+                                    @entry.Status
+                                </sl-badge>
+                                @if (entry.CanGenerateEmbeddings)
+                                {
+                                    <sl-badge variant="primary" pill style="margin-left:4px;">embeddings</sl-badge>
+                                }
+                            </td>
+                            <td class="text-muted text-sm">@entry.CreatedAt.ToString("d")</td>
+                            <td class="text-muted text-sm">@(isSelf ? "\u2014" : AdminModel.RelativeTime(lastSync))</td>
+                            <td style="text-align:right;">
+                                @if (!isSelf)
+                                {
+                                    <sl-icon-button name="link-45deg" label="Change URL"
+                                        data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress"
+                                        onclick="openChangeUrl(this.dataset.nodeId, this.dataset.nodeName, this.dataset.currentUrl)">
+                                    </sl-icon-button>
+                                    <form method="post" asp-page-handler="RevokeNode" style="display:inline;">
+                                        <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                        <sl-icon-button name="trash" label="Revoke"
+                                            data-name="@entry.DisplayName" onclick="if(confirm('Revoke node ' + this.dataset.name + '?')) { this.closest('form').submit(); }">
+                                        </sl-icon-button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+            <sl-icon name="people" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No trusted nodes</p>
+        </div>
+    }
+
+    <!-- Snapshots -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;"><sl-icon name="archive"></sl-icon> Snapshots</h3>
+        <form method="post" asp-page-handler="CreateSnapshot" id="form-create-snapshot">
+            <sl-button type="submit" size="small" variant="success" id="btn-create-snapshot">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Snapshot
+            </sl-button>
+        </form>
+    </div>
+
+    @if (Model.Snapshots != null && Model.Snapshots.Count > 0)
+    {
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Size</th>
+                        <th>Date</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var snap in Model.Snapshots)
+                    {
+                        <tr>
+                            <td><code class="text-sm">@snap.FileName</code></td>
+                            <td class="text-muted text-sm">@(snap.SizeBytes / 1024) KB</td>
+                            <td class="text-muted text-sm">@snap.CreatedAt.ToString("g")</td>
+                            <td style="text-align:right;">
+                                <a href="/Admin?handler=DownloadSnapshot&fileName=@Uri.EscapeDataString(snap.FileName)"
+                                   title="Download snapshot">
+                                    <sl-icon-button name="download" label="Download"></sl-icon-button>
+                                </a>
+                                <sl-icon-button name="arrow-counterclockwise" label="Restore"
+                                    data-filename="@snap.FileName"
+                                    onclick="openRestoreDialog(this.dataset.filename)">
+                                </sl-icon-button>
+                                <form method="post" asp-page-handler="DeleteSnapshot" style="display:inline;">
+                                    <input type="hidden" name="fileName" value="@snap.FileName" />
+                                    <sl-icon-button name="trash" label="Delete"
+                                        data-name="@snap.FileName" onclick="if(confirm('Delete snapshot ' + this.dataset.name + '?')) { this.closest('form').submit(); }">
+                                    </sl-icon-button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+            <sl-icon name="archive" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No snapshots</p>
+        </div>
+    }
+
+    <!-- Agents -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;"><sl-icon name="robot"></sl-icon> Agents</h3>
+        <sl-button size="small" variant="success" onclick="document.getElementById('dlg-create-agent').show()">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Agent
+        </sl-button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(Model.NewAgentKey))
+    {
+        <sl-alert variant="success" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="key"></sl-icon>
+            <strong>API Key (shown once — copy it now!):</strong><br/>
+            <code id="new-agent-key" style="font-size:0.85rem;word-break:break-all;">@Model.NewAgentKey</code>
+            <sl-icon-button name="clipboard" label="Copy" style="margin-left:8px;"
+                onclick="navigator.clipboard.writeText(document.getElementById('new-agent-key').textContent)">
+            </sl-icon-button>
+        </sl-alert>
+    }
+
+    @if (Model.Agents != null && Model.Agents.Count > 0)
+    {
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Description</th>
+                        <th>API Key</th>
+                        <th>Created</th>
+                        <th>Last Access</th>
+                        <th>Requests</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var agent in Model.Agents)
+                    {
+                        <tr>
+                            <td><strong>@agent.Name</strong></td>
+                            <td class="text-muted text-sm">@(agent.Description ?? "\u2014")</td>
+                            <td><code class="text-sm">@agent.KeyPrefix</code></td>
+                            <td class="text-muted text-sm">@agent.CreatedAt.ToString("g")</td>
+                            <td class="text-muted text-sm">@AdminModel.RelativeTime(agent.LastAccessedAt)</td>
+                            <td class="text-muted text-sm">@(agent.RequestCount == 0 ? "\u2014" : agent.RequestCount.ToString("N0"))</td>
+                            <td style="text-align:right;">
+                                <sl-icon-button name="shield-lock" label="Folder Restrictions"
+                                    data-agent-id="@agent.Id" data-agent-name="@agent.Name"
+                                    onclick="openAgentRestrictions(this.dataset.agentId, this.dataset.agentName)">
+                                </sl-icon-button>
+                                <form method="post" asp-page-handler="DeleteAgent" style="display:inline;">
+                                    <input type="hidden" name="agentId" value="@agent.Id" />
+                                    <sl-icon-button name="trash" label="Delete"
+                                        data-name="@agent.Name" onclick="if(confirm('Delete agent ' + this.dataset.name + '?')) { this.closest('form').submit(); }">
+                                    </sl-icon-button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+            <sl-icon name="robot" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No agents</p>
+        </div>
+    }
+
+    <!-- Add Node Dialog -->
+    <sl-dialog id="dlg-add-node" label="Add Trusted Node">
+        <form method="post" asp-page-handler="AddNode">
+            <div style="margin-bottom:16px;">
+                <sl-input name="nodeId" label="Node ID" placeholder="GUID, e.g. 00000000-0000-0000-0000-000000000000" required></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="displayName" label="Display Name" placeholder="e.g. My Laptop" required></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="ed25519PublicKeyB64" label="Public Key (Base64)" placeholder="Ed25519 public key" required></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="apiAddress" label="API Address" placeholder="https://host:port (optional)"></sl-input>
+            </div>
+            <sl-button type="submit" slot="footer" variant="primary">Add Node</sl-button>
+        </form>
+    </sl-dialog>
+
+    <!-- Change Node URL Dialog -->
+    <sl-dialog id="dlg-change-url" label="Change Node URL">
+        <form method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
+            <input type="hidden" id="change-url-node-id" name="nodeId" />
+            <p id="change-url-node-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
+            <div style="margin-bottom:16px;">
+                <sl-input id="change-url-input" name="newApiAddress" label="New API Address" placeholder="https://example.com" required></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <sl-button type="submit" slot="footer" variant="primary">
+                <sl-icon slot="prefix" name="link-45deg"></sl-icon> Change URL
+            </sl-button>
+        </form>
+    </sl-dialog>
+
+    <!-- Create Agent Dialog -->
+    <sl-dialog id="dlg-create-agent" label="Create Agent">
+        <form method="post" asp-page-handler="CreateAgent">
+            <div style="margin-bottom:16px;">
+                <sl-input name="agentName" label="Name" placeholder="e.g. Claude Code" required></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="agentDescription" label="Description" placeholder="Optional"></sl-input>
+            </div>
+            <sl-button type="submit" slot="footer" variant="primary">Create</sl-button>
+        </form>
+    </sl-dialog>
+
+    <!-- Deploy -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="rocket-takeoff"></sl-icon> Deploy</h3>
+    <div class="card" style="margin-bottom:32px;max-width:480px;">
+        <p style="font-size:0.88rem;color:var(--text-secondary);margin-bottom:16px;line-height:1.5;">
+            Pulls latest code from git, builds, and restarts services. The site will be unavailable for ~1&ndash;2 minutes during the process.<br>
+            <strong>Requires server-side setup:</strong> deploy script + <code>beememorybank-deploy</code> systemd service must be configured.
+            @if (!Model.DeployEnabled)
+            {
+                <br><sl-icon name="exclamation-triangle" style="color:var(--sl-color-warning-600);vertical-align:middle;"></sl-icon>
+                <span style="color:var(--sl-color-warning-600);"> Not configured on this server — button is disabled.</span>
+            }
+        </p>
+        @if (Model.DeployEnabled)
+        {
+            <form method="post" asp-page-handler="Deploy" class="sl-form">
+                <div style="margin-bottom:16px;">
+                    <sl-input name="password" label="Master Password" type="password" password-toggle required></sl-input>
+                </div>
+                <sl-button type="submit" variant="warning" size="small">
+                    <sl-icon slot="prefix" name="rocket-takeoff"></sl-icon> Deploy Now
+                </sl-button>
+            </form>
+        }
+        else
+        {
+            <sl-button variant="warning" size="small" disabled>
+                <sl-icon slot="prefix" name="rocket-takeoff"></sl-icon> Deploy Now
+            </sl-button>
+        }
+        @if (Model.DeployOutput != null)
+        {
+            <pre style="margin-top:16px;padding:12px;background:var(--bg-secondary);border-radius:6px;font-size:0.8rem;max-height:300px;overflow:auto;white-space:pre-wrap;">@Model.DeployOutput</pre>
+        }
+    </div>
+
+    <!-- Change Password -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="lock"></sl-icon> Change Master Password</h3>
+    <div class="card" style="margin-bottom:32px;max-width:480px;">
+        <form method="post" asp-page-handler="ChangePassword" class="sl-form">
+            <div style="margin-bottom:16px;">
+                <sl-input name="oldPassword" label="Current password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="newPassword" label="New password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <sl-button type="submit" variant="primary" size="small">
+                <sl-icon slot="prefix" name="key"></sl-icon> Change Password
+            </sl-button>
+        </form>
+    </div>
+
+    <!-- Lock Server -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="lock"></sl-icon> Lock Server</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Locking erases the master encryption key from memory. Everyone is immediately logged out —
+            you, other users, MCP agents, and mobile apps. No one can read or edit articles until any
+            superadmin logs back in — after that the server is open for everyone again.
+            Use this when you're leaving the server unattended and want to make sure nobody — not even
+            an already-connected agent — can access your data while you're away.
+            Think of it as pulling the key out of the lock and taking it with you.
+        </p>
+        <sl-button variant="warning" size="small" href="/Lock"
+            onclick="return confirm('Lock the server? The decryption key will be cleared from memory. All users will need to re-authenticate to access encrypted content.')">
+            <sl-icon slot="prefix" name="lock"></sl-icon> Lock Server
+        </sl-button>
+    </div>
+
+    <!-- Folder Restrictions Dialog (shared with Users page pattern) -->
+    <sl-dialog id="dlg-restrictions" label="Folder Restrictions" style="--width:560px;">
+        <style>
+            #dlg-restrictions::part(panel) { overflow: visible; }
+            #dlg-restrictions::part(body) { overflow: visible; }
+        </style>
+        <div id="restriction-user-name" style="margin-bottom:12px;font-weight:600;"></div>
+
+        <div id="restriction-list" style="margin-bottom:16px;max-height:300px;overflow-y:auto;border:1px solid var(--sl-color-neutral-200);border-radius:4px;padding:4px 8px;">
+        </div>
+
+        <div style="position:relative;">
+            <div style="display:flex;gap:8px;align-items:flex-end;">
+                <sl-input id="restriction-folder-search" label="Add folder restriction" placeholder="Type to search folders..." style="flex:1;" autocomplete="off"></sl-input>
+                <sl-button id="btn-add-restriction" variant="primary" size="small" disabled>
+                    <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add
+                </sl-button>
+            </div>
+            <div id="restriction-folder-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:56px;max-height:240px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
+        </div>
+    </sl-dialog>
+
+    <!-- Restore Snapshot Dialog -->
+    <sl-dialog id="dlg-restore-snapshot" label="Restore Snapshot">
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Warning:</strong> This will replace ALL data with the snapshot. Current data will be lost.
+            The server will be temporarily unavailable during restore.
+        </sl-alert>
+        <form method="post" asp-page-handler="RestoreSnapshot" id="restore-form">
+            <input type="hidden" name="fileName" id="restore-file-name" />
+            <div style="margin-bottom:16px;">
+                <sl-input name="masterPassword" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-checkbox name="createBackupFirst" checked>Create backup before restore</sl-checkbox>
+            </div>
+            <sl-button type="submit" slot="footer" variant="danger" id="btn-restore-confirm">
+                <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Restore
+            </sl-button>
+            <sl-button type="button" slot="footer" variant="default" onclick="document.getElementById('dlg-restore-snapshot').hide()">Cancel</sl-button>
+        </form>
+    </sl-dialog>
+
+</div>
+</div>
+
+<script>
+function openChangeUrl(nodeId, nodeName, currentUrl) {
+    document.getElementById('change-url-node-id').value = nodeId;
+    document.getElementById('change-url-node-name').textContent = 'Node: ' + nodeName;
+    var input = document.getElementById('change-url-input');
+    input.value = currentUrl;
+    setTimeout(function() { input.value = currentUrl; }, 50);
+    document.getElementById('dlg-change-url').show();
+}
+
+// ─── Folder Restrictions ─────────────────────────────────────────────────────
+
+var currentRestrictionUserId = null;
+var currentRestrictionType = 'agent';
+var selectedFolderId = null;
+var searchTimer = null;
+
+function escapeHtml(text) {
+    var d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+}
+
+function openAgentRestrictions(agentId, agentName) {
+    currentRestrictionUserId = agentId;
+    currentRestrictionType = 'agent';
+    document.getElementById('restriction-user-name').textContent = 'Agent: ' + agentName;
+    loadRestrictions();
+    selectedFolderId = null;
+    document.getElementById('restriction-folder-search').value = '';
+    document.getElementById('restriction-folder-dropdown').style.display = 'none';
+    document.getElementById('btn-add-restriction').disabled = true;
+    document.getElementById('dlg-restrictions').show();
+}
+
+function loadRestrictions() {
+    var url = '/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId;
+    fetch(url).then(function(r) { return r.json(); }).then(function(list) {
+        var container = document.getElementById('restriction-list');
+        if (!list || list.length === 0) {
+            container.innerHTML = '<div style="color:var(--sl-color-neutral-500);font-size:0.9rem;">No restrictions</div>';
+            return;
+        }
+        container.innerHTML = list.map(function(r) {
+            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--sl-color-neutral-200);">' +
+                '<span><sl-icon name="folder2"></sl-icon> ' + escapeHtml(r.folderPath) + '</span>' +
+                '<sl-icon-button name="trash" label="Remove" onclick="removeRestriction(\'' + r.folderId + '\')"></sl-icon-button>' +
+                '</div>';
+        }).join('');
+    }).catch(function() {
+        document.getElementById('restriction-list').innerHTML = '<div style="color:var(--sl-color-danger);font-size:0.9rem;">Failed to load restrictions</div>';
+    });
+}
+
+var folderSearchInput = document.getElementById('restriction-folder-search');
+var folderDropdown = document.getElementById('restriction-folder-dropdown');
+var addBtn = document.getElementById('btn-add-restriction');
+
+folderSearchInput.addEventListener('sl-input', function() {
+    selectedFolderId = null;
+    addBtn.disabled = true;
+    clearTimeout(searchTimer);
+    var q = folderSearchInput.value.trim();
+    if (q.length < 1) { folderDropdown.style.display = 'none'; return; }
+    searchTimer = setTimeout(function() { searchFolders(q); }, 250);
+});
+
+async function searchFolders(q) {
+    try {
+        var resp = await fetch('/api-proxy/folders/search?q=' + encodeURIComponent(q) + '&limit=12');
+        var data = await resp.json();
+        var currentRestrictions = await fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId).then(function(r) { return r.json(); });
+        var restrictedIds = new Set(currentRestrictions.map(function(r) { return r.folderId; }));
+        var folders = (data.folders || []).filter(function(f) { return !restrictedIds.has(f.id); });
+
+        if (folders.length === 0) {
+            folderDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-neutral-500);font-size:0.9rem;">No matching folders</div>';
+        } else {
+            folderDropdown.innerHTML = folders.map(function(f) {
+                return '<div class="folder-search-item" data-id="' + f.id + '" data-path="' + escapeHtml(f.path) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);">' +
+                    '<sl-icon name="folder2" style="margin-right:6px;"></sl-icon>' + escapeHtml(f.path) + '</div>';
+            }).join('');
+            if (data.hasMore) {
+                folderDropdown.innerHTML += '<div style="padding:6px 12px;color:var(--sl-color-neutral-400);font-size:0.8rem;text-align:center;">Type more to narrow results...</div>';
+            }
+        }
+        folderDropdown.style.display = 'block';
+    } catch (e) {
+        folderDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-danger-600);">Search failed</div>';
+        folderDropdown.style.display = 'block';
+    }
+}
+
+folderDropdown.addEventListener('click', function(e) {
+    var item = e.target.closest('.folder-search-item');
+    if (!item) return;
+    selectedFolderId = item.dataset.id;
+    folderSearchInput.value = item.dataset.path;
+    folderDropdown.style.display = 'none';
+    addBtn.disabled = false;
+});
+
+folderDropdown.addEventListener('mouseover', function(e) {
+    var item = e.target.closest('.folder-search-item');
+    if (item) item.style.background = 'var(--sl-color-primary-50)';
+});
+folderDropdown.addEventListener('mouseout', function(e) {
+    var item = e.target.closest('.folder-search-item');
+    if (item) item.style.background = '';
+});
+
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('#restriction-folder-search') && !e.target.closest('#restriction-folder-dropdown')) {
+        folderDropdown.style.display = 'none';
+    }
+});
+
+function addRestriction() {
+    if (!selectedFolderId) return;
+    fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderId: selectedFolderId })
+    }).then(function(r) {
+        if (r.ok) {
+            selectedFolderId = null;
+            folderSearchInput.value = '';
+            addBtn.disabled = true;
+            folderDropdown.style.display = 'none';
+            loadRestrictions();
+        } else {
+            alert('Failed to add restriction');
+        }
+    });
+}
+
+function removeRestriction(folderId) {
+    fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId + '/' + folderId, {
+        method: 'DELETE'
+    }).then(function(r) {
+        if (r.ok) {
+            loadRestrictions();
+        } else {
+            alert('Failed to remove restriction');
+        }
+    });
+}
+
+addBtn.addEventListener('click', addRestriction);
+
+function openRestoreDialog(fileName) {
+    document.getElementById('restore-file-name').value = fileName;
+    document.getElementById('dlg-restore-snapshot').show();
+}
+
+// Snapshot creation progress dialog
+(function() {
+    var form = document.getElementById('form-create-snapshot');
+    var dlg = document.getElementById('dlg-snapshot-progress');
+    if (form && dlg) {
+        form.addEventListener('submit', function() {
+            dlg.show();
+        });
+    }
+})();
+</script>
+
+<!-- Snapshot creation progress dialog (non-closable) -->
+<sl-dialog id="dlg-snapshot-progress" label="Creating Snapshot" no-header-close>
+    <div style="text-align:center;padding:24px 0;">
+        <sl-spinner style="font-size:2rem;margin-bottom:16px;"></sl-spinner>
+        <p style="margin:0;color:var(--sl-color-neutral-600);">Creating snapshot, please wait...</p>
+        <p class="text-muted text-sm" style="margin-top:8px;">This may take a while for large databases.</p>
+    </div>
+</sl-dialog>

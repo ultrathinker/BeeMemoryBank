@@ -1,0 +1,56 @@
+@page
+@model TreeModel
+@{
+    ViewData["Title"] = "Home";
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <div class="welcome">
+        <sl-icon name="database" style="font-size:3rem;color:var(--accent);display:block;margin-bottom:16px;"></sl-icon>
+        <h2>Welcome to BeeMemoryBank</h2>
+        <p>Select a folder from the tree to view its articles, or use search.</p>
+        <div style="display:flex;gap:8px;margin-top:16px;justify-content:center;">
+            <sl-button size="small" variant="success" href="/Article/Edit?treePath=%2F">
+                <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
+            </sl-button>
+            <sl-button size="small" variant="success" onclick="document.getElementById('dlg-add-folder-home').show()">
+                <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
+            </sl-button>
+        </div>
+    </div>
+</div>
+
+<!-- Add folder dialog (home) -->
+<sl-dialog id="dlg-add-folder-home" label="Add Folder">
+    <sl-input id="add-folder-home-name" label="Folder name" placeholder="My Folder" required autofocus></sl-input>
+    <sl-button id="btn-add-folder-home" slot="footer" variant="primary">Create</sl-button>
+</sl-dialog>
+
+<script>
+(function() {
+    var btn = document.getElementById('btn-add-folder-home');
+    if (btn) {
+        btn.addEventListener('click', function() {
+            var nameInput = document.getElementById('add-folder-home-name');
+            var name = (nameInput.value || '').trim();
+            if (!name) return;
+            btn.loading = true;
+            var path = '/' + name;
+            fetch('/api-proxy/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: path })
+            }).then(function(r) {
+                if (r.ok) {
+                    document.getElementById('dlg-add-folder-home').hide();
+                    window.location.href = '/Folder?path=' + encodeURIComponent(path);
+                } else {
+                    r.json().then(function(d) { alert(d.error || 'Failed to create folder'); }).catch(function() { alert('Failed to create folder'); });
+                }
+            }).catch(function() { alert('Error'); }).finally(function() { btn.loading = false; });
+        });
+    }
+})();
+</script>
+</div>

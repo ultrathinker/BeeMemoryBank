@@ -1,0 +1,96 @@
+@page
+@model BeeMemoryBank.Web.Pages.SearchModel
+@{
+    ViewData["Title"] = "Search";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <h2 style="margin-bottom:20px;"><sl-icon name="search"></sl-icon> Search</h2>
+
+    <form method="get" class="sl-form" style="margin-bottom:24px;">
+        <div style="display:flex;gap:8px;">
+            <sl-input name="q" placeholder="Search by title and tags..." value="@Model.Query"
+                autofocus style="flex:1;--sl-input-spacing-medium: 1rem;" size="medium">
+                <sl-icon name="search" slot="prefix" style="margin-left:8px;"></sl-icon>
+            </sl-input>
+            <sl-button type="submit" variant="primary">Search</sl-button>
+        </div>
+        <div style="margin-top:8px;">
+            <sl-checkbox name="content" value="true"
+                @(Model.ContentSearch ? "checked" : "")>
+                Search in article content (slower)
+            </sl-checkbox>
+        </div>
+    </form>
+
+    <div id="contentSearchNotice" style="display:none;align-items:center;gap:8px;margin-bottom:16px;">
+        <sl-spinner style="font-size:1rem;"></sl-spinner>
+        <span class="text-muted">Searching article content, this may take a while...</span>
+    </div>
+
+    <script>
+document.querySelector('.sl-form').addEventListener('submit', function() {
+    const cb = document.querySelector('sl-checkbox[name="content"]');
+    if (cb && cb.checked) {
+        document.getElementById('contentSearchNotice').style.display = 'flex';
+    }
+});
+    </script>
+
+    @if (Model.Results != null)
+    {
+        var totalCount = Model.Results.Folders.Count + Model.Results.Articles.Count;
+        <p class="text-muted text-sm mb-md">Found: @totalCount</p>
+
+        @if (totalCount > 0)
+        {
+            @if (Model.Results.Folders.Count > 0)
+            {
+                <h4 style="margin:24px 0 12px 4px;font-size:1rem;color:var(--text-secondary);">Folders (@Model.Results.Folders.Count)</h4>
+                <div class="card" style="margin-bottom:24px;padding:8px;">
+                    @foreach (var f in Model.Results.Folders)
+                    {
+                        <div class="search-result-item" data-type="folder" data-path="@f.Path">
+                            <sl-icon name="folder2" class="locate-trigger" title="Show in tree" style="color:var(--accent);"></sl-icon>
+                            <div class="search-result-text">
+                                @{
+                                    var parentPath = f.Path.Substring(0, f.Path.Length - f.Name.Length);
+                                }
+                                <a href="/Folder?path=@Uri.EscapeDataString(parentPath)" class="search-result-path">@parentPath</a>
+                                <a href="/Folder?path=@Uri.EscapeDataString(f.Path)" class="search-result-title" style="font-weight:600;">@f.Name</a>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+
+            @if (Model.Results.Articles.Count > 0)
+            {
+                <h4 style="margin:24px 0 12px 4px;font-size:1rem;color:var(--text-secondary);">Articles (@Model.Results.Articles.Count)</h4>
+                <div class="card" style="padding:8px;">
+                    @foreach (var a in Model.Results.Articles)
+                    {
+                        <div class="search-result-item" data-type="article" data-path="@a.TreePath" data-id="@a.Id">
+                            <sl-icon name="file-earmark-text" class="locate-trigger" title="Show in tree" style="color:var(--accent);"></sl-icon>
+                            <div class="search-result-text">
+                                <a href="/Folder?path=@Uri.EscapeDataString(a.TreePath)" class="search-result-path">@a.TreePath</a>
+                                <a href="/Article/View?id=@a.Id" class="search-result-title" style="font-weight:600;">@a.Title</a>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        }
+        else
+        {
+            <div style="text-align:center;padding:40px;">
+                <sl-icon name="search" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+                <p class="text-muted">No results found for «<strong>@Model.Query</strong>»</p>
+            </div>
+        }
+    }
+</div>
+</div>

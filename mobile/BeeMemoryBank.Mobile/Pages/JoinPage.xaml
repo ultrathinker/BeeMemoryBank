@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.JoinPage"
+             Title="Join Network"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="24" Spacing="16" MaximumWidthRequest="400"
+                              HorizontalOptions="Center" VerticalOptions="Center">
+
+            <Label Text="Join Existing Network"
+                   Style="{StaticResource TitleLabel}"
+                   HorizontalOptions="Center"
+                   FontSize="28" />
+
+            <Label Text="Connect to an existing BeeMemoryBank node to share its data"
+                   Style="{StaticResource SubtitleLabel}"
+                   HorizontalOptions="Center" />
+
+            <Frame Style="{StaticResource CardFrame}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="Node Name" Style="{StaticResource BaseLabel}" FontAttributes="Bold" />
+                    <Entry x:Name="NameEntry"
+                           AutomationId="JoinNameEntry"
+                           Placeholder="e.g. My Phone"
+                           Style="{StaticResource BaseEntry}" />
+
+                    <Label Text="Remote Node URL" Style="{StaticResource BaseLabel}" FontAttributes="Bold" />
+                    <Entry x:Name="UrlEntry"
+                           AutomationId="JoinUrlEntry"
+                           Placeholder="http://your-server:5300"
+                           Style="{StaticResource BaseEntry}" />
+
+                    <Label Text="Master Password" Style="{StaticResource BaseLabel}" FontAttributes="Bold" />
+                    <Entry x:Name="PasswordEntry"
+                           AutomationId="JoinPasswordEntry"
+                           Placeholder="Encryption password"
+                           IsPassword="True"
+                           Style="{StaticResource BaseEntry}" />
+
+                    <Label x:Name="ErrorLabel"
+                           TextColor="{StaticResource ErrorColor}"
+                           IsVisible="False"
+                           FontSize="14" />
+
+                    <Button x:Name="JoinButton"
+                            AutomationId="JoinButton"
+                            Text="Join Network"
+                            Style="{StaticResource PrimaryButton}"
+                            Clicked="OnJoinClicked" />
+
+                    <ActivityIndicator x:Name="LoadingIndicator"
+                                       IsRunning="False"
+                                       IsVisible="False"
+                                       Color="{StaticResource PrimaryColor}" />
+                </VerticalStackLayout>
+            </Frame>
+
+        </VerticalStackLayout>
+    </ScrollView>
+
+</ContentPage>

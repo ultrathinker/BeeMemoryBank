@@ -1,0 +1,42 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tree"
+    timeout: 30000
+- tapOn:
+    text: "Tree"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Books"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Books"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 30000
+- tapOn:
+    text: "The Master and Margarita"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TitleLabel"
+    timeout: 30000
+- assertVisible:
+    text: "The Master and Margarita"
+- back
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 30000
+- assertVisible:
+    text: "Books"
+- takeScreenshot: back_to_books

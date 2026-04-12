@@ -1,0 +1,328 @@
+@page
+@model BeeMemoryBank.Web.Pages.UsersModel
+@{
+    ViewData["Title"] = "Users";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <h2 style="margin:0;"><sl-icon name="people"></sl-icon> Users</h2>
+        <sl-button size="small" variant="success" onclick="document.getElementById('dlg-add-user').show()">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add User
+        </sl-button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(Model.SuccessMessage))
+    {
+        <sl-alert variant="success" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="check-circle"></sl-icon>
+            @Model.SuccessMessage
+        </sl-alert>
+    }
+    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+    {
+        <sl-alert variant="danger" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            @Model.ErrorMessage
+        </sl-alert>
+    }
+
+    @if (Model.Users != null && Model.Users.Count > 0)
+    {
+        <div class="card" style="padding:0;overflow:hidden;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Display Name</th>
+                        <th>Role</th>
+                        <th>Created</th>
+                        <th>Last Login</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var user in Model.Users)
+                    {
+                        <tr>
+                            <td><strong>@user.Username</strong></td>
+                            <td>@user.DisplayName</td>
+                            <td>
+                                <sl-badge variant="@(user.Role == "superadmin" ? "warning" : user.Role == "unlocker" ? "primary" : "neutral")" pill>
+                                    @user.Role
+                                </sl-badge>
+                            </td>
+                            <td class="text-muted text-sm">@user.CreatedAt.ToString("g")</td>
+                            <td class="text-muted text-sm">@(user.LastLoginAt?.ToString("g") ?? "—")</td>
+                            <td style="text-align:right;">
+                                @if (user.Role != "superadmin")
+                                {
+                                    <sl-icon-button name="shield-lock" label="Folder Restrictions"
+                                        data-uid="@user.Id" data-name="@user.Username"
+                                        onclick="openRestrictions(this.dataset.uid, this.dataset.name)">
+                                    </sl-icon-button>
+                                }
+                                <sl-icon-button name="key" label="Change Password"
+                                    data-uid="@user.Id" data-name="@user.Username"
+                                    onclick="openChangePassword(this.dataset.uid, this.dataset.name)">
+                                </sl-icon-button>
+                                <sl-icon-button name="pencil" label="Edit"
+                                    data-uid="@user.Id" data-display="@user.DisplayName" data-role="@user.Role"
+                                    onclick="openEditUser(this.dataset.uid, this.dataset.display, this.dataset.role)">
+                                </sl-icon-button>
+                                <sl-icon-button name="trash" label="Delete"
+                                    data-name="@user.Username" onclick="if(confirm('Delete user ' + this.dataset.name + '?')) { document.getElementById('form-del-@user.Id').submit(); }">
+                                </sl-icon-button>
+                                <form id="form-del-@user.Id" method="post" asp-page-handler="Delete" style="display:none;">
+                                    <input type="hidden" name="id" value="@user.Id" />
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;">
+            <sl-icon name="people" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No users found</p>
+        </div>
+    }
+
+    <sl-dialog id="dlg-add-user" label="Add User">
+        <form method="post" asp-page-handler="Create" id="form-add-user">
+            <div style="margin-bottom:16px;">
+                <sl-input name="username" label="Username" required autocomplete="off"></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="displayName" label="Display Name" required autocomplete="off"></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="password" label="Password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-select name="role" label="Role" value="user">
+                    <sl-option value="superadmin">Superadmin</sl-option>
+                    <sl-option value="unlocker">Unlocker</sl-option>
+                    <sl-option value="user">User</sl-option>
+                </sl-select>
+            </div>
+            <sl-button slot="footer" variant="primary" onclick="document.getElementById('form-add-user').submit()">Create User</sl-button>
+        </form>
+    </sl-dialog>
+
+    <sl-dialog id="dlg-change-password" label="Change Password">
+        <form method="post" asp-page-handler="ChangePassword" id="form-change-password">
+            <input type="hidden" id="cp-user-id" name="id" />
+            <p id="cp-user-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
+            <div style="margin-bottom:16px;">
+                <sl-input name="newPassword" label="New Password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <sl-button slot="footer" variant="primary" onclick="document.getElementById('form-change-password').submit()">Change Password</sl-button>
+        </form>
+    </sl-dialog>
+
+    <sl-dialog id="dlg-edit-user" label="Edit User">
+        <form method="post" asp-page-handler="Update" id="form-edit-user">
+            <input type="hidden" id="edit-user-id" name="id" />
+            <div style="margin-bottom:16px;">
+                <sl-input id="edit-display-name" name="displayName" label="Display Name" required></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-select id="edit-role" name="role" label="Role">
+                    <sl-option value="superadmin">Superadmin</sl-option>
+                    <sl-option value="unlocker">Unlocker</sl-option>
+                    <sl-option value="user">User</sl-option>
+                </sl-select>
+            </div>
+            <sl-button slot="footer" variant="primary" onclick="document.getElementById('form-edit-user').submit()">Save</sl-button>
+        </form>
+    </sl-dialog>
+
+    <!-- Folder Restrictions Dialog -->
+    <sl-dialog id="dlg-restrictions" label="Folder Restrictions" style="--width:560px;">
+        <style>
+            #dlg-restrictions::part(panel) { overflow: visible; }
+            #dlg-restrictions::part(body) { overflow: visible; }
+        </style>
+        <div id="restriction-user-name" style="margin-bottom:12px;font-weight:600;"></div>
+
+        <!-- Current restrictions list -->
+        <div id="restriction-list" style="margin-bottom:16px;max-height:300px;overflow-y:auto;border:1px solid var(--sl-color-neutral-200);border-radius:4px;padding:4px 8px;">
+            <!-- Populated by JS: each row = folder path + remove button -->
+        </div>
+
+        <!-- Add new restriction -->
+        <div style="position:relative;">
+            <div style="display:flex;gap:8px;align-items:flex-end;">
+                <sl-input id="restriction-folder-search" label="Add folder restriction" placeholder="Type to search folders..." style="flex:1;" autocomplete="off"></sl-input>
+                <sl-button id="btn-add-restriction" variant="primary" size="small" disabled>
+                    <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add
+                </sl-button>
+            </div>
+            <div id="restriction-folder-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:56px;max-height:240px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
+        </div>
+    </sl-dialog>
+
+</div>
+</div>
+
+<script>
+function openChangePassword(userId, username) {
+    document.getElementById('cp-user-id').value = userId;
+    document.getElementById('cp-user-name').textContent = 'User: ' + username;
+    document.getElementById('dlg-change-password').show();
+}
+
+function openEditUser(userId, displayName, role) {
+    document.getElementById('edit-user-id').value = userId;
+    document.getElementById('edit-display-name').value = displayName;
+    document.getElementById('edit-role').value = role;
+    document.getElementById('dlg-edit-user').show();
+}
+
+// ─── Folder Restrictions ─────────────────────────────────────────────────────
+
+var currentRestrictionUserId = null;
+var currentRestrictionType = 'user';
+var selectedFolderId = null;
+var searchTimer = null;
+
+function escapeHtml(text) {
+    var d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+}
+
+function openRestrictions(userId, userName) {
+    currentRestrictionUserId = userId;
+    currentRestrictionType = 'user';
+    document.getElementById('restriction-user-name').textContent = 'User: ' + userName;
+    loadRestrictions();
+    selectedFolderId = null;
+    document.getElementById('restriction-folder-search').value = '';
+    document.getElementById('restriction-folder-dropdown').style.display = 'none';
+    document.getElementById('btn-add-restriction').disabled = true;
+    document.getElementById('dlg-restrictions').show();
+}
+
+function loadRestrictions() {
+    var url = '/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId;
+    fetch(url).then(function(r) { return r.json(); }).then(function(list) {
+        var container = document.getElementById('restriction-list');
+        if (!list || list.length === 0) {
+            container.innerHTML = '<div style="color:var(--sl-color-neutral-500);font-size:0.9rem;">No restrictions</div>';
+            return;
+        }
+        container.innerHTML = list.map(function(r) {
+            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--sl-color-neutral-200);">' +
+                '<span><sl-icon name="folder2"></sl-icon> ' + escapeHtml(r.folderPath) + '</span>' +
+                '<sl-icon-button name="trash" label="Remove" onclick="removeRestriction(\'' + r.folderId + '\')"></sl-icon-button>' +
+                '</div>';
+        }).join('');
+    }).catch(function() {
+        document.getElementById('restriction-list').innerHTML = '<div style="color:var(--sl-color-danger);font-size:0.9rem;">Failed to load restrictions</div>';
+    });
+}
+
+var folderSearchInput = document.getElementById('restriction-folder-search');
+var folderDropdown = document.getElementById('restriction-folder-dropdown');
+var addBtn = document.getElementById('btn-add-restriction');
+
+folderSearchInput.addEventListener('sl-input', function() {
+    selectedFolderId = null;
+    addBtn.disabled = true;
+    clearTimeout(searchTimer);
+    var q = folderSearchInput.value.trim();
+    if (q.length < 1) { folderDropdown.style.display = 'none'; return; }
+    searchTimer = setTimeout(function() { searchFolders(q); }, 250);
+});
+
+async function searchFolders(q) {
+    try {
+        var resp = await fetch('/api-proxy/folders/search?q=' + encodeURIComponent(q) + '&limit=12');
+        var data = await resp.json();
+        var currentRestrictions = await fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId).then(function(r) { return r.json(); });
+        var restrictedIds = new Set(currentRestrictions.map(function(r) { return r.folderId; }));
+        var folders = (data.folders || []).filter(function(f) { return !restrictedIds.has(f.id); });
+
+        if (folders.length === 0) {
+            folderDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-neutral-500);font-size:0.9rem;">No matching folders</div>';
+        } else {
+            folderDropdown.innerHTML = folders.map(function(f) {
+                return '<div class="folder-search-item" data-id="' + f.id + '" data-path="' + escapeHtml(f.path) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);">' +
+                    '<sl-icon name="folder2" style="margin-right:6px;"></sl-icon>' + escapeHtml(f.path) + '</div>';
+            }).join('');
+            if (data.hasMore) {
+                folderDropdown.innerHTML += '<div style="padding:6px 12px;color:var(--sl-color-neutral-400);font-size:0.8rem;text-align:center;">Type more to narrow results...</div>';
+            }
+        }
+        folderDropdown.style.display = 'block';
+    } catch (e) {
+        folderDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-danger-600);">Search failed</div>';
+        folderDropdown.style.display = 'block';
+    }
+}
+
+folderDropdown.addEventListener('click', function(e) {
+    var item = e.target.closest('.folder-search-item');
+    if (!item) return;
+    selectedFolderId = item.dataset.id;
+    folderSearchInput.value = item.dataset.path;
+    folderDropdown.style.display = 'none';
+    addBtn.disabled = false;
+});
+
+folderDropdown.addEventListener('mouseover', function(e) {
+    var item = e.target.closest('.folder-search-item');
+    if (item) item.style.background = 'var(--sl-color-primary-50)';
+});
+folderDropdown.addEventListener('mouseout', function(e) {
+    var item = e.target.closest('.folder-search-item');
+    if (item) item.style.background = '';
+});
+
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('#restriction-folder-search') && !e.target.closest('#restriction-folder-dropdown')) {
+        folderDropdown.style.display = 'none';
+    }
+});
+
+function addRestriction() {
+    if (!selectedFolderId) return;
+    fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderId: selectedFolderId })
+    }).then(function(r) {
+        if (r.ok) {
+            selectedFolderId = null;
+            folderSearchInput.value = '';
+            addBtn.disabled = true;
+            folderDropdown.style.display = 'none';
+            loadRestrictions();
+        } else {
+            alert('Failed to add restriction');
+        }
+    });
+}
+
+function removeRestriction(folderId) {
+    fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId + '/' + folderId, {
+        method: 'DELETE'
+    }).then(function(r) {
+        if (r.ok) {
+            loadRestrictions();
+        } else {
+            alert('Failed to remove restriction');
+        }
+    });
+}
+
+addBtn.addEventListener('click', addRestriction);
+</script>

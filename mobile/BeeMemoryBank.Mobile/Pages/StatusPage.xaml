@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.StatusPage"
+             Title="BeeMemoryBank"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <RefreshView x:Name="RefreshView" Refreshing="OnRefreshing">
+        <ScrollView>
+            <VerticalStackLayout Padding="16" Spacing="12">
+
+                <Frame Style="{StaticResource CardFrame}" x:Name="WarningBanner" IsVisible="False"
+                       BackgroundColor="#FFF8E1" BorderColor="#FFB300">
+                    <VerticalStackLayout>
+                        <Label Text="Action Required"
+                               FontAttributes="Bold"
+                               FontSize="16"
+                               TextColor="#E65100" />
+                        <Label Text="Add this node to your-server.example.com/Admin to enable sync."
+                               LineBreakMode="WordWrap"
+                               TextColor="#BF360C" />
+                    </VerticalStackLayout>
+                </Frame>
+
+                <Frame Style="{StaticResource CardFrame}">
+                    <VerticalStackLayout Spacing="8">
+                        <Label Text="Node Info" FontAttributes="Bold" FontSize="18" />
+
+                        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                            <Label Grid.Row="0" Grid.Column="0" Text="Name:" FontAttributes="Bold" />
+                            <Label Grid.Row="0" Grid.Column="1" Text="{Binding NodeName}" />
+
+                            <Label Grid.Row="1" Grid.Column="0" Text="Node ID:" FontAttributes="Bold" />
+                            <Label Grid.Row="1" Grid.Column="1" Text="{Binding NodeIdShort}"
+                                   TextColor="{StaticResource PrimaryColor}"
+                                   TextDecorations="Underline">
+                                <Label.GestureRecognizers>
+                                    <TapGestureRecognizer Tapped="OnCopyNodeIdClicked" />
+                                </Label.GestureRecognizers>
+                            </Label>
+
+                            <Label Grid.Row="2" Grid.Column="0" Text="Public Key:" FontAttributes="Bold" />
+                            <Label Grid.Row="2" Grid.Column="1" Text="{Binding PublicKeyB64}"
+                                   LineBreakMode="TailTruncation" MaximumWidthRequest="200"
+                                   TextColor="{StaticResource PrimaryColor}"
+                                   TextDecorations="Underline">
+                                <Label.GestureRecognizers>
+                                    <TapGestureRecognizer Tapped="OnCopyPublicKeyClicked" />
+                                </Label.GestureRecognizers>
+                            </Label>
+                        </Grid>
+                    </VerticalStackLayout>
+                </Frame>
+
+                <Frame Style="{StaticResource CardFrame}">
+                    <VerticalStackLayout Spacing="8">
+                        <Label Text="Sync Status" FontAttributes="Bold" FontSize="18" />
+
+                        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                            <Label Grid.Row="0" Grid.Column="0" Text="Status:" FontAttributes="Bold" />
+                            <Label Grid.Row="0" Grid.Column="1" Text="{Binding StatusText}" />
+
+                            <Label Grid.Row="1" Grid.Column="0" Text="Last sync:" FontAttributes="Bold" />
+                            <Label Grid.Row="1" Grid.Column="1" Text="{Binding LastSyncTime, StringFormat='{0:yyyy-MM-dd HH:mm}'}" />
+
+                            <Label Grid.Row="2" Grid.Column="0" Text="Articles:" FontAttributes="Bold" />
+                            <Label Grid.Row="2" Grid.Column="1" Text="{Binding ArticleCount, StringFormat='{}{0} in local DB'}" />
+                        </Grid>
+
+                        <!-- Invisible Mode Toggle -->
+                        <Frame BackgroundColor="#331A1A" BorderColor="#FF4444" Padding="12" Margin="0,8,0,0">
+                            <HorizontalStackLayout Spacing="12">
+                                <Switch IsToggled="{Binding IsInvisible}" OnColor="#FF4444" />
+                                <VerticalStackLayout VerticalOptions="Center">
+                                    <Label Text="Invisible Mode" FontAttributes="Bold" TextColor="#FF4444" />
+                                    <Label Text="Other nodes won't see you and you won't sync." 
+                                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                                </VerticalStackLayout>
+                            </HorizontalStackLayout>
+                        </Frame>
+
+                    </VerticalStackLayout>
+                </Frame>
+
+                <Frame Style="{StaticResource CardFrame}" x:Name="PeersCard">
+                    <VerticalStackLayout Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <Label Grid.Column="0" Text="Peers" FontAttributes="Bold" FontSize="18" VerticalOptions="Center" />
+                            <Button Grid.Column="1" Text="+ Add Node"
+                                    AutomationId="AddPeerButton"
+                                    FontSize="12" Padding="8,4"
+                                    BackgroundColor="{StaticResource PrimaryColor}"
+                                    TextColor="White"
+                                    Clicked="OnAddPeerClicked" />
+                        </Grid>
+                        <CollectionView x:Name="PeersList"
+                                        AutomationId="PeersList"
+                                        SelectionMode="None"
+                                        EmptyView="No peers configured.">
+                            <CollectionView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid ColumnDefinitions="*,Auto,Auto" Padding="0,6" ColumnSpacing="8">
+                                        <VerticalStackLayout Grid.Column="0" Spacing="2">
+                                            <Label Text="{Binding DisplayName}" FontAttributes="Bold" FontSize="14" />
+                                            <Label Text="{Binding ApiAddress}" FontSize="12"
+                                                   TextColor="{StaticResource SecondaryTextColor}"
+                                                   LineBreakMode="TailTruncation" />
+                                        </VerticalStackLayout>
+                                        <Button Grid.Column="1" Text="Edit URL"
+                                                FontSize="12" Padding="8,4"
+                                                BackgroundColor="{StaticResource PrimaryColor}"
+                                                TextColor="White"
+                                                CommandParameter="{Binding .}"
+                                                Clicked="OnEditPeerUrlClicked" />
+                                        <Button Grid.Column="2" Text="✕"
+                                                FontSize="14" Padding="8,4"
+                                                BackgroundColor="{StaticResource ErrorColor}"
+                                                TextColor="White"
+                                                CommandParameter="{Binding .}"
+                                                Clicked="OnRemovePeerClicked" />
+                                    </Grid>
+                                </DataTemplate>
+                            </CollectionView.ItemTemplate>
+                        </CollectionView>
+                    </VerticalStackLayout>
+                </Frame>
+
+                <Button x:Name="SyncNowButton"
+                        AutomationId="SyncNowButton"
+                        Text="Sync Now"
+                        Style="{StaticResource PrimaryButton}"
+                        Clicked="OnSyncNowClicked" />
+
+                <Button x:Name="ToggleSyncButton"
+                        AutomationId="ToggleSyncButton"
+                        Text="Stop Sync Service"
+                        Style="{StaticResource PrimaryButton}"
+                        BackgroundColor="{StaticResource ErrorColor}"
+                        Clicked="OnToggleSyncClicked" />
+
+                <Button x:Name="ResetNodeButton"
+                        AutomationId="ResetNodeButton"
+                        Text="Reset Node"
+                        Style="{StaticResource PrimaryButton}"
+                        BackgroundColor="{StaticResource ErrorColor}"
+                        Clicked="OnResetNodeClicked" />
+
+                <Frame Style="{StaticResource CardFrame}" x:Name="ActivityCard">
+                    <VerticalStackLayout Spacing="8">
+                        <Label Text="Recent Activity" FontAttributes="Bold" FontSize="18" />
+                        <CollectionView x:Name="ActivityList"
+                                        AutomationId="ActivityList"
+                                        SelectionMode="None"
+                                        EmptyView="No recent activity.">
+                            <CollectionView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10"
+                                          Padding="0,5">
+                                        <Label Grid.Column="0"
+                                               Text="{Binding Icon}"
+                                               FontSize="18"
+                                               VerticalOptions="Center" />
+                                        <VerticalStackLayout Grid.Column="1" Spacing="1" VerticalOptions="Center">
+                                            <Label Text="{Binding Summary}"
+                                                   FontSize="13"
+                                                   LineBreakMode="TailTruncation" />
+                                            <Label Text="{Binding ActorName}"
+                                                   FontSize="11"
+                                                   TextColor="{StaticResource SecondaryTextColor}" />
+                                        </VerticalStackLayout>
+                                        <Label Grid.Column="2"
+                                               Text="{Binding TimeAgo}"
+                                               FontSize="11"
+                                               TextColor="{StaticResource SecondaryTextColor}"
+                                               VerticalOptions="Center" />
+                                    </Grid>
+                                </DataTemplate>
+                            </CollectionView.ItemTemplate>
+                        </CollectionView>
+                    </VerticalStackLayout>
+                </Frame>
+
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+</ContentPage>

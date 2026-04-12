@@ -1,0 +1,270 @@
+@page
+@model FolderModel
+@{
+    ViewData["Title"] = Model.FolderName;
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <h2 style="font-size:1.4rem;font-weight:700;">
+            <sl-icon name="folder2-open" style="margin-right:6px;"></sl-icon>@Model.FolderName
+        </h2>
+        <div class="toolbar">
+            <sl-button size="small" variant="success" href="/Article/Edit?treePath=@Uri.EscapeDataString(Model.CurrentPath)">
+                <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
+            </sl-button>
+            <sl-button size="small" variant="success" onclick="document.getElementById('dlg-add-subfolder').show()">
+                <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-rename-folder').show()">
+                <sl-icon slot="prefix" name="pencil"></sl-icon> Rename
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-folder').show()">
+                <sl-icon slot="prefix" name="folder-symlink"></sl-icon> Move
+            </sl-button>
+            <sl-button size="small" variant="default" href="/api-proxy/folders/download?path=@Uri.EscapeDataString(Model.CurrentPath)">
+                <sl-icon slot="prefix" name="file-zip"></sl-icon> Download
+            </sl-button>
+            <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-folder').show()">
+                <sl-icon slot="prefix" name="trash"></sl-icon> Delete
+            </sl-button>
+        </div>
+    </div>
+
+    <p class="text-muted text-sm" style="margin-bottom:20px;">
+        <sl-icon name="folder2"></sl-icon> @Model.CurrentPath
+    </p>
+
+    @if (Model.Children != null && Model.Children.Folders.Count > 0)
+    {
+        <div class="card">
+            <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-secondary);margin-bottom:12px;">
+                <sl-icon name="diagram-3"></sl-icon> Subfolders
+            </h4>
+            @foreach (var folder in Model.Children.Folders)
+            {
+                <a href="/Folder?path=@Uri.EscapeDataString(folder.Path)" class="node-child-item">
+                    <sl-icon name="folder2"></sl-icon> @folder.Name
+                    <sl-badge variant="neutral" pill>@folder.ArticleCount</sl-badge>
+                </a>
+            }
+        </div>
+    }
+
+    @if (Model.Children != null && Model.Children.Articles.Count > 0)
+    {
+        <div class="card">
+            <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-secondary);margin-bottom:12px;">
+                <sl-icon name="file-earmark-text"></sl-icon> Articles
+            </h4>
+            @foreach (var article in Model.Children.Articles)
+            {
+                <div class="article-list-item">
+                    <div>
+                        <a href="/Article/View?id=@article.Id">@article.Title</a>
+                        @foreach (var tag in article.Tags)
+                        {
+                            <sl-tag size="small" variant="primary" pill style="margin-left:4px;">@tag</sl-tag>
+                        }
+                    </div>
+                    <span class="text-muted text-sm">@article.UpdatedAt.ToString("d")</span>
+                </div>
+            }
+        </div>
+    }
+
+    @if (Model.Children == null || (Model.Children.Folders.Count == 0 && Model.Children.Articles.Count == 0))
+    {
+        <div class="card" style="text-align:center;padding:40px;">
+            <sl-icon name="folder2" style="font-size:3rem;color:var(--text-secondary);"></sl-icon>
+            <p style="margin-top:12px;color:var(--text-secondary);">This folder is empty</p>
+            <sl-button size="small" variant="primary" href="/Article/Edit?treePath=@Uri.EscapeDataString(Model.CurrentPath)" style="margin-top:12px;">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Article
+            </sl-button>
+        </div>
+    }
+
+<!-- Move folder dialog -->
+<sl-dialog id="dlg-move-folder" label="Move Folder" style="--width:560px;">
+    <style>
+        #dlg-move-folder::part(panel) { overflow: visible; }
+        #dlg-move-folder::part(body) { overflow: visible; }
+    </style>
+    <p class="text-muted text-sm">Moving: <code>@Model.CurrentPath</code></p>
+    <div style="position:relative;">
+        <sl-input id="move-folder-search" label="Destination parent folder" placeholder="Type to search or leave empty for root (/)" autocomplete="off"></sl-input>
+        <div id="move-folder-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:0;max-height:240px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
+    </div>
+    <sl-button id="btn-move-folder" slot="footer" variant="primary">Move</sl-button>
+</sl-dialog>
+
+<!-- Rename folder dialog -->
+<sl-dialog id="dlg-rename-folder" label="Rename Folder">
+    <p class="text-muted text-sm">Current path: <code>@Model.CurrentPath</code></p>
+    <sl-input id="rename-new-path" label="New path" value="@Model.CurrentPath" required></sl-input>
+    <sl-button id="btn-rename-folder" slot="footer" variant="primary">Rename</sl-button>
+</sl-dialog>
+
+<!-- Add subfolder dialog -->
+<sl-dialog id="dlg-add-subfolder" label="Add Subfolder">
+    <p class="text-muted text-sm">Parent: <code>@Model.CurrentPath</code></p>
+    <sl-input id="add-subfolder-name" label="Folder name" placeholder="New Folder" required autofocus></sl-input>
+    <sl-button id="btn-add-subfolder" slot="footer" variant="primary">Create</sl-button>
+</sl-dialog>
+
+<!-- Delete folder dialog -->
+<sl-dialog id="dlg-delete-folder" label="Delete Folder">
+    <sl-alert variant="danger" open>
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        All articles in <strong>@Model.CurrentPath</strong> and subfolders will be deleted!
+    </sl-alert>
+    <sl-button id="btn-confirm-delete-folder" slot="footer" variant="danger">Delete All</sl-button>
+</sl-dialog>
+
+<script>
+(function() {
+    var currentPath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath));
+    var moveSelectedPath = null;
+    var moveSearchTimer = null;
+
+    function escapeHtml(text) {
+        var d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    var moveFolderSearch = document.getElementById('move-folder-search');
+    var moveFolderDropdown = document.getElementById('move-folder-dropdown');
+
+    if (moveFolderSearch) {
+        moveFolderSearch.addEventListener('sl-input', function() {
+            moveSelectedPath = null;
+            clearTimeout(moveSearchTimer);
+            var q = moveFolderSearch.value.trim();
+            if (q.length < 1) { moveFolderDropdown.style.display = 'none'; return; }
+            moveSearchTimer = setTimeout(function() {
+                fetch('/api-proxy/folders/search?q=' + encodeURIComponent(q) + '&limit=12')
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var folders = data.folders || [];
+                        if (folders.length === 0) {
+                            moveFolderDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-neutral-500);font-size:0.9rem;">No matching folders</div>';
+                        } else {
+                            moveFolderDropdown.innerHTML = folders.map(function(f) {
+                                return '<div class="folder-search-item" data-path="' + escapeHtml(f.path) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);">' +
+                                    '<sl-icon name="folder2" style="margin-right:6px;"></sl-icon>' + escapeHtml(f.path) + '</div>';
+                            }).join('');
+                            if (data.hasMore) {
+                                moveFolderDropdown.innerHTML += '<div style="padding:6px 12px;color:var(--sl-color-neutral-400);font-size:0.8rem;text-align:center;">Type more to narrow results...</div>';
+                            }
+                        }
+                        moveFolderDropdown.style.display = 'block';
+                    });
+            }, 250);
+        });
+
+        moveFolderDropdown.addEventListener('click', function(e) {
+            var item = e.target.closest('.folder-search-item');
+            if (!item) return;
+            moveSelectedPath = item.dataset.path;
+            moveFolderSearch.value = moveSelectedPath;
+            moveFolderDropdown.style.display = 'none';
+        });
+
+        moveFolderDropdown.addEventListener('mouseover', function(e) {
+            var item = e.target.closest('.folder-search-item');
+            if (item) item.style.background = 'var(--sl-color-primary-50)';
+        });
+        moveFolderDropdown.addEventListener('mouseout', function(e) {
+            var item = e.target.closest('.folder-search-item');
+            if (item) item.style.background = '';
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('#move-folder-search') && !e.target.closest('#move-folder-dropdown')) {
+                moveFolderDropdown.style.display = 'none';
+            }
+        });
+    }
+
+    var moveBtn = document.getElementById('btn-move-folder');
+    if (moveBtn) {
+        moveBtn.addEventListener('click', function() {
+            var inputVal = moveFolderSearch.value.trim();
+            if (inputVal && !moveSelectedPath) {
+                alert('Please select a folder from the search results.');
+                return;
+            }
+            var newParentPath = moveSelectedPath || '/';
+            var folderName = currentPath.replace(/\/$/, '').split('/').pop();
+            var newPath = newParentPath.replace(/\/$/, '') + '/' + folderName;
+            if (newPath === currentPath) { alert('Already in that folder'); return; }
+            moveBtn.loading = true;
+            fetch('/api-proxy/folders/move?path=' + encodeURIComponent(currentPath), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ newParentPath: newParentPath })
+            }).then(function(r) {
+                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
+                else alert('Move failed');
+            }).catch(function() { alert('Error'); }).finally(function() { moveBtn.loading = false; });
+        });
+    }
+
+    var renameBtn = document.getElementById('btn-rename-folder');
+    if (renameBtn) {
+        renameBtn.addEventListener('click', function() {
+            var newPath = document.getElementById('rename-new-path').value.trim();
+            if (!newPath || newPath === currentPath) return;
+            renameBtn.loading = true;
+            fetch('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ newPath: newPath })
+            }).then(function(r) {
+                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
+                else alert('Rename failed');
+            }).catch(function() { alert('Error'); }).finally(function() { renameBtn.loading = false; });
+        });
+    }
+
+    var addSubBtn = document.getElementById('btn-add-subfolder');
+    if (addSubBtn) {
+        addSubBtn.addEventListener('click', function() {
+            var nameInput = document.getElementById('add-subfolder-name');
+            var name = (nameInput.value || '').trim();
+            if (!name) return;
+            addSubBtn.loading = true;
+            var newPath = currentPath.replace(/\/$/, '') + '/' + name;
+            fetch('/api-proxy/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: newPath })
+            }).then(function(r) {
+                if (r.ok) {
+                    document.getElementById('dlg-add-subfolder').hide();
+                    window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
+                } else {
+                    r.json().then(function(d) { alert(d.error || 'Failed to create folder'); }).catch(function() { alert('Failed to create folder'); });
+                }
+            }).catch(function() { alert('Error'); }).finally(function() { addSubBtn.loading = false; });
+        });
+    }
+
+    var deleteBtn = document.getElementById('btn-confirm-delete-folder');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function() {
+            deleteBtn.loading = true;
+            fetch('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
+                method: 'DELETE'
+            }).then(function(r) {
+                if (r.ok) window.location.href = '/Tree';
+                else alert('Delete failed');
+            }).catch(function() { alert('Error'); }).finally(function() { deleteBtn.loading = false; });
+        });
+    }
+})();
+</script>
+</div>
+</div>

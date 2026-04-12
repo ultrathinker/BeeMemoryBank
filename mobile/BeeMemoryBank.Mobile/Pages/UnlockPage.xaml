@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.UnlockPage"
+             Title="Unlock"
+             BackgroundColor="{StaticResource BackgroundColor}"
+             Shell.FlyoutBehavior="Disabled"
+             Shell.NavBarIsVisible="False">
+
+    <VerticalStackLayout Padding="32" Spacing="16" VerticalOptions="Center">
+
+        <Label Text="BeeMemoryBank"
+               FontSize="28"
+               FontAttributes="Bold"
+               HorizontalOptions="Center"
+               TextColor="{StaticResource PrimaryColor}" />
+
+        <Label x:Name="SubtitleLabel"
+               Text="Enter password to unlock"
+               FontSize="16"
+               HorizontalOptions="Center"
+               TextColor="{StaticResource SecondaryTextColor}" />
+
+        <!-- Fingerprint button — shown only when biometric is enrolled and password is stored -->
+        <Button x:Name="FingerprintButton"
+                AutomationId="FingerprintButton"
+                Text="🔑  Use Fingerprint"
+                Style="{StaticResource PrimaryButton}"
+                IsVisible="False"
+                Clicked="OnFingerprintClicked" />
+
+        <Label x:Name="OrLabel"
+               Text="— or enter password —"
+               FontSize="13"
+               HorizontalOptions="Center"
+               TextColor="{StaticResource SecondaryTextColor}"
+               IsVisible="False" />
+
+        <Entry x:Name="PasswordEntry"
+               AutomationId="PasswordEntry"
+               Style="{StaticResource BaseEntry}"
+               Placeholder="Password"
+               IsPassword="True"
+               ReturnType="Done"
+               ReturnCommand="{Binding Source={x:Reference UnlockButton}, Path=Command}" />
+
+        <Label x:Name="ErrorLabel"
+               TextColor="{StaticResource ErrorColor}"
+               IsVisible="False" />
+
+        <Button x:Name="UnlockButton"
+                AutomationId="UnlockButton"
+                Text="Unlock"
+                Style="{StaticResource PrimaryButton}"
+                Clicked="OnUnlockClicked" />
+
+        <ActivityIndicator x:Name="LoadingIndicator"
+                           IsRunning="False"
+                           IsVisible="False"
+                           Color="{StaticResource PrimaryColor}" />
+
+    </VerticalStackLayout>
+
+</ContentPage>

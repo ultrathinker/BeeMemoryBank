@@ -1,0 +1,52 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.DotSettings.user
+
+## IDE
+.vs/
+.idea/
+.vscode/
+
+## Data
+data/
+*.db
+*.db-journal
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Environment
+.env
+
+## Node
+node_modules/
+**/node_modules/
+
+## Agent context files
+CLAUDE.md
+AGENTS.md
+QWEN.md
+GEMINI.md
+_docs/
+_reports/
+_prompt*.txt
+_status*.txt
+_*_article.md
+_audit_report*.md
+
+## Maestro test screenshots (auto-generated during test runs)
+*.png
+
+## Build artifacts (deploy via git pull on private nodes only)
+publish/
+
+## Claude Code local config
+.claude/
+
+## Secrets
+*.pfx
+*.keystore

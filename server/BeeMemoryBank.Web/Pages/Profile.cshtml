@@ -1,0 +1,108 @@
+@page
+@model BeeMemoryBank.Web.Pages.ProfileModel
+@{
+    ViewData["Title"] = "Profile";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <h2 style="margin:0;"><sl-icon name="person-circle"></sl-icon> Profile</h2>
+    </div>
+
+    <div class="card" style="max-width:500px;">
+        <div style="margin-bottom:20px;">
+            <div style="margin-bottom:12px;">
+                <sl-input label="Username" value="@Model.Username" readonly autocomplete="username"></sl-input>
+            </div>
+            <div style="margin-bottom:12px;">
+                <sl-input label="Display Name" value="@Model.DisplayName" readonly></sl-input>
+            </div>
+            <div><strong>Role:</strong>
+                <sl-badge variant="@(Model.Role == "superadmin" ? "warning" : Model.Role == "unlocker" ? "primary" : "neutral")" pill style="margin-left:6px;">
+                    @Model.Role
+                </sl-badge>
+            </div>
+        </div>
+
+        <sl-divider></sl-divider>
+
+        <h3 style="margin:16px 0 12px;"><sl-icon name="key"></sl-icon> Change Password</h3>
+
+        <div id="cp-alert" style="display:none;margin-bottom:16px;"></div>
+
+        <div style="margin-bottom:16px;">
+            <sl-input id="cp-old" label="Current Password" type="password" password-toggle required autocomplete="current-password"></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input id="cp-new" label="New Password" type="password" password-toggle required autocomplete="new-password"></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input id="cp-confirm" label="Confirm New Password" type="password" password-toggle required autocomplete="new-password"></sl-input>
+        </div>
+        <sl-button id="btn-change-password" variant="primary">
+            <sl-icon slot="prefix" name="check-lg"></sl-icon> Change Password
+        </sl-button>
+    </div>
+</div>
+</div>
+
+<script>
+document.getElementById('btn-change-password').addEventListener('click', function() {
+    var btn = this;
+    var oldPw = document.getElementById('cp-old').value;
+    var newPw = document.getElementById('cp-new').value;
+    var confirmPw = document.getElementById('cp-confirm').value;
+    var alertEl = document.getElementById('cp-alert');
+
+    if (!oldPw || !newPw || !confirmPw) {
+        showAlert('danger', 'All fields are required.');
+        return;
+    }
+    if (newPw !== confirmPw) {
+        showAlert('danger', 'New passwords do not match.');
+        return;
+    }
+    if (newPw.length < 6 || !/[A-Z]/.test(newPw) || !/[a-z]/.test(newPw) || !/[0-9]/.test(newPw)) {
+        showAlert('danger', 'Password must be at least 6 characters with uppercase, lowercase, and a digit.');
+        return;
+    }
+
+    btn.loading = true;
+    fetch('/api-proxy/users/me/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
+    }).then(function(r) {
+        if (r.ok) {
+            showAlert('success', 'Password changed successfully.');
+            document.getElementById('cp-old').value = '';
+            document.getElementById('cp-new').value = '';
+            document.getElementById('cp-confirm').value = '';
+        } else {
+            return r.json().then(function(data) {
+                showAlert('danger', data.error || 'Failed to change password.');
+            });
+        }
+    }).catch(function() {
+        showAlert('danger', 'Network error.');
+    }).finally(function() {
+        btn.loading = false;
+    });
+});
+
+function escapeHtml(text) {
+    var d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+}
+
+function showAlert(variant, message) {
+    var alertEl = document.getElementById('cp-alert');
+    var icon = variant === 'success' ? 'check-circle' : 'exclamation-triangle';
+    alertEl.innerHTML = '<sl-alert variant="' + variant + '" open closable><sl-icon slot="icon" name="' + icon + '"></sl-icon>' + escapeHtml(message) + '</sl-alert>';
+    alertEl.style.display = 'block';
+}
+</script>
