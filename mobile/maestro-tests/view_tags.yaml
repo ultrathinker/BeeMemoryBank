@@ -1,0 +1,16 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tags"
+    timeout: 3000
+- tapOn:
+    text: "Tags"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TagsList"
+    timeout: 10000
+- takeScreenshot: view_tags

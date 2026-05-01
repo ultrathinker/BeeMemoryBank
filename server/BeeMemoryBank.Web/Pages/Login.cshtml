@@ -1,0 +1,142 @@
+@page
+@model LoginModel
+@{
+    ViewData["Title"] = "Login";
+}
+
+@{
+    var dekActive = Model.DekRotationProgress != null
+        && Model.DekRotationProgress.CurrentStep != "Idle"
+        && Model.DekRotationProgress.CurrentStep != "Completed"
+        && Model.DekRotationProgress.CurrentStep != "Failed";
+}
+
+<div class="login-wrapper">
+@if (dekActive)
+{
+    <div class="login-card">
+        <h2><sl-icon name="shield-lock"></sl-icon> DEK Rotation in Progress</h2>
+
+        <sl-alert variant="warning" open style="margin:16px 0;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            The encryption key is being rotated. Login is unavailable until the operation completes.
+        </sl-alert>
+
+        <div style="margin:16px 0;">
+            <strong>Step:</strong> @Model.DekRotationProgress!.CurrentStep
+        </div>
+        <sl-progress-bar value="@Model.DekRotationProgress.PercentageComplete"></sl-progress-bar>
+        @if (!string.IsNullOrEmpty(Model.DekRotationProgress.StatusMessage))
+        {
+            <p class="text-muted">@Model.DekRotationProgress.StatusMessage</p>
+        }
+
+        @if (!string.IsNullOrEmpty(Model.DekRotationProgress.ErrorMessage))
+        {
+            <sl-alert variant="warning" open style="margin-top:16px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                @Model.DekRotationProgress.ErrorMessage
+            </sl-alert>
+        }
+
+        <p class="text-muted text-sm" style="margin-top:24px;">
+            This page refreshes automatically every 3 seconds.
+        </p>
+    </div>
+
+    <script>
+        if (!document.getElementById('login-form-active')) {
+            setTimeout(() => location.reload(), 3000);
+        }
+    </script>
+}
+else if (Model.RestoreProgress != null && Model.RestoreProgress.CurrentStep != "Idle" && Model.RestoreProgress.CurrentStep != "Completed")
+{
+    <div class="login-card">
+        <h2><sl-icon name="arrow-clockwise"></sl-icon> Network Restoration in Progress</h2>
+
+        <div style="margin:16px 0;">
+            <strong>Step:</strong> @Model.RestoreProgress.CurrentStep
+        </div>
+        <sl-progress-bar value="@Model.RestoreProgress.PercentageComplete"></sl-progress-bar>
+        <p class="text-muted">@Model.RestoreProgress.StatusMessage</p>
+
+        @if (!string.IsNullOrEmpty(Model.RestoreProgress.ErrorMessage))
+        {
+            <sl-alert variant="warning" open style="margin-top:16px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                @Model.RestoreProgress.ErrorMessage
+            </sl-alert>
+        }
+
+        @if (Model.RestoreProgress.RequiresMasterPassword)
+        {
+            <form method="post" asp-page-handler="ContinueWithoutBackup" style="margin-top:16px;">
+                <input type="hidden" name="eventId" value="@Model.RestoreProgress.EventId" />
+                <p class="text-muted">Not enough disk space for a safety backup. Enter your master password to continue without a backup:</p>
+                <sl-input name="masterPassword" type="password" required password-toggle
+                          label="Master password (override)" style="margin-bottom:12px;"></sl-input>
+                <sl-button type="submit" variant="warning" style="width:100%;">
+                    Continue without backup
+                </sl-button>
+            </form>
+        }
+
+        <p class="text-muted text-sm" style="margin-top:24px;">
+            This page refreshes automatically every 2 seconds.
+        </p>
+    </div>
+
+    <script>
+        if (!document.getElementById('login-form-active')) {
+            setTimeout(() => location.reload(), 2000);
+        }
+    </script>
+}
+else
+{
+    <div id="login-form-active" class="login-card">
+        <h2><sl-icon name="shield-lock" style="margin-right:6px;"></sl-icon> Login</h2>
+
+        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <sl-alert variant="danger" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @Model.ErrorMessage
+            </sl-alert>
+        }
+
+        <form method="post" class="sl-form">
+            <div style="margin-bottom:16px;">
+                <sl-input name="username" label="Login" required autofocus></sl-input>
+            </div>
+            <div style="margin-bottom:20px;">
+                <sl-input name="password" label="Password" type="password" required password-toggle></sl-input>
+            </div>
+            <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+            <sl-button type="submit" variant="primary" style="width:100%;">
+                <sl-icon slot="prefix" name="box-arrow-in-right"></sl-icon> Sign In
+            </sl-button>
+        </form>
+
+        <sl-details summary="Node out-of-sync? Reset & rejoin..." style="margin-top:24px;">
+            <sl-alert variant="warning" open>
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>Destructive operation.</strong> Wipes all local data including node identity and whitelist.
+                Use this only if the sync status shows "Snapshot required" or if you want to rejoin a different network.
+                <br/><br/>
+                <form method="post" asp-page-handler="Reset" onsubmit="return confirm('This will DELETE all local articles, folders, keys, and sync state. Proceed?');">
+                    @Html.AntiForgeryToken()
+                    <sl-input name="masterPassword" type="password" required password-toggle
+                              label="Master password (verification)" placeholder="required to confirm"
+                              style="margin-bottom:12px;"></sl-input>
+                    <sl-button type="submit" variant="danger" style="width:100%;">
+                        <sl-icon slot="prefix" name="trash"></sl-icon>
+                        Wipe &amp; rejoin
+                    </sl-button>
+                </form>
+            </sl-alert>
+        </sl-details>
+    </div>
+}
+</div>

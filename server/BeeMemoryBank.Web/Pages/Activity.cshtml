@@ -1,0 +1,91 @@
+@page
+@model BeeMemoryBank.Web.Pages.ActivityModel
+@{
+    ViewData["Title"] = "Activity";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <h2 style="margin-bottom:20px;"><sl-icon name="activity"></sl-icon> Activity</h2>
+
+    @if (Model.Items.Count > 0)
+    {
+        <p class="text-muted text-sm mb-md">
+            Total: @Model.Total events — page @Model.CurrentPage of @Model.TotalPages
+        </p>
+        <div class="card">
+            @foreach (var item in Model.Items)
+            {
+                <div class="article-list-item" style="flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;flex-wrap:wrap;">
+                        <sl-badge variant="@ActivityModel.GetEventVariant(item.EventType)" pill>@item.EventType</sl-badge>
+                        @if (item.ArticleId.HasValue)
+                        {
+                            @if (item.ArticleTitle != null)
+                            {
+                                <a href="/Article/View?id=@item.ArticleId">@item.ArticleTitle</a>
+                            }
+                            else
+                            {
+                                <span class="text-muted">@($"(deleted) {item.ArticleId.Value.ToString()[..8]}…")</span>
+                            }
+                        }
+                        @if (!string.IsNullOrEmpty(item.TreePath))
+                        {
+                            @if (item.EventType.Contains("deleted"))
+                            {
+                                <span class="text-muted text-sm"><sl-icon name="folder2"></sl-icon> @item.TreePath <sl-badge variant="neutral" pill style="font-size:0.65rem;">deleted</sl-badge></span>
+                            }
+                            else
+                            {
+                                <a href="/Folder?path=@Uri.EscapeDataString(item.TreePath)" class="text-muted text-sm"><sl-icon name="folder2"></sl-icon> @item.TreePath</a>
+                            }
+                        }
+                        @if (!string.IsNullOrEmpty(item.NodeName))
+                        {
+                            <sl-badge variant="neutral" pill>@item.NodeName</sl-badge>
+                        }
+                        @if (!string.IsNullOrEmpty(item.ActorType))
+                        {
+                            <sl-badge variant="@(item.ActorType == "agent" ? "primary" : "neutral")" pill>@item.ActorType@(item.ActorName != null ? $": {item.ActorName}" : "")</sl-badge>
+                        }
+                        @if (!string.IsNullOrEmpty(item.ViaAgentName))
+                        {
+                            <sl-badge variant="warning" pill>via agent: @item.ViaAgentName</sl-badge>
+                        }
+                    </div>
+                    <span class="text-muted text-sm" style="white-space:nowrap;">@item.Timestamp.ToString("g")</span>
+                </div>
+            }
+        </div>
+
+        @if (Model.TotalPages > 1)
+        {
+            <div style="display:flex;justify-content:center;gap:8px;margin-top:20px;">
+                @if (Model.CurrentPage > 1)
+                {
+                    <sl-button size="small" href="/Activity?page=@(Model.CurrentPage - 1)">
+                        <sl-icon slot="prefix" name="chevron-left"></sl-icon> Prev
+                    </sl-button>
+                }
+                <span class="text-muted text-sm" style="line-height:32px;">@Model.CurrentPage / @Model.TotalPages</span>
+                @if (Model.CurrentPage < Model.TotalPages)
+                {
+                    <sl-button size="small" href="/Activity?page=@(Model.CurrentPage + 1)">
+                        Next <sl-icon slot="suffix" name="chevron-right"></sl-icon>
+                    </sl-button>
+                }
+            </div>
+        }
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;">
+            <sl-icon name="activity" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No events recorded yet</p>
+        </div>
+    }
+</div>
+</div>

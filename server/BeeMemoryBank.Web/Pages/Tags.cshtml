@@ -1,0 +1,240 @@
+@page
+@model BeeMemoryBank.Web.Pages.TagsModel
+@{
+    ViewData["Title"] = "Tags";
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h1 style="font-size:1.5rem;margin:0;">
+            <sl-icon name="tags"></sl-icon> Tags
+        </h1>
+        <sl-input id="tag-search" placeholder="Filter..." clearable size="small" style="width:260px;">
+            <sl-icon slot="prefix" name="search"></sl-icon>
+        </sl-input>
+    </div>
+
+    <div id="concept-loading" style="text-align:center;padding:24px;"><sl-spinner></sl-spinner></div>
+    <table id="concept-table" style="display:none;width:100%;border-collapse:collapse;">
+        <thead>
+            <tr style="border-bottom:1px solid var(--sl-color-neutral-300);">
+                <th style="text-align:left;padding:8px;">Name</th>
+                <th style="text-align:right;padding:8px;width:120px;">Articles</th>
+                <th style="text-align:right;padding:8px;width:260px;">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="concept-tbody"></tbody>
+    </table>
+    <div id="concept-pager" style="display:none;margin-top:12px;align-items:center;justify-content:space-between;gap:12px;">
+        <span id="concept-pager-info" style="font-size:0.85rem;color:var(--sl-color-neutral-500);"></span>
+        <div style="display:flex;gap:8px;">
+            <sl-button id="concept-pager-prev" size="small" variant="default">Prev</sl-button>
+            <sl-button id="concept-pager-next" size="small" variant="default">Next</sl-button>
+        </div>
+    </div>
+    <div id="concept-empty" style="display:none;text-align:center;padding:24px;color:var(--sl-color-neutral-500);">No tags found.</div>
+</div>
+</div>
+
+<sl-dialog id="dlg-rename" label="Rename tag">
+    <sl-input id="rename-new-name" label="New name" autofocus></sl-input>
+    <p class="text-muted text-sm" style="margin-top:8px;">Current: <code id="rename-current"></code></p>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-rename').hide()">Cancel</sl-button>
+    <sl-button id="btn-rename-confirm" slot="footer" variant="primary">Rename</sl-button>
+</sl-dialog>
+
+<sl-dialog id="dlg-merge" label="Merge tag">
+    <p class="text-muted text-sm">All articles using <code id="merge-source"></code> will be moved to the target tag, then the source is deleted.</p>
+    <sl-input id="merge-target" label="Target tag" autofocus></sl-input>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-merge').hide()">Cancel</sl-button>
+    <sl-button id="btn-merge-confirm" slot="footer" variant="primary">Merge</sl-button>
+</sl-dialog>
+
+<sl-dialog id="dlg-delete" label="Delete tag">
+    <sl-alert variant="danger" open>
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Delete <code id="delete-name"></code>? Removes it from all articles.
+    </sl-alert>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-delete').hide()">Cancel</sl-button>
+    <sl-button id="btn-delete-confirm" slot="footer" variant="danger">Delete</sl-button>
+</sl-dialog>
+
+@section Scripts {
+<script>
+(function() {
+    var isSuperadmin = @(Model.IsSuperadmin ? "true" : "false");
+    var conceptTags = [];
+    var searchFilter = '';
+    var currentPage = 1;
+    var pageSize = 200;
+
+    function escHtml(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function matchFilter(name) {
+        if (!searchFilter) return true;
+        return name.toLowerCase().indexOf(searchFilter.toLowerCase()) !== -1;
+    }
+
+    function renderConcept() {
+        var filtered = conceptTags.filter(function(t) { return matchFilter(t.name); });
+        var tbody = document.getElementById('concept-tbody');
+        var empty = document.getElementById('concept-empty');
+        var table = document.getElementById('concept-table');
+        var pager = document.getElementById('concept-pager');
+        var pagerInfo = document.getElementById('concept-pager-info');
+        if (filtered.length === 0) {
+            table.style.display = 'none';
+            pager.style.display = 'none';
+            empty.style.display = 'block';
+            return;
+        }
+        empty.style.display = 'none';
+        table.style.display = 'table';
+        var totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+        if (currentPage > totalPages) currentPage = totalPages;
+        if (currentPage < 1) currentPage = 1;
+        var pageItems = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+        tbody.innerHTML = pageItems.map(function(t) {
+            var actions = '';
+            if (isSuperadmin) {
+                var n = escHtml(t.name);
+                actions =
+                    '<sl-button size="small" variant="default" data-action="rename" data-name="'+n+'"><sl-icon slot="prefix" name="pencil"></sl-icon></sl-button> ' +
+                    '<sl-button size="small" variant="default" data-action="merge" data-name="'+n+'"><sl-icon slot="prefix" name="union"></sl-icon></sl-button> ' +
+                    '<sl-button size="small" variant="danger" data-action="delete" data-name="'+n+'"><sl-icon slot="prefix" name="trash"></sl-icon></sl-button>';
+            }
+            return '<tr style="border-bottom:1px solid var(--sl-color-neutral-200);">' +
+                '<td style="padding:8px;"><a href="/Graph?concept='+encodeURIComponent(t.name)+'">'+escHtml(t.name)+'</a></td>' +
+                '<td style="padding:8px;text-align:right;">'+t.articleCount+'</td>' +
+                '<td style="padding:8px;text-align:right;">'+actions+'</td>' +
+                '</tr>';
+        }).join('');
+        if (totalPages > 1) {
+            pagerInfo.textContent = 'Page ' + currentPage + ' of ' + totalPages + ' \u00B7 ' + filtered.length + ' tags';
+            pager.style.display = 'flex';
+        } else {
+            pager.style.display = 'none';
+        }
+    }
+
+    function loadConcept() {
+        fetch('/api-proxy/concept-tags')
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(data) {
+                conceptTags = (data || []).sort(function(a, b) { return a.name.localeCompare(b.name); });
+                document.getElementById('concept-loading').style.display = 'none';
+                renderConcept();
+            });
+    }
+
+    loadConcept();
+
+    document.getElementById('concept-pager-prev').addEventListener('click', function() {
+        if (currentPage > 1) { currentPage--; renderConcept(); }
+    });
+    document.getElementById('concept-pager-next').addEventListener('click', function() {
+        var filtered = conceptTags.filter(function(t) { return matchFilter(t.name); });
+        var totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+        if (currentPage < totalPages) { currentPage++; renderConcept(); }
+    });
+
+    document.getElementById('tag-search').addEventListener('sl-input', function(e) {
+        searchFilter = e.target.value || '';
+        currentPage = 1;
+        renderConcept();
+    });
+
+    var renameCurrent = null;
+    var mergeSource = null;
+    var deleteName = null;
+    var dlgRename = document.getElementById('dlg-rename');
+    var dlgMerge = document.getElementById('dlg-merge');
+    var dlgDelete = document.getElementById('dlg-delete');
+
+    function openRename(name) {
+        renameCurrent = name;
+        document.getElementById('rename-current').textContent = name;
+        document.getElementById('rename-new-name').value = name;
+        dlgRename.show();
+        setTimeout(function() { document.getElementById('rename-new-name').focus(); }, 100);
+    }
+    function openMerge(name) {
+        mergeSource = name;
+        document.getElementById('merge-source').textContent = name;
+        document.getElementById('merge-target').value = '';
+        dlgMerge.show();
+        setTimeout(function() { document.getElementById('merge-target').focus(); }, 100);
+    }
+    function openDelete(name) {
+        deleteName = name;
+        document.getElementById('delete-name').textContent = name;
+        dlgDelete.show();
+    }
+
+    document.getElementById('concept-tbody').addEventListener('click', function(e) {
+        var btn = e.target.closest('sl-button[data-action]');
+        if (!btn) return;
+        var action = btn.dataset.action;
+        var name = btn.dataset.name;
+        if (action === 'rename') openRename(name);
+        else if (action === 'merge') openMerge(name);
+        else if (action === 'delete') openDelete(name);
+    });
+
+    document.getElementById('btn-rename-confirm').addEventListener('click', function() {
+        var btn = this;
+        var newName = document.getElementById('rename-new-name').value.trim();
+        if (!newName || newName === renameCurrent) { dlgRename.hide(); return; }
+        btn.loading = true;
+        fetch('/api-proxy/concept-tags/' + encodeURIComponent(renameCurrent), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ newName: newName })
+        }).then(function(r) {
+            if (r.ok || r.status === 204) {
+                dlgRename.hide();
+                loadConcept();
+            } else {
+                r.json().then(function(d) { alert(d.error || 'Rename failed'); }).catch(function() { alert('Rename failed'); });
+            }
+        }).finally(function() { btn.loading = false; });
+    });
+
+    document.getElementById('btn-merge-confirm').addEventListener('click', function() {
+        var btn = this;
+        var target = document.getElementById('merge-target').value.trim();
+        if (!target) return;
+        btn.loading = true;
+        fetch('/api-proxy/concept-tags/merge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: mergeSource, target: target })
+        }).then(function(r) {
+            if (r.ok || r.status === 204) {
+                dlgMerge.hide();
+                loadConcept();
+            } else {
+                r.json().then(function(d) { alert(d.error || 'Merge failed'); }).catch(function() { alert('Merge failed'); });
+            }
+        }).finally(function() { btn.loading = false; });
+    });
+
+    document.getElementById('btn-delete-confirm').addEventListener('click', function() {
+        var btn = this;
+        btn.loading = true;
+        fetch('/api-proxy/concept-tags/' + encodeURIComponent(deleteName), { method: 'DELETE' })
+            .then(function(r) {
+                if (r.ok || r.status === 204) {
+                    dlgDelete.hide();
+                    loadConcept();
+                } else {
+                    r.json().then(function(d) { alert(d.error || 'Delete failed'); }).catch(function() { alert('Delete failed'); });
+                }
+            }).finally(function() { btn.loading = false; });
+    });
+})();
+</script>
+}

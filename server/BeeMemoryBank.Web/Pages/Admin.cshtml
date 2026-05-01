@@ -1,0 +1,1155 @@
+@page "/Admin"
+@using System.Text.Json
+@model BeeMemoryBank.Web.Pages.AdminModel
+@{
+    ViewData["Title"] = "Admin";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <h2 style="margin-bottom:20px;"><sl-icon name="gear"></sl-icon> Admin</h2>
+
+    @if (!string.IsNullOrEmpty(Model.SuccessMessage))
+    {
+        <sl-alert variant="success" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="check-circle"></sl-icon>
+            @Model.SuccessMessage
+        </sl-alert>
+    }
+    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+    {
+        <sl-alert variant="danger" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            @Model.ErrorMessage
+        </sl-alert>
+    }
+
+    @if (!string.IsNullOrEmpty(Model.GraphRebuildReport))
+    {
+        var graphDoc = JsonDocument.Parse(Model.GraphRebuildReport);
+        var graphR = graphDoc.RootElement;
+        var graphBefore = graphR.GetProperty("beforeEdgeRows").GetInt64();
+        var graphAfter = graphR.GetProperty("afterEdgeRows").GetInt64();
+        var graphExpected = graphR.GetProperty("expectedEdgeRows").GetInt64();
+        var graphConsistent = graphR.GetProperty("wasConsistent").GetBoolean();
+        var graphMs = graphR.GetProperty("durationMs").GetInt64();
+        <sl-alert variant="@(graphConsistent ? "success" : "primary")" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="@(graphConsistent ? "check-circle" : "arrow-repeat")"></sl-icon>
+            @if (graphConsistent)
+            {
+                <text>Tag graph integrity verified — everything is in sync (@graphBefore connections, checked in @graphMs ms).</text>
+            }
+            else
+            {
+                <text>Tag graph rebuilt: @graphBefore → @graphAfter connections (expected @graphExpected). Took @graphMs ms.</text>
+            }
+        </sl-alert>
+    }
+
+    @if (Model.PeerPendingRotations != null && Model.PeerPendingRotations.Count > 0)
+    {
+        foreach (var pending in Model.PeerPendingRotations)
+        {
+            // Use full event id (CSS-safe) for dialog id — avoids 8-char prefix collision
+            // and ArgumentOutOfRangeException on short ids. (R1 reviewers H-2 / LOW-4.)
+            var dlgId = "reject-dialog-" + pending.EventId.Replace("-", "");
+            // Format the rotation timestamp to local time + ISO short — raw "...T...Z" was
+            // confusing for non-technical admins. (Kilo R1 H-4.)
+            var rotationLocal = DateTime.TryParse(pending.RotationTs,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var rotUtc)
+                ? rotUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                : pending.RotationTs;
+            <sl-alert variant="warning" open style="margin-bottom:20px;" role="alert" aria-live="polite">
+                <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+                <div>
+                    <strong style="word-break:break-word;">@pending.OriginatorDisplayName</strong>
+                    rotated their DEK on @rotationLocal.
+                    To stay in sync, apply the rotation on this node.
+                </div>
+                <div style="display:flex;gap:8px;margin-top:12px;">
+                    <form method="post" asp-page-handler="PeerAcceptDekRotation" style="display:inline;">
+                        <input type="hidden" name="eventId" value="@pending.EventId" />
+                        <sl-button type="submit" variant="primary" size="small">Apply</sl-button>
+                    </form>
+                    <sl-button variant="danger" size="small" onclick="document.getElementById('@dlgId').show()">
+                        Reject — leave network
+                    </sl-button>
+                </div>
+            </sl-alert>
+            <sl-dialog id="@dlgId" label="Reject DEK rotation?">
+                <p>Rejecting will permanently disconnect this node from the rotated network. Continue?</p>
+                <form method="post" asp-page-handler="PeerRejectDekRotation" slot="footer" style="display:flex;gap:8px;justify-content:flex-end;">
+                    <input type="hidden" name="eventId" value="@pending.EventId" />
+                    <sl-button type="button" variant="default" autofocus onclick="this.closest('sl-dialog').hide()">Cancel</sl-button>
+                    <sl-button type="submit" variant="danger">Reject rotation</sl-button>
+                </form>
+            </sl-dialog>
+        }
+    }
+
+    <!-- Node Identity -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="fingerprint"></sl-icon> Node Identity</h3>
+    @if (Model.Identity != null)
+    {
+        <div class="card" style="margin-bottom:32px;">
+            <div class="article-meta">
+                <span><strong>ID:</strong>
+                    <span class="article-id-badge" title="Click to copy" data-bmb-copy="@Model.Identity.NodeId">
+                        @Model.Identity.NodeId
+                    </span>
+                </span>
+                <span><strong>Name:</strong> @Model.Identity.DisplayName</span>
+            </div>
+            <div style="margin-top:12px;">
+                <label style="font-size:0.85rem;color:var(--text-secondary);">Ed25519 Public Key</label>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                    <code style="font-size:0.78rem;word-break:break-all;flex:1;" id="pubkey-val">@Model.Identity.Ed25519PublicKeyB64</code>
+                    <sl-icon-button name="clipboard" label="Copy"
+                        onclick="navigator.clipboard.writeText(document.getElementById('pubkey-val').textContent)">
+                    </sl-icon-button>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <sl-alert variant="warning" open style="margin-bottom:32px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            Could not retrieve node identity. Check API connection.
+        </sl-alert>
+    }
+
+    <!-- Trusted Nodes -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;"><sl-icon name="people"></sl-icon> Trusted Nodes</h3>
+        <span id="local-events-counter" class="text-muted text-sm"></span>
+    </div>
+    <script>
+    (function() {
+        fetch('/api-proxy/sync/status')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var el = document.getElementById('local-events-counter');
+                if (el) el.textContent = 'Local events: ' + data.totalLocalEvents;
+            })
+            .catch(function() {});
+    })();
+    </script>
+    @if (Model.Whitelist != null && Model.Whitelist.Count > 0)
+    {
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Node ID</th>
+                        <th>API Address</th>
+                        <th>Status</th>
+                        <th>
+                            Auto-restore
+                            <sl-tooltip content="When ON, snapshot restores initiated by this peer apply automatically without your confirmation. The peer can replace your articles, folders, and tags. Enable only for peers you fully trust (e.g. your own devices). For peers that belong to other people, leave OFF — you'll get a UI prompt before restore applies." placement="top">
+                                <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
+                            </sl-tooltip>
+                        </th>
+                        <th>
+                            Auto-DEK rotation
+                            <sl-tooltip content="When ON, DEK rotation events initiated by this peer apply automatically without your confirmation. DEK rotation is more destructive than snapshot restore — it re-encrypts ALL article bodies, versions, and media with a new key. Enable only for peers you fully trust." placement="top">
+                                <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
+                            </sl-tooltip>
+                        </th>
+                        <th>Added</th>
+                        <th>Last Sync</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var entry in Model.Whitelist)
+                    {
+                        var isSelf = Model.Identity != null && entry.NodeId == Model.Identity.NodeId;
+                        DateTime lastSync = DateTime.MinValue;
+                        if (!isSelf && Model.NodeSyncStatus != null)
+                            Model.NodeSyncStatus.TryGetValue(entry.NodeId, out lastSync);
+                        <tr>
+                            <td><strong>@entry.DisplayName</strong></td>
+                            <td><code class="text-sm">@entry.NodeId.ToString()[..8]&hellip;</code></td>
+                            <td class="text-muted text-sm">@(entry.ApiAddress ?? "\u2014")</td>
+                            <td>
+                                <sl-badge variant="@(entry.Status == "active" ? "success" : "neutral")" pill>
+                                    @entry.Status
+                                </sl-badge>
+                                @if (entry.CanGenerateEmbeddings)
+                                {
+                                    <sl-badge variant="primary" pill style="margin-left:4px;">embeddings</sl-badge>
+                                }
+                            </td>
+                            <td>
+                                @if (!isSelf)
+                                {
+                                    <form method="post" asp-page-handler="SetAutoAcceptRestore" style="display:inline;" id="autoaccept-form-@entry.NodeId">
+                                        <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                        <input type="hidden" name="autoAccept" value="@((!entry.AutoAcceptRestore).ToString().ToLower())" id="autoaccept-value-@entry.NodeId" />
+                                        <sl-switch
+                                            @(entry.AutoAcceptRestore ? "checked" : "")
+                                            data-node-id="@entry.NodeId"
+                                            data-node-name="@entry.DisplayName"
+                                            onsl-change="confirmAutoAcceptToggle">
+                                        </sl-switch>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <span class="text-muted text-sm">—</span>
+                                }
+                            </td>
+                            <td>
+                                @if (!isSelf)
+                                {
+                                    <form method="post" asp-page-handler="SetAutoAcceptDekRotation" style="display:inline;" id="autoaccept-dek-form-@entry.NodeId">
+                                        <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                        <input type="hidden" name="autoAccept" value="@((!entry.AutoAcceptDekRotation).ToString().ToLower())" id="autoaccept-dek-value-@entry.NodeId" />
+                                        <sl-switch
+                                            @(entry.AutoAcceptDekRotation ? "checked" : "")
+                                            data-node-id="@entry.NodeId"
+                                            data-node-name="@entry.DisplayName"
+                                            onsl-change="confirmAutoAcceptDekToggle">
+                                        </sl-switch>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <span class="text-muted text-sm">—</span>
+                                }
+                            </td>
+                            <td class="text-muted text-sm">@entry.CreatedAt.ToString("d")</td>
+                            <td class="text-muted text-sm">@(isSelf ? "\u2014" : AdminModel.RelativeTime(lastSync))</td>
+                            <td style="text-align:right;">
+                                @if (!isSelf)
+                                {
+                                    <sl-icon-button name="link-45deg" label="Change URL"
+                                        data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress"
+                                        onclick="openChangeUrl(this.dataset.nodeId, this.dataset.nodeName, this.dataset.currentUrl)">
+                                    </sl-icon-button>
+                                    <form method="post" asp-page-handler="RevokeNode" style="display:inline;">
+                                        <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                        <sl-icon-button name="trash" label="Revoke"
+                                            data-name="@entry.DisplayName" onclick="if(confirm('Revoke node ' + this.dataset.name + '?')) { this.closest('form').submit(); }">
+                                        </sl-icon-button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+            <sl-icon name="people" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No trusted nodes</p>
+        </div>
+    }
+
+    <!-- Snapshots -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
+        <h3 style="margin:0;"><sl-icon name="archive"></sl-icon> Snapshots</h3>
+        <div style="display:flex;gap:8px;">
+            <sl-button size="small" variant="default" id="btn-show-upload">
+                <sl-icon slot="prefix" name="cloud-upload"></sl-icon> Upload
+            </sl-button>
+            <sl-button size="small" variant="success" id="btn-create-snapshot">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Snapshot
+            </sl-button>
+        </div>
+    </div>
+
+    <div id="snapshot-upload-zone"
+         style="display:none;border:2px dashed var(--text-secondary);padding:20px;text-align:center;border-radius:8px;margin-bottom:16px;cursor:pointer;transition:background 0.15s;">
+        <sl-icon name="cloud-upload" style="font-size:1.6rem;color:var(--text-secondary);"></sl-icon>
+        <p style="margin:8px 0 4px 0;">
+            Drag &amp; drop a snapshot file (<code>.tar.gz</code> / <code>.bin</code>)
+            or <sl-button variant="text" id="btn-pick-file">browse</sl-button>
+        </p>
+        <p class="text-muted text-sm" style="margin:0;">Uploaded snapshots appear in the list below and can be restored.</p>
+        <input type="file" id="snapshot-file-input" accept=".tar.gz,.bin" style="display:none;" />
+        <div id="upload-progress" style="display:none;margin-top:12px;">
+            <sl-progress-bar id="upload-progress-bar" value="0"></sl-progress-bar>
+            <span id="upload-status" class="text-sm text-muted"></span>
+        </div>
+    </div>
+
+    @if (Model.Snapshots != null && Model.Snapshots.Count > 0)
+    {
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Size</th>
+                        <th>Date</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var snap in Model.Snapshots)
+                    {
+                        <tr>
+                            <td><code class="text-sm">@snap.FileName</code></td>
+                            <td class="text-muted text-sm">@(snap.SizeBytes / 1024) KB</td>
+                            <td class="text-muted text-sm">@snap.CreatedAt.ToString("g")</td>
+                            <td style="text-align:right;">
+                                <a href="/Admin?handler=DownloadSnapshot&fileName=@Uri.EscapeDataString(snap.FileName)"
+                                   title="Download snapshot">
+                                    <sl-icon-button name="download" label="Download"></sl-icon-button>
+                                </a>
+                                <sl-icon-button name="arrow-counterclockwise" label="Restore"
+                                    data-filename="@snap.FileName"
+                                    onclick="openRestoreDialog(this.dataset.filename)">
+                                </sl-icon-button>
+                                <form method="post" asp-page-handler="DeleteSnapshot" style="display:inline;">
+                                    <input type="hidden" name="fileName" value="@snap.FileName" />
+                                    <sl-icon-button name="trash" label="Delete"
+                                        data-name="@snap.FileName" onclick="if(confirm('Delete snapshot ' + this.dataset.name + '?')) { this.closest('form').submit(); }">
+                                    </sl-icon-button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+            <sl-icon name="archive" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No snapshots</p>
+        </div>
+    }
+
+    <!-- Event Log & Compaction -->
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;margin-top:32px;">
+        <h3 style="margin:0;"><sl-icon name="archive"></sl-icon> Event Log &amp; Compaction</h3>
+        <sl-icon-button name="question-circle" label="About compaction"
+            id="compaction-info-btn"
+            style="font-size:1.2rem;color:var(--text-secondary);"></sl-icon-button>
+    </div>
+
+    @if (Model.CompactionPreview != null)
+    {
+        var p = Model.CompactionPreview;
+        <div class="card" style="margin-bottom:16px;">
+            <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:16px;margin-bottom:16px;">
+                <div>
+                    <div class="text-muted text-sm">Events in log</div>
+                    <div style="font-size:1.4rem;font-weight:600;">@p.TotalEvents</div>
+                </div>
+                <div>
+                    <div class="text-muted text-sm">Peers online</div>
+                    <div style="font-size:1.4rem;font-weight:600;">@p.ActivePeerCount</div>
+                </div>
+            </div>
+
+            @if (p.PeerPositions != null && p.PeerPositions.Count > 0)
+            {
+                <div style="margin-bottom:16px;">
+                    <div class="text-muted text-sm" style="margin-bottom:4px;">Peers status:</div>
+                    @foreach (var peer in p.PeerPositions)
+                    {
+                        var behind = peer.LastSequenceNum < 0 ? -1 : p.HeadSeq - peer.LastSequenceNum;
+                        <div style="font-size:0.85rem;">
+                            <code>@peer.NodeId</code> —
+                            @if (behind < 0)
+                            {
+                                <span>never synced</span>
+                            }
+                            else if (behind == 0)
+                            {
+                                <span>fully synced</span>
+                                <span>, last contact @AdminModel.RelativeTime(peer.UpdatedAt)</span>
+                            }
+                            else
+                            {
+                                <span>@behind operation(s) behind</span>
+                                <span>, last contact @AdminModel.RelativeTime(peer.UpdatedAt)</span>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            @if (p.Warnings != null && p.Warnings.Count > 0)
+            {
+                <sl-alert variant="warning" open style="margin-bottom:16px;">
+                    <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                    <strong>Warnings:</strong>
+                    <ul style="margin:8px 0 0 20px;">
+                        @foreach (var w in p.Warnings) { <li>@w</li> }
+                    </ul>
+                </sl-alert>
+            }
+
+            @if (p.CanCompact)
+            {
+                <sl-alert variant="primary" open style="margin-bottom:16px;">
+                    <sl-icon slot="icon" name="info-circle"></sl-icon>
+                    <strong>Ready to compact.</strong>
+                    <div style="margin-top:8px;font-size:0.9rem;">
+                        <div>Will delete the oldest <strong>@p.EventsToDelete</strong> events and replace them with one signed snapshot.</div>
+                        <div>Will keep <strong>@p.EventsRemaining</strong> of the most recent events as a tail for continued sync.</div>
+                        <div class="text-muted" style="margin-top:6px;">@(p.ActivePeerCount > 0
+                            ? "Safe: every active peer has already received all the events we're about to delete."
+                            : "No active peers — safe to compact.")</div>
+                    </div>
+                </sl-alert>
+
+                <form method="post" asp-page-handler="Compact" style="display:inline;" onsubmit="return confirm('Compact event log?\n\nWill delete the oldest @p.EventsToDelete events (kept as one signed snapshot).\nWill keep @p.EventsRemaining of the most recent events for continued sync.\n\nContinue?');">
+                    <sl-button type="submit" variant="warning">
+                        <sl-icon slot="prefix" name="archive"></sl-icon>
+                        Compact now (delete @p.EventsToDelete events)
+                    </sl-button>
+                </form>
+            }
+            else
+            {
+                <sl-alert variant="neutral" open>
+                    <sl-icon slot="icon" name="info-circle"></sl-icon>
+                    @p.Reason
+                </sl-alert>
+            }
+        </div>
+    }
+    else
+    {
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            Could not load compaction preview.
+        </sl-alert>
+    }
+
+    <sl-dialog id="compaction-info-dialog" label="About event log compaction" style="--width: 560px;">
+        <div style="line-height:1.55;">
+            <p><strong>What is the event log?</strong></p>
+            <p>Every operation on this node (create article, rename folder, add tag, delete, …) is written as a numbered event into a journal. Nodes synchronize with each other by exchanging events — if peer B is at operation #500 and we're at #1800, peer B pulls events 501–1800 to catch up.</p>
+
+            <p style="margin-top:12px;"><strong>Why compact?</strong></p>
+            <p>The journal grows forever — 25 000+ events per year for an active user. New nodes joining the network would have to replay all of it. Compaction truncates the old part of the journal and replaces it with a <em>signed snapshot</em>: the full state at that point, packaged into one file. Invariant preserved: <code>current state = snapshot + operations after it</code>. Nothing is lost semantically, only the journal becomes short again.</p>
+
+            <p style="margin-top:12px;"><strong>How many events are kept?</strong></p>
+            <p>Target: keep the <strong>1500</strong> most recent events. Older events get folded into a signed snapshot and removed from the log. If there are fewer than 1500 events total, nothing happens.</p>
+
+            <p style="margin-top:12px;"><strong>When is compaction refused?</strong></p>
+            <p>If any active peer is more than 1500 events behind the newest one, or if any peer is in the whitelist but has never synced, compaction is refused — those peers would be cut off. Resolve by waiting for them to sync, or by revoking them from the whitelist.</p>
+
+            <p style="margin-top:12px;"><strong>What happens after?</strong></p>
+            <ul style="margin:6px 0 0 20px;">
+                <li>A <code>.tar.gz</code> snapshot file is created in the server's data dir (signed with this node's key).</li>
+                <li>Operations 1…N are deleted from <code>tbl_event</code>. The most recent ones remain.</li>
+                <li>A tamper-proof <code>snapshot_checkpoint</code> marker is appended to the journal. It records the snapshot hash and references the previous checkpoint (Merkle chain). These markers never get compacted away.</li>
+                <li>Peers already at or past position <em>N</em> continue syncing normally.</li>
+                <li>Peers that fall behind position <em>N</em> later (e.g. offline for weeks) will need a <strong>Wipe &amp; Rejoin</strong> — they'll pull the fresh snapshot instead of trying to catch up via the journal.</li>
+            </ul>
+
+            <p style="margin-top:12px;"><strong>How often?</strong></p>
+            <p>Admin-triggered only — no automatic background compaction. For a personal knowledge base, running it once a month or when the event log passes 5–10k is fine. Always check the peer list above first: if any peer is close to being cut off, wait for it to sync or revoke it.</p>
+        </div>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('compaction-info-dialog').hide()">Cancel</sl-button>
+        <sl-button slot="footer" variant="primary" id="compaction-info-close">Got it</sl-button>
+    </sl-dialog>
+
+    <script>
+        (function () {
+            const btn = document.getElementById('compaction-info-btn');
+            const dlg = document.getElementById('compaction-info-dialog');
+            const close = document.getElementById('compaction-info-close');
+            if (btn && dlg) btn.addEventListener('click', function () { dlg.show(); });
+            if (close && dlg) close.addEventListener('click', function () { dlg.hide(); });
+        })();
+    </script>
+
+    @if (Model.SnapshotCheckpoints != null && Model.SnapshotCheckpoints.Count > 0)
+    {
+        <details style="margin-bottom:32px;">
+            <summary style="cursor:pointer;padding:8px;"><strong>Compaction history</strong> (@Model.SnapshotCheckpoints.Count checkpoints)</summary>
+            <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Sequence</th>
+                            <th>CP</th>
+                            <th>Events removed</th>
+                            <th>Snapshot</th>
+                            <th>Created at</th>
+                            <th>Chain</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var cp in Model.SnapshotCheckpoints)
+                    {
+                        var payload = cp.Payload;
+                        var cpSeq = payload.TryGetProperty("cp_seq", out var cps) ? cps.GetInt64() : 0;
+                        var evRemoved = payload.TryGetProperty("events_removed", out var er) ? er.GetInt32() : 0;
+                        var snapFile = payload.TryGetProperty("snapshot_file_name", out var sf) ? sf.GetString() : null;
+                        var prevHash = payload.TryGetProperty("prev_checkpoint_sha256", out var ph) ? ph.GetString() : null;
+                        <tr>
+                            <td>@cp.SequenceNum</td>
+                            <td>@cpSeq</td>
+                            <td>@evRemoved</td>
+                            <td><code style="font-size:0.8rem;">@snapFile</code></td>
+                            <td>@cp.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            <td>@(prevHash != null ? $"→ {prevHash[..Math.Min(8, prevHash.Length)]}\u2026" : "(first)")</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </details>
+    }
+
+    <!-- Agents -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;"><sl-icon name="robot"></sl-icon> Agents</h3>
+    </div>
+
+    @if (Model.Agents != null && Model.Agents.Count > 0)
+    {
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Description</th>
+                        <th>Owner</th>
+                        <th>API Key</th>
+                        <th>Created</th>
+                        <th>Last Access</th>
+                        <th>Requests</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var agent in Model.Agents)
+                    {
+                        <tr>
+                            <td><strong>@agent.Name</strong></td>
+                            <td class="text-muted text-sm">@(agent.Description ?? "\u2014")</td>
+                            <td class="text-muted text-sm">@(agent.OwnerName ?? (agent.OwnerUserId > 0 ? $"#{agent.OwnerUserId}" : "\u2014"))</td>
+                            <td><code class="text-sm">@agent.KeyPrefix</code></td>
+                            <td class="text-muted text-sm">@agent.CreatedAt.ToString("g")</td>
+                            <td class="text-muted text-sm">@AdminModel.RelativeTime(agent.LastAccessedAt)</td>
+                            <td class="text-muted text-sm">@(agent.RequestCount == 0 ? "\u2014" : agent.RequestCount.ToString("N0"))</td>
+                            <td style="text-align:right;">
+                                <form method="post" asp-page-handler="DeleteAgent" style="display:inline;">
+                                    <input type="hidden" name="agentId" value="@agent.Id" />
+                                    <sl-icon-button name="trash" label="Delete"
+                                        data-name="@agent.Name" onclick="if(confirm('Delete agent ' + this.dataset.name + '?')) { this.closest('form').submit(); }">
+                                    </sl-icon-button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+            <sl-icon name="robot" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">No agents</p>
+        </div>
+    }
+
+    <!-- Change Node URL Dialog -->
+    <sl-dialog id="dlg-change-url" label="Change Node URL">
+        <form method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
+            <input type="hidden" id="change-url-node-id" name="nodeId" />
+            <p id="change-url-node-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
+            <div style="margin-bottom:16px;">
+                <sl-input id="change-url-input" name="newApiAddress" label="New API Address" placeholder="https://example.com" required></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <sl-button type="button" slot="footer" variant="default" onclick="document.getElementById('dlg-change-url').hide()">Cancel</sl-button>
+            <sl-button type="submit" slot="footer" variant="primary">
+                <sl-icon slot="prefix" name="link-45deg"></sl-icon> Change URL
+            </sl-button>
+        </form>
+    </sl-dialog>
+
+    <!-- Lock Server -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="lock"></sl-icon> Lock Server</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Locking erases the master encryption key from memory. Everyone is immediately logged out —
+            you, other users, MCP agents, and mobile apps. No one can read or edit articles until any
+            superadmin logs back in — after that the server is open for everyone again.
+            Use this when you're leaving the server unattended and want to make sure nobody — not even
+            an already-connected agent — can access your data while you're away.
+            Think of it as pulling the key out of the lock and taking it with you.
+        </p>
+        <sl-button variant="warning" size="small" href="/Lock"
+            onclick="return confirm('Lock the server? The decryption key will be cleared from memory. All users will need to re-authenticate to access encrypted content.')">
+            <sl-icon slot="prefix" name="lock"></sl-icon> Lock Server
+        </sl-button>
+    </div>
+
+    <!-- Hard Delete -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="trash"></sl-icon> Hard Delete</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Physically remove folders, articles, and their media from this node and propagate
+            the deletion to every synced node. Unlike regular delete (which keeps items in the
+            trash), this is permanent and cannot be undone. Use for cleaning up junk imports
+            or data that must not persist anywhere.
+        </p>
+        <sl-button variant="danger" size="small" href="/HardDelete">
+            <sl-icon slot="prefix" name="trash"></sl-icon> Open Hard Delete
+        </sl-button>
+    </div>
+
+    <!-- DEK Rotation -->
+    @{
+        var dekActive = Model.DekRotationProgress != null
+            && Model.DekRotationProgress.CurrentStep != "Idle"
+            && Model.DekRotationProgress.CurrentStep != "Completed"
+            && Model.DekRotationProgress.CurrentStep != "Failed";
+    }
+
+    <h3 style="margin-bottom:12px;"><sl-icon name="shield-lock"></sl-icon> DEK Rotation</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Rotates the encryption key for all article bodies, versions, and media. Generates a new master DEK;
+            old DEK is securely retired.
+        </p>
+
+        @if (Model.ShowRecoveryKeyReminder)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>Issue a new recovery key!</strong> All previous recovery keys were invalidated by the DEK rotation.
+                Generate a fresh one via the API: <code>POST /api/keys/add-recovery</code>, or from the CLI: <code>bmb keys add-recovery</code>.
+            </sl-alert>
+        }
+
+        @if (dekActive)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="arrow-clockwise"></sl-icon>
+                <strong>DEK Rotation in Progress</strong>
+                <div style="margin-top:8px;">
+                    <strong>Step:</strong> @Model.DekRotationProgress!.CurrentStep
+                </div>
+                <sl-progress-bar value="@Model.DekRotationProgress.PercentageComplete" style="margin-top:8px;"></sl-progress-bar>
+                @if (!string.IsNullOrEmpty(Model.DekRotationProgress.StatusMessage))
+                {
+                    <p class="text-muted text-sm" style="margin-top:4px;">@Model.DekRotationProgress.StatusMessage</p>
+                }
+                @if (!string.IsNullOrEmpty(Model.DekRotationProgress.ErrorMessage))
+                {
+                    <p style="color:var(--sl-color-danger-600);margin-top:4px;">@Model.DekRotationProgress.ErrorMessage</p>
+                }
+                @if (Model.DekRotationProgress.EventId.HasValue)
+                {
+                    <form method="post" asp-page-handler="CancelDekRotation" style="margin-top:12px;">
+                        <input type="hidden" name="eventId" value="@Model.DekRotationProgress.EventId" />
+                        <sl-button type="submit" variant="danger" size="small">
+                            <sl-icon slot="prefix" name="x-lg"></sl-icon> Cancel Rotation
+                        </sl-button>
+                    </form>
+                }
+                <p class="text-muted text-sm" style="margin-top:8px;">This page refreshes automatically every 3 seconds.</p>
+            </sl-alert>
+        }
+        else if (!string.IsNullOrEmpty(Model.DekRotationCommitId))
+        {
+            <sl-alert variant="primary" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                <strong>DEK rotation proposed.</strong> Enter your master password to confirm and begin re-encryption.
+            </sl-alert>
+            <form method="post" asp-page-handler="AcceptDekRotation" style="margin-bottom:16px;">
+                <input type="hidden" name="commitEventId" value="@Model.DekRotationCommitId" />
+                <div style="margin-bottom:12px;">
+                    <sl-input name="masterPassword" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+                </div>
+                <div style="display:flex;gap:8px;">
+                    <sl-button type="submit" variant="warning">
+                        <sl-icon slot="prefix" name="shield-lock"></sl-icon> Confirm DEK Rotation
+                    </sl-button>
+                    <form method="post" asp-page-handler="CancelDekRotation" style="display:inline;">
+                        <input type="hidden" name="eventId" value="@Model.DekRotationCommitId" />
+                        <sl-button type="submit" variant="default">Cancel</sl-button>
+                    </form>
+                </div>
+            </form>
+        }
+        else if (Model.DekRotationProgress?.CurrentStep == "Failed")
+        {
+            <sl-alert variant="danger" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>DEK rotation failed.</strong>
+                @if (!string.IsNullOrEmpty(Model.DekRotationProgress.ErrorMessage))
+                {
+                    <p style="margin-top:4px;">@Model.DekRotationProgress.ErrorMessage</p>
+                }
+            </sl-alert>
+            <div style="display:flex;gap:8px;">
+                <sl-button variant="warning" size="small" onclick="document.getElementById('dlg-dek-rotation').show()">
+                    <sl-icon slot="prefix" name="shield-lock"></sl-icon> Retry Rotation
+                </sl-button>
+                @if (Model.DekRotationProgress?.EventId != null)
+                {
+                    <form method="post" asp-page-handler="CancelDekRotation" style="display:inline;">
+                        <input type="hidden" name="eventId" value="@Model.DekRotationProgress.EventId" />
+                        <sl-button type="submit" variant="default" size="small">Dismiss</sl-button>
+                    </form>
+                }
+            </div>
+        }
+        else
+        {
+            <sl-button variant="warning" size="small" onclick="document.getElementById('dlg-dek-rotation').show()">
+                <sl-icon slot="prefix" name="shield-lock"></sl-icon> Rotate DEK
+            </sl-button>
+        }
+    </div>
+
+    @if (dekActive)
+    {
+        <script>
+            if (!window._dekRotationRefreshing) {
+                window._dekRotationRefreshing = true;
+                setTimeout(function() { location.reload(); }, 3000);
+            }
+        </script>
+    }
+
+    @* Backfill Orphan Media Links — hidden. Auto-link on save covers new uploads;
+       if sync ever brings orphan rows, uncomment this block and the matching
+       blocks in Web/Program.cs + Api/Endpoints/AdminEndpoints.cs + Api/Program.cs.
+    <h3 style="margin-bottom:12px;"><sl-icon name="link-45deg"></sl-icon> Backfill Orphan Media Links</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Scan all articles for media references (images) and link any orphan media records to their
+            parent article. This fixes media uploaded before the article was saved.
+        </p>
+        <sl-button variant="primary" size="small" id="btn-backfill-media">
+            <sl-icon slot="prefix" name="link-45deg"></sl-icon> Backfill Media Links
+        </sl-button>
+    </div>
+    *@
+
+    <!-- Restore Snapshot Dialog -->
+    <sl-dialog id="dlg-restore-snapshot" label="Restore Snapshot">
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Warning:</strong> This will replace ALL data with the snapshot. Current data will be lost.
+            The server will be temporarily unavailable during restore.
+        </sl-alert>
+        <input type="hidden" name="fileName" id="restore-file-name" />
+        <div style="margin-bottom:16px;">
+            <sl-input name="masterPassword" id="restore-master-password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-checkbox name="createBackupFirst" id="restore-backup-checkbox" checked>Create backup before restore</sl-checkbox>
+        </div>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-restore-snapshot').hide()">Cancel</sl-button>
+        <sl-button type="button" slot="footer" variant="danger" id="btn-restore-confirm">
+            <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Restore
+        </sl-button>
+        <sl-button type="button" slot="footer" variant="default" onclick="document.getElementById('dlg-restore-snapshot').hide()">Cancel</sl-button>
+    </sl-dialog>
+
+    <!-- DEK Rotation Dialog -->
+    <sl-dialog id="dlg-dek-rotation" label="Rotate DEK" style="--width:580px;">
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>This is a destructive, network-wide operation.</strong>
+        </sl-alert>
+        <p style="margin-bottom:12px;">Before proceeding, understand the impact:</p>
+        <ul style="margin:0 0 16px 20px;line-height:1.8;">
+            <li>All article bodies, version history, conflict copies, and media files will be <strong>re-encrypted</strong> (one big transaction; node enters maintenance for the duration).</li>
+            <li>All <strong>agents</strong> will be deleted — they must be regenerated after rotation completes (their API keys cannot be re-wrapped server-side).</li>
+            <li>All <strong>other user key slots</strong> will be removed — other users will need to re-register their passwords against the new DEK.</li>
+            <li>All <strong>recovery keys</strong> will be invalidated — issue a new recovery key immediately after rotation.</li>
+            <li>A <strong>pre-rotation snapshot</strong> is created automatically before any destructive change.</li>
+            <li><strong>Do not close the browser, restart the node, or interrupt the process</strong> until it completes.</li>
+        </ul>
+        <form method="post" asp-page-handler="ProposeDekRotation" class="sl-form">
+            <div style="margin-bottom:16px;">
+                <sl-input name="masterPassword" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <sl-button type="button" slot="footer" variant="default" onclick="document.getElementById('dlg-dek-rotation').hide()">Cancel</sl-button>
+            <sl-button type="submit" slot="footer" variant="danger">
+                <sl-icon slot="prefix" name="shield-lock"></sl-icon> Propose DEK Rotation
+            </sl-button>
+            <sl-button type="button" slot="footer" variant="default" onclick="document.getElementById('dlg-dek-rotation').hide()">Cancel</sl-button>
+        </form>
+    </sl-dialog>
+
+    <!-- Advanced settings — diagnostic / repair tools an admin rarely needs -->
+    <sl-details summary="Advanced settings" style="margin-top:32px;margin-bottom:32px;">
+        <h4 style="margin-top:8px;margin-bottom:8px;"><sl-icon name="share"></sl-icon> Verify tag graph</h4>
+        <div style="max-width:640px;">
+            @if (Model.GraphEdgeStats != null)
+            {
+                var s = Model.GraphEdgeStats.Value;
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px 24px;margin-bottom:16px;">
+                    <div><span class="text-muted text-sm">Tags total</span><br><strong>@s.GetProperty("totalTags").GetInt64()</strong></div>
+                    <div><span class="text-muted text-sm">Tags with connections</span><br><strong>@s.GetProperty("nodesWithEdges").GetInt64()</strong></div>
+                    <div><span class="text-muted text-sm">Connections</span><br><strong>@s.GetProperty("totalEdgeRows").GetInt64()</strong></div>
+                </div>
+            }
+
+            <p class="text-muted text-sm" style="margin-bottom:8px;">
+                The system keeps a fast lookup of which tags appear together in your articles.
+                That lookup powers the Graph view, related-tags suggestions, and tag search.
+                It is updated automatically whenever you tag or untag an article — including
+                changes that arrive from another node via sync, and after restoring a snapshot.
+            </p>
+            <p class="text-muted text-sm" style="margin-bottom:8px;">
+                <strong>Pressing this button is always safe.</strong> If everything is in sync (the normal case),
+                it just verifies and returns in milliseconds. If something is off, it rebuilds the lookup
+                from scratch.
+            </p>
+            <p class="text-muted text-sm" style="margin-bottom:12px;">
+                You usually never need to press it. Reasons you might:
+            </p>
+            <ul class="text-muted text-sm" style="margin:0 0 16px 20px;line-height:1.7;">
+                <li>The Graph view shows fewer connections than you expect</li>
+                <li>You manually edited the database</li>
+                <li>You just want to confirm everything is consistent</li>
+            </ul>
+
+            <form method="post" asp-page-handler="RebuildGraph">
+                <sl-button type="submit" variant="primary" size="small">
+                    <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Verify and rebuild if needed
+                </sl-button>
+            </form>
+        </div>
+    </sl-details>
+
+</div>
+
+<script>
+function confirmAutoAcceptToggle(switchEl) {
+    var nodeId = switchEl.dataset.nodeId;
+    var nodeName = switchEl.dataset.nodeName;
+    var newValue = switchEl.checked;
+
+    var proceed;
+    if (newValue) {
+        proceed = confirm(
+            "Enable AUTO-RESTORE for peer '" + nodeName + "'?\n\n" +
+            "When this peer initiates a snapshot restore, it will apply on this node WITHOUT confirmation. " +
+            "Your articles, folders, and tags from after the restore point will be replaced.\n\n" +
+            "Only enable for peers you fully trust (your own devices, your team's nodes). " +
+            "For peers belonging to other people, keep this OFF.\n\n" +
+            "Continue?"
+        );
+    } else {
+        proceed = true;
+    }
+
+    if (!proceed) {
+        switchEl.checked = !newValue;
+        return;
+    }
+
+    document.getElementById("autoaccept-value-" + nodeId).value = newValue ? "true" : "false";
+    document.getElementById("autoaccept-form-" + nodeId).submit();
+}
+
+function confirmAutoAcceptDekToggle(switchEl) {
+    var nodeId = switchEl.dataset.nodeId;
+    var nodeName = switchEl.dataset.nodeName;
+    var newValue = switchEl.checked;
+
+    var proceed;
+    if (newValue) {
+        proceed = confirm(
+            "Enable AUTO-ACCEPT DEK ROTATION for peer '" + nodeName + "'?\n\n" +
+            "When this peer initiates a DEK rotation, it will apply on this node WITHOUT confirmation. " +
+            "ALL article bodies, versions, and media will be re-encrypted with a new key. " +
+            "This is more destructive than snapshot restore.\n\n" +
+            "Only enable for peers you fully trust (your own devices).\n\n" +
+            "Continue?"
+        );
+    } else {
+        proceed = true;
+    }
+
+    if (!proceed) {
+        switchEl.checked = !newValue;
+        return;
+    }
+
+    document.getElementById("autoaccept-dek-value-" + nodeId).value = newValue ? "true" : "false";
+    document.getElementById("autoaccept-dek-form-" + nodeId).submit();
+}
+
+function openChangeUrl(nodeId, nodeName, currentUrl) {
+    document.getElementById('change-url-node-id').value = nodeId;
+    document.getElementById('change-url-node-name').textContent = 'Node: ' + nodeName;
+    var input = document.getElementById('change-url-input');
+    input.value = currentUrl;
+    setTimeout(function() { input.value = currentUrl; }, 50);
+    document.getElementById('dlg-change-url').show();
+}
+
+function openRestoreDialog(fileName) {
+    document.getElementById('restore-file-name').value = fileName;
+    document.getElementById('restore-snapshot-name-display').textContent = fileName;
+    
+    var networkRadio = document.querySelector('sl-radio[value="network"]');
+    if (networkRadio) {
+        if (fileName.startsWith('imported-')) {
+            // Optional: for foreign networks disable network mode. In phase 6 it's based on DEK sentinel, but for now we don't have it.
+            // Let's not disable it yet or base it on "imported-" as instructions suggested "для imported-badge: ...".
+            // Actually, we'll keep it simple: just show dialog.
+        }
+    }
+    
+    document.getElementById('dlg-restore-snapshot').show();
+}
+
+(function() {
+    var dropZone = document.getElementById('snapshot-upload-zone');
+    var fileInput = document.getElementById('snapshot-file-input');
+    if (dropZone && fileInput) {
+        var pickFileBtn = document.getElementById('btn-pick-file');
+        if (pickFileBtn) pickFileBtn.addEventListener('click', function() { fileInput.click(); });
+
+        dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.style.background = 'rgba(0,0,0,0.05)'; });
+        dropZone.addEventListener('dragleave', function(e) { dropZone.style.background = ''; });
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dropZone.style.background = '';
+            if (e.dataTransfer.files.length) uploadSnapshotFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', function(e) {
+            if (e.target.files.length) uploadSnapshotFile(e.target.files[0]);
+        });
+    }
+
+    function uploadSnapshotFile(file) {
+        var fd = new FormData();
+        fd.append('file', file);
+        document.getElementById('upload-progress').style.display = 'block';
+        document.getElementById('upload-status').textContent = 'Uploading ' + file.name + '...';
+
+        var xhr = new XMLHttpRequest();
+        xhr.upload.addEventListener('progress', function(e) {
+            if (e.lengthComputable) {
+                document.getElementById('upload-progress-bar').value = (e.loaded / e.total) * 100;
+            }
+        });
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                document.getElementById('upload-status').textContent = 'Uploaded successfully';
+                setTimeout(function() { location.reload(); }, 1500);
+            } else {
+                document.getElementById('upload-status').textContent = 'Upload failed: ' + xhr.statusText;
+            }
+        };
+        xhr.open('POST', '/Admin?handler=UploadSnapshot');
+        xhr.setRequestHeader('RequestVerificationToken', document.querySelector('input[name="__RequestVerificationToken"]').value);
+        xhr.send(fd);
+    }
+    // Delegated event handlers on document — one-time registration via a window-level guard
+    // survives SPA page swaps. Plain addEventListener on #btn-create-snapshot turned out to be
+    // unreliable under SPA nav (first click did nothing; second click worked). Delegation on
+    // document removes the whole class of attachment-timing issues: the listener is set once
+    // on the first execution and never needs to be re-wired.
+
+    function showProgress(label, detail) {
+        var lbl = document.getElementById('snapshot-progress-label');
+        var det = document.getElementById('snapshot-progress-detail');
+        var dlg = document.getElementById('dlg-snapshot-progress');
+        if (lbl) lbl.textContent = label;
+        if (det) det.textContent = detail || '';
+        if (dlg) dlg.show();
+    }
+    function hideProgress() {
+        var dlg = document.getElementById('dlg-snapshot-progress');
+        if (dlg) dlg.hide();
+    }
+
+    // Register document-level delegated listeners ONCE for the lifetime of the tab.
+    // Re-attaching them on every SPA navigation would accumulate duplicate fetches.
+    // Other per-element handlers below (restoreBtn, etc.) still re-wire on each IIFE run
+    // because those elements are fresh after each SPA page swap.
+    if (!window._adminSnapshotDelegated) {
+        window._adminSnapshotDelegated = true;
+
+        // Block the snapshot-progress dialog from being closed mid-creation.
+        document.addEventListener('sl-request-close', function(e) {
+            if (e.target && e.target.id === 'dlg-snapshot-progress') e.preventDefault();
+        }, true);
+
+        // Toggle the snapshot upload drop-zone via the explicit "Upload" button next to "Create".
+        // Document-level delegation (same reason as #btn-create-snapshot below) — survives SPA nav.
+        document.addEventListener('click', function(e) {
+            var uploadToggle = e.target.closest('#btn-show-upload');
+            if (!uploadToggle) return;
+            var zone = document.getElementById('snapshot-upload-zone');
+            if (!zone) return;
+            zone.style.display = (zone.style.display === 'none' || !zone.style.display) ? 'block' : 'none';
+        });
+
+        document.addEventListener('click', function(e) {
+            var createBtn = e.target.closest('#btn-create-snapshot');
+            if (!createBtn) return;
+            if (createBtn.hasAttribute('data-busy')) return;
+            createBtn.setAttribute('data-busy', '');
+            createBtn.loading = true;
+            showProgress('Creating snapshot\u2026', 'This may take a while for large databases.');
+            fetch('/api-proxy/snapshots', { method: 'POST' })
+                .then(function(r) {
+                    if (r.ok) {
+                        window.location.reload();
+                    } else {
+                        hideProgress();
+                        alert('Failed to create snapshot');
+                    }
+                })
+                .catch(function() {
+                    hideProgress();
+                    alert('Network error');
+                })
+                .finally(function() {
+                    createBtn.loading = false;
+                    createBtn.removeAttribute('data-busy');
+                });
+        });
+    }
+
+    // Backfill Orphan Media Links handler — hidden, see matching HTML comment above.
+    // var backfillBtn = document.getElementById('btn-backfill-media');
+    // if (backfillBtn) {
+    //     backfillBtn.addEventListener('click', function() {
+    //         if (!confirm('Scan all articles and link orphan media records?')) return;
+    //         backfillBtn.loading = true;
+    //         fetch('/api-proxy/admin/backfill-media-links', { method: 'POST' })
+    //             .then(function(r) { return r.json(); })
+    //             .then(function(data) {
+    //                 backfillBtn.loading = false;
+    //                 alert('Linked ' + (data.linked || 0) + ' media records.');
+    //             })
+    //             .catch(function() {
+    //                 backfillBtn.loading = false;
+    //                 alert('Backfill failed.');
+    //             });
+    //     });
+    // }
+
+    var restoreBtn = document.getElementById('btn-restore-confirm');
+    if (restoreBtn) {
+        restoreBtn.addEventListener('click', function() {
+            var fileName = document.getElementById('restore-file-name').value;
+            var passwordInput = document.getElementById('restore-master-password');
+            var password = passwordInput ? passwordInput.value : '';
+            var backupCheckbox = document.getElementById('restore-backup-checkbox');
+            var createBackup = backupCheckbox ? backupCheckbox.checked : true;
+            var mode = document.getElementById('restore-mode').value;
+
+            if (mode === 'network') {
+                if (!confirm('Distribute snapshot state to entire network? This will affect all peers.')) return;
+                
+                restoreBtn.loading = true;
+                document.getElementById('dlg-restore-snapshot').hide();
+                showProgress('Initiating network restore\u2026', 'Please wait.');
+                
+                var fd = new FormData();
+                fd.append('fileName', fileName);
+                fetch('/Admin?handler=InitiateNetworkRestore', {
+                    method: 'POST',
+                    headers: {
+                        'RequestVerificationToken': document.querySelector('input[name="__RequestVerificationToken"]').value
+                    },
+                    body: fd
+                })
+                .then(function(r) {
+                    if (r.ok) return r.json();
+                    throw new Error('Failed to initiate network restore');
+                })
+                .then(function(j) {
+                    if (j && j.eventId) {
+                        window.location.href = '/Login?restore=true';
+                    } else {
+                        hideProgress();
+                        alert('Restore failed.');
+                    }
+                })
+                .catch(function(e) {
+                    hideProgress();
+                    alert(e);
+                })
+                .finally(function() { restoreBtn.loading = false; });
+                return;
+            }
+
+            if (!password) {
+                alert('Master Password is required for standalone restore.');
+                return;
+            }
+            restoreBtn.loading = true;
+
+            document.getElementById('dlg-restore-snapshot').hide();
+
+            var label = createBackup
+                ? 'Restoring snapshot\u2026'
+                : 'Restoring snapshot\u2026';
+            var detail = createBackup
+                ? 'Creating safety backup first, then restoring\u2026'
+                : 'Restoring snapshot without backup\u2026';
+            showProgress(label, detail);
+
+            fetch('/Admin?handler=RestoreSnapshot', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'RequestVerificationToken': document.querySelector('input[name="__RequestVerificationToken"]').value
+                },
+                body: 'fileName=' + encodeURIComponent(fileName) +
+                      '&masterPassword=' + encodeURIComponent(password) +
+                      '&createBackupFirst=' + (createBackup ? 'true' : 'false') +
+                      '&standaloneMode=' + (mode === 'standalone' ? 'true' : 'false')
+            })
+            .then(function(r) {
+                if (r.redirected) {
+                    window.location.href = r.url;
+                } else if (r.ok) {
+                    window.location.href = '/Login?restore=true';
+                } else {
+                    hideProgress();
+                    alert('Restore failed');
+                }
+            })
+            .catch(function() {
+                hideProgress();
+                alert('Network error');
+            })
+            .finally(function() { restoreBtn.loading = false; });
+        });
+    }
+})();
+</script>
+
+<!-- Snapshot progress dialog (non-closable) -->
+<sl-dialog id="dlg-snapshot-progress" no-header>
+    <div style="text-align:center;padding:24px 0;">
+        <sl-spinner style="font-size:2rem;margin-bottom:16px;"></sl-spinner>
+        <p id="snapshot-progress-label" style="margin:0;color:var(--text-primary);font-size:1.05rem;font-weight:600;">Creating snapshot\u2026</p>
+        <p id="snapshot-progress-detail" class="text-muted text-sm" style="margin-top:8px;">This may take a while for large databases.</p>
+    </div>
+</sl-dialog>
+
+</div>
+

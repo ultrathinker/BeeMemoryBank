@@ -1,0 +1,390 @@
+@page
+@model FolderModel
+@{
+    ViewData["Title"] = Model.FolderName;
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <h2 style="font-size:1.4rem;font-weight:700;margin:0 0 6px 0;">
+        <sl-icon name="folder2-open" style="margin-right:6px;"></sl-icon>@Model.FolderName
+    </h2>
+    <div class="folder-header-bar">
+        <div class="folder-path">
+            <span class="bmb-path-copy text-muted text-sm" title="Click to copy path" data-bmb-copy="@Model.CurrentPath">
+                <sl-icon name="folder2"></sl-icon> @Model.CurrentPath
+            </span>
+        </div>
+        <div class="toolbar compact">
+            <sl-button id="btn-open-new-article-folder" size="small" variant="success">
+                <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
+            </sl-button>
+            <sl-button id="btn-open-add-subfolder" size="small" variant="success">
+                <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-rename-folder').show()">
+                <sl-icon slot="prefix" name="pencil"></sl-icon> Rename
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-folder').show()">
+                <sl-icon slot="prefix" name="folder-symlink"></sl-icon> Move
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'folder',path:currentPath})">
+                <sl-icon slot="prefix" name="download"></sl-icon> Export
+            </sl-button>
+            <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-folder').show()">
+                <sl-icon slot="prefix" name="trash"></sl-icon> Delete
+            </sl-button>
+        </div>
+    </div>
+
+    @if (Model.Children != null && Model.Children.Folders.Count > 0)
+    {
+        <div class="card">
+            <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-secondary);margin-bottom:12px;">
+                <sl-icon name="diagram-3"></sl-icon> Subfolders
+            </h4>
+            <table class="bmb-sort-table" id="folders-table" style="width:100%;border-collapse:collapse;">
+                <thead>
+                    <tr>
+                        <th class="bmb-sort-th" data-sort="name" data-default="asc" style="text-align:left;padding:6px 10px;border-bottom:2px solid var(--sl-color-neutral-200);cursor:pointer;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-secondary);">Name <span class="bmb-sort-arrow"></span></th>
+                        <th class="bmb-sort-th" data-sort="count" style="text-align:center;padding:6px 10px;border-bottom:2px solid var(--sl-color-neutral-200);cursor:pointer;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-secondary);width:80px;">Articles <span class="bmb-sort-arrow"></span></th>
+                        <th class="bmb-sort-th" data-sort="updated" data-default="desc" style="text-align:right;padding:6px 10px;border-bottom:2px solid var(--sl-color-neutral-200);cursor:pointer;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-secondary);width:120px;">Updated <span class="bmb-sort-arrow"></span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var folder in Model.Children.Folders)
+                    {
+                        <tr class="bmb-sort-row" data-name="@folder.Name" data-count="@folder.ArticleCount" data-updated-ts="@folder.UpdatedAt.ToString("o")">
+                            <td style="padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);">
+                                <a href="/Folder?path=@Uri.EscapeDataString(folder.Path)" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;color:var(--text-primary);">
+                                    <sl-icon name="folder2" style="font-size:1rem;"></sl-icon> @folder.Name
+                                </a>
+                            </td>
+                            <td style="text-align:center;padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);">
+                                <sl-badge variant="neutral" pill>@folder.ArticleCount</sl-badge>
+                            </td>
+                            <td style="text-align:right;padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);font-size:0.85rem;color:var(--text-secondary);" class="text-muted text-sm">@folder.UpdatedAt.ToString("yyyy-MM-dd")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    @if (Model.Children != null && Model.Children.Articles.Count > 0)
+    {
+        <div class="card">
+            <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-secondary);margin-bottom:12px;">
+                <sl-icon name="file-earmark-text"></sl-icon> Articles
+            </h4>
+            <table class="bmb-sort-table" id="articles-table" style="width:100%;border-collapse:collapse;">
+                <thead>
+                    <tr>
+                        <th class="bmb-sort-th" data-sort="title" data-default="asc" style="text-align:left;padding:6px 10px;border-bottom:2px solid var(--sl-color-neutral-200);cursor:pointer;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-secondary);">Title <span class="bmb-sort-arrow"></span></th>
+                        <th class="bmb-sort-th" data-sort="created" data-default="desc" style="text-align:right;padding:6px 10px;border-bottom:2px solid var(--sl-color-neutral-200);cursor:pointer;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-secondary);width:120px;">Created <span class="bmb-sort-arrow"></span></th>
+                        <th class="bmb-sort-th" data-sort="updated" data-default="desc" style="text-align:right;padding:6px 10px;border-bottom:2px solid var(--sl-color-neutral-200);cursor:pointer;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-secondary);width:120px;">Updated <span class="bmb-sort-arrow"></span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var article in Model.Children.Articles)
+                    {
+                        <tr class="bmb-sort-row" data-title="@article.Title" data-created-ts="@article.CreatedAt.ToString("o")" data-updated-ts="@article.UpdatedAt.ToString("o")">
+                            <td style="padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);">
+                                <a href="/Article/View?id=@article.Id" style="text-decoration:none;color:var(--text-primary);">@article.Title</a>
+                            </td>
+                            <td style="text-align:right;padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);font-size:0.85rem;color:var(--text-secondary);" class="text-muted text-sm">@article.CreatedAt.ToString("yyyy-MM-dd")</td>
+                            <td style="text-align:right;padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);font-size:0.85rem;color:var(--text-secondary);" class="text-muted text-sm">@article.UpdatedAt.ToString("yyyy-MM-dd")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    @if (Model.Children == null || (Model.Children.Folders.Count == 0 && Model.Children.Articles.Count == 0))
+    {
+        <div class="card" style="text-align:center;padding:40px;">
+            <sl-icon name="folder2" style="font-size:3rem;color:var(--text-secondary);"></sl-icon>
+            <p style="margin-top:12px;color:var(--text-secondary);">This folder is empty</p>
+            <sl-button size="small" variant="primary" href="/Article/Edit?treePath=@Uri.EscapeDataString(Model.CurrentPath)" style="margin-top:12px;">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Article
+            </sl-button>
+        </div>
+    }
+
+<!-- Move folder dialog -->
+<sl-dialog id="dlg-move-folder" label="Move Folder" class="bmb-fp-host" style="--width:560px;">
+    <p class="text-muted text-sm">Moving: <code>@Model.CurrentPath</code></p>
+    <label style="display:block;font-size:0.88rem;color:var(--text-secondary);margin-bottom:6px;">Destination parent folder</label>
+    <div class="bmb-folder-picker" id="move-folder-picker">
+        <sl-input class="bmb-fp-input" placeholder="Type to search folders, or pick / for root" autocomplete="off"></sl-input>
+        <div class="bmb-fp-dropdown" hidden></div>
+    </div>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-move-folder').hide()">Cancel</sl-button>
+    <sl-button id="btn-move-folder" slot="footer" variant="primary">Move</sl-button>
+</sl-dialog>
+
+<!-- Rename folder dialog -->
+<sl-dialog id="dlg-rename-folder" label="Rename Folder">
+    <sl-input id="rename-folder-name" label="Folder name" value="@System.IO.Path.GetFileName(Model.CurrentPath.TrimEnd('/'))" required autofocus></sl-input>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-rename-folder').hide()">Cancel</sl-button>
+    <sl-button id="btn-rename-folder" slot="footer" variant="primary">Rename</sl-button>
+</sl-dialog>
+
+<!-- Add subfolder dialog -->
+<sl-dialog id="dlg-add-subfolder" label="Add Subfolder" class="bmb-fp-host">
+    <div id="folder-add-subfolder-path-selector" class="bmb-path-selector">
+        <div class="bmb-path-display">
+            <sl-icon class="bmb-path-icon" name="folder2"></sl-icon>
+            <span class="bmb-path-text">/</span>
+            <sl-icon-button class="bmb-path-edit-btn" name="pencil-square" label="Change location"></sl-icon-button>
+        </div>
+        <div class="bmb-path-picker bmb-folder-picker" hidden>
+            <sl-input class="bmb-fp-input" placeholder="Type to search folders, or pick / for root" autocomplete="off" size="small"></sl-input>
+            <div class="bmb-fp-dropdown" hidden></div>
+        </div>
+    </div>
+    <sl-alert id="add-subfolder-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        <span id="add-subfolder-error-msg"></span>
+    </sl-alert>
+    <sl-input id="add-subfolder-name" label="Folder name" placeholder="New Folder" required autofocus></sl-input>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-subfolder').hide()">Cancel</sl-button>
+    <sl-button id="btn-add-subfolder" slot="footer" variant="primary">Create</sl-button>
+</sl-dialog>
+
+<!-- Delete folder dialog -->
+<sl-dialog id="dlg-delete-folder" label="Delete Folder">
+    <sl-alert variant="danger" open>
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        All articles in <strong>@Model.CurrentPath</strong> and subfolders will be deleted!
+    </sl-alert>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-delete-folder').hide()">Cancel</sl-button>
+    <sl-button id="btn-confirm-delete-folder" slot="footer" variant="danger">Delete All</sl-button>
+</sl-dialog>
+
+<script>
+(function() {
+    var currentPath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath));
+
+    function escapeHtml(text) {
+        var d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    // New-article toolbar button: NEVER show a popup. Jump straight to the
+    // editor with the current folder pre-filled. The user can change the
+    // target folder there via the clickable breadcrumb under the title.
+    var openNewArticleBtn = document.getElementById('btn-open-new-article-folder');
+    if (openNewArticleBtn) {
+        openNewArticleBtn.addEventListener('click', function() {
+            window.location.href = '/Article/Edit?treePath=' + encodeURIComponent(currentPath || '/');
+        });
+    }
+
+    var addSubfolderSelector = null;
+    var openAddSubBtn = document.getElementById('btn-open-add-subfolder');
+    if (openAddSubBtn) {
+        openAddSubBtn.addEventListener('click', function() {
+            addSubfolderSelector = window.bmbInitPathSelector({
+                rootEl: document.getElementById('folder-add-subfolder-path-selector'),
+                basePath: currentPath
+            });
+            document.getElementById('dlg-add-subfolder').show();
+        });
+    }
+
+    // Move-folder dialog uses the shared bmbFolderPicker. Initialise on the
+    // dialog's sl-show event — by that point Shoelace has the panel in the
+    // DOM and any deferred site.js init has finished, so we don't need a
+    // setTimeout magic-number poll.
+    var moveFolderPicker = null;
+    function initMovePicker() {
+        if (moveFolderPicker || typeof window.bmbFolderPicker !== 'function') return;
+        var pickerRoot = document.getElementById('move-folder-picker');
+        if (!pickerRoot) return;
+        moveFolderPicker = window.bmbFolderPicker({
+            rootEl: pickerRoot,
+            initialPath: '/'
+        });
+    }
+    var moveDlg = document.getElementById('dlg-move-folder');
+    if (moveDlg) moveDlg.addEventListener('sl-show', initMovePicker);
+
+    var moveBtn = document.getElementById('btn-move-folder');
+    if (moveBtn) {
+        moveBtn.addEventListener('click', function() {
+            initMovePicker();
+            var newParentPath = (moveFolderPicker ? moveFolderPicker.getPath() : null) || '/';
+            var folderName = currentPath.replace(/\/$/, '').split('/').pop();
+            var newPath = newParentPath.replace(/\/$/, '') + '/' + folderName;
+            if (newPath === currentPath) { alert('Already in that folder'); return; }
+            moveBtn.loading = true;
+            fetch('/api-proxy/folders/move?path=' + encodeURIComponent(currentPath), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ newParentPath: newParentPath })
+            }).then(function(r) {
+                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
+                else r.json().then(function(d) { alert(d.error || 'Move failed'); }).catch(function() { alert('Move failed'); });
+            }).catch(function() { alert('Error'); }).finally(function() { moveBtn.loading = false; });
+        });
+    }
+
+    var renameBtn = document.getElementById('btn-rename-folder');
+    if (renameBtn) {
+        renameBtn.addEventListener('click', function() {
+            var newName = document.getElementById('rename-folder-name').value.trim();
+            if (!newName) return;
+            var parentPath = currentPath.substring(0, currentPath.replace(/\/$/, '').lastIndexOf('/'));
+            var newPath = parentPath + '/' + newName;
+            if (newPath === currentPath) return;
+            renameBtn.loading = true;
+            fetch('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ newPath: newPath })
+            }).then(function(r) {
+                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
+                else r.json().then(function(d) { alert(d.error || 'Rename failed'); }).catch(function() { alert('Rename failed'); });
+            }).catch(function() { alert('Error'); }).finally(function() { renameBtn.loading = false; });
+        });
+    }
+
+    var addSubBtn = document.getElementById('btn-add-subfolder');
+    if (addSubBtn) {
+        var addSubDlg = document.getElementById('dlg-add-subfolder');
+        var addSubErrBox = document.getElementById('add-subfolder-error');
+        var addSubErrMsg = document.getElementById('add-subfolder-error-msg');
+        function showAddSubError(msg) {
+            addSubErrMsg.textContent = msg || 'Failed to create folder';
+            addSubErrBox.style.display = 'block';
+            addSubErrBox.open = true;
+        }
+        function clearAddSubError() {
+            addSubErrBox.style.display = 'none';
+            addSubErrMsg.textContent = '';
+        }
+        if (addSubDlg) addSubDlg.addEventListener('sl-show', clearAddSubError);
+
+        addSubBtn.addEventListener('click', async function() {
+            clearAddSubError();
+            var nameInput = document.getElementById('add-subfolder-name');
+            var name = (nameInput.value || '').trim();
+            if (!name) {
+                showAddSubError('Folder name is required.');
+                return;
+            }
+            addSubBtn.loading = true;
+            var basePath = addSubfolderSelector ? addSubfolderSelector.getEffectivePath() : currentPath;
+            var newPath = basePath.replace(/\/$/, '') + '/' + name;
+            try {
+                var r = await fetch('/api-proxy/folders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: newPath })
+                });
+                if (r.ok) {
+                    addSubDlg.hide();
+                    window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
+                    return;
+                }
+                var d = null;
+                try { d = await r.json(); } catch (_) {}
+                showAddSubError((d && d.error) || 'Failed to create folder');
+            } catch (_) {
+                showAddSubError('Network error. Please try again.');
+            } finally {
+                addSubBtn.loading = false;
+            }
+        });
+    }
+
+    var deleteBtn = document.getElementById('btn-confirm-delete-folder');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function() {
+            deleteBtn.loading = true;
+            fetch('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
+                method: 'DELETE'
+            }).then(function(r) {
+                if (r.ok) window.location.href = '/Tree';
+                else r.json().then(function(d) { alert(d.error || 'Delete failed'); }).catch(function() { alert('Delete failed'); });
+            }).catch(function() { alert('Error'); }).finally(function() { deleteBtn.loading = false; });
+        });
+    }
+
+    var collator = new Intl.Collator(undefined, { sensitivity: 'base' });
+
+    function initSortableTable(tableId, columns) {
+        var table = document.getElementById(tableId);
+        if (!table) return;
+        var headers = table.querySelectorAll('.bmb-sort-th');
+        var tbody = table.querySelector('tbody');
+        var currentSort = null;
+        var currentDir = null;
+
+        headers.forEach(function(th) {
+            th.addEventListener('click', function() {
+                var sortKey = th.dataset.sort;
+                var defaultDir = th.dataset.default || 'asc';
+                if (currentSort === sortKey) {
+                    currentDir = currentDir === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort = sortKey;
+                    currentDir = defaultDir;
+                }
+                var col = columns[sortKey];
+                var rows = Array.from(tbody.querySelectorAll('.bmb-sort-row'));
+                rows.sort(function(a, b) {
+                    var va = col.extract(a);
+                    var vb = col.extract(b);
+                    var cmp = col.compare(va, vb);
+                    return currentDir === 'asc' ? cmp : -cmp;
+                });
+                rows.forEach(function(r) { tbody.appendChild(r); });
+                headers.forEach(function(h) {
+                    var arrow = h.querySelector('.bmb-sort-arrow');
+                    arrow.textContent = '';
+                    h.style.opacity = '0.7';
+                });
+                var activeArrow = th.querySelector('.bmb-sort-arrow');
+                activeArrow.textContent = currentDir === 'asc' ? ' \u25B2' : ' \u25BC';
+                th.style.opacity = '1';
+            });
+        });
+    }
+
+    initSortableTable('folders-table', {
+        name: {
+            extract: function(r) { return r.dataset.name; },
+            compare: function(a, b) { return collator.compare(a, b); }
+        },
+        count: {
+            extract: function(r) { return parseInt(r.dataset.count, 10) || 0; },
+            compare: function(a, b) { return a - b; }
+        },
+        updated: {
+            extract: function(r) { return new Date(r.dataset.updatedTs).getTime(); },
+            compare: function(a, b) { return a - b; }
+        }
+    });
+
+    initSortableTable('articles-table', {
+        title: {
+            extract: function(r) { return r.dataset.title; },
+            compare: function(a, b) { return collator.compare(a, b); }
+        },
+        created: {
+            extract: function(r) { return new Date(r.dataset.createdTs).getTime(); },
+            compare: function(a, b) { return a - b; }
+        },
+        updated: {
+            extract: function(r) { return new Date(r.dataset.updatedTs).getTime(); },
+            compare: function(a, b) { return a - b; }
+        }
+    });
+})();
+</script>
+</div>
+</div>

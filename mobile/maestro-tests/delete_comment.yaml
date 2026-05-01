@@ -1,0 +1,57 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tree"
+    timeout: 30000
+- tapOn:
+    text: "Tree"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Music"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Music"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Music Theory"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Music Theory"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TitleLabel"
+    timeout: 30000
+# Add a comment first so we can delete it
+- tapOn:
+    id: "com.beememorybank.mobile:id/CommentEntry"
+- inputText: "Test comment from Maestro"
+- tapOn:
+    id: "com.beememorybank.mobile:id/AddCommentButton"
+- extendedWaitUntil:
+    visible:
+      text: "Test comment from Maestro"
+    timeout: 30000
+# Now delete it
+- tapOn:
+    id: "com.beememorybank.mobile:id/DeleteCommentButton"
+- extendedWaitUntil:
+    visible:
+      text: "Delete Comment"
+    timeout: 30000
+- tapOn:
+    text: "Delete"
+- takeScreenshot: comment_deleted

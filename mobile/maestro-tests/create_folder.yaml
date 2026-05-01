@@ -1,0 +1,34 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- evalScript: ${output.folderName = 'f' + Date.now()}
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tree"
+    timeout: 3000
+- tapOn:
+    text: "Tree"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 10000
+- tapOn:
+    text: "NewFolderButton"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/PopupInputEntry"
+    timeout: 5000
+- tapOn:
+    id: "com.beememorybank.mobile:id/PopupInputEntry"
+- inputText: ${output.folderName}
+- pressKey: back
+- tapOn:
+    text: "Create"
+- scrollUntilVisible:
+    element:
+      text: ${output.folderName}
+    direction: DOWN
+    timeout: 30000
+- takeScreenshot: folder_created

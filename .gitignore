@@ -1,0 +1,54 @@
+## .NET
+bin/
+obj/
+publish/
+*.user
+*.suo
+*.DotSettings.user
+
+## IDE
+.vs/
+.idea/
+.vscode/
+.claude/
+
+## Data
+data/
+*.db
+*.db-journal
+
+## ONNX model (large binary, download separately — see docs/deployment.md)
+*.onnx
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Maestro screenshots at repo root (docs/screenshots/ and server/**/images/ kept)
+/*.png
+
+## Environment
+.env
+
+## Node
+node_modules/
+**/node_modules/
+
+## Agent context files
+CLAUDE.md
+AGENTS.md
+QWEN.md
+GEMINI.md
+_docs/
+_reports/
+_review/
+_prompt*.txt
+_status*.txt
+_*_article.md
+
+## Personal deployment configs (use docker-compose.yml + .env.example instead)
+deploy/
+
+## Secrets
+*.pfx
+*.keystore

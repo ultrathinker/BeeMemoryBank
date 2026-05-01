@@ -1,0 +1,61 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- evalScript: ${output.folderName = 'f' + Date.now()}
+- evalScript: ${output.subName = 's' + Date.now()}
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tree"
+    timeout: 3000
+- tapOn:
+    text: "Tree"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 10000
+# Create parent folder
+- tapOn:
+    text: "NewFolderButton"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/PopupInputEntry"
+    timeout: 5000
+- tapOn:
+    id: "com.beememorybank.mobile:id/PopupInputEntry"
+- inputText: ${output.folderName}
+- pressKey: back
+- tapOn:
+    text: "Create"
+- scrollUntilVisible:
+    element:
+      text: ${output.folderName}
+    direction: DOWN
+    timeout: 30000
+# Navigate into the new folder
+- tapOn:
+    text: ${output.folderName}
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 10000
+# Create subfolder inside
+- tapOn:
+    text: "NewFolderButton"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/PopupInputEntry"
+    timeout: 5000
+- tapOn:
+    id: "com.beememorybank.mobile:id/PopupInputEntry"
+- eraseText: 20
+- inputText: ${output.subName}
+- pressKey: back
+- tapOn:
+    text: "Create"
+- extendedWaitUntil:
+    visible:
+      text: ${output.subName}
+    timeout: 10000
+- takeScreenshot: subfolder_created

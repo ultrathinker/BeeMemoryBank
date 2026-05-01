@@ -1,0 +1,48 @@
+<div class="sidebar" id="app-sidebar">
+    <div class="sidebar-header">
+        <sl-input id="sidebar-search-input" placeholder="Search..." size="small" clearable type="search" autocomplete="nope-bmb-sidebar" name="sidebar-tree-search">
+            <sl-icon name="search" slot="prefix"></sl-icon>
+        </sl-input>
+        <button id="btn-last-search" type="button" title="Restore last search" style="display: none;">
+            <sl-icon name="arrow-counterclockwise"></sl-icon>
+        </button>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 4px 0 8px;">
+        <div style="display:flex;gap:12px;">
+            <a href="#" id="btn-new-article-sidebar" style="font-size:0.78rem;color:var(--accent);text-decoration:none;display:flex;align-items:center;gap:3px;">
+                <sl-icon name="file-earmark-plus" style="font-size:0.85rem;"></sl-icon> New article
+            </a>
+            <a href="#" id="btn-add-folder-sidebar" style="font-size:0.78rem;color:var(--accent);text-decoration:none;display:flex;align-items:center;gap:3px;">
+                <sl-icon name="folder-plus" style="font-size:0.85rem;"></sl-icon> Add folder
+            </a>
+        </div>
+        <div style="display:flex;align-items:center;">
+            <sl-icon-button id="btn-tree-refresh" name="arrow-clockwise" label="Refresh tree" title="Refresh tree"></sl-icon-button>
+            <sl-icon-button id="btn-sidebar-collapse" name="chevron-left" label="Collapse panel" title="Collapse panel"></sl-icon-button>
+        </div>
+    </div>
+    <div class="sidebar-tree-wrap">
+        <div class="sidebar-tree-top-fade" aria-hidden="true"></div>
+        <div class="sidebar-tree" id="tree-container"></div>
+    </div>
+
+    <sl-dialog id="dlg-add-folder-sidebar" label="Add Folder" class="bmb-fp-host">
+        <div id="add-folder-path-selector" class="bmb-path-selector">
+            <div class="bmb-path-display">
+                <sl-icon class="bmb-path-icon" name="folder2"></sl-icon>
+                <span class="bmb-path-text">/</span>
+                <sl-icon-button class="bmb-path-edit-btn" name="pencil-square" label="Change location"></sl-icon-button>
+            </div>
+            <div class="bmb-path-picker bmb-folder-picker" hidden>
+                <sl-input class="bmb-fp-input" placeholder="Type to search folders, or pick / for root" autocomplete="off" size="small"></sl-input>
+                <div class="bmb-fp-dropdown" hidden></div>
+            </div>
+        </div>
+        <sl-input id="add-folder-sidebar-name" label="Folder name" placeholder="My Folder" required autofocus></sl-input>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-folder-sidebar').hide()">Cancel</sl-button>
+        <sl-button id="btn-create-folder-sidebar" slot="footer" variant="primary">Create</sl-button>
+    </sl-dialog>
+</div>
+<button id="sidebar-expand-tab" title="Show sidebar" aria-label="Expand sidebar">
+    <sl-icon name="chevron-right"></sl-icon>
+</button>

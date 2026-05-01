@@ -1,0 +1,131 @@
+@page
+@model SetupModel
+@{
+    ViewData["Title"] = "Setup";
+    Layout = null;
+}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] - BeeMemoryBank</title>
+    <script type="module">
+        import { setBasePath } from '/lib/shoelace/shoelace-bundle.js';
+        setBasePath('/lib/shoelace');
+    </script>
+    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
+    <link href="/css/site.css" rel="stylesheet" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <style>
+        body { display: flex; align-items: center; justify-content: center; height: 100vh; }
+        .setup-card { width: 440px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; }
+        .setup-card h2 { margin-bottom: 24px; font-size: 1.3rem; text-align: center; }
+        .setup-card .logo-icon { font-size: 1.6rem; vertical-align: middle; margin-right: 6px; }
+        .setup-tabs { margin-bottom: 16px; }
+        .tab-panel-form { display: flex; flex-direction: column; gap: 16px; }
+        .tab-panel-form sl-input { width: 100%; }
+        .form-actions { margin-top: 4px; }
+        .form-actions sl-button { width: 100%; }
+    </style>
+</head>
+<body class="sl-theme-dark">
+    <div class="setup-card">
+        <h2>
+            <sl-icon name="bee" class="logo-icon"></sl-icon>
+            BeeMemoryBank Setup
+        </h2>
+
+        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <sl-alert variant="danger" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @Model.ErrorMessage
+            </sl-alert>
+        }
+
+        <div class="setup-tabs">
+            <sl-tab-group>
+                <sl-tab slot="nav" panel="standalone">
+                    <sl-icon name="plus-circle" style="margin-right:4px;"></sl-icon> New Network
+                </sl-tab>
+                <sl-tab slot="nav" panel="join">
+                    <sl-icon name="link" style="margin-right:4px;"></sl-icon> Join Network
+                </sl-tab>
+                <sl-tab-panel name="standalone">
+                    <form method="post" asp-page-handler="Standalone" class="tab-panel-form" data-setup-form="standalone">
+                        @Html.AntiForgeryToken()
+                        <sl-input name="adminUsername" label="Admin Username" required autofocus
+                                  placeholder="e.g. admin" autocomplete="username"></sl-input>
+                        <small class="text-muted" style="margin-top:-12px;">Used to log in. Can be different from the node name. Rename later via Profile.</small>
+                        <sl-input name="displayName" label="Node Name" required
+                                  placeholder="e.g. My Laptop"></sl-input>
+                        <sl-input name="password" label="Password" type="password" required
+                                  password-toggle minlength="6"></sl-input>
+                        <sl-input name="confirmPassword" label="Confirm Password" type="password" required
+                                  password-toggle minlength="6"></sl-input>
+                        <div class="form-actions">
+                            <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
+                                <sl-icon slot="prefix" name="plus-circle"></sl-icon> Create Network
+                            </sl-button>
+                        </div>
+                    </form>
+                </sl-tab-panel>
+                <sl-tab-panel name="join">
+                    <form method="post" asp-page-handler="Join" class="tab-panel-form" data-setup-form="join">
+                        @Html.AntiForgeryToken()
+                        <sl-input name="joinAdminUsername" label="Admin Username" required
+                                  placeholder="e.g. admin" autocomplete="username"></sl-input>
+                        <small class="text-muted" style="margin-top:-12px;">Used to log in on this node. Can be different from the node name.</small>
+                        <sl-input name="joinDisplayName" label="Node Name" required
+                                  placeholder="e.g. My Phone"></sl-input>
+                        <sl-input name="remoteUrl" label="Remote Node URL" required
+                                  placeholder="https://bee.example.com" type="url"></sl-input>
+                        <sl-input name="joinPassword" label="Password" type="password" required
+                                  password-toggle minlength="6"></sl-input>
+                        <div class="form-actions">
+                            <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
+                                <sl-icon slot="prefix" name="link"></sl-icon> Join Network
+                            </sl-button>
+                        </div>
+                    </form>
+                </sl-tab-panel>
+            </sl-tab-group>
+        </div>
+    </div>
+
+    <sl-dialog id="setup-loader" label="Please wait" no-header style="--width: 360px;">
+        <div style="text-align:center;padding:24px 12px;">
+            <sl-spinner style="font-size:2.5rem;--track-width:4px;"></sl-spinner>
+            <h3 id="setup-loader-title" style="margin-top:16px;margin-bottom:4px;">Working…</h3>
+            <p id="setup-loader-msg" class="text-muted" style="margin:0;font-size:0.9rem;">
+                Please don't close this page.
+            </p>
+        </div>
+    </sl-dialog>
+
+    <script>
+        (function () {
+            const dlg = document.getElementById('setup-loader');
+            const title = document.getElementById('setup-loader-title');
+            const msg = document.getElementById('setup-loader-msg');
+            document.querySelectorAll('form[data-setup-form]').forEach(function (form) {
+                form.addEventListener('submit', function () {
+                    const kind = form.getAttribute('data-setup-form');
+                    if (kind === 'join') {
+                        title.textContent = 'Joining network…';
+                        msg.textContent = 'Exchanging keys, downloading signed snapshot, importing data. This may take up to a minute.';
+                    } else {
+                        title.textContent = 'Creating network…';
+                        msg.textContent = 'Generating keys and initializing local database.';
+                    }
+                    form.querySelectorAll('[data-submit-btn]').forEach(function (b) { b.loading = true; b.disabled = true; });
+                    if (dlg && typeof dlg.show === 'function') dlg.show();
+                    else dlg.open = true;
+                });
+            });
+        })();
+    </script>
+</body>
+</html>

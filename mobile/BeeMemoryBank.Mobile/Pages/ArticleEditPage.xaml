@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.ArticleEditPage"
+             Title="Edit Article"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ContentPage.ToolbarItems>
+        <ToolbarItem Text="Save" Order="Primary" Clicked="OnSaveClicked" AutomationId="SaveToolbarButton" />
+    </ContentPage.ToolbarItems>
+
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="12">
+
+            <ActivityIndicator x:Name="LoadingIndicator" IsRunning="False" IsVisible="False"
+                               Color="{StaticResource PrimaryColor}" />
+
+            <Label Text="Title" FontAttributes="Bold" />
+            <Entry x:Name="TitleEntry"
+                   AutomationId="TitleEntry"
+                   Style="{StaticResource BaseEntry}"
+                   IsSpellCheckEnabled="False"
+                   IsTextPredictionEnabled="False"
+                   Placeholder="Article title" />
+
+            <Label Text="Tags (comma separated)" FontAttributes="Bold" />
+            <Entry x:Name="ConceptTagsEntry"
+                   AutomationId="ConceptTagsEntry"
+                   Style="{StaticResource BaseEntry}"
+                   IsSpellCheckEnabled="False"
+                   IsTextPredictionEnabled="False"
+                   Placeholder="tag1, tag2, tag3" />
+
+            <Grid ColumnDefinitions="*,Auto">
+            <Label Text="Content" FontAttributes="Bold" VerticalOptions="Center" />
+            <Button Grid.Column="1" Text="📷 Image"
+                    AutomationId="AddImageButton"
+                    Style="{StaticResource PrimaryButton}"
+                    Clicked="OnAddImageClicked"
+                    WidthRequest="110" HeightRequest="36"
+                    FontSize="13" Padding="4" />
+            </Grid>
+            <Editor x:Name="ContentEditor"
+                    AutomationId="ContentEditor"
+                    Placeholder="Article content..."
+                    AutoSize="TextChanges"
+                    MinimumHeightRequest="300"
+                    Style="{StaticResource BaseEditor}" />
+
+            <Label Text="Folder Path" FontAttributes="Bold" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <Label Grid.Column="0" x:Name="PathLabel"
+                       AutomationId="PathLabel"
+                       Text="/"
+                       FontSize="16"
+                       VerticalOptions="Center"
+                       LineBreakMode="TailTruncation" />
+                <Button Grid.Column="1" Text="Choose Folder"
+                        AutomationId="ChooseFolderButton"
+                        Style="{StaticResource PrimaryButton}"
+                        Clicked="OnChooseFolderClicked"
+                        WidthRequest="140" />
+            </Grid>
+
+            <Label x:Name="ErrorLabel"
+                   TextColor="{StaticResource ErrorColor}"
+                   IsVisible="False"
+                   LineBreakMode="WordWrap" />
+
+            <Button Text="Save"
+                    AutomationId="SaveButton"
+                    Style="{StaticResource PrimaryButton}"
+                    Clicked="OnSaveClicked" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+
+</ContentPage>

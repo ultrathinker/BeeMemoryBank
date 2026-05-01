@@ -1,0 +1,52 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tree"
+    timeout: 30000
+- tapOn:
+    text: "Tree"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Health"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Health"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Healthy Eating"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    text: "Healthy Eating"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TitleLabel"
+    timeout: 30000
+- assertVisible:
+    text: "Healthy Eating"
+- back
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/FolderList"
+    timeout: 30000
+- back
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 30000
+- assertVisible:
+    text: "Books"
+- takeScreenshot: deep_nav_back

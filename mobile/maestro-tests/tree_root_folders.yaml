@@ -1,0 +1,32 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tree"
+    timeout: 30000
+- tapOn:
+    text: "Tree"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 30000
+- assertVisible:
+    text: "Books"
+- scrollUntilVisible:
+    element:
+      text: "Movies"
+    direction: DOWN
+    timeout: 30000
+- assertVisible:
+    text: "Movies"
+- scrollUntilVisible:
+    element:
+      text: "Travel"
+    direction: DOWN
+    timeout: 30000
+- assertVisible:
+    text: "Travel"
+- takeScreenshot: tree_root_folders

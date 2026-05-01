@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.InitialSyncPage"
+             Title="Initial Sync"
+             Shell.NavBarIsVisible="False"
+             Shell.FlyoutBehavior="Disabled"
+             BackgroundColor="#1c1017">
+
+    <Grid Padding="24" RowDefinitions="*,Auto,Auto,Auto,Auto,*,Auto">
+
+        <VerticalStackLayout Grid.Row="1" Spacing="8" HorizontalOptions="Center">
+            <Label Text="Downloading your data"
+                   FontSize="22"
+                   FontAttributes="Bold"
+                   TextColor="#e8d8df"
+                   HorizontalOptions="Center" />
+            <Label Text="This has to finish before you can use the app."
+                   FontSize="14"
+                   TextColor="#9a8a91"
+                   HorizontalOptions="Center"
+                   HorizontalTextAlignment="Center" />
+        </VerticalStackLayout>
+
+        <ActivityIndicator Grid.Row="2"
+                           x:Name="Spinner"
+                           IsRunning="True"
+                           Color="#e8d8df"
+                           Margin="0,24,0,16" />
+
+        <Label Grid.Row="3"
+               x:Name="CounterLabel"
+               Text="Starting…"
+               FontSize="16"
+               TextColor="#e8d8df"
+               HorizontalOptions="Center" />
+
+        <Label Grid.Row="4"
+               x:Name="ErrorLabel"
+               IsVisible="False"
+               FontSize="14"
+               TextColor="#FF6B6B"
+               HorizontalTextAlignment="Center"
+               Margin="0,16,0,0" />
+
+        <VerticalStackLayout Grid.Row="6" Spacing="12">
+            <Button x:Name="RetryButton"
+                    Text="Retry"
+                    IsVisible="False"
+                    Clicked="OnRetryClicked"
+                    BackgroundColor="#5a2a3a"
+                    TextColor="#e8d8df" />
+            <Button x:Name="CancelButton"
+                    Text="Cancel and delete this node"
+                    Clicked="OnCancelClicked"
+                    BackgroundColor="Transparent"
+                    BorderColor="#5a2a3a"
+                    BorderWidth="1"
+                    TextColor="#e8d8df" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentPage>

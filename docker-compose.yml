@@ -1,0 +1,21 @@
+services:
+  bmb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BMB_API_PORT:-5300}:5300"
+      - "${BMB_WEB_PORT:-5301}:5301"
+    volumes:
+      - ${BMB_DATA_PATH:-./data}:/app/data
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - BMB_DATA_PATH=/app/data
+      - BMB_ONNX_MODEL_PATH=/app/data/model.onnx
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5300/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped

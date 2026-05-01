@@ -1,0 +1,43 @@
+using BeeMemoryBank.Web.Models;
+using BeeMemoryBank.Web.Services;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.RazorPages;
+
+namespace BeeMemoryBank.Web.Pages.Article;
+
+[Authorize]
+public class PreviewModel(ApiClient api) : PageModel
+{
+    public ArticleDto? Article { get; private set; }
+    public new string? Content { get; private set; }
+    public List<CommentDto> Comments { get; private set; } = [];
+    public List<RelatedArticleDto> RelatedArticles { get; private set; } = [];
+    public List<string> ConceptTags { get; private set; } = [];
+
+    public async Task<IActionResult> OnGetAsync(Guid id)
+    {
+        var isUnlocked = await api.IsUnlockedAsync();
+        if (!isUnlocked)
+        {
+            await HttpContext.SignOutAsync("BeeWebCookie");
+            return RedirectToPage("/Login", new { returnUrl = $"/Article/Preview?id={id}" });
+        }
+
+        Article = await api.GetArticleAsync(id);
+        if (Article != null)
+        {
+            try
+            {
+                var c = await api.GetArticleContentAsync(id);
+                Content = c?.Content;
+            }
+            catch { Content = null; }
+            Comments = await api.GetCommentsAsync(id) ?? [];
+            ConceptTags = await api.GetArticleConceptTagsAsync(id) ?? [];
+            RelatedArticles = await api.GetRelatedArticlesAsync(id) ?? [];
+        }
+        return Page();
+    }
+}

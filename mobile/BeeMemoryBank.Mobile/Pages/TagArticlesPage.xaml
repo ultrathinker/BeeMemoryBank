@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.TagArticlesPage"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <Grid RowDefinitions="*">
+
+        <ActivityIndicator x:Name="LoadingIndicator"
+                           Grid.Row="0"
+                           IsRunning="False"
+                           IsVisible="False"
+                           Color="{StaticResource PrimaryColor}"
+                           VerticalOptions="Center"
+                           HorizontalOptions="Center"
+                           ZIndex="10" />
+
+        <CollectionView x:Name="ArticlesList"
+                        AutomationId="TagArticlesList"
+                        SelectionMode="None"
+                        Margin="8,8,8,0">
+            <CollectionView.EmptyView>
+                <StackLayout Padding="16" VerticalOptions="Center" HorizontalOptions="Center">
+                    <Label Text="No articles found"
+                           TextColor="{StaticResource SecondaryTextColor}"
+                           FontSize="16"
+                           HorizontalOptions="Center" />
+                </StackLayout>
+            </CollectionView.EmptyView>
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Frame Style="{StaticResource CardFrame}" Margin="0,4">
+                        <Frame.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnArticleTapped" />
+                        </Frame.GestureRecognizers>
+                        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
+                            <Label Grid.Row="0" Grid.Column="0"
+                                   Text="{Binding Title}"
+                                   FontAttributes="Bold"
+                                   FontSize="15"
+                                   LineBreakMode="TailTruncation" />
+                            <Label Grid.Row="0" Grid.Column="1"
+                                   Text="{Binding TreePath}"
+                                   FontSize="12"
+                                   TextColor="{StaticResource SecondaryTextColor}"
+                                   LineBreakMode="TailTruncation" />
+                        </Grid>
+                    </Frame>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+
+    </Grid>
+
+</ContentPage>

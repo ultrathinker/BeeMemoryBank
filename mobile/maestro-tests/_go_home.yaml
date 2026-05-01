@@ -1,0 +1,97 @@
+appId: com.beememorybank.mobile
+---
+# === GO HOME: get to a root page with hamburger visible ===
+#
+# 1. launchApp — if app exited or is in background, brings it back
+# 2. If on Unlock screen — enter password
+# 3. If drawer is open (no hamburger, no "Navigate up") — tap right side to close
+# 4. If on a pushed page ("Navigate up" visible) — press back (up to 6 times)
+#
+# After this flow, hamburger ("Open navigation drawer") is visible.
+# Each test then opens drawer and navigates where it needs.
+
+# Restart app to get clean navigation state
+- launchApp:
+    appId: "com.beememorybank.mobile"
+    stopApp: true
+    clearKeychain: false
+    clearState: false
+
+# Dismiss Android permission dialogs if present
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn:
+          text: "Allow"
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn:
+          text: "Allow"
+
+# Handle Unlock screen
+- runFlow:
+    when:
+      visible: "Enter password to unlock"
+    commands:
+      - tapOn:
+          id: "com.beememorybank.mobile:id/PasswordEntry"
+      - inputText: ${BMB_TEST_PASSWORD}
+      - pressKey: back
+      - tapOn:
+          id: "com.beememorybank.mobile:id/UnlockButton"
+      - extendedWaitUntil:
+          visible:
+            text: "Node Info"
+          timeout: 30000
+
+# If drawer is open: no hamburger AND no "Navigate up" — tap right side to close drawer
+- runFlow:
+    when:
+      notVisible: "Open navigation drawer"
+    commands:
+      - runFlow:
+          when:
+            notVisible: "Navigate up"
+          commands:
+            - tapOn:
+                point: "90%,50%"
+
+# Pop pushed pages: press back while "Navigate up" is visible
+- runFlow:
+    when:
+      visible: "Navigate up"
+    commands:
+      - back
+
+- runFlow:
+    when:
+      visible: "Navigate up"
+    commands:
+      - back
+
+- runFlow:
+    when:
+      visible: "Navigate up"
+    commands:
+      - back
+
+- runFlow:
+    when:
+      visible: "Navigate up"
+    commands:
+      - back
+
+- runFlow:
+    when:
+      visible: "Navigate up"
+    commands:
+      - back
+
+- runFlow:
+    when:
+      visible: "Navigate up"
+    commands:
+      - back

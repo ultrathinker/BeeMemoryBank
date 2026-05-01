@@ -1,0 +1,164 @@
+@page
+@model TreeModel
+@{
+    ViewData["Title"] = "Home";
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <div class="welcome">
+        <sl-icon name="database" style="font-size:3rem;color:var(--accent);display:block;margin-bottom:16px;"></sl-icon>
+        <h2>Welcome to BeeMemoryBank</h2>
+        <p>Select a folder from the tree to view its articles, or use search.</p>
+        <div style="display:flex;gap:8px;margin-top:16px;justify-content:center;">
+            <sl-button size="small" variant="success" href="/Article/Edit?treePath=%2F">
+                <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
+            </sl-button>
+            <sl-button size="small" variant="success" onclick="document.getElementById('dlg-add-folder-home').show()">
+                <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'all'})">
+                <sl-icon slot="prefix" name="download"></sl-icon> Export All
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-import-obsidian').show()">
+                <sl-icon slot="prefix" name="upload"></sl-icon> Import from Obsidian
+            </sl-button>
+        </div>
+    </div>
+</div>
+
+<!-- Add folder dialog (home) -->
+<sl-dialog id="dlg-add-folder-home" label="Add Folder">
+    <sl-alert id="add-folder-home-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        <span id="add-folder-home-error-msg"></span>
+    </sl-alert>
+    <sl-input id="add-folder-home-name" label="Folder name" placeholder="My Folder" required autofocus></sl-input>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-folder-home').hide()">Cancel</sl-button>
+    <sl-button id="btn-add-folder-home" slot="footer" variant="primary">Create</sl-button>
+</sl-dialog>
+
+<script>
+(function() {
+    var btn = document.getElementById('btn-add-folder-home');
+    var dlg = document.getElementById('dlg-add-folder-home');
+    var errBox = document.getElementById('add-folder-home-error');
+    var errMsg = document.getElementById('add-folder-home-error-msg');
+
+    function showError(msg) {
+        errMsg.textContent = msg || 'Failed to create folder';
+        errBox.style.display = 'block';
+        errBox.open = true;
+    }
+    function clearError() {
+        errBox.style.display = 'none';
+        errMsg.textContent = '';
+    }
+    if (dlg) dlg.addEventListener('sl-show', clearError);
+
+    if (btn) {
+        btn.addEventListener('click', async function() {
+            clearError();
+            var nameInput = document.getElementById('add-folder-home-name');
+            var name = (nameInput.value || '').trim();
+            if (!name) {
+                showError('Folder name is required.');
+                return;
+            }
+            btn.loading = true;
+            var path = '/' + name.replace(/^\/+/, '');
+            try {
+                var r = await fetch('/api-proxy/folders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: path })
+                });
+                if (r.ok) {
+                    dlg.hide();
+                    window.location.href = '/Folder?path=' + encodeURIComponent(path);
+                    return;
+                }
+                var d = null;
+                try { d = await r.json(); } catch (_) {}
+                showError((d && d.error) || 'Failed to create folder');
+            } catch (_) {
+                showError('Network error. Please try again.');
+            } finally {
+                btn.loading = false;
+            }
+        });
+    }
+})();
+</script>
+
+<sl-dialog id="dlg-import-obsidian" label="Import from Obsidian">
+    <sl-alert id="import-obsidian-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        <span id="import-obsidian-error-msg"></span>
+    </sl-alert>
+    <p>Upload a ZIP file exported from an Obsidian vault.</p>
+    <input type="file" id="import-obsidian-file" accept=".zip" style="margin-bottom:16px;" />
+    <sl-button id="btn-import-obsidian" slot="footer" variant="primary">Import</sl-button>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-import-obsidian').hide()">Cancel</sl-button>
+</sl-dialog>
+
+<script>
+(function() {
+    var btn = document.getElementById('btn-import-obsidian');
+    var dlg = document.getElementById('dlg-import-obsidian');
+    var errBox = document.getElementById('import-obsidian-error');
+    var errMsg = document.getElementById('import-obsidian-error-msg');
+    var fileInput = document.getElementById('import-obsidian-file');
+
+    function showError(msg) {
+        errMsg.textContent = msg || 'Import failed';
+        errBox.style.display = 'block';
+        errBox.open = true;
+    }
+    function clearError() {
+        errBox.style.display = 'none';
+        errMsg.textContent = '';
+    }
+    if (dlg) dlg.addEventListener('sl-show', function() {
+        clearError();
+        fileInput.value = '';
+    });
+
+    if (btn) {
+        btn.addEventListener('click', async function() {
+            clearError();
+            var file = fileInput.files[0];
+            if (!file) {
+                showError('Please select a ZIP file.');
+                return;
+            }
+            btn.loading = true;
+            try {
+                var formData = new FormData();
+                formData.append('file', file);
+                var r = await fetch('/api-proxy/import/obsidian', {
+                    method: 'POST',
+                    body: formData
+                });
+                var d = null;
+                try { d = await r.json(); } catch (_) {}
+                if (r.ok && d) {
+                    dlg.hide();
+                    var msg = 'Imported ' + (d.articlesCreated || 0) + ' articles, '
+                        + (d.imagesImported || 0) + ' images, '
+                        + (d.filesSkipped || 0) + ' files skipped.';
+                    alert(msg);
+                    window.location.reload();
+                    return;
+                }
+                showError((d && d.error) || 'Import failed');
+            } catch (_) {
+                showError('Network error. Please try again.');
+            } finally {
+                btn.loading = false;
+            }
+        });
+    }
+})();
+</script>
+</div>
