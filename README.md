@@ -237,14 +237,27 @@ dotnet publish server/BeeMemoryBank.Cli/ -c Release -o publish/cli
 # 2. Initialize a new knowledge base
 ./publish/cli/bmb init --data ./data --name "MyNode" --password "your-master-password"
 
-# 3. Start the API server
-BMB_DATA_PATH=./data ASPNETCORE_URLS=http://localhost:5300 ./publish/api/BeeMemoryBank.Api
+# 3. Start the API server (Development mode — auto-generates the internal key in ./data/.internal-key)
+ASPNETCORE_ENVIRONMENT=Development \
+BMB_DATA_PATH=./data \
+ASPNETCORE_URLS=http://localhost:5300 \
+  ./publish/api/BeeMemoryBank.Api
 
-# 4. Start the Web UI (in another terminal)
-BMB_API_URL=http://localhost:5300 ASPNETCORE_URLS=http://localhost:5301 ./publish/web/BeeMemoryBank.Web
+# 4. Start the Web UI (in another terminal, same Development flag)
+ASPNETCORE_ENVIRONMENT=Development \
+BMB_API_URL=http://localhost:5300 \
+ASPNETCORE_URLS=http://localhost:5301 \
+  ./publish/web/BeeMemoryBank.Web
 ```
 
 Open `http://localhost:5301` in your browser and log in with your master password.
+
+> **Why `ASPNETCORE_ENVIRONMENT=Development`?** The API and Web share an internal auth secret (`BMB_INTERNAL_KEY`). In Docker it is exported by `docker-entrypoint.sh`. In Development the API and Web auto-generate it into `./data/.internal-key` and read the same file. **For production from-source deployments** (systemd, bare-metal, custom containers without the entrypoint) — set the key yourself and export it to both processes:
+>
+> ```bash
+> export BMB_INTERNAL_KEY=$(openssl rand -base64 32)
+> # then run both API and Web in shells where this variable is exported
+> ```
 
 ### Join an Existing Network
 
