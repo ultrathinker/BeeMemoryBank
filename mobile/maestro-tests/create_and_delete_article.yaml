@@ -1,0 +1,62 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- evalScript: ${output.title = 'a' + Date.now()}
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Tree"
+    timeout: 3000
+- tapOn:
+    text: "Tree"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 10000
+- tapOn:
+    text: "NewArticleButton"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TitleEntry"
+    timeout: 10000
+- tapOn:
+    id: "com.beememorybank.mobile:id/TitleEntry"
+- inputText: ${output.title}
+- pressKey: back
+- tapOn:
+    text: "SaveToolbarButton"
+- scrollUntilVisible:
+    element:
+      text: ${output.title}
+    direction: DOWN
+    timeout: 30000
+- takeScreenshot: article_created
+# Now on TreePage, tap the article to open detail
+- tapOn:
+    text: ${output.title}
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TitleLabel"
+    timeout: 30000
+# Delete via overflow menu
+- tapOn:
+    text: "More options"
+- extendedWaitUntil:
+    visible:
+      text: "Delete"
+    timeout: 3000
+- tapOn:
+    text: "Delete"
+# Confirm delete in confirmation dialog
+- extendedWaitUntil:
+    visible:
+      text: "Delete this article?"
+    timeout: 5000
+- tapOn:
+    text: "Delete"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TreeList"
+    timeout: 10000
+- takeScreenshot: article_deleted

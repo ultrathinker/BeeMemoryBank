@@ -1,0 +1,29 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Articles"
+    timeout: 3000
+- tapOn:
+    text: "Articles"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/ArticlesList"
+    timeout: 10000
+- tapOn:
+    id: "com.beememorybank.mobile:id/ContentSearchSwitch"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/SearchBar"
+    timeout: 3000
+- tapOn:
+    id: "com.beememorybank.mobile:id/SearchBar"
+- inputText: "red pill"
+- extendedWaitUntil:
+    visible:
+      text: "The Matrix"
+    timeout: 30000
+- takeScreenshot: content_search

@@ -1,0 +1,6 @@
+@BeeMemoryBank.Api_HostAddress = http://localhost:5146
+
+GET {{BeeMemoryBank.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

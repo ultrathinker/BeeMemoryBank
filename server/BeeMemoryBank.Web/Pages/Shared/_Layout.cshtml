@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] - BeeMemoryBank</title>
+    <script type="module">
+        import { setBasePath } from '/lib/shoelace/shoelace-bundle.js';
+        setBasePath('/lib/shoelace');
+    </script>
+    <link rel="stylesheet" href="/lib/shoelace/themes/light.css" />
+    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
+    <link href="/css/site.css" rel="stylesheet" asp-append-version="true" />
+    @await RenderSectionAsync("HeadStyles", required: false)
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <script src="/lib/marked/marked.umd.js"></script>
+    <script src="/lib/dompurify/purify.min.js"></script>
+</head>
+@{var themeUser = User.Identity?.Name ?? "";}
+<script>
+    (function(){var u=@Html.Raw(System.Text.Json.JsonSerializer.Serialize(themeUser));var k='bee-theme'+(u?'-'+u:'');var t=localStorage.getItem(k)||'crimson';document.documentElement.setAttribute('data-theme',t);})();
+</script>
+<body data-username="@themeUser">
+@*
+    Decoy username input to absorb Chrome's native password-manager autofill.
+    Chrome's PM scans each page for the first input it classifies as a
+    "username field" and silently fills it with the saved username for the
+    site — even on non-login pages without a <form> and with autocomplete="off".
+    Without this decoy Chrome was dropping the saved login "admin" into the
+    sidebar search, firing its sl-input event and triggering a search on
+    every page load. Placing the decoy before <header> makes it the first
+    match Chrome finds, so the real search stays untouched. It's kept off
+    screen (not display:none — Chrome ignores display:none fields) and out
+    of tab order / AT tree so it's invisible to real users.
+*@
+<input type="text" name="fake-user" autocomplete="username" tabindex="-1" aria-hidden="true"
+       style="position:absolute;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;" />
+<script>
+    (function(){var u=@Html.Raw(System.Text.Json.JsonSerializer.Serialize(themeUser));var k='bee-theme'+(u?'-'+u:'');var t=localStorage.getItem(k)||'crimson';var html=document.documentElement;var body=document.body;if(t==='light'){html.classList.remove('sl-theme-dark');html.classList.add('sl-theme-light');body.classList.remove('sl-theme-dark');body.classList.add('sl-theme-light');}else{html.classList.remove('sl-theme-light');html.classList.add('sl-theme-dark');body.classList.remove('sl-theme-light');body.classList.add('sl-theme-dark');}})();
+</script>
+    <header class="app-header">
+        <div class="header-left">
+            <a href="/Tree" class="app-logo">
+                <img src="/images/web-app-manifest-192x192.png" alt="Bee" class="app-logo-img" />
+                <span>Bee Memory Bank</span>
+            </a>
+        </div>
+        @if (User.Identity?.IsAuthenticated == true)
+        {
+        <div class="header-right">
+            <div class="theme-picker">
+                <sl-dropdown id="theme-dropdown" placement="bottom-end">
+                    <sl-button slot="trigger" size="small" variant="text" caret>
+                        <sl-icon name="palette" slot="prefix"></sl-icon>
+                        <span id="theme-label">Theme</span>
+                    </sl-button>
+                    <sl-menu id="theme-menu">
+                        @* --item-color colors each label with its own theme accent so the list doubles as a preview.
+                           See .theme-picker sl-menu-item::part(base) in site.css. *@
+                        <sl-menu-item data-theme="light" type="checkbox" style="--item-color:#2563eb"><span class="theme-color-dot" style="background:#ffffff;border:1px solid #ccc;"></span>Light</sl-menu-item>
+                        <sl-divider></sl-divider>
+                        <sl-menu-item data-theme="dark-classic" type="checkbox" style="--item-color:#569cd6"><span class="theme-color-dot" style="background:#569cd6"></span>Dark Classic</sl-menu-item>
+                        <sl-menu-item data-theme="dark-bee" type="checkbox" style="--item-color:#f0a500"><span class="theme-color-dot" style="background:#f0a500"></span>Dark Bee</sl-menu-item>
+                        <sl-divider></sl-divider>
+                        <sl-menu-item data-theme="ocean" type="checkbox" style="--item-color:#6c63ff"><span class="theme-color-dot" style="background:#6c63ff"></span>Deep Ocean</sl-menu-item>
+                        <sl-menu-item data-theme="emerald" type="checkbox" style="--item-color:#4caf50"><span class="theme-color-dot" style="background:#4caf50"></span>Emerald Forest</sl-menu-item>
+                        <sl-menu-item data-theme="sunset" type="checkbox" style="--item-color:#ff8f00"><span class="theme-color-dot" style="background:#ff8f00"></span>Sunset Amber</sl-menu-item>
+                        <sl-menu-item data-theme="nord" type="checkbox" style="--item-color:#88c0d0"><span class="theme-color-dot" style="background:#88c0d0"></span>Nord Frost</sl-menu-item>
+                        <sl-menu-item data-theme="crimson" type="checkbox" style="--item-color:#e91e63"><span class="theme-color-dot" style="background:#e91e63"></span>Crimson Night</sl-menu-item>
+                        <sl-menu-item data-theme="mono" type="checkbox" style="--item-color:#aaaaaa"><span class="theme-color-dot" style="background:#888"></span>Midnight Mono</sl-menu-item>
+                        <sl-divider></sl-divider>
+                        <sl-menu-item data-theme="purple" type="checkbox" style="--item-color:#9c27b0"><span class="theme-color-dot" style="background:#9c27b0"></span>Royal Purple</sl-menu-item>
+                        <sl-menu-item data-theme="teal" type="checkbox" style="--item-color:#00bcd4"><span class="theme-color-dot" style="background:#00bcd4"></span>Cyber Teal</sl-menu-item>
+                        <sl-menu-item data-theme="gold" type="checkbox" style="--item-color:#ffd600"><span class="theme-color-dot" style="background:#ffd600"></span>Solar Gold</sl-menu-item>
+                        <sl-menu-item data-theme="volcanic" type="checkbox" style="--item-color:#ff5722"><span class="theme-color-dot" style="background:#ff5722"></span>Volcanic</sl-menu-item>
+                        <sl-menu-item data-theme="arctic" type="checkbox" style="--item-color:#90a4ae"><span class="theme-color-dot" style="background:#90a4ae"></span>Arctic Silver</sl-menu-item>
+                        <sl-divider></sl-divider>
+                        <sl-menu-item data-theme="hacker" type="checkbox" style="--item-color:#00ff41"><span class="theme-color-dot" style="background:#00ff41"></span>Hacker Terminal</sl-menu-item>
+                    </sl-menu>
+                </sl-dropdown>
+            </div>
+            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            {
+            <div class="sync-status-wrapper" id="syncStatusWidget" style="position: relative; margin-right: 8px;">
+                <sl-icon-button name="arrow-repeat" label="Sync status" id="syncStatusBtn" style="font-size: 1.2rem;"></sl-icon-button>
+                <span class="sync-badge" id="syncBadge" style="display:none;"></span>
+                <div class="sync-dropdown" id="syncDropdown" style="display:none;">
+                    <div class="sync-dropdown-header">Sync Status</div>
+                    <div id="syncNodeList" class="sync-node-list">Loading...</div>
+                </div>
+            </div>
+            }
+            <a href="/Search" class="header-link">
+                <sl-icon name="search"></sl-icon> Search
+            </a>
+            <a href="/Graph" class="header-link">
+                <sl-icon name="diagram-3"></sl-icon> Graph
+            </a>
+            <a href="/Tags" class="header-link">
+                <sl-icon name="tags"></sl-icon> Tags
+            </a>
+            <a href="/Profile" class="header-link">
+                <sl-icon name="person-circle"></sl-icon> Profile
+            </a>
+            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            {
+            <a href="/Users" class="header-link">
+                <sl-icon name="people"></sl-icon> Users
+            </a>
+            }
+            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            {
+            <a href="/Activity" class="header-link">
+                <sl-icon name="activity"></sl-icon> Activity
+            </a>
+            }
+            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            {
+            <a href="/Admin" class="header-link">
+                <sl-icon name="gear"></sl-icon> Admin
+            </a>
+            }
+            <form method="post" action="/Logout" class="header-link" style="display:inline;">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="logout-link">
+                    <sl-icon name="box-arrow-right"></sl-icon> Logout
+                </button>
+            </form>
+
+        </div>
+        }
+
+        <sl-dialog id="dlg-download-choice" label="Export" style="--width:440px;">
+            <p style="margin:0 0 8px;">Export to <strong>Obsidian vault format</strong>:</p>
+            <ul style="margin:0 0 16px 20px;padding:0;color:var(--text-secondary);font-size:0.9rem;">
+                <li>folder tree preserved</li>
+                <li>one Markdown file per article</li>
+                <li>images in <code>attachments/</code></li>
+            </ul>
+            <p style="margin:0 0 16px;">Include images?</p>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <sl-button size="small" variant="default" onclick="bmbDownloadChoice(false)">Without images</sl-button>
+                <sl-button size="small" variant="primary" onclick="bmbDownloadChoice(true)">With images</sl-button>
+            </div>
+        </sl-dialog>
+        <script>
+        function bmbDownloadChoice(withImages) {
+            var dlg = document.getElementById('dlg-download-choice');
+            if (!dlg) return;
+            var payload = JSON.parse(dlg.dataset.payload || '{}');
+            payload.withImages = withImages;
+            dlg.hide();
+            window.bmbDownload(payload);
+        }
+        </script>
+    </header>
+
+    <div class="app-body">
+        @if (TempData["MigrationBanner"] is string migrationBanner)
+        {
+            <sl-alert variant="primary" open closable style="margin:12px 16px 0;">
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                @migrationBanner
+            </sl-alert>
+        }
+        @RenderBody()
+    </div>
+
+    <script src="/lib/vendor.min.js"></script>
+    <script src="/js/site.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.ArticleDetailPage"
+             Title="Article"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ContentPage.ToolbarItems>
+        <ToolbarItem Text="Edit" Order="Primary" Clicked="OnEditClicked" AutomationId="EditButton" />
+        <ToolbarItem x:Name="ToggleViewItem" Text="Raw" Order="Primary" Clicked="OnToggleViewClicked" AutomationId="ToggleViewButton" />
+        <ToolbarItem Text="Delete" Order="Secondary" Clicked="OnDeleteClicked" AutomationId="DeleteButton" />
+    </ContentPage.ToolbarItems>
+
+    <RefreshView x:Name="PullRefresh" Refreshing="OnRefreshing">
+        <ScrollView>
+            <VerticalStackLayout Padding="16" Spacing="12">
+
+                <ActivityIndicator x:Name="LoadingIndicator" IsRunning="True" IsVisible="True" Color="{StaticResource PrimaryColor}" />
+
+            <Label x:Name="TitleLabel"
+                   AutomationId="TitleLabel"
+                   FontSize="22"
+                   FontAttributes="Bold"
+                   IsVisible="False" />
+
+            <FlexLayout x:Name="ConceptTagsLayout"
+                        Wrap="Wrap"
+                        Direction="Row"
+                        IsVisible="False"
+                        Margin="0,0,0,8">
+                <BindableLayout.ItemTemplate>
+                    <DataTemplate>
+                        <Frame BackgroundColor="{StaticResource WarningColor}"
+                               CornerRadius="12"
+                               Padding="8,2"
+                               HasShadow="False"
+                               Margin="0,0,8,8">
+                            <Label Text="{Binding .}"
+                                   TextColor="Black"
+                                   FontSize="12"
+                                   FontAttributes="Bold" />
+                        </Frame>
+                    </DataTemplate>
+                </BindableLayout.ItemTemplate>
+            </FlexLayout>
+
+            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="ContentCard"
+                   Padding="4">
+                <VerticalStackLayout Spacing="0">
+                    <WebView x:Name="ContentWebView"
+                             AutomationId="ContentWebView"
+                             MinimumHeightRequest="120"
+                             VerticalOptions="FillAndExpand" />
+                    <Label x:Name="ContentRawLabel"
+                           AutomationId="ContentRawLabel"
+                           IsVisible="False"
+                           LineBreakMode="WordWrap"
+                           FontSize="14"
+                           FontFamily="Monospace"
+                           Padding="8"
+                           TextColor="{StaticResource TextColor}" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="RelatedArticlesCard">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Related Articles" FontAttributes="Bold" FontSize="16" />
+                    <VerticalStackLayout x:Name="RelatedArticlesList"
+                                         AutomationId="RelatedArticlesList"
+                                         Spacing="0">
+                        <BindableLayout.ItemTemplate>
+                            <DataTemplate>
+                                <VerticalStackLayout>
+                                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto"
+                                          Padding="0,10"
+                                          ColumnSpacing="8">
+                                        <Grid.GestureRecognizers>
+                                            <TapGestureRecognizer Tapped="OnRelatedArticleTapped" CommandParameter="{Binding Id}" />
+                                        </Grid.GestureRecognizers>
+                                        <Label Grid.Row="0" Grid.Column="0"
+                                               Text="{Binding Title}"
+                                               FontAttributes="Bold"
+                                               FontSize="15"
+                                               TextColor="{StaticResource TextColor}" />
+                                        <Label Grid.Row="1" Grid.Column="0"
+                                               Text="{Binding TreePath}"
+                                               FontSize="12"
+                                               TextColor="{StaticResource SecondaryTextColor}" />
+                                        <Frame Grid.Row="0" Grid.Column="1" Grid.RowSpan="2"
+                                               BackgroundColor="{StaticResource SurfaceSecondaryColor}"
+                                               BorderColor="{StaticResource BorderColor}"
+                                               CornerRadius="6"
+                                               Padding="6,2"
+                                               HasShadow="False"
+                                               VerticalOptions="Center">
+                                            <Label Text="{Binding Strength, StringFormat='[{0}%]'}"
+                                                   FontSize="12"
+                                                   FontAttributes="Bold"
+                                                   TextColor="{StaticResource PrimaryDarkColor}" />
+                                        </Frame>
+                                    </Grid>
+                                    <BoxView HeightRequest="1" Color="{StaticResource BorderColor}" Opacity="0.5" Margin="0,0" />
+                                </VerticalStackLayout>
+                            </DataTemplate>
+                        </BindableLayout.ItemTemplate>
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Frame>
+
+            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="MetaCard">
+                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="6">
+                    <Label Grid.Row="0" Grid.Column="0" Text="Path:" FontAttributes="Bold" />
+                    <Label Grid.Row="0" Grid.Column="1" x:Name="PathLabel" LineBreakMode="WordWrap" />
+
+                    <Label Grid.Row="1" Grid.Column="0" Text="Updated:" FontAttributes="Bold" />
+                    <Label Grid.Row="1" Grid.Column="1" x:Name="UpdatedLabel" />
+                </Grid>
+            </Frame>
+
+            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="CommentsCard">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="Comments" FontAttributes="Bold" FontSize="16" />
+
+                    <CollectionView x:Name="CommentsList"
+                                    AutomationId="CommentsList"
+                                    SelectionMode="None"
+                                    EmptyView="No comments yet."
+                                    MaximumHeightRequest="400">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto"
+                                      ColumnSpacing="8" RowSpacing="2" Padding="0,6">
+                                    <Label Grid.Row="0" Grid.Column="0"
+                                           Text="{Binding Text}"
+                                           LineBreakMode="WordWrap"
+                                           FontSize="14" />
+                                    <Label Grid.Row="1" Grid.Column="0"
+                                           Text="{Binding CreatedAt, StringFormat='{0:yyyy-MM-dd HH:mm}'}"
+                                           FontSize="12"
+                                           TextColor="{StaticResource SecondaryTextColor}" />
+                                    <Button Grid.Row="0" Grid.Column="1" Grid.RowSpan="2"
+                                            Text="✕"
+                                            FontSize="13"
+                                            WidthRequest="36"
+                                            HeightRequest="36"
+                                            Padding="0"
+                                            BackgroundColor="Transparent"
+                                            TextColor="{StaticResource SecondaryTextColor}"
+                                            AutomationId="DeleteCommentButton"
+                                            Clicked="OnDeleteCommentClicked" />
+                                </Grid>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+
+                    <VerticalStackLayout Spacing="8">
+                        <Editor x:Name="CommentEntry"
+                                AutomationId="CommentEntry"
+                                Placeholder="Add a comment..."
+                                AutoSize="TextChanges"
+                                MinimumHeightRequest="60"
+                                BackgroundColor="Transparent"
+                                Margin="0" />
+                        <Button Text="Add"
+                                AutomationId="AddCommentButton"
+                                Style="{StaticResource PrimaryButton}"
+                                WidthRequest="80"
+                                HorizontalOptions="End"
+                                Clicked="OnAddCommentClicked" />
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Frame>
+
+            </VerticalStackLayout>
+        </ScrollView>
+    </RefreshView>
+
+</ContentPage>

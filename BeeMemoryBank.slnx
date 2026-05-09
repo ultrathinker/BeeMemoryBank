@@ -1,0 +1,28 @@
+<Solution>
+  <Folder Name="/libs/">
+    <Project Path="libs/BeeMemoryBank.Core/BeeMemoryBank.Core.csproj" />
+    <Project Path="libs/BeeMemoryBank.Crypto/BeeMemoryBank.Crypto.csproj" />
+    <Project Path="libs/BeeMemoryBank.Storage/BeeMemoryBank.Storage.csproj" />
+    <Project Path="libs/BeeMemoryBank.Sync/BeeMemoryBank.Sync.csproj" />
+  </Folder>
+  <Folder Name="/server/">
+    <Project Path="server/BeeMemoryBank.Api/BeeMemoryBank.Api.csproj" />
+    <Project Path="server/BeeMemoryBank.Web/BeeMemoryBank.Web.csproj" />
+    <Project Path="server/BeeMemoryBank.Cli/BeeMemoryBank.Cli.csproj" />
+  </Folder>
+  <Folder Name="/mobile/">
+    <Project Path="mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BeeMemoryBank.Cli.Tests/BeeMemoryBank.Cli.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Core.Tests/BeeMemoryBank.Core.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Crypto.Tests/BeeMemoryBank.Crypto.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Integration.Tests/BeeMemoryBank.Integration.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Storage.Tests/BeeMemoryBank.Storage.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Sync.Tests/BeeMemoryBank.Sync.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Migrator.Tests/BeeMemoryBank.Migrator.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/BeeMemoryBank.Migrator/BeeMemoryBank.Migrator.csproj" />
+  </Folder>
+</Solution>

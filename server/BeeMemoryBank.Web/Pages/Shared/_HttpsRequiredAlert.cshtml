@@ -1,0 +1,27 @@
+@{
+    var host = Context.Request.Host.Host;
+    var isLocalhost = host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        || host == "127.0.0.1"
+        || host == "::1";
+    var forwardedProto = Context.Request.Headers["X-Forwarded-Proto"].FirstOrDefault();
+    var effectiveScheme = forwardedProto ?? Context.Request.Scheme;
+    var isHttps = string.Equals(effectiveScheme, "https", StringComparison.OrdinalIgnoreCase);
+    var requiresHttps = !isHttps && !isLocalhost;
+}
+
+@if (requiresHttps)
+{
+    var httpsUrl = $"https://{Context.Request.Host}{Context.Request.Path}{Context.Request.QueryString}";
+    <sl-alert variant="danger" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="shield-lock"></sl-icon>
+        <strong>This site requires HTTPS.</strong>
+        <br/><br/>
+        BeeMemoryBank uses secure session cookies that browsers reject over plain HTTP.
+        The form will appear to submit but you will be redirected back to this page.
+        <br/><br/>
+        <a href="@httpsUrl"
+           style="display:inline-block;padding:8px 16px;background:#0066cc;color:#fff;text-decoration:none;border-radius:4px;font-weight:600;">
+            🔒 Switch to HTTPS
+        </a>
+    </sl-alert>
+}

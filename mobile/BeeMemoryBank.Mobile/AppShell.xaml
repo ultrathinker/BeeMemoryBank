@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Shell xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+       xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+       xmlns:pages="clr-namespace:BeeMemoryBank.Mobile.Pages"
+       xmlns:controls="clr-namespace:BeeMemoryBank.Mobile.Controls"
+       x:Class="BeeMemoryBank.Mobile.AppShell"
+       Title="BeeMemoryBank"
+       Shell.BackgroundColor="#2a1520"
+       Shell.ForegroundColor="#e8d8df"
+       Shell.TitleColor="#e8d8df"
+       Shell.TabBarBackgroundColor="#2a1520"
+       Shell.TabBarForegroundColor="#e8d8df"
+       Shell.NavBarHasShadow="False"
+       FlyoutBackgroundColor="#1c1017"
+       FlyoutIcon="icon_menu.svg">
+
+    <Shell.TitleView>
+        <Grid ColumnDefinitions="*,Auto" Padding="0,0,16,0" HorizontalOptions="Fill">
+            <Label Text="{Binding CurrentItem.Title, Source={RelativeSource AncestorType={x:Type Shell}}}" 
+                   VerticalOptions="Center" 
+                   FontSize="18" 
+                   FontAttributes="Bold" 
+                   TextColor="#e8d8df" />
+            <controls:SyncIndicatorView Grid.Column="1" VerticalOptions="Center" />
+        </Grid>
+    </Shell.TitleView>
+
+    <Shell.FlyoutHeader>
+        <Label Text="BeeMemoryBank"
+               FontSize="20"
+               FontAttributes="Bold"
+               Padding="16,32,16,16"
+               TextColor="{StaticResource TextColor}" />
+    </Shell.FlyoutHeader>
+
+    <Shell.FlyoutFooter>
+        <VerticalStackLayout Spacing="0">
+            <Label x:Name="OfflineLabel"
+                   Text="● No internet connection"
+                   TextColor="#FF6B6B"
+                   FontSize="12"
+                   Padding="16,8,16,0"
+                   IsVisible="False" />
+            <Button Text="🔒  Lock"
+                    BackgroundColor="Transparent"
+                    TextColor="#e8d8df"
+                    FontSize="16"
+                    HorizontalOptions="Start"
+                    Margin="8,0,8,24"
+                    Clicked="OnLockClicked" />
+        </VerticalStackLayout>
+    </Shell.FlyoutFooter>
+
+    <!-- Hidden setup/unlock pages (no flyout entry) -->
+    <ShellContent Route="unlock" ContentTemplate="{DataTemplate pages:UnlockPage}"
+                  FlyoutItemIsVisible="False" />
+    <ShellContent Route="setup" ContentTemplate="{DataTemplate pages:SetupPage}"
+                  FlyoutItemIsVisible="False" />
+    <ShellContent Route="initialSync" ContentTemplate="{DataTemplate pages:InitialSyncPage}"
+                  FlyoutItemIsVisible="False" />
+
+    <FlyoutItem Title="Status" Icon="icon_status.svg">
+        <ShellContent Route="status" ContentTemplate="{DataTemplate pages:StatusPage}" />
+    </FlyoutItem>
+
+    <FlyoutItem Title="Articles" Icon="icon_articles.svg">
+        <ShellContent Route="articles" ContentTemplate="{DataTemplate pages:ArticlesPage}" />
+    </FlyoutItem>
+
+    <FlyoutItem Title="Tags" Icon="icon_tags.svg">
+        <ShellContent Route="tags" ContentTemplate="{DataTemplate pages:TagsPage}" />
+    </FlyoutItem>
+
+    <FlyoutItem Title="Tree" Icon="icon_tree.svg">
+        <ShellContent Route="tree" ContentTemplate="{DataTemplate pages:TreePage}" />
+    </FlyoutItem>
+
+    <FlyoutItem Title="Security" Icon="icon_security.svg">
+        <ShellContent Route="security" ContentTemplate="{DataTemplate pages:SecurityPage}" />
+    </FlyoutItem>
+
+</Shell>

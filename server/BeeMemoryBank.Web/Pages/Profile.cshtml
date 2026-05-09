@@ -1,0 +1,276 @@
+@page
+@model BeeMemoryBank.Web.Pages.ProfileModel
+@{
+    ViewData["Title"] = "Profile";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <h2 style="margin:0;"><sl-icon name="person-circle"></sl-icon> Profile</h2>
+    </div>
+
+    <div class="card" style="max-width:500px;margin-bottom:32px;">
+        <div style="margin-bottom:20px;">
+            <div style="margin-bottom:12px;">
+                <sl-input label="Username" value="@Model.Username" readonly autocomplete="username"></sl-input>
+            </div>
+            <div style="margin-bottom:12px;">
+                <sl-input label="Display Name" value="@Model.DisplayName" readonly></sl-input>
+            </div>
+            <div><strong>Role:</strong>
+                <sl-badge variant="@(Model.Role == "superadmin" ? "warning" : "neutral")" pill style="margin-left:6px;">
+                    @Model.Role
+                </sl-badge>
+            </div>
+        </div>
+
+        <sl-divider></sl-divider>
+
+        <h3 style="margin:16px 0 12px;"><sl-icon name="key"></sl-icon> Change Password</h3>
+
+        <sl-alert variant="warning" open style="margin-bottom:12px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            Changing your password updates the local key wrapping on <strong>this node only</strong>.
+            Other nodes in the network keep their own passwords independently — there is no way to push a
+            password change across the network. To prevent access from another node, sign in there and
+            change the password directly. To rotate the network's encryption key, use
+            <strong>Admin &rarr; Network &rarr; Rotate DEK</strong>.
+        </sl-alert>
+
+        <div id="cp-alert" style="display:none;margin-bottom:16px;"></div>
+
+        <div style="margin-bottom:16px;">
+            <sl-input id="cp-old" label="Current Password" type="password" password-toggle required autocomplete="current-password"></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input id="cp-new" label="New Password" type="password" password-toggle required autocomplete="new-password"></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input id="cp-confirm" label="Confirm New Password" type="password" password-toggle required autocomplete="new-password"></sl-input>
+        </div>
+        <sl-button id="btn-change-password" variant="primary">
+            <sl-icon slot="prefix" name="check-lg"></sl-icon> Change Password
+        </sl-button>
+    </div>
+
+    <!-- AI Agents Section -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="margin:0;"><sl-icon name="robot"></sl-icon> My AI Agents</h3>
+        <sl-button size="small" variant="success" onclick="document.getElementById('dlg-create-agent').show()">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Agent
+        </sl-button>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden;">
+        <div id="agents-loading" style="padding:20px;text-align:center;">
+            <sl-spinner style="font-size:1.5rem;"></sl-spinner>
+        </div>
+        <div id="agents-empty" style="padding:40px;text-align:center;display:none;">
+            <sl-icon name="robot" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">You have no agents</p>
+        </div>
+        <div id="agents-table-container" style="display:none;">
+            <table class="version-table" style="margin:0;">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>API Key Prefix</th>
+                        <th>Created</th>
+                        <th>Last Access</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="agents-tbody"></tbody>
+            </table>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid var(--border);background:var(--bg-app);font-size:0.85rem;color:var(--text-secondary);">
+            <sl-icon name="info-circle"></sl-icon> <span id="agents-count">Used 0 of 20 agents</span>
+        </div>
+    </div>
+</div>
+</div>
+
+<!-- Create Agent Dialog -->
+<sl-dialog id="dlg-create-agent" label="Create New AI Agent">
+    <div style="margin-bottom:16px;">
+        <sl-input id="agent-name" label="Name" placeholder="e.g. VS Code Plugin" required></sl-input>
+    </div>
+    <div style="margin-bottom:16px;">
+        <sl-input id="agent-desc" label="Description" placeholder="Optional"></sl-input>
+    </div>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-create-agent').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="primary" id="btn-do-create-agent">Create</sl-button>
+</sl-dialog>
+
+<!-- One-time Secret Dialog -->
+<sl-dialog id="dlg-show-secret" label="Agent API Key Created" no-header-close>
+    <sl-alert variant="warning" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Copy this key now. For your security, it will <strong>never be shown again</strong>.
+    </sl-alert>
+    <div style="background:var(--bg-app);padding:16px;border-radius:8px;border:1px solid var(--border);position:relative;">
+        <code id="secret-key-code" style="word-break:break-all;font-family:var(--font-mono);font-size:0.9rem;display:block;padding-right:40px;"></code>
+        <sl-icon-button name="clipboard" label="Copy" 
+            style="position:absolute;top:10px;right:10px;font-size:1.2rem;"
+            onclick="copySecret()">
+        </sl-icon-button>
+    </div>
+    <sl-button slot="footer" variant="primary" onclick="document.getElementById('dlg-show-secret').hide()">I have copied it</sl-button>
+</sl-dialog>
+
+<script>
+function copySecret() {
+    navigator.clipboard.writeText(document.getElementById('secret-key-code').textContent);
+    showAlert('success', 'Key copied to clipboard');
+}
+
+document.getElementById('btn-change-password').addEventListener('click', function() {
+    var btn = this;
+    var oldPw = document.getElementById('cp-old').value;
+    var newPw = document.getElementById('cp-new').value;
+    var confirmPw = document.getElementById('cp-confirm').value;
+
+    if (!oldPw || !newPw || !confirmPw) {
+        showAlert('danger', 'All fields are required.');
+        return;
+    }
+    if (newPw !== confirmPw) {
+        showAlert('danger', 'New passwords do not match.');
+        return;
+    }
+    if (newPw.length < 8 || !/[A-Z]/.test(newPw) || !/[a-z]/.test(newPw) || !/[0-9]/.test(newPw)) {
+        showAlert('danger', 'Password must be at least 8 characters and contain uppercase, lowercase, and digit.');
+        return;
+    }
+
+    btn.loading = true;
+    fetch('/api-proxy/users/me/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
+    }).then(function(r) {
+        if (r.ok) {
+            showAlert('success', 'Password changed successfully.');
+            document.getElementById('cp-old').value = '';
+            document.getElementById('cp-new').value = '';
+            document.getElementById('cp-confirm').value = '';
+        } else {
+            return r.json().then(function(data) {
+                showAlert('danger', data.error || 'Failed to change password.');
+            });
+        }
+    }).catch(function() {
+        showAlert('danger', 'Network error.');
+    }).finally(function() {
+        btn.loading = false;
+    });
+});
+
+function loadAgents() {
+    document.getElementById('agents-loading').style.display = 'block';
+    document.getElementById('agents-table-container').style.display = 'none';
+    document.getElementById('agents-empty').style.display = 'none';
+
+    fetch('/api-proxy/agents')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('agents-loading').style.display = 'none';
+            document.getElementById('agents-count').textContent = 'Used ' + data.length + ' of 20 agents';
+            
+            if (!data || data.length === 0) {
+                document.getElementById('agents-empty').style.display = 'block';
+                return;
+            }
+
+            var tbody = document.getElementById('agents-tbody');
+            tbody.innerHTML = '';
+            data.forEach(a => {
+                var tr = document.createElement('tr');
+                tr.innerHTML = '<td><strong>' + escapeHtml(a.name) + '</strong><br/><small class="text-muted">' + escapeHtml(a.description || '') + '</small></td>' +
+                               '<td><code class="text-sm">' + escapeHtml(a.keyPrefix) + '</code></td>' +
+                               '<td class="text-muted text-sm">' + new Date(a.createdAt).toLocaleDateString() + '</td>' +
+                               '<td class="text-muted text-sm">' + (a.lastAccessedAt ? timeAgo(new Date(a.lastAccessedAt)) : 'never') + '</td>' +
+                               '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" onclick="deleteAgent(' + a.id + ', \'' + escapeHtml(a.name) + '\')"></sl-icon-button></td>';
+                tbody.appendChild(tr);
+            });
+            document.getElementById('agents-table-container').style.display = 'block';
+        });
+}
+
+function deleteAgent(id, name) {
+    if (!confirm('Revoke agent "' + name + '"? Any applications using this key will lose access.')) return;
+    
+    fetch('/api-proxy/agents/' + id, { method: 'DELETE' })
+        .then(r => {
+            if (r.ok) {
+                showAlert('success', 'Agent revoked');
+                loadAgents();
+            } else {
+                showAlert('danger', 'Failed to revoke agent');
+            }
+        });
+}
+
+document.getElementById('btn-do-create-agent').addEventListener('click', function() {
+    var name = document.getElementById('agent-name').value;
+    var desc = document.getElementById('agent-desc').value;
+    var btn = this;
+
+    if (!name) {
+        alert('Name is required');
+        return;
+    }
+
+    btn.loading = true;
+    fetch('/api-proxy/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, description: desc })
+    }).then(r => {
+        if (r.ok) {
+            return r.json();
+        } else {
+            return r.json().then(data => { throw new Error(data.error || 'Failed to create agent'); });
+        }
+    }).then(data => {
+        document.getElementById('dlg-create-agent').hide();
+        document.getElementById('agent-name').value = '';
+        document.getElementById('agent-desc').value = '';
+        
+        document.getElementById('secret-key-code').textContent = data.apiKey;
+        document.getElementById('dlg-show-secret').show();
+        loadAgents();
+    }).catch(err => {
+        alert(err.message);
+    }).finally(() => {
+        btn.loading = false;
+    });
+});
+
+function timeAgo(date) {
+    var sec = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+    return Math.floor(sec / 86400) + 'd ago';
+}
+
+function escapeHtml(text) {
+    var d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+}
+
+function showAlert(variant, message) {
+    var alertEl = document.getElementById('cp-alert');
+    var icon = variant === 'success' ? 'check-circle' : 'exclamation-triangle';
+    alertEl.innerHTML = '<sl-alert variant="' + variant + '" open closable><sl-icon slot="icon" name="' + icon + '"></sl-icon>' + escapeHtml(message) + '</sl-alert>';
+    alertEl.style.display = 'block';
+    setTimeout(() => { alertEl.style.display = 'none'; }, 5000);
+}
+
+loadAgents();
+</script>

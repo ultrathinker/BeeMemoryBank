@@ -1,0 +1,18 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Status"
+    timeout: 3000
+- tapOn:
+    text: "Status"
+- extendedWaitUntil:
+    visible:
+      text: "Node Info"
+    timeout: 10000
+- assertVisible:
+    text: "Node Info"
+- takeScreenshot: status_page_loaded

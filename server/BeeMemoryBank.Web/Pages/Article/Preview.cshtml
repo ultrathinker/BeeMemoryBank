@@ -1,0 +1,153 @@
+@page
+@model BeeMemoryBank.Web.Pages.Article.PreviewModel
+@{
+    ViewData["Title"] = Model.Article?.Title ?? "Preview";
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@Model.Article?.Title - Preview</title>
+    <script type="module">
+        import { setBasePath } from '/lib/shoelace/shoelace-bundle.js';
+        setBasePath('/lib/shoelace');
+    </script>
+    <link rel="stylesheet" href="/lib/shoelace/themes/light.css" />
+    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
+    <link href="/css/site.css" rel="stylesheet" />
+    <script src="/lib/marked/marked.umd.js"></script>
+    <script src="/lib/dompurify/purify.min.js"></script>
+    @{var previewUser = User.Identity?.Name ?? "";}
+    <script>
+        (function(){
+            try {
+                var u = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(previewUser));
+                var k = 'bee-theme' + (u ? '-' + u : '');
+                var t = localStorage.getItem(k) || 'crimson';
+                document.documentElement.setAttribute('data-theme', t);
+                window.__beePreviewTheme = t;
+            } catch(e) {}
+        })();
+    </script>
+</head>
+<body class="sl-theme-dark" style="padding: 24px; margin: 0; background: var(--bg-primary); height: auto; min-height: 100vh; overflow: visible; display: block;">
+    <script>
+        (function(){
+            var html = document.documentElement;
+            var body = document.body;
+            if (window.__beePreviewTheme === 'light') {
+                html.classList.remove('sl-theme-dark'); html.classList.add('sl-theme-light');
+                body.classList.remove('sl-theme-dark'); body.classList.add('sl-theme-light');
+            } else {
+                html.classList.remove('sl-theme-light'); html.classList.add('sl-theme-dark');
+                body.classList.remove('sl-theme-light'); body.classList.add('sl-theme-dark');
+            }
+        })();
+        document.addEventListener('click', function(e){
+            var el = e.target.closest('[data-bmb-copy]');
+            if (!el) return;
+            var text = el.getAttribute('data-bmb-copy');
+            function flash(){
+                el.style.transition = 'outline-color 0.2s';
+                el.style.outline = '2px solid var(--sl-color-primary-500)';
+                el.style.outlineOffset = '2px';
+                setTimeout(function(){ el.style.outline = ''; }, 500);
+            }
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(flash, function(){});
+            } else {
+                var ta = document.createElement('textarea');
+                ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                document.body.appendChild(ta); ta.select();
+                try { document.execCommand('copy'); } catch(e){}
+                document.body.removeChild(ta); flash();
+            }
+        });
+    </script>
+@if (Model.Article != null)
+{
+    <h1 class="article-title">@Model.Article.Title</h1>
+    <div class="article-meta">
+        <span class="article-id-badge" title="Click to copy" data-bmb-copy="@Model.Article.Id">
+            id: @Model.Article.Id
+        </span>
+        <span class="bmb-path-copy" title="Click to copy path" data-bmb-copy="@Model.Article.TreePath"><sl-icon name="folder2"></sl-icon> @Model.Article.TreePath</span>
+    </div>
+    <div style="margin: 12px 0;">
+        <span style="font-size:0.78rem;color:var(--sl-color-neutral-500);margin-right:6px;">
+            <sl-icon name="diagram-3"></sl-icon> tags:
+        </span>
+        @foreach (var ct in Model.ConceptTags)
+        {
+            <sl-tag size="small" variant="warning" pill style="margin-right:4px;">@ct</sl-tag>
+        }
+    </div>
+    <div class="card">
+        @if (Model.Content == null)
+        {
+            <sl-alert variant="warning" open>
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                Content cannot be decrypted. This article was created on a node with a different encryption key.
+            </sl-alert>
+        }
+        <div class="article-content" id="article-body"></div>
+    </div>
+    @if (Model.RelatedArticles.Count > 0)
+    {
+        <div class="card mt-md">
+            <h4 style="font-size:0.95rem;margin-bottom:14px;">
+                <sl-icon name="diagram-3"></sl-icon> Related Articles (@Model.RelatedArticles.Count)
+            </h4>
+            @foreach (var rel in Model.RelatedArticles.OrderByDescending(r => r.Strength).Take(10))
+            {
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">
+                    <div>
+                        <a href="/Article/View?id=@rel.Id" target="_top" style="font-weight:500;">@rel.Title</a>
+                        <div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">@string.Join(", ", rel.SharedConcepts)</div>
+                    </div>
+                    <sl-badge variant="neutral" pill>@rel.Strength</sl-badge>
+                </div>
+            }
+        </div>
+    }
+    <div class="card mt-md">
+        <h4 style="font-size:0.95rem;margin-bottom:14px;">
+            <sl-icon name="chat-dots"></sl-icon> Comments (@Model.Comments.Count)
+        </h4>
+        @foreach (var comment in Model.Comments)
+        {
+            <div class="comment-item">
+                <div>
+                    <span class="comment-author">owner</span>
+                    <span class="comment-date">@comment.CreatedAt.ToString("g")</span>
+                </div>
+                <p class="comment-text">@comment.Text</p>
+            </div>
+        }
+    </div>
+    <script>
+        (function(){
+            var content = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""));
+            if (content) {
+                var body = document.getElementById('article-body');
+                var renderer = new marked.Renderer();
+                var origImage = renderer.image.bind(renderer);
+                renderer.image = function(token){
+                    if (token && token.href && token.href.startsWith('/api/media/')) {
+                        token.href = '/api-proxy/media/' + token.href.substring('/api/media/'.length);
+                    }
+                    return origImage(token);
+                };
+                body.innerHTML = DOMPurify.sanitize(marked.parse(content, { breaks: true, renderer: renderer }));
+            }
+        })();
+    </script>
+}
+else
+{
+    <p>Article not found.</p>
+}
+</body>
+</html>

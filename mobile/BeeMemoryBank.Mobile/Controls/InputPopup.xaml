@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Controls.InputPopup"
+             BackgroundColor="#80000000"
+             InputTransparent="False"
+             ZIndex="100">
+
+    <Frame BackgroundColor="{StaticResource SurfaceColor}"
+           BorderColor="{StaticResource BorderColor}"
+           CornerRadius="16"
+           Padding="24"
+           HasShadow="False"
+           WidthRequest="320"
+           VerticalOptions="Center"
+           HorizontalOptions="Center">
+        <VerticalStackLayout Spacing="12">
+
+            <Label x:Name="TitleLabel"
+                   FontSize="18"
+                   FontAttributes="Bold" />
+
+            <Label x:Name="MessageLabel"
+                   FontSize="14"
+                   TextColor="{StaticResource SecondaryTextColor}" />
+
+            <Entry x:Name="InputEntry"
+                   AutomationId="PopupInputEntry"
+                   FontSize="16"
+                   TextColor="{StaticResource TextColor}"
+                   PlaceholderColor="{StaticResource SecondaryTextColor}"
+                   BackgroundColor="{StaticResource InputBackgroundColor}"
+                   IsSpellCheckEnabled="False"
+                   IsTextPredictionEnabled="False"
+                   Margin="0,4" />
+
+            <HorizontalStackLayout Spacing="12" HorizontalOptions="End">
+                <Button x:Name="CancelButton"
+                        AutomationId="PopupCancelButton"
+                        Text="Cancel"
+                        Style="{StaticResource SecondaryButton}"
+                        HeightRequest="40"
+                        Clicked="OnCancelClicked" />
+                <Button x:Name="AcceptButton"
+                        AutomationId="PopupAcceptButton"
+                        Text="OK"
+                        Style="{StaticResource PrimaryButton}"
+                        HeightRequest="40"
+                        Clicked="OnAcceptClicked" />
+            </HorizontalStackLayout>
+
+        </VerticalStackLayout>
+    </Frame>
+
+</ContentView>

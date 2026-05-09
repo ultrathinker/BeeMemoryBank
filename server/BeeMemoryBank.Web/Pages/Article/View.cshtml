@@ -1,0 +1,613 @@
+@page
+@model BeeMemoryBank.Web.Pages.Article.ViewModel
+@{
+    ViewData["Title"] = Model.Article?.Title ?? "Article";
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+@if (Model.Article != null)
+{
+    <div style="margin-bottom:12px;">
+        <h1 class="article-title">@Model.Article.Title</h1>
+        <div class="article-meta">
+            <span class="article-id-badge" title="Click to copy" data-bmb-copy="@Model.Article.Id">
+                id: @Model.Article.Id
+            </span>
+            <span><sl-icon name="folder2"></sl-icon> @Model.Article.TreePath</span>
+        </div>
+    </div>
+
+    <div class="article-actions-bar" id="concept-tags-block">
+        <div class="tags-area">
+            <span class="tags-label">
+                <sl-icon name="diagram-3"></sl-icon> tags:
+            </span>
+            <span id="concept-tags-chips">
+                @foreach (var ct in Model.ConceptTags)
+                {
+                    <sl-tag size="small" variant="warning" pill removable data-concept="@ct">@ct</sl-tag>
+                }
+            </span>
+            <sl-button id="btn-add-concept" size="small" variant="text" circle title="Add tag">
+                <sl-icon name="plus-lg"></sl-icon>
+            </sl-button>
+            <div id="concept-tag-input-wrap" style="display:none;position:relative;margin-top:8px;max-width:480px;">
+                <sl-input id="concept-tag-search" placeholder="Type to search or create tag..." clearable autocomplete="off" size="small"></sl-input>
+                <div id="concept-tag-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:0;max-height:240px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
+            </div>
+        </div>
+        <div class="toolbar compact">
+            <sl-button size="small" variant="primary" href="/Article/Edit?id=@Model.Article.Id">
+                <sl-icon slot="prefix" name="pencil"></sl-icon> Edit
+            </sl-button>
+            <sl-button size="small" variant="default" href="/Article/History?id=@Model.Article.Id">
+                <sl-icon slot="prefix" name="clock-history"></sl-icon> History
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'article',id:'@Model.Article.Id'})">
+                <sl-icon slot="prefix" name="download"></sl-icon> Export
+            </sl-button>
+            <sl-button size="small" variant="default" href="/Folder?path=@Uri.EscapeDataString(Model.Article.TreePath)">
+                <sl-icon slot="prefix" name="arrow-left"></sl-icon> Folder
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-article').show()">
+                <sl-icon slot="prefix" name="arrows-move"></sl-icon> Move
+            </sl-button>
+            <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-article').show()">
+                <sl-icon slot="prefix" name="trash"></sl-icon> Delete
+            </sl-button>
+        </div>
+    </div>
+
+    <div class="card">
+        @if (Model.Content == null)
+        {
+            <sl-alert variant="warning" open>
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                Content cannot be decrypted. This article was created on a node with a different encryption key.
+            </sl-alert>
+        }
+        <div class="article-content" id="article-body"></div>
+    </div>
+
+    @if (Model.RelatedArticles.Count > 0)
+    {
+        var totalRelated = Model.RelatedArticles.Count;
+        var relatedPageSize = 10;
+        var totalRelatedPages = (int)Math.Ceiling(totalRelated / (double)relatedPageSize);
+        <div class="card mt-md">
+            <h4 style="font-size:0.95rem;margin-bottom:14px;">
+                <sl-icon name="diagram-3"></sl-icon> Related Articles (<span id="related-total">@totalRelated</span>)
+            </h4>
+            <div id="related-list">
+                @foreach (var rel in Model.RelatedArticles.OrderByDescending(r => r.Strength).Take(relatedPageSize))
+                {
+                    <div class="related-item" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">
+                        <div>
+                            <a href="/Article/View?id=@rel.Id" style="font-weight:500;">@rel.Title</a>
+                            <div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">@string.Join(", ", rel.SharedConcepts)</div>
+                        </div>
+                        <sl-badge variant="neutral" pill>@rel.Strength</sl-badge>
+                    </div>
+                }
+            </div>
+            @if (totalRelatedPages > 1)
+            {
+                <div id="related-pager" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;">
+                    <span id="related-pager-info" style="font-size:0.85rem;color:var(--sl-color-neutral-500);">Page 1 of @totalRelatedPages · @totalRelated items</span>
+                    <div style="display:flex;gap:8px;">
+                        <sl-button id="related-prev" size="small" variant="default" disabled>Prev</sl-button>
+                        <sl-button id="related-next" size="small" variant="default">Next</sl-button>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- Comments -->
+    <div class="card mt-md">
+        <h4 style="font-size:0.95rem;margin-bottom:14px;">
+            <sl-icon name="chat-dots"></sl-icon> Comments (@Model.Comments.Count)
+        </h4>
+
+        <div id="comments-list">
+        @foreach (var comment in Model.Comments)
+        {
+            <div class="comment-item" id="comment-@comment.Id">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div>
+                        <span class="comment-author">owner</span>
+                        <span class="comment-date">@comment.CreatedAt.ToString("g")</span>
+                    </div>
+                    <sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;"
+                        onclick="deleteComment(@comment.Id)"></sl-icon-button>
+                </div>
+                <p class="comment-text">@comment.Text</p>
+            </div>
+        }
+        </div>
+
+        <div style="margin-top:14px;">
+            <sl-textarea id="new-comment-text" rows="2" placeholder="Add a comment..." style="margin-bottom:8px;"></sl-textarea>
+            <sl-button id="btn-add-comment" size="small" variant="primary">
+                <sl-icon slot="prefix" name="send"></sl-icon> Add Comment
+            </sl-button>
+        </div>
+    </div>
+}
+else
+{
+    <p>Article not found.</p>
+}
+
+<!-- Move dialog -->
+<sl-dialog id="dlg-move-article" label="Move Article" style="--width:560px;">
+    <style>
+        #dlg-move-article::part(panel) { overflow: visible; }
+        #dlg-move-article::part(body) { overflow: visible; }
+    </style>
+    <p class="text-muted text-sm">Moving: <code>@Model.Article?.Title</code></p>
+    <div style="position:relative;">
+        <sl-input id="move-article-search" label="Destination folder" placeholder="Type to search or leave empty for root (/)" autocomplete="off"></sl-input>
+        <div id="move-article-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:0;max-height:240px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
+    </div>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-move-article').hide()">Cancel</sl-button>
+    <sl-button id="btn-move-article" slot="footer" variant="primary">Move</sl-button>
+</sl-dialog>
+
+<!-- Delete dialog -->
+<sl-dialog id="dlg-delete-article" label="Delete Article">
+    <sl-alert variant="danger" open>
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Delete «@Model.Article?.Title»?
+    </sl-alert>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-delete-article').hide()">Cancel</sl-button>
+    <sl-button id="btn-confirm-delete-article" slot="footer" variant="danger">Delete</sl-button>
+</sl-dialog>
+
+<div id="syncToast" class="sync-toast" style="display:none;">
+    <div class="sync-toast-content">
+        <span class="sync-toast-label">Syncing</span>
+        <div class="sync-toast-circles" id="syncToastCircles"></div>
+    </div>
+</div>
+
+<sl-dialog label="Sync Delivery Status" id="syncModal" class="sync-modal">
+    <div id="syncModalContent" class="sync-modal-content">Loading...</div>
+    <sl-button slot="footer" variant="primary" onclick="document.getElementById('syncModal').hide()">Close</sl-button>
+</sl-dialog>
+
+<script>
+(function() {
+    var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
+    var content = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""));
+    var treePath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"));
+
+    if (content) {
+        var body = document.getElementById('article-body');
+        var renderer = new marked.Renderer();
+        var origImage = renderer.image.bind(renderer);
+        renderer.image = function(token) {
+            if (token && token.href && token.href.startsWith('/api/media/')) {
+                token.href = '/api-proxy/media/' + token.href.substring('/api/media/'.length);
+            }
+            return origImage(token);
+        };
+        body.innerHTML = DOMPurify.sanitize(marked.parse(content, { breaks: true, renderer: renderer }));
+    }
+
+    // Move
+    var moveArticleSelectedPath = null;
+    var moveArticleSearchTimer = null;
+    var moveArticleSearch = document.getElementById('move-article-search');
+    var moveArticleDropdown = document.getElementById('move-article-dropdown');
+
+    function escapeHtmlMove(text) {
+        var d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
+    }
+
+    if (moveArticleSearch) {
+        moveArticleSearch.addEventListener('sl-input', function() {
+            moveArticleSelectedPath = null;
+            clearTimeout(moveArticleSearchTimer);
+            var q = moveArticleSearch.value.trim();
+            if (q.length < 1) { moveArticleDropdown.style.display = 'none'; return; }
+            moveArticleSearchTimer = setTimeout(function() {
+                fetch('/api-proxy/folders/search?q=' + encodeURIComponent(q) + '&limit=12')
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var folders = data.folders || [];
+                        if (folders.length === 0) {
+                            moveArticleDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-neutral-500);font-size:0.9rem;">No matching folders</div>';
+                        } else {
+                            moveArticleDropdown.innerHTML = folders.map(function(f) {
+                                return '<div class="move-article-item" data-path="' + escapeHtmlMove(f.path) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);">' +
+                                    '<sl-icon name="folder2" style="margin-right:6px;"></sl-icon>' + escapeHtmlMove(f.path) + '</div>';
+                            }).join('');
+                            if (data.hasMore) {
+                                moveArticleDropdown.innerHTML += '<div style="padding:6px 12px;color:var(--sl-color-neutral-400);font-size:0.8rem;text-align:center;">Type more to narrow results...</div>';
+                            }
+                        }
+                        moveArticleDropdown.style.display = 'block';
+                    });
+            }, 250);
+        });
+
+        moveArticleDropdown.addEventListener('click', function(e) {
+            var item = e.target.closest('.move-article-item');
+            if (!item) return;
+            moveArticleSelectedPath = item.dataset.path;
+            moveArticleSearch.value = moveArticleSelectedPath;
+            moveArticleDropdown.style.display = 'none';
+        });
+
+        moveArticleDropdown.addEventListener('mouseover', function(e) {
+            var item = e.target.closest('.move-article-item');
+            if (item) item.style.background = 'var(--sl-color-primary-50)';
+        });
+        moveArticleDropdown.addEventListener('mouseout', function(e) {
+            var item = e.target.closest('.move-article-item');
+            if (item) item.style.background = '';
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('#move-article-search') && !e.target.closest('#move-article-dropdown')) {
+                moveArticleDropdown.style.display = 'none';
+            }
+        });
+    }
+
+    var moveBtn = document.getElementById('btn-move-article');
+    if (moveBtn) {
+        moveBtn.addEventListener('click', function() {
+            var inputVal = moveArticleSearch.value.trim();
+            if (inputVal && !moveArticleSelectedPath) {
+                alert('Please select a folder from the search results.');
+                return;
+            }
+            var newPath = moveArticleSelectedPath || '/';
+            if (newPath === treePath) { alert('Article is already in that folder'); return; }
+            moveBtn.loading = true;
+            fetch('/api-proxy/article/' + articleId + '/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ newPath: newPath })
+            }).then(function(r) {
+                if (r.ok) window.location.reload();
+                else r.json().then(function(e) { alert(e.error || 'Move failed'); }).catch(function() { alert('Move failed'); });
+            }).catch(function() { alert('Error'); }).finally(function() { moveBtn.loading = false; });
+        });
+    }
+
+    // Delete
+    var deleteBtn = document.getElementById('btn-confirm-delete-article');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function() {
+            deleteBtn.loading = true;
+            fetch('/api-proxy/article/' + articleId, {
+                method: 'DELETE'
+            }).then(function(r) {
+                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(treePath);
+                else r.json().then(function(d) { alert(d.error || 'Delete failed'); }).catch(function() { alert('Delete failed'); });
+            }).catch(function() { alert('Error'); }).finally(function() { deleteBtn.loading = false; });
+        });
+    }
+
+    // Add comment
+    var addCommentBtn = document.getElementById('btn-add-comment');
+    if (addCommentBtn) {
+        addCommentBtn.addEventListener('click', function() {
+            var textarea = document.getElementById('new-comment-text');
+            var text = textarea.value.trim();
+            if (!text) return;
+            addCommentBtn.loading = true;
+            fetch('/api-proxy/comments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ articleId: articleId, text: text })
+            }).then(function(r) {
+                if (r.ok) return r.json();
+                throw new Error('Failed');
+            }).then(function(comment) {
+                textarea.value = '';
+                var list = document.getElementById('comments-list');
+                var div = document.createElement('div');
+                div.className = 'comment-item';
+                div.id = 'comment-' + comment.id;
+                var d = new Date(comment.createdAt);
+                div.innerHTML =
+                    '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+                    '<div><span class="comment-author">owner</span>' +
+                    '<span class="comment-date">' + d.toLocaleString() + '</span></div>' +
+                    '<sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;" onclick="deleteComment(' + comment.id + ')"></sl-icon-button>' +
+                    '</div>' +
+                    '<p class="comment-text">' + escHtml(comment.text) + '</p>';
+                list.appendChild(div);
+                // Update count heading
+                var h4 = list.closest('.card').querySelector('h4');
+                if (h4) {
+                    var cnt = list.querySelectorAll('.comment-item').length;
+                    h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
+                }
+            }).catch(function() { alert('Error adding comment'); })
+            .finally(function() { addCommentBtn.loading = false; });
+        });
+    }
+
+    window.deleteComment = function(id) {
+        if (!confirm('Delete this comment?')) return;
+        fetch('/api-proxy/comments/' + id, { method: 'DELETE' })
+            .then(function(r) {
+                if (r.ok || r.status === 204) {
+                    var el = document.getElementById('comment-' + id);
+                    if (el) el.remove();
+                    var list = document.getElementById('comments-list');
+                    var h4 = list.closest('.card').querySelector('h4');
+                    if (h4) {
+                        var cnt = list.querySelectorAll('.comment-item').length;
+                        h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
+                    }
+                } else { alert('Delete failed'); }
+            });
+    };
+
+    function escHtml(s) {
+        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+})();
+
+(function() {
+    var params = new URLSearchParams(window.location.search);
+    if (!params.has('justSaved')) return;
+
+    var url = new URL(window.location);
+    url.searchParams.delete('justSaved');
+    history.replaceState(null, '', url);
+
+    var toast = document.getElementById('syncToast');
+    if (!toast) return;
+
+    toast.style.display = 'flex';
+    var polling = true;
+    var fadeTimer = setTimeout(function() {
+        if (!toast.classList.contains('sync-toast-pinned')) {
+            toast.style.display = 'none';
+            polling = false;
+        }
+    }, 5000);
+
+    toast.addEventListener('click', function() {
+        toast.classList.add('sync-toast-pinned');
+        clearTimeout(fadeTimer);
+        toast.style.display = 'none';
+        polling = false;
+        var modal = document.getElementById('syncModal');
+        if (modal) {
+            modal.show();
+            if (typeof updateSyncModal === 'function') updateSyncModal();
+        }
+    });
+
+    function updateSyncToast() {
+        if (!polling) return;
+        fetch('/api-proxy/sync/delivery-status')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var circles = document.getElementById('syncToastCircles');
+                if (!circles || !data.nodes) return;
+                circles.innerHTML = data.nodes.map(function(n) {
+                    var color = n.isSynced ? 'var(--sl-color-success-600)' : 'var(--sl-color-warning-500)';
+                    var title = escHtml(n.displayName) + (n.isSynced ? ' ✓' : ' pending');
+                    return '<span class="sync-circle" style="background:' + color + ';" title="' + title + '"></span>';
+                }).join('');
+                if (polling) setTimeout(updateSyncToast, 3000);
+            })
+            .catch(function() { if (polling) setTimeout(updateSyncToast, 5000); });
+    }
+    updateSyncToast();
+})();
+
+(function() {
+    var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
+    if (!articleId) return;
+
+    var chipsEl = document.getElementById('concept-tags-chips');
+    var btnAdd = document.getElementById('btn-add-concept');
+    var inputWrap = document.getElementById('concept-tag-input-wrap');
+    var searchInput = document.getElementById('concept-tag-search');
+    var dropdown = document.getElementById('concept-tag-dropdown');
+    if (!chipsEl || !btnAdd || !searchInput || !dropdown) return;
+
+    var currentTags = Array.from(chipsEl.querySelectorAll('sl-tag[data-concept]'))
+        .map(function(el) { return el.getAttribute('data-concept'); });
+
+    var searchTimer = null;
+
+    function putTags(tags) {
+        return fetch('/api-proxy/article/' + articleId + '/concept-tags', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ conceptTags: tags })
+        });
+    }
+
+    function escConceptHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function renderChips() {
+        chipsEl.innerHTML = currentTags.map(function(t) {
+            return '<sl-tag size="small" variant="warning" pill removable data-concept="'+escConceptHtml(t)+'" style="margin-right:4px;">'+escConceptHtml(t)+'</sl-tag>';
+        }).join('');
+        attachRemoveHandlers();
+    }
+
+    function attachRemoveHandlers() {
+        chipsEl.querySelectorAll('sl-tag[data-concept]').forEach(function(el) {
+            el.addEventListener('sl-remove', function() {
+                var name = el.getAttribute('data-concept');
+                var idx = currentTags.indexOf(name);
+                if (idx === -1) return;
+                var prev = currentTags.slice();
+                currentTags.splice(idx, 1);
+                renderChips();
+                putTags(currentTags).then(function(r) {
+                    if (!r.ok) { currentTags = prev; renderChips(); alert('Failed to remove tag'); }
+                });
+            });
+        });
+    }
+
+    attachRemoveHandlers();
+
+    function addTag(name) {
+        name = (name || '').trim();
+        if (!name) return;
+        if (currentTags.some(function(t) { return t.toLowerCase() === name.toLowerCase(); })) {
+            searchInput.value = '';
+            dropdown.style.display = 'none';
+            return;
+        }
+        var prev = currentTags.slice();
+        currentTags.push(name);
+        renderChips();
+        putTags(currentTags).then(function(r) {
+            if (!r.ok) { currentTags = prev; renderChips(); alert('Failed to add tag'); }
+        });
+        searchInput.value = '';
+        dropdown.style.display = 'none';
+    }
+
+    btnAdd.addEventListener('click', function() {
+        inputWrap.style.display = 'block';
+        btnAdd.style.display = 'none';
+        setTimeout(function() { searchInput.focus(); }, 50);
+    });
+
+    searchInput.addEventListener('sl-input', function() {
+        clearTimeout(searchTimer);
+        var q = searchInput.value.trim();
+        if (q.length < 1) { dropdown.style.display = 'none'; return; }
+        searchTimer = setTimeout(function() {
+            fetch('/api-proxy/concept-tags?q=' + encodeURIComponent(q) + '&limit=20')
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(data) {
+                    var tags = (data || []).filter(function(t) {
+                        return !currentTags.some(function(c) { return c.toLowerCase() === t.name.toLowerCase(); });
+                    });
+                    var items = tags.map(function(t) {
+                        return '<div class="concept-tag-item" data-name="' + escConceptHtml(t.name) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);">' +
+                            '<sl-icon name="diagram-3" style="margin-right:6px;"></sl-icon>' +
+                            escConceptHtml(t.name) +
+                            '<span style="float:right;color:var(--sl-color-neutral-500);font-size:0.8rem;">' + t.articleCount + '</span>' +
+                            '</div>';
+                    });
+                    var exactMatch = tags.some(function(t) { return t.name.toLowerCase() === q.toLowerCase(); });
+                    var alreadyOnArticle = currentTags.some(function(c) { return c.toLowerCase() === q.toLowerCase(); });
+                    if (!exactMatch && !alreadyOnArticle) {
+                        items.unshift('<div class="concept-tag-item concept-tag-new" data-name="' + escConceptHtml(q) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);background:var(--sl-color-primary-50);">' +
+                            '<sl-icon name="plus-lg" style="margin-right:6px;"></sl-icon>Create <strong>' + escConceptHtml(q) + '</strong>' +
+                            '</div>');
+                    }
+                    dropdown.innerHTML = items.length === 0
+                        ? '<div style="padding:8px 12px;color:var(--sl-color-neutral-500);font-size:0.9rem;">No matches.</div>'
+                        : items.join('');
+                    dropdown.style.display = 'block';
+                });
+        }, 200);
+    });
+
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            var q = searchInput.value.trim();
+            if (q) addTag(q);
+        } else if (e.key === 'Escape') {
+            dropdown.style.display = 'none';
+            inputWrap.style.display = 'none';
+            btnAdd.style.display = '';
+            searchInput.value = '';
+        }
+    });
+
+    var suppressBlurHide = false;
+    dropdown.addEventListener('mousedown', function(e) {
+        if (e.target.closest('.concept-tag-item')) suppressBlurHide = true;
+    });
+
+    dropdown.addEventListener('click', function(e) {
+        var item = e.target.closest('.concept-tag-item');
+        if (!item) return;
+        addTag(item.getAttribute('data-name'));
+        setTimeout(function() { searchInput.focus(); }, 0);
+    });
+
+    dropdown.addEventListener('mouseover', function(e) {
+        var item = e.target.closest('.concept-tag-item');
+        if (item) item.style.background = 'var(--sl-color-primary-50)';
+    });
+    dropdown.addEventListener('mouseout', function(e) {
+        var item = e.target.closest('.concept-tag-item');
+        if (item) item.style.background = item.classList.contains('concept-tag-new') ? 'var(--sl-color-primary-50)' : '';
+    });
+
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#concept-tag-input-wrap')) {
+            dropdown.style.display = 'none';
+        }
+    });
+
+    searchInput.addEventListener('sl-blur', function() {
+        setTimeout(function() {
+            if (suppressBlurHide) {
+                suppressBlurHide = false;
+                return;
+            }
+            if (searchInput.value.trim() === '' && inputWrap.style.display !== 'none') {
+                dropdown.style.display = 'none';
+                inputWrap.style.display = 'none';
+                btnAdd.style.display = '';
+            }
+        }, 150);
+    });
+})();
+
+(function() {
+    var prev = document.getElementById('related-prev');
+    var next = document.getElementById('related-next');
+    if (!prev || !next) return;
+    var list = document.getElementById('related-list');
+    var info = document.getElementById('related-pager-info');
+    var articleIdLocal = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
+    if (!articleIdLocal) return;
+    var page = 1, pageSize = 10, totalPages = 1;
+    function escRel(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
+    function load(p) {
+        prev.loading = next.loading = true;
+        fetch('/api-proxy/article/' + articleIdLocal + '/related?page=' + p + '&pageSize=' + pageSize)
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+                page = d.page; totalPages = d.totalPages;
+                list.innerHTML = (d.items || []).map(function(r) {
+                    return '<div class="related-item" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">'
+                        + '<div><a href="/Article/View?id=' + r.id + '" style="font-weight:500;">' + escRel(r.title) + '</a>'
+                        + '<div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">' + escRel((r.sharedConcepts||[]).join(', ')) + '</div></div>'
+                        + '<sl-badge variant="neutral" pill>' + r.strength + '</sl-badge>'
+                        + '</div>';
+                }).join('');
+                info.textContent = 'Page ' + page + ' of ' + totalPages + ' \u00B7 ' + d.total + ' items';
+                prev.disabled = page <= 1;
+                next.disabled = page >= totalPages;
+            })
+            .finally(function() { prev.loading = next.loading = false; });
+    }
+    prev.addEventListener('click', function() { if (page > 1) load(page - 1); });
+    next.addEventListener('click', function() { load(page + 1); });
+})();
+</script>
+</div>
+</div>

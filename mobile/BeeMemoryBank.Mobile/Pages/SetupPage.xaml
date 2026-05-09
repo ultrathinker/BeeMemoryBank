@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.SetupPage"
+             Title="BeeMemoryBank Setup"
+             BackgroundColor="{StaticResource BackgroundColor}"
+             Shell.FlyoutBehavior="Disabled"
+             Shell.NavBarIsVisible="False">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="32" Spacing="16"
+                             MaximumWidthRequest="400"
+                             HorizontalOptions="Center" VerticalOptions="Center">
+
+            <Label Text="BeeMemoryBank"
+                   FontSize="28"
+                   FontAttributes="Bold"
+                   TextColor="{StaticResource PrimaryColor}"
+                   HorizontalOptions="Center" />
+
+            <Label Text="Setup your node"
+                   FontSize="16"
+                   TextColor="{StaticResource SecondaryTextColor}"
+                   HorizontalOptions="Center" />
+
+            <Entry x:Name="NameEntry"
+                   AutomationId="SetupNameEntry"
+                   Placeholder="My Node"
+                   Style="{StaticResource BaseEntry}" />
+
+            <Frame BorderColor="{StaticResource BorderColor}"
+                   BackgroundColor="{StaticResource SurfaceColor}"
+                   CornerRadius="8"
+                   Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Server URL"
+                           FontAttributes="Bold" />
+                    <Label Text="Connect to an existing BeeMemoryBank server. Leave empty to create a standalone offline node."
+                           FontSize="12"
+                           TextColor="{StaticResource SecondaryTextColor}"
+                           LineBreakMode="WordWrap" />
+                     <Entry x:Name="ServerUrlEntry"
+                            AutomationId="ServerUrlEntry"
+                            Placeholder="https://bmb.example.com"
+                            IsSpellCheckEnabled="False"
+                            IsTextPredictionEnabled="False"
+                            Style="{StaticResource BaseEntry}" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <Entry x:Name="PasswordEntry"
+                   AutomationId="SetupPasswordEntry"
+                   Placeholder="Password"
+                   IsPassword="True"
+                   Style="{StaticResource BaseEntry}" />
+
+            <Label x:Name="ErrorLabel"
+                   TextColor="{StaticResource ErrorColor}"
+                   IsVisible="False"
+                   FontSize="14" />
+
+            <Button x:Name="SetupButton"
+                    AutomationId="SetupButton"
+                    Text="Setup &amp; Connect"
+                    Style="{StaticResource PrimaryButton}"
+                    Clicked="OnSetupClicked" />
+
+            <ActivityIndicator x:Name="LoadingIndicator"
+                               IsVisible="False"
+                               IsRunning="False"
+                               Color="{StaticResource PrimaryColor}" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+
+</ContentPage>

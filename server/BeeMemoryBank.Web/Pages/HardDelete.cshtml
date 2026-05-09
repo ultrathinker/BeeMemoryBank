@@ -1,0 +1,528 @@
+@page
+@model HardDeleteModel
+@{
+    ViewData["Title"] = "Hard Delete";
+}
+
+<div class="main-content">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+        <h2 style="margin:0;"><sl-icon name="trash" style="margin-right:8px;vertical-align:middle;color:var(--sl-color-danger-600);"></sl-icon>Hard Delete (Superadmin)</h2>
+        <sl-button variant="default" size="small" onclick="document.getElementById('dlg-audit').show()">
+            <sl-icon slot="prefix" name="journal-text"></sl-icon> View Audit Log
+        </sl-button>
+    </div>
+
+    <sl-card style="width:100%; margin-bottom:24px;">
+        <div style="display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap;">
+            <sl-input id="filter-input" label="Filter (path or title)" placeholder="Type to filter..." style="flex:1; min-width:200px;" clearable></sl-input>
+            
+            <sl-select id="status-select" label="Status" value="All" style="width:150px;">
+                <sl-option value="All">All</sl-option>
+                <sl-option value="ActiveOnly">Active Only</sl-option>
+                <sl-option value="DeletedOnly">Soft Deleted</sl-option>
+            </sl-select>
+
+            <sl-select id="pagesize-select" label="Page Size" value="100" style="width:100px;">
+                <sl-option value="100">100</sl-option>
+                <sl-option value="250">250</sl-option>
+                <sl-option value="500">500</sl-option>
+            </sl-select>
+        </div>
+    </sl-card>
+
+    <sl-alert variant="primary" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="info-circle"></sl-icon>
+        <strong>Soft delete vs hard delete.</strong> When you delete an article or folder from the tree, BeeMemoryBank performs a <em>soft delete</em>: the row is marked as deleted and hidden from the tree and search, but the ciphertext and media remain on disk and are still synced to other nodes. This is reversible.
+        <br />
+        On this page a Superadmin can perform a <em>hard delete</em>: the selected article or folder (and its subtree) is physically removed from the database and disk, and a sync event propagates the purge to every connected node. This is permanent and cannot be undone.
+    </sl-alert>
+
+    <div id="loading-overlay" style="display:none; text-align:center; padding:40px;">
+        <sl-spinner style="font-size: 3rem;"></sl-spinner>
+    </div>
+
+    <div id="table-container">
+        <table class="bmb-table" style="width:100%; border-collapse:collapse;">
+            <thead>
+                <tr>
+                    <th style="width:40px;"></th>
+                    <th class="sortable" data-sort="title" style="cursor:pointer;user-select:none;">Path / Title <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="status" style="width:100px;cursor:pointer;user-select:none;">Status <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="createdAt" style="width:150px;cursor:pointer;user-select:none;">Created <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="size" style="width:100px;text-align:right;cursor:pointer;user-select:none;">Size <span class="sort-arrow"></span></th>
+                    <th style="width:100px;text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="list-body">
+                <!-- Loaded via JS -->
+            </tbody>
+        </table>
+
+        <div id="pagination-container" style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
+            <span id="pagination-info" style="font-size:var(--sl-font-size-small);color:var(--sl-color-neutral-600);"></span>
+            <div style="display:flex; gap:8px;">
+                <sl-button id="btn-prev" size="small" disabled>Previous</sl-button>
+                <sl-button id="btn-next" size="small" disabled>Next</sl-button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Dialog -->
+<sl-dialog id="dlg-confirm-delete" label="Confirm Hard Delete">
+    <sl-alert variant="danger" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>WARNING:</strong> This operation is permanent and cannot be undone. It will physically remove data from the database and disk on all nodes.
+    </sl-alert>
+
+    <div id="delete-preview" style="margin-bottom:16px; padding:12px; background:var(--sl-color-neutral-50); border-radius:var(--sl-border-radius-medium);">
+        <sl-spinner id="preview-spinner"></sl-spinner>
+        <div id="preview-content" style="display:none;">
+            <p id="preview-text"></p>
+        </div>
+    </div>
+
+    <p id="confirm-instruction"></p>
+    <sl-input id="confirm-input" placeholder="Type exactly as above to confirm" autocomplete="off" style="margin-top:8px;"></sl-input>
+
+    <sl-checkbox id="confirm-checkbox" style="margin-top:16px;">I understand this cannot be undone</sl-checkbox>
+
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-confirm-delete').hide()">Cancel</sl-button>
+
+    <sl-button slot="footer" id="btn-final-delete" variant="danger" disabled>Delete Forever</sl-button>
+</sl-dialog>
+
+<!-- Restore Confirmation Dialog -->
+<sl-dialog id="dlg-confirm-restore" label="Restore">
+    <sl-alert variant="primary" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="info-circle"></sl-icon>
+        This will create a <strong>new copy</strong> <code id="restore-target-name"></code> at the root. The original stays in the trash — you can hard-delete it separately.
+        <br/><br/>
+        <span id="restore-article-note" style="display:none;">Content, tags, and ciphertext are preserved. Comments and version history are not copied.</span>
+        <span id="restore-folder-note" style="display:none;">The subfolder structure (deleted together with this folder) will be recreated as empty folders. Articles from the deleted folder are already orphaned and live in the root.</span>
+    </sl-alert>
+    <sl-button slot="footer" id="btn-restore-cancel" variant="default">Cancel</sl-button>
+    <sl-button slot="footer" id="btn-restore-confirm" variant="success">
+        <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon>
+        Create copy
+    </sl-button>
+</sl-dialog>
+
+<!-- Audit Log Dialog -->
+<sl-dialog id="dlg-audit" label="Hard Delete Audit Log" style="--width: 80vw;">
+    <div id="audit-loading" style="text-align:center; padding:20px;">
+        <sl-spinner></sl-spinner>
+    </div>
+    <div id="audit-container" style="max-height:60vh; overflow-y:auto; display:none;">
+        <table class="bmb-table" style="width:100%; border-collapse:collapse; font-size:var(--sl-font-size-small);">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Entity</th>
+                    <th>Counts (A/F/M)</th>
+                    <th>Actor / Node</th>
+                </tr>
+            </thead>
+            <tbody id="audit-body"></tbody>
+        </table>
+    </div>
+    <div slot="footer" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <span id="audit-info" style="font-size:var(--sl-font-size-small); color:var(--sl-color-neutral-600);"></span>
+        <div style="display:flex; gap:8px;">
+            <sl-button id="audit-prev" size="small" disabled>
+                <sl-icon slot="prefix" name="chevron-left"></sl-icon> Prev
+            </sl-button>
+            <sl-button id="audit-next" size="small" disabled>
+                Next <sl-icon slot="suffix" name="chevron-right"></sl-icon>
+            </sl-button>
+        </div>
+    </div>
+</sl-dialog>
+
+<style>
+    .bmb-table th { text-align:left; padding:12px; border-bottom:2px solid var(--sl-color-neutral-200); font-size:var(--sl-font-size-small); text-transform:uppercase; color:var(--sl-color-neutral-600); }
+    .bmb-table td { padding:12px; border-bottom:1px solid var(--sl-color-neutral-100); vertical-align:middle; }
+    .status-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:bold; text-transform:uppercase; }
+    .status-active { background:var(--sl-color-success-100); color:var(--sl-color-success-700); }
+    .status-deleted { background:var(--sl-color-neutral-100); color:var(--sl-color-neutral-700); }
+    .item-path { font-size:11px; color:var(--sl-color-neutral-500); display:block; margin-bottom:2px; }
+    .item-title { font-weight:500; }
+</style>
+
+<script>
+(function() {
+    let currentPage = 1;
+    let totalCount = 0;
+    
+    const filterInput = document.getElementById('filter-input');
+    const statusSelect = document.getElementById('status-select');
+    const pageSizeSelect = document.getElementById('pagesize-select');
+    const listBody = document.getElementById('list-body');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const tableContainer = document.getElementById('table-container');
+    const paginationInfo = document.getElementById('pagination-info');
+    const btnPrev = document.getElementById('btn-prev');
+    const btnNext = document.getElementById('btn-next');
+
+    const dlgDelete = document.getElementById('dlg-confirm-delete');
+    const previewText = document.getElementById('preview-text');
+    const previewContent = document.getElementById('preview-content');
+    const previewSpinner = document.getElementById('preview-spinner');
+    const confirmInstruction = document.getElementById('confirm-instruction');
+    const confirmInput = document.getElementById('confirm-input');
+    const confirmCheckbox = document.getElementById('confirm-checkbox');
+    const btnFinalDelete = document.getElementById('btn-final-delete');
+
+    let currentItem = null;
+    let debounceTimer = null;
+    let currentItems = [];
+    let sortField = 'title';
+    let sortDir = 'asc';
+
+    async function loadList() {
+        loadingOverlay.style.display = 'block';
+        tableContainer.style.opacity = '0.5';
+        
+        const pageSize = pageSizeSelect.value || '100';
+        const filter = filterInput.value || '';
+        const status = statusSelect.value || 'All';
+
+        try {
+            const url = `/api-proxy/hard-delete/list?page=${currentPage}&pageSize=${pageSize}&filter=${encodeURIComponent(filter)}&status=${status}`;
+            const r = await fetch(url);
+            if (!r.ok) throw new Error('Failed to load list');
+            const data = await r.json();
+            
+            totalCount = data.totalCount;
+            currentItems = data.items || [];
+            sortAndRender();
+            updatePagination();
+        } catch (e) {
+            console.error(e);
+            toast('danger', 'Error loading list');
+        } finally {
+            loadingOverlay.style.display = 'none';
+            tableContainer.style.opacity = '1';
+        }
+    }
+
+    function sortAndRender() {
+        const dir = sortDir === 'asc' ? 1 : -1;
+        const cmp = (a, b) => {
+            // Folders always first
+            if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+            let av, bv;
+            switch (sortField) {
+                case 'status': av = a.status || ''; bv = b.status || ''; return av.localeCompare(bv) * dir;
+                case 'createdAt': av = new Date(a.createdAt).getTime(); bv = new Date(b.createdAt).getTime(); return (av - bv) * dir;
+                case 'size': av = a.size || 0; bv = b.size || 0; return (av - bv) * dir;
+                case 'title':
+                default: av = a.title || ''; bv = b.title || ''; return av.localeCompare(bv, undefined, { sensitivity: 'base' }) * dir;
+            }
+        };
+        const sorted = currentItems.slice().sort(cmp);
+        renderList(sorted);
+        updateSortArrows();
+    }
+
+    function updateSortArrows() {
+        document.querySelectorAll('th.sortable').forEach(th => {
+            const arrow = th.querySelector('.sort-arrow');
+            if (!arrow) return;
+            arrow.textContent = th.dataset.sort === sortField ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+        });
+    }
+
+    document.querySelectorAll('th.sortable').forEach(th => {
+        th.addEventListener('click', () => {
+            const f = th.dataset.sort;
+            if (sortField === f) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+            else { sortField = f; sortDir = 'asc'; }
+            sortAndRender();
+        });
+    });
+
+    function renderList(items) {
+        listBody.innerHTML = '';
+        if (items.length === 0) {
+            listBody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--sl-color-neutral-500);">No items found matching the filters.</td></tr>';
+            return;
+        }
+
+        items.forEach(item => {
+            const tr = document.createElement('tr');
+            const icon = item.type === 'folder' ? 'folder' : 'file-text';
+            const iconColor = item.type === 'folder' ? 'var(--sl-color-primary-500)' : 'var(--sl-color-neutral-500)';
+            
+            const date = new Date(item.createdAt).toLocaleDateString();
+            const sizeStr = item.type === 'article' ? formatSize(item.size) : '-';
+            const statusClass = item.status === 'A' ? 'status-active' : 'status-deleted';
+            const statusLabel = item.status === 'A' ? 'Active' : 'Deleted';
+
+            tr.innerHTML = `
+                <td><sl-icon name="${icon}" style="color:${iconColor};font-size:1.2rem;"></sl-icon></td>
+                <td>
+                    <span class="item-path">${item.path}</span>
+                    <span class="item-title">${item.title}</span>
+                </td>
+                <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+                <td><span style="font-size:12px;color:var(--sl-color-neutral-500);">${date}</span></td>
+                <td style="text-align:right;font-size:12px;color:var(--sl-color-neutral-500);">${sizeStr}</td>
+                <td style="text-align:right; white-space:nowrap;">
+                    ${item.status === 'D' ? `
+                        <sl-button variant="success" size="small" outline circle title="Restore" class="btn-restore-row" style="margin-right:4px;">
+                            <sl-icon name="arrow-counterclockwise"></sl-icon>
+                        </sl-button>
+                    ` : ''}
+                    <sl-button variant="danger" size="small" outline circle title="Delete Forever" class="btn-delete-row">
+                        <sl-icon name="trash"></sl-icon>
+                    </sl-button>
+                </td>
+            `;
+
+            tr.querySelector('.btn-delete-row').addEventListener('click', () => openDeleteDialog(item));
+            const restoreBtn = tr.querySelector('.btn-restore-row');
+            if (restoreBtn) restoreBtn.addEventListener('click', () => openRestoreDialog(item));
+            listBody.appendChild(tr);
+        });
+    }
+
+    function formatSize(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function updatePagination() {
+        const pageSize = parseInt(pageSizeSelect.value);
+        const start = (currentPage - 1) * pageSize + 1;
+        const end = Math.min(currentPage * pageSize, totalCount);
+        paginationInfo.textContent = totalCount > 0 ? `${start}–${end} of ${totalCount}` : '0 of 0';
+        
+        btnPrev.disabled = currentPage === 1;
+        btnNext.disabled = end >= totalCount;
+    }
+
+    async function openDeleteDialog(item) {
+        currentItem = item;
+        dlgDelete.show();
+        
+        previewSpinner.style.display = 'block';
+        previewContent.style.display = 'none';
+        btnFinalDelete.disabled = true;
+        confirmInput.value = '';
+        confirmCheckbox.checked = false;
+
+        const expectedText = item.type === 'folder' ? item.path : item.title;
+        confirmInstruction.innerHTML = `Please type <strong>${expectedText}</strong> to confirm:`;
+
+        if (item.type === 'folder') {
+            try {
+                const r = await fetch('/api-proxy/hard-delete/folder/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: item.path })
+                });
+                if (r.ok) {
+                    const p = await r.json();
+                    previewText.innerHTML = `This will delete <strong>${p.articlesCount}</strong> articles, <strong>${p.subfoldersCount}</strong> folders, and <strong>${p.mediaCount}</strong> media files.`;
+                } else {
+                    previewText.textContent = 'Failed to load folder preview.';
+                }
+            } catch (e) {
+                previewText.textContent = 'Error loading preview.';
+            }
+        } else {
+            previewText.innerHTML = `Deleting article: <strong>${item.title}</strong><br><span style="font-size:11px;">Path: ${item.path}</span>`;
+        }
+
+        previewSpinner.style.display = 'none';
+        previewContent.style.display = 'block';
+    }
+
+    function validateDelete() {
+        const expected = currentItem.type === 'folder' ? currentItem.path : currentItem.title;
+        const match = confirmInput.value === expected;
+        btnFinalDelete.disabled = !match || !confirmCheckbox.checked;
+    }
+
+    confirmInput.addEventListener('sl-input', validateDelete);
+    confirmCheckbox.addEventListener('sl-change', validateDelete);
+
+    btnFinalDelete.addEventListener('click', async () => {
+        btnFinalDelete.loading = true;
+        try {
+            const url = currentItem.type === 'folder' 
+                ? '/api-proxy/hard-delete/folder' 
+                : `/api-proxy/hard-delete/article/${currentItem.id}`;
+            const method = 'POST';
+            const body = currentItem.type === 'folder' ? JSON.stringify({ path: currentItem.path }) : null;
+            
+            const r = await fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: body
+            });
+
+            if (r.ok) {
+                const res = await r.json();
+                toast('success', `Hard delete successful. Deleted ${res.deletedArticles} articles, ${res.deletedFolders} folders, ${res.deletedMedia} media files.`);
+                dlgDelete.hide();
+                loadList();
+            } else {
+                const d = await r.json();
+                toast('danger', d.error || 'Failed to hard delete');
+            }
+        } catch (e) {
+            toast('danger', 'Network error');
+        } finally {
+            btnFinalDelete.loading = false;
+        }
+    });
+
+    // Restore flow
+    const dlgRestore = document.getElementById('dlg-confirm-restore');
+    const restoreTargetName = document.getElementById('restore-target-name');
+    const restoreArticleNote = document.getElementById('restore-article-note');
+    const restoreFolderNote = document.getElementById('restore-folder-note');
+    const btnRestoreCancel = document.getElementById('btn-restore-cancel');
+    const btnRestoreConfirm = document.getElementById('btn-restore-confirm');
+    let restoreItem = null;
+
+    function openRestoreDialog(item) {
+        restoreItem = item;
+        restoreTargetName.textContent = '[RESTORED] ' + item.title;
+        restoreArticleNote.style.display = item.type === 'article' ? 'inline' : 'none';
+        restoreFolderNote.style.display = item.type === 'folder' ? 'inline' : 'none';
+        dlgRestore.show();
+    }
+
+    btnRestoreCancel.addEventListener('click', () => dlgRestore.hide());
+
+    btnRestoreConfirm.addEventListener('click', async () => {
+        if (!restoreItem) return;
+        btnRestoreConfirm.loading = true;
+        try {
+            const url = restoreItem.type === 'folder'
+                ? `/api-proxy/hard-delete/restore/folder/${restoreItem.id}`
+                : `/api-proxy/hard-delete/restore/article/${restoreItem.id}`;
+            const r = await fetch(url, { method: 'POST' });
+            if (r.ok) {
+                const data = await r.json();
+                const name = restoreItem.type === 'folder'
+                    ? (data.newFolderPath || `[RESTORED] ${restoreItem.title}`)
+                    : (data.newTitle || `[RESTORED] ${restoreItem.title}`);
+                const extra = restoreItem.type === 'folder' && data.restoredSubfolderCount > 0
+                    ? ` (+ ${data.restoredSubfolderCount} subfolder${data.restoredSubfolderCount === 1 ? '' : 's'})`
+                    : '';
+                toast('success', `Restored: ${name}${extra}`);
+                dlgRestore.hide();
+                loadList();
+            } else {
+                let err = 'Restore failed';
+                try { const d = await r.json(); err = d.error || err; } catch {}
+                toast('danger', err);
+            }
+        } catch (e) {
+            toast('danger', 'Network error');
+        } finally {
+            btnRestoreConfirm.loading = false;
+        }
+    });
+
+    filterInput.addEventListener('sl-input', () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            currentPage = 1;
+            loadList();
+        }, 300);
+    });
+
+    statusSelect.addEventListener('sl-change', () => { currentPage = 1; loadList(); });
+    pageSizeSelect.addEventListener('sl-change', () => { currentPage = 1; loadList(); });
+    
+    btnPrev.addEventListener('click', () => { if (currentPage > 1) { currentPage--; loadList(); } });
+    btnNext.addEventListener('click', () => { if (currentPage * pageSizeSelect.value < totalCount) { currentPage++; loadList(); } });
+
+    // Audit Log
+    const dlgAudit = document.getElementById('dlg-audit');
+    const auditBody = document.getElementById('audit-body');
+    const auditLoading = document.getElementById('audit-loading');
+    const auditContainer = document.getElementById('audit-container');
+    const auditInfo = document.getElementById('audit-info');
+    const auditPrev = document.getElementById('audit-prev');
+    const auditNext = document.getElementById('audit-next');
+    const auditPageSize = 50;
+    let auditPage = 1;
+    let auditTotal = 0;
+
+    async function loadAudit() {
+        auditLoading.style.display = 'block';
+        auditContainer.style.display = 'none';
+        auditBody.innerHTML = '';
+        try {
+            const r = await fetch(`/api-proxy/hard-delete/audit?page=${auditPage}&pageSize=${auditPageSize}`);
+            if (r.ok) {
+                const data = await r.json();
+                auditTotal = data.totalCount;
+                renderAudit(data.items);
+                auditContainer.style.display = 'block';
+                const from = auditTotal === 0 ? 0 : (auditPage - 1) * auditPageSize + 1;
+                const to = Math.min(auditPage * auditPageSize, auditTotal);
+                auditInfo.textContent = `${from}–${to} of ${auditTotal}`;
+                auditPrev.disabled = auditPage <= 1;
+                auditNext.disabled = auditPage * auditPageSize >= auditTotal;
+            }
+        } catch (e) { console.error(e); }
+        finally { auditLoading.style.display = 'none'; }
+    }
+
+    dlgAudit.addEventListener('sl-show', () => { auditPage = 1; loadAudit(); });
+    auditPrev.addEventListener('click', () => { if (auditPage > 1) { auditPage--; loadAudit(); } });
+    auditNext.addEventListener('click', () => { if (auditPage * auditPageSize < auditTotal) { auditPage++; loadAudit(); } });
+
+    function renderAudit(items) {
+        if (items.length === 0) {
+            auditBody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;">No audit entries.</td></tr>';
+            return;
+        }
+        items.forEach(item => {
+            const tr = document.createElement('tr');
+            const date = new Date(item.occurredAt).toLocaleString();
+            const entity = `[${item.entityType}] ${item.entityTitle || item.entityIdentifier}`;
+            const counts = `${item.deletedArticles}A / ${item.deletedFolders}F / ${item.deletedMedia}M`;
+            const actor = item.userId ? `User #${item.userId}` : (item.sourceNodeId ? `Node ${item.sourceNodeId.substring(0,8)}` : 'System');
+
+            tr.innerHTML = `
+                <td>${date}</td>
+                <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${item.entityIdentifier}">${entity}</td>
+                <td>${counts}</td>
+                <td>${actor}</td>
+            `;
+            auditBody.appendChild(tr);
+        });
+    }
+
+    function toast(variant, message) {
+        const alert = Object.assign(document.createElement('sl-alert'), {
+            variant: variant,
+            closable: true,
+            duration: 5000,
+            innerHTML: `
+                <sl-icon slot="icon" name="${variant === 'success' ? 'check2-circle' : 'exclamation-octagon'}"></sl-icon>
+                ${message}
+            `
+        });
+        document.body.append(alert);
+        return alert.toast();
+    }
+
+    // Wait for Shoelace components to register before reading their .value
+    Promise.all([
+        customElements.whenDefined('sl-select'),
+        customElements.whenDefined('sl-input'),
+    ]).then(() => loadList());
+})();
+</script>

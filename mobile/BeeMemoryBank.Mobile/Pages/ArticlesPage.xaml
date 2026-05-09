@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.ArticlesPage"
+             Title="Articles"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ContentPage.ToolbarItems>
+        <ToolbarItem Text="+" Order="Primary" Clicked="OnNewArticleClicked" AutomationId="NewArticleButton" />
+    </ContentPage.ToolbarItems>
+
+    <Grid RowDefinitions="Auto,Auto,*">
+
+        <ActivityIndicator x:Name="LoadingIndicator"
+                           Grid.Row="0" Grid.RowSpan="3"
+                           IsRunning="False"
+                           IsVisible="False"
+                           Color="{StaticResource PrimaryColor}"
+                           VerticalOptions="Center"
+                           HorizontalOptions="Center"
+                           ZIndex="10" />
+
+        <SearchBar Grid.Row="0"
+                   x:Name="SearchBar"
+                   AutomationId="SearchBar"
+                   Placeholder="Search articles..."
+                   TextChanged="OnSearchTextChanged"
+                   Style="{StaticResource BaseSearchBar}"
+                   Margin="8,8,8,0" />
+
+        <HorizontalStackLayout Grid.Row="1" Padding="12,4" Spacing="8">
+            <Switch x:Name="ContentSearchSwitch" AutomationId="ContentSearchSwitch" Toggled="OnContentSearchToggled" />
+            <Label Text="Search in content (slower)"
+                   VerticalOptions="Center" FontSize="13"
+                   TextColor="{StaticResource SecondaryTextColor}" />
+        </HorizontalStackLayout>
+
+        <RefreshView Grid.Row="2" x:Name="RefreshView" Refreshing="OnRefreshing">
+            <CollectionView x:Name="ArticlesList"
+                            AutomationId="ArticlesList"
+                            SelectionMode="None"
+                            EmptyView="No articles found."
+                            Margin="8,8,8,0">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Frame Style="{StaticResource CardFrame}" Margin="0,4">
+                            <Frame.GestureRecognizers>
+                                <TapGestureRecognizer Tapped="OnArticleTapped" />
+                            </Frame.GestureRecognizers>
+                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
+                                <Label Grid.Row="0" Grid.Column="0"
+                                       Text="{Binding Title}"
+                                       FontAttributes="Bold"
+                                       FontSize="15"
+                                       LineBreakMode="TailTruncation" />
+                                <Label Grid.Row="0" Grid.Column="1"
+                                       Text="{Binding UpdatedAt, StringFormat='{0:MM-dd}'}"
+                                       FontSize="12"
+                                       TextColor="{StaticResource SecondaryTextColor}" />
+                                <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                       Text="{Binding TreePath}"
+                                       FontSize="12"
+                                       TextColor="{StaticResource SecondaryTextColor}"
+                                       LineBreakMode="TailTruncation" />
+                            </Grid>
+                        </Frame>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+        </RefreshView>
+
+    </Grid>
+
+</ContentPage>

@@ -1,0 +1,35 @@
+appId: com.beememorybank.mobile
+---
+- runFlow: _go_home.yaml
+- evalScript: ${output.title = 'a' + Date.now()}
+- tapOn:
+    text: "Open navigation drawer"
+- extendedWaitUntil:
+    visible:
+      text: "Articles"
+    timeout: 3000
+- tapOn:
+    text: "Articles"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/ArticlesList"
+    timeout: 10000
+- tapOn:
+    text: "NewArticleButton"
+- extendedWaitUntil:
+    visible:
+      id: "com.beememorybank.mobile:id/TitleEntry"
+    timeout: 10000
+- tapOn:
+    id: "com.beememorybank.mobile:id/TitleEntry"
+- inputText: ${output.title}
+- tapOn:
+    id: "com.beememorybank.mobile:id/ContentEditor"
+- inputText: "Created by Maestro test"
+- tapOn:
+    text: "SaveToolbarButton"
+- extendedWaitUntil:
+    visible:
+      text: ${output.title}
+    timeout: 30000
+- takeScreenshot: article_created

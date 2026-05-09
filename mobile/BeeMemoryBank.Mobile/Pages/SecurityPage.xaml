@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.SecurityPage"
+             Title="Security"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="12">
+
+            <!-- Password Slots -->
+            <Frame Style="{StaticResource CardFrame}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="Password Slots" FontAttributes="Bold" FontSize="18" />
+                    <Label Text="Each slot is an independent password that unlocks the same data."
+                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
+                           LineBreakMode="WordWrap" />
+
+                    <CollectionView x:Name="SlotsList" AutomationId="SlotsList" SelectionMode="None"
+                                    EmptyView="No slots found.">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="Auto,*,Auto" Padding="0,8" ColumnSpacing="12">
+                                    <!-- Icon -->
+                                    <Label Grid.Column="0" Text="{Binding Icon}"
+                                           FontSize="22" VerticalOptions="Center" />
+
+                                    <!-- Info -->
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                        <Label Text="{Binding DisplayName}"
+                                               FontAttributes="Bold" FontSize="15" />
+                                        <Label Text="{Binding CreatedAtFormatted}"
+                                               FontSize="12"
+                                               TextColor="{StaticResource SecondaryTextColor}" />
+                                    </VerticalStackLayout>
+
+                                    <!-- Delete button (hidden for main/only slot) -->
+                                    <Button Grid.Column="2"
+                                            Text="✕"
+                                            FontSize="14"
+                                            Padding="10,6"
+                                            BackgroundColor="{StaticResource ErrorColor}"
+                                            TextColor="White"
+                                            IsVisible="{Binding CanDelete}"
+                                            CommandParameter="{Binding .}"
+                                            Clicked="OnDeleteSlotClicked" />
+                                </Grid>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Add Dev Password -->
+            <Frame Style="{StaticResource CardFrame}" x:Name="AddDevCard">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Add Dev Password" FontAttributes="Bold" FontSize="16" />
+                    <Label Text="A secondary password for testing. Can be deleted at any time."
+                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
+                           LineBreakMode="WordWrap" />
+
+                    <Entry x:Name="DevPasswordEntry"
+                           AutomationId="DevPasswordEntry"
+                           Placeholder="New dev password"
+                           IsPassword="True"
+                           BackgroundColor="{StaticResource SurfaceColor}"
+                           TextColor="{StaticResource TextColor}"
+                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
+
+                    <Entry x:Name="DevPasswordConfirmEntry"
+                           AutomationId="DevPasswordConfirmEntry"
+                           Placeholder="Confirm dev password"
+                           IsPassword="True"
+                           BackgroundColor="{StaticResource SurfaceColor}"
+                           TextColor="{StaticResource TextColor}"
+                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
+
+                    <Label x:Name="AddErrorLabel"
+                           TextColor="{StaticResource ErrorColor}"
+                           FontSize="13"
+                           IsVisible="False"
+                           LineBreakMode="WordWrap" />
+
+                    <Button Text="Add Dev Password"
+                            AutomationId="AddDevPasswordButton"
+                            Style="{StaticResource PrimaryButton}"
+                            Clicked="OnAddDevPasswordClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Change Main Password -->
+            <Frame Style="{StaticResource CardFrame}">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Change Main Password" FontAttributes="Bold" FontSize="16" />
+
+                    <Entry x:Name="OldPasswordEntry"
+                           AutomationId="OldPasswordEntry"
+                           Placeholder="Current password"
+                           IsPassword="True"
+                           BackgroundColor="{StaticResource SurfaceColor}"
+                           TextColor="{StaticResource TextColor}"
+                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
+
+                    <Entry x:Name="NewPasswordEntry"
+                           AutomationId="NewPasswordEntry"
+                           Placeholder="New password"
+                           IsPassword="True"
+                           BackgroundColor="{StaticResource SurfaceColor}"
+                           TextColor="{StaticResource TextColor}"
+                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
+
+                    <Entry x:Name="NewPasswordConfirmEntry"
+                           AutomationId="NewPasswordConfirmEntry"
+                           Placeholder="Confirm new password"
+                           IsPassword="True"
+                           BackgroundColor="{StaticResource SurfaceColor}"
+                           TextColor="{StaticResource TextColor}"
+                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
+
+                    <Label x:Name="ChangeErrorLabel"
+                           TextColor="{StaticResource ErrorColor}"
+                           FontSize="13"
+                           IsVisible="False"
+                           LineBreakMode="WordWrap" />
+
+                    <Button Text="Change Password"
+                            AutomationId="ChangePasswordButton"
+                            Style="{StaticResource PrimaryButton}"
+                            Clicked="OnChangePasswordClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+        </VerticalStackLayout>
+    </ScrollView>
+
+</ContentPage>

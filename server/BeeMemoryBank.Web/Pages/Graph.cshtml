@@ -1,0 +1,1018 @@
+@page
+@model BeeMemoryBank.Web.Pages.GraphModel
+@{
+    ViewData["Title"] = "Knowledge Graph";
+}
+
+@section HeadStyles {
+    <style>
+        #graph-container {
+            position: relative;
+            background: var(--sl-panel-background-color);
+            border: 1px solid var(--sl-color-neutral-200);
+            border-radius: var(--sl-border-radius-medium);
+            overflow: hidden;
+        }
+        #graph-svg {
+            cursor: grab;
+            width: 100%;
+            height: 100%;
+        }
+        #graph-cy {
+            width: 100%;
+            height: 100%;
+            display: none;
+            position: relative;
+            overflow: hidden;
+        }
+        /* Cytoscape inserts transformed canvases that can briefly escape the box
+           during layout animation; make sure nothing outside #graph-cy becomes
+           horizontally scrollable on the page. */
+        html, body.graph-page { overflow-x: hidden; max-width: 100vw; }
+        /* The shared .main-content has overflow-y:auto for scrolling long pages,
+           which reserves ~17px for the vertical scrollbar. On wide content this
+           bleeds as horizontal scroll on the graph page specifically. Clip it. */
+        body.graph-page .main-content { overflow-x: hidden; }
+        #graph-svg:active {
+            cursor: grabbing;
+        }
+        .node circle {
+            stroke: #fff;
+            stroke-width: 1.5px;
+            transition: stroke-width 0.2s, r 0.2s;
+        }
+        .node.truncated circle {
+            stroke: var(--sl-color-warning-500);
+            stroke-width: 2.5px;
+            stroke-dasharray: 3 3;
+        }
+        .node:hover circle {
+            stroke-width: 3px;
+            stroke: var(--sl-color-primary-500);
+            stroke-dasharray: none;
+        }
+        .node text {
+            pointer-events: none;
+            font-family: var(--sl-font-sans);
+            font-weight: 500;
+            fill: var(--text-primary);
+            text-shadow: 0 1px 2px var(--bg-primary), 0 -1px 2px var(--bg-primary), 1px 0 2px var(--bg-primary), -1px 0 2px var(--bg-primary);
+        }
+        .link {
+            stroke: var(--sl-color-neutral-300);
+            stroke-opacity: 0.6;
+            transition: stroke-opacity 0.2s;
+        }
+        .link.highlight {
+            stroke: var(--sl-color-primary-400);
+            stroke-opacity: 1;
+        }
+        #graph-controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 5;
+        }
+        #btn-fullscreen {
+            display: inline-flex;
+        }
+        #graph-fullscreen-wrap {
+            position: relative;
+            height: calc(100vh - 220px);
+            min-height: 450px;
+            max-width: 100%;
+        }
+        /* The graph page has its own floating sidebars (bee-panel-left/right) whose
+           transforms or widths can briefly overflow on narrow viewports; clip at
+           the page level so the main scrollbars never appear. */
+        body.graph-page, body.graph-page #page-content {
+            overflow-x: hidden;
+        }
+        #graph-fullscreen-wrap #graph-container {
+            height: 100%;
+            min-height: 0;
+            margin-bottom: 0;
+        }
+        #graph-fullscreen-wrap:fullscreen,
+        #graph-fullscreen-wrap:-webkit-full-screen { height: 100vh; background: var(--bg-primary); }
+        #graph-fullscreen-wrap:fullscreen #graph-container,
+        #graph-fullscreen-wrap:-webkit-full-screen #graph-container { height: 100%; }
+        .bee-panel {
+            position: absolute;
+            top: 0; bottom: 0;
+            background: var(--sl-panel-background-color);
+            border: 1px solid var(--sl-color-neutral-300);
+            box-shadow: 0 0 12px rgba(0,0,0,0.15);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            overflow-y: auto;
+            visibility: hidden;
+            transition: transform 0.25s ease, visibility 0s linear 0.25s;
+        }
+        .bee-panel:not([hidden]) {
+            visibility: visible;
+            transition: transform 0.25s ease, visibility 0s linear 0s;
+        }
+        .bee-panel-right { right: 0; width: 450px; max-width: 50%; transform: translateX(calc(100% + 24px)); }
+        .bee-panel-right:not([hidden]) { transform: translateX(0); }
+        .bee-panel-left { left: 0; right: 450px; transform: translateX(calc(-100% - 24px)); overflow: hidden; }
+        .bee-panel-left:not([hidden]) { transform: translateX(0); }
+        #article-preview-frame { flex: 1 1 auto; min-height: 0; }
+        @@media (max-width: 900px) { .bee-panel-left { right: 0; } }
+        .bee-panel[hidden] { display: flex !important; pointer-events: none; }
+        .bee-panel-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap: 8px; flex-shrink: 0; }
+    </style>
+}
+
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <h1 style="margin:0;">
+        <sl-icon name="diagram-3"></sl-icon> Knowledge Graph
+    </h1>
+    <div style="display:flex; gap: 8px; align-items:center;">
+        <sl-button-group>
+            <sl-button id="btn-mode-home" variant="primary" size="small">
+                <sl-icon slot="prefix" name="house"></sl-icon> Home
+            </sl-button>
+            <sl-button id="btn-mode-full" variant="default" size="small">
+                <sl-icon slot="prefix" name="globe"></sl-icon> Full Graph
+            </sl-button>
+        </sl-button-group>
+        <sl-button id="btn-fullscreen" variant="default" size="small">
+            <sl-icon slot="prefix" name="fullscreen"></sl-icon> Fullscreen
+        </sl-button>
+        <sl-button-group>
+            <sl-button id="btn-graph-view" variant="primary" size="small">
+                <sl-icon slot="prefix" name="diagram-3"></sl-icon> Graph
+            </sl-button>
+            <sl-button id="btn-table-view" variant="default" size="small">
+                <sl-icon slot="prefix" name="table"></sl-icon> Tags
+            </sl-button>
+        </sl-button-group>
+    </div>
+</div>
+
+<!-- Legend: explains what node colors mean in the current mode -->
+<div id="graph-legend" style="margin-bottom:8px; display:flex; flex-wrap:wrap; gap:16px; font-size:0.85rem; color:var(--sl-color-neutral-500);"></div>
+
+<!-- Filter bar -->
+<div style="margin-bottom:16px; display: flex; gap: 8px;">
+    <sl-input id="concept-filter" placeholder="Filter tags locally, press Enter to search across the whole graph..." clearable size="small" style="flex-grow: 1; min-width: 0;">
+        <sl-icon slot="prefix" name="search"></sl-icon>
+    </sl-input>
+    <sl-tooltip content="Refresh data">
+        <sl-icon-button name="arrow-clockwise" label="Refresh" onclick="window.location.reload()"></sl-icon-button>
+    </sl-tooltip>
+</div>
+
+<!-- Tags table view (hidden by default) -->
+<div id="table-container" style="display:none;">
+    <div class="card">
+        <div id="concept-table-rows"></div>
+        <div id="concept-table-pager" style="display:none;margin-top:12px;align-items:center;justify-content:space-between;gap:12px;">
+            <span id="concept-table-pager-info" style="font-size:0.85rem;color:var(--sl-color-neutral-500);"></span>
+            <div style="display:flex;gap:8px;">
+                <sl-button id="concept-table-pager-prev" size="small" variant="default">Prev</sl-button>
+                <sl-button id="concept-table-pager-next" size="small" variant="default">Next</sl-button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Graph + floating panels wrapper (needed for fullscreen) -->
+<div id="graph-fullscreen-wrap">
+    <div id="graph-container">
+        <div id="graph-controls">
+            <sl-tooltip content="Zoom In" placement="left">
+                <sl-icon-button name="plus-lg" circle variant="default" id="btn-zoom-in"></sl-icon-button>
+            </sl-tooltip>
+            <sl-tooltip content="Zoom Out" placement="left">
+                <sl-icon-button name="dash-lg" circle variant="default" id="btn-zoom-out"></sl-icon-button>
+            </sl-tooltip>
+            <sl-tooltip content="Reset View" placement="left">
+                <sl-icon-button name="fullscreen-exit" circle variant="default" id="btn-zoom-reset"></sl-icon-button>
+            </sl-tooltip>
+        </div>
+
+        <svg id="graph-svg"></svg>
+        <div id="graph-cy"></div>
+        
+        <div id="graph-placeholder" style="display:none;align-items:center;justify-content:center;height:100%;color:var(--sl-color-neutral-400);position:absolute;top:0;left:0;right:0;">
+            <div style="text-align:center;">
+                <sl-icon name="diagram-3" style="font-size:3rem;display:block;margin-bottom:8px;"></sl-icon>
+                <p>No connections found.</p>
+                <p style="font-size:0.85rem;">Add tags to multiple articles to see links.</p>
+            </div>
+        </div>
+    </div>
+    <!-- Right panel: tag details -->
+    <div id="concept-panel" class="bee-panel bee-panel-right" hidden>
+        <div class="bee-panel-header">
+            <h3 id="panel-concept-name" style="margin:0;"></h3>
+            <sl-icon-button name="x-lg" label="Close" class="bee-panel-close" data-target="concept-panel"></sl-icon-button>
+        </div>
+        <p id="panel-concept-meta" class="text-muted text-sm"></p>
+        <div id="panel-articles-list" style="margin-top:20px;"></div>
+    </div>
+    <!-- Left panel: read-only article preview -->
+    <div id="article-preview-panel" class="bee-panel bee-panel-left" hidden>
+        <div class="bee-panel-header">
+            <span style="font-size:0.85rem;color:var(--sl-color-neutral-500);">Article preview</span>
+            <sl-icon-button name="x-lg" label="Close" class="bee-panel-close" data-target="article-preview-panel"></sl-icon-button>
+        </div>
+        <iframe id="article-preview-frame" style="flex:1;width:100%;border:0;background:var(--bg-primary);"></iframe>
+    </div>
+</div>
+
+</div>
+</div>
+
+@section Scripts {
+    <script src="~/lib/d3/d3.v7.min.js" asp-append-version="true"></script>
+    <script src="~/lib/cytoscape/cytoscape.min.js"></script>
+    <script src="~/lib/cytoscape/layout-base.js"></script>
+    <script src="~/lib/cytoscape/cose-base.js"></script>
+    <script src="~/lib/cytoscape/cytoscape-fcose.js"></script>
+    <script>
+    (function() {
+        // Tag the body so the CSS rules that clip horizontal overflow only apply here.
+        document.body.classList.add('graph-page');
+
+        // Register the fcose layout once; fcose is orders of magnitude faster than
+        // the built-in cose for large graphs (seconds vs. a blocking half-minute)
+        // and produces a visibly cleaner layout.
+        if (window.cytoscape && window.cytoscapeFcose) {
+            cytoscape.use(cytoscapeFcose);
+        } else {
+            console.error('Graph page: cytoscape or cytoscape-fcose failed to load.');
+        }
+
+        let nodes = [];
+        let links = [];
+        const initialFocus = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.FocusConcept));
+
+        const filterInput = document.getElementById('concept-filter');
+        let allConcepts = [];
+        let currentTablePage = 1;
+        const tablePageSize = 200;
+
+        function escTableHtml(s) {
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function renderConceptTable() {
+            const q = (filterInput.value || '').toLowerCase();
+            let filtered = allConcepts.filter(d => d.name.toLowerCase().includes(q));
+            filtered.sort((a, b) => b.count - a.count);
+            const rows = document.getElementById('concept-table-rows');
+            const pager = document.getElementById('concept-table-pager');
+            const pagerInfo = document.getElementById('concept-table-pager-info');
+
+            if (filtered.length === 0) {
+                rows.innerHTML = '<p style="color:var(--sl-color-neutral-400);text-align:center;padding:32px 0;">No tags found.</p>';
+                pager.style.display = 'none';
+                return;
+            }
+
+            const totalPages = Math.max(1, Math.ceil(filtered.length / tablePageSize));
+            if (currentTablePage > totalPages) currentTablePage = totalPages;
+            if (currentTablePage < 1) currentTablePage = 1;
+            const pageItems = filtered.slice((currentTablePage - 1) * tablePageSize, currentTablePage * tablePageSize);
+
+            rows.innerHTML = pageItems.map(d => {
+                const escaped = escTableHtml(d.name);
+                const variant = d.count > 5 ? 'primary' : 'neutral';
+                return '<div class="concept-row" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--sl-color-neutral-200);">' +
+                    '<a href="javascript:void(0)" class="concept-table-link" data-name="' + escaped + '" style="font-weight:500;">' + escaped + '</a>' +
+                    '<sl-badge variant="' + variant + '" pill>' + d.count + '</sl-badge>' +
+                    '</div>';
+            }).join('');
+
+            if (totalPages > 1) {
+                pagerInfo.textContent = 'Page ' + currentTablePage + ' of ' + totalPages + ' \u00B7 ' + filtered.length + ' tags';
+                pager.style.display = 'flex';
+            } else {
+                pager.style.display = 'none';
+            }
+        }
+
+        document.getElementById('concept-table-pager-prev').addEventListener('click', () => {
+            if (currentTablePage > 1) { currentTablePage--; renderConceptTable(); }
+        });
+        document.getElementById('concept-table-pager-next').addEventListener('click', () => {
+            const q = (filterInput.value || '').toLowerCase();
+            const filtered = allConcepts.filter(d => d.name.toLowerCase().includes(q));
+            const totalPages = Math.max(1, Math.ceil(filtered.length / tablePageSize));
+            if (currentTablePage < totalPages) { currentTablePage++; renderConceptTable(); }
+        });
+
+        filterInput.addEventListener('sl-input', e => {
+            const q = (e.target.value || '').toLowerCase();
+            currentTablePage = 1;
+            renderConceptTable();
+            if (cy) {
+                cy.batch(() => {
+                    cy.nodes().forEach(n => {
+                        const match = !q || n.data('name').toLowerCase().includes(q);
+                        n.style('opacity', match ? 1 : 0.1);
+                        n.scratch('_filtered', !match);
+                    });
+                    cy.edges().forEach(edge => {
+                        const srcHidden = edge.source().scratch('_filtered');
+                        const tgtHidden = edge.target().scratch('_filtered');
+                        edge.style('opacity', (srcHidden || tgtHidden) ? 0.05 : 0.6);
+                    });
+                });
+                return;
+            }
+            if (node && link && labels) {
+                node.style('opacity', d => d.name.toLowerCase().includes(q) ? 1 : 0.1);
+                link.style('opacity', d => d.source.id.toLowerCase().includes(q) || d.target.id.toLowerCase().includes(q) ? 0.6 : 0.05);
+                labels.style('opacity', d => d.name.toLowerCase().includes(q) ? 1 : 0.1);
+            }
+        });
+
+        document.getElementById('concept-table-rows').addEventListener('click', function(e) {
+            var link = e.target.closest('.concept-table-link');
+            if (!link) return;
+            e.preventDefault();
+            switchToGraphAndCenter(link.dataset.name);
+        });
+
+        renderConceptTable();
+
+        // ─── View toggle ──────────────────────────────────────────────────────────
+        const graphContainer = document.getElementById('graph-container');
+        const tableContainer = document.getElementById('table-container');
+        const btnGraph = document.getElementById('btn-graph-view');
+        const btnTable = document.getElementById('btn-table-view');
+
+        function setView(isGraph) {
+            graphContainer.style.display = isGraph ? 'block' : 'none';
+            tableContainer.style.display = isGraph ? 'none' : 'block';
+            btnGraph.setAttribute('variant', isGraph ? 'primary' : 'default');
+            btnTable.setAttribute('variant', isGraph ? 'default' : 'primary');
+            if (isGraph) {
+                if (cy) {
+                    setTimeout(() => { cy.resize(); cy.fit(); }, 10);
+                } else if (simulation) {
+                    setTimeout(() => {
+                        width = graphContainer.clientWidth;
+                        height = graphContainer.clientHeight;
+                        simulation.force("center", d3.forceCenter(width / 2, height / 2));
+                        simulation.alpha(0.3).restart();
+                    }, 10);
+                }
+            }
+        }
+
+        btnGraph.addEventListener('click', () => setView(true));
+        btnTable.addEventListener('click', () => setView(false));
+
+        window.switchToGraphAndCenter = (conceptName) => {
+            setView(true);
+            centerOnNode(conceptName);
+        };
+
+        let simulation, node, link, labels;
+        let svg, g, zoom;
+        let cy = null;
+        let width, height;
+        let currentMode = 'home';
+        const expandedTags = new Set();
+
+        const btnModeHome = document.getElementById('btn-mode-home');
+        const btnModeFull = document.getElementById('btn-mode-full');
+        const graphPlaceholder = document.getElementById('graph-placeholder');
+        const legendEl = document.getElementById('graph-legend');
+
+        const LEGEND_BY_MODE = {
+            home: [
+                { color: '#3b82f6', label: 'Base — popular tags' },
+                { color: '#f97316', label: 'Pulse — recently active' },
+                { color: 'transparent', border: 'var(--sl-color-warning-500)', label: 'Dashed — has hidden neighbors (double-click to expand)' },
+            ],
+            search: [
+                { color: '#10b981', label: 'Match — your query' },
+                { color: '#94a3b8', label: 'Neighbor — linked to matches' },
+                { color: 'transparent', border: 'var(--sl-color-warning-500)', label: 'Dashed — has hidden neighbors' },
+            ],
+            full: [
+                { color: '#a78bfa', label: 'All tags — unfiltered' },
+            ],
+        };
+
+        function updateLegend(mode) {
+            const items = LEGEND_BY_MODE[mode] || [];
+            legendEl.innerHTML = items.map(item => {
+                const border = item.border ? ('2px dashed ' + item.border) : '1px solid rgba(0,0,0,0.1)';
+                return '<span style="display:inline-flex;align-items:center;gap:6px;">'
+                     + '<span style="width:12px;height:12px;border-radius:50%;background:' + item.color + ';border:' + border + ';display:inline-block;"></span>'
+                     + item.label
+                     + '</span>';
+            }).join('');
+        }
+
+        function nodeColor(d) {
+            if (d.name === initialFocus) return '#f59e0b';
+            if (d.group === 'base') return '#3b82f6';
+            if (d.group === 'pulse') return '#f97316';
+            if (d.group === 'match') return '#10b981';
+            if (d.group === 'neighbor') return '#94a3b8';
+            return '#a78bfa';
+        }
+
+        function visibleNeighborCount(nodeId) {
+            let cnt = 0;
+            for (const l of links) {
+                const sid = typeof l.source === 'object' ? l.source.id : l.source;
+                const tid = typeof l.target === 'object' ? l.target.id : l.target;
+                if (sid === nodeId || tid === nodeId) cnt++;
+            }
+            return cnt;
+        }
+
+        function hiddenNeighbors(d) {
+            if (!d.totalNeighbors) return 0;
+            if (expandedTags.has(d.id)) return 0;
+            return Math.max(0, d.totalNeighbors - visibleNeighborCount(d.id));
+        }
+
+        function isTruncated(d) { return hiddenNeighbors(d) > 0; }
+
+        function applyTruncationClass() {
+            if (node) node.classed('truncated', isTruncated);
+        }
+
+        function setPlaceholder(html) {
+            graphPlaceholder.style.display = 'flex';
+            graphPlaceholder.innerHTML = html;
+        }
+        function placeholderLoading() {
+            setPlaceholder('<div style="text-align:center;"><sl-spinner style="font-size:3rem;display:block;margin-bottom:8px;"></sl-spinner><p style="color:var(--sl-color-neutral-400);">Loading graph...</p></div>');
+        }
+        function placeholderEmpty() {
+            setPlaceholder('<div style="text-align:center;"><sl-icon name="diagram-3" style="font-size:3rem;display:block;margin-bottom:8px;"></sl-icon><p>No connections found.</p><p style="font-size:0.85rem;">Add tags to multiple articles to see links.</p></div>');
+        }
+        function placeholderError(msg) {
+            setPlaceholder('<div style="text-align:center;color:var(--sl-color-danger-600);"><sl-icon name="exclamation-triangle" style="font-size:3rem;display:block;margin-bottom:8px;"></sl-icon><p>Failed to load graph data.</p><p style="font-size:0.85rem;">' + (msg || '') + '</p></div>');
+        }
+        function hidePlaceholder() { graphPlaceholder.style.display = 'none'; }
+
+        function destroyScene() {
+            if (simulation) { simulation.stop(); simulation = null; }
+            if (cy) { cy.destroy(); cy = null; }
+            d3.select('#graph-svg').selectAll('*').remove();
+            document.getElementById('graph-svg').style.display = 'block';
+            document.getElementById('graph-cy').style.display = 'none';
+            svg = null; g = null; zoom = null;
+            node = null; link = null; labels = null;
+            nodes = []; links = [];
+            expandedTags.clear();
+            if (conceptPanel) conceptPanel.hidden = true;
+        }
+
+        function updateModeButtons() {
+            btnModeHome.setAttribute('variant', currentMode === 'home' ? 'primary' : 'default');
+            btnModeFull.setAttribute('variant', currentMode === 'full' ? 'primary' : 'default');
+            updateLegend(currentMode);
+        }
+
+        async function loadMode(mode) {
+            destroyScene();
+            currentMode = mode;
+            updateModeButtons();
+            placeholderLoading();
+            try {
+                let payload;
+                if (mode === 'home') {
+                    const r = await fetch('/api-proxy/concept-tags/graph/home');
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    payload = await r.json();
+                } else if (mode === 'search') {
+                    const q = (filterInput.value || '').trim();
+                    if (!q) {
+                        placeholderEmpty();
+                        filterInput.focus();
+                        return;
+                    }
+                    const depth = 2;
+                    const r = await fetch('/api-proxy/concept-tags/graph/search?q=' + encodeURIComponent(q) + '&depth=' + depth + '&maxNodes=200');
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    payload = await r.json();
+                } else {
+                    const [tagsData, graphData] = await Promise.all([
+                        fetch('/api-proxy/concept-tags?limit=500').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }),
+                        fetch('/api-proxy/concept-tags/graph').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                    ]);
+                    payload = {
+                        nodes: tagsData.map(t => ({ name: t.name, articleCount: t.articleCount, group: 'neutral' })),
+                        edges: graphData.map(e => ({ source: e.source, target: e.target, weight: e.weight }))
+                    };
+                }
+                nodes = payload.nodes.map(n => ({
+                    id: n.name,
+                    name: n.name,
+                    count: n.articleCount || 0,
+                    group: n.group || 'neutral',
+                    totalNeighbors: n.totalNeighbors || 0
+                }));
+                links = payload.edges.map(e => ({ source: e.source, target: e.target, weight: e.weight }));
+                if (mode === 'full' || mode === 'home') {
+                    allConcepts = nodes.map(n => ({ name: n.name, count: n.count }));
+                    renderConceptTable();
+                }
+                if (nodes.length === 0) {
+                    placeholderEmpty();
+                } else {
+                    hidePlaceholder();
+                    if (mode === 'full') {
+                        initFullGraph(payload);
+                    } else {
+                        initGraph();
+                    }
+                }
+            } catch (err) {
+                placeholderError(err.message || 'Load failed');
+                console.error('Graph load error:', err);
+            }
+        }
+
+        function nodeClickHandler(event, d) {
+            event.stopPropagation();
+            showConceptDetails(d);
+        }
+        function nodeDblclickHandler(event, d) {
+            event.stopPropagation();
+            expandNeighbors(d.id);
+        }
+        function nodeMouseoverHandler(event, d) {
+            const connected = new Set([d.id]);
+            link.classed('highlight', l => {
+                if (l.source.id === d.id || l.target.id === d.id) {
+                    connected.add(l.source.id); connected.add(l.target.id);
+                    return true;
+                }
+                return false;
+            });
+            node.style('opacity', n => connected.has(n.id) ? 1 : 0.1);
+            labels.style('opacity', n => connected.has(n.id) ? 1 : 0.1);
+        }
+        function nodeMouseoutHandler() {
+            link.classed('highlight', false);
+            node.style('opacity', 1);
+            labels.style('opacity', 1);
+        }
+
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x; d.fy = d.y;
+        }
+        function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null; d.fy = null;
+        }
+
+        async function expandNeighbors(tagName) {
+            if (expandedTags.has(tagName)) return;
+            expandedTags.add(tagName);
+            try {
+                const r = await fetch('/api-proxy/concept-tags/graph/neighbors?tag=' + encodeURIComponent(tagName));
+                if (!r.ok) return;
+                const data = await r.json();
+                const existingNodeIds = new Set(nodes.map(n => n.id));
+                let addedCount = 0;
+                for (const name of (data.nodes || [])) {
+                    if (!existingNodeIds.has(name)) {
+                        nodes.push({ id: name, name, count: 1, group: 'neighbor' });
+                        existingNodeIds.add(name);
+                        addedCount++;
+                    }
+                }
+                const linkKey = (s, t) => s < t ? s + '|' + t : t + '|' + s;
+                const existingLinkKeys = new Set(links.map(l => {
+                    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+                    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+                    return linkKey(sid, tid);
+                }));
+                let addedLinks = 0;
+                for (const e of (data.edges || [])) {
+                    const key = linkKey(e.source, e.target);
+                    if (!existingLinkKeys.has(key)) {
+                        links.push({ source: e.source, target: e.target, weight: e.weight });
+                        existingLinkKeys.add(key);
+                        addedLinks++;
+                    }
+                }
+                if (addedCount > 0 || addedLinks > 0) refreshGraphData();
+            } catch (err) {
+                console.error('Expand failed:', err);
+            }
+        }
+
+        function refreshGraphData() {
+            if (!simulation || !svg) return;
+            link = g.select('.links').selectAll('line').data(links, d => {
+                const sid = typeof d.source === 'object' ? d.source.id : d.source;
+                const tid = typeof d.target === 'object' ? d.target.id : d.target;
+                return sid < tid ? sid + '|' + tid : tid + '|' + sid;
+            }).join(
+                enter => enter.append('line').attr('class', 'link').attr('stroke-width', d => Math.sqrt(d.weight) + 1),
+                update => update,
+                exit => exit.remove()
+            );
+
+            node = g.select('.nodes').selectAll('g.node').data(nodes, d => d.id).join(
+                enter => {
+                    const nEnter = enter.append('g').attr('class', 'node')
+                        .call(d3.drag().on('start', dragstarted).on('drag', dragged).on('end', dragended))
+                        .on('click', nodeClickHandler)
+                        .on('dblclick', nodeDblclickHandler)
+                        .on('mouseover', nodeMouseoverHandler)
+                        .on('mouseout', nodeMouseoutHandler);
+                    nEnter.append('circle')
+                        .attr('r', d => 8 + Math.sqrt(d.count) * 8)
+                        .attr('fill', nodeColor);
+                    nEnter.append('text')
+                        .attr('dy', '.35em')
+                        .attr('x', d => 12 + Math.sqrt(d.count) * 8)
+                        .style('font-size', d => Math.min(14, 10 + d.count) + 'px')
+                        .text(d => d.name);
+                    return nEnter;
+                },
+                update => update,
+                exit => exit.remove()
+            );
+            labels = node.select('text');
+
+            simulation.nodes(nodes);
+            simulation.force('link').links(links);
+            simulation.alpha(0.5).restart();
+            applyTruncationClass();
+        }
+
+        function initFullGraph(payload) {
+            document.getElementById('graph-svg').style.display = 'none';
+            document.getElementById('graph-cy').style.display = 'block';
+
+            // Resolve CSS variables to concrete colors — Cytoscape's canvas renderer
+            // does not understand var(...) references in style values.
+            const cs = getComputedStyle(document.documentElement);
+            const neutral300 = cs.getPropertyValue('--sl-color-neutral-300').trim() || '#d4d4d8';
+            const textPrimary = cs.getPropertyValue('--text-primary').trim() || cs.getPropertyValue('--sl-color-neutral-900').trim() || '#111';
+            const bgPrimary = cs.getPropertyValue('--bg-primary').trim() || '#fff';
+
+            const cyNodes = nodes.map(n => ({
+                data: { id: n.id, name: n.name, count: n.count }
+            }));
+            const cyEdges = links.map(e => ({
+                data: { source: typeof e.source === 'object' ? e.source.id : e.source,
+                        target: typeof e.target === 'object' ? e.target.id : e.target,
+                        weight: e.weight || 1 }
+            }));
+
+            cy = cytoscape({
+                container: document.getElementById('graph-cy'),
+                elements: { nodes: cyNodes, edges: cyEdges },
+                wheelSensitivity: 0.2,
+                style: [
+                    {
+                        selector: 'node',
+                        style: {
+                            'background-color': ele => ele.data('id') === initialFocus ? '#f59e0b' : '#a78bfa',
+                            'width': ele => 16 + Math.sqrt(ele.data('count')) * 16,
+                            'height': ele => 16 + Math.sqrt(ele.data('count')) * 16,
+                            'border-color': '#ffffff',
+                            'border-width': 2,
+                            'border-opacity': 0.9,
+                            'label': ele => (ele.data('count') > 5 || ele.scratch('_hover')) ? ele.data('name') : '',
+                            'font-size': 12,
+                            'color': textPrimary,
+                            'text-outline-width': 2,
+                            'text-outline-color': bgPrimary,
+                            'text-valign': 'center',
+                            'text-halign': 'center',
+                            'min-zoomed-font-size': 4
+                        }
+                    },
+                    {
+                        selector: 'edge',
+                        style: {
+                            'width': ele => Math.sqrt(ele.data('weight')) + 1,
+                            'line-color': neutral300,
+                            'curve-style': 'bezier',
+                            'opacity': 0.6
+                        }
+                    }
+                ],
+                layout: {
+                    name: 'fcose',
+                    quality: 'default',
+                    randomize: true,
+                    animate: 'end',
+                    animationDuration: 600,
+                    fit: true,
+                    padding: 30,
+                    // Pushed harder and edges kept longer than fcose defaults so
+                    // nodes don't visually overlap in dense clusters. fcose has
+                    // no collision-detection force, so these are our only knobs.
+                    nodeRepulsion: 15000,
+                    idealEdgeLength: 120,
+                    edgeElasticity: 0.45,
+                    nestingFactor: 0.1,
+                    numIter: 2500
+                }
+            });
+
+            cy.on('tap', 'node', function(evt) {
+                const n = evt.target;
+                const d = { id: n.id(), name: n.data('name'), count: n.data('count') };
+                showConceptDetails(d);
+            });
+
+            cy.on('tap', function(evt) {
+                if (evt.target === cy) conceptPanel.hidden = true;
+            });
+
+            // Show the label on hover for nodes whose label is normally hidden.
+            cy.on('mouseover', 'node', evt => {
+                evt.target.scratch('_hover', true);
+                evt.target.style('label', evt.target.data('name'));
+            });
+            cy.on('mouseout', 'node', evt => {
+                evt.target.scratch('_hover', false);
+                evt.target.style('label', evt.target.data('count') > 5 ? evt.target.data('name') : '');
+            });
+
+            // If the user landed here with ?tag=X, center on that node once the layout settles.
+            if (initialFocus) {
+                setTimeout(() => {
+                    const n = cy.getElementById(initialFocus);
+                    if (n && n.length) cy.animate({ center: { eles: n }, zoom: 1.5, duration: 500 });
+                }, 150);
+            }
+        }
+
+        function initGraph() {
+            svg = d3.select('#graph-svg');
+            width = graphContainer.clientWidth || 800;
+            height = graphContainer.clientHeight || 500;
+
+            zoom = d3.zoom()
+                .scaleExtent([0.1, 5])
+                .on('zoom', (event) => {
+                    g.attr('transform', event.transform);
+                    if (labels) labels.style('display', d => (event.transform.k > 0.8 || d.count > 5) ? 'block' : 'none');
+                });
+            svg.call(zoom);
+
+            g = svg.append('g');
+            g.append('g').attr('class', 'links');
+            g.append('g').attr('class', 'nodes');
+
+            simulation = d3.forceSimulation(nodes)
+                .force('link', d3.forceLink(links).id(d => d.id).distance(100))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(d => 10 + Math.sqrt(d.count) * 8 + 5));
+
+            link = g.select('.links').selectAll('line').data(links).join('line')
+                .attr('class', 'link')
+                .attr('stroke-width', d => Math.sqrt(d.weight) + 1);
+
+            node = g.select('.nodes').selectAll('g.node').data(nodes, d => d.id).join('g')
+                .attr('class', 'node')
+                .call(d3.drag().on('start', dragstarted).on('drag', dragged).on('end', dragended))
+                .on('click', nodeClickHandler)
+                .on('dblclick', nodeDblclickHandler)
+                .on('mouseover', nodeMouseoverHandler)
+                .on('mouseout', nodeMouseoutHandler);
+
+            node.append('circle')
+                .attr('r', d => 8 + Math.sqrt(d.count) * 8)
+                .attr('fill', nodeColor);
+
+            labels = node.append('text')
+                .attr('dy', '.35em')
+                .attr('x', d => 12 + Math.sqrt(d.count) * 8)
+                .style('font-size', d => Math.min(14, 10 + d.count) + 'px')
+                .text(d => d.name);
+
+            simulation.on('tick', () => {
+                link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+                node.attr('transform', d => 'translate(' + d.x + ',' + d.y + ')');
+            });
+
+            applyTruncationClass();
+
+            if (initialFocus) {
+                setTimeout(() => centerOnNode(initialFocus), 100);
+            } else {
+                setTimeout(() => {
+                    try {
+                        const bounds = g.node().getBBox();
+                        const parent = svg.node().parentElement;
+                        const fullWidth = parent.clientWidth, fullHeight = parent.clientHeight;
+                        const bw = bounds.width, bh = bounds.height;
+                        const midX = bounds.x + bw / 2, midY = bounds.y + bh / 2;
+                        if (bw == 0 || bh == 0) return;
+                        const sc = 0.85 / Math.max(bw / fullWidth, bh / fullHeight);
+                        svg.transition().duration(750).call(
+                            zoom.transform,
+                            d3.zoomIdentity.translate(fullWidth/2, fullHeight/2).scale(sc).translate(-midX, -midY)
+                        );
+                    } catch(e) { console.warn('Initial fit failed:', e); }
+                }, 100);
+            }
+
+            svg.on('click', function(event) {
+                if (event.target.closest('.node')) return;
+                conceptPanel.hidden = true;
+            });
+        }
+
+        function centerOnNode(nodeId, scale = 1.5) {
+            if (cy) {
+                const n = cy.getElementById(nodeId);
+                if (n.length) {
+                    cy.animate({
+                        center: { eles: n },
+                        zoom: scale,
+                        duration: 750
+                    });
+                    // We don't have separate nodeColor function for CY nodes style is handled by mapper
+                }
+                return;
+            }
+            if (!svg || !zoom || !node) return;
+            const d = nodes.find(n => n.id === nodeId);
+            if (!d) return;
+            const w = graphContainer.clientWidth;
+            const h = graphContainer.clientHeight;
+            svg.transition().duration(750).call(
+                zoom.transform,
+                d3.zoomIdentity.translate(w / 2, h / 2).scale(scale).translate(-d.x, -d.y)
+            );
+            node.selectAll('circle').attr('fill', n => n.id === nodeId ? '#f59e0b' : nodeColor(n));
+        }
+
+        // ─── Global controls (persistent across scene rebuilds) ──────────────────
+        document.getElementById('btn-zoom-in').onclick = () => {
+            if (cy) cy.zoom(cy.zoom() * 1.3);
+            else if (svg && zoom) svg.transition().call(zoom.scaleBy, 1.3);
+        };
+        document.getElementById('btn-zoom-out').onclick = () => {
+            if (cy) cy.zoom(cy.zoom() * 0.7);
+            else if (svg && zoom) svg.transition().call(zoom.scaleBy, 0.7);
+        };
+        document.getElementById('btn-zoom-reset').onclick = () => {
+            if (cy) cy.fit();
+            else if (svg && zoom) {
+                svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+                if (node) node.selectAll('circle').attr('fill', nodeColor);
+            }
+        };
+
+        document.getElementById('btn-fullscreen').onclick = () => {
+            const el = document.getElementById('graph-fullscreen-wrap');
+            if (document.fullscreenElement) document.exitFullscreen();
+            else el.requestFullscreen().catch(err => alert('Fullscreen error: ' + err.message));
+        };
+        document.addEventListener('fullscreenchange', () => {
+            const btn = document.getElementById('btn-fullscreen');
+            btn.innerHTML = document.fullscreenElement
+                ? '<sl-icon slot="prefix" name="fullscreen-exit"></sl-icon> Exit Fullscreen'
+                : '<sl-icon slot="prefix" name="fullscreen"></sl-icon> Fullscreen';
+            setTimeout(() => {
+                if (cy) { cy.resize(); cy.fit(); }
+                if (!simulation) return;
+                width = graphContainer.clientWidth;
+                height = graphContainer.clientHeight;
+                simulation.force('center', d3.forceCenter(width / 2, height / 2));
+                simulation.alpha(0.3).restart();
+            }, 100);
+        });
+
+        window.addEventListener('resize', () => {
+            if (cy) { cy.resize(); cy.fit(); }
+            if (!simulation) return;
+            width = graphContainer.clientWidth;
+            height = graphContainer.clientHeight;
+            simulation.force('center', d3.forceCenter(width / 2, height / 2));
+            simulation.alpha(0.3).restart();
+        });
+
+        btnModeHome.addEventListener('click', () => loadMode('home'));
+        btnModeFull.addEventListener('click', () => loadMode('full'));
+
+        filterInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if ((filterInput.value || '').trim()) loadMode('search');
+            }
+        });
+
+        // ─── Detail Panel ───────────────────────────────────────────────────────
+        const conceptPanel = document.getElementById('concept-panel');
+        const panelName = document.getElementById('panel-concept-name');
+        const panelMeta = document.getElementById('panel-concept-meta');
+        const panelList = document.getElementById('panel-articles-list');
+        const previewPanel = document.getElementById('article-preview-panel');
+        const previewFrame = document.getElementById('article-preview-frame');
+        const fullWrap = document.getElementById('graph-fullscreen-wrap');
+
+        function showConceptDetails(d) {
+            if (!d) return;
+            panelName.textContent = d.name;
+            const hidden = hiddenNeighbors(d);
+            const articlesMsg = `${d.count} article${d.count !== 1 ? 's' : ''} with this tag.`;
+            const neighborsMsg = hidden > 0
+                ? ` Has ${hidden} more neighbor${hidden !== 1 ? 's' : ''} not shown — double-click to expand.`
+                : '';
+            panelMeta.textContent = articlesMsg + neighborsMsg;
+            panelList.innerHTML = '<div style="display:flex;justify-content:center;padding:20px;"><sl-spinner style="font-size:2rem;"></sl-spinner></div>';
+            conceptPanel.hidden = false;
+
+            fetch(`/api-proxy/concept-tags/${encodeURIComponent(d.name)}/articles`)
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                })
+                .then(data => {
+                    const articles = data.articles || [];
+                    if (articles.length === 0) {
+                        panelList.innerHTML = '<p class="text-muted" style="text-align:center;padding:20px;">No articles found for this tag.</p>';
+                        return;
+                    }
+                    panelList.innerHTML = articles.map(a => `
+                        <div class="concept-article-row" style="display:flex;align-items:flex-start;gap:6px;padding:10px 0;border-bottom:1px solid var(--sl-color-neutral-100);">
+                            <sl-icon-button name="arrow-left-circle" label="Preview" class="btn-preview-article" data-id="${a.id}" title="Preview on the left" style="flex-shrink:0;"></sl-icon-button>
+                            <div style="flex:1;min-width:0;">
+                                <a href="/Article/View?id=${a.id}" style="font-weight:500;display:block;margin-bottom:4px;">${escapeHtml(a.title)}</a>
+                                <small class="text-muted" style="font-family:monospace;word-break:break-all;">${escapeHtml(a.treePath)}</small>
+                            </div>
+                        </div>
+                    `).join('');
+                })
+                .catch(err => {
+                    console.error('Fetch error:', err);
+                    panelList.innerHTML = `<p class="text-danger" style="text-align:center;padding:20px;">Failed to load articles: ${err.message}</p>`;
+                });
+        }
+
+        panelList.addEventListener('click', function(e) {
+            var btn = e.target.closest('.btn-preview-article');
+            if (!btn) return;
+            e.preventDefault();
+            var id = btn.dataset.id;
+            previewFrame.src = '/Article/Preview?id=' + id;
+            previewPanel.hidden = false;
+        });
+
+        fullWrap.addEventListener('click', function(e) {
+            var closer = e.target.closest('.bee-panel-close');
+            if (!closer) return;
+            var target = document.getElementById(closer.dataset.target);
+            if (target) target.hidden = true;
+            if (closer.dataset.target === 'article-preview-panel') previewFrame.src = 'about:blank';
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== 'Escape') return;
+            if (!previewPanel.hidden) {
+                e.preventDefault(); e.stopPropagation();
+                previewPanel.hidden = true;
+                previewFrame.src = 'about:blank';
+                return;
+            }
+            if (!conceptPanel.hidden) {
+                e.preventDefault(); e.stopPropagation();
+                conceptPanel.hidden = true;
+                return;
+            }
+        }, true);
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initial load — placed at the end of the IIFE so every `let`/`const`
+        // used inside destroyScene (conceptPanel) is already initialized before
+        // the first loadMode invocation.
+        if (initialFocus) loadMode('full');
+        else loadMode('home');
+    })();
+    </script>
+}
