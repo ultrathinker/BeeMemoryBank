@@ -28,8 +28,41 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'microsoft'
+          java-version: '17'
+
+      # The MAUI Android workload (~1 GB on disk) is the slowest single step.
+      # Cache it across runs so we only pay for it on .NET SDK changes.
+      - name: Cache .NET workloads
+        id: workload-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.dotnet
+          key: dotnet-workloads-maui-android-net10-${{ runner.os }}
+
       - name: Install MAUI Android workload
+        if: steps.workload-cache.outputs.cache-hit != 'true'
         run: dotnet workload install maui-android
+
+      # The MAUI Android csproj declares <MauiAsset Include="Resources\Raw\model.onnx">
+      # which fails the build if the file is absent. Cache + download mirroring
+      # the server-side build.yml strategy.
+      - name: Cache ONNX model
+        id: onnx-cache
+        uses: actions/cache@v4
+        with:
+          path: mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx
+          key: onnx-all-MiniLM-L6-v2-v1
+
+      - name: Download ONNX model (cache miss only)
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p mobile/BeeMemoryBank.Mobile/Resources/Raw
+          curl -L -o mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx \
+            https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
 
       - name: Restore mobile dependencies
         run: dotnet restore mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj
