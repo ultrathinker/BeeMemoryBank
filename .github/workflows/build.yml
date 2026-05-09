@@ -27,6 +27,25 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # Cache the 87 MB ONNX model so we do not re-download it on every push.
+      - name: Cache ONNX model
+        id: onnx-cache
+        uses: actions/cache@v4
+        with:
+          path: libs/BeeMemoryBank.Core/Embeddings/Models/model.onnx
+          key: onnx-all-MiniLM-L6-v2-v1
+
+      # Tests boot the API via WebApplicationFactory; the API's DI graph
+      # constructs OnnxEmbeddingGenerator at startup, which reads the model
+      # file. The Api.csproj <Content> directive copies it into every bin/
+      # folder when present.
+      - name: Download ONNX model (cache miss only)
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p libs/BeeMemoryBank.Core/Embeddings/Models
+          curl -L -o libs/BeeMemoryBank.Core/Embeddings/Models/model.onnx \
+            https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+
       # Build server-side projects only (libs, server, tools, tests).
       # The MAUI Android project under mobile/ requires the maui-android workload
       # (~1 GB download) and is built separately by build-mobile.yml on changes
