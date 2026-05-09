@@ -3,8 +3,10 @@ name: Build & Test
 on:
   push:
     branches: [main, master, develop]
+    paths-ignore: ['mobile/**', 'docs/**', '*.md']
   pull_request:
     branches: [main, master, develop]
+    paths-ignore: ['mobile/**', 'docs/**', '*.md']
 
 permissions:
   contents: read
@@ -25,11 +27,27 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # Build server-side projects only (libs, server, tools, tests).
+      # The MAUI Android project under mobile/ requires the maui-android workload
+      # (~1 GB download) and is built separately by build-mobile.yml on changes
+      # under mobile/**.
       - name: Restore dependencies
-        run: dotnet restore BeeMemoryBank.slnx
+        run: |
+          set -e
+          for proj in libs/*/*.csproj server/*/*.csproj tools/*/*.csproj tests/*/*.csproj; do
+            dotnet restore "$proj"
+          done
 
       - name: Build
-        run: dotnet build BeeMemoryBank.slnx --no-restore -c Release
+        run: |
+          set -e
+          for proj in libs/*/*.csproj server/*/*.csproj tools/*/*.csproj tests/*/*.csproj; do
+            dotnet build "$proj" --no-restore -c Release
+          done
 
       - name: Test
-        run: dotnet test BeeMemoryBank.slnx --no-build -c Release --verbosity normal
+        run: |
+          set -e
+          for proj in tests/*/*.csproj; do
+            dotnet test "$proj" --no-build -c Release --verbosity normal
+          done

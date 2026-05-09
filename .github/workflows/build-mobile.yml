@@ -1,0 +1,40 @@
+name: Build Mobile (Android)
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths: ['mobile/**', '.github/workflows/build-mobile.yml']
+  pull_request:
+    branches: [main, master, develop]
+    paths: ['mobile/**', '.github/workflows/build-mobile.yml']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@4d6c8fcf3c8f7a60068d26b594648e99df24cee3 # v4.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install MAUI Android workload
+        run: dotnet workload install maui-android
+
+      - name: Restore mobile dependencies
+        run: dotnet restore mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj
+
+      - name: Build APK (Release, unsigned)
+        run: |
+          dotnet publish mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj \
+            -f net10.0-android -c Release --no-restore
