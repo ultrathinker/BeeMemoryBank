@@ -226,38 +226,47 @@ Data is stored in `./data` on the host (including `model.onnx`). To customize po
 
 ### From Source
 
+Requires .NET 10 SDK. Tested end-to-end on Linux/macOS — every step below is needed; skipping any one of them will produce a confusing error at startup.
+
 ```bash
-# 1. Clone and build (requires .NET 10 SDK)
+# 1. Clone and build
 git clone https://github.com/ultrathinker/BeeMemoryBank.git
 cd BeeMemoryBank
 dotnet publish server/BeeMemoryBank.Api/ -c Release -o publish/api
 dotnet publish server/BeeMemoryBank.Web/ -c Release -o publish/web
 dotnet publish server/BeeMemoryBank.Cli/ -c Release -o publish/cli
 
-# 2. Initialize a new knowledge base
+# 2. Download the ONNX semantic-search model (87 MB, required — the API refuses to start without it)
+mkdir -p data
+curl -L -o data/model.onnx \
+  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+
+# 3. Initialize the knowledge base. The user that gets created has username = the value you pass to --name.
 ./publish/cli/bmb init --data ./data --name "MyNode" --password "your-master-password"
 
-# 3. Start the API server (Development mode — auto-generates the internal key in ./data/.internal-key)
-ASPNETCORE_ENVIRONMENT=Development \
-BMB_DATA_PATH=./data \
-ASPNETCORE_URLS=http://localhost:5300 \
-  ./publish/api/BeeMemoryBank.Api
+# 4. Generate a shared internal key for API↔Web auth (in production from-source mode).
+#    Both processes must see the same value, so export it in the parent shell.
+export BMB_INTERNAL_KEY=$(openssl rand -base64 32)
 
-# 4. Start the Web UI (in another terminal, same Development flag)
-ASPNETCORE_ENVIRONMENT=Development \
-BMB_API_URL=http://localhost:5300 \
-ASPNETCORE_URLS=http://localhost:5301 \
-  ./publish/web/BeeMemoryBank.Web
+# 5. Start the API server. Run it FROM publish/api/ (the binary looks for static files
+#    and the embedded entry point relative to its own working directory).
+(cd publish/api && \
+  BMB_DATA_PATH="$(pwd)/../../data" \
+  BMB_ONNX_MODEL_PATH="$(pwd)/../../data/model.onnx" \
+  ASPNETCORE_URLS=http://localhost:5300 \
+  ./BeeMemoryBank.Api)
+
+# 6. Start the Web UI (in another terminal — same exported BMB_INTERNAL_KEY).
+#    Run it FROM publish/web/ — otherwise wwwroot is not found and CSS/JS 404.
+(cd publish/web && \
+  BMB_API_URL=http://localhost:5300 \
+  ASPNETCORE_URLS=http://localhost:5301 \
+  ./BeeMemoryBank.Web)
 ```
 
-Open `http://localhost:5301` in your browser and log in with your master password.
+Open `http://localhost:5301` in your browser. Log in with **username = `MyNode`** (the value you passed to `bmb init --name`) and your master password.
 
-> **Why `ASPNETCORE_ENVIRONMENT=Development`?** The API and Web share an internal auth secret (`BMB_INTERNAL_KEY`). In Docker it is exported by `docker-entrypoint.sh`. In Development the API and Web auto-generate it into `./data/.internal-key` and read the same file. **For production from-source deployments** (systemd, bare-metal, custom containers without the entrypoint) — set the key yourself and export it to both processes:
->
-> ```bash
-> export BMB_INTERNAL_KEY=$(openssl rand -base64 32)
-> # then run both API and Web in shells where this variable is exported
-> ```
+> **Just want to play with it locally?** Set `ASPNETCORE_ENVIRONMENT=Development` instead of exporting `BMB_INTERNAL_KEY`. In Development the API and Web auto-generate the shared key into `./data/.internal-key` and read the same file — no key management on your part. The Production-style setup above is what you want for systemd, bare-metal, or any custom container without `docker-entrypoint.sh`.
 
 ### Join an Existing Network
 
