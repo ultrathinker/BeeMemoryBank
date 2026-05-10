@@ -224,49 +224,338 @@ Open `http://localhost:5301` in your browser and log in with your master passwor
 
 Data is stored in `./data` on the host (including `model.onnx`). To customize ports, copy `.env.example` to `.env` and edit as needed.
 
-### From Source
+### From Source (Linux / macOS / Windows, native services)
 
-Requires .NET 10 SDK. Tested end-to-end on Linux/macOS — every step below is needed; skipping any one of them will produce a confusing error at startup.
+Requires .NET 10 SDK. Pick your OS below — each block has the full sequence (build, init, generate the shared `BMB_INTERNAL_KEY`, register a service, restart on boot, logs).
+
+> **HTTPS is required everywhere except `localhost` / `127.0.0.1`.** The session cookie is `Secure`, so over plain HTTP the browser drops it and the login form silently redirects back to itself. If you serve on a domain or LAN IP, put a reverse proxy with TLS in front (see [HTTPS Reverse Proxy](#https-reverse-proxy) below).
+
+<details>
+<summary><b>Linux + systemd</b> — production-grade, auto-start, journald logs</summary>
+
+#### 1. Install .NET 10 SDK
+
+`dotnet-sdk-10.0` is not always in default repos — you need the Microsoft feed. See the [official guide](https://learn.microsoft.com/dotnet/core/install/linux-ubuntu). Or, no-root alternative:
 
 ```bash
-# 1. Clone and build
-git clone https://github.com/ultrathinker/BeeMemoryBank.git
-cd BeeMemoryBank
-dotnet publish server/BeeMemoryBank.Api/ -c Release -o publish/api
-dotnet publish server/BeeMemoryBank.Web/ -c Release -o publish/web
-dotnet publish server/BeeMemoryBank.Cli/ -c Release -o publish/cli
-
-# 2. Download the ONNX semantic-search model (87 MB, required — the API refuses to start without it)
-mkdir -p data
-curl -L -o data/model.onnx \
-  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
-
-# 3. Initialize the knowledge base. The user that gets created has username = the value you pass to --name.
-./publish/cli/bmb init --data ./data --name "MyNode" --password "your-master-password"
-
-# 4. Generate a shared internal key for API↔Web auth (in production from-source mode).
-#    Both processes must see the same value, so export it in the parent shell.
-export BMB_INTERNAL_KEY=$(openssl rand -base64 32)
-
-# 5. Start the API server. Run it FROM publish/api/ (the binary looks for static files
-#    and the embedded entry point relative to its own working directory).
-(cd publish/api && \
-  BMB_DATA_PATH="$(pwd)/../../data" \
-  BMB_ONNX_MODEL_PATH="$(pwd)/../../data/model.onnx" \
-  ASPNETCORE_URLS=http://localhost:5300 \
-  ./BeeMemoryBank.Api)
-
-# 6. Start the Web UI (in another terminal — same exported BMB_INTERNAL_KEY).
-#    Run it FROM publish/web/ — otherwise wwwroot is not found and CSS/JS 404.
-(cd publish/web && \
-  BMB_API_URL=http://localhost:5300 \
-  ASPNETCORE_URLS=http://localhost:5301 \
-  ./BeeMemoryBank.Web)
+curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 10.0
+export PATH="$PATH:$HOME/.dotnet"
+dotnet --version    # should be 10.x
 ```
 
-Open `http://localhost:5301` in your browser. Log in with **username = `MyNode`** (the value you passed to `bmb init --name`) and your master password.
+#### 2. Build & init
 
-> **Just want to play with it locally?** Set `ASPNETCORE_ENVIRONMENT=Development` instead of exporting `BMB_INTERNAL_KEY`. In Development the API and Web auto-generate the shared key into `./data/.internal-key` and read the same file — no key management on your part. The Production-style setup above is what you want for systemd, bare-metal, or any custom container without `docker-entrypoint.sh`.
+```bash
+sudo useradd -r -m -d /opt/beememorybank -s /bin/bash bmb
+sudo -u bmb git clone https://github.com/ultrathinker/BeeMemoryBank.git /opt/beememorybank/src
+cd /opt/beememorybank/src
+sudo -u bmb dotnet publish server/BeeMemoryBank.Api/ -c Release -o /opt/beememorybank/api
+sudo -u bmb dotnet publish server/BeeMemoryBank.Web/ -c Release -o /opt/beememorybank/web
+sudo -u bmb dotnet publish server/BeeMemoryBank.Cli/ -c Release -o /opt/beememorybank/cli
+sudo -u bmb mkdir -p /opt/beememorybank/data
+sudo -u bmb curl -L -o /opt/beememorybank/data/model.onnx \
+  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+
+# Master password — read from stdin so it never enters bash history or `ps aux`
+read -s -p "Master password: " BMB_PASSWORD; echo
+sudo -u bmb /opt/beememorybank/cli/bmb init \
+  --data /opt/beememorybank/data --name "MyServerNode" --password "$BMB_PASSWORD"
+unset BMB_PASSWORD
+```
+
+> `bmb init --name X` creates a node named `X` AND a first user whose login is also `X`. If you want a separate username and node name, skip this step and use the Web Setup form after the services are running — it has separate fields.
+
+#### 3. Shared API↔Web secret in one file
+
+Avoids the typo risk of pasting the same key into two unit files. `install` creates the file atomically with the right mode and owner:
+
+```bash
+printf 'BMB_INTERNAL_KEY=%s\n' "$(openssl rand -base64 32)" \
+  | sudo install -m 600 -o bmb -g bmb /dev/stdin /etc/beememorybank.env
+```
+
+#### 4. systemd unit files
+
+`/etc/systemd/system/beememorybank-api.service`:
+
+```ini
+[Unit]
+Description=BeeMemoryBank API
+After=network.target
+
+[Service]
+Type=simple
+User=bmb
+WorkingDirectory=/opt/beememorybank/api
+EnvironmentFile=/etc/beememorybank.env
+Environment="BMB_DATA_PATH=/opt/beememorybank/data"
+Environment="BMB_ONNX_MODEL_PATH=/opt/beememorybank/data/model.onnx"
+Environment="ASPNETCORE_URLS=http://localhost:5300"
+ExecStart=/opt/beememorybank/api/BeeMemoryBank.Api
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/systemd/system/beememorybank-web.service`:
+
+```ini
+[Unit]
+Description=BeeMemoryBank Web UI
+After=network.target beememorybank-api.service
+Requires=beememorybank-api.service
+
+[Service]
+Type=simple
+User=bmb
+WorkingDirectory=/opt/beememorybank/web
+EnvironmentFile=/etc/beememorybank.env
+Environment="BMB_API_URL=http://localhost:5300"
+Environment="ASPNETCORE_URLS=http://localhost:5301"
+ExecStart=/opt/beememorybank/web/BeeMemoryBank.Web
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now beememorybank-api beememorybank-web
+sudo journalctl -u beememorybank-api -f       # logs
+```
+
+</details>
+
+<details>
+<summary><b>macOS + launchd</b> — runs on user login, auto-restart on crash</summary>
+
+```bash
+brew install --cask dotnet-sdk
+dotnet --version    # should be 10.x
+
+git clone https://github.com/ultrathinker/BeeMemoryBank.git ~/bmb
+cd ~/bmb
+dotnet publish server/BeeMemoryBank.Api/ -c Release -o ~/bmb/api
+dotnet publish server/BeeMemoryBank.Web/ -c Release -o ~/bmb/web
+dotnet publish server/BeeMemoryBank.Cli/ -c Release -o ~/bmb/cli
+mkdir -p ~/bmb/data
+curl -L -o ~/bmb/data/model.onnx \
+  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+
+read -s -p "Master password: " PWD; echo
+~/bmb/cli/bmb init --data ~/bmb/data --name "MyMac" --password "$PWD"; unset PWD
+
+INTERNAL_KEY=$(openssl rand -base64 32); echo "$INTERNAL_KEY"   # paste into both plists below
+```
+
+`~/Library/LaunchAgents/com.beememorybank.api.plist` (replace `YOUR_USER` and the key value):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>          <string>com.beememorybank.api</string>
+    <key>WorkingDirectory</key><string>/Users/YOUR_USER/bmb/api</string>
+    <key>ProgramArguments</key>
+    <array><string>/Users/YOUR_USER/bmb/api/BeeMemoryBank.Api</string></array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BMB_INTERNAL_KEY</key>     <string>PASTE_INTERNAL_KEY_HERE</string>
+        <key>BMB_DATA_PATH</key>        <string>/Users/YOUR_USER/bmb/data</string>
+        <key>BMB_ONNX_MODEL_PATH</key>  <string>/Users/YOUR_USER/bmb/data/model.onnx</string>
+        <key>ASPNETCORE_URLS</key>      <string>http://localhost:5300</string>
+    </dict>
+    <key>RunAtLoad</key>      <true/>
+    <key>KeepAlive</key>      <true/>
+    <key>StandardOutPath</key><string>/Users/YOUR_USER/bmb/api.log</string>
+    <key>StandardErrorPath</key><string>/Users/YOUR_USER/bmb/api.err</string>
+</dict>
+</plist>
+```
+
+`~/Library/LaunchAgents/com.beememorybank.web.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>          <string>com.beememorybank.web</string>
+    <key>WorkingDirectory</key><string>/Users/YOUR_USER/bmb/web</string>
+    <key>ProgramArguments</key>
+    <array><string>/Users/YOUR_USER/bmb/web/BeeMemoryBank.Web</string></array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BMB_INTERNAL_KEY</key>  <string>SAME_INTERNAL_KEY</string>
+        <key>BMB_API_URL</key>       <string>http://localhost:5300</string>
+        <key>ASPNETCORE_URLS</key>   <string>http://localhost:5301</string>
+    </dict>
+    <key>RunAtLoad</key>      <true/>
+    <key>KeepAlive</key>      <true/>
+    <key>StandardOutPath</key><string>/Users/YOUR_USER/bmb/web.log</string>
+    <key>StandardErrorPath</key><string>/Users/YOUR_USER/bmb/web.err</string>
+</dict>
+</plist>
+```
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.beememorybank.api.plist
+launchctl load ~/Library/LaunchAgents/com.beememorybank.web.plist
+launchctl list | grep beememorybank
+tail -f ~/bmb/api.log
+```
+
+</details>
+
+<details>
+<summary><b>Windows + NSSM</b> — runs as a Windows Service, visible in services.msc</summary>
+
+Install:
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
+- [Git for Windows](https://git-scm.com/download/win)
+- [NSSM](https://nssm.cc/download) — wraps any `.exe` into a Windows Service with auto-restart and logs
+
+PowerShell:
+
+```powershell
+git clone https://github.com/ultrathinker/BeeMemoryBank.git C:\bee
+cd C:\bee
+dotnet publish server\BeeMemoryBank.Api\ -c Release -o C:\bee\api
+dotnet publish server\BeeMemoryBank.Web\ -c Release -o C:\bee\web
+dotnet publish server\BeeMemoryBank.Cli\ -c Release -o C:\bee\cli
+
+New-Item -ItemType Directory -Force C:\bee\data
+curl.exe -L -o C:\bee\data\model.onnx `
+  "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
+
+# Master password without persisting it to history.
+# (We use $securePwd to avoid clashing with PowerShell's automatic $PWD = current directory.)
+$securePwd = Read-Host -AsSecureString "Master password"
+$plainPwd = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePwd))
+C:\bee\cli\bmb.exe init --data C:\bee\data --name "MyWinNode" --password "$plainPwd"
+Remove-Variable plainPwd, securePwd
+
+# Generate the shared key with a real CSPRNG (NOT Get-Random — it is not crypto-strong)
+$bytes = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$key = [Convert]::ToBase64String($bytes)
+$key   # paste into both NSSM env blocks below
+```
+
+PowerShell **as Administrator**:
+
+```powershell
+nssm install BeeMemoryBankApi C:\bee\api\BeeMemoryBank.Api.exe
+nssm set BeeMemoryBankApi AppDirectory C:\bee\api
+nssm set BeeMemoryBankApi AppEnvironmentExtra `
+  "BMB_INTERNAL_KEY=PASTE_KEY_HERE" `
+  "BMB_DATA_PATH=C:\bee\data" `
+  "BMB_ONNX_MODEL_PATH=C:\bee\data\model.onnx" `
+  "ASPNETCORE_URLS=http://localhost:5300"
+nssm set BeeMemoryBankApi Start SERVICE_AUTO_START
+nssm start BeeMemoryBankApi
+
+nssm install BeeMemoryBankWeb C:\bee\web\BeeMemoryBank.Web.exe
+nssm set BeeMemoryBankWeb AppDirectory C:\bee\web
+nssm set BeeMemoryBankWeb AppEnvironmentExtra `
+  "BMB_INTERNAL_KEY=SAME_KEY" `
+  "BMB_API_URL=http://localhost:5300" `
+  "ASPNETCORE_URLS=http://localhost:5301"
+nssm set BeeMemoryBankWeb DependOnService BeeMemoryBankApi
+nssm set BeeMemoryBankWeb Start SERVICE_AUTO_START
+nssm start BeeMemoryBankWeb
+```
+
+Both services appear in `services.msc` and auto-start on boot.
+
+</details>
+
+<details>
+<summary><b>Quick test</b> — no service, two terminals, just to try it</summary>
+
+After cloning, `dotnet publish` for Api/Web/Cli, downloading `model.onnx`, and `bmb init` (see the OS block above for the build steps), open two terminals:
+
+```bash
+# Terminal 1 (API)
+ASPNETCORE_ENVIRONMENT=Development BMB_DATA_PATH=./data \
+BMB_ONNX_MODEL_PATH=./data/model.onnx \
+ASPNETCORE_URLS=http://localhost:5300 ./publish/api/BeeMemoryBank.Api
+
+# Terminal 2 (Web)
+ASPNETCORE_ENVIRONMENT=Development BMB_API_URL=http://localhost:5300 \
+ASPNETCORE_URLS=http://localhost:5301 ./publish/web/BeeMemoryBank.Web
+```
+
+In Development mode `BMB_INTERNAL_KEY` is not required — both processes auto-generate it into `data/.internal-key` and read the same file. Close the terminal and the process dies — that is the point of this mode.
+
+</details>
+
+#### After installation
+
+1. Open `http://localhost:5301` (or your HTTPS domain).
+2. **Log in.** If you initialized via CLI (`bmb init --name "X"`), the login is `X` and the password is the master password. If via the Web Setup form, the login is whatever you typed there.
+3. **AI agent token** (optional): Admin → Agents → Create. Copy the bearer token (shown **once**).
+4. **MCP in your AI client** (Claude Code / Cursor / Windsurf): add `bee-memory-bank` with `Authorization: Bearer bee_xxxxx`.
+5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --password "MasterP" --name "OtherNode" --data ./data`. The new node downloads a signed encrypted snapshot, verifies it, and joins the sync mesh.
+
+#### HTTPS Reverse Proxy
+
+The session cookie is `Secure`. On any host other than `localhost` / `127.0.0.1` (including LAN IPs), you need TLS in front. Two options:
+
+**Caddy** — auto Let's Encrypt, no separate certbot:
+```
+bee.example.com {
+    reverse_proxy 127.0.0.1:5301
+}
+```
+Then `sudo systemctl enable --now caddy`.
+
+**nginx + certbot:**
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name bee.example.com;
+    ssl_certificate /etc/letsencrypt/live/bee.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bee.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:5301;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+Then `sudo certbot --nginx -d bee.example.com`.
+
+#### Updating
+
+| Method | Commands |
+|---|---|
+| Docker | `git pull && docker compose up -d --build` |
+| Linux/systemd | `git pull` → `dotnet publish ...` → `sudo systemctl restart beememorybank-api beememorybank-web` |
+| macOS/launchd | `git pull` → `dotnet publish ...` → `launchctl kickstart -k gui/$(id -u)/com.beememorybank.api` (and `.web`) |
+| Windows/NSSM | `git pull` → `dotnet publish ...` → `nssm restart BeeMemoryBankApi BeeMemoryBankWeb` |
+
+Tip: take a snapshot via Admin → Snapshots → Create before updating, in case a DB migration goes sideways.
+
+#### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `BMB_INTERNAL_KEY is not set` on API startup | Production mode without the key | Generate with `openssl rand -base64 32`, export to both processes (or use `EnvironmentFile=` for systemd) |
+| `ONNX model not found` | `model.onnx` not downloaded | `curl -L -o data/model.onnx ...` |
+| Static files 404 (CSS/JS) | Web launched outside its `publish/web/` dir | `cd publish/web && ./BeeMemoryBank.Web` (or set `WorkingDirectory=` in the systemd unit) |
+| Login accepted, then redirect back to /Login | HTTP instead of HTTPS — `Secure` cookie dropped by browser | Put TLS in front (Caddy or nginx + certbot). Same problem when accessing via LAN IP without TLS. |
+| `bmb init` wrote data where API doesn't look | `--data` and `BMB_DATA_PATH` disagree | Use the same absolute path for both |
+| 401/403 between Web and API | Different `BMB_INTERNAL_KEY` in the two processes | Use `EnvironmentFile=` (systemd) or a shared env file |
+| `docker compose down -v` did not delete `./data` | `data/` is a bind mount, not a named volume — `-v` doesn't touch it | Remove manually: `rm -rf data/` |
 
 ### Join an Existing Network
 
