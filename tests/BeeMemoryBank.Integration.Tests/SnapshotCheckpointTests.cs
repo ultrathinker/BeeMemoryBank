@@ -15,6 +15,7 @@ using Xunit;
 
 namespace BeeMemoryBank.Integration.Tests;
 
+[Collection(CompactionCollection.Name)]
 public class SnapshotCheckpointTests : IAsyncLifetime
 {
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"bmb_cp_{Guid.NewGuid():N}");
