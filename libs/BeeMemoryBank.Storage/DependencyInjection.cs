@@ -20,8 +20,14 @@ public static class DependencyInjection
         services.AddScoped<IArticleRepository, ArticleRepository>();
         services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
         services.AddSingleton<IKeySlotRepository, KeySlotRepository>();
-        services.AddScoped<INodeIdentityRepository, NodeIdentityRepository>();
-        services.AddScoped<IWhitelistRepository, WhitelistRepository>();
+        // Singleton (not Scoped) — these repos are pulled into the singleton SnapshotService
+        // factory in Api/Program.cs. Resolving a scoped service from a singleton throws under
+        // ASPNETCORE_ENVIRONMENT=Development (scope validation enabled), which is exactly the
+        // mode README's "From Source" Quick Start recommends. They're stateless (primary
+        // ctor + singleton DbConnectionFactory + fresh connection per method), so Singleton
+        // is semantically equivalent — just compatible with how Api/Program.cs consumes them.
+        services.AddSingleton<INodeIdentityRepository, NodeIdentityRepository>();
+        services.AddSingleton<IWhitelistRepository, WhitelistRepository>();
         services.AddScoped<IEventLogRepository, EventLogRepository>();
         services.AddScoped<ISyncPositionRepository, SyncPositionRepository>();
         services.AddScoped<ISyncPushPositionRepository, SyncPushPositionRepository>();
@@ -36,7 +42,7 @@ public static class DependencyInjection
         services.AddScoped<IFolderAclRepository, FolderAclRepository>();
         services.AddScoped<IArticleVersionRepository, ArticleVersionRepository>();
         services.AddScoped<IConceptTagRepository, ConceptTagRepository>();
-        services.AddScoped<IRestoreReplayShieldRepository, RestoreReplayShieldRepository>();
+        services.AddSingleton<IRestoreReplayShieldRepository, RestoreReplayShieldRepository>();  // see comment near INodeIdentityRepository — same reason
         services.AddScoped<IRestoreEventStateRepository, RestoreEventStateRepository>();
         services.AddScoped<IDekRotationStateRepository, DekRotationStateRepository>();
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
