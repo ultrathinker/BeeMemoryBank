@@ -2,7 +2,20 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+// If a published bundle sits next to the binary (wwwroot present), anchor ContentRoot
+// there so static files resolve regardless of the launcher's cwd. Without this,
+// running `~/bmb/web/BeeMemoryBank.Web` from any other directory silently breaks
+// UseStaticFiles and the UI renders unstyled. In dev (`dotnet run`) there is no
+// wwwroot next to the binary in bin/<cfg>/<tfm>/ — the Web SDK uses a static-web-
+// assets manifest instead, which only works with the default cwd-based ContentRoot.
+var publishedWwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+var builder = Directory.Exists(publishedWwwroot)
+    ? WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
+        })
+    : WebApplication.CreateBuilder(args);
 
 // Auto-resolve BMB_INTERNAL_KEY from shared key file if not set (non-Docker / local dev).
 // API generates the file; Web reads it.
