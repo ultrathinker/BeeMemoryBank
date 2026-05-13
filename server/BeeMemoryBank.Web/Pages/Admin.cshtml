@@ -512,8 +512,12 @@
     }
 
     <!-- Agents -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
         <h3 style="margin:0;"><sl-icon name="robot"></sl-icon> Agents</h3>
+        <span class="text-muted text-sm" style="display:inline-flex;align-items:center;gap:6px;">
+            <sl-icon name="info-circle"></sl-icon>
+            To add a new agent, go to <a href="/Profile">Profile</a>.
+        </span>
     </div>
 
     @if (Model.Agents != null && Model.Agents.Count > 0)
