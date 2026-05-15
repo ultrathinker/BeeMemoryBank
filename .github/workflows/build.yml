@@ -30,7 +30,7 @@ jobs:
       # Cache the 87 MB ONNX model so we do not re-download it on every push.
       - name: Cache ONNX model
         id: onnx-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: libs/BeeMemoryBank.Core/Embeddings/Models/model.onnx
           key: onnx-all-MiniLM-L6-v2-v1
