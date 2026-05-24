@@ -131,7 +131,9 @@ public class NodeSetupService
         // out of beememorybank.db and can sign arbitrary sync events as this
         // node — effectively destroying the user's network state.
         var (wrappedPrivKey, privKeyIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, masterDek, nodeId);
-        Array.Clear(privateKey);
+        // Do NOT zero `privateKey` here — the snapshot-join handshake below still
+        // signs the /api/sync/challenge response with it. Cleared in the finally
+        // after the handshake. Forgetting this made every join fail with HTTP 401.
 
         var identity = new NodeIdentity
         {
@@ -196,10 +198,19 @@ public class NodeSetupService
                     ApiAddress = entry.ApiAddress,
                     Status = "A",
                     CreatedAt = now,
-                    UpdatedAt = now
+                    UpdatedAt = now,
+                    // Propagate IsSuperadmin from the bootstrap node's whitelist so this
+                    // new node knows which transitively-discovered peers are Superadmins.
+                    // Without this, every other Superadmin in the cluster gets demoted to
+                    // plain peer locally → their whitelist_*/hard_delete/restore_network
+                    // events get rejected once a 3rd node joins.
+                    IsSuperadmin = entry.IsSuperadmin
                 });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to import whitelist entry for node {NodeId}", entry.NodeId);
+            }
         }
 
         var remote = joinResponse.RemoteNode;
@@ -211,7 +222,10 @@ public class NodeSetupService
             ApiAddress = remoteUrl.TrimEnd('/'),
             Status = "A",
             CreatedAt = now,
-            UpdatedAt = now
+            UpdatedAt = now,
+            // Trust-on-join: the node we joined is implicitly Superadmin (we trusted them
+            // with our master password, they verified it). Mirrors JoinEndpoints.cs.
+            IsSuperadmin = true
         });
 
         _logger.LogInformation("Starting snapshot import from {Url}", remoteUrl);
@@ -246,6 +260,10 @@ public class NodeSetupService
             throw new InvalidOperationException(
                 $"Key exchange succeeded but snapshot import failed: {ex.Message}. Delete local data and try again.", ex);
         }
+        finally
+        {
+            Array.Clear(privateKey);
+        }
 
         return identity;
     }
@@ -270,7 +288,7 @@ public class NodeSetupService
 
     private sealed record JoinResponseDto(JoinRemoteNodeDto RemoteNode, JoinKeySlotDto KeySlot, List<JoinWhitelistEntryDto>? Whitelist);
     private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
-    private sealed record JoinWhitelistEntryDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress);
+    private sealed record JoinWhitelistEntryDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false);
     private sealed record JoinKeySlotDto(
         string EncryptedMasterDekB64,
         string IvB64,

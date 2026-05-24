@@ -40,11 +40,11 @@ public class MainActivity : MauiAppCompatActivity
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
-        // FLAG_SECURE: prevents screenshots, screen recording, and the recent-apps
-        // task switcher from showing decrypted article content. Set once here;
-        // applies for the activity's lifetime.
-        Window?.SetFlags(global::Android.Views.WindowManagerFlags.Secure,
-                          global::Android.Views.WindowManagerFlags.Secure);
+        // We intentionally do NOT set FLAG_SECURE. Blocking screenshots/screen-recording
+        // is user-hostile (breaks debugging, support screenshots, accessibility tools)
+        // and gives little real security — the data lives on the device anyway, and a
+        // determined attacker with physical access has many other paths. We do not want
+        // to support this restriction.
     }
 
     protected override void OnStart()
