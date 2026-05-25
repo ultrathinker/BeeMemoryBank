@@ -46,6 +46,9 @@ public static class DependencyInjection
         services.AddScoped<IRestoreEventStateRepository, RestoreEventStateRepository>();
         services.AddScoped<IDekRotationStateRepository, DekRotationStateRepository>();
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+        services.AddScoped<IRemoteAccountRepository, RemoteAccountRepository>();
+        services.AddScoped<IRemoteSubscriptionRepository, RemoteSubscriptionRepository>();
+        services.AddScoped<IRemoteApiTokenRepository, RemoteApiTokenRepository>();
         services.AddScoped<FolderBootstrapper>();
         services.TryAddScoped<ICallerScopeStore, InstanceCallerScopeStore>();
         services.AddScoped<CallerScopeHolder>();

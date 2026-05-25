@@ -24,8 +24,8 @@ public class CallerScopeMiddleware
         else if (userId.HasValue)
         {
             var folderAccess = ctx.RequestServices.GetRequiredService<FolderAccessService>();
-            var (denyPaths, allowPaths) = await folderAccess.GetAccessInfoAsync(userId, agentId);
-            holder.Scope = new HttpCallerScope(false, denyPaths, allowPaths);
+            var (denyPaths, allowPaths, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
+            holder.Scope = new HttpCallerScope(false, denyPaths, allowPaths, readOnlyPaths);
         }
         else if (agentId.HasValue)
         {

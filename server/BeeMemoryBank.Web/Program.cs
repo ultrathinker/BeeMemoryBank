@@ -182,6 +182,76 @@ app.MapPut("/api-proxy/article/{id:guid}", async (Guid id, HttpContext ctx, ApiC
     return result != null ? Results.Ok(result) : Results.StatusCode(502);
 }).RequireAuthorization();
 
+app.MapPost("/api-proxy/article/{id:guid}/copy", async (Guid id, HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<CopyArticleProxyRequest>();
+    if (req == null || string.IsNullOrWhiteSpace(req.TargetFolderPath))
+        return Results.BadRequest(new { error = "targetFolderPath is required" });
+    var (ok, status, error) = await api.CopyArticleAsync(id, req.TargetFolderPath);
+    return ok ? Results.Ok(new { ok = true }) : Results.Json(new { error = error ?? "Copy failed" }, statusCode: status);
+}).RequireAuthorization();
+
+// Remote Accounts proxy ────────────────────────────────────────────────
+app.MapGet("/api-proxy/remote-accounts", async (ApiClient api) =>
+{
+    var list = await api.ListRemoteAccountsAsync();
+    return list != null ? Results.Ok(list) : Results.StatusCode(502);
+}).RequireAuthorization();
+
+app.MapPost("/api-proxy/remote-accounts", async (HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<CreateRemoteAccountProxyRequest>();
+    if (req == null || string.IsNullOrWhiteSpace(req.BaseUrl) || string.IsNullOrWhiteSpace(req.Username))
+        return Results.BadRequest(new { error = "displayName, baseUrl, username, password required" });
+    var (ok, status, body, error) = await api.CreateRemoteAccountAsync(req.DisplayName, req.BaseUrl, req.Username, req.Password);
+    if (ok) return Results.Ok(body);
+    return Results.Json(new { error = error ?? "Failed" }, statusCode: status);
+}).RequireAuthorization();
+
+app.MapDelete("/api-proxy/remote-accounts/{id:guid}", async (Guid id, ApiClient api) =>
+{
+    await api.DeleteRemoteAccountAsync(id);
+    return Results.NoContent();
+}).RequireAuthorization();
+
+app.MapGet("/api-proxy/remote-accounts/{id:guid}/accessible", async (Guid id, ApiClient api) =>
+{
+    var (ok, status, body, error) = await api.ListAccessibleRemoteFoldersAsync(id);
+    if (ok) return Results.Ok(body);
+    return Results.Json(new { error = error ?? "Failed" }, statusCode: status);
+}).RequireAuthorization();
+
+app.MapGet("/api-proxy/remote-accounts/{id:guid}/subscriptions", async (Guid id, ApiClient api) =>
+{
+    var list = await api.ListRemoteSubscriptionsAsync(id);
+    return list != null ? Results.Ok(list) : Results.StatusCode(502);
+}).RequireAuthorization();
+
+app.MapPost("/api-proxy/remote-accounts/subscriptions", async (HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<AddRemoteSubscriptionProxyRequest>();
+    if (req == null || string.IsNullOrWhiteSpace(req.MountPath))
+        return Results.BadRequest(new { error = "mountPath required" });
+    var (ok, status, body, error) = await api.AddRemoteSubscriptionAsync(req.RemoteAccountId, req.RemoteFolderId, req.RemoteFolderPath, req.MountPath);
+    if (ok) return Results.Ok(body);
+    return Results.Json(new { error = error ?? "Failed" }, statusCode: status);
+}).RequireAuthorization();
+
+app.MapDelete("/api-proxy/remote-accounts/subscriptions/{id:guid}", async (Guid id, ApiClient api) =>
+{
+    await api.DeleteRemoteSubscriptionAsync(id);
+    return Results.NoContent();
+}).RequireAuthorization();
+
+app.MapPost("/api-proxy/folder/{id:guid}/copy", async (Guid id, HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<CopyFolderProxyRequest>();
+    if (req == null || string.IsNullOrWhiteSpace(req.TargetParentPath))
+        return Results.BadRequest(new { error = "targetParentPath is required" });
+    var (ok, status, error) = await api.CopyFolderAsync(id, req.TargetParentPath);
+    return ok ? Results.Ok(new { ok = true }) : Results.Json(new { error = error ?? "Copy failed" }, statusCode: status);
+}).RequireAuthorization();
+
 app.MapDelete("/api-proxy/article/{id:guid}", async (Guid id, ApiClient api) =>
 {
     var (ok, status, error) = await api.DeleteArticleAsync(id);
@@ -512,8 +582,17 @@ app.MapPost("/api-proxy/restrictions/user/{userId:int}", async (int userId, Http
 {
     var req = await ctx.Request.ReadFromJsonAsync<AddAclEntryProxyRequest>();
     if (req == null) return Results.BadRequest();
-    var result = await api.AddUserRestrictionAsync(userId, req.FolderId, req.Effect);
+    var result = await api.AddUserRestrictionAsync(userId, req.FolderId, req.Effect, req.IsReadOnly);
     return result != null ? Results.Ok(result) : Results.StatusCode(502);
+}).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
+app.MapMethods("/api-proxy/restrictions/user/{userId:int}/{folderId:guid}", new[] { "PATCH" },
+    async (int userId, Guid folderId, HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<UpdateAclReadOnlyProxyRequest>();
+    if (req == null) return Results.BadRequest();
+    var ok = await api.SetUserRestrictionReadOnlyAsync(userId, folderId, req.IsReadOnly);
+    return ok ? Results.NoContent() : Results.StatusCode(502);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
 app.MapDelete("/api-proxy/restrictions/user/{userId:int}/{folderId:guid}", async (int userId, Guid folderId, ApiClient api) =>
@@ -684,7 +763,17 @@ internal record CreateUserProxyRequest(string Username, string DisplayName, stri
 internal record UpdateUserProxyRequest(string DisplayName, string? Role);
 internal record ChangeUserPasswordProxyRequest(string NewPassword);
 internal record ChangeOwnPasswordProxyRequest(string OldPassword, string NewPassword);
-internal record AddAclEntryProxyRequest(Guid FolderId, string Effect);
+internal record AddAclEntryProxyRequest(Guid FolderId, string Effect, bool IsReadOnly = false);
+
+internal record UpdateAclReadOnlyProxyRequest(bool IsReadOnly);
+
+internal record CopyArticleProxyRequest(string TargetFolderPath);
+
+internal record CopyFolderProxyRequest(string TargetParentPath);
+
+internal record CreateRemoteAccountProxyRequest(string DisplayName, string BaseUrl, string Username, string Password);
+
+internal record AddRemoteSubscriptionProxyRequest(Guid RemoteAccountId, Guid RemoteFolderId, string RemoteFolderPath, string MountPath);
 internal record RenameTagDto(string NewName);
 internal record MergeConceptTagDto(string Source, string Target);
 internal record SetConceptTagsDto(List<string>? ConceptTags);

@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -19,7 +20,10 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         f.created_at      AS CreatedAt,
         f.updated_at      AS UpdatedAt,
         f.deleted_at      AS DeletedAt,
-        f.cascade_delete_op_id AS CascadeDeleteOpId";
+        f.cascade_delete_op_id AS CascadeDeleteOpId,
+        f.is_system       AS IsSystem,
+        f.remote_subscription_id AS RemoteSubscriptionId,
+        f.remote_origin_id AS RemoteOriginId";
 
     public async Task<Folder?> GetByIdAsync(Guid id, bool includeDeleted = false)
     {
@@ -80,19 +84,52 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         // Repo-level write guard: close the "new endpoint forgets manual ACL check" hole.
         if (_holder.Scope.IsAccessDenied(folder.Path))
             throw new UnauthorizedAccessException($"Write access denied for path '{folder.Path}'");
+        if (_holder.Scope.IsReadOnly(folder.Path))
+            throw new ReadOnlyAccessException(folder.Path);
+
+        // Defence-in-depth: even sync / import / migration paths that bypass
+        // FolderService must not be able to fabricate a reserved system path
+        // without setting IsSystem. Disallow the combination explicitly.
+        if (!folder.IsSystem && SystemFolders.IsReservedSystemPath(folder.Path))
+            throw new InvalidOperationException(
+                $"Folder path '{folder.Path}' is reserved for the system. Use FolderService.EnsureSystemFolderAsync.");
 
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_folder
-              (id, path, name, parent_path, status, lamport_ts, source_node_id, created_at, updated_at, deleted_at, cascade_delete_op_id)
-              VALUES (@Id, @Path, @Name, @ParentPath, @Status, @LamportTs, @SourceNodeId, @CreatedAt, @UpdatedAt, @DeletedAt, @CascadeDeleteOpId)",
-            folder);
+              (id, path, name, parent_path, status, lamport_ts, source_node_id, created_at, updated_at, deleted_at, cascade_delete_op_id, is_system, remote_subscription_id, remote_origin_id)
+              VALUES (@Id, @Path, @Name, @ParentPath, @Status, @LamportTs, @SourceNodeId, @CreatedAt, @UpdatedAt, @DeletedAt, @CascadeDeleteOpId, @IsSystem, @RemoteSubscriptionId, @RemoteOriginId)",
+            new
+            {
+                folder.Id, folder.Path, folder.Name, folder.ParentPath, folder.Status,
+                folder.LamportTs, folder.SourceNodeId, folder.CreatedAt, folder.UpdatedAt,
+                folder.DeletedAt, folder.CascadeDeleteOpId,
+                IsSystem = folder.IsSystem ? 1 : 0,
+                folder.RemoteSubscriptionId,
+                folder.RemoteOriginId
+            });
     }
 
     public async Task UpdateAsync(Folder folder)
     {
         if (_holder.Scope.IsAccessDenied(folder.Path))
             throw new UnauthorizedAccessException($"Write access denied for path '{folder.Path}'");
+        if (_holder.Scope.IsReadOnly(folder.Path))
+            throw new ReadOnlyAccessException(folder.Path);
+
+        // SECURITY: consult the stored row, not the caller-supplied object — a
+        // malicious or buggy caller could clear RemoteSubscriptionId on the
+        // in-memory Folder to bypass the read-only guard. Same fix pattern as
+        // ArticleRepository.UpdateAsync (gemini+kilo round-3 finding).
+        if (!_holder.Scope.IsSuperadmin)
+        {
+            using var check = OpenConnection();
+            var storedRemoteSubId = await check.QuerySingleOrDefaultAsync<string?>(
+                "SELECT remote_subscription_id FROM tbl_folder WHERE id = @id",
+                new { id = folder.Id });
+            if (!string.IsNullOrEmpty(storedRemoteSubId))
+                throw new ReadOnlyAccessException($"Folder '{folder.Path}' belongs to a remote read-only share.");
+        }
 
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
@@ -100,9 +137,20 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
               SET path = @Path, name = @Name, parent_path = @ParentPath,
                   status = @Status, lamport_ts = @LamportTs, source_node_id = @SourceNodeId,
                   updated_at = @UpdatedAt, deleted_at = @DeletedAt,
-                  cascade_delete_op_id = @CascadeDeleteOpId
+                  cascade_delete_op_id = @CascadeDeleteOpId,
+                  is_system = @IsSystem,
+                  remote_subscription_id = @RemoteSubscriptionId,
+                  remote_origin_id = @RemoteOriginId
               WHERE id = @Id",
-            folder);
+            new
+            {
+                folder.Id, folder.Path, folder.Name, folder.ParentPath, folder.Status,
+                folder.LamportTs, folder.SourceNodeId, folder.UpdatedAt,
+                folder.DeletedAt, folder.CascadeDeleteOpId,
+                IsSystem = folder.IsSystem ? 1 : 0,
+                folder.RemoteSubscriptionId,
+                folder.RemoteOriginId
+            });
     }
 
     public async Task SoftDeleteAsync(Guid id, DateTime deletedAt, Guid? cascadeOpId = null)
@@ -112,8 +160,13 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
             using var check = OpenConnection();
             var path = await check.QuerySingleOrDefaultAsync<string?>(
                 "SELECT path FROM tbl_folder WHERE id = @id", new { id });
-            if (path != null && _holder.Scope.IsAccessDenied(path))
-                throw new UnauthorizedAccessException($"Write access denied for path '{path}'");
+            if (path != null)
+            {
+                if (_holder.Scope.IsAccessDenied(path))
+                    throw new UnauthorizedAccessException($"Write access denied for path '{path}'");
+                if (_holder.Scope.IsReadOnly(path))
+                    throw new ReadOnlyAccessException(path);
+            }
         }
 
         using var conn = OpenConnection();
@@ -130,6 +183,8 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     {
         if (_holder.Scope.IsAccessDenied(pathPrefix))
             throw new UnauthorizedAccessException($"Write access denied for path '{pathPrefix}'");
+        if (_holder.Scope.IsReadOnly(pathPrefix))
+            throw new ReadOnlyAccessException(pathPrefix);
 
         using var conn = OpenConnection();
         var now = deletedAt.ToString("o");
@@ -158,6 +213,10 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     {
         if (_holder.Scope.IsAccessDenied(oldPath) || _holder.Scope.IsAccessDenied(newPath))
             throw new UnauthorizedAccessException($"Write access denied for rename '{oldPath}' -> '{newPath}'");
+        if (_holder.Scope.IsReadOnly(oldPath))
+            throw new ReadOnlyAccessException(oldPath);
+        if (_holder.Scope.IsReadOnly(newPath))
+            throw new ReadOnlyAccessException(newPath);
 
         using var conn = OpenConnection();
         var updatedAtStr = updatedAt.ToString("o");

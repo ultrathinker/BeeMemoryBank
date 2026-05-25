@@ -52,7 +52,19 @@ public record UpdateUserRequest(string DisplayName, string? Role = null, string?
 
 public record ChangeUserPasswordRequest(string NewPassword);
 
-public record AddAclEntryRequest(Guid FolderId, string Effect);
+public record AddAclEntryRequest(Guid FolderId, string Effect, bool IsReadOnly = false);
+
+public record UpdateAclReadOnlyRequest(bool IsReadOnly);
+
+public record CopyArticleRequest(string TargetFolderPath);
+
+public record CopyFolderRequest(string TargetParentPath);
+
+public record RemoteTokenIssueRequest(string Username, string Password, string? Label = null);
+
+public record CreateRemoteAccountRequest(string DisplayName, string BaseUrl, string Username, string Password);
+
+public record AddRemoteSubscriptionRequest(Guid RemoteAccountId, Guid RemoteFolderId, string RemoteFolderPath, string MountPath);
 
 public record RestoreSnapshotRequest(string FileName, string MasterPassword, bool CreateBackupFirst = true, bool StandaloneMode = false);
 

@@ -133,7 +133,7 @@ public static class ConceptTagEndpoints
         }).WithTags("ConceptTags");
 
         // PUT /api/articles/{id}/concept-tags — set concept tags for an article
-        app.MapPut("/api/articles/{id:guid}/concept-tags", async (Guid id, HttpContext ctx, ConceptTagService conceptTagService, IConceptTagRepository conceptTagRepo, ArticleService articleService, SetConceptTagsRequest req) =>
+        app.MapPut("/api/articles/{id:guid}/concept-tags", async (Guid id, HttpContext ctx, ConceptTagService conceptTagService, IConceptTagRepository conceptTagRepo, ArticleService articleService, FolderAccessService folderAccess, SetConceptTagsRequest req) =>
         {
             if (!InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
@@ -141,6 +141,18 @@ public static class ConceptTagEndpoints
             var article = await articleService.GetMetadataAsync(id);
             if (article == null)
                 return Results.NotFound(new ErrorResponse($"Article {id} not found"));
+
+            // Tags are user-mutable metadata — must respect Read-Only ACL on the
+            // owning folder, otherwise RO users could relabel content.
+            var (callerUserId, _, isSuperadmin) = CallerIdentity.Extract(ctx);
+            if (!isSuperadmin)
+            {
+                var (deny, allow, readOnly) = await folderAccess.GetFullAccessInfoAsync(callerUserId);
+                if (FolderAccessService.IsAccessDenied(deny, allow, article.TreePath))
+                    return Results.Json(new ErrorResponse("You don't have permission to modify tags on this article."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnly, article.TreePath))
+                    return Results.Json(new ErrorResponse("This article is in a read-only folder for your user."), statusCode: 403);
+            }
 
             await conceptTagService.SetForArticleAsync(id, req.ConceptTags);
             var conceptTags = await conceptTagRepo.GetByArticleIdAsync(id);

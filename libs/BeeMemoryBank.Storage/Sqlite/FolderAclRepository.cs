@@ -8,7 +8,8 @@ public class FolderAclRepository(DbConnectionFactory factory) : BaseRepository(f
 {
     private const string SelectCols =
         @"rowid AS Id, user_id AS UserId,
-          folder_id AS FolderId, effect AS Effect, created_at AS CreatedAt";
+          folder_id AS FolderId, effect AS Effect,
+          is_read_only AS IsReadOnly, created_at AS CreatedAt";
 
     public async Task<List<FolderAclEntry>> GetByUserIdAsync(int userId)
     {
@@ -22,9 +23,34 @@ public class FolderAclRepository(DbConnectionFactory factory) : BaseRepository(f
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
-            @"INSERT INTO tbl_folder_acl_entry (user_id, folder_id, effect, created_at)
-              VALUES (@UserId, @FolderId, @Effect, @CreatedAt)",
-            new { entry.UserId, entry.FolderId, Effect = entry.Effect.ToString().ToLowerInvariant(), entry.CreatedAt });
+            @"INSERT INTO tbl_folder_acl_entry (user_id, folder_id, effect, is_read_only, created_at)
+              VALUES (@UserId, @FolderId, @Effect, @IsReadOnly, @CreatedAt)",
+            new
+            {
+                entry.UserId,
+                entry.FolderId,
+                Effect = entry.Effect.ToString().ToLowerInvariant(),
+                IsReadOnly = entry.IsReadOnly ? 1 : 0,
+                entry.CreatedAt
+            });
+    }
+
+    public async Task SetReadOnlyAsync(int userId, Guid folderId, AclEffect effect, bool isReadOnly)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_folder_acl_entry
+                 SET is_read_only = @IsReadOnly
+               WHERE user_id = @userId
+                 AND folder_id = @folderId
+                 AND effect = @effect",
+            new
+            {
+                userId,
+                folderId,
+                effect = effect.ToString().ToLowerInvariant(),
+                IsReadOnly = isReadOnly ? 1 : 0
+            });
     }
 
     public async Task RemoveByUserFolderAndEffectAsync(int userId, Guid folderId, AclEffect effect)

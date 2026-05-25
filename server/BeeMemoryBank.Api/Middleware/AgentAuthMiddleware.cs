@@ -27,12 +27,63 @@ namespace BeeMemoryBank.Api.Middleware;
 /// </remarks>
 public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddleware> logger)
 {
-    public async Task InvokeAsync(HttpContext context, IAgentRepository agentRepo, IUserRepository userRepo, SessionService session)
+    public async Task InvokeAsync(HttpContext context,
+        IAgentRepository agentRepo,
+        IUserRepository userRepo,
+        SessionService session,
+        IRemoteApiTokenRepository remoteTokenRepo)
     {
         var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
         if (authHeader != null && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
             var apiKey = authHeader["Bearer ".Length..].Trim();
+
+            // Cross-instance remote token: looks like "bmbrt_<40-hex>".
+            // No auto-unlock — these tokens have no DEK material. The endpoint
+            // refuses to serve plaintext if the local session is still locked.
+            if (apiKey.StartsWith("bmbrt_"))
+            {
+                var hash = RemoteTokenHelper.Hash(apiKey);
+                var record = await remoteTokenRepo.GetByTokenHashAsync(hash);
+                if (record != null && record.ExpiresAt > DateTime.UtcNow)
+                {
+                    var owner = await userRepo.GetByIdAsync(record.UserId);
+                    if (owner != null && owner.IsActive)
+                    {
+                        // SECURITY: remote tokens must NEVER carry superadmin
+                        // privileges, even if their owning user is a superadmin.
+                        // The token leaves the node by design (handed to a friend's
+                        // BMB), so a leak would otherwise expose the entire vault
+                        // with no ACL — snapshot/accessible endpoints bypass
+                        // checks when IsSuperadmin=true. Always downgrade to user
+                        // scope. Cross-instance use cases never need elevation;
+                        // the token's read access is bounded by the owner-side
+                        // ACL grants on their guest user. (kilo security review)
+                        context.Items["CallerIdentity"] = new CallerIdentity(
+                            UserId: owner.Id,
+                            AgentId: null,
+                            ViaAgentName: $"remote:{record.Label ?? "unlabelled"}",
+                            IsSuperadmin: false);
+
+                        // Sliding 90-day window: each successful auth bumps expiry.
+                        // Awaited (not fire-and-forget) — the scoped repo handle
+                        // would otherwise be disposed before the UPDATE completed
+                        // and the renewal would silently never persist. SQLite
+                        // single-row UPDATE is fast enough to await on every hit.
+                        try
+                        {
+                            await remoteTokenRepo.TouchAsync(record.Id, DateTime.UtcNow, DateTime.UtcNow.AddDays(90));
+                        }
+                        catch
+                        {
+                            // non-critical; allow the request to proceed
+                        }
+                    }
+                }
+                await next(context);
+                return;
+            }
+
             if (apiKey.StartsWith("bee_"))
             {
                 var keyHash = AgentKeyHelper.ComputeKeyHash(apiKey);

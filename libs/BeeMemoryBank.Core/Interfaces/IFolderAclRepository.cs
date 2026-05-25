@@ -9,4 +9,5 @@ public interface IFolderAclRepository
     Task RemoveByUserFolderAndEffectAsync(int userId, Guid folderId, AclEffect effect);
     Task RemoveByUserAndFolderAsync(int userId, Guid folderId);
     Task<List<int>> GetUserIdsByFolderIdAsync(Guid folderId);
+    Task SetReadOnlyAsync(int userId, Guid folderId, AclEffect effect, bool isReadOnly);
 }

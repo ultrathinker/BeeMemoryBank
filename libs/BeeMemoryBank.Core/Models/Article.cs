@@ -21,4 +21,12 @@ public class Article
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime? DeletedAt { get; set; }
+
+    // Set when this row mirrors an article from a remote BMB node. Non-null
+    // makes the row read-only at the repository layer (Phase 4 turns this into
+    // write-through-via-REST instead of a hard refusal).
+    public Guid? RemoteSubscriptionId { get; set; }
+    public string? RemoteOriginId { get; set; }
+    public long? RemoteVersion { get; set; }
+    public string? RemoteUpdatedBy { get; set; }
 }

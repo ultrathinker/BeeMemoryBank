@@ -94,7 +94,8 @@ public class McpAclTests : IAsyncLifetime
 
         _searchTools = new BeeSearchTools(searchService, responseManager);
         _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo);
-        _writeTools = new BeeWriteTools(_articleService, folderRepo, folderSvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
+        var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
+        _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
         _conceptTools = new BeeConceptTools(_conceptTagService, _articleService, _httpContextAccessor, responseManager);
         _auditTools = new BeeAuditTools(eventLogRepo, articleRepo, whitelistRepo, nodeRepo, _httpContextAccessor, responseManager);
 

@@ -36,6 +36,7 @@ public static class RestrictionEndpoints
                     folderId = e.FolderId,
                     folderPath = folder?.Path ?? "(deleted)",
                     effect = e.Effect.ToString().ToLowerInvariant(),
+                    isReadOnly = e.IsReadOnly,
                     createdAt = e.CreatedAt
                 });
             }
@@ -57,11 +58,14 @@ public static class RestrictionEndpoints
             if (folder == null)
                 return Results.Json(new ErrorResponse("Folder not found"), statusCode: 404);
 
+            // is_read_only is only meaningful for allow-entries; deny-entries ignore it.
+            var isReadOnly = effect == AclEffect.Allow && req.IsReadOnly;
             var entry = new FolderAclEntry
             {
                 UserId = userId,
                 FolderId = req.FolderId,
                 Effect = effect,
+                IsReadOnly = isReadOnly,
                 CreatedAt = DateTime.UtcNow
             };
             try
@@ -73,7 +77,35 @@ public static class RestrictionEndpoints
                 return Results.Json(new ErrorResponse("ACL entry already exists"), statusCode: 409);
             }
             folderAccess.InvalidateCache(userId);
-            return Results.Ok(new { entry.Id, folderId = entry.FolderId, folderPath = folder.Path, effect = entry.Effect.ToString().ToLowerInvariant() });
+            return Results.Ok(new
+            {
+                entry.Id,
+                folderId = entry.FolderId,
+                folderPath = folder.Path,
+                effect = entry.Effect.ToString().ToLowerInvariant(),
+                isReadOnly = entry.IsReadOnly
+            });
+        });
+
+        // Toggle is_read_only on an existing allow-entry.
+        userGroup.MapPatch("/{userId:int}/{folderId:guid}", async (
+            int userId,
+            Guid folderId,
+            UpdateAclReadOnlyRequest req,
+            IFolderAclRepository repo,
+            FolderAccessService folderAccess,
+            HttpContext ctx) =>
+        {
+            if (!InternalKeyValidator.Validate(ctx))
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
+            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
+            if (role != UserRoles.Superadmin)
+                return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
+
+            // Only allow-entries can be RO; deny-entries are unaffected.
+            await repo.SetReadOnlyAsync(userId, folderId, AclEffect.Allow, req.IsReadOnly);
+            folderAccess.InvalidateCache(userId);
+            return Results.NoContent();
         });
 
         userGroup.MapDelete("/{userId:int}/{folderId:guid}", async (int userId, Guid folderId, IFolderAclRepository repo, FolderAccessService folderAccess, HttpContext ctx) =>

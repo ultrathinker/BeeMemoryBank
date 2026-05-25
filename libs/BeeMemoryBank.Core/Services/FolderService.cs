@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 
@@ -15,6 +16,40 @@ public class FolderService(
     {
         path = NormalizePath(path);
 
+        if (SystemFolders.IsReservedSystemPath(path))
+            throw new InvalidOperationException(
+                $"Folder name '{path}' is reserved for the system and cannot be created by users.");
+
+        return await CreateInternalAsync(path, isSystem: false);
+    }
+
+    // Lazily create a reserved system folder (e.g. /_Drafts) the first time
+    // backend code needs to write into it (failed offline-save, conflict draft,
+    // restored from Hard Delete). Idempotent: returns the existing folder if it
+    // already exists, upgrading is_system=1 on a legacy row created before the
+    // protection landed.
+    public async Task<Folder> EnsureSystemFolderAsync(string path)
+    {
+        path = NormalizePath(path);
+        if (!SystemFolders.IsReservedSystemPath(path))
+            throw new InvalidOperationException(
+                $"Path '{path}' is not a registered system folder name.");
+
+        var existing = await folderRepo.GetByPathAsync(path);
+        if (existing != null)
+        {
+            if (!existing.IsSystem)
+            {
+                existing.IsSystem = true;
+                await folderRepo.UpdateAsync(existing);
+            }
+            return existing;
+        }
+        return await CreateInternalAsync(path, isSystem: true);
+    }
+
+    private async Task<Folder> CreateInternalAsync(string path, bool isSystem)
+    {
         var existing = await folderRepo.GetByPathAsync(path);
         if (existing != null)
             throw new InvalidOperationException($"Folder already exists at path '{path}'.");
@@ -38,7 +73,8 @@ public class FolderService(
             LamportTs = lamportTs,
             SourceNodeId = identity?.NodeId,
             CreatedAt = now,
-            UpdatedAt = now
+            UpdatedAt = now,
+            IsSystem = isSystem
         };
 
         await folderRepo.CreateAsync(folder);
@@ -58,10 +94,31 @@ public class FolderService(
         var folder = await folderRepo.GetByIdAsync(folderId)
             ?? throw new KeyNotFoundException($"Folder {folderId} not found");
 
+        if (folder.IsSystem)
+            throw new InvalidOperationException(
+                $"System folder '{folder.Path}' cannot be renamed.");
+
+        if (folder.RemoteSubscriptionId.HasValue)
+            throw new InvalidOperationException(
+                $"Folder '{folder.Path}' is a remote mirror and cannot be renamed.");
+
+        // Block when descendants include any remote mirror mount-point — the
+        // subscription's stored MountPath would no longer match the new tree
+        // location and the next poll would resurrect the old path / dupe.
+        // Caught by gemini round-3.
+        await EnsureNoRemoteDescendantsAsync(folder.Path, "renamed");
+
         var oldPath = folder.Path;
         var newParentPath = folder.ParentPath;
         var newPath = (newParentPath != null ? newParentPath : "") + "/" + newName;
         newPath = "/" + newPath.Trim('/');
+
+        // Defence-in-depth: forbid renaming to a reserved system path (otherwise
+        // a user could create `/MyFolder`, fill it, then rename → `/_Drafts` and
+        // have the next EnsureSystemFolderAsync upgrade it to is_system=1.
+        if (SystemFolders.IsReservedSystemPath(newPath))
+            throw new InvalidOperationException(
+                $"Cannot rename to reserved system path '{newPath}'.");
 
         var descendantIds = await folderRepo.ListIdsByPathPrefixAsync(oldPath);
 
@@ -87,9 +144,23 @@ public class FolderService(
         var folder = await folderRepo.GetByIdAsync(folderId)
             ?? throw new KeyNotFoundException($"Folder {folderId} not found");
 
+        if (folder.IsSystem)
+            throw new InvalidOperationException(
+                $"System folder '{folder.Path}' cannot be moved.");
+
+        if (folder.RemoteSubscriptionId.HasValue)
+            throw new InvalidOperationException(
+                $"Folder '{folder.Path}' is a remote mirror and cannot be moved.");
+
+        await EnsureNoRemoteDescendantsAsync(folder.Path, "moved");
+
         var oldPath = folder.Path;
         var folderName = GetLastSegment(oldPath);
         var newPath = newParentPath.TrimEnd('/') + "/" + folderName;
+
+        if (SystemFolders.IsReservedSystemPath(newPath))
+            throw new InvalidOperationException(
+                $"Cannot move to reserved system path '{newPath}'.");
 
         if (newPath == oldPath) return;
         if (newPath.StartsWith(oldPath + "/"))
@@ -118,6 +189,16 @@ public class FolderService(
         var folder = await folderRepo.GetByIdAsync(folderId)
             ?? throw new KeyNotFoundException($"Folder {folderId} not found");
 
+        if (folder.IsSystem)
+            throw new InvalidOperationException(
+                $"System folder '{folder.Path}' cannot be deleted.");
+
+        if (folder.RemoteSubscriptionId.HasValue)
+            throw new InvalidOperationException(
+                $"Folder '{folder.Path}' is a remote mirror. Detach the subscription on the Remote Accounts page instead.");
+
+        await EnsureNoRemoteDescendantsAsync(folder.Path, "deleted");
+
         var deletedAt = DateTime.UtcNow;
         // Shared op id tags this folder and its cascade-deleted subfolders, so
         // Restore can later recreate exactly the subtree that went down together.
@@ -140,6 +221,23 @@ public class FolderService(
     // pollution) and a peer can no longer push such paths via sync.
     private static string NormalizePath(string path) =>
         TreePathCanonicalizer.Canonicalize(path);
+
+    // Walks descendants of `path` and refuses the operation if any are flagged
+    // as remote mirror roots. Detaching a subscription via the Remote Accounts
+    // page is the only sanctioned way to remove a mirror.
+    private async Task EnsureNoRemoteDescendantsAsync(string path, string verb)
+    {
+        var all = await folderRepo.GetAllActiveAsync();
+        var prefix = path.TrimEnd('/') + "/";
+        var blocker = all.FirstOrDefault(f =>
+            f.RemoteSubscriptionId.HasValue
+            && f.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        if (blocker != null)
+        {
+            throw new InvalidOperationException(
+                $"Folder '{path}' cannot be {verb} because it contains a remote-mirror subtree at '{blocker.Path}'. Detach it first.");
+        }
+    }
 
     private static string? GetParentPath(string path)
     {

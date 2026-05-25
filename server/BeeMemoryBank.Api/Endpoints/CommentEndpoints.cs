@@ -49,9 +49,11 @@ public static class CommentEndpoints
                 var article = await articleSvc.GetMetadataAsync(req.ArticleId);
                 if (article is null)
                     return Results.NotFound(new ErrorResponse($"Article {req.ArticleId} not found"));
-                var (folderPaths, policy) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                var (folderPaths, policy, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
                 if (FolderAccessService.IsAccessDenied(folderPaths, policy, article.TreePath))
                     return Results.Json(new ErrorResponse($"Access denied for article {req.ArticleId}."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, article.TreePath))
+                    return Results.Json(new ErrorResponse($"Article {req.ArticleId} is in a read-only folder."), statusCode: 403);
             }
 
             var comment = await commentSvc.CreateAsync(req.ArticleId, req.Text.Trim());
@@ -80,9 +82,11 @@ public static class CommentEndpoints
                 var article = await articleSvc.GetMetadataAsync(comment.ArticleId);
                 if (article is null)
                     return Results.NotFound(new ErrorResponse($"Comment {id} not found"));
-                var (folderPaths, policy) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                var (folderPaths, policy, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
                 if (FolderAccessService.IsAccessDenied(folderPaths, policy, article.TreePath))
                     return Results.Json(new ErrorResponse($"Access denied for comment {id}."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, article.TreePath))
+                    return Results.Json(new ErrorResponse($"Comment {id}'s article is in a read-only folder."), statusCode: 403);
             }
 
             await commentSvc.DeleteAsync(id);

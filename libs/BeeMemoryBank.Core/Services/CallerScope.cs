@@ -11,6 +11,10 @@ public sealed class SystemCallerScope : ICallerScope
 
     public bool IsAccessDenied(string? treePath) => false;
 
+    public bool IsWriteDenied(string? treePath) => false;
+
+    public bool IsReadOnly(string? treePath) => false;
+
     public bool IsNavigable(string? treePath) => true;
 
     public List<Article> FilterArticles(List<Article> articles) => articles;
@@ -31,6 +35,10 @@ public sealed class DenyAllScope : ICallerScope
 
     public bool IsAccessDenied(string? treePath) => true;
 
+    public bool IsWriteDenied(string? treePath) => true;
+
+    public bool IsReadOnly(string? treePath) => false;
+
     public bool IsNavigable(string? treePath) => false;
 
     public List<Article> FilterArticles(List<Article> articles) => [];
@@ -42,15 +50,27 @@ public sealed class HttpCallerScope : ICallerScope
 {
     private readonly HashSet<string> _denyPaths;
     private readonly HashSet<string> _allowPaths;
+    private readonly HashSet<string> _readOnlyPaths;
     private readonly HashSet<string> _ancestors;
 
     public bool IsSuperadmin { get; }
 
+    // Back-compat overload — read-only paths default to empty.
     public HttpCallerScope(bool isSuperadmin, HashSet<string> denyPaths, HashSet<string> allowPaths)
+        : this(isSuperadmin, denyPaths, allowPaths, new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+    {
+    }
+
+    public HttpCallerScope(
+        bool isSuperadmin,
+        HashSet<string> denyPaths,
+        HashSet<string> allowPaths,
+        HashSet<string> readOnlyPaths)
     {
         IsSuperadmin = isSuperadmin;
         _denyPaths = denyPaths;
         _allowPaths = allowPaths;
+        _readOnlyPaths = readOnlyPaths;
         _ancestors = allowPaths.Count > 0
             ? FolderAccessService.ComputeAncestors(allowPaths)
             : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -58,6 +78,12 @@ public sealed class HttpCallerScope : ICallerScope
 
     public bool IsAccessDenied(string? treePath)
         => IsSuperadmin ? false : FolderAccessService.IsAccessDenied(_denyPaths, _allowPaths, treePath);
+
+    public bool IsWriteDenied(string? treePath)
+        => IsSuperadmin ? false : FolderAccessService.IsWriteDenied(_denyPaths, _allowPaths, _readOnlyPaths, treePath);
+
+    public bool IsReadOnly(string? treePath)
+        => IsSuperadmin ? false : FolderAccessService.IsReadOnlyForCaller(_readOnlyPaths, treePath);
 
     public bool IsNavigable(string? treePath)
     {

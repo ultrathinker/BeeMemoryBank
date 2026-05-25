@@ -231,6 +231,9 @@
                     <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add
                 </sl-button>
             </div>
+            <div id="restriction-readonly-row" style="margin-top:8px;display:none;">
+                <sl-switch id="restriction-readonly" size="small">Read-only (allow read, deny write)</sl-switch>
+            </div>
             <div id="restriction-folder-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:56px;max-height:240px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
         </div>
     </sl-dialog>
@@ -406,14 +409,19 @@ function loadRestrictions() {
             return;
         }
         container.innerHTML = list.map(function(r) {
-            var effectIcon = r.effect === 'allow' ? 'check-circle' : 'x-circle';
-            var effectColor = r.effect === 'allow' ? 'var(--sl-color-success-600)' : 'var(--sl-color-danger-600)';
             var effectLabel = r.effect === 'allow' ? 'Allow' : 'Deny';
+            var roBadge = (r.effect === 'allow' && r.isReadOnly)
+                ? ' <sl-badge variant="warning" pill style="margin-left:4px;" title="Read-only"><sl-icon slot=\"prefix\" name=\"lock-fill\"></sl-icon>RO</sl-badge>'
+                : '';
+            var toggleBtn = r.effect === 'allow'
+                ? '<sl-icon-button name="lock' + (r.isReadOnly ? '-fill' : '') + '" label="Toggle read-only" onclick="toggleReadOnly(\'' + r.folderId + '\', ' + (r.isReadOnly ? 'false' : 'true') + ')"></sl-icon-button>'
+                : '';
             return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--sl-color-neutral-200);">' +
                 '<span><sl-icon name="folder2"></sl-icon> ' + escapeHtml(r.folderPath) +
-                ' <sl-badge variant="' + (r.effect === 'allow' ? 'success' : 'danger') + '" pill style="margin-left:8px;">' + effectLabel + '</sl-badge></span>' +
+                ' <sl-badge variant="' + (r.effect === 'allow' ? 'success' : 'danger') + '" pill style="margin-left:8px;">' + effectLabel + '</sl-badge>' + roBadge + '</span>' +
+                '<span>' + toggleBtn +
                 '<sl-icon-button name="trash" label="Remove" onclick="removeRestriction(\'' + r.folderId + '\')"></sl-icon-button>' +
-                '</div>';
+                '</span></div>';
         }).join('');
     }).catch(function() {
         document.getElementById('restriction-list').innerHTML = '<div style="color:var(--sl-color-danger);font-size:0.9rem;">Failed to load restrictions</div>';
@@ -539,10 +547,11 @@ async function addRestriction() {
 
     addBtn.loading = true;
     var effect = document.getElementById('restriction-effect').value || 'deny';
+    var isReadOnly = effect === 'allow' && document.getElementById('restriction-readonly').checked;
     var resp = await fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderId: folderId, effect: effect })
+        body: JSON.stringify({ folderId: folderId, effect: effect, isReadOnly: isReadOnly })
     });
     addBtn.loading = false;
     if (resp.ok) {
@@ -568,6 +577,27 @@ function removeRestriction(folderId) {
         }
     });
 }
+
+function toggleReadOnly(folderId, newValue) {
+    fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId + '/' + folderId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isReadOnly: newValue })
+    }).then(function(r) {
+        if (r.ok) {
+            loadRestrictions();
+        } else {
+            showDlgError('restriction-error', 'Failed to toggle read-only flag');
+        }
+    });
+}
+
+// Show/hide the read-only switch based on selected effect.
+document.getElementById('restriction-effect').addEventListener('sl-change', function() {
+    var sel = document.getElementById('restriction-effect').value;
+    document.getElementById('restriction-readonly-row').style.display = sel === 'allow' ? '' : 'none';
+    if (sel !== 'allow') document.getElementById('restriction-readonly').checked = false;
+});
 
 addBtn.addEventListener('click', addRestriction);
 </script>

@@ -26,6 +26,7 @@ public static class DependencyInjection
         services.AddScoped<SearchService>();
         services.AddScoped<EmbeddingProjectionService>();
         services.AddScoped<FolderService>();
+        services.AddScoped<CopyService>();
         services.AddScoped<CommentService>();
         services.AddScoped<MediaService>();
         services.AddScoped<UserService>();
@@ -34,6 +35,8 @@ public static class DependencyInjection
         services.AddScoped<ObsidianImportService>();
         services.AddScoped<RestoreService>();
         services.AddScoped<LegacyPasswordSlotMigrationService>();
+        services.AddScoped<RemoteAccountService>();
+        services.AddScoped<RemoteEventApplier>();
         return services;
     }
 

@@ -68,7 +68,8 @@ public class McpToolsTests : IAsyncLifetime
         _searchTools = new BeeSearchTools(_searchService, responseManager);
         var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccessService);
         _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo);
-        _writeTools = new BeeWriteTools(_articleService, folderRepo, folderSvc, conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
+        var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
+        _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
     }
 
     public Task DisposeAsync()

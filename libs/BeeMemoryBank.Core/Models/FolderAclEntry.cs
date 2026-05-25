@@ -15,5 +15,11 @@ public class FolderAclEntry
     public int? UserId { get; set; }
     public Guid FolderId { get; set; }
     public AclEffect Effect { get; set; }
+
+    // Only meaningful when Effect == Allow.
+    // true = read-only access; false (default) = full read+write.
+    // Ignored when Effect == Deny.
+    public bool IsReadOnly { get; set; }
+
     public DateTime CreatedAt { get; set; }
 }

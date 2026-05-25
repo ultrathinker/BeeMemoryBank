@@ -75,7 +75,9 @@ public class AclPathChangeTests : IAsyncLifetime
 
         _httpContextAccessor = new HttpContextAccessor();
         var responseManager = new McpResponseManager(Path.GetTempPath());
-        _writeTools = new BeeWriteTools(_articleService, _folderRepo, _folderSvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
+        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
+        var copySvc = new CopyService(_articleService, _folderSvc, mediaService, articleRepo, _folderRepo, _conceptTagService, _scopeHolder);
+        _writeTools = new BeeWriteTools(_articleService, _folderRepo, articleRepo, _folderSvc, copySvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
 
         _scopeHolder.Scope = SystemCallerScope.Instance;
 

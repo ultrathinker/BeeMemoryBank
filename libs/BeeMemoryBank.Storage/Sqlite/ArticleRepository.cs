@@ -22,7 +22,11 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         a.source_node_id  AS SourceNodeId,
         a.created_at      AS CreatedAt,
         a.updated_at      AS UpdatedAt,
-        a.deleted_at      AS DeletedAt";
+        a.deleted_at      AS DeletedAt,
+        a.remote_subscription_id AS RemoteSubscriptionId,
+        a.remote_origin_id       AS RemoteOriginId,
+        a.remote_version         AS RemoteVersion,
+        a.remote_updated_by      AS RemoteUpdatedBy";
 
     private const string FromClause = "FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id";
 
@@ -115,6 +119,8 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         // Repo-level write guard: close the "new endpoint forgets manual ACL check" hole.
         if (_holder.Scope.IsAccessDenied(article.TreePath))
             throw new UnauthorizedAccessException($"Write access denied for path '{article.TreePath}'");
+        if (_holder.Scope.IsReadOnly(article.TreePath))
+            throw new ReadOnlyAccessException(article.TreePath);
 
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
@@ -122,9 +128,11 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_article
               (id, title, tree_path, folder_id, embedding_projection, embedding_model_version, embedding_pending,
-               status, lamport_ts, source_node_id, created_at, updated_at)
+               status, lamport_ts, source_node_id, created_at, updated_at,
+               remote_subscription_id, remote_origin_id, remote_version, remote_updated_by)
               VALUES (@Id, @Title, @TreePath, @FolderId, @EmbeddingProjection, @EmbeddingModelVersion, @EmbeddingPending,
-                      @Status, @LamportTs, @SourceNodeId, @CreatedAt, @UpdatedAt)",
+                      @Status, @LamportTs, @SourceNodeId, @CreatedAt, @UpdatedAt,
+                      @RemoteSubscriptionId, @RemoteOriginId, @RemoteVersion, @RemoteUpdatedBy)",
             article, tx);
 
         tx.Commit();
@@ -134,6 +142,41 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
     {
         if (_holder.Scope.IsAccessDenied(article.TreePath))
             throw new UnauthorizedAccessException($"Write access denied for path '{article.TreePath}'");
+        if (_holder.Scope.IsReadOnly(article.TreePath))
+            throw new ReadOnlyAccessException(article.TreePath);
+
+        // SECURITY: we ALSO need to check the article's CURRENT (pre-update)
+        // path. Without this, a caller with write permission on /Public could
+        // call UpdateAsync with article.Id pointing at a /Secrets article and
+        // article.TreePath = "/Public" — the guard above passes, and the row
+        // is moved (with full plaintext attached) into the caller's reach.
+        // Gemini security review 2026-05-25.
+        //
+        // The mirrored-share guard is in the same SELECT so we avoid a second
+        // round-trip.
+        if (!_holder.Scope.IsSuperadmin)
+        {
+            using var check = OpenConnection();
+            var stored = await check.QuerySingleOrDefaultAsync<ArticleUpdateGuardMeta>(
+                @"SELECT COALESCE(f.path, '/') AS StoredTreePath,
+                         a.remote_subscription_id AS RemoteSubId
+                    FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
+                   WHERE a.id = @id",
+                new { id = article.Id });
+            if (stored != null)
+            {
+                if (!string.IsNullOrEmpty(stored.RemoteSubId))
+                    throw new ReadOnlyAccessException($"Article {article.Id} is in a remote read-only share.");
+                if (!string.IsNullOrEmpty(stored.StoredTreePath))
+                {
+                    if (_holder.Scope.IsAccessDenied(stored.StoredTreePath))
+                        throw new UnauthorizedAccessException(
+                            $"Write access denied for stored path '{stored.StoredTreePath}' (cannot move article you don't own).");
+                    if (_holder.Scope.IsReadOnly(stored.StoredTreePath))
+                        throw new ReadOnlyAccessException(stored.StoredTreePath);
+                }
+            }
+        }
 
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
@@ -151,7 +194,9 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
                   lamport_ts = @LamportTs, source_node_id = @SourceNodeId,
                   updated_at = @UpdatedAt,
                   status = @Status,
-                  deleted_at = CASE WHEN @Status = 'A' THEN NULL ELSE deleted_at END
+                  deleted_at = CASE WHEN @Status = 'A' THEN NULL ELSE deleted_at END,
+                  remote_version = @RemoteVersion,
+                  remote_updated_by = @RemoteUpdatedBy
               WHERE id = @Id",
             article, tx);
 
@@ -165,11 +210,27 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         if (!_holder.Scope.IsSuperadmin)
         {
             using var check = OpenConnection();
-            var treePath = await check.QuerySingleOrDefaultAsync<string?>(
-                "SELECT COALESCE(f.path, '/') FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id WHERE a.id = @id",
+            // Dapper maps ValueTuple by position (Item1/Item2), not by alias, so
+            // `(string?, string?)` would receive nulls regardless of SELECT — the
+            // ACL/Read-only guard would silently no-op. Use a dedicated record so
+            // properties bind by name. Caught by Claude+gemini third review.
+            var meta = await check.QuerySingleOrDefaultAsync<ArticleDeleteMeta>(
+                @"SELECT COALESCE(f.path, '/') AS TreePath, a.remote_subscription_id AS RemoteSubId
+                  FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
+                  WHERE a.id = @id",
                 new { id });
-            if (treePath != null && _holder.Scope.IsAccessDenied(treePath))
-                throw new UnauthorizedAccessException($"Write access denied for path '{treePath}'");
+            if (meta != null)
+            {
+                if (!string.IsNullOrEmpty(meta.TreePath))
+                {
+                    if (_holder.Scope.IsAccessDenied(meta.TreePath))
+                        throw new UnauthorizedAccessException($"Write access denied for path '{meta.TreePath}'");
+                    if (_holder.Scope.IsReadOnly(meta.TreePath))
+                        throw new ReadOnlyAccessException(meta.TreePath);
+                }
+                if (!string.IsNullOrEmpty(meta.RemoteSubId))
+                    throw new ReadOnlyAccessException($"Article {id} is in a remote read-only share.");
+            }
         }
 
         using var conn = OpenConnection();
@@ -277,4 +338,19 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         return results.ToList();
     }
 
+    // Dapper binds public properties by alias — used by SoftDeleteAsync to
+    // probe path and remote-subscription guard. Plain record class on purpose:
+    // ValueTuple binds by position (Item1/Item2) and would defeat the guard.
+    private sealed class ArticleDeleteMeta
+    {
+        public string? TreePath { get; set; }
+        public string? RemoteSubId { get; set; }
+    }
+
+    // Same shape — used by UpdateAsync to enforce the stored-path guard.
+    private sealed class ArticleUpdateGuardMeta
+    {
+        public string? StoredTreePath { get; set; }
+        public string? RemoteSubId { get; set; }
+    }
 }

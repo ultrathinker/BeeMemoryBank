@@ -9,8 +9,26 @@ namespace BeeMemoryBank.Core.Services;
 public class UserService(
     IUserRepository userRepo,
     IKeySlotRepository keySlotRepo,
-    SessionService session)
+    SessionService session,
+    IRemoteApiTokenRepository? remoteTokenRepo = null)
 {
+    // Invalidate any remote API tokens the user owns whenever their password
+    // changes (Claude round-3 finding). Without this, an attacker who captured
+    // a remote token before the password rotation keeps full read access for
+    // the remaining sliding-90-day window. Repo is optional so legacy DI
+    // setups in tests still construct the service.
+    private async Task RevokeRemoteTokensAsync(int userId)
+    {
+        if (remoteTokenRepo == null) return;
+        try
+        {
+            var tokens = await remoteTokenRepo.ListByUserAsync(userId);
+            foreach (var t in tokens)
+                await remoteTokenRepo.DeleteAsync(t.Id);
+        }
+        catch { /* non-fatal — log via standard logger if it ever matters */ }
+    }
+
     public async Task<User?> AuthenticateAsync(string username, string password)
     {
         var user = await userRepo.GetByUsernameAsync(username);
@@ -131,6 +149,7 @@ public class UserService(
         }
 
         await userRepo.UpdateAsync(user);
+        await RevokeRemoteTokensAsync(userId);
     }
 
     public async Task AdminChangePasswordAsync(int userId, string newPassword)
@@ -177,6 +196,7 @@ public class UserService(
         }
 
         await userRepo.UpdateAsync(user);
+        await RevokeRemoteTokensAsync(userId);
     }
 
     public async Task DeleteUserAsync(int userId)

@@ -40,7 +40,7 @@ public static class TreeEndpoints
             return Results.Ok(tree);
         }).WithTags("Tree");
 
-        app.MapGet("/api/tree/children", async (HttpContext ctx, TreeService svc, CallerScopeHolder scopeHolder, IConceptTagRepository conceptTagRepo, string path = "/") =>
+        app.MapGet("/api/tree/children", async (HttpContext ctx, TreeService svc, CallerScopeHolder scopeHolder, IConceptTagRepository conceptTagRepo, FolderAccessService folderAccess, IFolderRepository folderRepo, string path = "/") =>
         {
             if (!InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
@@ -60,12 +60,62 @@ public static class TreeEndpoints
                 articleResponses.Add(ArticleResponse.From(a, conceptTags));
             }
 
+            var isReadOnly = false;
+            if (!scope.IsSuperadmin)
+            {
+                var (userId, _, _) = CallerIdentity.Extract(ctx);
+                if (userId is int uid)
+                {
+                    var (_, _, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(uid);
+                    isReadOnly = FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, path);
+                }
+            }
+
+            var currentFolder = await folderRepo.GetByPathAsync(path);
+            var isCurrentSystem = currentFolder?.IsSystem == true;
+
             var response = new TreeChildrenResponse(
                 result.Path,
-                result.Folders.Select(f => new FolderInfoResponse(f.Id, f.Path, f.Name, f.ArticleCount, f.CreatedAt, f.UpdatedAt)).ToList(),
-                articleResponses);
+                result.Folders.Select(f => new FolderInfoResponse(f.Id, f.Path, f.Name, f.ArticleCount, f.CreatedAt, f.UpdatedAt, f.IsSystem, f.IsRemote)).ToList(),
+                articleResponses,
+                isReadOnly,
+                isCurrentSystem);
             return Results.Ok(response);
         }).WithTags("Tree");
+
+        // Lightweight endpoint UIs use to decorate folder lists and to gate
+        // single-folder write actions without re-listing the whole tree.
+        app.MapGet("/api/access/readonly-paths", async (HttpContext ctx, FolderAccessService folderAccess) =>
+        {
+            if (!InternalKeyValidator.Validate(ctx))
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
+
+            var (userId, _, isSuperadmin) = CallerIdentity.Extract(ctx);
+            if (isSuperadmin || userId is null)
+                return Results.Ok(new { paths = Array.Empty<string>() });
+
+            var (_, _, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
+            return Results.Ok(new { paths = readOnlyPaths.OrderBy(p => p).ToArray() });
+        }).WithTags("Access");
+
+        app.MapGet("/api/access/folder-permissions", async (HttpContext ctx, FolderAccessService folderAccess, string path) =>
+        {
+            if (!InternalKeyValidator.Validate(ctx))
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
+            if (string.IsNullOrWhiteSpace(path))
+                return Results.BadRequest(new ErrorResponse("path is required"));
+
+            var (userId, _, isSuperadmin) = CallerIdentity.Extract(ctx);
+            if (isSuperadmin)
+                return Results.Ok(new { path, canRead = true, canWrite = true, isReadOnly = false });
+            if (userId is null)
+                return Results.Ok(new { path, canRead = false, canWrite = false, isReadOnly = false });
+
+            var (deny, allow, ro) = await folderAccess.GetFullAccessInfoAsync(userId);
+            var canRead = !FolderAccessService.IsAccessDenied(deny, allow, path);
+            var isReadOnly = canRead && FolderAccessService.IsReadOnlyForCaller(ro, path);
+            return Results.Ok(new { path, canRead, canWrite = canRead && !isReadOnly, isReadOnly });
+        }).WithTags("Access");
 
         app.MapGet("/api/folders/search", async (HttpContext ctx, IFolderRepository folderRepo, string? q = null, int limit = 12) =>
         {

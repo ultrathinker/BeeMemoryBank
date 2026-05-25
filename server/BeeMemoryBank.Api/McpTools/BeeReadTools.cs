@@ -129,6 +129,7 @@ public class BeeReadTools(
             .GroupBy(a => a.TreePath)
             .ToDictionary(g => g.Key, g => g.Select(a => new { id = a.Id, title = a.Title }).ToList());
 
+        var folderMeta = folders.ToDictionary(f => f.Path, f => f);
         var allPaths = new HashSet<string>(folders.Select(f => f.Path));
         foreach (var a in articles)
             allPaths.Add(a.TreePath);
@@ -140,12 +141,18 @@ public class BeeReadTools(
         var emptyList = new List<object>();
         var byPath = filteredPaths
             .OrderBy(p => p)
-            .Select(p => new
+            .Select(p =>
             {
-                path = p,
-                articles = articlesByPath.TryGetValue(p, out var arts)
-                    ? arts.Select(a => (object)a).ToList()
-                    : emptyList
+                folderMeta.TryGetValue(p, out var meta);
+                return new
+                {
+                    path = p,
+                    isSystem = meta?.IsSystem ?? false,
+                    isRemote = meta?.RemoteSubscriptionId.HasValue ?? false,
+                    articles = articlesByPath.TryGetValue(p, out var arts)
+                        ? arts.Select(a => (object)a).ToList()
+                        : emptyList
+                };
             });
 
         var json = JsonSerializer.Serialize(new { paths = byPath }, JsonOpts);

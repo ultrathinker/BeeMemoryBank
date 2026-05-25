@@ -1,0 +1,211 @@
+@page
+@model BeeMemoryBank.Web.Pages.RemoteAccountsModel
+@{
+    ViewData["Title"] = "Remote Accounts";
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <h2 style="font-size:1.4rem;font-weight:700;margin:0 0 16px 0;">
+        <sl-icon name="cloud-arrow-down" style="margin-right:6px;"></sl-icon>Remote Accounts
+    </h2>
+    <p class="text-muted" style="margin-bottom:18px;">
+        Mirror folders read-only from another BMB node. Provide that node's URL plus the username/password
+        of a guest account it created for you. The credentials are exchanged once for a 90-day token; the
+        password itself is never persisted.
+    </p>
+
+    <sl-button id="btn-add-account" size="small" variant="primary" style="margin-bottom:14px;">
+        <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Remote Account
+    </sl-button>
+
+    <div id="accounts-list"></div>
+
+    <sl-dialog id="dlg-add-account" label="Add Remote Account" style="--width:520px;">
+        <sl-alert id="add-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+            <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+            <span id="add-error-msg"></span>
+        </sl-alert>
+        <sl-input id="add-display" label="Display name" placeholder="Alice's BMB" required></sl-input>
+        <sl-input id="add-url" label="Base URL" placeholder="https://her-node.example" required style="margin-top:8px;"></sl-input>
+        <sl-input id="add-username" label="Username (on remote node)" required style="margin-top:8px;"></sl-input>
+        <sl-input id="add-password" label="Password" type="password" required style="margin-top:8px;"></sl-input>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-account').hide()">Cancel</sl-button>
+        <sl-button id="btn-save-account" slot="footer" variant="primary">Connect</sl-button>
+    </sl-dialog>
+
+    <sl-dialog id="dlg-subs" label="Subscriptions" style="--width:620px;">
+        <p class="text-muted text-sm" id="dlg-subs-account-info"></p>
+        <sl-alert id="subs-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+            <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+            <span id="subs-error-msg"></span>
+        </sl-alert>
+        <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-secondary);margin:10px 0 8px;">
+            Currently mirrored
+        </h4>
+        <div id="subs-current" style="margin-bottom:14px;"></div>
+        <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-secondary);margin:10px 0 8px;">
+            Available folders
+        </h4>
+        <div id="subs-available"></div>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-subs').hide()">Close</sl-button>
+    </sl-dialog>
+</div>
+</div>
+
+<script>
+let currentAccountId = null;
+
+function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+async function refresh() {
+    const resp = await fetch('/api-proxy/remote-accounts');
+    const list = await resp.json();
+    const container = document.getElementById('accounts-list');
+    if (!list || list.length === 0) {
+        container.innerHTML = '<div class="card" style="padding:24px;text-align:center;color:var(--text-secondary);">No remote accounts configured yet.</div>';
+        return;
+    }
+    container.innerHTML = list.map(function(a) {
+        const status = a.lastSyncStatus || 'pending';
+        const statusVariant = status === 'ok' ? 'success' : status === 'auth_failed' ? 'danger' : status === 'unreachable' ? 'warning' : 'neutral';
+        return '<div class="card" style="padding:14px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">'
+            + '<div><strong>' + escapeHtml(a.displayName) + '</strong> '
+            + '<sl-badge variant="' + statusVariant + '" pill style="margin-left:6px;">' + status + '</sl-badge>'
+            + '<div style="color:var(--text-secondary);font-size:0.85rem;">'
+            + escapeHtml(a.username) + ' @@ ' + escapeHtml(a.baseUrl)
+            + (a.lastSyncAt ? ' · last sync ' + new Date(a.lastSyncAt).toLocaleString() : '')
+            + (a.lastError ? '<br><span style="color:var(--sl-color-danger-600);">' + escapeHtml(a.lastError) + '</span>' : '')
+            + '</div></div>'
+            + '<div>'
+            + '<sl-button size="small" variant="default" onclick="openSubsDialog(\'' + a.id + '\', \'' + escapeHtml(a.displayName).replace(/'/g, "\\'") + '\')">'
+            + '<sl-icon slot="prefix" name="diagram-2"></sl-icon> Subscriptions</sl-button> '
+            + '<sl-icon-button name="trash" label="Delete" onclick="removeAccount(\'' + a.id + '\')"></sl-icon-button>'
+            + '</div></div>';
+    }).join('');
+}
+
+async function saveAccount() {
+    const display = document.getElementById('add-display').value.trim();
+    const url = document.getElementById('add-url').value.trim().replace(/\/+$/, '');
+    const username = document.getElementById('add-username').value.trim();
+    const password = document.getElementById('add-password').value;
+    if (!display || !url || !username || !password) {
+        showAddErr('All fields are required'); return;
+    }
+    const btn = document.getElementById('btn-save-account');
+    btn.loading = true;
+    try {
+        const resp = await fetch('/api-proxy/remote-accounts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ displayName: display, baseUrl: url, username: username, password: password })
+        });
+        if (resp.ok) {
+            document.getElementById('dlg-add-account').hide();
+            ['add-display','add-url','add-username','add-password'].forEach(function(id){ document.getElementById(id).value=''; });
+            await refresh();
+        } else {
+            const data = await resp.json().catch(function(){return{};});
+            showAddErr(data.error || ('HTTP ' + resp.status));
+        }
+    } finally { btn.loading = false; }
+}
+
+function showAddErr(msg) {
+    const el = document.getElementById('add-error');
+    document.getElementById('add-error-msg').textContent = msg;
+    el.style.display = ''; el.open = true;
+}
+
+async function removeAccount(id) {
+    if (!confirm('Remove this remote account and all its mirrored folders?')) return;
+    await fetch('/api-proxy/remote-accounts/' + id, { method: 'DELETE' });
+    refresh();
+}
+
+async function openSubsDialog(id, name) {
+    currentAccountId = id;
+    document.getElementById('dlg-subs-account-info').textContent = 'Account: ' + name;
+    document.getElementById('subs-current').innerHTML = '<sl-spinner></sl-spinner>';
+    document.getElementById('subs-available').innerHTML = '<sl-spinner></sl-spinner>';
+    document.getElementById('dlg-subs').show();
+
+    try {
+        const [current, accessibleResp] = await Promise.all([
+            fetch('/api-proxy/remote-accounts/' + id + '/subscriptions').then(function(r){return r.json();}),
+            fetch('/api-proxy/remote-accounts/' + id + '/accessible')
+        ]);
+        renderSubs(current || []);
+        if (!accessibleResp.ok) {
+            const data = await accessibleResp.json().catch(function(){return{};});
+            document.getElementById('subs-available').innerHTML =
+                '<div style="color:var(--sl-color-danger-600);">Failed to list available folders: ' + escapeHtml(data.error || ('HTTP ' + accessibleResp.status)) + '</div>';
+            return;
+        }
+        const accessible = await accessibleResp.json();
+        renderAvailable(accessible.folders || [], (current || []).map(function(s){ return s.remoteFolderId; }));
+    } catch (e) {
+        document.getElementById('subs-error').open = true;
+        document.getElementById('subs-error').style.display = '';
+        document.getElementById('subs-error-msg').textContent = String(e);
+    }
+}
+
+function renderSubs(list) {
+    const c = document.getElementById('subs-current');
+    if (list.length === 0) { c.innerHTML = '<div class="text-muted">No folders mirrored yet.</div>'; return; }
+    c.innerHTML = list.map(function(s) {
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--sl-color-neutral-200);">'
+            + '<div><sl-icon name="cloud-check"></sl-icon> '
+            + '<strong>' + escapeHtml(s.mountPath) + '</strong>'
+            + ' <span class="text-muted">← ' + escapeHtml(s.remoteFolderPath) + '</span></div>'
+            + '<sl-icon-button name="trash" label="Unmirror" onclick="removeSub(\'' + s.id + '\')"></sl-icon-button>'
+            + '</div>';
+    }).join('');
+}
+
+function renderAvailable(folders, subscribedIds) {
+    const a = document.getElementById('subs-available');
+    if (folders.length === 0) { a.innerHTML = '<div class="text-muted">Nothing accessible — does this user have ACL on any folders?</div>'; return; }
+    a.innerHTML = folders.map(function(f) {
+        const already = subscribedIds.indexOf(f.id) !== -1;
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--sl-color-neutral-100);">'
+            + '<div><sl-icon name="folder2"></sl-icon> ' + escapeHtml(f.path)
+            + (f.isReadOnly ? ' <sl-badge variant="warning" pill>RO</sl-badge>' : '')
+            + ' <sl-badge variant="neutral" pill>' + f.articleCount + '</sl-badge></div>'
+            + (already
+                ? '<sl-badge variant="success" pill>Mirrored</sl-badge>'
+                : '<sl-button size="small" variant="primary" onclick="addSub(\'' + f.id + '\', \'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')">Mirror</sl-button>')
+            + '</div>';
+    }).join('');
+}
+
+async function addSub(remoteFolderId, remoteFolderPath) {
+    const defaultMount = '/Shared' + remoteFolderPath;
+    const mount = prompt('Mount path on this device:', defaultMount);
+    if (!mount) return;
+    const resp = await fetch('/api-proxy/remote-accounts/subscriptions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            remoteAccountId: currentAccountId,
+            remoteFolderId: remoteFolderId,
+            remoteFolderPath: remoteFolderPath,
+            mountPath: mount.trim()
+        })
+    });
+    if (resp.ok) { openSubsDialog(currentAccountId, document.getElementById('dlg-subs-account-info').textContent.replace(/^Account: /, '')); refresh(); }
+    else { const data = await resp.json().catch(function(){return{};}); alert(data.error || 'Failed to subscribe'); }
+}
+
+async function removeSub(id) {
+    if (!confirm('Stop mirroring this folder?')) return;
+    await fetch('/api-proxy/remote-accounts/subscriptions/' + id, { method: 'DELETE' });
+    openSubsDialog(currentAccountId, document.getElementById('dlg-subs-account-info').textContent.replace(/^Account: /, ''));
+}
+
+document.getElementById('btn-add-account').addEventListener('click', function() { document.getElementById('dlg-add-account').show(); });
+document.getElementById('btn-save-account').addEventListener('click', saveAccount);
+refresh();
+</script>

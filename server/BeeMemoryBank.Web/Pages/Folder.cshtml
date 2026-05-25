@@ -9,31 +9,59 @@
     <h2 style="font-size:1.4rem;font-weight:700;margin:0 0 6px 0;">
         <sl-icon name="folder2-open" style="margin-right:6px;"></sl-icon>@Model.FolderName
     </h2>
+    @{
+        var isReadOnly = Model.Children?.IsReadOnly == true;
+        var isSystemFolder = Model.Children?.IsSystem == true;
+    }
     <div class="folder-header-bar">
         <div class="folder-path">
             <span class="bmb-path-copy text-muted text-sm" title="Click to copy path" data-bmb-copy="@Model.CurrentPath">
                 <sl-icon name="folder2"></sl-icon> @Model.CurrentPath
             </span>
+            @if (isReadOnly)
+            {
+                <sl-badge variant="warning" pill style="margin-left:8px;" title="You have read-only access to this folder.">
+                    <sl-icon slot="prefix" name="lock-fill"></sl-icon> Read-only
+                </sl-badge>
+            }
+            @if (isSystemFolder)
+            {
+                <sl-badge variant="primary" pill style="margin-left:8px;" title="System folder — write content allowed, structural ops disabled.">
+                    <sl-icon slot="prefix" name="gear-fill"></sl-icon> System
+                </sl-badge>
+            }
         </div>
         <div class="toolbar compact">
-            <sl-button id="btn-open-new-article-folder" size="small" variant="success">
-                <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
-            </sl-button>
-            <sl-button id="btn-open-add-subfolder" size="small" variant="success">
-                <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
-            </sl-button>
-            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-rename-folder').show()">
-                <sl-icon slot="prefix" name="pencil"></sl-icon> Rename
-            </sl-button>
-            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-folder').show()">
-                <sl-icon slot="prefix" name="folder-symlink"></sl-icon> Move
+            @if (!isReadOnly)
+            {
+                <sl-button id="btn-open-new-article-folder" size="small" variant="success">
+                    <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
+                </sl-button>
+                <sl-button id="btn-open-add-subfolder" size="small" variant="success">
+                    <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
+                </sl-button>
+                @if (!isSystemFolder)
+                {
+                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-rename-folder').show()">
+                        <sl-icon slot="prefix" name="pencil"></sl-icon> Rename
+                    </sl-button>
+                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-folder').show()">
+                        <sl-icon slot="prefix" name="folder-symlink"></sl-icon> Move
+                    </sl-button>
+                }
+            }
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-copy-folder').show()">
+                <sl-icon slot="prefix" name="copy"></sl-icon> Copy To
             </sl-button>
             <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'folder',path:currentPath})">
                 <sl-icon slot="prefix" name="download"></sl-icon> Export
             </sl-button>
-            <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-folder').show()">
-                <sl-icon slot="prefix" name="trash"></sl-icon> Delete
-            </sl-button>
+            @if (!isReadOnly && !isSystemFolder)
+            {
+                <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-folder').show()">
+                    <sl-icon slot="prefix" name="trash"></sl-icon> Delete
+                </sl-button>
+            }
         </div>
     </div>
 
@@ -106,9 +134,12 @@
         <div class="card" style="text-align:center;padding:40px;">
             <sl-icon name="folder2" style="font-size:3rem;color:var(--text-secondary);"></sl-icon>
             <p style="margin-top:12px;color:var(--text-secondary);">This folder is empty</p>
-            <sl-button size="small" variant="primary" href="/Article/Edit?treePath=@Uri.EscapeDataString(Model.CurrentPath)" style="margin-top:12px;">
-                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Article
-            </sl-button>
+            @if (!isReadOnly)
+            {
+                <sl-button size="small" variant="primary" href="/Article/Edit?treePath=@Uri.EscapeDataString(Model.CurrentPath)" style="margin-top:12px;">
+                    <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Article
+                </sl-button>
+            }
         </div>
     }
 
@@ -162,6 +193,59 @@
     <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-delete-folder').hide()">Cancel</sl-button>
     <sl-button id="btn-confirm-delete-folder" slot="footer" variant="danger">Delete All</sl-button>
 </sl-dialog>
+
+<!-- Copy folder dialog -->
+<sl-dialog id="dlg-copy-folder" label="Copy Folder To">
+    <p class="text-muted text-sm">Copying: <code>@Model.CurrentPath</code></p>
+    <sl-alert id="copy-folder-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        <span id="copy-folder-error-msg"></span>
+    </sl-alert>
+    <sl-input id="copy-folder-target" label="Target parent path" placeholder="/" autocomplete="off" autofocus></sl-input>
+    <small class="text-muted">A deep copy is created at <code>&lt;target&gt;/@System.IO.Path.GetFileName(Model.CurrentPath.TrimEnd('/'))</code>. Name collisions get a " (N)" suffix.</small>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-copy-folder').hide()">Cancel</sl-button>
+    <sl-button id="btn-copy-folder" slot="footer" variant="primary">Copy</sl-button>
+</sl-dialog>
+<script>
+(function() {
+    var dlg = document.getElementById('dlg-copy-folder');
+    var btn = document.getElementById('btn-copy-folder');
+    var input = document.getElementById('copy-folder-target');
+    if (!dlg || !btn) return;
+    btn.addEventListener('click', async function() {
+        var target = (input.value || '').trim() || '/';
+        var folderId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
+            Model.Children != null && Model.Children.Folders.Count > 0
+                ? "" // we don't have current folder ID directly; use API by path instead
+                : ""));
+        // Look up folder id by path via search endpoint, then call copy.
+        try {
+            var lookupResp = await fetch('/api-proxy/folders/search?q=' + encodeURIComponent(@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath))) + '&limit=20');
+            var lookup = await lookupResp.json();
+            var match = (lookup.folders || []).find(function(f) { return f.path === @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath)); });
+            if (!match) { showCopyErr('Could not locate source folder'); return; }
+            var resp = await fetch('/api-proxy/folder/' + match.id + '/copy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targetParentPath: target })
+            });
+            if (resp.ok) {
+                dlg.hide();
+                window.location.href = '/Folder?path=' + encodeURIComponent(target);
+            } else {
+                var data = {}; try { data = await resp.json(); } catch {}
+                showCopyErr(data.error || ('Copy failed (HTTP ' + resp.status + ')'));
+            }
+        } catch (e) { showCopyErr(String(e)); }
+    });
+    function showCopyErr(msg) {
+        var box = document.getElementById('copy-folder-error');
+        document.getElementById('copy-folder-error-msg').textContent = msg;
+        box.style.display = '';
+        box.open = true;
+    }
+})();
+</script>
 
 <script>
 (function() {

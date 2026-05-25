@@ -15,6 +15,7 @@ public class ViewModel(ApiClient api) : PageModel
     public List<CommentDto> Comments { get; private set; } = [];
     public List<RelatedArticleDto> RelatedArticles { get; private set; } = [];
     public List<string> ConceptTags { get; private set; } = [];
+    public bool IsReadOnly { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(Guid id)
     {
@@ -41,6 +42,9 @@ public class ViewModel(ApiClient api) : PageModel
             Comments = await api.GetCommentsAsync(id) ?? [];
             ConceptTags = await api.GetArticleConceptTagsAsync(id) ?? [];
             RelatedArticles = await api.GetRelatedArticlesAsync(id) ?? [];
+
+            var perms = await api.GetFolderPermissionsAsync(Article.TreePath);
+            IsReadOnly = perms?.IsReadOnly == true;
         }
         return Page();
     }

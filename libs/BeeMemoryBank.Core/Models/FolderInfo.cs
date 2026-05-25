@@ -8,6 +8,8 @@ public class FolderInfo
     public int ArticleCount { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public bool IsSystem { get; set; }
+    public bool IsRemote { get; set; }
 }
 
 public class TreeChildrenResult

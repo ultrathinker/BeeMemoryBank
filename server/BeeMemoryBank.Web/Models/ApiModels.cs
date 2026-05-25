@@ -18,12 +18,18 @@ public record ArticleContentDto(Guid Id, string Content);
 
 public record SessionStatusDto(bool IsUnlocked);
 
-public record FolderInfoDto(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt);
+public record FolderInfoDto(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt, bool IsSystem = false);
 
 public record TreeChildrenDto(
     string Path,
     List<FolderInfoDto> Folders,
-    List<ArticleDto> Articles);
+    List<ArticleDto> Articles,
+    bool IsReadOnly = false,
+    bool IsSystem = false);
+
+public record FolderPermissionsDto(string Path, bool CanRead, bool CanWrite, bool IsReadOnly);
+
+public record ReadOnlyPathsDto(string[] Paths);
 
 public record SearchResponseDto(
     List<FolderInfoDto> Folders,
@@ -96,7 +102,7 @@ public record LoginResponse(int UserId, string Username, string DisplayName, str
 
 public record UserDto(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt);
 
-public record AclEntryDto(int Id, Guid FolderId, string FolderPath, string Effect, DateTime CreatedAt);
+public record AclEntryDto(int Id, Guid FolderId, string FolderPath, string Effect, DateTime CreatedAt, bool IsReadOnly = false);
 
 public record ArticleVersionDto(
     Guid Id,

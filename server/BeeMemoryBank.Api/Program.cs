@@ -75,6 +75,8 @@ builder.Services.AddSyncScheduler(interval: syncInterval, periodicCleanupFactory
 builder.Services.AddCleanupService();
 builder.Services.AddEmbeddingProcessor();
 builder.Services.AddHttpClient();
+builder.Services.AddTransient<HttpClient>(sp =>
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient());
 builder.Services.AddHttpContextAccessor();
 
 // Route CallerScope through HttpContext.Items so it survives child DI scopes.
@@ -109,6 +111,7 @@ builder.Services.AddSingleton(new McpResponseManager(dataPath));
 builder.Services.AddSingleton<DownloadTokenService>();
 builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();
+builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler>();
 builder.Services.AddScoped<ZipExportService>();
 builder.Services.AddScoped<CompactionService>();
 builder.Services.AddSingleton<SnapshotJoinCache>();
@@ -351,6 +354,9 @@ app.MapArticleEndpoints();
 app.MapTreeEndpoints();
 app.MapConceptTagEndpoints();
 app.MapFolderEndpoints();
+app.MapCopyEndpoints();
+app.MapRemoteAuthEndpoints();
+app.MapRemoteAccountEndpoints();
 app.MapSearchEndpoints();
 app.MapKeyEndpoints();
 app.MapWhitelistEndpoints();

@@ -74,6 +74,8 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
             new { articleId = articleId.Value });
         if (treePath == null || _holder.Scope.IsAccessDenied(treePath))
             throw new UnauthorizedAccessException($"Write access denied for media on article {articleId}");
+        if (_holder.Scope.IsReadOnly(treePath))
+            throw new ReadOnlyAccessException(treePath);
     }
 
     public async Task CreateAsync(Media media)

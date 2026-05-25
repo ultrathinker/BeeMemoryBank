@@ -132,6 +132,104 @@ public class ApiClient(HttpClient http)
     public async Task<Dictionary<string, List<string>>?> GetFullTreeAsync() =>
         await http.GetFromJsonAsync<Dictionary<string, List<string>>>("/api/tree", JsonOpts);
 
+    public async Task<FolderPermissionsDto?> GetFolderPermissionsAsync(string path)
+    {
+        var resp = await http.GetAsync($"/api/access/folder-permissions?path={Uri.EscapeDataString(path)}");
+        if (!resp.IsSuccessStatusCode) return null;
+        return await resp.Content.ReadFromJsonAsync<FolderPermissionsDto>(JsonOpts);
+    }
+
+    public async Task<string[]> GetReadOnlyPathsAsync()
+    {
+        var resp = await http.GetAsync("/api/access/readonly-paths");
+        if (!resp.IsSuccessStatusCode) return Array.Empty<string>();
+        var doc = await resp.Content.ReadFromJsonAsync<ReadOnlyPathsDto>(JsonOpts);
+        return doc?.Paths ?? Array.Empty<string>();
+    }
+
+    public async Task<List<object>?> ListRemoteAccountsAsync()
+    {
+        try
+        {
+            var resp = await http.GetAsync("/api/remote-accounts/");
+            if (!resp.IsSuccessStatusCode) return null;
+            return await resp.Content.ReadFromJsonAsync<List<object>>(JsonOpts);
+        }
+        catch { return null; }
+    }
+
+    public async Task<(bool ok, int status, object? body, string? error)> CreateRemoteAccountAsync(string display, string baseUrl, string username, string password)
+    {
+        var resp = await http.PostAsync("/api/remote-accounts/", Body(new { displayName = display, baseUrl, username, password }));
+        if (resp.IsSuccessStatusCode)
+        {
+            var body = await resp.Content.ReadFromJsonAsync<object>(JsonOpts);
+            return (true, 200, body, null);
+        }
+        var err = await ReadErrorAsync(resp);
+        return (false, (int)resp.StatusCode, null, err);
+    }
+
+    public async Task DeleteRemoteAccountAsync(Guid id)
+    {
+        try { await http.DeleteAsync($"/api/remote-accounts/{id}"); } catch { }
+    }
+
+    public async Task<(bool ok, int status, object? body, string? error)> ListAccessibleRemoteFoldersAsync(Guid id)
+    {
+        var resp = await http.GetAsync($"/api/remote-accounts/{id}/accessible");
+        if (resp.IsSuccessStatusCode)
+        {
+            var body = await resp.Content.ReadFromJsonAsync<object>(JsonOpts);
+            return (true, 200, body, null);
+        }
+        return (false, (int)resp.StatusCode, null, await ReadErrorAsync(resp));
+    }
+
+    public async Task<List<object>?> ListRemoteSubscriptionsAsync(Guid id)
+    {
+        try
+        {
+            var resp = await http.GetAsync($"/api/remote-accounts/{id}/subscriptions");
+            if (!resp.IsSuccessStatusCode) return null;
+            return await resp.Content.ReadFromJsonAsync<List<object>>(JsonOpts);
+        }
+        catch { return null; }
+    }
+
+    public async Task<(bool ok, int status, object? body, string? error)> AddRemoteSubscriptionAsync(Guid accountId, Guid remoteFolderId, string remoteFolderPath, string mountPath)
+    {
+        var resp = await http.PostAsync("/api/remote-accounts/subscriptions",
+            Body(new { remoteAccountId = accountId, remoteFolderId, remoteFolderPath, mountPath }));
+        if (resp.IsSuccessStatusCode)
+        {
+            var body = await resp.Content.ReadFromJsonAsync<object>(JsonOpts);
+            return (true, 200, body, null);
+        }
+        return (false, (int)resp.StatusCode, null, await ReadErrorAsync(resp));
+    }
+
+    public async Task DeleteRemoteSubscriptionAsync(Guid id)
+    {
+        try { await http.DeleteAsync($"/api/remote-accounts/subscriptions/{id}"); } catch { }
+    }
+
+    public async Task<(bool ok, int status, string? error)> CopyArticleAsync(Guid articleId, string targetFolderPath)
+    {
+        var resp = await http.PostAsync($"/api/articles/{articleId}/copy", Body(new { targetFolderPath }));
+        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
+        var err = await ReadErrorAsync(resp);
+        return (false, (int)resp.StatusCode, err);
+    }
+
+    public async Task<(bool ok, int status, string? error)> CopyFolderAsync(Guid folderId, string targetParentPath)
+    {
+        var resp = await http.PostAsync($"/api/folders/{folderId}/copy", Body(new { targetParentPath }));
+        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
+        var err = await ReadErrorAsync(resp);
+        return (false, (int)resp.StatusCode, err);
+    }
+
     // ─── Articles ─────────────────────────────────────────────────────────────
 
     public async Task<List<ArticleDto>?> ListArticlesAsync(string? treePath = null)
@@ -857,15 +955,29 @@ public class ApiClient(HttpClient http)
         catch { return null; }
     }
 
-    public async Task<AclEntryDto?> AddUserRestrictionAsync(int userId, Guid folderId, string effect)
+    public async Task<AclEntryDto?> AddUserRestrictionAsync(int userId, Guid folderId, string effect, bool isReadOnly = false)
     {
         try
         {
-            var resp = await http.PostAsync($"/api/restrictions/user/{userId}", Body(new { folderId, effect }));
+            var resp = await http.PostAsync($"/api/restrictions/user/{userId}", Body(new { folderId, effect, isReadOnly }));
             if (!resp.IsSuccessStatusCode) return null;
             return await resp.Content.ReadFromJsonAsync<AclEntryDto>(JsonOpts);
         }
         catch { return null; }
+    }
+
+    public async Task<bool> SetUserRestrictionReadOnlyAsync(int userId, Guid folderId, bool isReadOnly)
+    {
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Patch, $"/api/restrictions/user/{userId}/{folderId}")
+            {
+                Content = Body(new { isReadOnly })
+            };
+            var resp = await http.SendAsync(req);
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
     }
 
     public async Task<bool> RemoveUserRestrictionAsync(int userId, Guid folderId)

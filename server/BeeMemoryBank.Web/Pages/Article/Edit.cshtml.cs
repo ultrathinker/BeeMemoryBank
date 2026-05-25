@@ -17,7 +17,7 @@ public class EditModel(ApiClient api) : PageModel
     public bool IsNew => ArticleId == null;
     public string? ErrorMessage { get; set; }
 
-    public async Task OnGetAsync(Guid? id, string? treePath)
+    public async Task<IActionResult> OnGetAsync(Guid? id, string? treePath)
     {
         if (id.HasValue)
         {
@@ -30,6 +30,14 @@ public class EditModel(ApiClient api) : PageModel
                 LastModified = article.UpdatedAt;
                 var c = await api.GetArticleContentAsync(id.Value);
                 Content = c?.Content ?? "";
+
+                // Read-only ACL: forward to View page with a one-time flash.
+                var perms = await api.GetFolderPermissionsAsync(article.TreePath);
+                if (perms != null && perms.IsReadOnly)
+                {
+                    TempData["FlashMessage"] = "This article is in a read-only folder for your user.";
+                    return Redirect($"/Article/View?id={id.Value}");
+                }
             }
             var ct = await api.GetArticleConceptTagsAsync(id.Value);
             ConceptTagsRaw = ct != null ? string.Join(", ", ct) : "";
@@ -37,7 +45,15 @@ public class EditModel(ApiClient api) : PageModel
         else
         {
             TreePath = treePath ?? "/";
+            // Block creating a new article inside a read-only folder.
+            var perms = await api.GetFolderPermissionsAsync(TreePath);
+            if (perms != null && perms.IsReadOnly)
+            {
+                TempData["FlashMessage"] = $"Folder {TreePath} is read-only for your user.";
+                return Redirect($"/Folder?path={Uri.EscapeDataString(TreePath)}");
+            }
         }
+        return Page();
     }
 
     public async Task<IActionResult> OnPostAsync(

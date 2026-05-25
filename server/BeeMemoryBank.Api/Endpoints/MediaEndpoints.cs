@@ -32,9 +32,13 @@ public static class MediaEndpoints
                     var article = await articleSvc.GetMetadataAsync(artId.Value);
                     if (article != null)
                     {
-                        var (folderPaths, policy) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                        var (folderPaths, policy, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
                         if (FolderAccessService.IsAccessDenied(folderPaths, policy, article.TreePath))
                             return Results.Json(new ErrorResponse($"Access denied for path '{article.TreePath}'."), statusCode: 403);
+                        // RO ACL was missing here — user with allow+is_read_only could upload
+                        // media binding it to articles in a "read-only" folder. Caught by E2E.
+                        if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, article.TreePath))
+                            return Results.Json(new ErrorResponse($"Folder '{article.TreePath}' is read-only for your user."), statusCode: 403);
                     }
                 }
             }

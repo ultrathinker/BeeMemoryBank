@@ -28,10 +28,10 @@ public record RecoveryKeyResponse(string RecoveryKey);
 
 public record ErrorResponse(string Error);
 
-public record FolderInfoResponse(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt)
+public record FolderInfoResponse(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt, bool IsSystem = false, bool IsRemote = false)
 {
     public static FolderInfoResponse From(BeeMemoryBank.Core.Models.Folder f, int articleCount = 0) =>
-        new(f.Id, f.Path, f.Name, articleCount, f.CreatedAt, f.UpdatedAt);
+        new(f.Id, f.Path, f.Name, articleCount, f.CreatedAt, f.UpdatedAt, f.IsSystem, f.RemoteSubscriptionId.HasValue);
 }
 
 public record SearchResponse(
@@ -41,7 +41,9 @@ public record SearchResponse(
 public record TreeChildrenResponse(
     string Path,
     List<FolderInfoResponse> Folders,
-    List<ArticleResponse> Articles);
+    List<ArticleResponse> Articles,
+    bool IsReadOnly = false,
+    bool IsSystem = false);
 
 public record MoveArticleResponse(Guid Id, string NewPath);
 

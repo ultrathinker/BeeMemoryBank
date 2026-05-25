@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Core.Services;
 
 public class FolderAccessService
 {
-    private static readonly ConcurrentDictionary<string, (HashSet<string> denyPaths, HashSet<string> allowPaths, DateTime loadedAt)> _cache = new();
+    private static readonly ConcurrentDictionary<string, (HashSet<string> denyPaths, HashSet<string> allowPaths, HashSet<string> readOnlyPaths, DateTime loadedAt)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
 
     private readonly IServiceProvider _serviceProvider;
@@ -19,13 +19,19 @@ public class FolderAccessService
 
     public async Task<(HashSet<string> denyPaths, HashSet<string> allowPaths)> GetAccessInfoAsync(int? userId, int? agentId = null)
     {
+        var (deny, allow, _) = await GetFullAccessInfoAsync(userId);
+        return (deny, allow);
+    }
+
+    public async Task<(HashSet<string> denyPaths, HashSet<string> allowPaths, HashSet<string> readOnlyPaths)> GetFullAccessInfoAsync(int? userId)
+    {
         if (userId is null)
-            return ([], []);
+            return ([], [], []);
 
         var cacheKey = $"u:{userId}";
 
         if (_cache.TryGetValue(cacheKey, out var cached) && DateTime.UtcNow - cached.loadedAt < CacheTtl)
-            return (cached.denyPaths, cached.allowPaths);
+            return (cached.denyPaths, cached.allowPaths, cached.readOnlyPaths);
 
         var repo = _serviceProvider.GetRequiredService<IFolderAclRepository>();
         var folderRepo = _serviceProvider.GetRequiredService<IFolderRepository>();
@@ -34,6 +40,7 @@ public class FolderAccessService
 
         var denyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var allowPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var readOnlyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var holder = _serviceProvider.GetRequiredService<CallerScopeHolder>();
         var previousScope = holder.Scope;
         holder.Scope = SystemCallerScope.Instance;
@@ -44,9 +51,15 @@ public class FolderAccessService
                 var folder = await folderRepo.GetByIdAsync(entry.FolderId, includeDeleted: true);
                 if (folder is null) continue;
                 if (entry.Effect == AclEffect.Deny)
+                {
                     denyPaths.Add(folder.Path);
+                }
                 else
+                {
                     allowPaths.Add(folder.Path);
+                    if (entry.IsReadOnly)
+                        readOnlyPaths.Add(folder.Path);
+                }
             }
         }
         finally
@@ -54,8 +67,8 @@ public class FolderAccessService
             holder.Scope = previousScope;
         }
 
-        _cache[cacheKey] = (denyPaths, allowPaths, DateTime.UtcNow);
-        return (denyPaths, allowPaths);
+        _cache[cacheKey] = (denyPaths, allowPaths, readOnlyPaths, DateTime.UtcNow);
+        return (denyPaths, allowPaths, readOnlyPaths);
     }
 
     public static bool IsAccessDenied(HashSet<string> denyPaths, HashSet<string> allowPaths, string? treePath)
@@ -73,6 +86,33 @@ public class FolderAccessService
 
         // 3. Allow list is non-empty: path must match an allow prefix
         return !MatchesAnyPrefix(treePath, allowPaths);
+    }
+
+    // True when any write operation (create/update/delete/move/rename) on
+    // treePath should be refused for this caller. Reuses IsAccessDenied as
+    // the floor: anything denied for read is also denied for write. On top,
+    // matching an allow-row with is_read_only=1 also yields "write denied".
+    public static bool IsWriteDenied(
+        HashSet<string> denyPaths,
+        HashSet<string> allowPaths,
+        HashSet<string> readOnlyPaths,
+        string? treePath)
+    {
+        if (IsAccessDenied(denyPaths, allowPaths, treePath))
+            return true;
+        if (string.IsNullOrEmpty(treePath))
+            return true;
+        return MatchesAnyPrefix(treePath, readOnlyPaths);
+    }
+
+    // True when treePath matches an allow-with-is_read_only=1 entry.
+    // Used together with IsAccessDenied so endpoints can return a distinct
+    // "read-only" error message instead of generic "no permission".
+    public static bool IsReadOnlyForCaller(HashSet<string> readOnlyPaths, string? treePath)
+    {
+        if (string.IsNullOrEmpty(treePath))
+            return false;
+        return MatchesAnyPrefix(treePath, readOnlyPaths);
     }
 
     private static bool MatchesAnyPrefix(string treePath, HashSet<string> prefixes)

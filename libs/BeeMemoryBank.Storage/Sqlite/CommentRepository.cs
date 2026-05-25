@@ -70,6 +70,8 @@ public class CommentRepository(DbConnectionFactory factory, CallerScopeHolder sc
         var treePath = await GetArticleTreePathAsync(conn, articleId);
         if (treePath == null || _holder.Scope.IsAccessDenied(treePath))
             throw new UnauthorizedAccessException($"Write access denied for article {articleId}");
+        if (_holder.Scope.IsReadOnly(treePath))
+            throw new ReadOnlyAccessException(treePath);
     }
 
     public async Task<Comment> CreateAsync(Guid articleId, string text, Guid? sourceNodeId = null)

@@ -38,11 +38,17 @@
             </div>
         </div>
         <div class="toolbar compact">
-            <sl-button size="small" variant="primary" href="/Article/Edit?id=@Model.Article.Id">
-                <sl-icon slot="prefix" name="pencil"></sl-icon> Edit
-            </sl-button>
+            @if (!Model.IsReadOnly)
+            {
+                <sl-button size="small" variant="primary" href="/Article/Edit?id=@Model.Article.Id">
+                    <sl-icon slot="prefix" name="pencil"></sl-icon> Edit
+                </sl-button>
+            }
             <sl-button size="small" variant="default" href="/Article/History?id=@Model.Article.Id">
                 <sl-icon slot="prefix" name="clock-history"></sl-icon> History
+            </sl-button>
+            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-copy-article').show()">
+                <sl-icon slot="prefix" name="copy"></sl-icon> Copy To
             </sl-button>
             <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'article',id:'@Model.Article.Id'})">
                 <sl-icon slot="prefix" name="download"></sl-icon> Export
@@ -50,12 +56,21 @@
             <sl-button size="small" variant="default" href="/Folder?path=@Uri.EscapeDataString(Model.Article.TreePath)">
                 <sl-icon slot="prefix" name="arrow-left"></sl-icon> Folder
             </sl-button>
-            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-article').show()">
-                <sl-icon slot="prefix" name="arrows-move"></sl-icon> Move
-            </sl-button>
-            <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-article').show()">
-                <sl-icon slot="prefix" name="trash"></sl-icon> Delete
-            </sl-button>
+            @if (!Model.IsReadOnly)
+            {
+                <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-article').show()">
+                    <sl-icon slot="prefix" name="arrows-move"></sl-icon> Move
+                </sl-button>
+                <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-article').show()">
+                    <sl-icon slot="prefix" name="trash"></sl-icon> Delete
+                </sl-button>
+            }
+            else
+            {
+                <sl-badge variant="warning" pill title="Read-only ACL — write operations are disabled.">
+                    <sl-icon slot="prefix" name="lock-fill"></sl-icon> Read-only
+                </sl-badge>
+            }
         </div>
     </div>
 
@@ -607,6 +622,56 @@ else
     }
     prev.addEventListener('click', function() { if (page > 1) load(page - 1); });
     next.addEventListener('click', function() { load(page + 1); });
+})();
+</script>
+
+<!-- Copy article dialog -->
+<sl-dialog id="dlg-copy-article" label="Copy Article To">
+    @if (Model.Article != null)
+    {
+        <p class="text-muted text-sm">Copying: <strong>@Model.Article.Title</strong> from <code>@Model.Article.TreePath</code></p>
+    }
+    <sl-alert id="copy-article-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        <span id="copy-article-error-msg"></span>
+    </sl-alert>
+    <sl-input id="copy-article-target" label="Target folder path" placeholder="/" autocomplete="off" autofocus></sl-input>
+    <small class="text-muted">If the target already contains an article with the same title, the copy is renamed with a " (N)" suffix.</small>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-copy-article').hide()">Cancel</sl-button>
+    <sl-button id="btn-copy-article" slot="footer" variant="primary">Copy</sl-button>
+</sl-dialog>
+<script>
+(function() {
+    var btn = document.getElementById('btn-copy-article');
+    if (!btn) return;
+    var dlg = document.getElementById('dlg-copy-article');
+    var input = document.getElementById('copy-article-target');
+    var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
+    btn.addEventListener('click', async function() {
+        var target = (input.value || '').trim() || '/';
+        try {
+            var resp = await fetch('/api-proxy/article/' + articleId + '/copy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targetFolderPath: target })
+            });
+            if (resp.ok) {
+                dlg.hide();
+                window.location.href = '/Folder?path=' + encodeURIComponent(target);
+            } else {
+                var data = {}; try { data = await resp.json(); } catch {}
+                var box = document.getElementById('copy-article-error');
+                document.getElementById('copy-article-error-msg').textContent = data.error || ('Copy failed (HTTP ' + resp.status + ')');
+                box.style.display = '';
+                box.open = true;
+            }
+        } catch (e) {
+            var box = document.getElementById('copy-article-error');
+            document.getElementById('copy-article-error-msg').textContent = String(e);
+            box.style.display = '';
+            box.open = true;
+        }
+    });
 })();
 </script>
 </div>

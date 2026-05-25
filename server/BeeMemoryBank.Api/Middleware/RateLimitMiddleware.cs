@@ -20,7 +20,10 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
     {
         "/api/session/unlock",
         "/api/session/login",
-        "/api/join"
+        "/api/join",
+        // Cross-instance Phase 3 token issuance — same brute-force risk as
+        // /login but bypasses InternalKeyValidator entirely (Claude round-3).
+        "/api/auth/remote-token"
     };
 
     public async Task InvokeAsync(HttpContext context)

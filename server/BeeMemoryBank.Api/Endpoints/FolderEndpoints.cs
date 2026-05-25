@@ -27,9 +27,11 @@ public static class FolderEndpoints
             var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
             if (!isSuperadmin)
             {
-                var (denyPaths, allowPaths) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                var (denyPaths, allowPaths, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
                 if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, req.Path))
                     return Results.Json(new ErrorResponse($"You don't have permission to create a folder at {PathHelper.Display(req.Path)}."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, req.Path))
+                    return Results.Json(new ErrorResponse($"Folder {PathHelper.Display(req.Path)} is read-only for your user."), statusCode: 403);
             }
 
             try
@@ -95,11 +97,14 @@ public static class FolderEndpoints
             var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
             HashSet<string> denyPaths = [];
             HashSet<string> allowPaths = [];
+            HashSet<string> readOnlyPaths = [];
             if (!isSuperadmin)
             {
-                (denyPaths, allowPaths) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                (denyPaths, allowPaths, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
                 if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, path))
                     return Results.Json(new ErrorResponse($"You don't have permission to access folder {PathHelper.Display(path)}."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, path))
+                    return Results.Json(new ErrorResponse($"Folder {PathHelper.Display(path)} is read-only for your user."), statusCode: 403);
             }
 
             var folder = await folderRepo.GetByPathAsync(path);
@@ -115,6 +120,8 @@ public static class FolderEndpoints
                 resolvedNewPath = "/" + resolvedNewPath.Trim('/');
                 if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, resolvedNewPath))
                     return Results.Json(new ErrorResponse("You don't have permission to rename the folder to this path."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, resolvedNewPath))
+                    return Results.Json(new ErrorResponse("Target path is read-only for your user."), statusCode: 403);
             }
 
             try
@@ -124,6 +131,10 @@ public static class FolderEndpoints
             catch (UnauthorizedAccessException)
             {
                 return Results.Json(new ErrorResponse("Permission denied for this rename operation."), statusCode: 403);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 403);
             }
 
             var updated = await folderRepo.GetByIdAsync(folder.Id);
@@ -141,14 +152,18 @@ public static class FolderEndpoints
             var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
             if (!isSuperadmin)
             {
-                var (denyPaths, allowPaths) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                var (denyPaths, allowPaths, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
                 if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, path))
                     return Results.Json(new ErrorResponse("You don't have permission to access this folder."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, path))
+                    return Results.Json(new ErrorResponse("Source folder is read-only for your user."), statusCode: 403);
 
                 var folderName = path.TrimEnd('/').Split('/').Last();
                 var resolvedNewPath = req.NewParentPath.TrimEnd('/') + "/" + folderName;
                 if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, resolvedNewPath))
                     return Results.Json(new ErrorResponse("You don't have permission to access this folder."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, resolvedNewPath))
+                    return Results.Json(new ErrorResponse("Target parent folder is read-only for your user."), statusCode: 403);
             }
 
             var folder = await folderRepo.GetByPathAsync(path);
@@ -182,9 +197,11 @@ public static class FolderEndpoints
             var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
             if (!isSuperadmin)
             {
-                var (denyPaths, allowPaths) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                var (denyPaths, allowPaths, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
                 if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, path))
                     return Results.Json(new ErrorResponse($"You don't have permission to delete folder {PathHelper.Display(path)}."), statusCode: 403);
+                if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, path))
+                    return Results.Json(new ErrorResponse($"Folder {PathHelper.Display(path)} is read-only for your user."), statusCode: 403);
 
                 if (allowPaths.Count == 0)
                 {
@@ -192,6 +209,34 @@ public static class FolderEndpoints
                     if (denyPaths.Any(rp => rp.StartsWith(pathPrefix, StringComparison.OrdinalIgnoreCase)))
                         return Results.Json(new ErrorResponse("Cannot delete: folder contains restricted sub-folders"), statusCode: 403);
                 }
+            }
+
+            // PRE-CHECK before touching articles. Without this, a folder DELETE
+            // first calls ArticleService.DeleteByPathAsync (wiping articles)
+            // and THEN tries FolderService.DeleteAsync which throws when the
+            // folder is system/remote — leaving us with deleted articles but a
+            // surviving folder, and the next remote-sync poll resurrects the
+            // articles under new GUIDs. Caught by Phase 3 E2E test.
+            var existing = await folderRepo.GetByPathAsync(path);
+            if (existing != null && existing.IsSystem)
+                return Results.Json(new ErrorResponse($"System folder {PathHelper.Display(path)} cannot be deleted."), statusCode: 403);
+            if (existing != null && existing.RemoteSubscriptionId.HasValue)
+                return Results.Json(new ErrorResponse(
+                    $"Folder {PathHelper.Display(path)} is a remote mirror. Detach the subscription on the Remote Accounts page instead."),
+                    statusCode: 403);
+
+            // Same protection for ancestors: refuse if any descendant is itself a remote mount.
+            if (existing != null)
+            {
+                var pathPrefix = path.TrimEnd('/') + "/";
+                var allFolders = await folderRepo.GetAllActiveAsync();
+                var mirrorBlocker = allFolders.FirstOrDefault(f =>
+                    f.RemoteSubscriptionId.HasValue
+                    && f.Path.StartsWith(pathPrefix, StringComparison.OrdinalIgnoreCase));
+                if (mirrorBlocker != null)
+                    return Results.Json(new ErrorResponse(
+                        $"Folder {PathHelper.Display(path)} contains a remote mirror at {PathHelper.Display(mirrorBlocker.Path)}. Detach the subscription first."),
+                        statusCode: 403);
             }
 
             var deleted = await svc.DeleteByPathAsync(path);
