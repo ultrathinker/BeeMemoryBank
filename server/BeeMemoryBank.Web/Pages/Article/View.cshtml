@@ -53,6 +53,9 @@
             <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'article',id:'@Model.Article.Id'})">
                 <sl-icon slot="prefix" name="download"></sl-icon> Export
             </sl-button>
+            <sl-button size="small" variant="default" id="btn-print-article">
+                <sl-icon slot="prefix" name="printer"></sl-icon> Print
+            </sl-button>
             <sl-button size="small" variant="default" href="/Folder?path=@Uri.EscapeDataString(Model.Article.TreePath)">
                 <sl-icon slot="prefix" name="arrow-left"></sl-icon> Folder
             </sl-button>
@@ -154,6 +157,40 @@ else
 {
     <p>Article not found.</p>
 }
+
+<!-- Print preview dialog -->
+<sl-dialog id="dlg-print-article" label="Print Preview" class="print-dialog" style="--width:90vw;">
+    <style>
+        #dlg-print-article::part(panel) { max-height: 92vh; }
+        #dlg-print-article::part(body) { padding: 0; background: var(--sl-color-neutral-100); }
+        .print-preview-toolbar {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px 14px; background: var(--sl-color-neutral-50);
+            border-bottom: 1px solid var(--sl-color-neutral-200);
+            font-size: 0.85rem;
+        }
+        .print-preview-toolbar .spacer { flex: 1; }
+        .print-preview-frame-wrap {
+            height: calc(80vh - 50px); overflow: auto;
+            background: var(--sl-color-neutral-100);
+        }
+        #print-iframe { width: 100%; height: 100%; border: 0; background: transparent; }
+    </style>
+    <div class="print-preview-toolbar">
+        <sl-icon-button id="print-zoom-out" name="zoom-out" label="Zoom out"></sl-icon-button>
+        <span id="print-zoom-label" style="min-width:42px;text-align:center;">100%</span>
+        <sl-icon-button id="print-zoom-in" name="zoom-in" label="Zoom in"></sl-icon-button>
+        <span class="spacer"></span>
+        <span id="print-page-status" style="color:var(--sl-color-neutral-600);">Rendering…</span>
+    </div>
+    <div class="print-preview-frame-wrap">
+        <iframe id="print-iframe" title="Print preview"></iframe>
+    </div>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-print-article').hide()">Close</sl-button>
+    <sl-button slot="footer" variant="primary" id="btn-do-print">
+        <sl-icon slot="prefix" name="printer"></sl-icon> Print
+    </sl-button>
+</sl-dialog>
 
 <!-- Move dialog -->
 <sl-dialog id="dlg-move-article" label="Move Article" style="--width:560px;">
@@ -370,6 +407,146 @@ else
 
     function escHtml(s) {
         return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ─── Print preview (paged.js inside an iframe) ───
+    var printBtn = document.getElementById('btn-print-article');
+    var printDlg = document.getElementById('dlg-print-article');
+    if (printBtn && printDlg) {
+        var printIframe = document.getElementById('print-iframe');
+        var pageStatus = document.getElementById('print-page-status');
+        var zoomLabel = document.getElementById('print-zoom-label');
+        var zoomIn = document.getElementById('print-zoom-in');
+        var zoomOut = document.getElementById('print-zoom-out');
+        var doPrintBtn = document.getElementById('btn-do-print');
+        var currentZoom = 1.0;
+        var rendered = false;
+
+        var articleTitle = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Title ?? ""));
+        var articleTreePath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"));
+
+        function buildPrintDoc(title, bodyHtml, footerMeta) {
+            // Self-contained HTML document for the iframe. paged.js paginates the
+            // body into <div class="pagedjs_page"> elements that match @@page CSS.
+            return '<!doctype html><html><head><meta charset="utf-8">' +
+                '<base href="/">' +
+                '<title>' + escAttr(title) + '</title>' +
+                '<style>' + printCss() + '</style>' +
+                '<script src="/lib/pagedjs/paged.polyfill.js" defer><\/script>' +
+                '</head><body>' +
+                '<article class="print-article">' +
+                '<header class="print-header"><h1>' + escAttr(title) + '</h1>' +
+                '<div class="print-meta">' + escAttr(footerMeta) + '</div></header>' +
+                bodyHtml +
+                '</article>' +
+                '<script>' + previewBridgeJs() + '<\/script>' +
+                '</body></html>';
+        }
+
+        function printCss() {
+            return [
+                '@@page { size: A4; margin: 20mm 18mm; }',
+                'html, body { margin: 0; padding: 0; }',
+                'body { font-family: Georgia, "Times New Roman", serif; color: #111; font-size: 11pt; line-height: 1.55; }',
+                '.print-header { margin-bottom: 14pt; padding-bottom: 6pt; border-bottom: 1pt solid #888; }',
+                '.print-header h1 { margin: 0 0 4pt 0; font-size: 18pt; }',
+                '.print-meta { color: #555; font-size: 9pt; }',
+                'h1, h2, h3, h4 { color: #000; page-break-after: avoid; }',
+                'h1 { font-size: 16pt; } h2 { font-size: 14pt; } h3 { font-size: 12pt; }',
+                'p { margin: 0 0 8pt 0; orphans: 3; widows: 3; }',
+                'pre, code { font-family: "Courier New", monospace; font-size: 9.5pt; }',
+                'pre { background: #f4f4f4; padding: 8pt; border: 1pt solid #ddd; border-radius: 3pt; white-space: pre-wrap; word-wrap: break-word; page-break-inside: avoid; }',
+                'code { background: #f4f4f4; padding: 1pt 4pt; border-radius: 2pt; }',
+                'pre code { background: none; padding: 0; }',
+                'blockquote { border-left: 2pt solid #888; margin: 8pt 0; padding-left: 10pt; color: #444; }',
+                'ul, ol { padding-left: 22pt; }',
+                'li { margin: 2pt 0; }',
+                'img { max-width: 100%; }',
+                'table { border-collapse: collapse; width: 100%; margin: 8pt 0; font-size: 10pt; page-break-inside: avoid; }',
+                'th, td { border: 1pt solid #ccc; padding: 4pt 8pt; text-align: left; }',
+                'th { background: #f0f0f0; }',
+                'a { color: inherit; text-decoration: underline; }',
+                // Paged.js view styling — give each rendered page a card look.
+                '.pagedjs_pages { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 16px 0; }',
+                '.pagedjs_page { background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }',
+                '@@media print {',
+                '  .pagedjs_pages { gap: 0; padding: 0; }',
+                '  .pagedjs_page { box-shadow: none; margin: 0; }',
+                '}'
+            ].join('\n');
+        }
+
+        function previewBridgeJs() {
+            // Runs inside the iframe. When paged.js finishes pagination, it adds
+            // class="pagedjs_rendered" to <html>. We post the page count back.
+            return [
+                "(function(){",
+                "  function notify(){",
+                "    var pages = document.querySelectorAll('.pagedjs_page').length;",
+                "    parent.postMessage({ type: 'bmb-print-rendered', pages: pages }, '*');",
+                "  }",
+                "  var observer = new MutationObserver(function(){",
+                "    if (document.documentElement.classList.contains('pagedjs_rendered')) {",
+                "      observer.disconnect(); notify();",
+                "    }",
+                "  });",
+                "  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });",
+                "  setTimeout(function(){ if(document.documentElement.classList.contains('pagedjs_rendered')) notify(); }, 50);",
+                "})();"
+            ].join('\n');
+        }
+
+        function escAttr(s) {
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function applyZoom() {
+            try {
+                var doc = printIframe.contentDocument;
+                if (!doc) return;
+                var pages = doc.querySelector('.pagedjs_pages');
+                if (pages) {
+                    pages.style.transform = 'scale(' + currentZoom + ')';
+                    pages.style.transformOrigin = 'top center';
+                }
+                zoomLabel.textContent = Math.round(currentZoom * 100) + '%';
+            } catch (e) { /* ignore */ }
+        }
+
+        window.addEventListener('message', function(e) {
+            if (!e.data || e.data.type !== 'bmb-print-rendered') return;
+            rendered = true;
+            pageStatus.textContent = e.data.pages + (e.data.pages === 1 ? ' page' : ' pages');
+            applyZoom();
+        });
+
+        printBtn.addEventListener('click', function() {
+            var body = document.getElementById('article-body');
+            if (!body) return;
+            rendered = false;
+            currentZoom = 1.0;
+            zoomLabel.textContent = '100%';
+            pageStatus.textContent = 'Rendering…';
+            var meta = articleTreePath + '   ·   ' + new Date().toLocaleString();
+            printIframe.srcdoc = buildPrintDoc(articleTitle, body.innerHTML, meta);
+            printDlg.show();
+        });
+
+        zoomIn.addEventListener('click', function() {
+            if (currentZoom < 2.0) { currentZoom = Math.round((currentZoom + 0.1) * 10) / 10; applyZoom(); }
+        });
+        zoomOut.addEventListener('click', function() {
+            if (currentZoom > 0.4) { currentZoom = Math.round((currentZoom - 0.1) * 10) / 10; applyZoom(); }
+        });
+        doPrintBtn.addEventListener('click', function() {
+            if (!rendered) return;
+            try {
+                printIframe.contentWindow.focus();
+                printIframe.contentWindow.print();
+            } catch (e) {
+                alert('Print failed: ' + e.message);
+            }
+        });
     }
 })();
 
