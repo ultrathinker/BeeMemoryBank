@@ -197,12 +197,11 @@ public class MigrationRunner
             ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        if (stmt.StartsWith("CREATE TABLE", StringComparison.OrdinalIgnoreCase) &&
-            ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        if (stmt.StartsWith("CREATE INDEX", StringComparison.OrdinalIgnoreCase) &&
-            ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+        // CREATE TABLE / INDEX / UNIQUE INDEX / TRIGGER / VIEW — any "already exists"
+        // is treated as idempotent. Re-applying a squashed 001_initial_schema on top
+        // of a DB that already has the full schema lights up every one of these.
+        if (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) &&
+            (stmt.StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase)))
             return true;
 
         return false;
