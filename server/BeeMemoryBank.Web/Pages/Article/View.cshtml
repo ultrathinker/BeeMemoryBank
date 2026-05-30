@@ -569,11 +569,33 @@ else
                 // we don't need to override anything for it.
                 '.pagedjs_pages { display: block !important; padding: 24px 0 !important; background: #e5e7eb !important; min-height: 100vh !important; }',
                 '.pagedjs_page { display: block !important; margin: 0 auto 24px auto !important; background: white !important; box-shadow: 0 4px 14px rgba(0,0,0,0.25) !important; border: 1px solid rgba(0,0,0,0.08) !important; }',
-                '.pagedjs_page:last-child { margin-bottom: 24px !important; }'
+                '.pagedjs_page:last-child { margin-bottom: 24px !important; }',
+
+                // Real-print path. Activated by the beforeprint handler adding
+                // html.bmb-printing — we deliberately do NOT use @@media print here,
+                // because paged.js partially activates print media during preview and
+                // would break the screen layout. The .bmb-printing class is added
+                // only during the actual window.print() pass.
+                //
+                // Strip every screen-only decoration that would otherwise eat space
+                // on the physical page (grey backdrop, padding around sheets, gap
+                // between sheets, shadow, border). Force one .pagedjs_page = one
+                // printer page so we don't get the "page 2 is blank grey gap" effect.
+                'html.bmb-printing, html.bmb-printing body { background: white !important; }',
+                'html.bmb-printing .pagedjs_pages { padding: 0 !important; background: white !important; min-height: 0 !important; }',
+                'html.bmb-printing .pagedjs_page { margin: 0 !important; box-shadow: none !important; border: 0 !important; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }',
+                'html.bmb-printing .pagedjs_page:last-child { page-break-after: auto; break-after: auto; }'
             ].join('\n');
         }
 
         function previewBridgeJs() {
+            // Runs inside the iframe BEFORE paged.polyfill.js. Two jobs:
+            //   1. PagedConfig.after — fires when pagination finishes; we report page count up.
+            //   2. beforeprint/afterprint — swap the screen decoration off and override
+            //      @@page margin to zero while the browser is printing, then swap back.
+            //      Done via a class on <html> and a temporary <style> rather than
+            //      @@media print, because paged.js partially activates print media
+            //      inside the preview and would break the screen layout.
             return [
                 "window.PagedConfig = {",
                 "  after: function(flow){",
@@ -581,7 +603,25 @@ else
                 "      : document.querySelectorAll('.pagedjs_page').length;",
                 "    parent.postMessage({ type: 'bmb-print-rendered', pages: pages }, '*');",
                 "  }",
-                "};"
+                "};",
+                "window.addEventListener('beforeprint', function(){",
+                "  document.documentElement.classList.add('bmb-printing');",
+                // Paged.js's pages already include the requested margin inside the
+                // .pagedjs_page content area. Letting the browser apply @@page margin
+                // on top would double the margins and push the sheet off the page.
+                // Inject a zero-margin @@page override for the print pass only.
+                "  if (!document.getElementById('bmb-print-page')) {",
+                "    var s = document.createElement('style');",
+                "    s.id = 'bmb-print-page';",
+                "    s.textContent = '\\u0040page { size: A4; margin: 0; }';",
+                "    document.head.appendChild(s);",
+                "  }",
+                "});",
+                "window.addEventListener('afterprint', function(){",
+                "  document.documentElement.classList.remove('bmb-printing');",
+                "  var s = document.getElementById('bmb-print-page');",
+                "  if (s) s.remove();",
+                "});"
             ].join('\n');
         }
 
