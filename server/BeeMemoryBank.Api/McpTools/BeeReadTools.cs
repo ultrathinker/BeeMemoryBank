@@ -54,16 +54,16 @@ public class BeeReadTools(
 
     [McpServerTool(Name = "bee_get_article")]
     [Description(
-        "Get article metadata, and optionally the decrypted body content.\n" +
+        "Get an article (full body by default). Pass content=false for metadata only.\n" +
         "Returns JSON: { id, title, treePath, tags, relatedCount, relatedStrength, createdAt, updatedAt" +
         "[, content] }. 'tags' is a string array of tag names on the article. 'relatedCount' = how many " +
         "other articles share at least one tag with this one; 'relatedStrength' = total sum of shared-tag " +
-        "counts across all related articles. Include 'content' only when content=true (saves tokens).\n" +
+        "counts across all related articles.\n" +
         "Soft-deleted articles return \"Error: article {id} not found\" — there is no way via MCP to tell " +
         "\"was deleted\" apart from \"never existed\".")]
     public async Task<string> GetArticle(
         [Description("Article ID (GUID).")] Guid id,
-        [Description("If true, includes the decrypted article body as 'content' in the response. Default: false (metadata only, saves tokens).")] bool content = false)
+        [Description("Include the decrypted article body as 'content' in the response. Default: true. Pass false for metadata only.")] bool content = true)
     {
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)

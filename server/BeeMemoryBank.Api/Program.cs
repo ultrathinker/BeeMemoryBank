@@ -137,6 +137,17 @@ builder.Services.AddMcpServer()
     .WithTools<BeeAuditTools>()
     .WithTools<BeeConceptTools>();
 
+builder.Services.AddSingleton(new BeeMemoryBank.Api.Helpers.McpToolRegistry(new[]
+{
+    typeof(BeeSearchTools),
+    typeof(BeeReadTools),
+    typeof(BeeWriteTools),
+    typeof(BeeSessionTools),
+    typeof(BeeUploadTools),
+    typeof(BeeAuditTools),
+    typeof(BeeConceptTools)
+}));
+
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
@@ -312,6 +323,13 @@ app.UseMiddleware<BeeMemoryBank.Api.Middleware.AgentAuthMiddleware>();
 
 // Ambient caller scope — resolves folder ACL once per request, repos filter reads automatically
 app.UseMiddleware<BeeMemoryBank.Api.Middleware.CallerScopeMiddleware>();
+
+// Validate MCP tool/call parameter names. The SDK silently drops unknown args,
+// which sends weak models into guess-the-flag loops. We short-circuit with a
+// schema-bearing error before the SDK sees the request.
+app.UseWhen(
+    ctx => ctx.Request.Path.StartsWithSegments("/mcp"),
+    branch => branch.UseMiddleware<BeeMemoryBank.Api.Middleware.McpParameterValidationMiddleware>());
 
 // Error handling
 app.UseExceptionHandler(errorApp =>
