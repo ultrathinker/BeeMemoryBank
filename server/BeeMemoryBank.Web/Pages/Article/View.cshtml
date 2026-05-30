@@ -159,17 +159,12 @@ else
 }
 
 <!-- Print preview dialog -->
-<sl-dialog id="dlg-print-article" label="Print Preview" class="print-dialog" style="--width:90vw;">
+<sl-dialog id="dlg-print-article" label="Print Preview" class="print-dialog">
     <style>
-        /* Default size: 90% of viewport, single scroll inside the iframe wrapper. */
-        #dlg-print-article::part(panel) { max-height: 92vh; height: 92vh; }
+        /* Always full-viewport — preview makes no sense at any smaller size. */
+        #dlg-print-article { --width: 100vw; }
+        #dlg-print-article::part(panel) { max-width: 100vw; max-height: 100vh; height: 100vh; border-radius: 0; }
         #dlg-print-article::part(body) { padding: 0; background: var(--sl-color-neutral-100); overflow: hidden; display: flex; flex-direction: column; }
-
-        /* Maximize: cover the whole viewport, hide chrome — just the article. */
-        #dlg-print-article.maximized { --width: 100vw; }
-        #dlg-print-article.maximized::part(panel) { max-width: 100vw; max-height: 100vh; height: 100vh; border-radius: 0; }
-        #dlg-print-article.maximized::part(header) { display: none; }
-        #dlg-print-article.maximized::part(footer) { display: none; }
 
         .print-preview-toolbar {
             display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
@@ -182,14 +177,25 @@ else
         .print-preview-toolbar .spacer { flex: 1; }
         .print-preview-toolbar sl-select { min-width: 140px; }
         .print-preview-toolbar sl-select::part(form-control-label) { display: none; }
+
+        /* Compact pill-buttons around the font-size %, tight against the label. */
+        .print-preview-toolbar .size-group { display: flex; align-items: center; gap: 4px; }
+        .print-preview-toolbar .size-btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 24px; height: 24px;
+            background: var(--sl-color-primary-600); color: white;
+            border: 0; border-radius: 5px; cursor: pointer;
+            font-size: 16px; line-height: 1; padding: 0;
+        }
+        .print-preview-toolbar .size-btn:hover { background: var(--sl-color-primary-500); }
+        .print-preview-toolbar .size-btn:active { background: var(--sl-color-primary-700); }
+        .print-preview-toolbar .size-label { min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
+
         .print-preview-frame-wrap {
             flex: 1; min-height: 0; overflow: auto;
             background: var(--sl-color-neutral-100);
         }
         #print-iframe { width: 100%; height: 100%; border: 0; background: transparent; display: block; }
-        /* Toolbar shown inside the panel when maximized — give Print and Close direct buttons there. */
-        .print-maximized-only { display: none; }
-        #dlg-print-article.maximized .print-maximized-only { display: inline-flex; }
     </style>
     <div class="print-preview-toolbar">
         <div class="group">
@@ -207,10 +213,10 @@ else
                 <sl-option value="mono">Monospace</sl-option>
             </sl-select>
         </div>
-        <div class="group">
-            <sl-icon-button id="print-size-down" name="dash-lg" label="Smaller font"></sl-icon-button>
-            <span id="print-size-label" style="min-width:42px;text-align:center;">100%</span>
-            <sl-icon-button id="print-size-up" name="plus-lg" label="Larger font"></sl-icon-button>
+        <div class="size-group">
+            <button type="button" class="size-btn" id="print-size-down" aria-label="Smaller font">−</button>
+            <span id="print-size-label" class="size-label">100%</span>
+            <button type="button" class="size-btn" id="print-size-up" aria-label="Larger font">+</button>
         </div>
         <div class="group">
             <sl-select id="print-margins" size="small" value="normal" hoist>
@@ -222,19 +228,14 @@ else
         <sl-switch id="print-page-numbers" size="small">Page numbers</sl-switch>
         <span class="spacer"></span>
         <span id="print-page-status" style="color:var(--sl-color-neutral-600);">Rendering…</span>
-        <sl-icon-button id="print-maximize" name="arrows-fullscreen" label="Maximize"></sl-icon-button>
-        <sl-button class="print-maximized-only" size="small" variant="default" onclick="document.getElementById('dlg-print-article').hide()">Close</sl-button>
-        <sl-button class="print-maximized-only" size="small" variant="primary" id="btn-do-print-max">
+        <sl-button size="small" variant="default" onclick="document.getElementById('dlg-print-article').hide()">Close</sl-button>
+        <sl-button size="small" variant="primary" id="btn-do-print">
             <sl-icon slot="prefix" name="printer"></sl-icon> Print
         </sl-button>
     </div>
     <div class="print-preview-frame-wrap">
         <iframe id="print-iframe" title="Print preview"></iframe>
     </div>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-print-article').hide()">Close</sl-button>
-    <sl-button slot="footer" variant="primary" id="btn-do-print">
-        <sl-icon slot="prefix" name="printer"></sl-icon> Print
-    </sl-button>
 </sl-dialog>
 
 <!-- Move dialog -->
@@ -464,14 +465,12 @@ else
         var zoomIn = document.getElementById('print-zoom-in');
         var zoomOut = document.getElementById('print-zoom-out');
         var doPrintBtn = document.getElementById('btn-do-print');
-        var doPrintBtnMax = document.getElementById('btn-do-print-max');
         var fontSelect = document.getElementById('print-font');
         var marginsSelect = document.getElementById('print-margins');
         var sizeUp = document.getElementById('print-size-up');
         var sizeDown = document.getElementById('print-size-down');
         var sizeLabel = document.getElementById('print-size-label');
         var pageNumbersSwitch = document.getElementById('print-page-numbers');
-        var maximizeBtn = document.getElementById('print-maximize');
 
         // Settings — visual zoom is just a CSS transform on the preview;
         // font/size/margins/page-numbers require a re-pagination, so changing
@@ -665,12 +664,6 @@ else
             rebuildDebounced();
         });
 
-        maximizeBtn.addEventListener('click', function() {
-            var on = printDlg.classList.toggle('maximized');
-            maximizeBtn.name = on ? 'fullscreen-exit' : 'arrows-fullscreen';
-            maximizeBtn.label = on ? 'Restore' : 'Maximize';
-        });
-
         function doPrint() {
             if (!rendered) return;
             try {
@@ -679,7 +672,6 @@ else
             } catch (e) { alert('Print failed: ' + e.message); }
         }
         doPrintBtn.addEventListener('click', doPrint);
-        if (doPrintBtnMax) doPrintBtnMax.addEventListener('click', doPrint);
     }
 })();
 
