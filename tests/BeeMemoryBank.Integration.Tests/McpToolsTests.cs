@@ -142,7 +142,7 @@ public class McpToolsTests : IAsyncLifetime
     // ───── bee_get_article ───────────────────────────────────────────────────
 
     [Fact]
-    public async Task BeeGetArticle_ExistingId_ReturnsMetadata()
+    public async Task BeeGetArticle_ExistingId_ReturnsBodyByDefault()
     {
         var article = await _articleService.CreateAsync("Get Article", "/Get", [], "body");
 
@@ -151,6 +151,17 @@ public class McpToolsTests : IAsyncLifetime
         var obj = JsonDocument.Parse(result).RootElement;
         obj.GetProperty("id").GetString().Should().Be(article.Id.ToString());
         obj.GetProperty("title").GetString().Should().Be("Get Article");
+        obj.GetProperty("content").GetString().Should().Be("body");
+    }
+
+    [Fact]
+    public async Task BeeGetArticle_ContentFalse_OmitsBody()
+    {
+        var article = await _articleService.CreateAsync("Metadata only", "/Get", [], "body");
+
+        var result = await _readTools.GetArticle(article.Id, content: false);
+
+        var obj = JsonDocument.Parse(result).RootElement;
         obj.TryGetProperty("content", out _).Should().BeFalse();
     }
 
