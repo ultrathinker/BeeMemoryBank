@@ -532,7 +532,11 @@ else
                 '@@page { size: A4; margin: ' + margins + '; }',
                 pageNumbersRule,
                 'html, body { margin: 0; padding: 0; }',
-                'body { font-family: ' + fontFamily + '; color: #111; font-size: ' + s(11) + '; line-height: 1.4; }',
+                // Grey backdrop in the preview so the white A4 sheets stand out.
+                // Reset to white for actual print so we don't waste ink.
+                'html { background: #e5e7eb; }',
+                '@@media print { html { background: white; } }',
+                'body { font-family: ' + fontFamily + '; color: #111; font-size: ' + s(11) + '; line-height: 1.4; background: transparent; }',
                 '.print-header { margin-bottom: 10pt; padding-bottom: 5pt; border-bottom: 1pt solid #888; }',
                 '.print-header h1 { margin: 0 0 3pt 0; font-size: ' + s(18) + '; }',
                 '.print-meta { color: #555; font-size: ' + s(9) + '; }',
@@ -555,11 +559,15 @@ else
                 'th, td { border: 1pt solid #ccc; padding: 4pt 8pt; text-align: left; }',
                 'th { background: #f0f0f0; }',
                 'a { color: inherit; text-decoration: underline; }',
-                '.pagedjs_pages { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 16px 0; }',
-                '.pagedjs_page { background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }',
+                // Paged.js's own stylesheet sets defaults — override with higher specificity
+                // (selectors compound with .pagedjs and !important on critical visual rules)
+                // so each rendered sheet shows as a white card on the grey backdrop.
+                '.pagedjs_pages { display: flex !important; flex-direction: column !important; align-items: center !important; gap: 20px !important; padding: 20px 0 !important; }',
+                '.pagedjs_page { background: white !important; box-shadow: 0 4px 14px rgba(0,0,0,0.22) !important; border: 1px solid rgba(0,0,0,0.08) !important; margin: 0 !important; }',
                 '@@media print {',
-                '  .pagedjs_pages { gap: 0; padding: 0; }',
-                '  .pagedjs_page { box-shadow: none; margin: 0; }',
+                '  html, body { background: white !important; }',
+                '  .pagedjs_pages { gap: 0 !important; padding: 0 !important; }',
+                '  .pagedjs_page { box-shadow: none !important; border: 0 !important; margin: 0 !important; }',
                 '}'
             ].join('\n');
         }
