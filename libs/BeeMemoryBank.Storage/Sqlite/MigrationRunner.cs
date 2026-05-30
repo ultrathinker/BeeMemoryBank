@@ -34,18 +34,30 @@ public class MigrationRunner
             .OrderBy(r => r)
             .ToList();
 
-        // Ghost Hunter: remove tbl_migration rows whose version has no
-        // corresponding embedded *.sql resource in this assembly.
-        // Makes squashing effortless: delete old migration files, update 001 —
-        // existing DBs self-heal on next startup. No manual constants to touch.
-        var assemblyVersions = resourceNames
-            .Select(r => TryParseVersion(r, out var v) ? (int?)v : null)
-            .Where(v => v.HasValue)
-            .Select(v => v!.Value)
-            .ToHashSet();
+        // Ghost Hunter: a tbl_migration row is a ghost if its FILENAME no longer
+        // matches the assembly's resource at the same version. Two cases:
+        //   (a) Squashed away — version absent in assembly (file deleted).
+        //   (b) Replaced in place — same version, different filename. This
+        //       happens when a later squash reassigns numbers (e.g. old v3 was
+        //       '003_add_hash_fail_count' but the current v3 is '003_system_folders').
+        //       Same number does NOT mean same schema change — comparing by version
+        //       alone made the runner believe the migration was applied and the new
+        //       statements never ran, producing schema drift like a missing column.
+        // Either way: drop the row, the main loop below re-applies the current file.
+        // IsIdempotentError handles overlap with statements that already ran.
+        var assemblyByVersion = new Dictionary<int, string>();
+        foreach (var r in resourceNames)
+            if (TryParseVersion(r, out var v))
+                assemblyByVersion[v] = r;
 
-        var dbVersions = (await connection.QueryAsync<int>("SELECT version FROM tbl_migration")).ToList();
-        var ghostVersions = dbVersions.Where(v => !assemblyVersions.Contains(v)).ToList();
+        var dbMigrations = (await connection.QueryAsync<MigrationRow>(
+            "SELECT version AS Version, filename AS Filename FROM tbl_migration")).ToList();
+
+        var ghostVersions = dbMigrations
+            .Where(m => !assemblyByVersion.TryGetValue(m.Version, out var asmFile) || asmFile != m.Filename)
+            .Select(m => m.Version)
+            .ToList();
+
         if (ghostVersions.Count > 0)
         {
             await connection.ExecuteAsync(
@@ -378,6 +390,12 @@ public class MigrationRunner
     }
 
     private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    private class MigrationRow
+    {
+        public int Version { get; set; }
+        public string Filename { get; set; } = "";
+    }
 
     private static string StripComments(string sql)
     {
