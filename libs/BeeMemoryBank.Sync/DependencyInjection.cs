@@ -23,6 +23,10 @@ public static class DependencyInjection
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
 
+        // Default sync-auth signer derives the node key via the master DEK. Mobile overrides
+        // this with a Keystore-backed signer so background backup-sync works while locked.
+        services.TryAddScoped<INodeAuthSigner, SessionNodeAuthSigner>();
+
         // ILazySlotRewrapService is needed by SessionService.UnlockAsync to handle
         // post-DEK-rotation slot rewrap (when a node didn't auto-accept eagerly).
         // Registering here means CLI/mobile/server all share the same impl — without

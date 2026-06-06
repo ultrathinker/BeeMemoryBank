@@ -63,6 +63,11 @@ public static class MauiProgram
 
 #if ANDROID
         builder.Services.AddSingleton<IBiometricService, BiometricService>();
+        // Hardware-backed ingest key + signer: lets background backup-sync authenticate while the
+        // vault is locked / after reboot, without the master DEK. Overrides the default
+        // SessionNodeAuthSigner registered in AddSync().
+        builder.Services.AddSingleton<IIngestKeyStore, IngestKeyStore>();
+        builder.Services.AddScoped<INodeAuthSigner, KeystoreNodeAuthSigner>();
 #endif
 
         builder.Services.AddTransient<Pages.UnlockPage>();

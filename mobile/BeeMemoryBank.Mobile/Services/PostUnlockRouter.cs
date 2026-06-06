@@ -1,4 +1,6 @@
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Services;
@@ -27,6 +29,10 @@ public class PostUnlockRouter
 
     public async Task RouteAsync()
     {
+        // Enrol the hardware-backed ingest key now, while the master DEK is in memory, so the
+        // background backup-sync can run unattended (locked / post-reboot) afterwards.
+        await TryEnrollIngestKeyAsync();
+
         var target = await ResolveTargetAsync();
 
         if (target == "//initialSync")
@@ -39,6 +45,49 @@ public class PostUnlockRouter
         {
             await Shell.Current.GoToAsync(target);
             App.StartSyncService();
+        }
+    }
+
+    /// <summary>
+    /// One-time enrolment of the Ed25519 identity seed into the hardware-backed ingest store.
+    /// Best-effort: if it fails, foreground sync still works via the master DEK while unlocked.
+    /// </summary>
+    private async Task TryEnrollIngestKeyAsync()
+    {
+        try
+        {
+            var ingest = _sp.GetService<IIngestKeyStore>();
+            if (ingest == null || ingest.HasEnrolledKey()) return;
+
+            var session = _sp.GetRequiredService<SessionService>();
+            if (!session.IsUnlocked) return;
+
+            using var scope = _sp.CreateScope();
+            var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
+            var identity = await nodeRepo.GetAsync();
+            if (identity == null) return;
+
+            var dek = session.GetMasterDek();
+            byte[]? seed = null;
+            try
+            {
+                seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+                    identity.Ed25519PrivateKey,
+                    identity.Ed25519PrivateKeyIV,
+                    identity.Ed25519PrivateKeyV,
+                    identity.NodeId,
+                    dek);
+                ingest.Enroll(seed);
+            }
+            finally
+            {
+                if (seed != null) Array.Clear(seed);
+                Array.Clear(dek);
+            }
+        }
+        catch
+        {
+            // Non-fatal: background unattended sync just won't be available until next unlock.
         }
     }
 

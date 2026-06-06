@@ -20,6 +20,7 @@ public class SyncClient(
     ISyncPushPositionRepository pushPositionRepo,
     EventApplier eventApplier,
     SessionService sessionService,
+    INodeAuthSigner authSigner,
     ILogger<SyncClient> logger,
     IRestoreRetrier? restoreRetrier = null)
 {
@@ -183,6 +184,11 @@ public class SyncClient(
     private async Task VerifyRemoteSentinelAsync(
         HttpClient http, string baseUrl, NodeIdentity identity, CancellationToken ct)
     {
+        // Sentinel verification needs the master DEK. On the locked background backup path
+        // (mobile ingest signs via Keystore, vault stays locked) the DEK isn't available —
+        // skip this best-effort sanity check. The pull/apply path stores ciphertext and
+        // never needs the DEK, so backup-sync proceeds safely without it.
+        if (!sessionService.IsUnlocked) return;
         try
         {
             var resp = await http.GetAsync($"{baseUrl}/api/sync/sentinel", ct);
@@ -242,27 +248,10 @@ public class SyncClient(
         var challengeBytes = Convert.FromBase64String(challengeData.Challenge);
         var domainTag = "BMB-CHALLENGE-V1\0"u8.ToArray();
         var challengePayload = domainTag.Concat(challengeBytes).ToArray();
-        byte[] signature;
-        if (identity.Ed25519PrivateKeyV == 0)
-        {
-            signature = NodeIdentityCrypto.SignWithIdentity(
-                identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
-                identity.NodeId, Array.Empty<byte>(), challengePayload);
-        }
-        else
-        {
-            var masterDek = sessionService.GetMasterDek();
-            try
-            {
-                signature = NodeIdentityCrypto.SignWithIdentity(
-                    identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
-                    identity.NodeId, masterDek, challengePayload);
-            }
-            finally
-            {
-                Array.Clear(masterDek);
-            }
-        }
+        // Signing is delegated to INodeAuthSigner: the default derives the key via the master
+        // DEK (server/CLI/unlocked foreground), while the mobile background ingest path signs
+        // via a hardware-backed Keystore key with no DEK — enabling unattended backup-sync.
+        var signature = authSigner.SignChallenge(identity, challengePayload);
 
         // Authenticate
         var authResp = await http.PostAsJsonAsync($"{baseUrl}/api/sync/authenticate", new
