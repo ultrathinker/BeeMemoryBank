@@ -287,6 +287,8 @@ public partial class StatusPage : ContentPage
 
         // Clear biometric stored password
         _services.GetService<IBiometricService>()?.Clear();
+        // Clear the ingest key (bound to the old node identity) so the next setup re-enrols cleanly.
+        _services.GetService<IIngestKeyStore>()?.Clear();
 
         // Clear SQLite connection pool before deleting so no stale connections remain
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();

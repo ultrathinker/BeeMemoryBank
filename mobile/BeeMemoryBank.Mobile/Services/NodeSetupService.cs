@@ -280,7 +280,10 @@ public class NodeSetupService
     private void RollbackPartialNode()
     {
         using var conn = _dbFactory.CreateConnection();
+        using var tx = conn.BeginTransaction();
         using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        // All-or-nothing: a crash mid-rollback must not leave a half-deleted "Frankenstein" node.
         cmd.CommandText = @"
             DELETE FROM tbl_sync_position;
             DELETE FROM tbl_whitelist;
@@ -288,6 +291,7 @@ public class NodeSetupService
             DELETE FROM tbl_key_slot;
             DELETE FROM tbl_node_identity;";
         cmd.ExecuteNonQuery();
+        tx.Commit();
     }
 
     private void WriteMigrationMarker()

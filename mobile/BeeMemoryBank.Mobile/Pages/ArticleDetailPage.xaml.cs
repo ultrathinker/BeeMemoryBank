@@ -212,11 +212,26 @@ public partial class ArticleDetailPage : ContentPage
         return markdown;
     }
 
+    // Strip non-data: image links and dangerous raw HTML before native rendering. Articles can be
+    // authored on any peer; without this an external image (e.g. ![](http://attacker/pixel.png))
+    // would be auto-fetched by the native Image control, leaking the reader's IP/read-activity and
+    // defeating the E2E privacy of the vault. Media is already inlined as data: URIs upstream.
+    private static readonly Regex _externalImage =
+        new(@"!\[([^\]]*)\]\(\s*(?!data:)[^)]*\)", RegexOptions.Compiled);
+    private static readonly Regex _dangerousHtml =
+        new(@"<\s*/?\s*(script|iframe|object|embed|form|meta|link|style|base)\b[^>]*>",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static string SanitizeMarkdown(string markdown)
+    {
+        markdown = _externalImage.Replace(markdown, "*[external image removed]*");
+        markdown = _dangerousHtml.Replace(markdown, string.Empty);
+        return markdown;
+    }
+
     private void RenderContent(string markdown)
     {
-        // Feed raw markdown to the native renderer. Raw HTML embedded in articles is rendered as
-        // text (no HTML/JS engine), so the old WebView CSP/DisableHtml hardening is unnecessary.
-        ContentMarkdown.MarkdownText = markdown;
+        ContentMarkdown.MarkdownText = SanitizeMarkdown(markdown);
     }
 
     private async Task LoadCommentsAsync(Guid articleId, IServiceProvider sp)

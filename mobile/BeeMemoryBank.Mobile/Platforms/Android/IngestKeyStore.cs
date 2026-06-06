@@ -85,7 +85,8 @@ public sealed class IngestKeyStore : IIngestKeyStore
         encrypted.CopyTo(blob, iv.Length);
 
         var path = FilePath(BlobFile);
-        var tmp = path + ".tmp";
+        // Unique tmp name so two concurrent enrol attempts can't collide on the same tmp file.
+        var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllBytes(tmp, blob);
         File.Move(tmp, path, overwrite: true);
     }
@@ -105,8 +106,11 @@ public sealed class IngestKeyStore : IIngestKeyStore
     {
         var path = FilePath(BlobFile);
         if (File.Exists(path)) File.Delete(path);
-        var tmp = path + ".tmp";
-        if (File.Exists(tmp)) File.Delete(tmp);
+        // Sweep any leftover tmp files from a crash mid-enrol.
+        var dir = Path.GetDirectoryName(path);
+        if (dir != null)
+            foreach (var f in Directory.GetFiles(dir, BlobFile + ".*.tmp"))
+                try { File.Delete(f); } catch { }
         try
         {
             var ks = KeyStore.GetInstance("AndroidKeyStore")!;

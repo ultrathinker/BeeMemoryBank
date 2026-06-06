@@ -125,9 +125,14 @@ public partial class ArticlesPage : ContentPage
         if (sender is not BindableObject bo) return;
         if (bo.BindingContext is not ArticleListItem item) return;
         // Instant feedback: show the overlay, yield one frame so it paints, then navigate.
+        // try/finally so a navigation failure can't leave the screen stuck behind the overlay.
         NavBusyOverlay.IsVisible = true;
-        await Task.Delay(16);
-        await Shell.Current.GoToAsync($"articleDetail?id={item.Id}");
+        try
+        {
+            await Task.Delay(16);
+            await Shell.Current.GoToAsync($"articleDetail?id={item.Id}");
+        }
+        finally { NavBusyOverlay.IsVisible = false; }
     }
 
     private async void OnNewArticleClicked(object? sender, EventArgs e)

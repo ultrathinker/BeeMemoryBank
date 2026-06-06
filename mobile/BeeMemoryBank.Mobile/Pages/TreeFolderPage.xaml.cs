@@ -96,19 +96,20 @@ public partial class TreeFolderPage : ContentPage
         if (sender is not BindableObject bo) return;
         if (bo.BindingContext is not TreeListItem item) return;
 
+        string? route = null;
         if (item.IsFolder && item.FolderPath is not null)
-        {
-            NavBusyOverlay.IsVisible = true;
-            await Task.Delay(16);
-            await Shell.Current.GoToAsync(
-                $"treeFolder?path={Uri.EscapeDataString(item.FolderPath)}&folderName={Uri.EscapeDataString(item.Name)}");
-        }
+            route = $"treeFolder?path={Uri.EscapeDataString(item.FolderPath)}&folderName={Uri.EscapeDataString(item.Name)}";
         else if (!item.IsFolder && item.ArticleId.HasValue)
+            route = $"articleDetail?id={item.ArticleId.Value}";
+        if (route is null) return;
+
+        NavBusyOverlay.IsVisible = true;
+        try
         {
-            NavBusyOverlay.IsVisible = true;
             await Task.Delay(16);
-            await Shell.Current.GoToAsync($"articleDetail?id={item.ArticleId.Value}");
+            await Shell.Current.GoToAsync(route);
         }
+        finally { NavBusyOverlay.IsVisible = false; }
     }
 
     private async void OnNewArticleClicked(object? sender, EventArgs e)

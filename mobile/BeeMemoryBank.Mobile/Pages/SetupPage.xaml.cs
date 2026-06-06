@@ -178,7 +178,8 @@ public partial class SetupPage : ContentPage
         int i = 0;
         while (!ct.IsCancellationRequested)
         {
-            StatusLabel.Text = messages[Math.Min(i, messages.Length - 1)];
+            var text = messages[Math.Min(i, messages.Length - 1)];
+            MainThread.BeginInvokeOnMainThread(() => StatusLabel.Text = text);
             i++;
             try { await Task.Delay(5000, ct); }
             catch (TaskCanceledException) { break; }
@@ -211,6 +212,10 @@ public partial class SetupPage : ContentPage
 
         App.StopSyncService();
         _services.GetService<IBiometricService>()?.Clear();
+        // Clear the ingest key too — it's bound to the OLD node identity. Leaving it means the next
+        // setup's enrolment is skipped (HasEnrolledKey()==true) and background sync signs with the
+        // wrong seed until it self-heals after a failed cycle.
+        _services.GetService<IIngestKeyStore>()?.Clear();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
         var dbPath = Path.Combine(
