@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:idk="clr-namespace:Indiko.Maui.Controls.Markdown;assembly=Indiko.Maui.Controls.Markdown"
              x:Class="BeeMemoryBank.Mobile.Pages.ArticleDetailPage"
              Title="Article"
              BackgroundColor="{StaticResource BackgroundColor}">
@@ -47,10 +48,8 @@
             <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="ContentCard"
                    Padding="4">
                 <VerticalStackLayout Spacing="0">
-                    <WebView x:Name="ContentWebView"
-                             AutomationId="ContentWebView"
-                             MinimumHeightRequest="120"
-                             VerticalOptions="FillAndExpand" />
+                    <idk:MarkdownView x:Name="ContentMarkdown"
+                                      AutomationId="ContentMarkdown" />
                     <Label x:Name="ContentRawLabel"
                            AutomationId="ContentRawLabel"
                            IsVisible="False"
@@ -64,7 +63,7 @@
 
             <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="RelatedArticlesCard">
                 <VerticalStackLayout Spacing="8">
-                    <Label Text="Related Articles" FontAttributes="Bold" FontSize="16" />
+                    <Label x:Name="RelatedHeaderLabel" Text="Related Articles" FontAttributes="Bold" FontSize="16" />
                     <VerticalStackLayout x:Name="RelatedArticlesList"
                                          AutomationId="RelatedArticlesList"
                                          Spacing="0">
@@ -104,6 +103,33 @@
                             </DataTemplate>
                         </BindableLayout.ItemTemplate>
                     </VerticalStackLayout>
+
+                    <HorizontalStackLayout Spacing="20" HorizontalOptions="Center" Margin="0,4,0,0">
+                        <Button x:Name="RelatedShowMoreButton"
+                                AutomationId="RelatedShowMoreButton"
+                                Text="Show more"
+                                IsVisible="False"
+                                BackgroundColor="Transparent"
+                                Padding="0"
+                                TextColor="{StaticResource PrimaryColor}"
+                                Clicked="OnRelatedShowMoreClicked" />
+                        <Button x:Name="RelatedShowAllButton"
+                                AutomationId="RelatedShowAllButton"
+                                Text="Show all"
+                                IsVisible="False"
+                                BackgroundColor="Transparent"
+                                Padding="0"
+                                TextColor="{StaticResource PrimaryColor}"
+                                Clicked="OnRelatedShowAllClicked" />
+                        <Button x:Name="RelatedShowLessButton"
+                                AutomationId="RelatedShowLessButton"
+                                Text="Show less"
+                                IsVisible="False"
+                                BackgroundColor="Transparent"
+                                Padding="0"
+                                TextColor="{StaticResource SecondaryTextColor}"
+                                Clicked="OnRelatedShowLessClicked" />
+                    </HorizontalStackLayout>
                 </VerticalStackLayout>
             </Frame>
 
