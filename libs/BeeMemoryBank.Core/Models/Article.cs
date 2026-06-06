@@ -22,6 +22,13 @@ public class Article
     public DateTime UpdatedAt { get; set; }
     public DateTime? DeletedAt { get; set; }
 
+    // Second-layer ("protected") encryption. Protected == true means the body holds a
+    // passphrase-encrypted BMBENC1 blob (see ProtectedContentCodec); it is DERIVED from the body
+    // content on every write, so it can never desync from what's actually stored. ProtectionHint is
+    // an optional plaintext reminder shown on the lock screen before the passphrase is entered.
+    public bool Protected { get; set; }
+    public string? ProtectionHint { get; set; }
+
     // Set when this row mirrors an article from a remote BMB node. Non-null
     // makes the row read-only at the repository layer (Phase 4 turns this into
     // write-through-via-REST instead of a hard refusal).

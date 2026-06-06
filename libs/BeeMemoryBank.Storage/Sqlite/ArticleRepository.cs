@@ -26,7 +26,9 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         a.remote_subscription_id AS RemoteSubscriptionId,
         a.remote_origin_id       AS RemoteOriginId,
         a.remote_version         AS RemoteVersion,
-        a.remote_updated_by      AS RemoteUpdatedBy";
+        a.remote_updated_by      AS RemoteUpdatedBy,
+        a.protected              AS Protected,
+        a.protection_hint        AS ProtectionHint";
 
     private const string FromClause = "FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id";
 
@@ -129,10 +131,12 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
             @"INSERT INTO tbl_article
               (id, title, tree_path, folder_id, embedding_projection, embedding_model_version, embedding_pending,
                status, lamport_ts, source_node_id, created_at, updated_at,
-               remote_subscription_id, remote_origin_id, remote_version, remote_updated_by)
+               remote_subscription_id, remote_origin_id, remote_version, remote_updated_by,
+               protected, protection_hint)
               VALUES (@Id, @Title, @TreePath, @FolderId, @EmbeddingProjection, @EmbeddingModelVersion, @EmbeddingPending,
                       @Status, @LamportTs, @SourceNodeId, @CreatedAt, @UpdatedAt,
-                      @RemoteSubscriptionId, @RemoteOriginId, @RemoteVersion, @RemoteUpdatedBy)",
+                      @RemoteSubscriptionId, @RemoteOriginId, @RemoteVersion, @RemoteUpdatedBy,
+                      @Protected, @ProtectionHint)",
             article, tx);
 
         tx.Commit();
@@ -196,7 +200,9 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
                   status = @Status,
                   deleted_at = CASE WHEN @Status = 'A' THEN NULL ELSE deleted_at END,
                   remote_version = @RemoteVersion,
-                  remote_updated_by = @RemoteUpdatedBy
+                  remote_updated_by = @RemoteUpdatedBy,
+                  protected = @Protected,
+                  protection_hint = @ProtectionHint
               WHERE id = @Id",
             article, tx);
 

@@ -99,6 +99,11 @@ public class CopyService(
         var created = await articleService.CreateAsync(newTitle, targetFolderPath, tags.ToList(), sourceContent);
         createdArticles.Add(created.Id);
 
+        // CreateAsync already derived the `protected` flag from the copied BMBENC1 body; carry the
+        // reminder hint across too so the copy's lock screen looks identical to the original.
+        if (source.Protected && source.ProtectionHint != null)
+            await articleService.UpdateAsync(created.Id, protectionHint: source.ProtectionHint, updateHint: true);
+
         // No media referenced — done.
         if (sourceMedia.Count == 0)
             return created.Id;

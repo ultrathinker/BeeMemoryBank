@@ -34,7 +34,9 @@ public class EventLogger(
             Status: article.Status,
             CreatedAt: article.CreatedAt,
             UpdatedAt: article.UpdatedAt,
-            DekEpoch: 1
+            DekEpoch: 1,
+            Protected: article.Protected,
+            ProtectionHint: article.ProtectionHint
         );
 
         await AppendEventAsync(identity, EventTypes.ArticleCreate, article.Id, article.LamportTs,
@@ -59,7 +61,9 @@ public class EventLogger(
             Status: article.Status,
             CreatedAt: article.CreatedAt,
             UpdatedAt: article.UpdatedAt,
-            DekEpoch: 1
+            DekEpoch: 1,
+            Protected: article.Protected,
+            ProtectionHint: article.ProtectionHint
         );
 
         await AppendEventAsync(identity, EventTypes.ArticleUpdate, article.Id, article.LamportTs,

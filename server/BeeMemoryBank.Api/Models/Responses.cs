@@ -12,10 +12,13 @@ public record ArticleResponse(
     bool EmbeddingPending,
     string Status,
     DateTime CreatedAt,
-    DateTime UpdatedAt)
+    DateTime UpdatedAt,
+    bool Protected = false,
+    string? ProtectionHint = null)
 {
     public static ArticleResponse From(BeeMemoryBank.Core.Models.Article a, List<string> conceptTags) => new(
-        a.Id, a.Title, a.TreePath, conceptTags, a.EmbeddingPending, a.Status, a.CreatedAt, a.UpdatedAt);
+        a.Id, a.Title, a.TreePath, conceptTags, a.EmbeddingPending, a.Status, a.CreatedAt, a.UpdatedAt,
+        a.Protected, a.ProtectionHint);
 }
 
 public record ArticleContentResponse(Guid Id, string Content);

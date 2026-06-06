@@ -74,6 +74,26 @@ public class BeeReadTools(
         var relatedCount = related.Count;
         var relatedStrength = related.Sum(r => r.Strength);
 
+        if (content && article.Protected)
+        {
+            // Protected articles are passphrase-locked end-to-end. An agent has no passphrase and
+            // must never receive (or accidentally rewrite) the BMBENC1 ciphertext.
+            return responseManager.ProcessResponse(JsonSerializer.Serialize(new
+            {
+                id = article.Id,
+                title = article.Title,
+                treePath = article.TreePath,
+                tags,
+                relatedCount,
+                relatedStrength,
+                content = (string?)null,
+                isProtected = true,
+                notice = "This article is password-protected (second-layer encryption). Its body can only be unlocked by a human in the web/mobile UI; agents cannot read or modify it.",
+                createdAt = article.CreatedAt,
+                updatedAt = article.UpdatedAt
+            }, JsonOpts));
+        }
+
         if (content)
         {
             try
@@ -201,6 +221,8 @@ public class BeeReadTools(
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)
             return $"Error: article {id} not found";
+        if (article.Protected)
+            return "Error: this article is password-protected (second-layer encryption); version content is locked and cannot be read by agents.";
 
         var version = await versionRepo.GetAsync(id, versionNumber);
         if (version == null)

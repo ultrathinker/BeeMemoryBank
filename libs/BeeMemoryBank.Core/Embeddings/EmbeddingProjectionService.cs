@@ -55,6 +55,15 @@ public class EmbeddingProjectionService(
         if (!session.IsUnlocked)
             throw new InvalidOperationException("Session is locked.");
 
+        // Never embed a protected article's body — it's an opaque passphrase-encrypted blob. Clear
+        // the pending flag with an empty projection so the background processor stops retrying it;
+        // it simply won't appear in semantic search (by design).
+        if (Crypto.ProtectedContentCodec.IsProtected(plaintext))
+        {
+            await articleRepo.UpdateEmbeddingAsync(article.Id, [], ModelVersion);
+            return;
+        }
+
         var matrix = await LoadMatrixAsync();
         var embedding = generator.Generate(plaintext);
         var projection = matrix.Project(embedding);

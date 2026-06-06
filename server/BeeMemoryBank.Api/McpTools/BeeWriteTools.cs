@@ -35,6 +35,8 @@ public class BeeWriteTools(
             var article = await articleRepo.GetByIdAsync(sourceId);
             if (article != null)
             {
+                if (article.Protected)
+                    return "Error: this article is password-protected (second-layer encryption); agents cannot copy it. A human can copy it from the web/mobile UI.";
                 var newId = await copySvc.CopyArticleAsync(sourceId, targetPath);
                 return $"Copied article to {targetPath}. New ID: {newId}";
             }
@@ -117,6 +119,8 @@ public class BeeWriteTools(
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)
             return $"Error: article {id} not found";
+        if (article.Protected && content != null)
+            return "Error: this article is password-protected (second-layer encryption); agents cannot change its body. A human must edit it in the web/mobile UI.";
 
         try
         {
@@ -322,6 +326,8 @@ public class BeeWriteTools(
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)
             return $"Error: article {id} not found";
+        if (article.Protected)
+            return "Error: this article is password-protected (second-layer encryption); agents cannot change its body. A human must edit it in the web/mobile UI.";
 
         try
         {
@@ -375,6 +381,8 @@ public class BeeWriteTools(
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)
             return $"Error: article {id} not found";
+        if (article.Protected)
+            return "Error: this article is password-protected (second-layer encryption); agents cannot change its body. A human must edit it in the web/mobile UI.";
 
         try
         {
@@ -409,6 +417,8 @@ public class BeeWriteTools(
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)
             return $"Error: article {id} not found";
+        if (article.Protected)
+            return "Error: this article is password-protected (second-layer encryption); agents cannot change its body. A human must edit it in the web/mobile UI.";
 
         try
         {

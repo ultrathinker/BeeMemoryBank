@@ -69,6 +69,9 @@ public static class FolderEndpoints
                 foreach (var article in articles)
                 {
                     var content = await svc.GetContentAsync(article.Id);
+                    // Don't write a password-protected article's raw BMBENC1 blob into the export.
+                    if (BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(content))
+                        content = "🔒 This article is password-protected (second-layer encryption) and was not included in this export.\n";
 
                     var relative = article.TreePath[path.TrimEnd('/').Length..].TrimStart('/');
                     var folder = relative.Length > 0 ? relative + "/" : "";

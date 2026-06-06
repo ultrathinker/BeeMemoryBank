@@ -86,7 +86,17 @@ public record ArticleEventPayload(
     [property: JsonPropertyName("status")]        string Status,
     [property: JsonPropertyName("created_at")]    DateTime CreatedAt,
     [property: JsonPropertyName("updated_at")]    DateTime UpdatedAt,
-    [property: JsonPropertyName("dek_epoch")]     int DekEpoch = 1
+    [property: JsonPropertyName("dek_epoch")]     int DekEpoch = 1,
+    // Forward-compat: second-layer "protected" article metadata. The body ciphertext already
+    // carries the BMBENC1 blob verbatim; these are the plaintext metadata a receiver needs to
+    // render the lock badge/hint without decrypting.
+    // CRITICAL: Protected is bool? (NOT bool=false). A pre-2026-06 sender omits the JSON property,
+    // which must deserialize to null = "I don't know about this flag" — NOT false. If it defaulted
+    // to false, an old node editing a protected article's title would ship protected=false and the
+    // receiver would strip the lock from a body that is still a BMBENC1 ciphertext, exposing it to
+    // accidental overwrite. EventApplier therefore only writes the flag when it HasValue.
+    [property: JsonPropertyName("protected")]       bool? Protected = null,
+    [property: JsonPropertyName("protection_hint")] string? ProtectionHint = null
 );
 
 /// <summary>Payload for soft-deleting an article.</summary>

@@ -15,6 +15,11 @@ public partial class ZipExportService(
 {
     private ICallerScope Scope => scopeHolder.Scope;
 
+    // Plaintext markdown export can't include a password-protected body (no passphrase here, and the
+    // raw BMBENC1 ciphertext would just be confusing base64). Write a placeholder instead.
+    private const string ProtectedExportNotice =
+        "🔒 This article is password-protected (second-layer encryption) and was not included in this export.\n";
+
     private static readonly string TempBase = Path.Combine(Path.GetTempPath(), "bmb-downloads");
 
     private static string EnsureTempDir()
@@ -35,6 +40,8 @@ public partial class ZipExportService(
 
         var slug = FileNameHelper.SanitizeFileName(article.Title);
         var content = await articleService.GetContentAsync(articleId);
+        if (BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(content))
+            content = ProtectedExportNotice;
 
         var mediaList = withImages ? await mediaService.GetByArticleIdAsync(articleId) : [];
 
@@ -124,6 +131,8 @@ public partial class ZipExportService(
             var (_, mdFileName) = GetUniqueSlug(slugTracker, mdEntryUsed, article.Title, article.TreePath, rootPath);
 
             var content = await articleService.GetContentAsync(article.Id);
+            if (BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(content))
+                content = ProtectedExportNotice;
             var mediaList = withImages ? await mediaService.GetByArticleIdAsync(article.Id) : [];
 
             string rewritten;

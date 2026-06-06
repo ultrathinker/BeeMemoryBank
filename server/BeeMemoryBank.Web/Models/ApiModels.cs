@@ -12,7 +12,9 @@ public record ArticleDto(
     DateTime UpdatedAt,
     List<string>? ConceptTags = null,
     int RelatedCount = 0,
-    int RelatedStrength = 0);
+    int RelatedStrength = 0,
+    bool Protected = false,
+    string? ProtectionHint = null);
 
 public record ArticleContentDto(Guid Id, string Content);
 

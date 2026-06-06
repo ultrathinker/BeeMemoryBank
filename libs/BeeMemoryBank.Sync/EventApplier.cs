@@ -427,7 +427,10 @@ public class EventApplier(
             LamportTs = evt.LamportTs,
             SourceNodeId = evt.NodeId,
             CreatedAt = p.CreatedAt,
-            UpdatedAt = p.UpdatedAt
+            UpdatedAt = p.UpdatedAt,
+            // Old senders omit `protected` (null) — they cannot create protected articles, so false.
+            Protected = p.Protected ?? false,
+            ProtectionHint = p.ProtectionHint
         };
 
         await folderRepo.EnsureExistsAsync(p.TreePath, evt.NodeId);
@@ -496,6 +499,14 @@ public class EventApplier(
             existing.LamportTs = evt.LamportTs;
             existing.SourceNodeId = evt.NodeId;
             existing.UpdatedAt = p.UpdatedAt;
+            // Only touch the lock flag when the sender actually knows about it (HasValue). A
+            // pre-2026-06 node omits it (null) → keep the existing flag so a title-only edit from an
+            // old peer can't strip protection off a body that is still a BMBENC1 ciphertext.
+            if (p.Protected.HasValue)
+            {
+                existing.Protected = p.Protected.Value;
+                existing.ProtectionHint = p.ProtectionHint;
+            }
 
             await folderRepo.EnsureExistsAsync(p.TreePath, evt.NodeId);
             var folder = await folderRepo.GetByPathAsync(p.TreePath);

@@ -99,7 +99,23 @@
             <input type="text" name="conceptTags" id="concept-tags-input" value="@Model.ConceptTagsRaw" placeholder="Add tags..." />
         </div>
 
-        <div style="margin-bottom:16px;">
+        @if (Model.IsProtected)
+        {
+            <div id="prot-gate" style="margin-bottom:16px;padding:18px;border:1px solid var(--sl-color-warning-300);border-radius:6px;background:var(--sl-color-warning-50);">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                    <sl-icon name="shield-lock" style="color:var(--sl-color-warning-600);"></sl-icon>
+                    <strong>This article is password-protected.</strong>
+                </div>
+                <p style="margin:0 0 10px;font-size:0.9rem;color:var(--sl-color-neutral-600);">Enter its password to edit the content. Drafts are NOT autosaved for protected articles.</p>
+                <div style="display:flex;gap:8px;align-items:flex-start;max-width:420px;">
+                    <sl-input id="prot-pass" type="password" password-toggle placeholder="Password" style="flex:1;"></sl-input>
+                    <sl-button id="prot-unlock" variant="primary">Unlock</sl-button>
+                </div>
+                <div id="prot-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;margin-top:8px;"></div>
+            </div>
+        }
+
+        <div style="margin-bottom:16px;" id="content-block" @(Model.IsProtected ? "hidden" : "")>
             <label style="display:block;font-size:0.88rem;color:var(--text-secondary);margin-bottom:6px;">Content (Markdown)</label>
             <textarea name="content" id="md-editor">@Model.Content</textarea>
         </div>
@@ -117,6 +133,8 @@
 <script src="/lib/editor.min.js"></script>
 <script>
 (function() {
+    var isProtected = @(Model.IsProtected ? "true" : "false");
+    var protPass = null; // held in memory only after unlock; never persisted
     var imageCounter = 0;
     // Count existing images in content to continue numbering
     var existingImages = (document.getElementById('md-editor').value || '').match(/!\[image-\d+\]/g);
@@ -331,6 +349,7 @@
     }
 
     function saveDraft() {
+        if (isProtected) return; // never write a protected article's plaintext to localStorage
         var currentTitle = titleInput.value;
         var currentContent = easyMDE.value();
         var currentConceptTags = conceptTagify ? conceptTagify.value.map(function(t) { return t.value; }).join(',') : '';
@@ -348,6 +367,7 @@
     }
 
     function checkForDraft() {
+        if (isProtected) return; // drafts disabled for protected articles
         var savedDraft = localStorage.getItem(draftKey);
         if (!savedDraft) return;
         var draft = JSON.parse(savedDraft);
@@ -408,6 +428,82 @@
             form.requestSubmit();
         }
     });
+
+    // ── Protected article: gate the editor behind the passphrase, save via passphrase-carrying PUT ──
+    if (isProtected) {
+        var protGate = document.getElementById('prot-gate');
+        var protPassInput = document.getElementById('prot-pass');
+        var protUnlockBtn = document.getElementById('prot-unlock');
+        var protError = document.getElementById('prot-error');
+        var contentBlock = document.getElementById('content-block');
+
+        function protUnlock() {
+            var pass = protPassInput.value || '';
+            if (!pass) { protPassInput.focus(); return; }
+            protError.style.display = 'none';
+            protUnlockBtn.loading = true;
+            fetch('/api-proxy/article/' + articleId + '/unlock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ passphrase: pass })
+            }).then(function(r) {
+                if (r.ok) return r.json();
+                return r.json().catch(function(){ return {}; }).then(function(j) {
+                    throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Unlock failed.'));
+                });
+            }).then(function(data) {
+                protPass = pass;
+                easyMDE.value(data.content || '');
+                originalContent = data.content || '';
+                protPassInput.value = '';
+                if (protGate) protGate.style.display = 'none';
+                if (contentBlock) contentBlock.hidden = false;
+                easyMDE.codemirror.refresh(); // CodeMirror mis-renders while hidden — refresh on reveal
+            }).catch(function(err) {
+                protError.textContent = err.message;
+                protError.style.display = '';
+                protPassInput.focus();
+            }).finally(function() {
+                protUnlockBtn.loading = false;
+            });
+        }
+        if (protUnlockBtn) protUnlockBtn.addEventListener('click', protUnlock);
+        if (protPassInput) protPassInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); protUnlock(); }
+        });
+
+        // Intercept the form submit: save the body re-wrapped under the passphrase.
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (!protPass) { if (protError) { protError.textContent = 'Unlock the article first.'; protError.style.display = ''; } return; }
+            var payload = {
+                title: titleInput.value,
+                treePath: form.querySelector('input[name="treePath"]').value,
+                content: easyMDE.value(),
+                passphrase: protPass
+            };
+            fetch('/api-proxy/article/' + articleId, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function(r) {
+                if (!r.ok) return r.json().catch(function(){ return {}; }).then(function(j) {
+                    throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Save failed.'));
+                });
+                // Persist tags too, then go to the view.
+                var tags = conceptTagify ? conceptTagify.value.map(function(t){ return t.value; }) : [];
+                return fetch('/api-proxy/article/' + articleId + '/concept-tags', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ conceptTags: tags })
+                }).catch(function(){ /* tags are best-effort */ }).then(function() {
+                    window.location.href = '/Article/View?id=' + articleId;
+                });
+            }).catch(function(err) {
+                showToast(err.message);
+            });
+        });
+    }
 
     checkForDraft();
 })();

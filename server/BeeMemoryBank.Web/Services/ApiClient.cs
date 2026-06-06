@@ -297,6 +297,52 @@ public class ApiClient(HttpClient http)
         return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
     }
 
+    // ─── Protected ("second-layer") articles ───────────────────────────────────
+
+    public async Task<(bool ok, int status, string? content, string? error)> UnlockArticleAsync(Guid id, string passphrase)
+    {
+        var resp = await http.PostAsync($"/api/articles/{id}/unlock", Body(new { passphrase }));
+        if (resp.IsSuccessStatusCode)
+        {
+            var dto = await resp.Content.ReadFromJsonAsync<ArticleContentDto>(JsonOpts);
+            return (true, (int)resp.StatusCode, dto?.Content, null);
+        }
+        return (false, (int)resp.StatusCode, null, await ReadErrorAsync(resp));
+    }
+
+    public async Task<(bool ok, int status, string? error)> ProtectArticleAsync(Guid id, string passphrase, string? hint)
+    {
+        var resp = await http.PostAsync($"/api/articles/{id}/protect", Body(new { passphrase, hint }));
+        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
+        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
+    }
+
+    public async Task<(bool ok, int status, string? error)> UnprotectArticleAsync(Guid id, string passphrase)
+    {
+        var resp = await http.PostAsync($"/api/articles/{id}/unprotect", Body(new { passphrase }));
+        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
+        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
+    }
+
+    public async Task<(bool ok, int status, string? error)> ChangeArticlePassphraseAsync(Guid id, string oldPassphrase, string newPassphrase, string? hint)
+    {
+        var resp = await http.PostAsync($"/api/articles/{id}/change-passphrase", Body(new { oldPassphrase, newPassphrase, hint }));
+        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
+        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
+    }
+
+    // Edit of a protected article: PUT carries the passphrase so the server re-wraps the new body.
+    public async Task<(ArticleDto? Article, int Status, string? Error)> UpdateProtectedArticleAsync(
+        Guid id, string? title, string? treePath, string content, string passphrase)
+    {
+        var resp = await http.PutAsync($"/api/articles/{id}",
+            Body(new { title, treePath, content, passphrase }));
+        if (!resp.IsSuccessStatusCode)
+            return (null, (int)resp.StatusCode, await ReadErrorAsync(resp));
+        var dto = await resp.Content.ReadFromJsonAsync<ArticleDto>(JsonOpts);
+        return (dto, (int)resp.StatusCode, null);
+    }
+
     public async Task<(bool ok, int status, string? error)> MoveArticleAsync(Guid id, string newPath)
     {
         var resp = await http.PostAsync($"/api/articles/{id}/move", Body(new { newPath }));

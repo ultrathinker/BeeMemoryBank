@@ -30,14 +30,24 @@ public class ViewModel(ApiClient api) : PageModel
         Article = await api.GetArticleAsync(id);
         if (Article != null)
         {
-            try
+            if (Article.Protected)
             {
-                var c = await api.GetArticleContentAsync(id);
-                Content = c?.Content;
+                // Protected article: never fetch the body server-side. The page renders a lock card
+                // and the body is fetched only after the user enters the passphrase (stateless —
+                // re-locks on every reload/navigation).
+                Content = null;
             }
-            catch
+            else
             {
-                Content = null; // decryption failed (article from node with different DEK)
+                try
+                {
+                    var c = await api.GetArticleContentAsync(id);
+                    Content = c?.Content;
+                }
+                catch
+                {
+                    Content = null; // decryption failed (article from node with different DEK)
+                }
             }
             Comments = await api.GetCommentsAsync(id) ?? [];
             ConceptTags = await api.GetArticleConceptTagsAsync(id) ?? [];

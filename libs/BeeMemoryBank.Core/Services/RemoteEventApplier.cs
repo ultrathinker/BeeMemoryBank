@@ -180,6 +180,9 @@ public class RemoteEventApplier(
                     existing.UpdatedAt = DateTime.UtcNow;
                     existing.RemoteVersion = ra.LamportTs;
                     existing.RemoteUpdatedBy = ra.UpdatedBy;
+                    // Mirror the protected flag from the (already-encrypted) remote body so the local
+                    // copy shows the lock card instead of a raw BMBENC1 blob.
+                    existing.Protected = Crypto.ProtectedContentCodec.IsProtected(content);
                     await UpsertEncryptedBodyAsync(existing.Id, content);
                     await articleRepo.UpdateAsync(existing);
                 }
@@ -268,7 +271,8 @@ public class RemoteEventApplier(
             RemoteSubscriptionId = sub.Id,
             RemoteOriginId = ra.Id.ToString("D"),
             RemoteVersion = ra.LamportTs,
-            RemoteUpdatedBy = ra.UpdatedBy
+            RemoteUpdatedBy = ra.UpdatedBy,
+            Protected = Crypto.ProtectedContentCodec.IsProtected(content)
         };
         await articleRepo.CreateAsync(article);
 

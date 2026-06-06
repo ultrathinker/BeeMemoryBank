@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
@@ -168,7 +169,29 @@ public static class ArticleEndpoints
                 }
             }
 
-            await svc.UpdateAsync(id, req.Title, req.TreePath, null, req.Content);
+            if (req.Content != null && existingMeta.Protected)
+            {
+                // Editing a protected article's body: re-wrap the new content under its passphrase.
+                if (string.IsNullOrEmpty(req.Passphrase))
+                    return Results.Json(new ErrorResponse("This article is protected — a passphrase is required to edit its content."), statusCode: 400);
+                // Body FIRST: UpdateProtectedContentAsync verifies the passphrase before writing, so a
+                // wrong passphrase aborts with nothing committed. Only then apply title/path — otherwise
+                // a bad passphrase would still have persisted the metadata change (non-atomic edit).
+                try
+                {
+                    await svc.UpdateProtectedContentAsync(id, req.Content, req.Passphrase);
+                }
+                catch (CryptographicException)
+                {
+                    return Results.Json(new ErrorResponse("Wrong passphrase."), statusCode: 401);
+                }
+                if (req.Title != null || req.TreePath != null)
+                    await svc.UpdateAsync(id, req.Title, req.TreePath, null, null);
+            }
+            else
+            {
+                await svc.UpdateAsync(id, req.Title, req.TreePath, null, req.Content);
+            }
             if (req.ConceptTags != null)
                 await conceptTagSvc.SetForArticleAsync(id, req.ConceptTags);
             var article = await svc.GetMetadataAsync(id);
@@ -231,5 +254,122 @@ public static class ArticleEndpoints
             await svc.MoveAsync(id, req.NewPath);
             return Results.Ok(new MoveArticleResponse(id, req.NewPath));
         });
+
+        // ===== Second-layer ("protected article") encryption =====
+
+        group.MapPost("/{id:guid}/protect", async (Guid id, ProtectArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
+        {
+            var (_, error) = await WriteGateAsync(id, ctx, svc, session, folderAccess);
+            if (error != null) return error;
+            if (string.IsNullOrEmpty(req.Passphrase) || req.Passphrase.Length < 4)
+                return Results.Json(new ErrorResponse("Passphrase must be at least 4 characters."), statusCode: 400);
+            try
+            {
+                await svc.ProtectAsync(id, req.Passphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
+                return Results.Ok(new { protected_ = true });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
+            }
+        });
+
+        group.MapPost("/{id:guid}/unprotect", async (Guid id, UnprotectArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
+        {
+            var (_, error) = await WriteGateAsync(id, ctx, svc, session, folderAccess);
+            if (error != null) return error;
+            try
+            {
+                await svc.UnprotectAsync(id, req.Passphrase);
+                return Results.Ok(new { protected_ = false });
+            }
+            catch (CryptographicException)
+            {
+                return Results.Json(new ErrorResponse("Wrong passphrase."), statusCode: 401);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
+            }
+        });
+
+        group.MapPost("/{id:guid}/change-passphrase", async (Guid id, ChangeArticlePassphraseRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
+        {
+            var (_, error) = await WriteGateAsync(id, ctx, svc, session, folderAccess);
+            if (error != null) return error;
+            if (string.IsNullOrEmpty(req.NewPassphrase) || req.NewPassphrase.Length < 4)
+                return Results.Json(new ErrorResponse("New passphrase must be at least 4 characters."), statusCode: 400);
+            try
+            {
+                await svc.ChangePassphraseAsync(id, req.OldPassphrase, req.NewPassphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
+                return Results.Ok(new { changed = true });
+            }
+            catch (CryptographicException)
+            {
+                return Results.Json(new ErrorResponse("Wrong current passphrase."), statusCode: 401);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
+            }
+        });
+
+        // Read-only unlock: returns the decrypted plaintext. Uses READ ACL so read-only-folder users
+        // can still view a protected article they have access to.
+        group.MapPost("/{id:guid}/unlock", async (Guid id, UnlockArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
+        {
+            if (!InternalKeyValidator.Validate(ctx))
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+
+            var meta = await svc.GetMetadataAsync(id);
+            if (meta == null)
+                return Results.NotFound(new ErrorResponse($"Article {id} not found"));
+
+            var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
+            if (!isSuperadmin)
+            {
+                var (denyPaths, allowPaths) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, meta.TreePath))
+                    return Results.Json(new ErrorResponse("You don't have permission to read this article."), statusCode: 403);
+            }
+
+            try
+            {
+                var content = await svc.UnlockContentAsync(id, req.Passphrase);
+                return Results.Ok(new ArticleContentResponse(id, content));
+            }
+            catch (CryptographicException)
+            {
+                return Results.Json(new ErrorResponse("Wrong passphrase."), statusCode: 401);
+            }
+        });
+    }
+
+    // Shared gate for protected-article WRITE operations: internal key + unlocked session + write ACL.
+    // Returns the metadata on success, or the IResult to return on failure.
+    private static async Task<(Article? meta, IResult? error)> WriteGateAsync(
+        Guid id, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess)
+    {
+        if (!InternalKeyValidator.Validate(ctx))
+            return (null, Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403));
+        if (!session.IsUnlocked)
+            return (null, Results.Json(new ErrorResponse("Session is locked"), statusCode: 403));
+
+        var meta = await svc.GetMetadataAsync(id);
+        if (meta == null)
+            return (null, Results.NotFound(new ErrorResponse($"Article {id} not found")));
+
+        var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
+        if (!isSuperadmin)
+        {
+            var (folderPaths, policy, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
+            if (FolderAccessService.IsAccessDenied(folderPaths, policy, meta.TreePath))
+                return (null, Results.Json(new ErrorResponse("You don't have permission to modify this article."), statusCode: 403));
+            if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, meta.TreePath))
+                return (null, Results.Json(new ErrorResponse("This article is in a read-only folder for your user."), statusCode: 403));
+        }
+        return (meta, null);
     }
 }

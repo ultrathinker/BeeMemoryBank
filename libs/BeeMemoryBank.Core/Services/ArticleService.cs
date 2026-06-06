@@ -70,7 +70,10 @@ public partial class ArticleService(
             LamportTs = lamportTs,
             SourceNodeId = identity?.NodeId,
             CreatedAt = now,
-            UpdatedAt = now
+            UpdatedAt = now,
+            // Derive the protected flag from the body itself so a copied/imported BMBENC1 blob
+            // (e.g. via CopyService) is never silently treated as plaintext.
+            Protected = ProtectedContentCodec.IsProtected(plaintext)
         };
 
         var folder = await EnsureFolderExistsAsync(treePath);
@@ -136,7 +139,10 @@ public partial class ArticleService(
         string? title = null,
         string? treePath = null,
         List<string>? tags = null,
-        string? plaintext = null)
+        string? plaintext = null,
+        string? protectionHint = null,
+        bool updateHint = false,
+        bool suppressVersion = false)
     {
         var article = await articleRepo.GetByIdAsync(id)
                        ?? throw new KeyNotFoundException($"Article {id} not found.");
@@ -158,6 +164,13 @@ public partial class ArticleService(
         article.SourceNodeId = identity?.NodeId;
         article.UpdatedAt = DateTime.UtcNow;
 
+        // Keep the protected flag in lock-step with the body content (the body is the source of
+        // truth). Only touch it when the body is actually being rewritten.
+        if (plaintext != null)
+            article.Protected = ProtectedContentCodec.IsProtected(plaintext);
+        if (updateHint)
+            article.ProtectionHint = protectionHint;
+
         await articleRepo.UpdateAsync(article);
 
         if (tags != null)
@@ -171,27 +184,34 @@ public partial class ArticleService(
             body = await bodyRepo.GetByArticleIdAsync(id)
                    ?? throw new KeyNotFoundException($"Article body {id} not found.");
 
-            var maxVer = await versionRepo.GetMaxVersionNumberAsync(id);
-            var actorName = actorProvider.ActorName ?? actorProvider.ActorType;
-            var nodeDisplayName = identity?.DisplayName;
-            var updatedBy = nodeDisplayName != null
-                ? $"{nodeDisplayName} / {actorName}"
-                : actorName;
-            await versionRepo.CreateAsync(new ArticleVersion
+            // suppressVersion: skip snapshotting the CURRENT body. Used by Protect/ChangePassphrase,
+            // where the current body is pre-protection plaintext (or old-passphrase ciphertext) that
+            // must NOT linger in history. Those callers purge history BEFORE calling this, so there is
+            // never a window where a protected article has a readable plaintext version.
+            if (!suppressVersion)
             {
-                Id = Guid.NewGuid(),
-                ArticleId = id,
-                VersionNumber = maxVer + 1,
-                Title = prevTitle,
-                TreePath = prevTreePath,
-                Ciphertext = body.Ciphertext,
-                IV = body.IV,
-                EncryptedDek = body.EncryptedDek,
-                DekIV = body.DekIV,
-                UpdatedBy = updatedBy,
-                CreatedAt = DateTime.UtcNow
-            });
-            await versionRepo.DeleteOldVersionsAsync(id, 50);
+                var maxVer = await versionRepo.GetMaxVersionNumberAsync(id);
+                var actorName = actorProvider.ActorName ?? actorProvider.ActorType;
+                var nodeDisplayName = identity?.DisplayName;
+                var updatedBy = nodeDisplayName != null
+                    ? $"{nodeDisplayName} / {actorName}"
+                    : actorName;
+                await versionRepo.CreateAsync(new ArticleVersion
+                {
+                    Id = Guid.NewGuid(),
+                    ArticleId = id,
+                    VersionNumber = maxVer + 1,
+                    Title = prevTitle,
+                    TreePath = prevTreePath,
+                    Ciphertext = body.Ciphertext,
+                    IV = body.IV,
+                    EncryptedDek = body.EncryptedDek,
+                    DekIV = body.DekIV,
+                    UpdatedBy = updatedBy,
+                    CreatedAt = DateTime.UtcNow
+                });
+                await versionRepo.DeleteOldVersionsAsync(id, 50);
+            }
 
             var masterDek = session.GetMasterDek();
             try

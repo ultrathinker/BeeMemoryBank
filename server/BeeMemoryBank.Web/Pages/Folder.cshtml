@@ -119,6 +119,10 @@
                         <tr class="bmb-sort-row" data-title="@article.Title" data-created-ts="@article.CreatedAt.ToString("o")" data-updated-ts="@article.UpdatedAt.ToString("o")">
                             <td style="padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);">
                                 <a href="/Article/View?id=@article.Id" style="text-decoration:none;color:var(--text-primary);">@article.Title</a>
+                                @if (article.Protected)
+                                {
+                                    <sl-icon name="shield-lock" title="Password-protected" style="color:var(--sl-color-warning-600);font-size:0.85em;vertical-align:-1px;margin-left:4px;"></sl-icon>
+                                }
                             </td>
                             <td style="text-align:right;padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);font-size:0.85rem;color:var(--text-secondary);" class="text-muted text-sm">@article.CreatedAt.ToString("yyyy-MM-dd")</td>
                             <td style="text-align:right;padding:8px 10px;border-bottom:1px solid var(--sl-color-neutral-100);font-size:0.85rem;color:var(--text-secondary);" class="text-muted text-sm">@article.UpdatedAt.ToString("yyyy-MM-dd")</td>

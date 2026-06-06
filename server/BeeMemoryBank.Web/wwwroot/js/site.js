@@ -216,6 +216,9 @@ $(function () {
             var html = '<div class="tree-node-row tree-article-row" style="padding-left:' + pl + 'px;">';
             html += '<span class="tree-article-dash">\u2013</span>';
             html += '<a href="/Article/View?id=' + article.id + '" class="tree-node-link tree-article-link">' + escapeHtml(article.title) + '</a>';
+            if (article.protected) {
+                html += ' <sl-icon name="shield-lock" title="Password-protected" style="color:var(--sl-color-warning-600);font-size:0.85em;vertical-align:-1px;"></sl-icon>';
+            }
             html += '</div>';
             return html;
         }

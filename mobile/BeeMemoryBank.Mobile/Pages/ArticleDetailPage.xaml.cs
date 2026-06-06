@@ -15,6 +15,10 @@ public partial class ArticleDetailPage : ContentPage
     private Guid _parsedId;
     private string _rawContent = "";
     private bool _showingRaw = false;
+    // Phase-1 data-loss guard: a protected article's body is a passphrase-encrypted BMBENC1 blob.
+    // The mobile app has no unlock UI yet, so we show a read-only placeholder and block editing —
+    // otherwise the user would edit/overwrite the ciphertext and destroy the data on next sync.
+    private bool _isProtected = false;
     private CancellationTokenSource? _cts;
     private List<RelatedArticle> _relatedAll = new();
     private int _relatedShown;
@@ -88,16 +92,31 @@ public partial class ArticleDetailPage : ContentPage
 
             var content = await articleSvc.GetContentAsync(id);
             if (ct.IsCancellationRequested) return;
-            _rawContent = content;
 
-            var mediaService = scope.ServiceProvider.GetService<MediaService>();
-            if (mediaService != null)
-                content = await ResolveMediaImagesAsync(content, mediaService);
-            
-            if (ct.IsCancellationRequested) return;
+            if (article.Protected || BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(content))
+            {
+                _isProtected = true;
+                const string notice =
+                    "## 🔒 Password-protected\n\nThis article is locked with a separate password. " +
+                    "Open it in the **web app** to unlock and view its content.\n\n" +
+                    "_Editing is disabled here to keep the encrypted data safe._";
+                _rawContent = notice; // never expose the raw BMBENC1 blob, even in Raw view
+                RenderContent(notice);
+                ContentCard.IsVisible = true;
+            }
+            else
+            {
+                _rawContent = content;
 
-            RenderContent(content);
-            ContentCard.IsVisible = true;
+                var mediaService = scope.ServiceProvider.GetService<MediaService>();
+                if (mediaService != null)
+                    content = await ResolveMediaImagesAsync(content, mediaService);
+
+                if (ct.IsCancellationRequested) return;
+
+                RenderContent(content);
+                ContentCard.IsVisible = true;
+            }
 
             var related = await conceptTagSvc.GetRelatedArticlesAsync(id);
             if (ct.IsCancellationRequested) return;
@@ -291,6 +310,13 @@ public partial class ArticleDetailPage : ContentPage
 
     private async void OnEditClicked(object? sender, EventArgs e)
     {
+        if (_isProtected)
+        {
+            await DisplayAlert("Protected article",
+                "This article is password-protected. Editing it on mobile is not supported yet — open it in the web app to unlock and edit.",
+                "OK");
+            return;
+        }
         await Shell.Current.GoToAsync($"articleEdit?id={_parsedId}");
     }
 

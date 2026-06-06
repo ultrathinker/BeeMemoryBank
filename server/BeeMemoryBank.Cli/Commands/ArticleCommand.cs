@@ -107,7 +107,11 @@ public static class ArticleCommand
             var body = await articleSvc.GetContentAsync(id);
             await output.WriteLineAsync();
             await output.WriteLineAsync("--- Content ---");
-            await output.WriteLineAsync(body);
+            // A password-protected article's body is an opaque BMBENC1 blob — don't print raw base64.
+            if (BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(body))
+                await output.WriteLineAsync("🔒 This article is password-protected (second-layer encryption). Unlock it in the web app to view its content.");
+            else
+                await output.WriteLineAsync(body);
         }
 
         return 0;

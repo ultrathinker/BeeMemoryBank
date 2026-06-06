@@ -43,6 +43,21 @@
                 <sl-button size="small" variant="primary" href="/Article/Edit?id=@Model.Article.Id">
                     <sl-icon slot="prefix" name="pencil"></sl-icon> Edit
                 </sl-button>
+                @if (Model.Article.Protected)
+                {
+                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-change-pass').show()" title="Change the password">
+                        <sl-icon slot="prefix" name="key"></sl-icon> Password
+                    </sl-button>
+                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-unprotect').show()" title="Remove password protection">
+                        <sl-icon slot="prefix" name="unlock"></sl-icon> Unprotect
+                    </sl-button>
+                }
+                else
+                {
+                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-protect').show()" title="Encrypt this article with a separate password">
+                        <sl-icon slot="prefix" name="shield-lock"></sl-icon> Protect
+                    </sl-button>
+                }
             }
             <sl-button size="small" variant="default" href="/Article/History?id=@Model.Article.Id">
                 <sl-icon slot="prefix" name="clock-history"></sl-icon> History
@@ -77,16 +92,48 @@
         </div>
     </div>
 
-    <div class="card">
-        @if (Model.Content == null)
-        {
-            <sl-alert variant="warning" open>
-                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-                Content cannot be decrypted. This article was created on a node with a different encryption key.
-            </sl-alert>
-        }
-        <div class="article-content" id="article-body"></div>
-    </div>
+    @if (Model.Article.Protected)
+    {
+        <div class="card" id="lock-card" style="text-align:center;padding:40px 20px;">
+            <sl-icon name="shield-lock" style="font-size:3rem;color:var(--sl-color-warning-600);"></sl-icon>
+            <h3 style="margin:14px 0 4px;">This article is password-protected</h3>
+            <p style="color:var(--sl-color-neutral-500);margin:0;font-size:0.9rem;">Enter its password to view the content.</p>
+            @if (!string.IsNullOrWhiteSpace(Model.Article.ProtectionHint))
+            {
+                <p style="color:var(--sl-color-neutral-500);margin:10px 0 0;font-size:0.9rem;">
+                    <sl-icon name="lightbulb"></sl-icon> Hint: @Model.Article.ProtectionHint
+                </p>
+            }
+            <div style="max-width:340px;margin:18px auto 0;display:flex;flex-direction:column;gap:10px;">
+                <sl-input id="unlock-pass" type="password" password-toggle placeholder="Password"></sl-input>
+                <div id="unlock-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
+                <sl-button id="btn-unlock" variant="primary">
+                    <sl-icon slot="prefix" name="unlock"></sl-icon> Unlock
+                </sl-button>
+            </div>
+        </div>
+        <div class="card" id="unlocked-card" style="display:none;">
+            <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+                <sl-button size="small" variant="warning" id="btn-relock" title="Hide content again">
+                    <sl-icon slot="prefix" name="lock"></sl-icon> Re-lock
+                </sl-button>
+            </div>
+            <div class="article-content" id="article-body"></div>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+            @if (Model.Content == null)
+            {
+                <sl-alert variant="warning" open>
+                    <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                    Content cannot be decrypted. This article was created on a node with a different encryption key.
+                </sl-alert>
+            }
+            <div class="article-content" id="article-body"></div>
+        </div>
+    }
 
     @if (Model.RelatedArticles.Count > 0)
     {
@@ -263,6 +310,50 @@ else
     <sl-button id="btn-confirm-delete-article" slot="footer" variant="danger">Delete</sl-button>
 </sl-dialog>
 
+@if (!Model.IsReadOnly)
+{
+    <!-- Protect dialog (add a separate password) -->
+    <sl-dialog id="dlg-protect" label="Protect with a password">
+        <sl-alert variant="warning" open style="margin-bottom:14px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            This password is <strong>separate</strong> from your account and <strong>cannot be recovered</strong>.
+            If you forget it, this article is lost forever.
+        </sl-alert>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+            <sl-input id="protect-pass" type="password" password-toggle label="Password"></sl-input>
+            <sl-input id="protect-pass2" type="password" password-toggle label="Confirm password"></sl-input>
+            <sl-input id="protect-hint" label="Hint (optional)" placeholder="A reminder shown before unlocking — do NOT put the password here"></sl-input>
+            <div id="protect-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
+        </div>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-protect').hide()">Cancel</sl-button>
+        <sl-button id="btn-protect" slot="footer" variant="primary">Protect</sl-button>
+    </sl-dialog>
+
+    <!-- Change passphrase dialog -->
+    <sl-dialog id="dlg-change-pass" label="Change article password">
+        <div style="display:flex;flex-direction:column;gap:12px;">
+            <sl-input id="cp-old" type="password" password-toggle label="Current password"></sl-input>
+            <sl-input id="cp-new" type="password" password-toggle label="New password"></sl-input>
+            <sl-input id="cp-new2" type="password" password-toggle label="Confirm new password"></sl-input>
+            <sl-input id="cp-hint" label="Hint (optional)" placeholder="A reminder shown before unlocking"></sl-input>
+            <div id="cp-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
+        </div>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-change-pass').hide()">Cancel</sl-button>
+        <sl-button id="btn-change-pass" slot="footer" variant="primary">Change password</sl-button>
+    </sl-dialog>
+
+    <!-- Remove protection dialog -->
+    <sl-dialog id="dlg-unprotect" label="Remove password protection">
+        <p class="text-muted text-sm">The article body will be readable again without a password.</p>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+            <sl-input id="up-pass" type="password" password-toggle label="Current password"></sl-input>
+            <div id="up-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
+        </div>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-unprotect').hide()">Cancel</sl-button>
+        <sl-button id="btn-unprotect" slot="footer" variant="danger">Remove protection</sl-button>
+    </sl-dialog>
+}
+
 <div id="syncToast" class="sync-toast" style="display:none;">
     <div class="sync-toast-content">
         <span class="sync-toast-label">Syncing</span>
@@ -280,9 +371,11 @@ else
     var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
     var content = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""));
     var treePath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"));
+    var isProtected = @(Model.Article?.Protected == true ? "true" : "false");
 
-    if (content) {
+    function renderMarkdown(md) {
         var body = document.getElementById('article-body');
+        if (!body) return;
         var renderer = new marked.Renderer();
         var origImage = renderer.image.bind(renderer);
         renderer.image = function(token) {
@@ -291,7 +384,119 @@ else
             }
             return origImage(token);
         };
-        body.innerHTML = DOMPurify.sanitize(marked.parse(content, { breaks: true, renderer: renderer }));
+        body.innerHTML = DOMPurify.sanitize(marked.parse(md, { breaks: true, renderer: renderer }));
+    }
+
+    if (content && !isProtected) {
+        renderMarkdown(content);
+    }
+
+    // ── Protected article: unlock / re-lock (variant 2 — stateless, re-locks on reload) ──
+    if (isProtected) {
+        var lockCard = document.getElementById('lock-card');
+        var unlockedCard = document.getElementById('unlocked-card');
+        var unlockPass = document.getElementById('unlock-pass');
+        var unlockError = document.getElementById('unlock-error');
+        var btnUnlock = document.getElementById('btn-unlock');
+        var btnRelock = document.getElementById('btn-relock');
+
+        function doUnlock() {
+            var pass = unlockPass.value || '';
+            if (!pass) { unlockPass.focus(); return; }
+            unlockError.style.display = 'none';
+            btnUnlock.loading = true;
+            fetch('/api-proxy/article/' + articleId + '/unlock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ passphrase: pass })
+            }).then(function(r) {
+                if (r.ok) return r.json();
+                return r.json().catch(function(){ return {}; }).then(function(j) {
+                    throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Unlock failed.'));
+                });
+            }).then(function(data) {
+                renderMarkdown(data.content || '');
+                unlockPass.value = '';
+                lockCard.style.display = 'none';
+                unlockedCard.style.display = '';
+            }).catch(function(err) {
+                unlockError.textContent = err.message;
+                unlockError.style.display = '';
+                unlockPass.focus();
+            }).finally(function() {
+                btnUnlock.loading = false;
+            });
+        }
+
+        if (btnUnlock) btnUnlock.addEventListener('click', doUnlock);
+        if (unlockPass) unlockPass.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); doUnlock(); }
+        });
+        if (btnRelock) btnRelock.addEventListener('click', function() {
+            // Clear the decrypted DOM and show the lock card again. No server state to clear.
+            var body = document.getElementById('article-body');
+            if (body) body.innerHTML = '';
+            unlockedCard.style.display = 'none';
+            lockCard.style.display = '';
+            if (unlockPass) unlockPass.focus();
+        });
+    }
+
+    // ── Protect / change password / remove protection ──
+    function postProtection(url, payload, errEl, btn) {
+        errEl.style.display = 'none';
+        btn.loading = true;
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).then(function(r) {
+            if (r.ok) { location.reload(); return; }
+            return r.json().catch(function(){ return {}; }).then(function(j) {
+                throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Operation failed.'));
+            });
+        }).catch(function(err) {
+            errEl.textContent = err.message;
+            errEl.style.display = '';
+        }).finally(function() {
+            btn.loading = false;
+        });
+    }
+
+    var btnProtect = document.getElementById('btn-protect');
+    if (btnProtect) {
+        btnProtect.addEventListener('click', function() {
+            var p1 = document.getElementById('protect-pass').value || '';
+            var p2 = document.getElementById('protect-pass2').value || '';
+            var hint = document.getElementById('protect-hint').value || '';
+            var err = document.getElementById('protect-error');
+            if (p1.length < 4) { err.textContent = 'Password must be at least 4 characters.'; err.style.display = ''; return; }
+            if (p1 !== p2) { err.textContent = 'Passwords do not match.'; err.style.display = ''; return; }
+            postProtection('/api-proxy/article/' + articleId + '/protect', { passphrase: p1, hint: hint }, err, btnProtect);
+        });
+    }
+
+    var btnChangePass = document.getElementById('btn-change-pass');
+    if (btnChangePass) {
+        btnChangePass.addEventListener('click', function() {
+            var oldp = document.getElementById('cp-old').value || '';
+            var n1 = document.getElementById('cp-new').value || '';
+            var n2 = document.getElementById('cp-new2').value || '';
+            var hint = document.getElementById('cp-hint').value || '';
+            var err = document.getElementById('cp-error');
+            if (n1.length < 4) { err.textContent = 'New password must be at least 4 characters.'; err.style.display = ''; return; }
+            if (n1 !== n2) { err.textContent = 'New passwords do not match.'; err.style.display = ''; return; }
+            postProtection('/api-proxy/article/' + articleId + '/change-passphrase', { oldPassphrase: oldp, newPassphrase: n1, hint: hint }, err, btnChangePass);
+        });
+    }
+
+    var btnUnprotect = document.getElementById('btn-unprotect');
+    if (btnUnprotect) {
+        btnUnprotect.addEventListener('click', function() {
+            var pass = document.getElementById('up-pass').value || '';
+            var err = document.getElementById('up-error');
+            postProtection('/api-proxy/article/' + articleId + '/unprotect', { passphrase: pass }, err, btnUnprotect);
+        });
     }
 
     // Move

@@ -15,6 +15,7 @@ public class EditModel(ApiClient api) : PageModel
     public string ConceptTagsRaw { get; set; } = "";
     public DateTime? LastModified { get; private set; }
     public bool IsNew => ArticleId == null;
+    public bool IsProtected { get; private set; }
     public string? ErrorMessage { get; set; }
 
     public async Task<IActionResult> OnGetAsync(Guid? id, string? treePath)
@@ -28,8 +29,14 @@ public class EditModel(ApiClient api) : PageModel
                 TreePath = article.TreePath;
                 Title = article.Title;
                 LastModified = article.UpdatedAt;
-                var c = await api.GetArticleContentAsync(id.Value);
-                Content = c?.Content ?? "";
+                IsProtected = article.Protected;
+                if (!article.Protected)
+                {
+                    var c = await api.GetArticleContentAsync(id.Value);
+                    Content = c?.Content ?? "";
+                }
+                // Protected: never load the encrypted blob server-side. The client unlocks with the
+                // passphrase and fills the editor; the body is saved back via a passphrase-carrying PUT.
 
                 // Read-only ACL: forward to View page with a one-time flash.
                 var perms = await api.GetFolderPermissionsAsync(article.TreePath);

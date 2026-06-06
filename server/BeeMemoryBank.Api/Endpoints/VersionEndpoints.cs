@@ -60,6 +60,11 @@ public static class VersionEndpoints
                 var content = ArticleEncryptor.Decrypt(version.Ciphertext, version.IV, articleDek, bodyAad);
                 Array.Clear(articleDek);
 
+                // A protected article's historical versions are encrypted blobs (BMBENC1). Don't
+                // surface the raw ciphertext — show a notice instead. (We have no passphrase here.)
+                if (BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(content))
+                    content = "🔒 This version belongs to a password-protected article and cannot be displayed here.";
+
                 return Results.Ok(new
                 {
                     id = version.Id,

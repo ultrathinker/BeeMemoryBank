@@ -82,6 +82,11 @@ public class SearchService(
                         var plaintext = ArticleEncryptor.Decrypt(body.Ciphertext, body.IV, articleDek, bodyAad);
                         Array.Clear(articleDek);
 
+                        // Protected bodies are opaque BMBENC1 blobs — never full-text-search them
+                        // (we have no passphrase here, and matching base64 would be meaningless).
+                        if (ProtectedContentCodec.IsProtected(plaintext))
+                            continue;
+
                         if (plaintext.Contains(query, StringComparison.OrdinalIgnoreCase))
                             bodyMatchIds.Add(body.ArticleId);
                     }

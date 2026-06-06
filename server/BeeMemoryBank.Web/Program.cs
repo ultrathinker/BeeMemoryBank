@@ -178,8 +178,47 @@ app.MapPut("/api-proxy/article/{id:guid}", async (Guid id, HttpContext ctx, ApiC
 {
     var req = await ctx.Request.ReadFromJsonAsync<UpdateArticleProxyRequest>();
     if (req == null) return Results.BadRequest();
+    // Editing a protected article: forward the passphrase so the API re-wraps the new body.
+    if (!string.IsNullOrEmpty(req.Passphrase) && req.Content != null)
+    {
+        var (art, status, error) = await api.UpdateProtectedArticleAsync(id, req.Title, req.TreePath, req.Content, req.Passphrase);
+        return art != null ? Results.Ok(art) : Results.Json(new { error = error ?? "Update failed" }, statusCode: status);
+    }
     var result = await api.UpdateArticleAsync(id, req.Title, req.TreePath, req.Content);
     return result != null ? Results.Ok(result) : Results.StatusCode(502);
+}).RequireAuthorization();
+
+// ─── Protected ("second-layer") articles ───────────────────────────────────
+app.MapPost("/api-proxy/article/{id:guid}/unlock", async (Guid id, HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<UnlockArticleProxyRequest>();
+    if (req == null) return Results.BadRequest();
+    var (ok, status, content, error) = await api.UnlockArticleAsync(id, req.Passphrase);
+    return ok ? Results.Ok(new { content }) : Results.Json(new { error = error ?? "Unlock failed" }, statusCode: status);
+}).RequireAuthorization();
+
+app.MapPost("/api-proxy/article/{id:guid}/protect", async (Guid id, HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<ProtectArticleProxyRequest>();
+    if (req == null) return Results.BadRequest();
+    var (ok, status, error) = await api.ProtectArticleAsync(id, req.Passphrase, req.Hint);
+    return ok ? Results.Ok(new { ok = true }) : Results.Json(new { error = error ?? "Protect failed" }, statusCode: status);
+}).RequireAuthorization();
+
+app.MapPost("/api-proxy/article/{id:guid}/unprotect", async (Guid id, HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<UnlockArticleProxyRequest>();
+    if (req == null) return Results.BadRequest();
+    var (ok, status, error) = await api.UnprotectArticleAsync(id, req.Passphrase);
+    return ok ? Results.Ok(new { ok = true }) : Results.Json(new { error = error ?? "Unprotect failed" }, statusCode: status);
+}).RequireAuthorization();
+
+app.MapPost("/api-proxy/article/{id:guid}/change-passphrase", async (Guid id, HttpContext ctx, ApiClient api) =>
+{
+    var req = await ctx.Request.ReadFromJsonAsync<ChangePassphraseProxyRequest>();
+    if (req == null) return Results.BadRequest();
+    var (ok, status, error) = await api.ChangeArticlePassphraseAsync(id, req.OldPassphrase, req.NewPassphrase, req.Hint);
+    return ok ? Results.Ok(new { ok = true }) : Results.Json(new { error = error ?? "Change failed" }, statusCode: status);
 }).RequireAuthorization();
 
 app.MapPost("/api-proxy/article/{id:guid}/copy", async (Guid id, HttpContext ctx, ApiClient api) =>
@@ -753,7 +792,12 @@ internal record CreateAgentProxyRequest(string Name, string? Description);
 internal record UpdateArticleProxyRequest(
     string? Title,
     string? TreePath,
-    string? Content);
+    string? Content,
+    string? Passphrase = null);
+
+internal record ProtectArticleProxyRequest(string Passphrase, string? Hint = null);
+internal record UnlockArticleProxyRequest(string Passphrase);
+internal record ChangePassphraseProxyRequest(string OldPassphrase, string NewPassphrase, string? Hint = null);
 
 internal record CreateFolderProxyRequest(string Path);
 internal record RenameFolderProxyRequest(string NewPath);

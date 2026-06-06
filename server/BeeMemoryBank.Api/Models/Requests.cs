@@ -12,7 +12,16 @@ public record UpdateArticleRequest(
     string? Title = null,
     string? TreePath = null,
     List<string>? ConceptTags = null,
-    string? Content = null);
+    string? Content = null,
+    // Required only when editing the CONTENT of a protected article — used to re-wrap the new body
+    // under the same passphrase (verified against the existing body first).
+    string? Passphrase = null);
+
+// Second-layer ("protected article") requests.
+public record ProtectArticleRequest(string Passphrase, string? Hint = null);
+public record UnprotectArticleRequest(string Passphrase);
+public record ChangeArticlePassphraseRequest(string OldPassphrase, string NewPassphrase, string? Hint = null);
+public record UnlockArticleRequest(string Passphrase);
 
 public record ChangePasswordRequest(string OldPassword, string NewPassword);
 
