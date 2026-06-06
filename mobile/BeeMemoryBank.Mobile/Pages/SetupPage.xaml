@@ -70,6 +70,14 @@
                                IsRunning="False"
                                Color="{StaticResource PrimaryColor}" />
 
+            <Label x:Name="StatusLabel"
+                   AutomationId="SetupStatusLabel"
+                   IsVisible="False"
+                   HorizontalOptions="Center"
+                   HorizontalTextAlignment="Center"
+                   FontSize="14"
+                   TextColor="{StaticResource SecondaryTextColor}" />
+
             <Button x:Name="ResetButton"
                     AutomationId="ResetButton"
                     Text="Reset local data"

@@ -16,6 +16,7 @@ public partial class SetupPage : ContentPage
     private readonly PostUnlockRouter _router;
     private readonly IServiceProvider _services;
     private bool _busy;
+    private CancellationTokenSource? _statusCts;
 
     public SetupPage(NodeSetupService setupSvc, SessionService session, PostUnlockRouter router, IServiceProvider services)
     {
@@ -76,8 +77,11 @@ public partial class SetupPage : ContentPage
                 if (!confirmed) return; // finally resets the busy state
             }
 
+            // Rotating status messages so the user sees progress during the long join.
+            StartStatusCycler(isJoin);
+
             // Heavy work (Argon2id KDF, network, snapshot import) runs off the UI thread so the
-            // spinner keeps animating and the screen stays responsive on slow/old devices.
+            // status ticker keeps updating and the screen stays responsive on slow/old devices.
             await Task.Run(async () =>
             {
                 if (isJoin)
@@ -101,6 +105,7 @@ public partial class SetupPage : ContentPage
         }
         finally
         {
+            StopStatusCycler();
             _busy = false;
             SetBusy(false);
         }
@@ -127,10 +132,65 @@ public partial class SetupPage : ContentPage
         NameEntry.IsEnabled = !busy;
         ServerUrlEntry.IsEnabled = !busy;
         PasswordEntry.IsEnabled = !busy;
-        SetupButton.IsEnabled = !busy;
         ResetButton.IsEnabled = !busy;
+
+        // Make the disabled state unmistakable: dim the button and change its label, since a
+        // plain IsEnabled=false doesn't visibly restyle the custom PrimaryButton.
+        SetupButton.IsEnabled = !busy;
+        SetupButton.Opacity = busy ? 0.5 : 1;
+        SetupButton.Text = busy ? "Connecting…" : "Setup & Connect";
+
+        LoadingIndicator.IsVisible = busy; // set visible before running so it actually animates
         LoadingIndicator.IsRunning = busy;
-        LoadingIndicator.IsVisible = busy;
+    }
+
+    // Cycles short status messages every few seconds during the long setup so the user always
+    // sees something happening, even while a single backend step (e.g. snapshot download) runs.
+    private void StartStatusCycler(bool isJoin)
+    {
+        var messages = isJoin
+            ? new[]
+            {
+                "Contacting the server…",
+                "Verifying your password…",
+                "Exchanging encryption keys…",
+                "Downloading your library…",
+                "Importing articles…",
+                "Almost done…"
+            }
+            : new[]
+            {
+                "Creating your node…",
+                "Setting up encryption…",
+                "Almost done…"
+            };
+
+        _statusCts?.Cancel();
+        _statusCts = new CancellationTokenSource();
+        StatusLabel.IsVisible = true;
+        _ = RunStatusCyclerAsync(messages, _statusCts.Token);
+    }
+
+    private async Task RunStatusCyclerAsync(string[] messages, CancellationToken ct)
+    {
+        // Started from the UI thread and never offloads, so awaits resume on the UI context and
+        // the Label is touched safely on the UI thread.
+        int i = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            StatusLabel.Text = messages[Math.Min(i, messages.Length - 1)];
+            i++;
+            try { await Task.Delay(5000, ct); }
+            catch (TaskCanceledException) { break; }
+        }
+    }
+
+    private void StopStatusCycler()
+    {
+        _statusCts?.Cancel();
+        _statusCts = null;
+        StatusLabel.IsVisible = false;
+        StatusLabel.Text = string.Empty;
     }
 
     private void ShowError(string message)
