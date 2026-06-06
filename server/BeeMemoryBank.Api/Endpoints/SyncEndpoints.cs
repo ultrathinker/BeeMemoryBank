@@ -401,6 +401,9 @@ public static class SyncEndpoints
             var whitelist = await whitelistRepo.GetAllActiveAsync();
 
             var statuses = new List<DeliveryNodeStatus>();
+            // One COUNT query per node below — N is the number of ACTIVE whitelist nodes (a handful
+            // in practice), so the per-node CountEventsAfterSequenceAsync is acceptable. Batch into a
+            // single query if the active-node count ever grows large.
             foreach (var node in whitelist.Where(node => node.NodeId != identity?.NodeId)) // exclude self
             {
                 var push = pushPositions.FirstOrDefault(p => p.RemoteNodeId == node.NodeId);

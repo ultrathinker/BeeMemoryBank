@@ -925,7 +925,7 @@ $(function () {
                                 var label = n.unsyncedCount + ' change' + (n.unsyncedCount === 1 ? '' : 's') + ' not synced';
                                 metaText = label + ' · ' + (n.lastContactAt ? 'last sync ' + getRelativeTime(n.lastContactAt) : 'never synced');
                             }
-                            var pct = n.headSeq > 0 ? (n.lastPushedSeq / n.headSeq * 100) : 0;
+                            var pct = n.headSeq > 0 ? Math.min(100, Math.max(0, n.lastPushedSeq / n.headSeq * 100)) : 0;
 
                             return '<div class="sync-node-item">' +
                                 '<sl-icon name="' + icon + '" style="font-size:1.1rem;color:' + (isOnline ? 'var(--accent)' : 'var(--text-secondary)') + ';"></sl-icon>' +
@@ -1421,9 +1421,11 @@ function updateSyncModal() {
 
             function getRelativeTime(dateStr) {
                 if (!dateStr) return 'Never';
-                var date = new Date(dateStr);
+                // Treat naive timestamps as UTC (server emits UTC) and clamp clock skew to 0,
+                // mirroring the dropdown's getRelativeTime so the two render identically.
+                var date = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z');
                 var now = new Date();
-                var diff = Math.floor((now - date) / 1000);
+                var diff = Math.max(0, Math.floor((now - date) / 1000));
                 if (diff < 15) return 'Just now';
                 if (diff < 60) return diff + 's ago';
                 if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
@@ -1458,7 +1460,7 @@ function updateSyncModal() {
                     var label = n.unsyncedCount + ' change' + (n.unsyncedCount === 1 ? '' : 's') + ' not synced';
                     metaText = label + ' · ' + (n.lastContactAt ? 'last sync ' + getRelativeTime(n.lastContactAt) : 'never synced');
                 }
-                var pct = n.headSeq > 0 ? (n.lastPushedSeq / n.headSeq * 100) : 0;
+                var pct = n.headSeq > 0 ? Math.min(100, Math.max(0, n.lastPushedSeq / n.headSeq * 100)) : 0;
 
                 return '<div class="sync-modal-node">' +
                     '<sl-icon name="' + icon + '" style="font-size:1.4rem;margin-top:2px;color:' + (isOnline ? 'var(--accent)' : 'var(--text-secondary)') + ';"></sl-icon>' +
