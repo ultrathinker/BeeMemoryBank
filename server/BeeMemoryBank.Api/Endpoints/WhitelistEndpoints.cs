@@ -16,12 +16,25 @@ public static class WhitelistEndpoints
     {
         var group = app.MapGroup("/api/whitelist").WithTags("Whitelist");
 
-        group.MapGet("/sync-status", async (HttpContext ctx, ISyncPositionRepository syncRepo) =>
+        group.MapGet("/sync-status", async (HttpContext ctx, ISyncPositionRepository syncRepo, ISyncPushPositionRepository pushRepo) =>
         {
             if (!InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-            var positions = await syncRepo.GetAllAsync();
-            return Results.Ok(positions.Select(p => new SyncStatusEntry(p.RemoteNodeId, p.UpdatedAt)));
+
+            // "Last sync" = most recent contact in EITHER direction. sync_position tracks how far
+            // WE pulled FROM a node; push_position tracks how far a node pulled FROM us / reported.
+            // Private nodes (no API address) are never pulled from, so their only signal is the
+            // push position — using sync_position alone left them at DateTime.MinValue (rendered
+            // as a nonsensical "739772d ago").
+            var latest = new Dictionary<Guid, DateTime>();
+            foreach (var p in await syncRepo.GetAllAsync())
+                if (!latest.TryGetValue(p.RemoteNodeId, out var cur) || p.UpdatedAt > cur)
+                    latest[p.RemoteNodeId] = p.UpdatedAt;
+            foreach (var p in await pushRepo.GetAllAsync())
+                if (!latest.TryGetValue(p.RemoteNodeId, out var cur) || p.PushedAt > cur)
+                    latest[p.RemoteNodeId] = p.PushedAt;
+
+            return Results.Ok(latest.Select(kv => new SyncStatusEntry(kv.Key, kv.Value)));
         });
 
         // GET /api/whitelist — list active entries (no unlock required)

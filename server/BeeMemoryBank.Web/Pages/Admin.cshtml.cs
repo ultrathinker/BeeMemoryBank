@@ -240,7 +240,9 @@ public class AdminModel(ApiClient api) : PageModel
 
     public static string RelativeTime(DateTime? utc)
     {
-        if (utc == null) return "\u2014";
+        // Treat null / default / pre-2000 sentinels as "never synced" instead of computing a
+        // nonsensical age from DateTime.MinValue (e.g. "739772d ago").
+        if (utc == null || utc.Value == default || utc.Value.Year < 2000) return "Never";
         var diff = DateTime.UtcNow - utc.Value;
         if (diff.TotalMinutes < 1) return "just now";
         if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes} min ago";
