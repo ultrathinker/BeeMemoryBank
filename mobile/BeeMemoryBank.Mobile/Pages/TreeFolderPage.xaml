@@ -60,6 +60,17 @@
             </CollectionView.ItemTemplate>
         </CollectionView>
 
+        <Grid x:Name="NavBusyOverlay"
+              Grid.Row="0" Grid.RowSpan="2"
+              IsVisible="False"
+              BackgroundColor="#99000000"
+              ZIndex="20">
+            <ActivityIndicator IsRunning="True"
+                               Color="{StaticResource PrimaryColor}"
+                               WidthRequest="48" HeightRequest="48"
+                               VerticalOptions="Center" HorizontalOptions="Center" />
+        </Grid>
+
     </Grid>
 
 </ContentPage>

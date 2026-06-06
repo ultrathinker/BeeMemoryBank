@@ -22,6 +22,7 @@ public partial class ArticlesPage : ContentPage
     protected override void OnAppearing()
     {
         base.OnAppearing();
+        NavBusyOverlay.IsVisible = false; // clear tap-loading when returning from the article
         _ = LoadArticlesAsync();
         _services.GetRequiredService<Services.SyncNotificationService>().ClearPendingUpdates();
     }
@@ -123,6 +124,9 @@ public partial class ArticlesPage : ContentPage
     {
         if (sender is not BindableObject bo) return;
         if (bo.BindingContext is not ArticleListItem item) return;
+        // Instant feedback: show the overlay, yield one frame so it paints, then navigate.
+        NavBusyOverlay.IsVisible = true;
+        await Task.Delay(16);
         await Shell.Current.GoToAsync($"articleDetail?id={item.Id}");
     }
 

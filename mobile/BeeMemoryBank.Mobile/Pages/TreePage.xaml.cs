@@ -30,6 +30,7 @@ public partial class TreePage : ContentPage
     protected override void OnAppearing()
     {
         base.OnAppearing();
+        NavBusyOverlay.IsVisible = false; // clear tap-loading when returning
         _ = LoadItemsAsync();
         _services.GetRequiredService<Services.SyncNotificationService>().ClearPendingUpdates();
     }
@@ -112,11 +113,15 @@ public partial class TreePage : ContentPage
 
         if (item.IsFolder && item.FolderPath is not null)
         {
+            NavBusyOverlay.IsVisible = true;
+            await Task.Delay(16);
             await Shell.Current.GoToAsync(
                 $"treeFolder?path={Uri.EscapeDataString(item.FolderPath)}&folderName={Uri.EscapeDataString(item.Name)}");
         }
         else if (!item.IsFolder && item.ArticleId.HasValue)
         {
+            NavBusyOverlay.IsVisible = true;
+            await Task.Delay(16);
             await Shell.Current.GoToAsync($"articleDetail?id={item.ArticleId.Value}");
         }
     }
