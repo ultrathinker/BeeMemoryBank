@@ -29,7 +29,8 @@ public record DeliveryNodeStatus(
     string DisplayName,
     string NodeType,
     long LastPushedSeq,
-    long TotalLocalEvents,
+    long HeadSeq,
+    int UnsyncedCount,
     bool IsSynced,
     DateTime? LastContactAt);
 

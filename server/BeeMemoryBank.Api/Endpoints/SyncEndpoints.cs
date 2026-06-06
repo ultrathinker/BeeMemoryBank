@@ -392,25 +392,33 @@ public static class SyncEndpoints
             if (!BeeMemoryBank.Api.Middleware.InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var identity = await nodeRepo.GetAsync();
-            var totalEvents = await eventLogRepo.GetTotalCountAsync();
+            // Use the head sequence number (MAX), NOT COUNT(*): after compaction trims early
+            // events, COUNT is lower than the head seq, so comparing a node's last_pushed_seq
+            // (a sequence number) against COUNT falsely reports caught-up nodes as behind and —
+            // worse — behind nodes as "Up to date" once their seq exceeds the shrunken count.
+            var headSeq = await eventLogRepo.GetMaxSequenceAsync();
             var pushPositions = await pushPositionRepo.GetAllAsync();
             var whitelist = await whitelistRepo.GetAllActiveAsync();
 
-            var statuses = whitelist
-                .Where(node => node.NodeId != identity?.NodeId) // exclude self
-                .Select(node =>
+            var statuses = new List<DeliveryNodeStatus>();
+            foreach (var node in whitelist.Where(node => node.NodeId != identity?.NodeId)) // exclude self
             {
                 var push = pushPositions.FirstOrDefault(p => p.RemoteNodeId == node.NodeId);
                 var nodeType = string.IsNullOrEmpty(node.ApiAddress) ? "private" : "public";
-                return new DeliveryNodeStatus(
+                var lastPushed = push?.LastPushedSeq ?? 0;
+                // Exact count of events the node hasn't received yet — robust to gaps left by
+                // compaction (head - lastPushed would over-count deleted events).
+                var unsyncedCount = await eventLogRepo.CountEventsAfterSequenceAsync(lastPushed);
+                statuses.Add(new DeliveryNodeStatus(
                     node.NodeId,
                     node.DisplayName,
                     nodeType,
-                    push?.LastPushedSeq ?? 0,
-                    totalEvents,
-                    (push?.LastPushedSeq ?? 0) >= totalEvents,
-                    push?.PushedAt);
-            }).ToList();
+                    lastPushed,
+                    headSeq,
+                    unsyncedCount,
+                    unsyncedCount == 0,
+                    push?.PushedAt));
+            }
 
             return Results.Ok(new DeliveryStatusResponse(identity?.NodeId, invisibleMode.IsInvisible, statuses));
         }).WithTags("Sync");

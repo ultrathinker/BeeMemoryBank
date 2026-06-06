@@ -913,18 +913,27 @@ $(function () {
                         list.innerHTML = listHtml;
                     } else {
                         listHtml += data.nodes.map(function (n) {
-                            var statusColor = n.isSynced ? 'var(--sl-color-success-600)' : 'var(--sl-color-warning-500)';
                             var isOnline = n.lastContactAt && (new Date() - new Date(n.lastContactAt) < 300000); // 5 min
-                            var statusText = n.isSynced ? 'Synced' : (n.lastPushedSeq + ' / ' + n.totalLocalEvents);
                             var icon = getNodeIcon(n);
-                            
+                            // Behind = how many events this node hasn't received yet. The date is the
+                            // last time the two nodes actually talked (last_contact), kept separate so a
+                            // long-offline node that happens to be caught-up doesn't masquerade as live.
+                            var metaText;
+                            if (n.isSynced) {
+                                metaText = 'Up to date · ' + getRelativeTime(n.lastContactAt);
+                            } else {
+                                var label = n.unsyncedCount + ' change' + (n.unsyncedCount === 1 ? '' : 's') + ' not synced';
+                                metaText = label + ' · ' + (n.lastContactAt ? 'last sync ' + getRelativeTime(n.lastContactAt) : 'never synced');
+                            }
+                            var pct = n.headSeq > 0 ? (n.lastPushedSeq / n.headSeq * 100) : 0;
+
                             return '<div class="sync-node-item">' +
                                 '<sl-icon name="' + icon + '" style="font-size:1.1rem;color:' + (isOnline ? 'var(--accent)' : 'var(--text-secondary)') + ';"></sl-icon>' +
                                 '<div class="sync-node-info">' +
-                                    '<div class="sync-node-name">' + syncEscapeHtml(n.displayName) + 
+                                    '<div class="sync-node-name">' + syncEscapeHtml(n.displayName) +
                                     (isOnline ? ' <small style="color:var(--sl-color-success-600);font-size:0.65rem;">ONLINE</small>' : '') + '</div>' +
-                                    '<div class="sync-node-meta">' + (n.isSynced ? 'Up to date' : (n.lastContactAt ? 'Syncing...' : 'Waiting for first sync')) + ' · ' + getRelativeTime(n.lastContactAt) + '</div>' +
-                                    (n.isSynced ? '' : '<sl-progress-bar value="' + (n.lastPushedSeq / n.totalLocalEvents * 100) + '" style="--height:4px;margin-top:4px;"></sl-progress-bar>') +
+                                    '<div class="sync-node-meta">' + metaText + '</div>' +
+                                    (n.isSynced ? '' : '<sl-progress-bar value="' + pct + '" style="--height:4px;margin-top:4px;"></sl-progress-bar>') +
                                 '</div>' +
                             '</div>';
                         }).join('');
@@ -1442,13 +1451,21 @@ function updateSyncModal() {
             html += data.nodes.map(function (n) {
                 var isOnline = n.lastContactAt && (new Date() - new Date(n.lastContactAt) < 300000);
                 var icon = getNodeIcon(n);
-                
+                var metaText;
+                if (n.isSynced) {
+                    metaText = 'Up to date · ' + getRelativeTime(n.lastContactAt);
+                } else {
+                    var label = n.unsyncedCount + ' change' + (n.unsyncedCount === 1 ? '' : 's') + ' not synced';
+                    metaText = label + ' · ' + (n.lastContactAt ? 'last sync ' + getRelativeTime(n.lastContactAt) : 'never synced');
+                }
+                var pct = n.headSeq > 0 ? (n.lastPushedSeq / n.headSeq * 100) : 0;
+
                 return '<div class="sync-modal-node">' +
                     '<sl-icon name="' + icon + '" style="font-size:1.4rem;margin-top:2px;color:' + (isOnline ? 'var(--accent)' : 'var(--text-secondary)') + ';"></sl-icon>' +
                     '<div class="sync-modal-node-info">' +
                         '<strong>' + escForModal(n.displayName) + (isOnline ? ' <small style="color:var(--sl-color-success-600);">ONLINE</small>' : '') + '</strong><br>' +
-                        '<small>' + (n.isSynced ? 'Synced' : (n.lastContactAt ? 'Syncing: ' + n.lastPushedSeq + ' / ' + n.totalLocalEvents : 'Waiting for first sync')) + ' · ' + getRelativeTime(n.lastContactAt) + '</small>' +
-                        (n.isSynced ? '' : '<sl-progress-bar value="' + (n.lastPushedSeq / n.totalLocalEvents * 100) + '" style="--height:6px;margin-top:8px;"></sl-progress-bar>') +
+                        '<small>' + metaText + '</small>' +
+                        (n.isSynced ? '' : '<sl-progress-bar value="' + pct + '" style="--height:6px;margin-top:8px;"></sl-progress-bar>') +
                     '</div>' +
                 '</div>';
             }).join('');
