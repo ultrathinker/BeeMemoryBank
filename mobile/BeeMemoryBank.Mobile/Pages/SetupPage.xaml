@@ -70,6 +70,14 @@
                                IsRunning="False"
                                Color="{StaticResource PrimaryColor}" />
 
+            <Button x:Name="ResetButton"
+                    AutomationId="ResetButton"
+                    Text="Reset local data"
+                    IsVisible="False"
+                    BackgroundColor="Transparent"
+                    TextColor="{StaticResource ErrorColor}"
+                    Clicked="OnResetClicked" />
+
         </VerticalStackLayout>
     </ScrollView>
 

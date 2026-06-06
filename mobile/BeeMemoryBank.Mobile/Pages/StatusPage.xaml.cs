@@ -284,8 +284,13 @@ public partial class StatusPage : ContentPage
         // Clear SQLite connection pool before deleting so no stale connections remain
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
-        if (File.Exists(dbPath))
-            File.Delete(dbPath);
+        // Delete the WAL/-shm/-journal sidecars too — an orphaned -wal next to a fresh db gets
+        // replayed on next open and resurrects the wiped state.
+        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+        {
+            var f = dbPath + suffix;
+            if (File.Exists(f)) File.Delete(f);
+        }
 
         // Restart the app process — the only reliable way to reinitialize all singletons
         // and re-run migrations on the fresh database.
