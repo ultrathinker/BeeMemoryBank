@@ -9,7 +9,8 @@
 @if (Model.Article != null)
 {
     <div style="margin-bottom:12px;">
-        <h1 class="article-title">@Model.Article.Title</h1>
+        <h1 class="article-title">@if (Model.Article.Protected)
+            {<sl-icon name="shield-lock" title="Password-protected" style="color:var(--sl-color-warning-600);margin-right:6px;vertical-align:-2px;"></sl-icon>}@Model.Article.Title</h1>
         <div class="article-meta">
             <span class="article-id-badge" title="Click to copy" data-bmb-copy="@Model.Article.Id">
                 id: @Model.Article.Id
@@ -43,21 +44,14 @@
                 <sl-button size="small" variant="primary" href="/Article/Edit?id=@Model.Article.Id">
                     <sl-icon slot="prefix" name="pencil"></sl-icon> Edit
                 </sl-button>
-                @if (Model.Article.Protected)
-                {
-                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-change-pass').show()" title="Change the password">
-                        <sl-icon slot="prefix" name="key"></sl-icon> Password
-                    </sl-button>
-                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-unprotect').show()" title="Remove password protection">
-                        <sl-icon slot="prefix" name="unlock"></sl-icon> Unprotect
-                    </sl-button>
-                }
-                else
+                @if (!Model.Article.Protected)
                 {
                     <sl-button size="small" variant="default" onclick="document.getElementById('dlg-protect').show()" title="Encrypt this article with a separate password">
                         <sl-icon slot="prefix" name="shield-lock"></sl-icon> Protect
                     </sl-button>
                 }
+                @* For protected articles, Change-password / Unprotect live on the lock card (under Unlock),
+                   not in this toolbar — see the lock card below. *@
             }
             <sl-button size="small" variant="default" href="/Article/History?id=@Model.Article.Id">
                 <sl-icon slot="prefix" name="clock-history"></sl-icon> History
@@ -110,10 +104,30 @@
                 <sl-button id="btn-unlock" variant="primary">
                     <sl-icon slot="prefix" name="unlock"></sl-icon> Unlock
                 </sl-button>
+                @if (!Model.IsReadOnly)
+                {
+                    <div style="display:flex;gap:8px;justify-content:center;margin-top:4px;">
+                        <sl-button size="small" variant="text" onclick="document.getElementById('dlg-change-pass').show()" title="Change the password">
+                            <sl-icon slot="prefix" name="key"></sl-icon> Change password
+                        </sl-button>
+                        <sl-button size="small" variant="text" onclick="document.getElementById('dlg-unprotect').show()" title="Remove password protection">
+                            <sl-icon slot="prefix" name="unlock"></sl-icon> Unprotect
+                        </sl-button>
+                    </div>
+                }
             </div>
         </div>
         <div class="card" id="unlocked-card" style="display:none;">
-            <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px;">
+                @if (!Model.IsReadOnly)
+                {
+                    <sl-button size="small" variant="text" onclick="document.getElementById('dlg-change-pass').show()" title="Change the password">
+                        <sl-icon slot="prefix" name="key"></sl-icon> Change password
+                    </sl-button>
+                    <sl-button size="small" variant="text" onclick="document.getElementById('dlg-unprotect').show()" title="Remove password protection">
+                        <sl-icon slot="prefix" name="unlock"></sl-icon> Unprotect
+                    </sl-button>
+                }
                 <sl-button size="small" variant="warning" id="btn-relock" title="Hide content again">
                     <sl-icon slot="prefix" name="lock"></sl-icon> Re-lock
                 </sl-button>

@@ -99,9 +99,28 @@
             <input type="text" name="conceptTags" id="concept-tags-input" value="@Model.ConceptTagsRaw" placeholder="Add tags..." />
         </div>
 
+        @if (Model.IsNew)
+        {
+            <div style="margin-bottom:16px;">
+                <sl-details id="protect-on-create" summary="🔒 Protect with a password (optional)">
+                    <sl-alert variant="warning" open style="margin-bottom:12px;">
+                        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                        The password is <strong>separate</strong> from your account and <strong>cannot be recovered</strong>.
+                        The article is encrypted before the first save — the plaintext is never written to the database, event log, or sync.
+                    </sl-alert>
+                    <div style="display:flex;flex-direction:column;gap:10px;max-width:480px;">
+                        <sl-input id="create-pass" name="passphrase" type="password" password-toggle label="Password"></sl-input>
+                        <sl-input id="create-pass2" type="password" password-toggle label="Confirm password"></sl-input>
+                        <sl-input id="create-hint" name="hint" label="Hint (optional)" placeholder="A reminder shown before unlocking — not the password itself"></sl-input>
+                        <div id="create-prot-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
+                    </div>
+                </sl-details>
+            </div>
+        }
+
         @if (Model.IsProtected)
         {
-            <div id="prot-gate" style="margin-bottom:16px;padding:18px;border:1px solid var(--sl-color-warning-300);border-radius:6px;background:var(--sl-color-warning-50);">
+            <div id="prot-gate" style="margin-bottom:16px;padding:18px;border:1px solid var(--sl-color-warning-300);border-radius:6px;background:var(--sl-color-warning-50);" @(Model.IsLocked ? "" : "hidden")>
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
                     <sl-icon name="shield-lock" style="color:var(--sl-color-warning-600);"></sl-icon>
                     <strong>This article is password-protected.</strong>
@@ -115,7 +134,7 @@
             </div>
         }
 
-        <div style="margin-bottom:16px;" id="content-block" @(Model.IsProtected ? "hidden" : "")>
+        <div style="margin-bottom:16px;" id="content-block" @(Model.IsLocked ? "hidden" : "")>
             <label style="display:block;font-size:0.88rem;color:var(--text-secondary);margin-bottom:6px;">Content (Markdown)</label>
             <textarea name="content" id="md-editor">@Model.Content</textarea>
         </div>
@@ -134,7 +153,18 @@
 <script>
 (function() {
     var isProtected = @(Model.IsProtected ? "true" : "false");
-    var protPass = null; // held in memory only after unlock; never persisted
+    var isLocked = @(Model.IsLocked ? "true" : "false");
+    var isNew = @(Model.IsNew ? "true" : "false");
+    var protPass = null; // held in memory only after a manual gate unlock; never persisted
+    // True while the user is filling the "protect on create" section of a NEW article.
+    function isCreateProtected() {
+        var cp = document.getElementById('create-pass');
+        var on = !!(cp && cp.value);
+        // The user may have typed plaintext (auto-drafted to localStorage) BEFORE deciding to protect.
+        // The moment a password appears, scrub any existing plaintext draft so it can't linger on disk.
+        if (on) { try { localStorage.removeItem(draftKey); } catch (e) {} }
+        return on;
+    }
     var imageCounter = 0;
     // Count existing images in content to continue numbering
     var existingImages = (document.getElementById('md-editor').value || '').match(/!\[image-\d+\]/g);
@@ -349,7 +379,9 @@
     }
 
     function saveDraft() {
-        if (isProtected) return; // never write a protected article's plaintext to localStorage
+        // Never write protected plaintext to localStorage — neither an existing protected article
+        // nor a new one the user is in the middle of protecting.
+        if (isProtected || isCreateProtected()) return;
         var currentTitle = titleInput.value;
         var currentContent = easyMDE.value();
         var currentConceptTags = conceptTagify ? conceptTagify.value.map(function(t) { return t.value; }).join(',') : '';
@@ -429,13 +461,17 @@
         }
     });
 
-    // ── Protected article: gate the editor behind the passphrase, save via passphrase-carrying PUT ──
+    // ── Existing protected article: editor gated by passphrase; save uses the server-side recent-unlock
+    //    cache (passphrase not sent) and falls back to a re-auth prompt if that 60s window expired. ──
     if (isProtected) {
         var protGate = document.getElementById('prot-gate');
         var protPassInput = document.getElementById('prot-pass');
         var protUnlockBtn = document.getElementById('prot-unlock');
         var protError = document.getElementById('prot-error');
         var contentBlock = document.getElementById('content-block');
+        var reauthPending = false; // unlock is being used to re-auth an expired save, not initial open
+
+        if (isLocked) easyMDE.codemirror.refresh(); // ensure CM lays out even if it inits while hidden
 
         function protUnlock() {
             var pass = protPassInput.value || '';
@@ -453,12 +489,16 @@
                 });
             }).then(function(data) {
                 protPass = pass;
-                easyMDE.value(data.content || '');
-                originalContent = data.content || '';
+                if (!reauthPending) {
+                    // Initial unlock: fill the editor. (On re-auth we keep the user's in-progress edits.)
+                    easyMDE.value(data.content || '');
+                    originalContent = data.content || '';
+                }
                 protPassInput.value = '';
-                if (protGate) protGate.style.display = 'none';
+                if (protGate) protGate.hidden = true;
                 if (contentBlock) contentBlock.hidden = false;
-                easyMDE.codemirror.refresh(); // CodeMirror mis-renders while hidden — refresh on reveal
+                easyMDE.codemirror.refresh();
+                if (reauthPending) { reauthPending = false; doProtectedSave(); }
             }).catch(function(err) {
                 protError.textContent = err.message;
                 protError.style.display = '';
@@ -472,25 +512,35 @@
             if (e.key === 'Enter') { e.preventDefault(); protUnlock(); }
         });
 
-        // Intercept the form submit: save the body re-wrapped under the passphrase.
-        form.addEventListener('submit', function(e) {
-            e.preventDefault();
-            if (!protPass) { if (protError) { protError.textContent = 'Unlock the article first.'; protError.style.display = ''; } return; }
+        function doProtectedSave() {
             var payload = {
                 title: titleInput.value,
                 treePath: form.querySelector('input[name="treePath"]').value,
-                content: easyMDE.value(),
-                passphrase: protPass
+                content: easyMDE.value()
             };
+            if (protPass) payload.passphrase = protPass; // else the server uses the recent-unlock cache
             fetch('/api-proxy/article/' + articleId, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             }).then(function(r) {
-                if (!r.ok) return r.json().catch(function(){ return {}; }).then(function(j) {
-                    throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Save failed.'));
-                });
-                // Persist tags too, then go to the view.
+                if (r.status === 400) {
+                    // Cache window expired and we have no passphrase — ask for it, keep the edits.
+                    reauthPending = true;
+                    if (protGate) protGate.hidden = false;
+                    protError.textContent = 'Your unlock expired — re-enter the password to save.';
+                    protError.style.display = '';
+                    protPassInput.focus();
+                    return null;
+                }
+                if (!r.ok) {
+                    // Stale cached/typed passphrase (e.g. changed on another device) — drop it so the
+                    // next save falls back to 400 → re-auth gate instead of looping on 401.
+                    if (r.status === 401) protPass = null;
+                    return r.json().catch(function(){ return {}; }).then(function(j) {
+                        throw new Error(r.status === 401 ? 'Wrong password — re-enter to save.' : (j.error || 'Save failed.'));
+                    });
+                }
                 var tags = conceptTagify ? conceptTagify.value.map(function(t){ return t.value; }) : [];
                 return fetch('/api-proxy/article/' + articleId + '/concept-tags', {
                     method: 'PUT',
@@ -502,6 +552,42 @@
             }).catch(function(err) {
                 showToast(err.message);
             });
+        }
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (protGate && !protGate.hidden && !protPass) {
+                protError.textContent = 'Unlock the article first.';
+                protError.style.display = '';
+                protPassInput.focus();
+                return;
+            }
+            doProtectedSave();
+        });
+    }
+
+    // ── New article being created WITH a password: validate the passphrase before the form posts. ──
+    if (isNew) {
+        var createPassEl = document.getElementById('create-pass');
+        if (createPassEl) {
+            // The instant a password is typed, drop any plaintext draft already on disk.
+            createPassEl.addEventListener('sl-input', function() {
+                if (createPassEl.value) { try { localStorage.removeItem(draftKey); } catch (e) {} }
+            });
+        }
+        form.addEventListener('submit', function(e) {
+            var cp = document.getElementById('create-pass');
+            if (!cp || !cp.value) return; // not protecting on create
+            var cp2 = document.getElementById('create-pass2');
+            var err = document.getElementById('create-prot-error');
+            var details = document.getElementById('protect-on-create');
+            function fail(msg) {
+                e.preventDefault();
+                if (err) { err.textContent = msg; err.style.display = ''; }
+                if (details) details.open = true;
+            }
+            if (cp.value.length < 4) return fail('Password must be at least 4 characters.');
+            if (cp.value !== (cp2 ? cp2.value : '')) return fail('Passwords do not match.');
         });
     }
 

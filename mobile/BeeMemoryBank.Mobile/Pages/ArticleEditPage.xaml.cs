@@ -11,6 +11,9 @@ public partial class ArticleEditPage : ContentPage
 {
     private readonly IServiceProvider _services;
     private Guid? _articleId;
+    // Set when an existing protected article is opened here (e.g. via deep link / share intent).
+    // The mobile app has no unlock UI yet, so we refuse to edit rather than overwrite the ciphertext.
+    private bool _protectedBlocked;
 
     public string ArticleId
     {
@@ -40,7 +43,14 @@ public partial class ArticleEditPage : ContentPage
         _services = services;
         Title = "New Article";
         PathLabel.Text = "/";
+        // Protect-on-create is offered for NEW articles only; LoadAsync() hides it for existing ones.
+        ProtectSection.IsVisible = true;
         FolderPickerPage.FolderSelected = path => PathLabel.Text = path;
+    }
+
+    private void OnProtectToggled(object? sender, ToggledEventArgs e)
+    {
+        ProtectFields.IsVisible = e.Value;
     }
 
     protected override void OnAppearing()
@@ -67,8 +77,19 @@ public partial class ArticleEditPage : ContentPage
             var article = await articleSvc.GetMetadataAsync(id);
             if (article == null) return;
 
+            if (article.Protected)
+            {
+                // Never load the BMBENC1 blob into the editor — saving it back would corrupt the data.
+                _protectedBlocked = true;
+                TitleEntry.Text = article.Title;
+                ContentEditor.IsVisible = false;
+                ShowError("This article is password-protected. Editing it on mobile is not supported yet — open it in the web app to unlock and edit.");
+                return;
+            }
+
             TitleEntry.Text = article.Title;
             PathLabel.Text = article.TreePath;
+            ProtectSection.IsVisible = false; // existing article: protect-on-create doesn't apply
 
             var conceptTags = await conceptTagSvc.GetByArticleIdAsync(id);
             ConceptTagsEntry.Text = string.Join(", ", conceptTags);
@@ -89,6 +110,11 @@ public partial class ArticleEditPage : ContentPage
 
     private async void OnSaveClicked(object? sender, EventArgs e)
     {
+        if (_protectedBlocked)
+        {
+            ShowError("This article is password-protected — edit it in the web app.");
+            return;
+        }
         var title = TitleEntry.Text?.Trim();
         if (string.IsNullOrEmpty(title))
         {
@@ -123,7 +149,17 @@ public partial class ArticleEditPage : ContentPage
             }
             else
             {
-                var article = await articleSvc.CreateAsync(title, path, conceptTags, content);
+                string? hint = null;
+                if (ProtectSwitch.IsToggled)
+                {
+                    var pass = ProtectPassEntry.Text ?? "";
+                    if (pass.Length < 4) { ShowError("Password must be at least 4 characters."); return; }
+                    if (pass != (ProtectPass2Entry.Text ?? "")) { ShowError("Passwords do not match."); return; }
+                    // Wrap locally so the very first CREATE event carries only ciphertext.
+                    content = BeeMemoryBank.Crypto.ProtectedContentCodec.Wrap(content, pass);
+                    hint = string.IsNullOrWhiteSpace(ProtectHintEntry.Text) ? null : ProtectHintEntry.Text.Trim();
+                }
+                var article = await articleSvc.CreateAsync(title, path, conceptTags, content, hint);
                 await Shell.Current.GoToAsync($"..?created={article.Id}");
             }
         }

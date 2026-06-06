@@ -18,6 +18,8 @@ public record ArticleDto(
 
 public record ArticleContentDto(Guid Id, string Content);
 
+public record EditContentDto(Guid Id, bool Protected, bool Unlocked, string? Content);
+
 public record SessionStatusDto(bool IsUnlocked);
 
 public record FolderInfoDto(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt, bool IsSystem = false);

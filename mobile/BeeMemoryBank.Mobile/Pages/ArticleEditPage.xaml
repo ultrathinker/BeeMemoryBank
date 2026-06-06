@@ -47,6 +47,32 @@
                     MinimumHeightRequest="300"
                     Style="{StaticResource BaseEditor}" />
 
+            <!-- Protect-on-create: only shown for NEW articles. Encrypts the body BEFORE the first
+                 save so the plaintext never reaches the event log / sync. -->
+            <Border x:Name="ProtectSection" IsVisible="False"
+                    Stroke="{StaticResource PrimaryColor}" StrokeThickness="1"
+                    Padding="12">
+                <VerticalStackLayout Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <Label Text="🔒 Protect with password" FontAttributes="Bold" VerticalOptions="Center" />
+                        <Switch Grid.Column="1" x:Name="ProtectSwitch" AutomationId="ProtectSwitch" Toggled="OnProtectToggled" />
+                    </Grid>
+                    <VerticalStackLayout x:Name="ProtectFields" IsVisible="False" Spacing="8">
+                        <Label Text="The password is separate from your account and CANNOT be recovered. The article is encrypted before it is saved or synced."
+                               FontSize="12" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
+                        <Entry x:Name="ProtectPassEntry" IsPassword="True" Placeholder="Password"
+                               AutomationId="ProtectPassEntry" Style="{StaticResource BaseEntry}"
+                               IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
+                        <Entry x:Name="ProtectPass2Entry" IsPassword="True" Placeholder="Confirm password"
+                               AutomationId="ProtectPass2Entry" Style="{StaticResource BaseEntry}"
+                               IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
+                        <Entry x:Name="ProtectHintEntry" Placeholder="Hint (optional)"
+                               AutomationId="ProtectHintEntry" Style="{StaticResource BaseEntry}"
+                               IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
             <Label Text="Folder Path" FontAttributes="Bold" />
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                 <Label Grid.Column="0" x:Name="PathLabel"

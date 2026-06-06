@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -94,7 +95,18 @@ public static class ArticleEndpoints
 
             try
             {
-                var article = await svc.CreateAsync(req.Title, req.TreePath, [], req.Content);
+                // Create-with-password: wrap the body BEFORE the first save so the plaintext never
+                // reaches the event log or sync. The very first CREATE event carries only ciphertext.
+                var content = req.Content;
+                string? hint = null;
+                if (!string.IsNullOrEmpty(req.Passphrase))
+                {
+                    if (req.Passphrase.Length < 4)
+                        return Results.Json(new ErrorResponse("Passphrase must be at least 4 characters."), statusCode: 400);
+                    content = BeeMemoryBank.Crypto.ProtectedContentCodec.Wrap(req.Content, req.Passphrase);
+                    hint = string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim();
+                }
+                var article = await svc.CreateAsync(req.Title, req.TreePath, [], content, hint);
                 if (req.ConceptTags is { Count: > 0 })
                     await conceptTagSvc.SetForArticleAsync(article.Id, req.ConceptTags);
                 return Results.Created($"/api/articles/{article.Id}", ArticleResponse.From(article, req.ConceptTags ?? []));
@@ -105,7 +117,7 @@ public static class ArticleEndpoints
             }
         });
 
-        group.MapPut("/{id:guid}", async (Guid id, UpdateArticleRequest req, ArticleService svc, ConceptTagService conceptTagSvc, IConceptTagRepository conceptTagRepo, SessionService session, HttpContext ctx, FolderAccessService folderAccess) =>
+        group.MapPut("/{id:guid}", async (Guid id, UpdateArticleRequest req, ArticleService svc, ConceptTagService conceptTagSvc, IConceptTagRepository conceptTagRepo, SessionService session, HttpContext ctx, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
             if (!InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
@@ -172,14 +184,19 @@ public static class ArticleEndpoints
             if (req.Content != null && existingMeta.Protected)
             {
                 // Editing a protected article's body: re-wrap the new content under its passphrase.
-                if (string.IsNullOrEmpty(req.Passphrase))
+                // The passphrase comes from the request OR, for a seamless read→edit handoff, from the
+                // server-side recent-unlock cache (so the browser never has to hold or resend it).
+                var passphrase = !string.IsNullOrEmpty(req.Passphrase)
+                    ? req.Passphrase
+                    : unlockCache.TryGet(CallerKey(ctx), id);
+                if (string.IsNullOrEmpty(passphrase))
                     return Results.Json(new ErrorResponse("This article is protected — a passphrase is required to edit its content."), statusCode: 400);
                 // Body FIRST: UpdateProtectedContentAsync verifies the passphrase before writing, so a
                 // wrong passphrase aborts with nothing committed. Only then apply title/path — otherwise
                 // a bad passphrase would still have persisted the metadata change (non-atomic edit).
                 try
                 {
-                    await svc.UpdateProtectedContentAsync(id, req.Content, req.Passphrase);
+                    await svc.UpdateProtectedContentAsync(id, req.Content, passphrase);
                 }
                 catch (CryptographicException)
                 {
@@ -187,6 +204,8 @@ public static class ArticleEndpoints
                 }
                 if (req.Title != null || req.TreePath != null)
                     await svc.UpdateAsync(id, req.Title, req.TreePath, null, null);
+                // Refresh the cache window so consecutive saves keep working without re-prompting.
+                unlockCache.Remember(CallerKey(ctx), id, passphrase);
             }
             else
             {
@@ -257,7 +276,7 @@ public static class ArticleEndpoints
 
         // ===== Second-layer ("protected article") encryption =====
 
-        group.MapPost("/{id:guid}/protect", async (Guid id, ProtectArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
+        group.MapPost("/{id:guid}/protect", async (Guid id, ProtectArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
             var (_, error) = await WriteGateAsync(id, ctx, svc, session, folderAccess);
             if (error != null) return error;
@@ -266,6 +285,9 @@ public static class ArticleEndpoints
             try
             {
                 await svc.ProtectAsync(id, req.Passphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
+                // The caller just proved the passphrase — prime the cache so editing right after
+                // protecting doesn't immediately re-prompt.
+                unlockCache.Remember(CallerKey(ctx), id, req.Passphrase);
                 return Results.Ok(new { protected_ = true });
             }
             catch (InvalidOperationException ex)
@@ -274,13 +296,14 @@ public static class ArticleEndpoints
             }
         });
 
-        group.MapPost("/{id:guid}/unprotect", async (Guid id, UnprotectArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
+        group.MapPost("/{id:guid}/unprotect", async (Guid id, UnprotectArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
             var (_, error) = await WriteGateAsync(id, ctx, svc, session, folderAccess);
             if (error != null) return error;
             try
             {
                 await svc.UnprotectAsync(id, req.Passphrase);
+                unlockCache.Forget(CallerKey(ctx), id); // no longer protected
                 return Results.Ok(new { protected_ = false });
             }
             catch (CryptographicException)
@@ -293,7 +316,7 @@ public static class ArticleEndpoints
             }
         });
 
-        group.MapPost("/{id:guid}/change-passphrase", async (Guid id, ChangeArticlePassphraseRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
+        group.MapPost("/{id:guid}/change-passphrase", async (Guid id, ChangeArticlePassphraseRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
             var (_, error) = await WriteGateAsync(id, ctx, svc, session, folderAccess);
             if (error != null) return error;
@@ -302,6 +325,7 @@ public static class ArticleEndpoints
             try
             {
                 await svc.ChangePassphraseAsync(id, req.OldPassphrase, req.NewPassphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
+                unlockCache.Remember(CallerKey(ctx), id, req.NewPassphrase); // cache the new passphrase
                 return Results.Ok(new { changed = true });
             }
             catch (CryptographicException)
@@ -316,7 +340,7 @@ public static class ArticleEndpoints
 
         // Read-only unlock: returns the decrypted plaintext. Uses READ ACL so read-only-folder users
         // can still view a protected article they have access to.
-        group.MapPost("/{id:guid}/unlock", async (Guid id, UnlockArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
+        group.MapPost("/{id:guid}/unlock", async (Guid id, UnlockArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
             if (!InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
@@ -338,6 +362,10 @@ public static class ArticleEndpoints
             try
             {
                 var content = await svc.UnlockContentAsync(id, req.Passphrase);
+                // Remember the verified passphrase server-side (60s) so the Edit page can open without
+                // re-prompting. Never returned to the browser. View page load does NOT read this.
+                if (meta.Protected)
+                    unlockCache.Remember(CallerKey(ctx), id, req.Passphrase);
                 return Results.Ok(new ArticleContentResponse(id, content));
             }
             catch (CryptographicException)
@@ -345,6 +373,57 @@ public static class ArticleEndpoints
                 return Results.Json(new ErrorResponse("Wrong passphrase."), statusCode: 401);
             }
         });
+
+        // Edit-load helper: tells the Edit page whether the article is protected and, if it was
+        // unlocked in the last 60s by this caller, returns the decrypted body so the editor opens
+        // without a re-prompt. On a cache miss it returns unlocked=false (the Edit page shows the gate).
+        group.MapGet("/{id:guid}/edit-content", async (Guid id, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
+        {
+            if (!InternalKeyValidator.Validate(ctx))
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+
+            var meta = await svc.GetMetadataAsync(id);
+            if (meta == null)
+                return Results.NotFound(new ErrorResponse($"Article {id} not found"));
+
+            var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
+            if (!isSuperadmin)
+            {
+                var (denyPaths, allowPaths) = await folderAccess.GetAccessInfoAsync(userId, agentId);
+                if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, meta.TreePath))
+                    return Results.Json(new ErrorResponse("You don't have permission to read this article."), statusCode: 403);
+            }
+
+            if (!meta.Protected)
+            {
+                var plain = await svc.GetContentAsync(id);
+                return Results.Ok(new EditContentResponse(id, false, true, plain));
+            }
+
+            var cached = unlockCache.TryGet(CallerKey(ctx), id);
+            if (cached == null)
+                return Results.Ok(new EditContentResponse(id, true, false, null));
+            try
+            {
+                var content = await svc.UnlockContentAsync(id, cached);
+                return Results.Ok(new EditContentResponse(id, true, true, content));
+            }
+            catch (CryptographicException)
+            {
+                // Cached passphrase no longer valid (e.g. changed elsewhere) — force a re-prompt.
+                unlockCache.Forget(CallerKey(ctx), id);
+                return Results.Ok(new EditContentResponse(id, true, false, null));
+            }
+        });
+    }
+
+    // Stable per-caller key for the unlock cache so one user's unlock can't be reused by another.
+    private static string CallerKey(HttpContext ctx)
+    {
+        var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
+        return $"u{userId}:a{agentId}:s{isSuperadmin}";
     }
 
     // Shared gate for protected-article WRITE operations: internal key + unlocked session + write ACL.

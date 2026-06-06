@@ -6,7 +6,11 @@ public record CreateArticleRequest(
     string Title,
     string TreePath,
     string Content,
-    List<string>? ConceptTags = null);
+    List<string>? ConceptTags = null,
+    // Create the article ALREADY protected: the body is wrapped before the first save, so the
+    // plaintext never reaches the event log / sync. Omit for a normal (plaintext) article.
+    string? Passphrase = null,
+    string? Hint = null);
 
 public record UpdateArticleRequest(
     string? Title = null,

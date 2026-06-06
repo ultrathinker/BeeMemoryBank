@@ -25,7 +25,7 @@ public partial class ArticleService(
     /// Creates an article with encrypted body.
     /// Generates per-article DEK, encrypts body, saves both layers, writes to event log.
     /// </summary>
-    public async Task<Article> CreateAsync(string title, string treePath, List<string> tags, string plaintext)
+    public async Task<Article> CreateAsync(string title, string treePath, List<string> tags, string plaintext, string? protectionHint = null)
     {
         if (string.IsNullOrWhiteSpace(title)) throw new ArgumentException("Title cannot be empty.");
         if (string.IsNullOrWhiteSpace(treePath) || !treePath.StartsWith('/'))
@@ -73,7 +73,10 @@ public partial class ArticleService(
             UpdatedAt = now,
             // Derive the protected flag from the body itself so a copied/imported BMBENC1 blob
             // (e.g. via CopyService) is never silently treated as plaintext.
-            Protected = ProtectedContentCodec.IsProtected(plaintext)
+            Protected = ProtectedContentCodec.IsProtected(plaintext),
+            // Only carry a hint when the body is actually protected — a hint on a plaintext article
+            // would be a confusing, meaningless dangling field.
+            ProtectionHint = ProtectedContentCodec.IsProtected(plaintext) ? protectionHint : null
         };
 
         var folder = await EnsureFolderExistsAsync(treePath);

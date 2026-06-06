@@ -16,6 +16,8 @@ public class EditModel(ApiClient api) : PageModel
     public DateTime? LastModified { get; private set; }
     public bool IsNew => ArticleId == null;
     public bool IsProtected { get; private set; }
+    // Protected AND not unlockable from the recent-unlock cache → show the passphrase gate.
+    public bool IsLocked { get; private set; }
     public string? ErrorMessage { get; set; }
 
     public async Task<IActionResult> OnGetAsync(Guid? id, string? treePath)
@@ -30,13 +32,20 @@ public class EditModel(ApiClient api) : PageModel
                 Title = article.Title;
                 LastModified = article.UpdatedAt;
                 IsProtected = article.Protected;
-                if (!article.Protected)
+
+                // edit-content returns plaintext for a non-protected article OR for a protected one
+                // that was unlocked in the last ~60s by this user (server-side cache → no re-prompt).
+                var ec = await api.GetEditContentAsync(id.Value);
+                if (ec is { Unlocked: true })
+                    Content = ec.Content ?? "";
+                else if (!article.Protected)
                 {
+                    // Non-protected but the helper failed for some reason — fall back to the normal path.
                     var c = await api.GetArticleContentAsync(id.Value);
                     Content = c?.Content ?? "";
                 }
-                // Protected: never load the encrypted blob server-side. The client unlocks with the
-                // passphrase and fills the editor; the body is saved back via a passphrase-carrying PUT.
+                // Protected + not unlocked → leave Content empty and show the passphrase gate.
+                IsLocked = article.Protected && (ec is null || !ec.Unlocked);
 
                 // Read-only ACL: forward to View page with a one-time flash.
                 var perms = await api.GetFolderPermissionsAsync(article.TreePath);
@@ -64,7 +73,8 @@ public class EditModel(ApiClient api) : PageModel
     }
 
     public async Task<IActionResult> OnPostAsync(
-        Guid? id, string? treePath, string title, string? content, string? conceptTags)
+        Guid? id, string? treePath, string title, string? content, string? conceptTags,
+        string? passphrase = null, string? hint = null)
     {
         var body = content ?? "";
 
@@ -93,7 +103,9 @@ public class EditModel(ApiClient api) : PageModel
         else
         {
             var (article, status, error) = await api.CreateArticleWithErrorAsync(
-                title, treePath ?? "/", body);
+                title, treePath ?? "/", body,
+                string.IsNullOrWhiteSpace(passphrase) ? null : passphrase,
+                string.IsNullOrWhiteSpace(hint) ? null : hint);
             if (article != null)
             {
                 await api.SetArticleConceptTagsAsync(article.Id, ctList);

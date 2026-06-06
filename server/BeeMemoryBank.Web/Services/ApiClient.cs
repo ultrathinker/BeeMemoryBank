@@ -262,14 +262,25 @@ public class ApiClient(HttpClient http)
     }
 
     public async Task<(ArticleDto? Article, int Status, string? Error)> CreateArticleWithErrorAsync(
-        string title, string treePath, string content)
+        string title, string treePath, string content, string? passphrase = null, string? hint = null)
     {
+        // passphrase != null → create the article ALREADY protected (body wrapped server-side before
+        // the first save, so the plaintext never reaches the event log / sync).
         var resp = await http.PostAsync("/api/articles",
-            Body(new { title, treePath, content }));
+            Body(new { title, treePath, content, passphrase, hint }));
         if (!resp.IsSuccessStatusCode)
             return (null, (int)resp.StatusCode, await ReadErrorAsync(resp));
         var dto = await resp.Content.ReadFromJsonAsync<ArticleDto>(JsonOpts);
         return (dto, (int)resp.StatusCode, null);
+    }
+
+    // Edit-load helper: returns whether the article is protected and, if it was unlocked in the last
+    // ~60s by this user (server-side cache), the decrypted body so the editor opens without a re-prompt.
+    public async Task<EditContentDto?> GetEditContentAsync(Guid id)
+    {
+        var resp = await http.GetAsync($"/api/articles/{id}/edit-content");
+        if (!resp.IsSuccessStatusCode) return null;
+        return await resp.Content.ReadFromJsonAsync<EditContentDto>(JsonOpts);
     }
 
     public async Task<ArticleDto?> UpdateArticleAsync(

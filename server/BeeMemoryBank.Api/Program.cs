@@ -109,6 +109,7 @@ builder.Services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.Get
 builder.Services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<SnapshotRestoreService>());
 builder.Services.AddSingleton(new McpResponseManager(dataPath));
 builder.Services.AddSingleton<DownloadTokenService>();
+builder.Services.AddSingleton<BeeMemoryBank.Api.Services.ProtectedUnlockCache>();
 builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();
 builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler>();

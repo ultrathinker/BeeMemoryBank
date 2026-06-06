@@ -74,7 +74,7 @@ public partial class ArticleDetailPage : ContentPage
             }
 
             Title = article.Title;
-            TitleLabel.Text = article.Title;
+            TitleLabel.Text = (article.Protected ? "🔒 " : "") + article.Title;
             PathLabel.Text = article.TreePath;
             UpdatedLabel.Text = article.UpdatedAt.ToString("yyyy-MM-dd HH:mm");
 

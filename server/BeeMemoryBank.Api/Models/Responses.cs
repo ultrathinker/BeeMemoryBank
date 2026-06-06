@@ -23,6 +23,11 @@ public record ArticleResponse(
 
 public record ArticleContentResponse(Guid Id, string Content);
 
+// Edit-load helper for protected articles: Unlocked=true means Content holds the plaintext (either
+// a non-protected body or one unlocked from the recent-unlock cache). Unlocked=false → Edit shows the
+// passphrase gate (Content is null).
+public record EditContentResponse(Guid Id, bool Protected, bool Unlocked, string? Content);
+
 public record SessionStatusResponse(bool IsUnlocked);
 
 public record UnlockResponse(bool IsUnlocked, string? MigratedSyntheticUsername);
