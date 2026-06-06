@@ -43,7 +43,7 @@ jobs:
       # version invalidates it on a float so the workload is reinstalled to match.
       - name: Cache .NET workloads
         id: workload-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.dotnet
           key: dotnet-workloads-maui-android-net10-${{ runner.os }}-${{ steps.dotnet.outputs.dotnet-version }}
@@ -57,7 +57,7 @@ jobs:
       # the server-side build.yml strategy.
       - name: Cache ONNX model
         id: onnx-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx
           key: onnx-all-MiniLM-L6-v2-v1
