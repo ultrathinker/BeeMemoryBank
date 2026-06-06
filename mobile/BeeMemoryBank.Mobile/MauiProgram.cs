@@ -45,6 +45,7 @@ public static class MauiProgram
             .AddSingleton<SyncNotificationService>()
             .AddSingleton<SyncStatusService>()
             .AddScoped<NodeSetupService>()
+            .AddSingleton<IngestKeyEnroller>()
             .AddSingleton<PostUnlockRouter>()
             .AddLogging();
 

@@ -46,6 +46,13 @@ public partial class StatusPage : ContentPage
         await Task.Run(async () => await _statusSvc.RefreshAsync());
         _statusSvc.StartPolling();
         WarningBanner.IsVisible = !_statusSvc.IsRegisteredOnServer;
+
+        // Self-heal: if the ingest key never enrolled (e.g. a transient Keystore failure at first
+        // setup left background backup dead), enrol it now while unlocked. Surface a banner only if
+        // it still isn't armed afterwards, so the failure is never silent.
+        var enroller = _services.GetRequiredService<IngestKeyEnroller>();
+        await enroller.TryEnrollAsync();
+        BackupWarningBanner.IsVisible = !enroller.IsArmed();
         await LoadActivityAsync();
         await LoadPeersAsync();
     }

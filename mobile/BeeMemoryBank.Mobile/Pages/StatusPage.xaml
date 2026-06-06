@@ -22,6 +22,20 @@
                     </VerticalStackLayout>
                 </Frame>
 
+                <Frame Style="{StaticResource CardFrame}" x:Name="BackupWarningBanner" IsVisible="False"
+                       AutomationId="BackupWarningBanner"
+                       BackgroundColor="#FFF8E1" BorderColor="#FFB300">
+                    <VerticalStackLayout>
+                        <Label Text="Background backup not active"
+                               FontAttributes="Bold"
+                               FontSize="16"
+                               TextColor="#E65100" />
+                        <Label Text="This device can't receive updates while locked yet. Lock and unlock the app once to activate background backup."
+                               LineBreakMode="WordWrap"
+                               TextColor="#BF360C" />
+                    </VerticalStackLayout>
+                </Frame>
+
                 <Frame Style="{StaticResource CardFrame}">
                     <VerticalStackLayout Spacing="8">
                         <Label Text="Node Info" FontAttributes="Bold" FontSize="18" />
