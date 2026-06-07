@@ -47,6 +47,7 @@ public static class MauiProgram
             .AddScoped<NodeSetupService>()
             .AddSingleton<IngestKeyEnroller>()
             .AddSingleton<PostUnlockRouter>()
+            .AddSingleton<MobileUnlockHolder>()
             .AddLogging();
 
         // p5: friendly maintenance-mode messages for HTTP 503 from the BMB API. Only routes

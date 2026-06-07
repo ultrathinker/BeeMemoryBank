@@ -40,6 +40,22 @@
                     WidthRequest="110" HeightRequest="36"
                     FontSize="13" Padding="4" />
             </Grid>
+            <!-- Edit gate for an existing protected article (when not handed off from the read view). -->
+            <Border x:Name="EditUnlockGate" IsVisible="False"
+                    Stroke="{StaticResource PrimaryColor}" StrokeThickness="1" Padding="12">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="🔒 Enter the password to edit this article" FontAttributes="Bold" />
+                    <Entry x:Name="EditUnlockPassEntry" IsPassword="True" Placeholder="Password"
+                           AutomationId="EditUnlockPassEntry" Style="{StaticResource BaseEntry}"
+                           IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
+                           ReturnType="Go" Completed="OnEditUnlockClicked" />
+                    <Label x:Name="EditUnlockErrorLabel" IsVisible="False"
+                           TextColor="{StaticResource ErrorColor}" FontSize="13" />
+                    <Button Text="Unlock" AutomationId="EditUnlockButton"
+                            Style="{StaticResource PrimaryButton}" Clicked="OnEditUnlockClicked" />
+                </VerticalStackLayout>
+            </Border>
+
             <Editor x:Name="ContentEditor"
                     AutomationId="ContentEditor"
                     Placeholder="Article content..."

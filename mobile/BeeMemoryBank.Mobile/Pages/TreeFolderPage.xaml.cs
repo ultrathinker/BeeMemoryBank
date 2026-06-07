@@ -12,10 +12,25 @@ public partial class TreeFolderPage : ContentPage
     private readonly IServiceProvider _services;
     private string _currentPath = "/";
 
+    // #4 — compact vs expanded list items; shared preference with the rest of the lists.
+    private bool _expanded = Preferences.Get(TreePage.ListExpandedKey, false);
+    public LineBreakMode ItemsLineBreakMode => _expanded ? LineBreakMode.WordWrap : LineBreakMode.TailTruncation;
+    public int ItemsMaxLines => _expanded ? 3 : 1;
+
     public TreeFolderPage(IServiceProvider services)
     {
         InitializeComponent();
         _services = services;
+        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+    }
+
+    private void OnToggleExpandClicked(object? sender, EventArgs e)
+    {
+        _expanded = !_expanded;
+        Preferences.Set(TreePage.ListExpandedKey, _expanded);
+        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        OnPropertyChanged(nameof(ItemsLineBreakMode));
+        OnPropertyChanged(nameof(ItemsMaxLines));
     }
 
     protected override void OnAppearing()
@@ -26,7 +41,8 @@ public partial class TreeFolderPage : ContentPage
 
     public string FolderName
     {
-        set { if (value != null) Title = Uri.UnescapeDataString(value); }
+        // Folder name is reflected in the breadcrumb; the title shows the nesting level instead.
+        set { /* no-op: see FolderPath for title/breadcrumb */ }
     }
 
     public string FolderPath
@@ -35,6 +51,10 @@ public partial class TreeFolderPage : ContentPage
         {
             if (value == null) return;
             _currentPath = Uri.UnescapeDataString(value);
+            // #5 — orient the user: title shows depth, breadcrumb shows the full path.
+            var depth = _currentPath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
+            Title = depth > 0 ? $"Level {depth}" : "Tree";
+            BreadcrumbLabel.Text = _currentPath;
             _ = LoadItemsAsync(_currentPath);
         }
     }
@@ -81,7 +101,7 @@ public partial class TreeFolderPage : ContentPage
         result.AddRange(folders.OrderBy(f => f.Name, BeeMemoryBank.Core.UnderscoreFirstComparer.Instance)
             .Select(f => new TreeListItem(f.Name, true, f.Path, null, null)));
         result.AddRange(directArticles
-            .Select(a => new TreeListItem(a.Title, false, null, a.Id, a.UpdatedAt)));
+            .Select(a => new TreeListItem(a.Title, false, null, a.Id, a.UpdatedAt, a.Protected)));
         return result;
     }
 

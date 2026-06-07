@@ -10,29 +10,62 @@ public record TreeListItem(
     bool IsFolder,
     string? FolderPath,
     Guid? ArticleId,
-    DateTime? UpdatedAt)
+    DateTime? UpdatedAt,
+    bool Protected = false)
 {
     public string DisplayName => Name;
     public string IconSource => IsFolder ? "icon_folder.svg" : "icon_article.svg";
     public string RightText => IsFolder ? "›" : (UpdatedAt.HasValue ? UpdatedAt.Value.ToString("MM-dd") : "");
+    // Lock badge shown only for protected articles (folders are never protected).
+    public bool ShowLock => Protected && !IsFolder;
 }
 
 public partial class TreePage : ContentPage
 {
     private readonly IServiceProvider _services;
 
+    // #4 — compact (1-line, truncated) vs expanded (up to 3 lines) list items, toggled from the
+    // toolbar and remembered across launches. List item labels bind LineBreakMode/MaxLines to these.
+    private bool _expanded = Preferences.Get(ListExpandedKey, false);
+    public const string ListExpandedKey = "list_items_expanded";
+    public LineBreakMode ItemsLineBreakMode => _expanded ? LineBreakMode.WordWrap : LineBreakMode.TailTruncation;
+    public int ItemsMaxLines => _expanded ? 3 : 1;
+
     public TreePage(IServiceProvider services)
     {
         InitializeComponent();
         _services = services;
+        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        BreadcrumbLabel.Text = "/"; // root level
+    }
+
+    private void OnToggleExpandClicked(object? sender, EventArgs e)
+    {
+        _expanded = !_expanded;
+        Preferences.Set(ListExpandedKey, _expanded);
+        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        OnPropertyChanged(nameof(ItemsLineBreakMode));
+        OnPropertyChanged(nameof(ItemsMaxLines));
     }
 
     protected override void OnAppearing()
     {
         base.OnAppearing();
+        SyncExpandedFromPrefs(); // pick up a toggle made on another (cached) tab
         NavBusyOverlay.IsVisible = false; // clear tap-loading when returning
         _ = LoadItemsAsync();
         _services.GetRequiredService<Services.SyncNotificationService>().ClearPendingUpdates();
+    }
+
+    // Tabs are cached, so a toggle on the Articles tab must be reflected here on re-appear.
+    private void SyncExpandedFromPrefs()
+    {
+        var pref = Preferences.Get(ListExpandedKey, false);
+        if (pref == _expanded) return;
+        _expanded = pref;
+        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        OnPropertyChanged(nameof(ItemsLineBreakMode));
+        OnPropertyChanged(nameof(ItemsMaxLines));
     }
 
     protected override void OnDisappearing()
@@ -96,7 +129,7 @@ public partial class TreePage : ContentPage
         result.AddRange(folders.OrderBy(f => f.Name, BeeMemoryBank.Core.UnderscoreFirstComparer.Instance)
             .Select(f => new TreeListItem(f.Name, true, f.Path, null, null)));
         result.AddRange(directArticles
-            .Select(a => new TreeListItem(a.Title, false, null, a.Id, a.UpdatedAt)));
+            .Select(a => new TreeListItem(a.Title, false, null, a.Id, a.UpdatedAt, a.Protected)));
         return result;
     }
 

@@ -5,7 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Pages;
 
-public record ArticleListItem(Guid Id, string Title, string TreePath, DateTime UpdatedAt);
+public record ArticleListItem(Guid Id, string Title, string TreePath, DateTime UpdatedAt, bool Protected = false);
 
 public partial class ArticlesPage : ContentPage
 {
@@ -13,18 +13,44 @@ public partial class ArticlesPage : ContentPage
     private List<ArticleListItem> _allArticles = new();
     private CancellationTokenSource? _searchCts;
 
+    // #4 — compact (1-line) vs expanded (up to 3 lines) list items; shared preference with the tree.
+    private bool _expanded = Preferences.Get(TreePage.ListExpandedKey, false);
+    public LineBreakMode ItemsLineBreakMode => _expanded ? LineBreakMode.WordWrap : LineBreakMode.TailTruncation;
+    public int ItemsMaxLines => _expanded ? 3 : 1;
+
     public ArticlesPage(IServiceProvider services)
     {
         InitializeComponent();
         _services = services;
+        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+    }
+
+    private void OnToggleExpandClicked(object? sender, EventArgs e)
+    {
+        _expanded = !_expanded;
+        Preferences.Set(TreePage.ListExpandedKey, _expanded);
+        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        OnPropertyChanged(nameof(ItemsLineBreakMode));
+        OnPropertyChanged(nameof(ItemsMaxLines));
     }
 
     protected override void OnAppearing()
     {
         base.OnAppearing();
+        SyncExpandedFromPrefs(); // pick up a toggle made on another (cached) tab
         NavBusyOverlay.IsVisible = false; // clear tap-loading when returning from the article
         _ = LoadArticlesAsync();
         _services.GetRequiredService<Services.SyncNotificationService>().ClearPendingUpdates();
+    }
+
+    private void SyncExpandedFromPrefs()
+    {
+        var pref = Preferences.Get(TreePage.ListExpandedKey, false);
+        if (pref == _expanded) return;
+        _expanded = pref;
+        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        OnPropertyChanged(nameof(ItemsLineBreakMode));
+        OnPropertyChanged(nameof(ItemsMaxLines));
     }
 
     protected override void OnDisappearing()
@@ -61,7 +87,7 @@ public partial class ArticlesPage : ContentPage
                     .OrderByDescending(a => a.UpdatedAt)
                     .Select(a => new ArticleListItem(
                         a.Id, a.Title, a.TreePath,
-                        a.UpdatedAt))
+                        a.UpdatedAt, a.Protected))
                     .ToList();
             });
             _allArticles = items;

@@ -2,11 +2,13 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="BeeMemoryBank.Mobile.Pages.ArticlesPage"
+             x:Name="PageRoot"
              Title="Articles"
              BackgroundColor="{StaticResource BackgroundColor}">
 
     <ContentPage.ToolbarItems>
         <ToolbarItem Text="+" Order="Primary" Clicked="OnNewArticleClicked" AutomationId="NewArticleButton" />
+        <ToolbarItem x:Name="ExpandToggle" Text="Expand" AutomationId="ExpandToggle" Clicked="OnToggleExpandClicked" Order="Secondary" />
     </ContentPage.ToolbarItems>
 
     <Grid RowDefinitions="Auto,Auto,*">
@@ -47,17 +49,23 @@
                             <Frame.GestureRecognizers>
                                 <TapGestureRecognizer Tapped="OnArticleTapped" />
                             </Frame.GestureRecognizers>
-                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
+                            <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
                                 <Label Grid.Row="0" Grid.Column="0"
+                                       Text="🔒"
+                                       FontSize="13"
+                                       IsVisible="{Binding Protected}"
+                                       VerticalOptions="Start" />
+                                <Label Grid.Row="0" Grid.Column="1"
                                        Text="{Binding Title}"
                                        FontAttributes="Bold"
                                        FontSize="15"
-                                       LineBreakMode="TailTruncation" />
-                                <Label Grid.Row="0" Grid.Column="1"
+                                       LineBreakMode="{Binding ItemsLineBreakMode, Source={RelativeSource AncestorType={x:Type ContentPage}}}"
+                                       MaxLines="{Binding ItemsMaxLines, Source={RelativeSource AncestorType={x:Type ContentPage}}}" />
+                                <Label Grid.Row="0" Grid.Column="2"
                                        Text="{Binding UpdatedAt, StringFormat='{0:MM-dd}'}"
                                        FontSize="12"
                                        TextColor="{StaticResource SecondaryTextColor}" />
-                                <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
                                        Text="{Binding TreePath}"
                                        FontSize="12"
                                        TextColor="{StaticResource SecondaryTextColor}"

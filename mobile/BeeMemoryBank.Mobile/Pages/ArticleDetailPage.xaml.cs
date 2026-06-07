@@ -113,9 +113,11 @@ public partial class ArticleDetailPage : ContentPage
                 }
                 // Show the unlock card; the content stays hidden until the passphrase is entered.
                 LockCard.IsVisible = true;
+                EnsureRemovePasswordItem(true);
             }
             else
             {
+                EnsureRemovePasswordItem(false);
                 _rawContent = content;
 
                 var mediaService = scope.ServiceProvider.GetService<MediaService>();
@@ -343,6 +345,10 @@ public partial class ArticleDetailPage : ContentPage
         UnlockPassEntry.Text = "";
         _rawContent = plaintext; // Raw view now shows the decrypted text, not the blob
 
+        // Hand the verified passphrase to the edit page (short-lived, in-memory) so tapping Edit right
+        // after unlocking doesn't re-prompt.
+        _services.GetService<Services.MobileUnlockHolder>()?.Remember(_parsedId, pass);
+
         // Reset the Raw/Markdown toggle so unlocking after tapping "Raw" (while locked) doesn't land
         // on a blank screen with the stale empty raw label.
         _showingRaw = false;
@@ -367,14 +373,54 @@ public partial class ArticleDetailPage : ContentPage
 
     private async void OnEditClicked(object? sender, EventArgs e)
     {
-        if (_isProtected)
-        {
-            await DisplayAlert("Protected article",
-                "This article is password-protected. Editing it on mobile is not supported yet — open it in the web app to unlock and edit.",
-                "OK");
-            return;
-        }
+        // Protected articles are now editable on mobile: the edit page unlocks (or reuses the handoff
+        // passphrase) and re-wraps on save.
         await Shell.Current.GoToAsync($"articleEdit?id={_parsedId}");
+    }
+
+    // "Remove password" lives in the ⋮ overflow next to Delete, shown only for protected articles.
+    private ToolbarItem? _removePasswordItem;
+    private void EnsureRemovePasswordItem(bool show)
+    {
+        if (show)
+        {
+            if (_removePasswordItem == null)
+            {
+                _removePasswordItem = new ToolbarItem { Text = "Remove password", Order = ToolbarItemOrder.Secondary };
+                _removePasswordItem.Clicked += OnRemovePasswordClicked;
+            }
+            if (!ToolbarItems.Contains(_removePasswordItem)) ToolbarItems.Add(_removePasswordItem);
+        }
+        else if (_removePasswordItem != null && ToolbarItems.Contains(_removePasswordItem))
+        {
+            ToolbarItems.Remove(_removePasswordItem);
+        }
+    }
+
+    private async void OnRemovePasswordClicked(object? sender, EventArgs e)
+    {
+        var pass = await DisplayPromptAsync("Remove password",
+            "Enter the article password to remove its protection. The article will become readable without a password.",
+            accept: "Remove", cancel: "Cancel", placeholder: "Password");
+        if (string.IsNullOrEmpty(pass)) return;
+
+        try
+        {
+            using var scope = _services.CreateScope();
+            var articleSvc = scope.ServiceProvider.GetRequiredService<ArticleService>();
+            await articleSvc.UnprotectAsync(_parsedId, pass);
+            _services.GetService<Services.MobileUnlockHolder>()?.Clear();
+            _cts = new CancellationTokenSource();
+            await LoadAsync(_parsedId, _cts.Token); // reload as a now-plaintext article
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            await DisplayAlert("Wrong password", "The password is incorrect.", "OK");
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlert("Error", ex.Message, "OK");
+        }
     }
 
     private async void OnDeleteClicked(object? sender, EventArgs e)

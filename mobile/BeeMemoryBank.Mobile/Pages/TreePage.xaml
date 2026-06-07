@@ -2,15 +2,24 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="BeeMemoryBank.Mobile.Pages.TreePage"
+             x:Name="PageRoot"
              Title="Tree"
              BackgroundColor="{StaticResource BackgroundColor}">
 
     <ContentPage.ToolbarItems>
         <ToolbarItem IconImageSource="icon_new_article.svg" AutomationId="NewArticleButton" Clicked="OnNewArticleClicked" Order="Primary" />
         <ToolbarItem IconImageSource="icon_new_folder.svg" AutomationId="NewFolderButton" Clicked="OnNewFolderClicked" Order="Primary" />
+        <ToolbarItem x:Name="ExpandToggle" Text="Expand" AutomationId="ExpandToggle" Clicked="OnToggleExpandClicked" Order="Secondary" />
     </ContentPage.ToolbarItems>
 
     <Grid RowDefinitions="Auto,*">
+
+        <Label Grid.Row="0" x:Name="BreadcrumbLabel"
+               Text="/"
+               FontSize="13"
+               TextColor="{StaticResource SecondaryTextColor}"
+               LineBreakMode="HeadTruncation"
+               Padding="12,8,12,4" />
 
         <ActivityIndicator x:Name="LoadingIndicator"
                            Grid.Row="0" Grid.RowSpan="2"
@@ -34,15 +43,21 @@
                                 <TapGestureRecognizer Tapped="OnItemTapped" />
                                 <TapGestureRecognizer Tapped="OnItemLongPressed" NumberOfTapsRequired="2" />
                             </Frame.GestureRecognizers>
-                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                            <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="10">
                                 <Image Grid.Column="0"
                                        Source="{Binding IconSource}"
                                        WidthRequest="20" HeightRequest="20"
                                        VerticalOptions="Center" />
                                 <Label Grid.Column="1"
+                                       Text="🔒"
+                                       FontSize="13"
+                                       IsVisible="{Binding ShowLock}"
+                                       VerticalOptions="Center" />
+                                <Label Grid.Column="2"
                                        Text="{Binding DisplayName}"
                                        FontSize="15"
-                                       LineBreakMode="TailTruncation"
+                                       LineBreakMode="{Binding ItemsLineBreakMode, Source={RelativeSource AncestorType={x:Type ContentPage}}}"
+                                       MaxLines="{Binding ItemsMaxLines, Source={RelativeSource AncestorType={x:Type ContentPage}}}"
                                        VerticalOptions="Center">
                                     <Label.Triggers>
                                         <DataTrigger TargetType="Label" Binding="{Binding IsFolder}" Value="True">
@@ -50,7 +65,7 @@
                                         </DataTrigger>
                                     </Label.Triggers>
                                 </Label>
-                                <Label Grid.Column="2"
+                                <Label Grid.Column="3"
                                        Text="{Binding RightText}"
                                        FontSize="15"
                                        TextColor="{StaticResource SecondaryTextColor}"

@@ -11,9 +11,16 @@ public partial class ArticleEditPage : ContentPage
 {
     private readonly IServiceProvider _services;
     private Guid? _articleId;
-    // Set when an existing protected article is opened here (e.g. via deep link / share intent).
-    // The mobile app has no unlock UI yet, so we refuse to edit rather than overwrite the ciphertext.
-    private bool _protectedBlocked;
+    // Editing an existing protected article: the passphrase (from the read→edit handoff or the edit
+    // gate) is held in memory and used to re-wrap the body on save. _protectedBlobForEdit holds the
+    // BMBENC1 body while the gate is up so Unlock can decrypt it.
+    private bool _isProtectedArticle;
+    private string? _editPassphrase;
+    private string? _protectedBlobForEdit;
+    // Guards Save against the race where the user taps Save before LoadAsync has discovered the
+    // article is protected (which would otherwise wipe the BMBENC1 body via the plaintext path).
+    // New articles never call LoadAsync, so they start ready.
+    private bool _loaded = true;
 
     public string ArticleId
     {
@@ -23,6 +30,7 @@ public partial class ArticleEditPage : ContentPage
             {
                 _articleId = id;
                 Title = "Edit Article";
+                _loaded = false; // block Save until the article (and its protected state) is loaded
                 _ = LoadAsync(id);
             }
         }
@@ -53,6 +61,34 @@ public partial class ArticleEditPage : ContentPage
         ProtectFields.IsVisible = e.Value;
     }
 
+    // Edit gate for an existing protected article opened without a fresh read→edit handoff.
+    private async void OnEditUnlockClicked(object? sender, EventArgs e)
+    {
+        var pass = EditUnlockPassEntry.Text ?? "";
+        if (pass.Length == 0) { EditUnlockPassEntry.Focus(); return; }
+        if (_protectedBlobForEdit == null) return;
+
+        EditUnlockErrorLabel.IsVisible = false;
+        var blob = _protectedBlobForEdit;
+        string pt;
+        try
+        {
+            pt = await Task.Run(() => BeeMemoryBank.Crypto.ProtectedContentCodec.Unwrap(blob, pass));
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            EditUnlockErrorLabel.Text = "Wrong password.";
+            EditUnlockErrorLabel.IsVisible = true;
+            return;
+        }
+
+        _editPassphrase = pass;
+        EditUnlockPassEntry.Text = "";
+        ContentEditor.Text = pt;
+        EditUnlockGate.IsVisible = false;
+        ContentEditor.IsVisible = true;
+    }
+
     protected override void OnAppearing()
     {
         base.OnAppearing();
@@ -67,6 +103,10 @@ public partial class ArticleEditPage : ContentPage
     {
         LoadingIndicator.IsRunning = true;
         LoadingIndicator.IsVisible = true;
+        // Reset protected state up-front so a reused page can never carry stale flags into a save.
+        _isProtectedArticle = false;
+        _editPassphrase = null;
+        _protectedBlobForEdit = null;
 
         try
         {
@@ -77,16 +117,6 @@ public partial class ArticleEditPage : ContentPage
             var article = await articleSvc.GetMetadataAsync(id);
             if (article == null) return;
 
-            if (article.Protected)
-            {
-                // Never load the BMBENC1 blob into the editor — saving it back would corrupt the data.
-                _protectedBlocked = true;
-                TitleEntry.Text = article.Title;
-                ContentEditor.IsVisible = false;
-                ShowError("This article is password-protected. Editing it on mobile is not supported yet — open it in the web app to unlock and edit.");
-                return;
-            }
-
             TitleEntry.Text = article.Title;
             PathLabel.Text = article.TreePath;
             ProtectSection.IsVisible = false; // existing article: protect-on-create doesn't apply
@@ -95,6 +125,32 @@ public partial class ArticleEditPage : ContentPage
             ConceptTagsEntry.Text = string.Join(", ", conceptTags);
 
             var content = await articleSvc.GetContentAsync(id);
+
+            if (article.Protected)
+            {
+                _isProtectedArticle = true;
+                _protectedBlobForEdit = content; // BMBENC1 body; decrypted after unlock/handoff
+
+                // Try the read→edit handoff first (passphrase verified moments ago on the detail page).
+                var handoff = _services.GetService<MobileUnlockHolder>()?.Take(id);
+                if (handoff != null)
+                {
+                    try
+                    {
+                        var pt = await Task.Run(() => BeeMemoryBank.Crypto.ProtectedContentCodec.Unwrap(_protectedBlobForEdit, handoff));
+                        _editPassphrase = handoff;
+                        ContentEditor.Text = pt;
+                        return; // unlocked via handoff — no gate needed
+                    }
+                    catch { /* stale handoff — fall through to the gate */ }
+                }
+
+                // No (valid) handoff → show the unlock gate; the editor stays hidden until unlocked.
+                EditUnlockGate.IsVisible = true;
+                ContentEditor.IsVisible = false;
+                return;
+            }
+
             ContentEditor.Text = content;
         }
         catch (Exception ex)
@@ -103,6 +159,7 @@ public partial class ArticleEditPage : ContentPage
         }
         finally
         {
+            _loaded = true; // protected state is now known — Save is safe
             LoadingIndicator.IsRunning = false;
             LoadingIndicator.IsVisible = false;
         }
@@ -110,9 +167,9 @@ public partial class ArticleEditPage : ContentPage
 
     private async void OnSaveClicked(object? sender, EventArgs e)
     {
-        if (_protectedBlocked)
+        if (!_loaded)
         {
-            ShowError("This article is password-protected — edit it in the web app.");
+            ShowError("Still loading — please wait a moment and try again.");
             return;
         }
         var title = TitleEntry.Text?.Trim();
@@ -144,7 +201,26 @@ public partial class ArticleEditPage : ContentPage
 
             if (_articleId.HasValue)
             {
-                await articleSvc.UpdateAsync(_articleId.Value, title, path, conceptTags, content);
+                if (_isProtectedArticle)
+                {
+                    if (_editPassphrase == null) { ShowError("Unlock the article first."); return; }
+                    try
+                    {
+                        // Re-wrap the new body under the same passphrase (verifies it first).
+                        await articleSvc.UpdateProtectedContentAsync(_articleId.Value, content, _editPassphrase);
+                    }
+                    catch (System.Security.Cryptography.CryptographicException)
+                    {
+                        ShowError("Wrong password.");
+                        return;
+                    }
+                    // Metadata + tags only (no body — keeps it protected).
+                    await articleSvc.UpdateAsync(_articleId.Value, title, path, conceptTags, null);
+                }
+                else
+                {
+                    await articleSvc.UpdateAsync(_articleId.Value, title, path, conceptTags, content);
+                }
                 await Shell.Current.GoToAsync($"..?created={_articleId.Value}");
             }
             else
