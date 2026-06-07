@@ -19,6 +19,7 @@ public partial class ArticleDetailPage : ContentPage
     // The mobile app has no unlock UI yet, so we show a read-only placeholder and block editing —
     // otherwise the user would edit/overwrite the ciphertext and destroy the data on next sync.
     private bool _isProtected = false;
+    private string? _protectedBlob; // the BMBENC1 body; unwrapped on-device after the user enters the passphrase
     private CancellationTokenSource? _cts;
     private List<RelatedArticle> _relatedAll = new();
     private int _relatedShown;
@@ -56,6 +57,14 @@ public partial class ArticleDetailPage : ContentPage
         ContentCard.IsVisible = false;
         RelatedArticlesCard.IsVisible = false;
         CommentsCard.IsVisible = false;
+        // Reset protected state so a reused/refreshed page can't keep a stale lock card, a stale
+        // _isProtected (which would wrongly block Edit), or a lingering decrypted body in memory.
+        LockCard.IsVisible = false;
+        LockHintLabel.IsVisible = false;
+        UnlockErrorLabel.IsVisible = false;
+        _isProtected = false;
+        _protectedBlob = null;
+        _rawContent = "";
 
         try
         {
@@ -96,13 +105,14 @@ public partial class ArticleDetailPage : ContentPage
             if (article.Protected || BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(content))
             {
                 _isProtected = true;
-                const string notice =
-                    "## 🔒 Password-protected\n\nThis article is locked with a separate password. " +
-                    "Open it in the **web app** to unlock and view its content.\n\n" +
-                    "_Editing is disabled here to keep the encrypted data safe._";
-                _rawContent = notice; // never expose the raw BMBENC1 blob, even in Raw view
-                RenderContent(notice);
-                ContentCard.IsVisible = true;
+                _protectedBlob = content; // keep the encrypted blob; decrypted locally after Unlock
+                if (!string.IsNullOrWhiteSpace(article.ProtectionHint))
+                {
+                    LockHintLabel.Text = "💡 Hint: " + article.ProtectionHint;
+                    LockHintLabel.IsVisible = true;
+                }
+                // Show the unlock card; the content stays hidden until the passphrase is entered.
+                LockCard.IsVisible = true;
             }
             else
             {
@@ -306,6 +316,53 @@ public partial class ArticleDetailPage : ContentPage
         {
             await DisplayAlert("Error", ex.Message, "OK");
         }
+    }
+
+    private async void OnUnlockClicked(object? sender, EventArgs e)
+    {
+        var pass = UnlockPassEntry.Text ?? "";
+        if (pass.Length == 0) { UnlockPassEntry.Focus(); return; }
+        if (_protectedBlob == null) return;
+
+        UnlockErrorLabel.IsVisible = false;
+        var blob = _protectedBlob;
+        string plaintext;
+        try
+        {
+            // Argon2id KDF is intentionally CPU-heavy — run it off the UI thread to avoid an ANR.
+            // Local, offline decryption of the inner passphrase layer (GCM tag fails on wrong pass).
+            plaintext = await Task.Run(() => BeeMemoryBank.Crypto.ProtectedContentCodec.Unwrap(blob, pass));
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            UnlockErrorLabel.Text = "Wrong password.";
+            UnlockErrorLabel.IsVisible = true;
+            return;
+        }
+
+        UnlockPassEntry.Text = "";
+        _rawContent = plaintext; // Raw view now shows the decrypted text, not the blob
+
+        // Reset the Raw/Markdown toggle so unlocking after tapping "Raw" (while locked) doesn't land
+        // on a blank screen with the stale empty raw label.
+        _showingRaw = false;
+        ContentRawLabel.IsVisible = false;
+        ContentMarkdown.IsVisible = true;
+        ToggleViewItem.Text = "Raw";
+
+        var rendered = plaintext;
+        try
+        {
+            using var scope = _services.CreateScope();
+            var mediaService = scope.ServiceProvider.GetService<MediaService>();
+            if (mediaService != null)
+                rendered = await ResolveMediaImagesAsync(plaintext, mediaService);
+        }
+        catch { /* fall back to raw markdown if media resolution fails */ }
+
+        RenderContent(rendered);
+        LockCard.IsVisible = false;
+        ContentCard.IsVisible = true;
     }
 
     private async void OnEditClicked(object? sender, EventArgs e)

@@ -45,6 +45,28 @@
                 </BindableLayout.ItemTemplate>
             </FlexLayout>
 
+            <!-- Lock card for password-protected articles: enter the passphrase to decrypt locally.
+                 No server involved — the BMBENC1 body is unwrapped on-device. -->
+            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="LockCard">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="🔒 Password-protected" FontAttributes="Bold" FontSize="16" />
+                    <Label Text="Enter the password to view this article."
+                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
+                    <Label x:Name="LockHintLabel" IsVisible="False" FontSize="13"
+                           TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Entry x:Name="UnlockPassEntry" IsPassword="True" Placeholder="Password"
+                           AutomationId="UnlockPassEntry" Style="{StaticResource BaseEntry}"
+                           IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
+                           ReturnType="Go" Completed="OnUnlockClicked" />
+                    <Label x:Name="UnlockErrorLabel" IsVisible="False"
+                           TextColor="{StaticResource ErrorColor}" FontSize="13" />
+                    <Button Text="Unlock"
+                            AutomationId="UnlockButton"
+                            Style="{StaticResource PrimaryButton}"
+                            Clicked="OnUnlockClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
             <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="ContentCard"
                    Padding="4">
                 <VerticalStackLayout Spacing="0">
