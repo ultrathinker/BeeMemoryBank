@@ -35,15 +35,20 @@ public partial class TreePage : ContentPage
     {
         InitializeComponent();
         _services = services;
-        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
         BreadcrumbLabel.Text = "/"; // root level
+        UpdateExpandIcon();
     }
+
+    // Swap the toolbar icon so it reflects the current state (arrows-out = tap to expand,
+    // arrows-in = tap to collapse).
+    private void UpdateExpandIcon() =>
+        ExpandToggle.IconImageSource = _expanded ? "icon_compact.svg" : "icon_expand.svg";
 
     private void OnToggleExpandClicked(object? sender, EventArgs e)
     {
         _expanded = !_expanded;
         Preferences.Set(ListExpandedKey, _expanded);
-        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        UpdateExpandIcon();
         OnPropertyChanged(nameof(ItemsLineBreakMode));
         OnPropertyChanged(nameof(ItemsMaxLines));
     }
@@ -63,7 +68,7 @@ public partial class TreePage : ContentPage
         var pref = Preferences.Get(ListExpandedKey, false);
         if (pref == _expanded) return;
         _expanded = pref;
-        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        UpdateExpandIcon();
         OnPropertyChanged(nameof(ItemsLineBreakMode));
         OnPropertyChanged(nameof(ItemsMaxLines));
     }

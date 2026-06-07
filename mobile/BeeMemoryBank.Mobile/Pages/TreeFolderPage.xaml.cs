@@ -21,14 +21,17 @@ public partial class TreeFolderPage : ContentPage
     {
         InitializeComponent();
         _services = services;
-        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        UpdateExpandIcon();
     }
+
+    private void UpdateExpandIcon() =>
+        ExpandToggle.IconImageSource = _expanded ? "icon_compact.svg" : "icon_expand.svg";
 
     private void OnToggleExpandClicked(object? sender, EventArgs e)
     {
         _expanded = !_expanded;
         Preferences.Set(TreePage.ListExpandedKey, _expanded);
-        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        UpdateExpandIcon();
         OnPropertyChanged(nameof(ItemsLineBreakMode));
         OnPropertyChanged(nameof(ItemsMaxLines));
     }
@@ -51,16 +54,17 @@ public partial class TreeFolderPage : ContentPage
         {
             if (value == null) return;
             _currentPath = Uri.UnescapeDataString(value);
-            // #5 — orient the user: title shows depth, breadcrumb shows the full path.
-            var depth = _currentPath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
-            Title = depth > 0 ? $"Level {depth}" : "Tree";
-            BreadcrumbLabel.Text = _currentPath;
             _ = LoadItemsAsync(_currentPath);
         }
     }
 
     private async Task LoadItemsAsync(string currentPath)
     {
+        // #5 — orient the user: title shows the depth as "Tree [N]", breadcrumb shows the full path.
+        var depth = currentPath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
+        Title = depth > 0 ? $"Tree [{depth}]" : "Tree";
+        BreadcrumbLabel.Text = currentPath;
+
         LoadingIndicator.IsVisible = true;
         LoadingIndicator.IsRunning = true;
 

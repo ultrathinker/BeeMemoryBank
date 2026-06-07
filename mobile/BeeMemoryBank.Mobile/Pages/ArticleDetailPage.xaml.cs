@@ -29,8 +29,13 @@ public partial class ArticleDetailPage : ContentPage
     {
         set
         {
-            if (Guid.TryParse(value, out _parsedId))
+            // Use a temp: Guid.TryParse assigns Guid.Empty to its out param on failure. Binding
+            // directly to _parsedId meant a back-navigation that re-applies the query WITHOUT `id`
+            // (e.g. "..?created=X") wiped _parsedId to Empty → every later reload queried an empty
+            // GUID → "article not found". Only update _parsedId on a successful parse.
+            if (Guid.TryParse(value, out var newId))
             {
+                _parsedId = newId;
                 _cts?.Cancel();
                 _cts = new CancellationTokenSource();
                 _ = LoadAsync(_parsedId, _cts.Token);
@@ -47,7 +52,9 @@ public partial class ArticleDetailPage : ContentPage
         ContentMarkdown.Theme = MarkdownThemeDefaults.Dark;
     }
 
-    private async Task LoadAsync(Guid id, CancellationToken ct)
+    private bool _appearedBefore;
+
+    private async Task LoadAsync(Guid id, CancellationToken ct, bool isInitial = true)
     {
         LoadingIndicator.IsVisible = true;
         LoadingIndicator.IsRunning = true;
@@ -75,6 +82,18 @@ public partial class ArticleDetailPage : ContentPage
             var article = await articleSvc.GetMetadataAsync(id);
             if (ct.IsCancellationRequested) return;
 
+            if (article == null)
+            {
+                // On a reload/refresh (e.g. mid-sync) GetMetadataAsync can transiently return null.
+                // Retry once after a short gap to tell a transient sync window apart from a real
+                // deletion before deciding to kick the user back to the list.
+                if (!isInitial)
+                {
+                    await Task.Delay(400, ct);
+                    if (ct.IsCancellationRequested) return;
+                    article = await articleSvc.GetMetadataAsync(id);
+                }
+            }
             if (article == null)
             {
                 await DisplayAlert("Error", "Article not found.", "OK");
@@ -444,6 +463,16 @@ public partial class ArticleDetailPage : ContentPage
     protected override void OnAppearing()
     {
         base.OnAppearing();
+        // Reload when returning to the page (e.g. after editing) so the content/tags are fresh and a
+        // protected article re-locks. Skip the very first appearance — the ArticleId setter already
+        // kicked off the initial load.
+        if (_appearedBefore)
+        {
+            _cts?.Cancel();
+            _cts = new CancellationTokenSource();
+            _ = LoadAsync(_parsedId, _cts.Token, isInitial: false);
+        }
+        _appearedBefore = true;
         _services.GetRequiredService<Services.SyncNotificationService>().ClearPendingUpdates();
     }
 
@@ -466,7 +495,7 @@ public partial class ArticleDetailPage : ContentPage
             await syncStatus.SyncNowAsync();
         }
         
-        await LoadAsync(_parsedId, _cts.Token);
+        await LoadAsync(_parsedId, _cts.Token, isInitial: false);
         syncNotify.ClearPendingUpdates();
         PullRefresh.IsRefreshing = false;
     }

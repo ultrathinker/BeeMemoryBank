@@ -22,14 +22,17 @@ public partial class ArticlesPage : ContentPage
     {
         InitializeComponent();
         _services = services;
-        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        UpdateExpandIcon();
     }
+
+    private void UpdateExpandIcon() =>
+        ExpandToggle.IconImageSource = _expanded ? "icon_compact.svg" : "icon_expand.svg";
 
     private void OnToggleExpandClicked(object? sender, EventArgs e)
     {
         _expanded = !_expanded;
         Preferences.Set(TreePage.ListExpandedKey, _expanded);
-        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        UpdateExpandIcon();
         OnPropertyChanged(nameof(ItemsLineBreakMode));
         OnPropertyChanged(nameof(ItemsMaxLines));
     }
@@ -48,7 +51,7 @@ public partial class ArticlesPage : ContentPage
         var pref = Preferences.Get(TreePage.ListExpandedKey, false);
         if (pref == _expanded) return;
         _expanded = pref;
-        ExpandToggle.Text = _expanded ? "Compact" : "Expand";
+        UpdateExpandIcon();
         OnPropertyChanged(nameof(ItemsLineBreakMode));
         OnPropertyChanged(nameof(ItemsMaxLines));
     }

@@ -1435,3 +1435,11 @@ a.search-result-title:hover {
    float over the dialog body / footer instead of being clipped. */
 sl-dialog.bmb-fp-host::part(panel),
 sl-dialog.bmb-fp-host::part(body) { overflow: visible; }
+
+/* Secret entry fields (e.g. per-article passwords) that must NOT trigger the browser's
+   "save password?" prompt or any password-manager autofill. We avoid type="password" entirely
+   (Chrome keys its prompts off the field type) and mask the value with -webkit-text-security. */
+sl-input.bmb-secret::part(input) {
+    -webkit-text-security: disc;
+    text-security: disc;
+}

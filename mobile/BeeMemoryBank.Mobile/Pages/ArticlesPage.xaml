@@ -8,7 +8,7 @@
 
     <ContentPage.ToolbarItems>
         <ToolbarItem Text="+" Order="Primary" Clicked="OnNewArticleClicked" AutomationId="NewArticleButton" />
-        <ToolbarItem x:Name="ExpandToggle" Text="Expand" AutomationId="ExpandToggle" Clicked="OnToggleExpandClicked" Order="Secondary" />
+        <ToolbarItem x:Name="ExpandToggle" IconImageSource="icon_expand.svg" AutomationId="ExpandToggle" Clicked="OnToggleExpandClicked" Order="Primary" />
     </ContentPage.ToolbarItems>
 
     <Grid RowDefinitions="Auto,Auto,*">

@@ -109,8 +109,8 @@
                         The article is encrypted before the first save — the plaintext is never written to the database, event log, or sync.
                     </sl-alert>
                     <div style="display:flex;flex-direction:column;gap:10px;max-width:480px;">
-                        <sl-input id="create-pass" name="passphrase" type="password" password-toggle label="Password"></sl-input>
-                        <sl-input id="create-pass2" type="password" password-toggle label="Confirm password"></sl-input>
+                        <sl-input id="create-pass" name="passphrase" type="text" inputmode="text" autocomplete="off" class="bmb-secret" data-1p-ignore data-lpignore="true" label="Password"></sl-input>
+                        <sl-input id="create-pass2" type="text" inputmode="text" autocomplete="off" class="bmb-secret" data-1p-ignore data-lpignore="true" label="Confirm password"></sl-input>
                         <sl-input id="create-hint" name="hint" label="Hint (optional)" placeholder="A reminder shown before unlocking — not the password itself"></sl-input>
                         <div id="create-prot-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
                     </div>
@@ -127,7 +127,7 @@
                 </div>
                 <p style="margin:0 0 10px;font-size:0.9rem;color:var(--sl-color-neutral-600);">Enter its password to edit the content. Drafts are NOT autosaved for protected articles.</p>
                 <div style="display:flex;gap:8px;align-items:flex-start;max-width:420px;">
-                    <sl-input id="prot-pass" type="password" password-toggle placeholder="Password" style="flex:1;"></sl-input>
+                    <sl-input id="prot-pass" type="text" inputmode="text" autocomplete="off" class="bmb-secret" data-1p-ignore data-lpignore="true" placeholder="Password" style="flex:1;"></sl-input>
                     <sl-button id="prot-unlock" variant="primary">Unlock</sl-button>
                 </div>
                 <div id="prot-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;margin-top:8px;"></div>

@@ -1498,3 +1498,20 @@ function updateSyncModal() {
         })
         .catch(function () {});
 }
+
+// Secret fields (.bmb-secret) use type="text" + -webkit-text-security so Chrome never offers to
+// "save password". Firefox doesn't support that CSS, so there the value would show as plaintext —
+// fall back to native type="password" masking ONLY on such browsers (Chrome/Safari keep type=text).
+(function () {
+    if (window.CSS && CSS.supports && CSS.supports('-webkit-text-security', 'disc')) return;
+    function maskSecrets() {
+        document.querySelectorAll('sl-input.bmb-secret').forEach(function (el) {
+            el.setAttribute('type', 'password');
+        });
+    }
+    if (window.customElements && customElements.whenDefined) {
+        customElements.whenDefined('sl-input').then(maskSecrets);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', maskSecrets);
+    else maskSecrets();
+})();

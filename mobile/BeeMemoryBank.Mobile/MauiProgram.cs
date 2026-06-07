@@ -20,6 +20,16 @@ public static class MauiProgram
         var builder = MauiApp.CreateBuilder();
         builder.UseMauiApp<App>();
 
+#if ANDROID
+        // This is a personal vault — we never want Android's autofill framework to offer to "save"
+        // an article's per-article password (or any field). Disable autofill on every Entry.
+        Microsoft.Maui.Handlers.EntryHandler.Mapper.AppendToMapping("BmbNoAutofill", (handler, view) =>
+        {
+            handler.PlatformView.ImportantForAutofill = Android.Views.ImportantForAutofill.No;
+            handler.PlatformView.SetAutofillHints((string[]?)null);
+        });
+#endif
+
         var dataDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var dbPath = Path.Combine(dataDir, "beememorybank.db");
         var mediaDir = Path.Combine(dataDir, "media");
