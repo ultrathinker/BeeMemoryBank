@@ -2,6 +2,7 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:idk="clr-namespace:Indiko.Maui.Controls.Markdown;assembly=Indiko.Maui.Controls.Markdown"
+             xmlns:controls="clr-namespace:BeeMemoryBank.Mobile.Controls"
              x:Class="BeeMemoryBank.Mobile.Pages.ArticleDetailPage"
              Title="Article"
              BackgroundColor="{StaticResource BackgroundColor}">
@@ -54,7 +55,7 @@
                            FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
                     <Label x:Name="LockHintLabel" IsVisible="False" FontSize="13"
                            TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
-                    <Entry x:Name="UnlockPassEntry" IsPassword="True" Placeholder="Password"
+                    <controls:SecretEntry x:Name="UnlockPassEntry" Placeholder="Password"
                            AutomationId="UnlockPassEntry" Style="{StaticResource BaseEntry}"
                            IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
                            ReturnType="Go" Completed="OnUnlockClicked" />

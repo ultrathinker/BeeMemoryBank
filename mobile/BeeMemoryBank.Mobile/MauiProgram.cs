@@ -22,11 +22,24 @@ public static class MauiProgram
 
 #if ANDROID
         // This is a personal vault — we never want Android's autofill framework to offer to "save"
-        // an article's per-article password (or any field). Disable autofill on every Entry.
+        // any field. Disable autofill on every Entry.
         Microsoft.Maui.Handlers.EntryHandler.Mapper.AppendToMapping("BmbNoAutofill", (handler, view) =>
         {
-            handler.PlatformView.ImportantForAutofill = Android.Views.ImportantForAutofill.No;
-            handler.PlatformView.SetAutofillHints((string[]?)null);
+            var editText = handler.PlatformView;
+            if (editText is null) return; // can be null during handler teardown
+            editText.ImportantForAutofill = Android.Views.ImportantForAutofill.No;
+            editText.SetAutofillHints((string[]?)null);
+
+            // SecretEntry (per-article passphrase): mask the value but DON'T present it as a password
+            // input type — otherwise the keyboard / password manager still offers to save & restore it
+            // at the IME level, bypassing ImportantForAutofill. This is the native equivalent of the
+            // web "-webkit-text-security" trick: plain text input type + a masking transformation.
+            if (view is BeeMemoryBank.Mobile.Controls.SecretEntry)
+            {
+                editText.InputType = Android.Text.InputTypes.ClassText
+                                   | Android.Text.InputTypes.TextFlagNoSuggestions;
+                editText.TransformationMethod = Android.Text.Method.PasswordTransformationMethod.Instance;
+            }
         });
 #endif
 

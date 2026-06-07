@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.Mobile.Controls"
              x:Class="BeeMemoryBank.Mobile.Pages.ArticleEditPage"
              Title="Edit Article"
              BackgroundColor="{StaticResource BackgroundColor}">
@@ -45,7 +46,7 @@
                     Stroke="{StaticResource PrimaryColor}" StrokeThickness="1" Padding="12">
                 <VerticalStackLayout Spacing="8">
                     <Label Text="🔒 Enter the password to edit this article" FontAttributes="Bold" />
-                    <Entry x:Name="EditUnlockPassEntry" IsPassword="True" Placeholder="Password"
+                    <controls:SecretEntry x:Name="EditUnlockPassEntry" Placeholder="Password"
                            AutomationId="EditUnlockPassEntry" Style="{StaticResource BaseEntry}"
                            IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
                            ReturnType="Go" Completed="OnEditUnlockClicked" />
@@ -76,10 +77,10 @@
                     <VerticalStackLayout x:Name="ProtectFields" IsVisible="False" Spacing="8">
                         <Label Text="The password is separate from your account and CANNOT be recovered. The article is encrypted before it is saved or synced."
                                FontSize="12" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
-                        <Entry x:Name="ProtectPassEntry" IsPassword="True" Placeholder="Password"
+                        <controls:SecretEntry x:Name="ProtectPassEntry" Placeholder="Password"
                                AutomationId="ProtectPassEntry" Style="{StaticResource BaseEntry}"
                                IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
-                        <Entry x:Name="ProtectPass2Entry" IsPassword="True" Placeholder="Confirm password"
+                        <controls:SecretEntry x:Name="ProtectPass2Entry" Placeholder="Confirm password"
                                AutomationId="ProtectPass2Entry" Style="{StaticResource BaseEntry}"
                                IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
                         <Entry x:Name="ProtectHintEntry" Placeholder="Hint (optional)"
