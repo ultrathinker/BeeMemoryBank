@@ -51,7 +51,13 @@ public class SyncForegroundService : Service
                 var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
                 var scheduler = new SyncScheduler(scopeFactory, logger, syncTrigger, httpClientFactory, interval: TimeSpan.FromMinutes(5));
                 syncNotify.AttachScheduler(scheduler);
-                
+
+                // Persistent heartbeat: each cycle (success OR failure) stamps Preferences so the
+                // Status page can show when background sync last actually ran on this device.
+                Services.SyncHeartbeat.RecordServiceStart();
+                scheduler.SyncCycleCompleted += (_, r) =>
+                    Services.SyncHeartbeat.RecordCycle(r.Error == null, r.TotalApplied, r.Error);
+
                 await scheduler.StartAsync(token);
             });
 

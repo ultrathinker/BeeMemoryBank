@@ -67,6 +67,17 @@
                 </Frame>
 
                 <Frame Style="{StaticResource CardFrame}">
+                    <VerticalStackLayout Spacing="6">
+                        <Label Text="Background Sync" FontAttributes="Bold" FontSize="18" />
+                        <Label x:Name="BgSyncLabel" AutomationId="BgSyncLabel" Text="—"
+                               FontSize="14" LineBreakMode="WordWrap" />
+                        <Label x:Name="BgSyncDetailLabel" AutomationId="BgSyncDetailLabel" Text=""
+                               FontSize="12" TextColor="{StaticResource SecondaryTextColor}"
+                               LineBreakMode="WordWrap" />
+                    </VerticalStackLayout>
+                </Frame>
+
+                <Frame Style="{StaticResource CardFrame}">
                     <VerticalStackLayout Spacing="8">
                         <Label Text="Sync Status" FontAttributes="Bold" FontSize="18" />
 

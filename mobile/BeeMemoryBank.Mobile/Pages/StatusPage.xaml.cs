@@ -41,6 +41,34 @@ public partial class StatusPage : ContentPage
         _statusSvc.StopPolling();
     }
 
+    // Diagnostic: show when the background sync loop last actually ran on this device (from the
+    // persisted heartbeat) — works even after the app was killed / off-charger / rebooted.
+    private void UpdateBackgroundSyncHeartbeat()
+    {
+        var (lastCycleUtc, status, count, serviceStartUtc) = Services.SyncHeartbeat.Read();
+        if (lastCycleUtc == null)
+        {
+            BgSyncLabel.Text = "No background sync has run yet on this device.";
+            BgSyncDetailLabel.Text = serviceStartUtc != null
+                ? $"Service started {Ago(serviceStartUtc.Value)}, but no cycle completed."
+                : "Service hasn't started yet.";
+            return;
+        }
+        BgSyncLabel.Text = $"Last cycle: {Ago(lastCycleUtc.Value)} — {status}";
+        BgSyncDetailLabel.Text = $"Cycles so far: {count}"
+            + (serviceStartUtc != null ? $" · service (re)started {Ago(serviceStartUtc.Value)}" : "");
+    }
+
+    private static string Ago(DateTime utc)
+    {
+        var d = DateTime.UtcNow - utc;
+        if (d < TimeSpan.Zero) d = TimeSpan.Zero;
+        if (d.TotalMinutes < 1) return $"{(int)d.TotalSeconds}s ago";
+        if (d.TotalHours < 1) return $"{(int)d.TotalMinutes}m ago";
+        if (d.TotalDays < 1) return $"{(int)d.TotalHours}h {(int)d.Minutes}m ago";
+        return $"{(int)d.TotalDays}d {(int)d.Hours}h ago";
+    }
+
     private async Task LoadAsync()
     {
         await Task.Run(async () => await _statusSvc.RefreshAsync());
@@ -53,6 +81,7 @@ public partial class StatusPage : ContentPage
         var enroller = _services.GetRequiredService<IngestKeyEnroller>();
         await enroller.TryEnrollAsync();
         BackupWarningBanner.IsVisible = !enroller.IsArmed();
+        UpdateBackgroundSyncHeartbeat();
         await LoadActivityAsync();
         await LoadPeersAsync();
     }

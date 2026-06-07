@@ -39,7 +39,10 @@ public class SyncScheduler(
                 try
                 {
                     var result = await SyncAllAsync(stoppingToken);
-                    SyncCycleCompleted?.Invoke(this, result);
+                    // Guard: a throwing subscriber must not bubble into the outer catch and fire the
+                    // error-path event too (double-fire for one cycle).
+                    try { SyncCycleCompleted?.Invoke(this, result); }
+                    catch (Exception ex) { logger.LogWarning(ex, "SyncCycleCompleted subscriber threw"); }
                 }
                 finally
                 {
@@ -53,6 +56,9 @@ public class SyncScheduler(
             catch (Exception ex)
             {
                 logger.LogError(ex, "SyncScheduler cycle failed, will retry next interval");
+                // Still signal completion (with the error) so heartbeat subscribers can tell a
+                // failed-but-alive loop apart from a loop that stopped firing entirely.
+                SyncCycleCompleted?.Invoke(this, new SyncCycleResult(0, ex.Message));
             }
 
             await syncTrigger.WaitAsync(Interval, stoppingToken);
@@ -123,4 +129,4 @@ public class SyncScheduler(
     }
 }
 
-public record SyncCycleResult(int TotalApplied);
+public record SyncCycleResult(int TotalApplied, string? Error = null);
