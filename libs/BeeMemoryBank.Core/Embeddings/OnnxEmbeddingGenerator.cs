@@ -16,8 +16,12 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
 
     public int Dimension => 384;
 
-    private readonly InferenceSession _session;
-    private readonly BertWordPieceTokenizer _tokenizer;
+    // Lazy: the ~22 MB model + ONNX runtime are loaded on the FIRST Generate() call, not at
+    // construction. This keeps injecting IEmbeddingGenerator free — e.g. the WorkManager background-sync
+    // worker pulls in EventApplier/ConceptTagService (which inject this) but only computes an embedding
+    // for a concept-tag rename, so it almost never pays the load cost. Lazy<> is thread-safe.
+    private readonly Lazy<InferenceSession> _session;
+    private readonly Lazy<BertWordPieceTokenizer> _tokenizer = new(LoadTokenizer);
 
     public OnnxEmbeddingGenerator(string? modelPath = null)
     {
@@ -25,21 +29,22 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
             Environment.GetEnvironmentVariable("BMB_ONNX_MODEL_PATH") ??
             Path.Combine(AppContext.BaseDirectory, "model.onnx");
 
-        if (!File.Exists(modelPath))
-            throw new FileNotFoundException(
-                $"ONNX model not found at '{modelPath}'. " +
-                $"Download all-MiniLM-L6-v2 ONNX and place it at that path, " +
-                $"or set BMB_ONNX_MODEL_PATH environment variable.",
-                modelPath);
-
-        _session = new InferenceSession(modelPath);
-        _tokenizer = LoadTokenizer();
+        var path = modelPath;
+        _session = new Lazy<InferenceSession>(() =>
+        {
+            if (!File.Exists(path))
+                throw new FileNotFoundException(
+                    $"ONNX model not found at '{path}'. " +
+                    $"Download all-MiniLM-L6-v2 ONNX and place it at that path, " +
+                    $"or set BMB_ONNX_MODEL_PATH environment variable.",
+                    path);
+            return new InferenceSession(path);
+        });
     }
 
     public OnnxEmbeddingGenerator(byte[] modelBytes)
     {
-        _session = new InferenceSession(modelBytes);
-        _tokenizer = LoadTokenizer();
+        _session = new Lazy<InferenceSession>(() => new InferenceSession(modelBytes));
     }
 
     private static BertWordPieceTokenizer LoadTokenizer()
@@ -60,7 +65,7 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
         if (string.IsNullOrWhiteSpace(text))
             return new float[Dimension];
 
-        var (inputIds, attentionMask, tokenTypeIds) = _tokenizer.Encode(text, MaxSequenceLength);
+        var (inputIds, attentionMask, tokenTypeIds) = _tokenizer.Value.Encode(text, MaxSequenceLength);
         int seqLen = inputIds.Length;
 
         var inputIdsTensor = new DenseTensor<long>(inputIds, [1, seqLen]);
@@ -74,7 +79,7 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
             NamedOnnxValue.CreateFromTensor("token_type_ids", tokenTypeIdsTensor),
         };
 
-        using var results = _session.Run(inputs);
+        using var results = _session.Value.Run(inputs);
         // Cast to DenseTensor to get a flat Span — avoids int[] allocation per element access
         var denseTensor = results[0].AsTensor<float>() as DenseTensor<float>
             ?? throw new InvalidOperationException("ONNX output is not a DenseTensor<float>.");
@@ -107,5 +112,8 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
         return embedding;
     }
 
-    public void Dispose() => _session.Dispose();
+    public void Dispose()
+    {
+        if (_session.IsValueCreated) _session.Value.Dispose();
+    }
 }

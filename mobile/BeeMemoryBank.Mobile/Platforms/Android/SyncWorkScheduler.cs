@@ -25,6 +25,9 @@ public static class SyncWorkScheduler
             var request = new PeriodicWorkRequest.Builder(
                     Java.Lang.Class.FromType(typeof(SyncWorker)), 15, TimeUnit.Minutes!)
                 .SetConstraints(constraints)
+                // On a transient sync failure the worker returns Retry — back off exponentially from
+                // 30s instead of waiting the full 15-minute period.
+                .SetBackoffCriteria(BackoffPolicy.Exponential!, 30, TimeUnit.Seconds!)
                 .Build();
 
             WorkManager.GetInstance(context)

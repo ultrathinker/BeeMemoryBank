@@ -18,21 +18,28 @@ public class SyncWorker : Worker
 {
     public SyncWorker(Context context, WorkerParameters workerParams) : base(context, workerParams) { }
 
+    // Retry a transient failure a few times (exponential backoff from 30s), then stop retrying so the
+    // normal 15-minute period resumes. Without this cap, a persistently-offline node would push the
+    // backoff to WorkManager's max (~5h), destroying the every-15-min cadence we need.
+    private const int MaxRetries = 3;
+
     public override Result DoWork()
     {
         try
         {
-            Task.Run(RunAsync).GetAwaiter().GetResult();
-            return Result.InvokeSuccess()!;
+            var hadError = Task.Run(RunAsync).GetAwaiter().GetResult();
+            if (!hadError) return Result.InvokeSuccess()!;
+            return RunAttemptCount < MaxRetries ? Result.InvokeRetry()! : Result.InvokeSuccess()!;
         }
         catch (Exception ex)
         {
             Services.SyncHeartbeat.RecordCycle(false, 0, "worker: " + ex.Message, "wm");
-            return Result.InvokeRetry()!;
+            return RunAttemptCount < MaxRetries ? Result.InvokeRetry()! : Result.InvokeSuccess()!;
         }
     }
 
-    private static async Task RunAsync()
+    /// <summary>Runs a sync cycle. Returns true if a node sync failed (so DoWork can request a retry).</summary>
+    private static async Task<bool> RunAsync()
     {
         // Backstop only: if the foreground service is alive in this process it's already syncing on its
         // own (5-min) cadence — defer to it so the two never run SyncClient concurrently. The heartbeat
@@ -40,14 +47,14 @@ public class SyncWorker : Worker
         if (SyncForegroundService.IsRunning)
         {
             Services.SyncHeartbeat.RecordCycle(true, 0, null, "wm-skip");
-            return;
+            return false;
         }
 
         var services = IPlatformApplication.Current?.Services;
         if (services == null)
         {
             Services.SyncHeartbeat.RecordCycle(false, 0, "no services", "wm");
-            return;
+            return false;
         }
 
         var scopeFactory = services.GetRequiredService<IServiceScopeFactory>();
@@ -63,7 +70,7 @@ public class SyncWorker : Worker
         if (invisible is { IsInvisible: true })
         {
             Services.SyncHeartbeat.RecordCycle(true, 0, null, "wm");
-            return;
+            return false;
         }
 
         var whitelist = sp.GetRequiredService<IWhitelistRepository>();
@@ -75,7 +82,7 @@ public class SyncWorker : Worker
         if (nodes.Count == 0)
         {
             Services.SyncHeartbeat.RecordCycle(true, 0, null, "wm");
-            return;
+            return false;
         }
 
         int applied = 0;
@@ -88,5 +95,6 @@ public class SyncWorker : Worker
             catch (Exception ex) { err = ex.Message; }
         }
         Services.SyncHeartbeat.RecordCycle(err == null, applied, err, "wm");
+        return err != null;
     }
 }
