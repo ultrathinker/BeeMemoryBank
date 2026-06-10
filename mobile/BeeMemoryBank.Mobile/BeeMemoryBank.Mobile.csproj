@@ -30,8 +30,14 @@
     <PackageReference Include="Indiko.Maui.Controls.Markdown" Version="1.5.0" />
     <PackageReference Include="Microsoft.Maui.Controls" Version="10.*" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.*" />
-    <PackageReference Include="Xamarin.AndroidX.Core" Version="*" />
+    <!-- Core and Core.Core.Ktx are pinned to the SAME train (1.19.x). WorkManager transitively pulls an
+         older Core.Core.Ktx (1.17.x) which duplicates androidx.core.animation.AnimatorKt with a newer
+         Core → R8 "defined multiple times". A floating "*" on only one of them can re-introduce that on
+         a future restore, so both are pinned together. Bump both in lockstep when upgrading AndroidX. -->
+    <PackageReference Include="Xamarin.AndroidX.Core" Version="1.19.*" />
+    <PackageReference Include="Xamarin.AndroidX.Core.Core.Ktx" Version="1.19.*" />
     <PackageReference Include="Xamarin.AndroidX.Biometric" Version="*" />
+    <PackageReference Include="Xamarin.AndroidX.Work.Runtime" Version="*" />
     <PackageReference Include="Markdig" Version="0.44.*" />
   </ItemGroup>
 

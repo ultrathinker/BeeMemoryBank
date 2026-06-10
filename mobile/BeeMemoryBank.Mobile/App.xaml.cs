@@ -95,6 +95,15 @@ public partial class App : Application
 #if ANDROID
         var intent = new Android.Content.Intent(Platform.AppContext, typeof(Platforms.Android.SyncForegroundService));
         Platform.AppContext.StartForegroundService(intent);
+        ScheduleSyncWork();
+#endif
+    }
+
+    // WorkManager backstop: guarantees a periodic sync even when the OEM kills the foreground service.
+    public static void ScheduleSyncWork()
+    {
+#if ANDROID
+        Platforms.Android.SyncWorkScheduler.Ensure(Platform.AppContext);
 #endif
     }
 

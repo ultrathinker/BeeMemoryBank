@@ -17,6 +17,12 @@ public class SyncForegroundService : Service
     private const int NotificationId = 1001;
     private const string ChannelId = "bmb_sync";
 
+    // True while this service is actively syncing in THIS process. The WorkManager backstop checks it
+    // and skips its own cycle when the foreground service is alive, so the two never sync concurrently
+    // (which could otherwise double-push or hit "database is locked" under WAL). Static defaults to
+    // false in a fresh process — exactly when WorkManager should take over.
+    public static volatile bool IsRunning;
+
     public override IBinder? OnBind(Intent? intent) => null;
 
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
@@ -31,6 +37,7 @@ public class SyncForegroundService : Service
             global::Android.Util.Log.Debug("BeeSync", "CreateNotificationChannel done");
             if (!TryStartForeground(startId))
                 return StartCommandResult.NotSticky;
+            IsRunning = true;
 
             var token = _cts.Token;
 
@@ -56,7 +63,7 @@ public class SyncForegroundService : Service
                 // Status page can show when background sync last actually ran on this device.
                 Services.SyncHeartbeat.RecordServiceStart();
                 scheduler.SyncCycleCompleted += (_, r) =>
-                    Services.SyncHeartbeat.RecordCycle(r.Error == null, r.TotalApplied, r.Error);
+                    Services.SyncHeartbeat.RecordCycle(r.Error == null, r.TotalApplied, r.Error, "fg");
 
                 await scheduler.StartAsync(token);
             });
@@ -124,6 +131,7 @@ public class SyncForegroundService : Service
 
     public override void OnDestroy()
     {
+        IsRunning = false;
         _cts?.Cancel();
         _cts?.Dispose();
         base.OnDestroy();

@@ -13,11 +13,16 @@ public static class SyncHeartbeat
     private const string KeyCount = "bg_sync_count";
     private const string KeyServiceStartUtc = "bg_sync_service_start_utc";
 
-    /// <summary>Record one completed sync cycle (success or failure).</summary>
-    public static void RecordCycle(bool ok, int applied, string? error)
+    /// <summary>
+    /// Record one completed sync cycle (success or failure). <paramref name="source"/> tags which
+    /// mechanism ran it: "fg" = foreground service, "wm" = WorkManager backstop — so we can see which
+    /// one keeps the device synced when the OEM kills the foreground service.
+    /// </summary>
+    public static void RecordCycle(bool ok, int applied, string? error, string source = "")
     {
+        var tag = string.IsNullOrEmpty(source) ? "" : $" [{source}]";
         Preferences.Set(KeyUtc, DateTime.UtcNow.ToString("o"));
-        Preferences.Set(KeyStatus, ok ? $"ok (applied {applied})" : $"error: {Trim(error)}");
+        Preferences.Set(KeyStatus, (ok ? $"ok (applied {applied})" : $"error: {Trim(error)}") + tag);
         Preferences.Set(KeyCount, Preferences.Get(KeyCount, 0) + 1);
     }
 
