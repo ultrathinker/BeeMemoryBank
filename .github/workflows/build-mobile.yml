@@ -20,6 +20,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # Pin the SDK install location to a workspace-local dir. `dotnet workload install`
+    # writes workloads into the ACTIVE SDK tree, so by forcing setup-dotnet to install
+    # the SDK here we make the workload land in the SAME directory we cache below.
+    # (The previous setup cached ~/.dotnet but the SDK lived in /usr/share/dotnet, so
+    # the workload was never actually cached — on a cache hit the install step was
+    # skipped yet the workload was absent → NETSDK1147.)
+    env:
+      DOTNET_INSTALL_DIR: ${{ github.workspace }}/.dotnet
+
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
@@ -45,7 +54,7 @@ jobs:
         id: workload-cache
         uses: actions/cache@v4
         with:
-          path: ~/.dotnet
+          path: ${{ github.workspace }}/.dotnet
           key: dotnet-workloads-maui-android-net10-${{ runner.os }}-${{ steps.dotnet.outputs.dotnet-version }}
 
       - name: Install MAUI Android workload
