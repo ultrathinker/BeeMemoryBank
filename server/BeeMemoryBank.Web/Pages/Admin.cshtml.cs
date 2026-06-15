@@ -28,6 +28,10 @@ public class AdminModel(ApiClient api) : PageModel
     public bool ShowRecoveryKeyReminder { get; set; }
     public List<PeerPendingDekRotationDto> PeerPendingRotations { get; set; } = new();
 
+    public string? CurrentVersion { get; set; }
+    public JsonElement? UpdateStatus { get; set; }
+    public JsonElement? UpdateCheck { get; set; }
+
     public async Task OnGetAsync(string? msg = null, string? err = null)
     {
         SuccessMessage = msg;
@@ -35,7 +39,27 @@ public class AdminModel(ApiClient api) : PageModel
         GraphRebuildReport = TempData["GraphRebuildReport"] as string;
         DekRotationCommitId = TempData.Peek("DekRotationCommitId") as string;
         ShowRecoveryKeyReminder = TempData["RecoveryKeyReminder"] as string == "true";
+        if (TempData["UpdateCheck"] is string uc && !string.IsNullOrEmpty(uc))
+        {
+            try { UpdateCheck = JsonSerializer.Deserialize<JsonElement>(uc); }
+            catch { /* stale/garbled TempData — ignore */ }
+        }
         await LoadDataAsync();
+    }
+
+    public async Task<IActionResult> OnPostCheckUpdateAsync()
+    {
+        var result = await api.CheckForUpdatesAsync();
+        TempData["UpdateCheck"] = result?.GetRawText();
+        return RedirectToPage();
+    }
+
+    public async Task<IActionResult> OnPostApplyUpdateAsync()
+    {
+        var ok = await api.ApplyUpdateAsync();
+        return ok
+            ? RedirectToPage(new { msg = "Update triggered. The server is rebuilding and will restart — refresh this page in 30–60 seconds." })
+            : RedirectToPage(new { err = "Failed to trigger the update." });
     }
 
     public async Task<IActionResult> OnPostRevokeNodeAsync(Guid nodeId)
@@ -234,6 +258,8 @@ public class AdminModel(ApiClient api) : PageModel
             api.GetSnapshotCheckpointsAsync().ContinueWith(t => SnapshotCheckpoints = t.Result),
             api.GetDekRotationProgressAsync().ContinueWith(t => DekRotationProgress = t.Result),
             api.GetPeerPendingDekRotationsAsync().ContinueWith(t => PeerPendingRotations = t.Result ?? new()),
+            api.GetServerVersionAsync().ContinueWith(t => CurrentVersion = t.Result),
+            api.GetUpdateStatusAsync().ContinueWith(t => UpdateStatus = t.Result),
         };
         await Task.WhenAll(tasks);
     }

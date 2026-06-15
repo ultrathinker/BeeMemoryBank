@@ -365,7 +365,9 @@ app.MapGet("/api/version", () =>
     var deployedAt = File.Exists(location)
         ? File.GetLastWriteTimeUtc(location)
         : DateTime.UtcNow;
-    return Results.Ok(new { deployedAt, build = "2026-04-18" });
+    // `version` is the compiled-in build version (source of truth for update checks).
+    // `deployedAt`/`build` are kept for backward compatibility (older mobile/Maestro readers).
+    return Results.Ok(new { version = BeeMemoryBank.Api.Helpers.AppVersion.Current, deployedAt, build = "2026-04-18" });
 }).WithTags("Health").AllowAnonymous();
 
 app.MapSessionEndpoints();

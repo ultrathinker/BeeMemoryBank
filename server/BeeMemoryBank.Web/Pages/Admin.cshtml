@@ -123,6 +123,85 @@
         </sl-alert>
     }
 
+    <!-- Software Updates -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="arrow-up-circle"></sl-icon> Software Updates</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+        <p style="margin:0 0 12px;">
+            Current version: <strong>v@(Model.CurrentVersion ?? "unknown")</strong>
+        </p>
+
+        @if (Model.UpdateStatus is { } st)
+        {
+            if (st.TryGetProperty("inProgress", out var ip) && ip.ValueKind == JsonValueKind.True)
+            {
+                <sl-alert variant="primary" open style="margin-bottom:12px;">
+                    <sl-icon slot="icon" name="hourglass-split"></sl-icon>
+                    An update is being applied now. The server will restart shortly — refresh this page in a moment.
+                </sl-alert>
+            }
+            else if (st.TryGetProperty("result", out var res) && res.ValueKind == JsonValueKind.Object)
+            {
+                var rstatus = res.TryGetProperty("status", out var rs) && rs.ValueKind == JsonValueKind.String ? rs.GetString() : null;
+                var rmsg = res.TryGetProperty("message", out var rm) && rm.ValueKind == JsonValueKind.String ? rm.GetString() : null;
+                if (rstatus == "success")
+                {
+                    <sl-alert variant="success" open style="margin-bottom:12px;">
+                        <sl-icon slot="icon" name="check-circle"></sl-icon>
+                        Last update: @rmsg
+                    </sl-alert>
+                }
+                else if (rstatus != null)
+                {
+                    <sl-alert variant="danger" open style="margin-bottom:12px;">
+                        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                        Last update failed: @rmsg
+                    </sl-alert>
+                }
+            }
+        }
+
+        @if (Model.UpdateCheck is { } uc)
+        {
+            var latest = uc.TryGetProperty("latest", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() : null;
+            var avail = uc.TryGetProperty("updateAvailable", out var a) && a.ValueKind == JsonValueKind.True;
+            var error = uc.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+            var notes = uc.TryGetProperty("notes", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+
+            if (error != null)
+            {
+                <sl-alert variant="warning" open style="margin-bottom:12px;">
+                    <sl-icon slot="icon" name="exclamation-triangle"></sl-icon> @error
+                </sl-alert>
+            }
+            else if (avail)
+            {
+                <sl-alert variant="success" open style="margin-bottom:12px;">
+                    <sl-icon slot="icon" name="arrow-up-circle"></sl-icon>
+                    Update available: <strong>v@latest</strong>@(string.IsNullOrEmpty(notes) ? "" : $" — {notes}")
+                </sl-alert>
+                <form method="post" asp-page-handler="ApplyUpdate" style="margin-bottom:8px;"
+                      onsubmit="return confirm('Apply update to v@(latest)?\n\nThe server will fetch the new version, rebuild, and restart. This page will be unavailable for about 30–60 seconds.\n\nContinue?');">
+                    <sl-button type="submit" variant="primary" size="small">
+                        <sl-icon slot="prefix" name="download"></sl-icon> Apply update &amp; restart
+                    </sl-button>
+                </form>
+            }
+            else
+            {
+                <sl-alert variant="neutral" open style="margin-bottom:12px;">
+                    <sl-icon slot="icon" name="check-circle"></sl-icon>
+                    You are running the latest version@(string.IsNullOrEmpty(latest) ? "" : $" (v{latest})").
+                </sl-alert>
+            }
+        }
+
+        <form method="post" asp-page-handler="CheckUpdate" style="margin-top:4px;">
+            <sl-button type="submit" variant="default" size="small">
+                <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Check for updates
+            </sl-button>
+        </form>
+    </div>
+
     <!-- Trusted Nodes -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <h3 style="margin:0;"><sl-icon name="people"></sl-icon> Trusted Nodes</h3>

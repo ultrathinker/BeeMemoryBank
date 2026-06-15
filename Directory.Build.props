@@ -6,5 +6,13 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <LangVersion>latest</LangVersion>
     <RootNamespace>$(MSBuildProjectName.Replace("-","_"))</RootNamespace>
+
+    <!-- Single source of truth for the version: the repo-root VERSION file.
+         Compiled into every assembly so the running app reports exactly what was built
+         (read at runtime via AssemblyInformationalVersion). The Condition guards against
+         a missing file so the build never breaks; the Dockerfile must `COPY VERSION .`
+         into the build context or the Docker build (every deploy) would skip it silently. -->
+    <Version Condition="Exists('$(MSBuildThisFileDirectory)VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
+    <InformationalVersion Condition="Exists('$(MSBuildThisFileDirectory)VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</InformationalVersion>
   </PropertyGroup>
 </Project>

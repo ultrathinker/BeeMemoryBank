@@ -3,6 +3,9 @@ WORKDIR /src
 
 COPY BeeMemoryBank.slnx .
 COPY Directory.Build.props .
+# VERSION is read by Directory.Build.props at build time to stamp the assembly version.
+# Without this COPY the version property is silently skipped inside the container build.
+COPY VERSION .
 COPY libs/ libs/
 COPY server/ server/
 COPY tests/ tests/

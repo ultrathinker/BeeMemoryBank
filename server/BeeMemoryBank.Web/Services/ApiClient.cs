@@ -572,6 +572,40 @@ public class ApiClient(HttpClient http)
         catch { return null; }
     }
 
+    // ─── Software updates ───────────────────────────────────────────────────────
+
+    public async Task<string?> GetServerVersionAsync()
+    {
+        try
+        {
+            var el = await http.GetFromJsonAsync<JsonElement>("/api/version", JsonOpts);
+            return el.TryGetProperty("version", out var v) ? v.GetString() : null;
+        }
+        catch { return null; }
+    }
+
+    public async Task<JsonElement?> CheckForUpdatesAsync()
+    {
+        try { return await http.GetFromJsonAsync<JsonElement>("/api/admin/update/check", JsonOpts); }
+        catch { return null; }
+    }
+
+    public async Task<bool> ApplyUpdateAsync()
+    {
+        try
+        {
+            var resp = await http.PostAsync("/api/admin/update/apply", null);
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
+    public async Task<JsonElement?> GetUpdateStatusAsync()
+    {
+        try { return await http.GetFromJsonAsync<JsonElement>("/api/admin/update/status", JsonOpts); }
+        catch { return null; }
+    }
+
     public async Task<List<SnapshotDto>?> GetSnapshotsAsync() =>
         await http.GetFromJsonAsync<List<SnapshotDto>>("/api/snapshots", JsonOpts);
 
