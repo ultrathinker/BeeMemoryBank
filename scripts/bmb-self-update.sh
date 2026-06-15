@@ -54,12 +54,13 @@ cd "$REPO" || {
     exit 1
 }
 
-# This unit runs as root but the repo is owned by a regular user, so without this
-# git aborts with "fatal: detected dubious ownership in repository".
-git config --global --add safe.directory "$REPO" 2>/dev/null || true
+# This unit runs as root while the repo is owned by a regular user, so git would
+# abort with "fatal: detected dubious ownership". Pass safe.directory per-command:
+# systemd has no HOME, so `git config --global` would silently write nowhere.
+GIT="git -c safe.directory=$REPO"
 
 echo "$(ts) git fetch + reset --hard origin/master" >> "$LOG"
-if ! git fetch origin >> "$LOG" 2>&1 || ! git reset --hard origin/master >> "$LOG" 2>&1; then
+if ! $GIT fetch origin >> "$LOG" 2>&1 || ! $GIT reset --hard origin/master >> "$LOG" 2>&1; then
     write_result "error" 2 "git update failed"
     echo "$(ts) ERROR git update failed" >> "$LOG"
     exit 2
