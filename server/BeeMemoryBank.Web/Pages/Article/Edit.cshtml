@@ -415,19 +415,6 @@
     var originalContent = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content));
     var isDirty = false;
 
-    function showSaveIndicator() {
-        var indicator = document.getElementById('save-indicator');
-        if (!indicator) {
-            indicator = document.createElement('div');
-            indicator.id = 'save-indicator';
-            indicator.style.cssText = 'position:fixed;bottom:15px;right:15px;padding:5px 10px;background-color:var(--sl-color-success-200);color:var(--sl-color-success-800);border-radius:var(--sl-border-radius-medium);font-size:var(--sl-font-size-small);opacity:0;transition:opacity 0.5s;';
-            document.body.appendChild(indicator);
-        }
-        indicator.textContent = 'Draft saved';
-        indicator.style.opacity = '1';
-        setTimeout(function() { indicator.style.opacity = '0'; }, 2000);
-    }
-
     function saveDraft() {
         // Never write protected plaintext to localStorage — neither an existing protected article
         // nor a new one the user is in the middle of protecting.
@@ -445,7 +432,6 @@
             savedAt: new Date().toISOString()
         }));
         isDirty = false;
-        showSaveIndicator();
     }
 
     function checkForDraft() {
