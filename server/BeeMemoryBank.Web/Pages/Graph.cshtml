@@ -671,18 +671,25 @@
         }
 
         function dragstarted(event, d) {
-            // No reheat on mousedown — a plain click must not nudge the whole layout.
+            // Pin the node but do NOT reheat on mousedown — a plain click must not nudge
+            // the layout. Reheat happens on the first real pointer movement (see dragged).
             d.fx = d.x; d.fy = d.y;
+            d._dragging = false;
         }
         function dragged(event, d) {
-            // Reheat only once the pointer actually moves (so a plain click doesn't nudge
-            // the layout), but at full strength so dragging stays as responsive as before.
-            if (!event.active) simulation.alphaTarget(0.3).restart();
+            // Reheat on the first actual movement. NOTE: do NOT gate this on event.active —
+            // it is truthy during a drag, which would block the reheat and make nodes
+            // undraggable once the layout has cooled. Use a per-node flag instead.
+            if (!d._dragging) {
+                d._dragging = true;
+                simulation.alphaTarget(0.3).restart();
+            }
             d.fx = event.x; d.fy = event.y;
         }
         function dragended(event, d) {
-            if (!event.active) simulation.alphaTarget(0);
+            if (d._dragging) simulation.alphaTarget(0);
             d.fx = null; d.fy = null;
+            d._dragging = false;
         }
 
         async function expandNeighbors(tagName) {
