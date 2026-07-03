@@ -166,7 +166,7 @@
 <!-- Filter bar -->
 <div style="margin-bottom:16px; display: flex; gap: 8px;">
     <sl-input id="concept-filter" placeholder="Filter tags locally, press Enter to search across the whole graph..." clearable size="small" style="flex-grow: 1; min-width: 0;">
-        <sl-icon slot="prefix" name="search"></sl-icon>
+        <sl-icon slot="prefix" name="search" style="margin-left:8px;"></sl-icon>
     </sl-input>
     <sl-tooltip content="Refresh data">
         <sl-icon-button name="arrow-clockwise" label="Refresh" onclick="window.location.reload()"></sl-icon-button>
@@ -265,6 +265,7 @@
         let links = [];
         const initialFocus = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.FocusConcept));
         let focusedNodeId = null;
+        let singleClickTimer = null;
 
         let hiddenMatches = [];        // match node data not yet shown
         const GREEN_MORE_ID = '__more_matches__';
@@ -529,7 +530,6 @@
                         return;
                     }
                     filterInput.value = q;
-                    if (queryOverride != null) focusedNodeId = queryOverride;
                     const depth = 1;
                     const r = await fetch('/api-proxy/concept-tags/graph/search?q=' + encodeURIComponent(q) + '&depth=' + depth + '&maxNodes=200');
                     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -620,20 +620,37 @@
 
         function nodeClickHandler(event, d) {
             event.stopPropagation();
+            // Aggregators do nothing on a single click — they expand on double-click only.
+            // (A single click used to fire a reveal + relayout, making the node jump away
+            // before a double-click could land on it.)
+            if (d.synthetic) return;
+            // A dblclick always fires two single clicks first, so defer the panel + highlight
+            // and let a following dblclick (drill-down) cancel it.
+            if (singleClickTimer) clearTimeout(singleClickTimer);
+            singleClickTimer = setTimeout(() => {
+                singleClickTimer = null;
+                focusedNodeId = d.id;
+                if (node) node.selectAll('circle').attr('fill', nodeColor);
+                showConceptDetails(d);
+            }, 250);
+        }
+        function nodeDblclickHandler(event, d) {
+            event.stopPropagation();
+            if (singleClickTimer) { clearTimeout(singleClickTimer); singleClickTimer = null; }
             if (d.synthetic) {
-                event.stopPropagation();
                 if (d.group === 'more-match') revealMoreMatches();
                 else if (d.group === 'more-neigh') revealMoreNeighbors(d.parentId);
                 return;
             }
-            focusedNodeId = d.id;
-            if (node) node.selectAll('circle').attr('fill', nodeColor);
-            showConceptDetails(d);
-        }
-        function nodeDblclickHandler(event, d) {
-            if (d.synthetic) return;
-            event.stopPropagation();
             expandNeighbors(d.id);
+        }
+
+        // The amber highlight tracks the details panel — it appears only with the panel
+        // and is cleared whenever the panel is hidden (see the observer below).
+        function clearConceptFocus() {
+            if (focusedNodeId == null) return;
+            focusedNodeId = null;
+            if (node) node.selectAll('circle').attr('fill', nodeColor);
         }
         function nodeMouseoverHandler(event, d) {
             const connected = new Set([d.id]);
@@ -1019,8 +1036,6 @@
                 zoom.transform,
                 d3.zoomIdentity.translate(w / 2, h / 2).scale(scale).translate(-d.x, -d.y)
             );
-            focusedNodeId = nodeId;
-            node.selectAll('circle').attr('fill', nodeColor);
         }
 
         // ─── Global controls (persistent across scene rebuilds) ──────────────────
@@ -1089,6 +1104,10 @@
 
         // ─── Detail Panel ───────────────────────────────────────────────────────
         const conceptPanel = document.getElementById('concept-panel');
+        // Keep the highlight in sync with the panel: any close path (Escape, close button,
+        // empty-canvas click, scene rebuild) hides the panel → drop the highlight.
+        new MutationObserver(() => { if (conceptPanel.hidden) clearConceptFocus(); })
+            .observe(conceptPanel, { attributes: true, attributeFilter: ['hidden'] });
         const panelName = document.getElementById('panel-concept-name');
         const panelMeta = document.getElementById('panel-concept-meta');
         const panelList = document.getElementById('panel-articles-list');
