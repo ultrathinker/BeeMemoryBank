@@ -140,7 +140,7 @@
     <div style="display:flex; gap: 8px; align-items:center;">
         <sl-button-group>
             <sl-button id="btn-mode-home" variant="primary" size="small">
-                <sl-icon slot="prefix" name="house"></sl-icon> Home
+                <sl-icon slot="prefix" name="house"></sl-icon> Simple
             </sl-button>
             <sl-button id="btn-mode-full" variant="default" size="small">
                 <sl-icon slot="prefix" name="globe"></sl-icon> Full Graph
@@ -234,6 +234,12 @@
 
 </div>
 </div>
+
+<sl-dialog id="dlg-full-confirm" label="Load the full graph?">
+    <p>The full graph renders <strong>every</strong> tag at once. If you have a lot of tags this can be slow and heavy to explore. Continue?</p>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-full-confirm').hide()">Cancel</sl-button>
+    <sl-button id="btn-full-confirm" slot="footer" variant="primary">Load full graph</sl-button>
+</sl-dialog>
 
 @section Scripts {
     <script src="~/lib/d3/d3.v7.min.js" asp-append-version="true"></script>
@@ -486,7 +492,7 @@
             updateLegend(currentMode);
         }
 
-        async function loadMode(mode) {
+        async function loadMode(mode, queryOverride) {
             destroyScene();
             currentMode = mode;
             updateModeButtons();
@@ -498,12 +504,13 @@
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     payload = await r.json();
                 } else if (mode === 'search') {
-                    const q = (filterInput.value || '').trim();
+                    const q = (queryOverride != null ? queryOverride : (filterInput.value || '')).trim();
                     if (!q) {
                         placeholderEmpty();
                         filterInput.focus();
                         return;
                     }
+                    filterInput.value = q;
                     const depth = 2;
                     const r = await fetch('/api-proxy/concept-tags/graph/search?q=' + encodeURIComponent(q) + '&depth=' + depth + '&maxNodes=200');
                     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -913,7 +920,15 @@
         });
 
         btnModeHome.addEventListener('click', () => loadMode('home'));
-        btnModeFull.addEventListener('click', () => loadMode('full'));
+        btnModeFull.addEventListener('click', () => {
+            const dlg = document.getElementById('dlg-full-confirm');
+            dlg.show();
+        });
+
+        document.getElementById('btn-full-confirm').addEventListener('click', () => {
+            document.getElementById('dlg-full-confirm').hide();
+            loadMode('full');
+        });
 
         filterInput.addEventListener('keydown', e => {
             if (e.key === 'Enter') {
@@ -1011,7 +1026,7 @@
         // Initial load — placed at the end of the IIFE so every `let`/`const`
         // used inside destroyScene (conceptPanel) is already initialized before
         // the first loadMode invocation.
-        if (initialFocus) loadMode('full');
+        if (initialFocus) loadMode('search', initialFocus);
         else loadMode('home');
     })();
     </script>

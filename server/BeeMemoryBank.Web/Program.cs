@@ -123,6 +123,7 @@ if (!app.Environment.IsDevelopment())
 app.Use(async (ctx, next) =>
 {
     var headers = ctx.Response.Headers;
+    var framable = ctx.Request.Path.StartsWithSegments("/Article/Preview");
     headers["Content-Security-Policy"] =
         "default-src 'self'; " +
         "script-src 'self' 'unsafe-inline'; " +
@@ -134,11 +135,11 @@ app.Use(async (ctx, next) =>
         // Shoelace icons are served as data: URIs and fetched (not <img>'d),
         // so they hit connect-src — must allow data: there.
         "connect-src 'self' data:; " +
-        "frame-ancestors 'none'; " +
+        "frame-ancestors " + (framable ? "'self'" : "'none'") + "; " +
         "base-uri 'self'; " +
         "form-action 'self'";
     headers["X-Content-Type-Options"] = "nosniff";
-    headers["X-Frame-Options"] = "DENY";
+    headers["X-Frame-Options"] = framable ? "SAMEORIGIN" : "DENY";
     headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
     headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()";
     await next();
