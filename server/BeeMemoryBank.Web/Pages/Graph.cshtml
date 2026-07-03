@@ -418,7 +418,7 @@
                 { color: '#94a3b8', label: 'Neighbor — linked to matches' },
                 { color: '#86efac', label: 'More matches — click to reveal 10 more' },
                 { color: '#cbd5e1', label: 'More neighbors — click to reveal 10 more' },
-                { color: 'transparent', border: 'var(--sl-color-warning-500)', label: 'Dashed — has hidden neighbors' },
+                { color: 'transparent', border: 'var(--sl-color-warning-500)', label: 'Dashed — has deeper tags (double-click to expand)' },
             ],
             full: [
                 { color: '#a78bfa', label: 'All tags — unfiltered' },
@@ -463,15 +463,16 @@
             return Math.max(0, d.totalNeighbors - visibleNeighborCount(d.id));
         }
 
-        function isTruncated(d) { return hiddenNeighbors(d) > 0; }
+        function isTruncated(d) {
+            if (d.synthetic) return false;
+            if (expandedTags.has(d.id)) return false;
+            if (d.totalNeighbors === -1) return true;   // revealed node, unknown count — allow drilling
+            return (d.totalNeighbors || 0) - visibleNeighborCount(d.id) > 0;
+        }
 
         function applyTruncationClass() {
             if (!node) return;
-            if (currentMode === 'search') {
-                node.classed('truncated', false);
-                return;
-            }
-            node.classed('truncated', d => d.synthetic ? false : isTruncated(d));
+            node.classed('truncated', d => isTruncated(d));
         }
 
         function setPlaceholder(html) {
@@ -529,7 +530,7 @@
                     }
                     filterInput.value = q;
                     if (queryOverride != null) focusedNodeId = queryOverride;
-                    const depth = 2;
+                    const depth = 1;
                     const r = await fetch('/api-proxy/concept-tags/graph/search?q=' + encodeURIComponent(q) + '&depth=' + depth + '&maxNodes=200');
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     payload = await r.json();
@@ -554,19 +555,45 @@
                 if (mode === 'search') {
                     allSearchLinks = links.map(e => ({ source: e.source, target: e.target, weight: e.weight }));
                     hiddenMatches = [];
-                    const matches = nodes.filter(n => n.group === 'match');
-                    const others = nodes.filter(n => n.group !== 'match');
-                    matches.sort((a, b) => (b.count - a.count) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-                    const visibleMatches = matches.slice(0, 10);
-                    hiddenMatches = matches.slice(10);
-                    const visibleIds = new Set(visibleMatches.map(n => n.id));
-                    for (const o of others) visibleIds.add(o.id);
+                    expandedTags.clear();
+
+                    const matchNodes = nodes.filter(n => n.group === 'match');
+                    const neighborNodes = nodes.filter(n => n.group === 'neighbor');
+                    matchNodes.sort((a, b) => (b.count - a.count) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+                    const visibleMatches = matchNodes.slice(0, 10);
+                    hiddenMatches = matchNodes.slice(10);
+                    const matchIdSet = new Set(visibleMatches.map(m => m.id));
+
+                    // Build each visible match's neighbor list (id + weight) from the payload edges.
+                    const neighborById = new Map(neighborNodes.map(n => [n.id, n]));
+                    const perMatchNeighbors = new Map();
+                    for (const l of links) {
+                        const sid = typeof l.source === 'object' ? l.source.id : l.source;
+                        const tid = typeof l.target === 'object' ? l.target.id : l.target;
+                        let mId = null, nId = null;
+                        if (matchIdSet.has(sid) && neighborById.has(tid)) { mId = sid; nId = tid; }
+                        else if (matchIdSet.has(tid) && neighborById.has(sid)) { mId = tid; nId = sid; }
+                        if (mId == null) continue;
+                        if (!perMatchNeighbors.has(mId)) perMatchNeighbors.set(mId, []);
+                        perMatchNeighbors.get(mId).push({ id: nId, weight: l.weight || 1 });
+                    }
+                    // Show at most 10 neighbors per match (highest co-occurrence weight first).
+                    const shownNeighborIds = new Set();
+                    for (const m of visibleMatches) {
+                        const list = (perMatchNeighbors.get(m.id) || []).sort((a, b) => b.weight - a.weight);
+                        for (const nb of list.slice(0, 10)) shownNeighborIds.add(nb.id);
+                    }
+                    const visibleNodeIds = new Set([...matchIdSet, ...shownNeighborIds]);
+                    const finalNeighbors = neighborNodes.filter(n => shownNeighborIds.has(n.id));
+                    nodes = visibleMatches.concat(finalNeighbors);
                     links = links.filter(l => {
                         const sid = typeof l.source === 'object' ? l.source.id : l.source;
                         const tid = typeof l.target === 'object' ? l.target.id : l.target;
-                        return visibleIds.has(sid) && visibleIds.has(tid);
+                        return visibleNodeIds.has(sid) && visibleNodeIds.has(tid);
                     });
-                    nodes = visibleMatches.concat(others);
+                    // Matches are auto-expanded: their direct neighbors are on screen, and any
+                    // overflow beyond the shown 10 becomes their light-gray "+N" bucket (via sync).
+                    for (const m of visibleMatches) expandedTags.add(m.id);
                     if (hiddenMatches.length > 0) {
                         nodes.push({ id: GREEN_MORE_ID, name: '+' + hiddenMatches.length, count: 1, group: 'more-match', synthetic: true, totalNeighbors: 0 });
                     }
@@ -639,38 +666,7 @@
         async function expandNeighbors(tagName) {
             if (expandedTags.has(tagName)) return;
             expandedTags.add(tagName);
-            try {
-                const r = await fetch('/api-proxy/concept-tags/graph/neighbors?tag=' + encodeURIComponent(tagName));
-                if (!r.ok) return;
-                const data = await r.json();
-                const existingNodeIds = new Set(nodes.map(n => n.id));
-                let addedCount = 0;
-                for (const name of (data.nodes || [])) {
-                    if (!existingNodeIds.has(name)) {
-                        nodes.push({ id: name, name, count: 1, group: 'neighbor' });
-                        existingNodeIds.add(name);
-                        addedCount++;
-                    }
-                }
-                const linkKey = (s, t) => s < t ? s + '|' + t : t + '|' + s;
-                const existingLinkKeys = new Set(links.map(l => {
-                    const sid = typeof l.source === 'object' ? l.source.id : l.source;
-                    const tid = typeof l.target === 'object' ? l.target.id : l.target;
-                    return linkKey(sid, tid);
-                }));
-                let addedLinks = 0;
-                for (const e of (data.edges || [])) {
-                    const key = linkKey(e.source, e.target);
-                    if (!existingLinkKeys.has(key)) {
-                        links.push({ source: e.source, target: e.target, weight: e.weight });
-                        existingLinkKeys.add(key);
-                        addedLinks++;
-                    }
-                }
-                if (addedCount > 0 || addedLinks > 0) refreshGraphData();
-            } catch (err) {
-                console.error('Expand failed:', err);
-            }
+            await revealMoreNeighbors(tagName);
         }
 
         function refreshGraphData() {
@@ -730,7 +726,7 @@
             const batch = hiddenMatches.splice(0, 10);
             // remove old aggregator node
             nodes = nodes.filter(n => n.id !== GREEN_MORE_ID);
-            for (const m of batch) nodes.push(m);
+            for (const m of batch) { nodes.push(m); expandedTags.add(m.id); }
             // restore links between the newly shown matches and existing nodes
             const visibleIds = new Set(nodes.map(n => n.id));
             for (const l of allSearchLinks) {
@@ -758,37 +754,25 @@
                     return !aggIds.has(sid) && !aggIds.has(tid);
                 });
             }
-            // add a fresh aggregator for every real node that can still be expanded
-            const visibleIdSet = new Set(nodes.map(x => x.id));
-            for (const n of nodes.filter(x => !x.synthetic)) {
-                const badge = neighborBadge(n, visibleIdSet);
-                if (badge !== null) {
+            // "+N" overflow bucket ONLY for EXPANDED nodes with more direct neighbors than shown.
+            // Non-expanded nodes with hidden neighbors are signalled by the dashed border instead.
+            const ids = new Set(nodes.map(x => x.id));
+            for (const n of nodes.filter(x => !x.synthetic && expandedTags.has(x.id))) {
+                let hidden;
+                const full = expandedNeighborData.get(n.name);
+                if (full) {
+                    let vis = 0;
+                    for (const nb of full) if (ids.has(nb.name)) vis++;
+                    hidden = full.length - vis;
+                } else {
+                    hidden = Math.max(0, (n.totalNeighbors || 0) - visibleNeighborCount(n.id));
+                }
+                if (hidden > 0) {
                     const aggId = NEIGH_MORE_PREFIX + n.id;
-                    nodes.push({ id: aggId, name: badge, count: 0.5, group: 'more-neigh', synthetic: true, totalNeighbors: 0, parentId: n.id });
+                    nodes.push({ id: aggId, name: '+' + hidden, count: 0.5, group: 'more-neigh', synthetic: true, totalNeighbors: 0, parentId: n.id });
                     links.push({ source: n.id, target: aggId, weight: 1 });
                 }
             }
-        }
-
-        // Decides whether a real node still has hidden neighbors, and the "+N" label
-        // for its aggregator. Returns null when the node is fully expanded (no aggregator).
-        //  - If we've already fetched the node's full neighbor list, compare against
-        //    what's currently on screen (exact remaining count).
-        //  - Revealed nodes (totalNeighbors === -1) have an unknown count but must stay
-        //    expandable, so show a bare "+"; the first click resolves the real count.
-        //  - Otherwise use the payload's totalNeighbors vs. currently visible edges.
-        function neighborBadge(n, visibleIdSet) {
-            const ids = visibleIdSet || new Set(nodes.map(x => x.id));
-            const full = expandedNeighborData.get(n.name);
-            if (full) {
-                let vis = 0;
-                for (const nb of full) if (ids.has(nb.name)) vis++;
-                const rem = full.length - vis;
-                return rem > 0 ? '+' + rem : null;
-            }
-            if (n.totalNeighbors === -1) return '+';
-            const hidden = Math.max(0, (n.totalNeighbors || 0) - visibleNeighborCount(n.id));
-            return hidden > 0 ? '+' + hidden : null;
         }
 
         async function revealMoreNeighbors(parentId) {
