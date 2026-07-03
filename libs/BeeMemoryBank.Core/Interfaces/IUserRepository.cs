@@ -17,4 +17,19 @@ public interface IUserRepository
     /// in-place via delete+create — the user→slot FK must follow.
     /// </summary>
     Task RepointKeySlotAsync(int oldSlotId, int newSlotId);
+
+    /// <summary>
+    /// Reads the node-local security stamp for a user, IGNORING the is_active filter so a
+    /// recently-deleted (IsActive=0) user still resolves — deletion bumps the stamp, so a
+    /// pre-deletion cookie's stamp will mismatch and be rejected. Returns null if the user
+    /// row does not exist at all.
+    /// </summary>
+    Task<string?> GetSecurityStampAsync(int id);
+
+    /// <summary>
+    /// Regenerates the node-local security stamp (new random value) for a user. Called on
+    /// every identity-affecting change to invalidate outstanding Web cookies on next
+    /// revalidation. Returns the new stamp.
+    /// </summary>
+    Task<string> BumpSecurityStampAsync(int id);
 }

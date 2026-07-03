@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Services;
@@ -12,13 +11,10 @@ public static class DownloadEndpoints
 {
     public static void MapDownloadEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/downloads").WithTags("Downloads");
+        var group = app.MapGroup("/api/downloads").WithTags("Downloads").RequireInternalKey();
 
         group.MapPost("/prepare", async (PrepareDownloadRequest req, DownloadTokenService tokenSvc, ZipExportService exportSvc, HttpContext ctx, CancellationToken ct) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             if (!sessionUnlocked(ctx))
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -64,7 +60,7 @@ public static class DownloadEndpoints
 
             var stream = new DeleteOnCloseStream(entry.FilePath);
             return Results.File(stream, contentType, entry.FileName);
-        });
+        }).WithMetadata(new SkipInternalKey()); // token IS the credential — single-use, issued by authed /prepare
     }
 
     private static bool sessionUnlocked(HttpContext ctx)

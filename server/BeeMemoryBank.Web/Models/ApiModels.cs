@@ -100,9 +100,10 @@ public record LoginResult(
     string? DisplayName,
     string? Role,
     string? UserId,
-    string? MigratedSyntheticUsername);
+    string? MigratedSyntheticUsername,
+    string? SecurityStamp);
 
-public record LoginResponse(int UserId, string Username, string DisplayName, string Role, bool IsUnlocked, string? MigratedSyntheticUsername = null);
+public record LoginResponse(int UserId, string Username, string DisplayName, string Role, bool IsUnlocked, string? MigratedSyntheticUsername = null, string? SecurityStamp = null);
 
 public record UserDto(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt);
 

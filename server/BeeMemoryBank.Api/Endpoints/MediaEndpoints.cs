@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
@@ -10,15 +9,13 @@ public static class MediaEndpoints
 {
     public static void MapMediaEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/media").WithTags("Media");
+        var group = app.MapGroup("/api/media").WithTags("Media").RequireInternalKey();
 
         group.MapPost("/", async (
             IFormFile file, SessionService session, MediaService mediaService,
             ArticleService articleSvc, FolderAccessService folderAccess,
             HttpContext ctx, string? articleId) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -76,8 +73,6 @@ public static class MediaEndpoints
         group.MapGet("/{id:guid}", async (
             Guid id, SessionService session, MediaService mediaService, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -93,8 +88,6 @@ public static class MediaEndpoints
         group.MapDelete("/{id:guid}", async (
             Guid id, SessionService session, MediaService mediaService, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -117,8 +110,6 @@ public static class MediaEndpoints
             Guid articleId, SessionService session, MediaService mediaService,
             ArticleService articleSvc, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -135,6 +126,6 @@ public static class MediaEndpoints
                 fileSize = m.FileSize,
                 createdAt = m.CreatedAt
             }));
-        }).WithTags("Media");
+        }).RequireInternalKey().WithTags("Media");
     }
 }

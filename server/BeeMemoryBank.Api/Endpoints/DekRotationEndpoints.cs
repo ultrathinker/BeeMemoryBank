@@ -1,5 +1,5 @@
 using System.Text.Json;
-using BeeMemoryBank.Api.Middleware;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
@@ -17,7 +17,7 @@ public static class DekRotationEndpoints
 
     public static void MapDekRotationEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/dek-rotation").WithTags("DekRotation");
+        var group = app.MapGroup("/api/dek-rotation").WithTags("DekRotation").RequireInternalKey();
 
         group.MapPost("/propose", async (
             ProposeDekRotationRequest req,
@@ -27,8 +27,6 @@ public static class DekRotationEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
 
@@ -78,8 +76,6 @@ public static class DekRotationEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
@@ -111,8 +107,6 @@ public static class DekRotationEndpoints
             DekRotationService svc,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
 
@@ -129,8 +123,6 @@ public static class DekRotationEndpoints
 
         group.MapGet("/progress", (DekRotationService svc, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             return Results.Ok(svc.GetProgress());
         });
 
@@ -145,8 +137,6 @@ public static class DekRotationEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
@@ -192,8 +182,6 @@ public static class DekRotationEndpoints
             IAuditLogRepository auditRepo,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
 
@@ -220,8 +208,6 @@ public static class DekRotationEndpoints
             IWhitelistRepository whitelistRepo,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
 

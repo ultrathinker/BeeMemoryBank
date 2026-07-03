@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -18,15 +17,13 @@ public static class CommentEndpoints
             HttpContext ctx,
             Guid articleId) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             var comments = await commentSvc.GetDecryptedByArticleAsync(articleId);
             var result = comments.Select(c => new CommentResponse(c.comment.Id, c.comment.ArticleId, c.text, c.comment.CreatedAt));
             return Results.Ok(result);
-        }).WithTags("Comments");
+        }).RequireInternalKey().WithTags("Comments");
 
         app.MapPost("/api/comments", async (
             CommentService commentSvc,
@@ -36,8 +33,6 @@ public static class CommentEndpoints
             AddCommentRequest req,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(req.Text))
                 return Results.BadRequest(new ErrorResponse("Text is required"));
             if (!session.IsUnlocked)
@@ -59,7 +54,7 @@ public static class CommentEndpoints
             var comment = await commentSvc.CreateAsync(req.ArticleId, req.Text.Trim());
             var text = await commentSvc.DecryptTextAsync(comment);
             return Results.Ok(new CommentResponse(comment.Id, comment.ArticleId, text, comment.CreatedAt));
-        }).WithTags("Comments");
+        }).RequireInternalKey().WithTags("Comments");
 
         app.MapDelete("/api/comments/{id:int}", async (
             CommentService commentSvc,
@@ -69,8 +64,6 @@ public static class CommentEndpoints
             int id,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var comment = await commentRepo.GetByIdAsync(id);
             if (comment == null)
@@ -91,6 +84,6 @@ public static class CommentEndpoints
 
             await commentSvc.DeleteAsync(id);
             return Results.NoContent();
-        }).WithTags("Comments");
+        }).RequireInternalKey().WithTags("Comments");
     }
 }

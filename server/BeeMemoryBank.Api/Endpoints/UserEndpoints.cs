@@ -2,7 +2,6 @@
 // does NOT propagate to other nodes. See docs/architecture.md → Node Topology.
 
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -14,26 +13,37 @@ public static class UserEndpoints
 {
     public static void MapUserEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/users").WithTags("Users");
+        var group = app.MapGroup("/api/users").WithTags("Users").RequireInternalKey();
         group.AddEndpointFilter<RequireNonAgentFilter>();
 
         group.MapGet("/", async (IUserRepository repo, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             var users = await repo.ListActiveAsync();
             return Results.Ok(users.Select(u => new UserListItemResponse(
                 u.Id, u.Username, u.DisplayName, u.Role, u.CreatedAt, u.LastLoginAt)));
+        });
+
+        // GET /api/users/me/stamp — returns this caller's node-local security stamp.
+        // Used by the Web layer's OnValidatePrincipal to revoke stale cookies after an
+        // identity-affecting change (password/role change, deletion). The forwarded
+        // X-User-Id identifies the caller; the group's RequireInternalKey filter already
+        // authenticated the internal key, and RequireNonAgentFilter blocks agents.
+        group.MapGet("/me/stamp", async (HttpContext ctx, IUserRepository repo) =>
+        {
+            var userIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
+            if (!int.TryParse(userIdStr, out var userId))
+                return Results.Json(new ErrorResponse("User not identified"), statusCode: 401);
+
+            var stamp = await repo.GetSecurityStampAsync(userId);
+            if (stamp == null)
+                return Results.NotFound();
+            return Results.Ok(new { stamp });
         });
 
         group.MapPost("/", async (CreateUserRequest req, IUserRepository userRepo, UserService userService, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can create users"), statusCode: 403);
-
-            if (!InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Only superadmin can create users"), statusCode: 403);
 
             try
@@ -54,9 +64,6 @@ public static class UserEndpoints
         {
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can update users"), statusCode: 403);
-
-            if (!InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Only superadmin can update users"), statusCode: 403);
 
             try
@@ -80,9 +87,6 @@ public static class UserEndpoints
             if (role != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Only superadmin can delete users"), statusCode: 403);
 
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Only superadmin can delete users"), statusCode: 403);
-
             try
             {
                 await userService.DeleteUserAsync(id);
@@ -103,9 +107,6 @@ public static class UserEndpoints
         // Self-service password change — any authenticated user can change their own password
         group.MapPost("/me/change-password", async (ChangePasswordRequest req, UserService userService, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             var userIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
             if (string.IsNullOrEmpty(userIdStr) || !int.TryParse(userIdStr, out var userId))
                 return Results.Json(new ErrorResponse("User not identified"), statusCode: 401);
@@ -137,9 +138,6 @@ public static class UserEndpoints
         {
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can change passwords"), statusCode: 403);
-
-            if (!InternalKeyValidator.Validate(ctx))
                 return Results.Json(new ErrorResponse("Only superadmin can change passwords"), statusCode: 403);
 
             try

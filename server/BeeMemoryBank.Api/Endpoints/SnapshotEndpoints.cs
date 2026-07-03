@@ -1,3 +1,4 @@
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
@@ -16,12 +17,10 @@ public static class SnapshotEndpoints
 {
     public static void MapSnapshotEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/snapshots").WithTags("Snapshots");
+        var group = app.MapGroup("/api/snapshots").WithTags("Snapshots").RequireInternalKey();
 
         group.MapGet("/", (SnapshotService svc, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Snapshot filenames carry timestamps and originator node IDs. Restrict
             // listing to superadmins (matches restore/upload/delete which already gate
             // on this) — non-superadmin Users have no admin reason to enumerate them.
@@ -32,8 +31,6 @@ public static class SnapshotEndpoints
 
         group.MapPost("/", async (SnapshotService svc, SessionService session, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Creating a snapshot is an expensive VACUUM INTO + tar/gzip operation.
             // Without a role gate, any authenticated User could DoS the disk.
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
@@ -49,8 +46,6 @@ public static class SnapshotEndpoints
 
         group.MapGet("/{fileName}/download", (string fileName, SnapshotService svc, SessionService session, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Snapshots contain the encrypted DB (incl. wrapped DEKs and key slots).
             // Even though contents are at rest under master-DEK encryption, exfil
             // enables offline brute-force against weak passwords. Restrict to admin.
@@ -77,8 +72,6 @@ public static class SnapshotEndpoints
         group.MapPost("/restore", async (RestoreSnapshotRequest req, SnapshotService svc, SessionService session,
             MaintenanceModeService maintenance, HttpContext ctx, ILogger<Program> logger, IAuditLogRepository auditRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
 
@@ -130,8 +123,6 @@ public static class SnapshotEndpoints
 
         group.MapDelete("/{fileName}", async (string fileName, SnapshotService svc, SessionService session, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
@@ -153,8 +144,6 @@ public static class SnapshotEndpoints
             ILogger<Program> logger,
             IAuditLogRepository auditRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked) return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -203,8 +192,6 @@ public static class SnapshotEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked) return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -332,7 +319,8 @@ public static class SnapshotEndpoints
 
             return Results.File(pendingPath, "application/octet-stream", enableRangeProcessing: true);
         })
-        .WithName("ServeRestoreFile");
+        .WithName("ServeRestoreFile")
+        .WithMetadata(new SkipInternalKey());
 
         group.MapGet("/restore/progress", (SnapshotRestoreService restoreSvc, HttpContext ctx) =>
         {
@@ -361,7 +349,8 @@ public static class SnapshotEndpoints
                 requiresMasterPassword = p.RequiresMasterPassword
             });
         })
-        .WithName("GetRestoreProgress");
+        .WithName("GetRestoreProgress")
+        .WithMetadata(new SkipInternalKey());
 
         group.MapPost("/restore/continue-without-backup", async (
             RestoreContinueWithoutBackupRequest req,
@@ -369,8 +358,6 @@ public static class SnapshotEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             try
@@ -396,8 +383,6 @@ public static class SnapshotEndpoints
             SessionService session,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             // Note: do NOT require session.IsUnlocked here — sessions are intentionally locked

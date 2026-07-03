@@ -1,3 +1,4 @@
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
@@ -303,8 +304,6 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             INodeIdentityRepository nodeRepo) =>
         {
-            if (!BeeMemoryBank.Api.Middleware.InternalKeyValidator.Validate(ctx))
-                return Results.Json(new BeeMemoryBank.Api.Models.ErrorResponse("Unauthorized"), statusCode: 403);
             var identity = await nodeRepo.GetAsync();
             var totalEvents = await eventLogRepo.GetTotalCountAsync();
             var positions = await syncPositionRepo.GetAllAsync();
@@ -334,7 +333,7 @@ public static class SyncEndpoints
                 isInvisible = invisibleMode.IsInvisible,
                 nodes = nodeStatuses
             });
-        }).WithTags("Sync");
+        }).RequireInternalKey().WithTags("Sync");
 
         // ─── Ping (lightweight check if new events exist) ────────────────────────
         app.MapGet("/api/sync/ping", async (
@@ -343,26 +342,22 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             long afterSequence = 0) =>
         {
-            if (!BeeMemoryBank.Api.Middleware.InternalKeyValidator.Validate(ctx))
-                return Results.Json(new BeeMemoryBank.Api.Models.ErrorResponse("Unauthorized"), statusCode: 403);
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
             var events = await eventLogRepo.GetAfterSequenceAsync(afterSequence, 1);
             if (events.Count == 0)
                 return Results.NoContent();
             return Results.Ok(new { count = await eventLogRepo.GetTotalCountAsync() - afterSequence });
-        }).WithTags("Sync");
+        }).RequireInternalKey().WithTags("Sync");
 
         app.MapGet("/api/sync/invisible", (
             HttpContext ctx,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode) =>
         {
-            if (!BeeMemoryBank.Api.Middleware.InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
             return Results.Ok(new { IsInvisible = invisibleMode.IsInvisible });
-        }).WithTags("Sync");
+        }).RequireInternalKey().WithTags("Sync");
 
         // ─── Invisible Mode Toggle ───────────────────────────────────────────────
         app.MapPost("/api/sync/invisible", (
@@ -370,15 +365,13 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             [Microsoft.AspNetCore.Mvc.FromBody] bool isInvisible) =>
         {
-            if (!BeeMemoryBank.Api.Middleware.InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
 
             invisibleMode.IsInvisible = isInvisible;
             return Results.Ok();
-        }).WithTags("Sync");
+        }).RequireInternalKey().WithTags("Sync");
 
         // ─── Delivery status (requires internal key — exposes node topology) ────
         app.MapGet("/api/sync/delivery-status", async (
@@ -389,8 +382,6 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             INodeIdentityRepository nodeRepo) =>
         {
-            if (!BeeMemoryBank.Api.Middleware.InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var identity = await nodeRepo.GetAsync();
             // Use the head sequence number (MAX), NOT COUNT(*): after compaction trims early
             // events, COUNT is lower than the head seq, so comparing a node's last_pushed_seq
@@ -424,7 +415,7 @@ public static class SyncEndpoints
             }
 
             return Results.Ok(new DeliveryStatusResponse(identity?.NodeId, invisibleMode.IsInvisible, statuses));
-        }).WithTags("Sync");
+        }).RequireInternalKey().WithTags("Sync");
     }
 
     private static bool TryAuth(HttpContext ctx, SyncTokenStore store, out Guid nodeId)

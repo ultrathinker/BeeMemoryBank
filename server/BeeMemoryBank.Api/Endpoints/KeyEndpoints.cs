@@ -1,4 +1,4 @@
-using BeeMemoryBank.Api.Middleware;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Services;
 
@@ -8,12 +8,10 @@ public static class KeyEndpoints
 {
     public static void MapKeyEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/keys").WithTags("Keys");
+        var group = app.MapGroup("/api/keys").WithTags("Keys").RequireInternalKey();
 
         group.MapPost("/change-password", async (ChangePasswordRequest req, KeyManagementService svc, SessionService session, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -23,8 +21,6 @@ public static class KeyEndpoints
 
         group.MapPost("/add-recovery", async (KeyManagementService svc, SessionService session, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 

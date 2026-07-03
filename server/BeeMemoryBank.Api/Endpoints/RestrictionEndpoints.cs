@@ -3,7 +3,6 @@
 // docs/architecture.md → Node Topology.
 
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -15,12 +14,10 @@ public static class RestrictionEndpoints
 {
     public static void MapRestrictionEndpoints(this WebApplication app)
     {
-        var userGroup = app.MapGroup("/api/restrictions/user").WithTags("Restrictions");
+        var userGroup = app.MapGroup("/api/restrictions/user").WithTags("Restrictions").RequireInternalKey();
 
         userGroup.MapGet("/{userId:int}", async (int userId, IFolderAclRepository repo, IFolderRepository folderRepo, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
@@ -45,8 +42,6 @@ public static class RestrictionEndpoints
 
         userGroup.MapPost("/{userId:int}", async (int userId, AddAclEntryRequest req, IFolderAclRepository repo, IFolderRepository folderRepo, FolderAccessService folderAccess, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
@@ -96,8 +91,6 @@ public static class RestrictionEndpoints
             FolderAccessService folderAccess,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
@@ -110,8 +103,6 @@ public static class RestrictionEndpoints
 
         userGroup.MapDelete("/{userId:int}/{folderId:guid}", async (int userId, Guid folderId, IFolderAclRepository repo, FolderAccessService folderAccess, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
             if (role != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);

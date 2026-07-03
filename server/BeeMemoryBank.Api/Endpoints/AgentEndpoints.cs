@@ -2,7 +2,6 @@
 // and revoked per-node. They are never synchronized to other nodes.
 
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -15,14 +14,12 @@ public static class AgentEndpoints
 {
     public static void MapAgentEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/agents").WithTags("Agents");
+        var group = app.MapGroup("/api/agents").WithTags("Agents").RequireInternalKey();
         group.AddEndpointFilter<RequireNonAgentFilter>();
 
         // GET /api/agents — list active agents
         group.MapGet("/", async (HttpContext ctx, IAgentRepository repo, IUserRepository userRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var callerIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
             var callerRole = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
@@ -57,8 +54,6 @@ public static class AgentEndpoints
             HttpContext ctx,
             IAuditLogRepository auditRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -130,8 +125,6 @@ public static class AgentEndpoints
             HttpContext ctx,
             IAuditLogRepository auditRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 

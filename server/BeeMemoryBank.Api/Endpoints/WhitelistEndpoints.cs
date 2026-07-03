@@ -1,5 +1,5 @@
 using System.Net.Http.Json;
-using BeeMemoryBank.Api.Middleware;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -14,12 +14,10 @@ public static class WhitelistEndpoints
 {
     public static void MapWhitelistEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/whitelist").WithTags("Whitelist");
+        var group = app.MapGroup("/api/whitelist").WithTags("Whitelist").RequireInternalKey();
 
         group.MapGet("/sync-status", async (HttpContext ctx, ISyncPositionRepository syncRepo, ISyncPushPositionRepository pushRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             // "Last sync" = most recent contact in EITHER direction. sync_position tracks how far
             // WE pulled FROM a node; push_position tracks how far a node pulled FROM us / reported.
@@ -40,8 +38,6 @@ public static class WhitelistEndpoints
         // GET /api/whitelist — list active entries (no unlock required)
         group.MapGet("/", async (HttpContext ctx, IWhitelistRepository repo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var entries = await repo.GetAllActiveAsync();
             return Results.Ok(entries.Select(WhitelistEntryResponse.From));
         });
@@ -49,8 +45,6 @@ public static class WhitelistEndpoints
         // GET /api/whitelist/{nodeId} — single entry
         group.MapGet("/{nodeId:guid}", async (Guid nodeId, HttpContext ctx, IWhitelistRepository repo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
             return entry != null
                 ? Results.Ok(WhitelistEntryResponse.From(entry))
@@ -65,8 +59,6 @@ public static class WhitelistEndpoints
             SessionService session,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -94,8 +86,6 @@ public static class WhitelistEndpoints
             IHttpClientFactory httpClientFactory,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             // 1. Verify master password
             if (!session.IsUnlocked)
@@ -164,8 +154,6 @@ public static class WhitelistEndpoints
             INodeIdentityRepository nodeIdentityRepo,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
@@ -192,8 +180,6 @@ public static class WhitelistEndpoints
             INodeIdentityRepository nodeIdentityRepo,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
@@ -219,8 +205,6 @@ public static class WhitelistEndpoints
             SessionService session,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 

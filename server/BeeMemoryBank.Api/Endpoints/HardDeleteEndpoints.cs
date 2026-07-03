@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -11,12 +10,10 @@ public static class HardDeleteEndpoints
 {
     public static void MapHardDeleteEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/hard-delete").WithTags("HardDelete");
+        var group = app.MapGroup("/api/hard-delete").WithTags("HardDelete").RequireInternalKey();
 
         group.MapGet("/list", async (HttpContext ctx, HardDeleteService svc, SessionService session, int page = 1, int pageSize = 100, string? filter = null, HardDeleteStatusFilter status = HardDeleteStatusFilter.All) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -30,8 +27,6 @@ public static class HardDeleteEndpoints
 
         group.MapPost("/folder/preview", async (PreviewFolderRequest req, HttpContext ctx, HardDeleteService svc, SessionService session) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -45,8 +40,6 @@ public static class HardDeleteEndpoints
 
         group.MapPost("/article/{id:guid}", async (Guid id, HttpContext ctx, HardDeleteService svc, SessionService session) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -60,8 +53,6 @@ public static class HardDeleteEndpoints
 
         group.MapPost("/folder", async (HardDeleteFolderRequest req, HttpContext ctx, HardDeleteService svc, SessionService session) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -75,8 +66,6 @@ public static class HardDeleteEndpoints
 
         group.MapPost("/restore/article/{id:guid}", async (Guid id, HttpContext ctx, RestoreService svc, SessionService session) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -95,8 +84,6 @@ public static class HardDeleteEndpoints
 
         group.MapPost("/restore/folder/{id:guid}", async (Guid id, HttpContext ctx, RestoreService svc, SessionService session) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -115,8 +102,6 @@ public static class HardDeleteEndpoints
 
         group.MapGet("/audit", async (HttpContext ctx, HardDeleteService svc, SessionService session, int page = 1, int pageSize = 100) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 

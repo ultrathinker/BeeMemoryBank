@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -12,13 +11,10 @@ public static class VersionEndpoints
 {
     public static void MapVersionEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/articles").WithTags("Versions");
+        var group = app.MapGroup("/api/articles").WithTags("Versions").RequireInternalKey();
 
         group.MapGet("/{id:guid}/versions", async (Guid id, HttpContext ctx, IArticleVersionRepository versionRepo, ArticleService svc) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             var article = await svc.GetMetadataAsync(id);
             if (article == null)
                 return Results.NotFound(new ErrorResponse($"Article {id} not found"));
@@ -37,8 +33,6 @@ public static class VersionEndpoints
 
         group.MapGet("/{id:guid}/versions/{versionNumber:int}", async (Guid id, int versionNumber, HttpContext ctx, IArticleVersionRepository versionRepo, SessionService session, ArticleService svc) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 

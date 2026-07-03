@@ -1,7 +1,6 @@
 using System.IO.Compression;
 using System.Text;
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -13,12 +12,10 @@ public static class FolderEndpoints
 {
     public static void MapFolderEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/folders").WithTags("Folders");
+        var group = app.MapGroup("/api/folders").WithTags("Folders").RequireInternalKey();
 
         group.MapPost("/", async (CreateFolderRequest req, FolderService folderSvc, SessionService session, HttpContext ctx, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(req.Path))
@@ -51,8 +48,6 @@ public static class FolderEndpoints
 
         group.MapGet("/download", async (ArticleService svc, SessionService session, HttpContext ctx, string path) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(path))
                 return Results.BadRequest(new ErrorResponse("Parameter 'path' is required"));
             if (!session.IsUnlocked)
@@ -92,8 +87,6 @@ public static class FolderEndpoints
 
         group.MapPatch("/", async (string path, RenameFolderRequest req, IFolderRepository folderRepo, FolderService folderSvc, HttpContext ctx, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(path))
                 return Results.BadRequest(new ErrorResponse("Parameter 'path' is required"));
 
@@ -147,8 +140,6 @@ public static class FolderEndpoints
 
         group.MapPost("/move", async (string path, MoveFolderRequest req, IFolderRepository folderRepo, FolderService folderSvc, HttpContext ctx, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(path))
                 return Results.BadRequest(new ErrorResponse("Parameter 'path' is required"));
 
@@ -192,8 +183,6 @@ public static class FolderEndpoints
 
         group.MapDelete("/", async (string path, ArticleService svc, IFolderRepository folderRepo, FolderService folderSvc, HttpContext ctx, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(path))
                 return Results.BadRequest(new ErrorResponse("Parameter 'path' is required"));
 

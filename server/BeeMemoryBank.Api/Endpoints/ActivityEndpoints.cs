@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -21,9 +20,6 @@ public static class ActivityEndpoints
             int offset = 0,
             Guid? articleId = null) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             limit = Math.Clamp(limit, 1, 200);
             offset = Math.Max(0, offset);
 
@@ -94,6 +90,6 @@ public static class ActivityEndpoints
 
             var responseTotal = isSuperadmin ? total : items.Count;
             return Results.Ok(new ActivityResponse(items, responseTotal, offset, limit));
-        }).WithTags("Activity");
+        }).RequireInternalKey().WithTags("Activity");
     }
 }

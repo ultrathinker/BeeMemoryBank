@@ -20,7 +20,10 @@ public class InternalKeyHandler(IHttpContextAccessor httpContextAccessor) : Dele
             request.Headers.TryAddWithoutValidation("X-User-Role", role);
 
         var userId = httpContextAccessor.HttpContext?.User.FindFirst("UserId")?.Value;
-        if (!string.IsNullOrEmpty(userId))
+        // F4: GetSecurityStampAsync (OnValidatePrincipal path) sets X-User-Id manually because the
+        // principal isn't populated yet. Skip re-adding it when the request already carries one, so
+        // we never send a duplicate X-User-Id header (which the API would reject as malformed).
+        if (!string.IsNullOrEmpty(userId) && !request.Headers.Contains("X-User-Id"))
             request.Headers.TryAddWithoutValidation("X-User-Id", userId);
 
         var displayName = httpContextAccessor.HttpContext?.User.FindFirst("DisplayName")?.Value;

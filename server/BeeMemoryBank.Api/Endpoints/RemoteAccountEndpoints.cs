@@ -1,4 +1,4 @@
-using BeeMemoryBank.Api.Middleware;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -15,12 +15,10 @@ public static class RemoteAccountEndpoints
 {
     public static void MapRemoteAccountEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/remote-accounts").WithTags("RemoteAccount");
+        var group = app.MapGroup("/api/remote-accounts").WithTags("RemoteAccount").RequireInternalKey();
 
         group.MapGet("/", async (HttpContext ctx, RemoteAccountService svc) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Remote accounts are node-wide configuration: any guest could
             // otherwise list owner-configured mirrors, delete subscriptions, or
             // mount a foreign owner's folder under their own writable tree.
@@ -46,8 +44,6 @@ public static class RemoteAccountEndpoints
 
         group.MapPost("/", async (CreateRemoteAccountRequest req, HttpContext ctx, RemoteAccountService svc, SessionService session) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Remote accounts are node-wide configuration: any guest could
             // otherwise list owner-configured mirrors, delete subscriptions, or
             // mount a foreign owner's folder under their own writable tree.
@@ -73,8 +69,6 @@ public static class RemoteAccountEndpoints
 
         group.MapDelete("/{id:guid}", async (Guid id, HttpContext ctx, RemoteAccountService svc) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Remote accounts are node-wide configuration: any guest could
             // otherwise list owner-configured mirrors, delete subscriptions, or
             // mount a foreign owner's folder under their own writable tree.
@@ -88,8 +82,6 @@ public static class RemoteAccountEndpoints
 
         group.MapGet("/{id:guid}/accessible", async (Guid id, HttpContext ctx, RemoteAccountService svc, SessionService session) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Remote accounts are node-wide configuration: any guest could
             // otherwise list owner-configured mirrors, delete subscriptions, or
             // mount a foreign owner's folder under their own writable tree.
@@ -116,8 +108,6 @@ public static class RemoteAccountEndpoints
 
         group.MapGet("/{id:guid}/subscriptions", async (Guid id, HttpContext ctx, RemoteAccountService svc) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Remote accounts are node-wide configuration: any guest could
             // otherwise list owner-configured mirrors, delete subscriptions, or
             // mount a foreign owner's folder under their own writable tree.
@@ -131,8 +121,6 @@ public static class RemoteAccountEndpoints
 
         group.MapPost("/subscriptions", async (AddRemoteSubscriptionRequest req, HttpContext ctx, RemoteAccountService svc, SessionService session) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Remote accounts are node-wide configuration: any guest could
             // otherwise list owner-configured mirrors, delete subscriptions, or
             // mount a foreign owner's folder under their own writable tree.
@@ -158,8 +146,6 @@ public static class RemoteAccountEndpoints
 
         group.MapDelete("/subscriptions/{id:guid}", async (Guid id, HttpContext ctx, RemoteAccountService svc) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             // Remote accounts are node-wide configuration: any guest could
             // otherwise list owner-configured mirrors, delete subscriptions, or
             // mount a foreign owner's folder under their own writable tree.

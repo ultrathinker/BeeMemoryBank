@@ -72,7 +72,11 @@ public class LoginModel(ApiClient api) : PageModel
             new(ClaimTypes.Name, result.Username!),
             new(ClaimTypes.Role, result.Role!),
             new("DisplayName", result.DisplayName ?? result.Username!),
-            new("UserId", result.UserId ?? "")
+            new("UserId", result.UserId ?? ""),
+            // W3 (Option A): node-local security stamp. OnValidatePrincipal revalidates this
+            // against the API periodically; a mismatch (password/role change, deletion) rejects
+            // the cookie. Absent claim (cookie minted before this feature) → reject → re-login.
+            new("SecurityStamp", result.SecurityStamp ?? "")
         };
         var identity = new ClaimsIdentity(claims, "BeeWebCookie");
         var principal = new ClaimsPrincipal(identity);

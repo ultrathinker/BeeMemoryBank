@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -11,7 +10,7 @@ public static class SessionEndpoints
 {
     public static void MapSessionEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/session").WithTags("Session");
+        var group = app.MapGroup("/api/session").WithTags("Session").RequireInternalKey();
 
         group.MapPost("/unlock", async (UnlockRequest req, SessionService session) =>
         {
@@ -23,7 +22,7 @@ public static class SessionEndpoints
                 ? session.LastMigrationResult!.SyntheticAdminUsername
                 : null;
             return Results.Ok(new UnlockResponse(true, migratedSynthetic));
-        }).RequireNonAgent();
+        }).RequireNonAgent().WithMetadata(new SkipInternalKey());
 
         group.MapPost("/login", async (LoginRequest req, SessionService session, UserService userService, IUserRepository userRepo) =>
         {
@@ -50,7 +49,7 @@ public static class SessionEndpoints
                     if (synthUser != null)
                         return Results.Ok(new LoginResponse(
                             synthUser.Id, synthUser.Username, synthUser.DisplayName,
-                            synthUser.Role, true, migration.SyntheticAdminUsername));
+                            synthUser.Role, true, migration.SyntheticAdminUsername, synthUser.SecurityStamp));
                 }
                 // Defensive: unlock succeeded but no user was created — fresh post-Setup nodes
                 // never reach here (Setup creates a user), so this is the bare-disk-no-init case.
@@ -80,8 +79,8 @@ public static class SessionEndpoints
                 ? session.LastMigrationResult!.SyntheticAdminUsername
                 : null;
 
-            return Results.Ok(new LoginResponse(user.Id, user.Username, user.DisplayName, user.Role, isUnlocked, migratedSynthetic));
-        });
+            return Results.Ok(new LoginResponse(user.Id, user.Username, user.DisplayName, user.Role, isUnlocked, migratedSynthetic, user.SecurityStamp));
+        }).WithMetadata(new SkipInternalKey());
 
         group.MapPost("/lock", (SessionService session, HttpContext ctx) =>
         {
@@ -90,14 +89,11 @@ public static class SessionEndpoints
             if (role != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Only superadmin can lock the server"), statusCode: 403);
 
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Only superadmin can lock the server"), statusCode: 403);
-
             session.Lock();
             return Results.Ok(new SessionStatusResponse(false));
         }).RequireNonAgent();
 
         group.MapGet("/status", (SessionService session) =>
-            Results.Ok(new SessionStatusResponse(session.IsUnlocked)));
+            Results.Ok(new SessionStatusResponse(session.IsUnlocked))).WithMetadata(new SkipInternalKey());
     }
 }

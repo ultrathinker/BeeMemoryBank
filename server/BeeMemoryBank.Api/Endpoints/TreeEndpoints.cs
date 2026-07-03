@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -13,8 +12,6 @@ public static class TreeEndpoints
     {
         app.MapGet("/api/tree", async (HttpContext ctx, TreeService svc, CallerScopeHolder scopeHolder) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             // Folders come from FolderRepository already filtered by ambient scope
             // to the navigable set (readable paths + ancestor stubs for AllowList).
@@ -38,12 +35,10 @@ public static class TreeEndpoints
             }
 
             return Results.Ok(tree);
-        }).WithTags("Tree");
+        }).RequireInternalKey().WithTags("Tree");
 
         app.MapGet("/api/tree/children", async (HttpContext ctx, TreeService svc, CallerScopeHolder scopeHolder, IConceptTagRepository conceptTagRepo, FolderAccessService folderAccess, IFolderRepository folderRepo, string path = "/") =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var scope = scopeHolder.Scope;
             if (!scope.IsNavigable(path))
@@ -81,14 +76,12 @@ public static class TreeEndpoints
                 isReadOnly,
                 isCurrentSystem);
             return Results.Ok(response);
-        }).WithTags("Tree");
+        }).RequireInternalKey().WithTags("Tree");
 
         // Lightweight endpoint UIs use to decorate folder lists and to gate
         // single-folder write actions without re-listing the whole tree.
         app.MapGet("/api/access/readonly-paths", async (HttpContext ctx, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var (userId, _, isSuperadmin) = CallerIdentity.Extract(ctx);
             if (isSuperadmin || userId is null)
@@ -96,12 +89,10 @@ public static class TreeEndpoints
 
             var (_, _, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
             return Results.Ok(new { paths = readOnlyPaths.OrderBy(p => p).ToArray() });
-        }).WithTags("Access");
+        }).RequireInternalKey().WithTags("Access");
 
         app.MapGet("/api/access/folder-permissions", async (HttpContext ctx, FolderAccessService folderAccess, string path) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(path))
                 return Results.BadRequest(new ErrorResponse("path is required"));
 
@@ -115,12 +106,10 @@ public static class TreeEndpoints
             var canRead = !FolderAccessService.IsAccessDenied(deny, allow, path);
             var isReadOnly = canRead && FolderAccessService.IsReadOnlyForCaller(ro, path);
             return Results.Ok(new { path, canRead, canWrite = canRead && !isReadOnly, isReadOnly });
-        }).WithTags("Access");
+        }).RequireInternalKey().WithTags("Access");
 
         app.MapGet("/api/folders/search", async (HttpContext ctx, IFolderRepository folderRepo, string? q = null, int limit = 12) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(q))
                 return Results.Ok(Array.Empty<object>());
@@ -136,6 +125,6 @@ public static class TreeEndpoints
             var hasMore = folders.Count > limit;
             var results = folders.Take(limit).Select(f => new { id = f.Id, path = f.Path }).ToList();
             return Results.Ok(new { folders = results, hasMore });
-        }).WithTags("Tree");
+        }).RequireInternalKey().WithTags("Tree");
     }
 }

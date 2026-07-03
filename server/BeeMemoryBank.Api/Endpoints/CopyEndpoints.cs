@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -19,8 +18,6 @@ public static class CopyEndpoints
             SessionService session,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(req.TargetFolderPath))
@@ -62,7 +59,7 @@ public static class CopyEndpoints
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
-        }).WithTags("Copy");
+        }).RequireInternalKey().WithTags("Copy");
 
         app.MapPost("/api/folders/{id:guid}/copy", async (
             Guid id,
@@ -73,8 +70,6 @@ public static class CopyEndpoints
             SessionService session,
             HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(req.TargetParentPath))
@@ -113,6 +108,6 @@ public static class CopyEndpoints
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
-        }).WithTags("Copy");
+        }).RequireInternalKey().WithTags("Copy");
     }
 }

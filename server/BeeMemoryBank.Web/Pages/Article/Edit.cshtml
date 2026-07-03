@@ -10,6 +10,15 @@
 @section HeadStyles {
 <link rel="stylesheet" href="/lib/easymde/easymde.min.css" />
 <link rel="stylesheet" href="/lib/tagify/tagify.css" />
+<style>
+    /* EasyMDE toolbar icons are rendered via local Shoelace <sl-icon> (bootstrap-icons),
+       replacing EasyMDE's FontAwesome <i> glyphs. Align them with the other toolbar buttons. */
+    .editor-toolbar sl-icon.bmb-mde-icon {
+        font-size: 1.05rem;
+        vertical-align: -0.15em;
+        pointer-events: none;
+    }
+</style>
 }
 
 <partial name="Shared/_Sidebar" />
@@ -246,6 +255,12 @@
     var easyMDE = new EasyMDE({
         element: document.getElementById('md-editor'),
         spellChecker: false,
+        // Toolbar icons are rendered via the app's local Shoelace <sl-icon> set (bootstrap-icons,
+        // vendored under wwwroot/lib/shoelace/assets/icons and used everywhere else in the UI).
+        // FontAwesome is fully removed: autoDownloadFontAwesome:false keeps EasyMDE from ever
+        // injecting its <link> to the maxcdn CDN, and the FA <i> glyphs it still builds are
+        // swapped for <sl-icon> immediately after construction (see replaceToolbarIcons below).
+        autoDownloadFontAwesome: false,
         autofocus: false,
         status: false,
         minHeight: '350px',
@@ -275,6 +290,41 @@
             return html.replace(/src="\/api\/media\//g, 'src="/api-proxy/media/');
         }
     });
+
+    // Swap every FontAwesome <i> EasyMDE built in the toolbar for a local <sl-icon>
+    // (bootstrap-icons via Shoelace). Only the inner <i> is replaced; the <button> and its
+    // click handler are left untouched, so all actions keep working.
+    (function replaceToolbarIcons() {
+        var faToBi = {
+            'fa-bold': 'type-bold',
+            'fa-italic': 'type-italic',
+            'fa-header': 'type-h1',
+            'fa-code': 'code-slash',
+            'fa-quote-left': 'blockquote-left',
+            'fa-list-ul': 'list-ul',
+            'fa-list-ol': 'list-ol',
+            'fa-link': 'link-45deg',
+            'fa-image': 'image',
+            'fa-table': 'table',
+            'fa-eye': 'eye',
+            'fa-columns': 'layout-split',
+            'fa-arrows-alt': 'arrows-fullscreen',
+            'fa-question-circle': 'question-circle'
+        };
+        var toolbar = document.querySelector('.editor-toolbar');
+        if (!toolbar) return;
+        toolbar.querySelectorAll('i').forEach(function(iEl) {
+            var mapped = null;
+            iEl.classList.forEach(function(cls) {
+                if (faToBi.hasOwnProperty(cls)) mapped = faToBi[cls];
+            });
+            if (!mapped) return; // defensive: leave unknown glyphs untouched
+            var icon = document.createElement('sl-icon');
+            icon.setAttribute('name', mapped);
+            icon.setAttribute('class', 'bmb-mde-icon');
+            iEl.replaceWith(icon);
+        });
+    })();
 
     // Handle paste (Ctrl+V with image from clipboard)
     easyMDE.codemirror.on('paste', function(cm, e) {

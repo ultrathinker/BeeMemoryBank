@@ -1,6 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
-using BeeMemoryBank.Api.Middleware;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -21,13 +21,16 @@ public static class InitEndpoints
 
     public static void MapInitEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/init").WithTags("Init");
+        var group = app.MapGroup("/api/init").WithTags("Init").RequireInternalKey();
 
+        // Intentionally anonymous: the Web startup middleware polls this before the node is
+        // initialized (and before any user exists) to decide whether to redirect to /Setup.
+        // Marked SkipInternalKey so the group filter does not gate it.
         group.MapGet("/status", async (InitializationService initSvc) =>
         {
             var initialized = await initSvc.IsInitializedAsync();
             return Results.Ok(new { initialized });
-        });
+        }).WithMetadata(new SkipInternalKey());
 
         // POST /api/init/standalone — first-time node initialization (new network).
         // AUDIT NOTE: This endpoint is only callable from the Web UI server (localhost or X-Internal-Key).
@@ -38,9 +41,6 @@ public static class InitEndpoints
             HttpContext ctx,
             InitializationService initSvc) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             await _initLock.WaitAsync();
             try
             {
@@ -91,9 +91,6 @@ public static class InitEndpoints
             IDbConnectionFactory dbConnFactory) =>
         {
             var logger = loggerFactory.CreateLogger("BeeMemoryBank.Api.InitEndpoints");
-
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             await _initLock.WaitAsync();
             try
@@ -406,9 +403,6 @@ public static class InitEndpoints
             DbConnectionFactory connFactory,
             MaintenanceModeService maintenance) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             var identity = await nodeRepo.GetAsync();
             if (identity == null)
                 return Results.BadRequest(new ErrorResponse("Node is not initialized — nothing to reset"));

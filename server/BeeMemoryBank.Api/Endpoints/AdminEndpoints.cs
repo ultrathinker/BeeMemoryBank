@@ -1,6 +1,5 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
@@ -11,7 +10,7 @@ public static class AdminEndpoints
 {
     public static void MapAdminEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/admin").WithTags("Admin");
+        var group = app.MapGroup("/api/admin").WithTags("Admin").RequireInternalKey();
 
         // backfill-media-links was a one-shot migration helper for an earlier schema change.
         // Disabled: leaving the rest of the /api/admin group registered so concept-tag-edge
@@ -20,8 +19,6 @@ public static class AdminEndpoints
         group.MapGet("/concept-tag-edge/stats", async (
             HttpContext ctx, SessionService session, IConceptTagRepository conceptTagRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -36,8 +33,6 @@ public static class AdminEndpoints
         group.MapPost("/concept-tag-edge/rebuild", async (
             HttpContext ctx, SessionService session, IConceptTagRepository conceptTagRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -143,8 +138,6 @@ public static class AdminEndpoints
     // 3-gate admin check shared by the update endpoints; returns null when authorized.
     private static IResult? RequireSuperadmin(HttpContext ctx, SessionService session)
     {
-        if (!InternalKeyValidator.Validate(ctx))
-            return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
         if (!session.IsUnlocked)
             return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
         if (!CallerIdentity.Extract(ctx).IsSuperadmin)

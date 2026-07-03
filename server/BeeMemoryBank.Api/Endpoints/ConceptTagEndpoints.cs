@@ -1,5 +1,4 @@
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -15,8 +14,6 @@ public static class ConceptTagEndpoints
         // GET /api/concept-tags?q=...&limit=N — list concept tags; optional substring filter
         app.MapGet("/api/concept-tags", async (HttpContext ctx, ConceptTagService conceptTagService, IConceptTagRepository conceptTagRepo, string? q = null, int limit = 500) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             limit = Math.Clamp(limit, 1, 500);
 
@@ -28,13 +25,11 @@ public static class ConceptTagEndpoints
 
             var tags = await conceptTagRepo.GetAllAsync();
             return Results.Ok(tags.Select(t => new { name = t.Name, articleCount = t.ArticleCount }));
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // GET /api/concept-tags/graph — get concept tag connections for graph visualization
         app.MapGet("/api/concept-tags/graph", async (HttpContext ctx, IConceptTagRepository conceptTagRepo, IMemoryCache cache) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var userKey = ctx.User.Identity?.Name ?? "anon";
             var cacheKey = $"concept_graph_{userKey}";
@@ -44,13 +39,11 @@ public static class ConceptTagEndpoints
                 cache.Set(cacheKey, edges, TimeSpan.FromMinutes(5));
             }
             return Results.Ok(edges.Select(e => new { source = e.Source, target = e.Target, weight = e.Weight }));
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // GET /api/concept-tags/graph/home — home graph view with base + pulse node groups
         app.MapGet("/api/concept-tags/graph/home", async (HttpContext ctx, IConceptTagRepository conceptTagRepo, IMemoryCache cache) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var userKey = ctx.User.Identity?.Name ?? "anon";
             var cacheKey = $"concept_graph_home_{userKey}";
@@ -64,13 +57,11 @@ public static class ConceptTagEndpoints
                 nodes = data.Nodes.Select(n => new { name = n.Name, articleCount = n.ArticleCount, group = n.Group, totalNeighbors = n.TotalNeighbors }),
                 edges = data.Edges.Select(e => new { source = e.Source, target = e.Target, weight = e.Weight })
             });
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // GET /api/concept-tags/graph/search?q=...&depth=1..3&maxNodes=... — search graph with BFS expansion
         app.MapGet("/api/concept-tags/graph/search", async (HttpContext ctx, IConceptTagRepository conceptTagRepo, string? q, int depth = 2, int maxNodes = 100) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(q))
                 return Results.BadRequest(new ErrorResponse("q is required"));
@@ -84,13 +75,11 @@ public static class ConceptTagEndpoints
                 nodes = data.Nodes.Select(n => new { name = n.Name, articleCount = n.ArticleCount, group = n.Group, totalNeighbors = n.TotalNeighbors }),
                 edges = data.Edges.Select(e => new { source = e.Source, target = e.Target, weight = e.Weight })
             });
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // GET /api/concept-tags/graph/neighbors — get neighbors for a specific concept tag
         app.MapGet("/api/concept-tags/graph/neighbors", async (string tag, HttpContext ctx, IConceptTagRepository conceptTagRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(tag))
                 return Results.BadRequest(new ErrorResponse("tag is required"));
@@ -102,13 +91,11 @@ public static class ConceptTagEndpoints
                 nodes = nodeNames,
                 edges = edges.Select(e => new { source = e.Source, target = e.Target, weight = e.Weight })
             });
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // GET /api/articles/{id}/concept-tags — get concept tags for an article
         app.MapGet("/api/articles/{id:guid}/concept-tags", async (Guid id, HttpContext ctx, IConceptTagRepository conceptTagRepo, ArticleService articleService) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var article = await articleService.GetMetadataAsync(id);
             if (article == null)
@@ -116,13 +103,11 @@ public static class ConceptTagEndpoints
 
             var conceptTags = await conceptTagRepo.GetByArticleIdAsync(id);
             return Results.Ok(new { conceptTags });
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // GET /api/concept-tags/{name}/articles — get articles by concept tag
         app.MapGet("/api/concept-tags/{name}/articles", async (string name, HttpContext ctx, ConceptTagService conceptTagService) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(name))
                 return Results.BadRequest(new ErrorResponse("Name required"));
@@ -130,13 +115,11 @@ public static class ConceptTagEndpoints
             var articles = await conceptTagService.SearchByConceptAsync(name);
 
             return Results.Ok(new { articles = articles.Select(a => new { id = a.Id, title = a.Title, treePath = a.TreePath }) });
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // PUT /api/articles/{id}/concept-tags — set concept tags for an article
         app.MapPut("/api/articles/{id:guid}/concept-tags", async (Guid id, HttpContext ctx, ConceptTagService conceptTagService, IConceptTagRepository conceptTagRepo, ArticleService articleService, FolderAccessService folderAccess, SetConceptTagsRequest req) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var article = await articleService.GetMetadataAsync(id);
             if (article == null)
@@ -157,13 +140,11 @@ public static class ConceptTagEndpoints
             await conceptTagService.SetForArticleAsync(id, req.ConceptTags);
             var conceptTags = await conceptTagRepo.GetByArticleIdAsync(id);
             return Results.Ok(new { conceptTags });
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // GET /api/articles/{id}/related — get related articles via shared concept tags
         app.MapGet("/api/articles/{id:guid}/related", async (Guid id, HttpContext ctx, IConceptTagRepository conceptTagRepo, ArticleService articleService) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var article = await articleService.GetMetadataAsync(id);
             if (article == null)
@@ -178,13 +159,11 @@ public static class ConceptTagEndpoints
                 sharedConcepts = r.SharedConcepts,
                 strength = r.Strength
             }));
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // PUT /api/concept-tags/{name} — rename globally
         app.MapPut("/api/concept-tags/{name}", async (string name, RenameTagRequest req, HttpContext ctx, ConceptTagService conceptTagService) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var caller = CallerIdentity.Extract(ctx);
             if (!caller.IsSuperadmin)
@@ -202,13 +181,11 @@ public static class ConceptTagEndpoints
             {
                 return Results.Conflict(new ErrorResponse(ex.Message));
             }
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // POST /api/concept-tags/merge — merge source into target
         app.MapPost("/api/concept-tags/merge", async (MergeConceptTagRequest req, HttpContext ctx, ConceptTagService conceptTagService) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var caller = CallerIdentity.Extract(ctx);
             if (!caller.IsSuperadmin)
@@ -226,13 +203,11 @@ public static class ConceptTagEndpoints
             {
                 return Results.Conflict(new ErrorResponse(ex.Message));
             }
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
 
         // DELETE /api/concept-tags/{name} — delete globally
         app.MapDelete("/api/concept-tags/{name}", async (string name, HttpContext ctx, ConceptTagService conceptTagService) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var caller = CallerIdentity.Extract(ctx);
             if (!caller.IsSuperadmin)
@@ -247,7 +222,7 @@ public static class ConceptTagEndpoints
             {
                 return Results.NotFound(new ErrorResponse(ex.Message));
             }
-        }).WithTags("ConceptTags");
+        }).RequireInternalKey().WithTags("ConceptTags");
     }
 }
 

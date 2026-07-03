@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
@@ -13,12 +12,10 @@ public static class ArticleEndpoints
 {
     public static void MapArticleEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/articles").WithTags("Articles");
+        var group = app.MapGroup("/api/articles").WithTags("Articles").RequireInternalKey();
 
         group.MapGet("/", async (HttpContext ctx, ArticleService svc, IConceptTagRepository conceptTagRepo, string? treePath = null) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var articles = await svc.ListAsync(treePath);
 
@@ -35,8 +32,6 @@ public static class ArticleEndpoints
 
         group.MapGet("/{id:guid}", async (Guid id, HttpContext ctx, ArticleService svc, IConceptTagRepository conceptTagRepo) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var article = await svc.GetMetadataAsync(id);
             if (article == null)
@@ -51,8 +46,6 @@ public static class ArticleEndpoints
 
         group.MapGet("/{id:guid}/content", async (Guid id, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -78,8 +71,6 @@ public static class ArticleEndpoints
 
         group.MapPost("/", async (CreateArticleRequest req, ArticleService svc, ConceptTagService conceptTagSvc, SessionService session, HttpContext ctx, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -119,8 +110,6 @@ public static class ArticleEndpoints
 
         group.MapPut("/{id:guid}", async (Guid id, UpdateArticleRequest req, ArticleService svc, ConceptTagService conceptTagSvc, IConceptTagRepository conceptTagRepo, SessionService session, HttpContext ctx, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (req.Content != null && !session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -225,8 +214,6 @@ public static class ArticleEndpoints
 
         group.MapDelete("/{id:guid}", async (Guid id, ArticleService svc, HttpContext ctx, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
             if (!isSuperadmin)
@@ -248,8 +235,6 @@ public static class ArticleEndpoints
 
         group.MapPost("/{id:guid}/move", async (Guid id, MoveArticleRequest req, ArticleService svc, HttpContext ctx, FolderAccessService folderAccess) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
 
             var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
             if (!isSuperadmin)
@@ -342,8 +327,6 @@ public static class ArticleEndpoints
         // can still view a protected article they have access to.
         group.MapPost("/{id:guid}/unlock", async (Guid id, UnlockArticleRequest req, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -379,8 +362,6 @@ public static class ArticleEndpoints
         // without a re-prompt. On a cache miss it returns unlocked=false (the Edit page shows the gate).
         group.MapGet("/{id:guid}/edit-content", async (Guid id, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -431,8 +412,6 @@ public static class ArticleEndpoints
     private static async Task<(Article? meta, IResult? error)> WriteGateAsync(
         Guid id, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess)
     {
-        if (!InternalKeyValidator.Validate(ctx))
-            return (null, Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403));
         if (!session.IsUnlocked)
             return (null, Results.Json(new ErrorResponse("Session is locked"), statusCode: 403));
 

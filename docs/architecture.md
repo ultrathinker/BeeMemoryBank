@@ -114,7 +114,7 @@ Core ← Crypto
 Core, Storage, Crypto ← Sync
 Core, Storage, Crypto, Sync ← Api
 Core, Storage, Sync ← Cli
-(Web has no dependencies on other modules — HTTP calls to Api only)
+Core ← Web (shared DTO/enums only; no business logic)
 ```
 
 No circular dependencies. Core is the kernel with no external dependencies.

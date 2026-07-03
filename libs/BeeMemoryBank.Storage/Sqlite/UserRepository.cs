@@ -10,7 +10,8 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
     private const string SelectColumns =
         @"id AS Id, username AS Username, display_name AS DisplayName,
           password_hash AS PasswordHash, role AS Role, key_slot_id AS KeySlotId,
-          is_active AS IsActive, created_at AS CreatedAt, last_login_at AS LastLoginAt";
+          is_active AS IsActive, created_at AS CreatedAt, last_login_at AS LastLoginAt,
+          security_stamp AS SecurityStamp";
 
     public async Task<User?> GetByUsernameAsync(string username)
     {
@@ -37,10 +38,14 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
 
     public async Task<int> CreateAsync(User user)
     {
+        // Stamp every new user immediately so the login cookie has a claim to validate against.
+        if (string.IsNullOrEmpty(user.SecurityStamp))
+            user.SecurityStamp = GenerateStamp();
+
         using var conn = OpenConnection();
         return await conn.ExecuteScalarAsync<int>(
-            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, created_at, last_login_at)
-              VALUES (@Username, @DisplayName, @PasswordHash, @Role, @KeySlotId, @IsActive, @CreatedAt, @LastLoginAt);
+            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, created_at, last_login_at, security_stamp)
+              VALUES (@Username, @DisplayName, @PasswordHash, @Role, @KeySlotId, @IsActive, @CreatedAt, @LastLoginAt, @SecurityStamp);
               SELECT last_insert_rowid()",
             user);
     }
@@ -90,5 +95,32 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
         await conn.ExecuteAsync(
             "UPDATE tbl_user SET key_slot_id = @newSlotId WHERE key_slot_id = @oldSlotId",
             new { oldSlotId, newSlotId });
+    }
+
+    // NOTE: no is_active filter — deletion bumps the stamp, so a pre-deletion cookie must
+    // still resolve here to be rejected on mismatch. Only a truly absent row returns null.
+    public async Task<string?> GetSecurityStampAsync(int id)
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<string?>(
+            "SELECT security_stamp FROM tbl_user WHERE id = @id",
+            new { id });
+    }
+
+    public async Task<string> BumpSecurityStampAsync(int id)
+    {
+        var stamp = GenerateStamp();
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_user SET security_stamp = @stamp WHERE id = @id",
+            new { stamp, id });
+        return stamp;
+    }
+
+    /// <summary>32 lowercase hex chars, matching the migration's lower(hex(randomblob(16))).</summary>
+    private static string GenerateStamp()
+    {
+        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

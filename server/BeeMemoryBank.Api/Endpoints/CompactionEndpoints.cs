@@ -1,5 +1,5 @@
 using System.Text.Json;
-using BeeMemoryBank.Api.Middleware;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Services;
@@ -12,13 +12,10 @@ public static class CompactionEndpoints
 {
     public static void MapCompactionEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/admin/compact").WithTags("Compaction");
+        var group = app.MapGroup("/api/admin/compact").WithTags("Compaction").RequireInternalKey();
 
         group.MapGet("/preview", async (CompactionService svc, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             var preview = await svc.PreviewAsync();
             return Results.Ok(preview);
         });
@@ -26,8 +23,6 @@ public static class CompactionEndpoints
         group.MapPost("/", async (CompactionRequest req, CompactionService svc,
             SessionService session, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -44,9 +39,6 @@ public static class CompactionEndpoints
 
         group.MapGet("/checkpoints", async (DbConnectionFactory connFactory, HttpContext ctx) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
-
             using var conn = connFactory.CreateConnection();
             var rows = await conn.QueryAsync<(long SequenceNum, string Payload, DateTime CreatedAt, Guid NodeId)>(
                 @"SELECT sequence_num, payload, created_at, node_id

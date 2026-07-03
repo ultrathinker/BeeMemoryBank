@@ -1,6 +1,9 @@
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.Extensions.Caching.Memory;
+using System.Text;
 
 // If a published bundle sits next to the binary (wwwroot present), anchor ContentRoot
 // there so static files resolve regardless of the launcher's cwd. Without this,
@@ -45,6 +48,9 @@ builder.Services.AddHttpClient<ApiClient>(client =>
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddRazorPages();
+// W3 (Option A): Web-side cache for security-stamp lookups so OnValidatePrincipal does not
+// round-trip the API on every authenticated request. TTL 5 minutes bounds staleness.
+builder.Services.AddMemoryCache();
 
 builder.Services.AddAuthentication("BeeWebCookie")
     .AddCookie("BeeWebCookie", options =>
@@ -60,8 +66,92 @@ builder.Services.AddAuthentication("BeeWebCookie")
         // Development can still log in over http://localhost because Chrome
         // exempts localhost from the Secure cookie restriction.
         options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
-        options.ExpireTimeSpan = TimeSpan.FromDays(7);
-        options.SlidingExpiration = true;
+        // W3 (Option B): short, NON-sliding cookie lifetime. A stolen/leaked cookie is
+        // good for at most 8h and never refreshes, bounding the window for a stale
+        // credential (deleted/demoted/password-reset user) to hours, not days. This is
+        // the immediate ceiling on its own; Option A (security-stamp revalidation) adds
+        // per-event revocation on top.
+        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.SlidingExpiration = false;
+
+        // W3 (Option A): revalidate the cookie's embedded security stamp against the API.
+        // Runs on every AUTHENTICATED request (static files run before auth, so never on
+        // CSS/JS). The stamp lookup is cached per-user for 5 minutes (IMemoryCache) so the
+        // hot path normally hits memory. Behaviour rule (F2): the lookup distinguishes three
+        // outcomes so an authoritative 404 is not conflated with a transport error:
+        //   * absent stamp claim (cookie from before this feature) → REJECT → forced re-login;
+        //   * stamp mismatch (password/role change, deletion) → REJECT;
+        //   * HTTP 404 / user definitively gone → REJECT (authoritative answer, not fail-open);
+        //   * API unreachable / 5xx / lookup throws → FAIL OPEN (an API hiccup must not log out
+        //     the whole site; the 8h cookie ceiling already bounds exposure).
+        options.Events = new CookieAuthenticationEvents
+        {
+            OnValidatePrincipal = async context =>
+            {
+                var principal = context.Principal;
+                var stampClaim = principal?.FindFirst("SecurityStamp")?.Value;
+                // Absent claim → old cookie from before this feature → reject (safe, one-time).
+                if (string.IsNullOrEmpty(stampClaim))
+                {
+                    context.RejectPrincipal();
+                    return;
+                }
+
+                var userId = principal?.FindFirst("UserId")?.Value;
+                if (string.IsNullOrEmpty(userId) || !int.TryParse(userId, out var userIdInt))
+                {
+                    context.RejectPrincipal();
+                    return;
+                }
+
+                var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
+                var api = context.HttpContext.RequestServices.GetRequiredService<ApiClient>();
+                var logger = context.HttpContext.RequestServices
+                    .GetRequiredService<ILogger<Program>>();
+
+                var cacheKey = $"security_stamp_{userId}";
+                if (!cache.TryGetValue(cacheKey, out string? currentStamp) || currentStamp is null)
+                {
+                    SecurityStampLookup lookup;
+                    try
+                    {
+                        lookup = await api.GetSecurityStampAsync(userIdInt);
+                    }
+                    catch (Exception ex)
+                    {
+                        // FAIL OPEN: do not reject on unexpected errors.
+                        logger.LogWarning(ex,
+                            "Security-stamp lookup failed for user {UserId}; allowing request (fail-open).", userId);
+                        return;
+                    }
+
+                    // F2: HTTP 404 / definitive "user no longer exists" → REJECT. Unlike a transport
+                    // error, a 404 is an authoritative answer from the API, so failing open would
+                    // wrongly keep a deleted/demoted user's session alive. Not cached (next request
+                    // would just reject again anyway).
+                    if (lookup.Outcome == SecurityStampLookupOutcome.NotFound)
+                    {
+                        logger.LogWarning("Security-stamp lookup 404 for user {UserId}; rejecting principal.", userId);
+                        context.RejectPrincipal();
+                        return;
+                    }
+
+                    // Transport error / 5xx / unreachable / malformed body → FAIL OPEN. Do NOT log
+                    // everyone out on an API hiccup; the 8h cookie ceiling already bounds exposure.
+                    // The 5-min cache is NOT populated so the next request retries the lookup.
+                    if (lookup.Outcome != SecurityStampLookupOutcome.Found || string.IsNullOrEmpty(lookup.Stamp))
+                        return;
+
+                    currentStamp = lookup.Stamp;
+                    // Only cache successful (200) lookups for the TTL.
+                    cache.Set(cacheKey, currentStamp,
+                        new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) });
+                }
+
+                if (!string.Equals(stampClaim, currentStamp, StringComparison.Ordinal))
+                    context.RejectPrincipal();
+            }
+        };
     });
 
 builder.Services.AddAuthorization();
@@ -127,11 +217,13 @@ app.Use(async (ctx, next) =>
     headers["Content-Security-Policy"] =
         "default-src 'self'; " +
         "script-src 'self' 'unsafe-inline'; " +
-        // maxcdn.bootstrapcdn.com — EasyMDE injects a <link> for FontAwesome
-        // from this CDN when its toolbar renders. Until we self-host, allow it.
-        "style-src 'self' 'unsafe-inline' https://maxcdn.bootstrapcdn.com; " +
+        // W5b: removed https://maxcdn.bootstrapcdn.com (EasyMDE's FontAwesome CDN). EasyMDE is
+        // now pointed away from the CDN via autoDownloadFontAwesome:false (Article/Edit.cshtml).
+        // The toolbar icon GLYPHS therefore do not render until a self-hosted FontAwesome subset
+        // is vendored under wwwroot/lib/fontawesome — see the TODO in Article/Edit.cshtml.
+        "style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data: blob:; " +
-        "font-src 'self' data: https://maxcdn.bootstrapcdn.com; " +
+        "font-src 'self' data:; " +
         // Shoelace icons are served as data: URIs and fetched (not <img>'d),
         // so they hit connect-src — must allow data: there.
         "connect-src 'self' data:; " +
@@ -306,36 +398,11 @@ app.MapGet("/api-proxy/search", async (ApiClient api, string? q = null, bool con
 }).RequireAuthorization();
 
 // Concept tag proxy routes
-app.MapGet("/api-proxy/concept-tags", async (ApiClient api, string? q = null, int limit = 500) =>
-{
-    var tags = await api.GetAllConceptTagsAsync(q, limit);
-    return tags != null ? Results.Ok(tags) : Results.StatusCode(502);
-}).RequireAuthorization();
-
-app.MapGet("/api-proxy/concept-tags/graph", async (ApiClient api) =>
-{
-    var edges = await api.GetConceptGraphAsync();
-    return edges != null ? Results.Ok(edges) : Results.StatusCode(502);
-}).RequireAuthorization();
-
-app.MapGet("/api-proxy/concept-tags/graph/home", async (ApiClient api) =>
-{
-    var data = await api.GetConceptGraphHomeAsync();
-    return data.HasValue ? Results.Ok(data.Value) : Results.StatusCode(502);
-}).RequireAuthorization();
-
-app.MapGet("/api-proxy/concept-tags/graph/search", async (ApiClient api, string? q, int depth = 2, int maxNodes = 200) =>
-{
-    if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest(new { error = "q required" });
-    var data = await api.GetConceptGraphSearchAsync(q, depth, maxNodes);
-    return data.HasValue ? Results.Ok(data.Value) : Results.StatusCode(502);
-}).RequireAuthorization();
-
-app.MapGet("/api-proxy/concept-tags/graph/neighbors", async (ApiClient api, string tag) =>
-{
-    var result = await api.GetConceptGraphNeighborsAsync(tag);
-    return result != null ? Results.Ok(result) : Results.StatusCode(502);
-}).RequireAuthorization();
+// W1 PILOT: the concept-tags GET family (list, graph, graph/home, graph/search,
+// graph/neighbors, {name}/articles) is now served by the catch-all forwarder via the
+// ProxyRouteTable "concept-tags" entry — see the catch-all registered before app.Run().
+// The superadmin MUTATIONS below stay as explicit routes (they win over the catch-all and
+// keep their RequireAuthorization("superadmin") gate).
 
 app.MapPut("/api-proxy/concept-tags/{name}", async (string name, HttpContext ctx, ApiClient api) =>
 {
@@ -365,12 +432,6 @@ app.MapGet("/api-proxy/article/{id:guid}/concept-tags", async (Guid id, ApiClien
 {
     var tags = await api.GetArticleConceptTagsAsync(id);
     return tags != null ? Results.Ok(tags) : Results.StatusCode(502);
-}).RequireAuthorization();
-
-app.MapGet("/api-proxy/concept-tags/{name}/articles", async (string name, ApiClient api) =>
-{
-    var articles = await api.GetArticlesByConceptTagAsync(name);
-    return articles != null ? Results.Ok(articles) : Results.StatusCode(502);
 }).RequireAuthorization();
 
 app.MapPut("/api-proxy/article/{id:guid}/concept-tags", async (Guid id, HttpContext ctx, ApiClient api) =>
@@ -451,14 +512,16 @@ app.MapGet("/api-proxy/session/status", async (ApiClient api) =>
 
 app.MapGet("/api-proxy/sync/status", async (ApiClient api) =>
 {
-    var result = await api.GetSyncStatusAsync();
-    return result != null ? Results.Ok(result) : Results.StatusCode(502);
+    // W2: pass upstream status + body through verbatim (was: null → 502, hiding real errors).
+    var f = await api.ForwardGetAsync("sync/status");
+    return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
 app.MapGet("/api-proxy/sync/delivery-status", async (ApiClient api) =>
 {
-    var result = await api.GetAsync("sync/delivery-status");
-    return result != null ? Results.Ok(result) : Results.StatusCode(502);
+    // W2: pass upstream status + body through verbatim (was: null → 502).
+    var f = await api.ForwardGetAsync("sync/delivery-status");
+    return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
 app.MapPost("/api-proxy/folders", async (HttpContext ctx, ApiClient api) =>
@@ -726,6 +789,15 @@ app.MapGet("/api-proxy/hard-delete/audit", async (int page, int pageSize, ApiCli
 app.MapRazorPages();
 app.MapGet("/", () => Results.Redirect("/Tree"));
 
+// POST /api-proxy/init/reset — INTENTIONALLY ANONYMOUS (no RequireAuthorization).
+// Purpose: lockout / forgotten-password recovery. When an admin is locked out of the
+// vault (forgotten master password) they cannot authenticate, so this route must be
+// reachable from the locked /Login screen to wipe-and-rejoin the node.
+// The REAL security control is API-side: POST /api/init/reset requires the master
+// password in the body (SessionService.UnlockAsync) and refuses if it is wrong. The
+// Web layer adds nothing here — it only forwards the master password. Keeping this
+// route anonymous is deliberate; do not add RequireAuthorization without breaking
+// the only recovery path for a forgotten master password.
 app.MapPost("/api-proxy/init/reset", async (HttpContext ctx, ApiClient api) =>
 {
     var req = await ctx.Request.ReadFromJsonAsync<ResetProxyRequest>();
@@ -782,6 +854,57 @@ app.MapGet("/api-proxy/maintenance", async (ApiClient api) =>
 //     var (ok, body, status) = await api.PostRawAsync("admin/backfill-media-links", "");
 //     return Results.Content(body ?? "", "application/json", null, status);
 // }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
+// ─── W1 catch-all forwarder (registered LAST so explicit routes win) ──────────
+// Routes /api-proxy/{**path} requests that are NOT matched by an explicit hand-written route
+// through the deny-by-default ProxyRouteTable. Identity headers (X-Internal-Key / X-User-*) are
+// injected automatically by InternalKeyHandler, so the forwarder only expresses ROLE gating and
+// STREAMING. Pilot: only the concept-tags GET family is in the table. Unknown prefix → 404.
+app.MapMethods("/api-proxy/{**path}", new[] { "GET", "POST", "PUT", "DELETE", "PATCH" },
+    async (string path, HttpContext ctx, ApiClient api) =>
+{
+    var entry = ProxyRouteTable.Match(path, out var matchedPrefix);
+    if (entry is null)
+        return Results.NotFound(); // deny-by-default: unknown prefix → 404, never a blind forward
+
+    // Role gate — preserves the per-path RequireAuthorization("superadmin") semantics that a
+    // single catch-all registration cannot otherwise attach per route.
+    if (entry.RequiredRole == "superadmin" && !ctx.User.IsInRole("superadmin"))
+        return Results.Json(new { error = "Forbidden — superadmin only" }, statusCode: 403);
+
+    var upstreamPath = ProxyRouteTable.BuildUpstreamPath(path, matchedPrefix, entry)
+                        + ctx.Request.QueryString.Value;
+    var method = new HttpMethod(ctx.Request.Method);
+    var upstreamReq = new HttpRequestMessage(method, upstreamPath);
+
+    // Forward a body when present (POST/PUT/PATCH). The pilot is GET-only; the general path is
+    // kept so the table can grow into mutation routes in a supervised follow-up.
+    if (ctx.Request.ContentLength is > 0 || ctx.Request.Headers.ContainsKey("Transfer-Encoding"))
+    {
+        upstreamReq.Content = new StreamContent(ctx.Request.Body);
+        if (!string.IsNullOrEmpty(ctx.Request.ContentType))
+            upstreamReq.Content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue(ctx.Request.ContentType);
+    }
+
+    HttpResponseMessage upstream;
+    try
+    {
+        upstream = await api.SendForwardAsync(upstreamReq);
+    }
+    catch
+    {
+        return Results.StatusCode(502); // API unreachable
+    }
+
+    using (upstream)
+    {
+        // Status + content-type + body passthrough — this is the W2 fix, for free.
+        var body = await upstream.Content.ReadAsStringAsync();
+        var contentType = upstream.Content.Headers.ContentType?.MediaType ?? "application/json";
+        return Results.Content(body, contentType, Encoding.UTF8, (int)upstream.StatusCode);
+    }
+}).RequireAuthorization();
 
 app.Run();
 

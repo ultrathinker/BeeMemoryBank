@@ -149,6 +149,10 @@ public class UserService(
         }
 
         await userRepo.UpdateAsync(user);
+        // Bump the security stamp: any outstanding Web cookie (this user's other sessions,
+        // and this session too) is rejected on next revalidation. Self-service password
+        // change therefore forces a re-login — acceptable per the W3 design.
+        await userRepo.BumpSecurityStampAsync(userId);
         await RevokeRemoteTokensAsync(userId);
     }
 
@@ -196,6 +200,8 @@ public class UserService(
         }
 
         await userRepo.UpdateAsync(user);
+        // Admin reset bumps the stamp — logs out every session for this user (intended).
+        await userRepo.BumpSecurityStampAsync(userId);
         await RevokeRemoteTokensAsync(userId);
     }
 
@@ -221,6 +227,11 @@ public class UserService(
                     "Cannot delete the last user with a key slot — this would permanently lock the vault.");
             await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
         }
+
+        // Bump the stamp so the deleted user's outstanding Web cookie is rejected on next
+        // revalidation. Done before the soft-delete so it lands even though DeleteAsync only
+        // flips is_active (the stamp lookup ignores is_active, so the bumped value still resolves).
+        await userRepo.BumpSecurityStampAsync(userId);
 
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         for (int attempt = 0; attempt < 3; attempt++)
@@ -248,6 +259,7 @@ public class UserService(
 
         user.DisplayName = displayName.Trim();
 
+        bool roleChanged = false;
         if (role != null && role != user.Role)
         {
             var validRoles = new[] { UserRoles.Superadmin, UserRoles.User };
@@ -266,6 +278,7 @@ public class UserService(
             }
 
             user.Role = role;
+            roleChanged = true;
 
             var hadKeySlot = oldRole == UserRoles.Superadmin;
             var needsKeySlot = role == UserRoles.Superadmin;
@@ -316,6 +329,11 @@ public class UserService(
         }
 
         await userRepo.UpdateAsync(user);
+
+        // A role change (promote/demote) is identity-affecting: bump the stamp so the
+        // user's existing cookie is revalidated against the new role promptly.
+        if (roleChanged)
+            await userRepo.BumpSecurityStampAsync(userId);
     }
 
     public static void ValidatePassword(string password)

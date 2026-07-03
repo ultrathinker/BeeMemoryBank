@@ -1,4 +1,4 @@
-using BeeMemoryBank.Api.Middleware;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -13,8 +13,6 @@ public static class ObsidianImportEndpoints
             IFormFile file,
             HttpContext ctx, SessionService session, ObsidianImportService importService) =>
         {
-            if (!InternalKeyValidator.Validate(ctx))
-                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -36,6 +34,7 @@ public static class ObsidianImportEndpoints
             }
         }).DisableAntiforgery()
           .WithMetadata(new RequestSizeLimitAttribute(500L * 1024 * 1024))
+          .RequireInternalKey()
           .WithTags("Import");
     }
 }
