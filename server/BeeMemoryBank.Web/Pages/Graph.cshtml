@@ -675,9 +675,9 @@
             d.fx = d.x; d.fy = d.y;
         }
         function dragged(event, d) {
-            // Reheat only once the pointer actually moves. Gentle target (0.1 vs the old
-            // 0.3) so a drag settles neighbors softly instead of flinging the tree.
-            if (!event.active) simulation.alphaTarget(0.1).restart();
+            // Reheat only once the pointer actually moves (so a plain click doesn't nudge
+            // the layout), but at full strength so dragging stays as responsive as before.
+            if (!event.active) simulation.alphaTarget(0.3).restart();
             d.fx = event.x; d.fy = event.y;
         }
         function dragended(event, d) {
