@@ -264,6 +264,13 @@
         let nodes = [];
         let links = [];
         const initialFocus = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.FocusConcept));
+        let focusedNodeId = null;
+
+        let hiddenMatches = [];        // match node data not yet shown
+        const GREEN_MORE_ID = '__more_matches__';
+        const NEIGH_MORE_PREFIX = '__more_neigh__';   // aggregator id = prefix + parentNodeId
+        const expandedNeighborData = new Map();        // parentName -> full neighbor list [{name, weight}] once fetched
+        let allSearchLinks = [];
 
         const filterInput = document.getElementById('concept-filter');
         let allConcepts = [];
@@ -409,6 +416,8 @@
             search: [
                 { color: '#10b981', label: 'Match — your query' },
                 { color: '#94a3b8', label: 'Neighbor — linked to matches' },
+                { color: '#86efac', label: 'More matches — click to reveal 10 more' },
+                { color: '#cbd5e1', label: 'More neighbors — click to reveal 10 more' },
                 { color: 'transparent', border: 'var(--sl-color-warning-500)', label: 'Dashed — has hidden neighbors' },
             ],
             full: [
@@ -428,7 +437,9 @@
         }
 
         function nodeColor(d) {
-            if (d.name === initialFocus) return '#f59e0b';
+            if (focusedNodeId && d.id === focusedNodeId) return '#f59e0b';
+            if (d.group === 'more-match') return '#86efac';
+            if (d.group === 'more-neigh') return '#cbd5e1';
             if (d.group === 'base') return '#3b82f6';
             if (d.group === 'pulse') return '#f97316';
             if (d.group === 'match') return '#10b981';
@@ -455,7 +466,12 @@
         function isTruncated(d) { return hiddenNeighbors(d) > 0; }
 
         function applyTruncationClass() {
-            if (node) node.classed('truncated', isTruncated);
+            if (!node) return;
+            if (currentMode === 'search') {
+                node.classed('truncated', false);
+                return;
+            }
+            node.classed('truncated', d => d.synthetic ? false : isTruncated(d));
         }
 
         function setPlaceholder(html) {
@@ -495,6 +511,7 @@
         async function loadMode(mode, queryOverride) {
             destroyScene();
             currentMode = mode;
+            focusedNodeId = null;
             updateModeButtons();
             placeholderLoading();
             try {
@@ -511,6 +528,7 @@
                         return;
                     }
                     filterInput.value = q;
+                    if (queryOverride != null) focusedNodeId = queryOverride;
                     const depth = 2;
                     const r = await fetch('/api-proxy/concept-tags/graph/search?q=' + encodeURIComponent(q) + '&depth=' + depth + '&maxNodes=200');
                     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -533,6 +551,26 @@
                     totalNeighbors: n.totalNeighbors || 0
                 }));
                 links = payload.edges.map(e => ({ source: e.source, target: e.target, weight: e.weight }));
+                if (mode === 'search') {
+                    allSearchLinks = links.map(e => ({ source: e.source, target: e.target, weight: e.weight }));
+                    hiddenMatches = [];
+                    const matches = nodes.filter(n => n.group === 'match');
+                    const others = nodes.filter(n => n.group !== 'match');
+                    matches.sort((a, b) => (b.count - a.count) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+                    const visibleMatches = matches.slice(0, 10);
+                    hiddenMatches = matches.slice(10);
+                    const visibleIds = new Set(visibleMatches.map(n => n.id));
+                    for (const o of others) visibleIds.add(o.id);
+                    links = links.filter(l => {
+                        const sid = typeof l.source === 'object' ? l.source.id : l.source;
+                        const tid = typeof l.target === 'object' ? l.target.id : l.target;
+                        return visibleIds.has(sid) && visibleIds.has(tid);
+                    });
+                    nodes = visibleMatches.concat(others);
+                    if (hiddenMatches.length > 0) {
+                        nodes.push({ id: GREEN_MORE_ID, name: '+' + hiddenMatches.length, count: 1, group: 'more-match', synthetic: true, totalNeighbors: 0 });
+                    }
+                }
                 if (mode === 'full' || mode === 'home') {
                     allConcepts = nodes.map(n => ({ name: n.name, count: n.count }));
                     renderConceptTable();
@@ -555,9 +593,18 @@
 
         function nodeClickHandler(event, d) {
             event.stopPropagation();
+            if (d.synthetic) {
+                event.stopPropagation();
+                if (d.group === 'more-match') revealMoreMatches();
+                else if (d.group === 'more-neigh') revealMoreNeighbors(d.parentId);
+                return;
+            }
+            focusedNodeId = d.id;
+            if (node) node.selectAll('circle').attr('fill', nodeColor);
             showConceptDetails(d);
         }
         function nodeDblclickHandler(event, d) {
+            if (d.synthetic) return;
             event.stopPropagation();
             expandNeighbors(d.id);
         }
@@ -628,6 +675,7 @@
 
         function refreshGraphData() {
             if (!simulation || !svg) return;
+            syncNeighborAggregators();
             link = g.select('.links').selectAll('line').data(links, d => {
                 const sid = typeof d.source === 'object' ? d.source.id : d.source;
                 const tid = typeof d.target === 'object' ? d.target.id : d.target;
@@ -647,12 +695,13 @@
                         .on('mouseover', nodeMouseoverHandler)
                         .on('mouseout', nodeMouseoutHandler);
                     nEnter.append('circle')
-                        .attr('r', d => 8 + Math.sqrt(d.count) * 8)
+                        .attr('r', d => d.synthetic ? 16 : 8 + Math.sqrt(d.count) * 8)
                         .attr('fill', nodeColor);
                     nEnter.append('text')
                         .attr('dy', '.35em')
-                        .attr('x', d => 12 + Math.sqrt(d.count) * 8)
-                        .style('font-size', d => Math.min(14, 10 + d.count) + 'px')
+                        .attr('x', d => d.synthetic ? 0 : 12 + Math.sqrt(d.count) * 8)
+                        .attr('text-anchor', d => d.synthetic ? 'middle' : 'start')
+                        .style('font-size', d => d.synthetic ? '11px' : Math.min(14, 10 + d.count) + 'px')
                         .text(d => d.name);
                     return nEnter;
                 },
@@ -665,6 +714,119 @@
             simulation.force('link').links(links);
             simulation.alpha(0.5).restart();
             applyTruncationClass();
+        }
+
+        function linkExists(a, b) {
+            for (const l of links) {
+                const sid = typeof l.source === 'object' ? l.source.id : l.source;
+                const tid = typeof l.target === 'object' ? l.target.id : l.target;
+                if ((sid === a && tid === b) || (sid === b && tid === a)) return true;
+            }
+            return false;
+        }
+
+        function revealMoreMatches() {
+            if (hiddenMatches.length === 0) return;
+            const batch = hiddenMatches.splice(0, 10);
+            // remove old aggregator node
+            nodes = nodes.filter(n => n.id !== GREEN_MORE_ID);
+            for (const m of batch) nodes.push(m);
+            // restore links between the newly shown matches and existing nodes
+            const visibleIds = new Set(nodes.map(n => n.id));
+            for (const l of allSearchLinks) {
+                const sid = typeof l.source === 'object' ? l.source.id : l.source;
+                const tid = typeof l.target === 'object' ? l.target.id : l.target;
+                if (visibleIds.has(sid) && visibleIds.has(tid) && !linkExists(sid, tid)) {
+                    links.push({ source: sid, target: tid, weight: l.weight });
+                }
+            }
+            if (hiddenMatches.length > 0) {
+                nodes.push({ id: GREEN_MORE_ID, name: '+' + hiddenMatches.length, count: 1, group: 'more-match', synthetic: true, totalNeighbors: 0 });
+            }
+            refreshGraphData();
+        }
+
+        function syncNeighborAggregators() {
+            if (currentMode !== 'search') return;
+            // remove all existing neighbor aggregators first
+            const aggIds = new Set(nodes.filter(n => n.group === 'more-neigh').map(n => n.id));
+            if (aggIds.size) {
+                nodes = nodes.filter(n => !aggIds.has(n.id));
+                links = links.filter(l => {
+                    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+                    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+                    return !aggIds.has(sid) && !aggIds.has(tid);
+                });
+            }
+            // add a fresh aggregator for every real node that can still be expanded
+            const visibleIdSet = new Set(nodes.map(x => x.id));
+            for (const n of nodes.filter(x => !x.synthetic)) {
+                const badge = neighborBadge(n, visibleIdSet);
+                if (badge !== null) {
+                    const aggId = NEIGH_MORE_PREFIX + n.id;
+                    nodes.push({ id: aggId, name: badge, count: 0.5, group: 'more-neigh', synthetic: true, totalNeighbors: 0, parentId: n.id });
+                    links.push({ source: n.id, target: aggId, weight: 1 });
+                }
+            }
+        }
+
+        // Decides whether a real node still has hidden neighbors, and the "+N" label
+        // for its aggregator. Returns null when the node is fully expanded (no aggregator).
+        //  - If we've already fetched the node's full neighbor list, compare against
+        //    what's currently on screen (exact remaining count).
+        //  - Revealed nodes (totalNeighbors === -1) have an unknown count but must stay
+        //    expandable, so show a bare "+"; the first click resolves the real count.
+        //  - Otherwise use the payload's totalNeighbors vs. currently visible edges.
+        function neighborBadge(n, visibleIdSet) {
+            const ids = visibleIdSet || new Set(nodes.map(x => x.id));
+            const full = expandedNeighborData.get(n.name);
+            if (full) {
+                let vis = 0;
+                for (const nb of full) if (ids.has(nb.name)) vis++;
+                const rem = full.length - vis;
+                return rem > 0 ? '+' + rem : null;
+            }
+            if (n.totalNeighbors === -1) return '+';
+            const hidden = Math.max(0, (n.totalNeighbors || 0) - visibleNeighborCount(n.id));
+            return hidden > 0 ? '+' + hidden : null;
+        }
+
+        async function revealMoreNeighbors(parentId) {
+            const parent = nodes.find(n => n.id === parentId);
+            if (!parent) return;
+            let full = expandedNeighborData.get(parent.name);
+            if (!full) {
+                try {
+                    const r = await fetch('/api-proxy/concept-tags/graph/neighbors?tag=' + encodeURIComponent(parent.name));
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    // build [{name, weight}] for neighbors of parent, dedup, sort by weight desc
+                    const wByName = new Map();
+                    for (const e of (data.edges || [])) {
+                        const other = e.source === parent.name ? e.target : (e.target === parent.name ? e.source : null);
+                        if (!other) continue;
+                        wByName.set(other, Math.max(wByName.get(other) || 0, e.weight || 1));
+                    }
+                    full = [...wByName.entries()].map(([name, weight]) => ({ name, weight })).sort((a, b) => b.weight - a.weight);
+                    expandedNeighborData.set(parent.name, full);
+                } catch (err) { console.error('neighbor fetch failed', err); return; }
+            }
+            const existingIds = new Set(nodes.map(n => n.id));
+            let added = 0;
+            for (const nb of full) {
+                if (added >= 10) break;
+                if (existingIds.has(nb.name)) continue;
+                nodes.push({ id: nb.name, name: nb.name, count: 1, group: 'neighbor', totalNeighbors: -1 });
+                existingIds.add(nb.name);
+                added++;
+            }
+            // add parent<->neighbor links for all now-visible neighbors of parent
+            for (const nb of full) {
+                if (existingIds.has(nb.name) && !linkExists(parent.name, nb.name)) {
+                    links.push({ source: parent.name, target: nb.name, weight: nb.weight });
+                }
+            }
+            refreshGraphData();   // will re-run syncNeighborAggregators and recompute the +N
         }
 
         function initFullGraph(payload) {
@@ -786,6 +948,8 @@
             g.append('g').attr('class', 'links');
             g.append('g').attr('class', 'nodes');
 
+            syncNeighborAggregators();
+
             simulation = d3.forceSimulation(nodes)
                 .force('link', d3.forceLink(links).id(d => d.id).distance(100))
                 .force('charge', d3.forceManyBody().strength(-300))
@@ -805,13 +969,14 @@
                 .on('mouseout', nodeMouseoutHandler);
 
             node.append('circle')
-                .attr('r', d => 8 + Math.sqrt(d.count) * 8)
+                .attr('r', d => d.synthetic ? 16 : 8 + Math.sqrt(d.count) * 8)
                 .attr('fill', nodeColor);
 
             labels = node.append('text')
                 .attr('dy', '.35em')
-                .attr('x', d => 12 + Math.sqrt(d.count) * 8)
-                .style('font-size', d => Math.min(14, 10 + d.count) + 'px')
+                .attr('x', d => d.synthetic ? 0 : 12 + Math.sqrt(d.count) * 8)
+                .attr('text-anchor', d => d.synthetic ? 'middle' : 'start')
+                .style('font-size', d => d.synthetic ? '11px' : Math.min(14, 10 + d.count) + 'px')
                 .text(d => d.name);
 
             simulation.on('tick', () => {
@@ -870,7 +1035,8 @@
                 zoom.transform,
                 d3.zoomIdentity.translate(w / 2, h / 2).scale(scale).translate(-d.x, -d.y)
             );
-            node.selectAll('circle').attr('fill', n => n.id === nodeId ? '#f59e0b' : nodeColor(n));
+            focusedNodeId = nodeId;
+            node.selectAll('circle').attr('fill', nodeColor);
         }
 
         // ─── Global controls (persistent across scene rebuilds) ──────────────────
