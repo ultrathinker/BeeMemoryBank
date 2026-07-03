@@ -671,10 +671,15 @@
         }
 
         function dragstarted(event, d) {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
+            // No reheat on mousedown — a plain click must not nudge the whole layout.
             d.fx = d.x; d.fy = d.y;
         }
-        function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+        function dragged(event, d) {
+            // Reheat only once the pointer actually moves. Gentle target (0.1 vs the old
+            // 0.3) so a drag settles neighbors softly instead of flinging the tree.
+            if (!event.active) simulation.alphaTarget(0.1).restart();
+            d.fx = event.x; d.fy = event.y;
+        }
         function dragended(event, d) {
             if (!event.active) simulation.alphaTarget(0);
             d.fx = null; d.fy = null;
