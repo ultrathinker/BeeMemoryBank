@@ -10,6 +10,11 @@
         <sl-icon name="database" style="font-size:3rem;color:var(--accent);display:block;margin-bottom:16px;"></sl-icon>
         <h2>Welcome to BeeMemoryBank</h2>
         <p>Select a folder from the tree to view its articles, or use search.</p>
+        <div style="margin-top:16px;margin-bottom:8px;display:flex;justify-content:center;">
+            <sl-button size="large" variant="primary" href="/AI">
+                <sl-icon slot="prefix" name="chat-left-text"></sl-icon> Ask AI
+            </sl-button>
+        </div>
         <div style="display:flex;gap:8px;margin-top:16px;justify-content:center;">
             <sl-button size="small" variant="success" href="/Article/Edit?treePath=%2F">
                 <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
