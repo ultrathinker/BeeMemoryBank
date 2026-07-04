@@ -941,7 +941,7 @@ app.MapDelete("/api-proxy/chat/keys/{id:guid}", async (Guid id, ApiClient api) =
 // the UI can render the error instead of a dead event-stream.
 app.MapPost("/api-proxy/chat/stream", async (HttpContext ctx, ApiClient api) =>
 {
-    var upstreamReq = new HttpRequestMessage(HttpMethod.Post, "chat/stream");
+    var upstreamReq = new HttpRequestMessage(HttpMethod.Post, "api/chat/stream");
     if (ctx.Request.ContentLength is > 0 || ctx.Request.Headers.ContainsKey("Transfer-Encoding"))
     {
         upstreamReq.Content = new StreamContent(ctx.Request.Body);
@@ -1002,7 +1002,7 @@ app.MapPost("/api-proxy/chat/stream", async (HttpContext ctx, ApiClient api) =>
 
 app.MapPost("/api-proxy/chat/{conversationId:guid}/confirm", async (Guid conversationId, HttpContext ctx, ApiClient api) =>
 {
-    var upstreamReq = new HttpRequestMessage(HttpMethod.Post, $"chat/stream/{conversationId}/confirm");
+    var upstreamReq = new HttpRequestMessage(HttpMethod.Post, $"api/chat/stream/{conversationId}/confirm");
     if (ctx.Request.ContentLength is > 0 || ctx.Request.Headers.ContainsKey("Transfer-Encoding"))
     {
         upstreamReq.Content = new StreamContent(ctx.Request.Body);
@@ -1082,7 +1082,7 @@ app.MapDelete("/api-proxy/chat/conversations/{id:guid}", async (Guid id, ApiClie
 // payload cleanly. CSP img-src allows 'self' so this renders without any CSP change.
 app.MapGet("/api-proxy/chat/attachments/{id:guid}", async (Guid id, ApiClient api) =>
 {
-    var upstreamReq = new HttpRequestMessage(HttpMethod.Get, $"chat/attachments/{id}");
+    var upstreamReq = new HttpRequestMessage(HttpMethod.Get, $"api/chat/attachments/{id}");
     HttpResponseMessage upstream;
     try { upstream = await api.SendForwardAsync(upstreamReq); }
     catch { return Results.StatusCode(502); }
