@@ -134,6 +134,13 @@ public static class ChatEndpoints
 
             if (string.IsNullOrWhiteSpace(req.ModelId))
                 return Results.Json(new ErrorResponse("ModelId is required"), statusCode: 400);
+            // An OpenRouter model slug is always a clean "provider/model-name" string and never
+            // contains whitespace. A whitespace-containing ModelId is broken data (e.g. someone
+            // pasted a label like "For Generate: ..." into the slug field): it corrupts the chat
+            // model picker downstream. Reject it defensively so the API can never persist bad data,
+            // regardless of caller (the Admin UI validates too, but never trust the client alone).
+            if (req.ModelId.Trim().Any(char.IsWhiteSpace))
+                return Results.Json(new ErrorResponse("ModelId must not contain whitespace — use the exact OpenRouter slug (e.g. provider/model-name)."), statusCode: 400);
             if (string.IsNullOrWhiteSpace(req.Label))
                 return Results.Json(new ErrorResponse("Label is required"), statusCode: 400);
 

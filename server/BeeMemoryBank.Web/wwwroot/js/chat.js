@@ -198,6 +198,13 @@
     // Phase 5: react to a model pick. The image-attach control is enabled ONLY for vision models
     // (image-gen models GENERATE images — they do not accept an attached one). Switching away from a
     // vision model discards any staged image so it cannot be sent to a non-vision model.
+    // Recursion guard: clearAttachment() calls onModelChanged() (to refresh the hint after dropping
+    // a staged image), so this function MUST NOT call clearAttachment() unconditionally — otherwise
+    // onModelChanged() <-> clearAttachment() form a base-case-less mutual recursion that overflows
+    // the stack (RangeError). Only discard the staged image when one actually exists; once
+    // clearAttachment() has nulled stagedAttachment, the next call here terminates the loop. This
+    // makes the picker safe for ANY modelId value (including malformed/whitespace-containing ones,
+    // which previously crashed the whole page — see loadModels' catch).
     function onModelChanged() {
         var m = modelsById[modelSelect.value];
         currentCategory = (m && m.category) || 'text';
@@ -209,7 +216,7 @@
                 ? 'Attach an image (PNG, JPEG, WebP, GIF — max 8MB)'
                 : 'Image attach is available for vision models only';
         }
-        if (!isVision) clearAttachment();
+        if (!isVision && stagedAttachment) clearAttachment();
         if (attachHint) {
             attachHint.style.display = 'block';
             if (currentCategory === 'vision') {

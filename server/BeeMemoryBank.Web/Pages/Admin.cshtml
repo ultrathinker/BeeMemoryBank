@@ -863,10 +863,22 @@
             document.getElementById('dlg-add-chat-model').show();
         });
         document.getElementById('btn-save-chat-model').addEventListener('click', function () {
-            var modelId = document.getElementById('chat-model-id').value.trim();
+            var modelIdInput = document.getElementById('chat-model-id');
+            var modelId = modelIdInput.value.trim();
             var label = document.getElementById('chat-model-label').value.trim();
             var category = document.getElementById('chat-model-category').value || 'text';
             var enabled = document.getElementById('chat-model-enabled').checked;
+            // OpenRouter model slugs are always clean "provider/model-name" strings — they never
+            // contain spaces or colons. Reject a Model ID that does (someone pasted a label by
+            // mistake) with an inline error instead of submitting broken data that can corrupt the
+            // chat picker downstream (a space-containing value previously crashed /AI with a stack
+            // overflow). Clear any prior custom validity so the field isn't stuck invalid.
+            modelIdInput.setCustomValidity('');
+            if (/[\s:]/.test(modelId)) {
+                modelIdInput.setCustomValidity('Model ID must not contain spaces — use the exact slug from OpenRouter, like provider/model-name');
+                modelIdInput.reportValidity();
+                return;
+            }
             if (!modelId || !label) return;
             fetch('/api-proxy/chat/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelId: modelId, label: label, category: category, enabled: enabled }) })
                 .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
