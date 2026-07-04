@@ -766,14 +766,14 @@
         // key (HTTP 401 → enabled=0) shows red; a cooling-down key (402/429 → future disabled_until)
         // shows amber with its retry time; otherwise Active (green), with any last_error as a tooltip.
         function keyStatus(k) {
-            if (!k.Enabled) return { label: 'Disabled', color: 'var(--sl-color-danger-600)' };
-            if (k.DisabledUntil) {
-                var d = new Date(k.DisabledUntil);
+            if (!k.enabled) return { label: 'Disabled', color: 'var(--sl-color-danger-600)' };
+            if (k.disabledUntil) {
+                var d = new Date(k.disabledUntil);
                 if (!isNaN(d) && d.getTime() > Date.now()) {
-                    return { label: 'Cooling down', color: 'var(--sl-color-warning-600)', title: 'auto-retries after ' + rel(k.DisabledUntil) };
+                    return { label: 'Cooling down', color: 'var(--sl-color-warning-600)', title: 'auto-retries after ' + rel(k.disabledUntil) };
                 }
             }
-            if (k.LastError) return { label: 'Active', color: 'var(--sl-color-success-600)', title: 'last error: ' + k.LastError };
+            if (k.lastError) return { label: 'Active', color: 'var(--sl-color-success-600)', title: 'last error: ' + k.lastError };
             return { label: 'Active', color: 'var(--sl-color-success-600)' };
         }
 
@@ -786,13 +786,13 @@
                 keysBody.innerHTML = keys.map(function (k) {
                     var st = keyStatus(k);
                     return '<tr>'
-                        + '<td><strong>' + esc(k.Label) + '</strong></td>'
-                        + '<td><code class="text-sm">' + esc(k.KeyPrefix) + '</code></td>'
-                        + '<td class="text-muted text-sm">' + (k.Priority || 0) + '</td>'
-                        + '<td><sl-switch data-key-id="' + k.Id + '" ' + (k.Enabled ? 'checked' : '') + ' onsl-change="toggleChatKey"></sl-switch></td>'
+                        + '<td><strong>' + esc(k.label) + '</strong></td>'
+                        + '<td><code class="text-sm">' + esc(k.keyPrefix) + '</code></td>'
+                        + '<td class="text-muted text-sm">' + (k.priority || 0) + '</td>'
+                        + '<td><sl-switch data-key-id="' + k.id + '" ' + (k.enabled ? 'checked' : '') + ' onsl-change="toggleChatKey"></sl-switch></td>'
                         + '<td class="text-sm" style="color:' + st.color + ';"' + (st.title ? ' title="' + esc(st.title) + '"' : '') + '>' + st.label + '</td>'
-                        + '<td class="text-muted text-sm">' + rel(k.LastUsedAt) + '</td>'
-                        + '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" data-key-id="' + k.Id + '" onclick="deleteChatKey(this.dataset.keyId)"></sl-icon-button></td>'
+                        + '<td class="text-muted text-sm">' + rel(k.lastUsedAt) + '</td>'
+                        + '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" data-key-id="' + k.id + '" onclick="deleteChatKey(this.dataset.keyId)"></sl-icon-button></td>'
                         + '</tr>';
                 }).join('');
             }).catch(function () { keysBody.innerHTML = '<tr><td colspan="7" class="text-muted text-sm">Failed to load keys.</td></tr>'; });
@@ -806,11 +806,11 @@
                 }
                 modelsBody.innerHTML = models.map(function (m) {
                     return '<tr>'
-                        + '<td><strong>' + esc(m.Label) + '</strong></td>'
-                        + '<td><code class="text-sm">' + esc(m.ModelId) + '</code></td>'
-                        + '<td class="text-muted text-sm">' + esc(m.Category || 'text') + '</td>'
-                        + '<td><sl-switch data-model-id="' + m.Id + '" ' + (m.Enabled ? 'checked' : '') + ' onsl-change="toggleChatModel"></sl-switch></td>'
-                        + '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" data-model-id="' + m.Id + '" onclick="deleteChatModel(this.dataset.modelId)"></sl-icon-button></td>'
+                        + '<td><strong>' + esc(m.label) + '</strong></td>'
+                        + '<td><code class="text-sm">' + esc(m.modelId) + '</code></td>'
+                        + '<td class="text-muted text-sm">' + esc(m.category || 'text') + '</td>'
+                        + '<td><sl-switch data-model-id="' + m.id + '" ' + (m.enabled ? 'checked' : '') + ' onsl-change="toggleChatModel"></sl-switch></td>'
+                        + '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" data-model-id="' + m.id + '" onclick="deleteChatModel(this.dataset.modelId)"></sl-icon-button></td>'
                         + '</tr>';
                 }).join('');
             }).catch(function () { modelsBody.innerHTML = '<tr><td colspan="5" class="text-muted text-sm">Failed to load models.</td></tr>'; });
@@ -851,8 +851,8 @@
                     document.getElementById('chat-key-value').value = '';
                     document.getElementById('chat-key-priority').value = '0';
                     loadKeys();
-                    if (res.ok && res.body && res.body.ApiKey) {
-                        alert('Key created. Copy it now — it will not be shown again:\n\n' + res.body.ApiKey);
+                    if (res.ok && res.body && res.body.apiKey) {
+                        alert('Key created. Copy it now — it will not be shown again:\n\n' + res.body.apiKey);
                     } else if (!res.ok) {
                         alert((res.body && res.body.error) ? res.body.error : 'Failed to save key (is the vault unlocked?).');
                     }
