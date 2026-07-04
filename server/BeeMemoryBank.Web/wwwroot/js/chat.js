@@ -41,7 +41,7 @@
     var currentConversationId = null;
     var sending = false;
     var abortCtrl = null;
-    // Phase 5: all enabled models keyed by ModelId (for category lookup), the selected category,
+    // Phase 5: all enabled models keyed by modelId (for category lookup), the selected category,
     // and a staged image attachment ({mime, dataBase64, previewUrl} or null).
     var modelsById = {};
     var currentCategory = 'text';
@@ -112,9 +112,26 @@
 
     // ── model picker ─────────────────────────────────────────────────────────
 
+    // Parses the models response, distinguishing a genuine lock/auth failure (401/403/409 — often an
+    // HTML login page or a {"error":"Vault is locked"} body) from other failures. When the response
+    // isn't usable JSON, throws an Error carrying `.status`/`.body` so loadModels' .catch can tailor
+    // the message instead of always blaming the vault lock (which previously masked the real cause).
+    function readModelsResponse(r) {
+        var ct = r.headers.get('content-type') || '';
+        if (!r.ok || ct.indexOf('application/json') < 0) {
+            return r.text().then(function (bodyText) {
+                var err = new Error('models request failed: HTTP ' + r.status);
+                err.status = r.status;
+                err.body = bodyText;
+                throw err;
+            });
+        }
+        return r.json();
+    }
+
     function loadModels(then) {
         fetch('/api-proxy/chat/models', { headers: { 'Accept': 'application/json' } })
-            .then(function (r) { return r.json(); })
+            .then(readModelsResponse)
             .then(function (models) {
                 if (!Array.isArray(models) || models.length === 0) {
                     modelSelect.innerHTML = '';
@@ -123,15 +140,17 @@
                         'No chat model is configured yet. Ask a superadmin to add one under Admin → AI / Chat.');
                     return;
                 }
-                // ChatModelResponse is serialized in PascalCase (API JSON default). Phase 5: show ALL
-                // categories (text + vision + image-gen) in the picker, grouped so the user knows which
-                // models accept images and which generate them. Store a by-ModelId map for category lookup.
+                // ChatModelResponse is serialized in camelCase (ASP.NET Core Minimal API default — Api/
+                // Program.cs sets no PropertyNamingPolicy override, so JsonSerializerDefaults.Web applies).
+                // Phase 5: show ALL categories (text + vision + image-gen) in the picker, grouped so the
+                // user knows which models accept images and which generate them. Store a by-modelId map
+                // for category lookup.
                 modelsById = {};
-                models.forEach(function (m) { modelsById[m.ModelId] = m; });
+                models.forEach(function (m) { modelsById[m.modelId] = m; });
                 modelSelect.innerHTML = '';
                 var groups = { 'text': [], 'vision': [], 'image-gen': [] };
                 models.forEach(function (m) {
-                    var cat = (m.Category || 'text');
+                    var cat = (m.category || 'text');
                     (groups[cat] || (groups[cat] = [])).push(m);
                 });
                 var labels = {
@@ -150,19 +169,29 @@
                     list.forEach(function (m) {
                         if (!firstModel) firstModel = m;
                         var opt = document.createElement('sl-option');
-                        opt.value = m.ModelId;
-                        opt.textContent = m.Label || m.ModelId;
+                        opt.value = m.modelId;
+                        opt.textContent = m.label || m.modelId;
                         modelSelect.appendChild(opt);
                     });
                 });
-                modelSelect.value = firstModel.ModelId;
+                modelSelect.value = firstModel.modelId;
                 onModelChanged();
                 hideEmpty();
                 if (then) then();
             })
-            .catch(function () {
+            .catch(function (err) {
+                // Never assume a lock: only blame the vault when there's genuine evidence (401/403/409 or
+                // a "Vault is locked"/login body). Otherwise the message is generic and the real cause
+                // (status + body) is logged to the console so future debugging doesn't require guessing.
+                console.error('[chat] loadModels failed:', err && err.message, '| status:', err && err.status, '| body:', err && err.body);
+                var status = err && err.status;
+                var body = (err && err.body) || '';
+                var looksLocked = status === 401 || status === 403 || status === 409
+                    || /vault is locked|account\/login|\blogin\b/i.test(body);
                 showEmpty('exclamation-triangle',
-                    'Could not reach the server to load chat models. Make sure the vault is unlocked.');
+                    looksLocked
+                        ? 'Could not load chat models — the vault or your session is locked. Make sure the vault is unlocked.'
+                        : 'Could not load chat models (see browser console for details).');
             });
     }
 
@@ -171,7 +200,7 @@
     // vision model discards any staged image so it cannot be sent to a non-vision model.
     function onModelChanged() {
         var m = modelsById[modelSelect.value];
-        currentCategory = (m && m.Category) || 'text';
+        currentCategory = (m && m.category) || 'text';
         var isVision = currentCategory === 'vision';
         if (attachBtn) {
             attachBtn.disabled = !isVision;
