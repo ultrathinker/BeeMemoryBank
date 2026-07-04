@@ -309,11 +309,27 @@ public sealed class OpenRouterClient
                 toolCalls = null;
         }
 
+        // Diagnostic: some OpenRouter-routed models accept the `tools` schema but never actually
+        // emit a real tool_calls delta — instead they narrate a fake tool invocation as plain text
+        // content (mimicking ChatGPT-plugin-style transcripts from training data). That looks like
+        // "the tool didn't work" from the user's side but is a model-capability limitation, not a
+        // dispatch bug. Log tool-call outcome + a content snippet so this is diagnosable from logs
+        // instead of guessed at.
+        if (tools is { Count: > 0 })
+        {
+            _logger.LogInformation(
+                "OpenRouter tool-call turn: model={Model} toolCalls={ToolCallCount} contentSnippet={Snippet}",
+                resolvedModel ?? model, toolCalls?.Count ?? 0,
+                toolCalls is null ? Truncate(contentBuilder.ToString(), 200) : "(n/a — tool_calls present)");
+        }
+
         return new ToolCompletionResult(
             Content: contentBuilder.ToString(),
             ToolCalls: toolCalls,
             Model: resolvedModel ?? model);
     }
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 
     // Accumulator for one streaming tool call (keyed by the delta's `index`).
     private sealed class AccumulatedToolCall
