@@ -492,6 +492,22 @@ public sealed class OpenRouterClient
             {
                 if (msgEl.TryGetProperty("content", out var contentEl))
                     ExtractContent(contentEl, textBuilder, imageSources);
+
+                // Shape 1.5: some providers (e.g. Gemini image-output models via OpenRouter) return
+                // the generated image(s) in a sibling `message.images` array instead of embedding them
+                // in `content` — each entry shaped like a content part: {type:image_url, image_url:{url}}.
+                if (msgEl.TryGetProperty("images", out var imagesEl) && imagesEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var part in imagesEl.EnumerateArray())
+                    {
+                        if (part.ValueKind != JsonValueKind.Object) continue;
+                        if (part.TryGetProperty("image_url", out var iuEl)
+                            && iuEl.ValueKind == JsonValueKind.Object
+                            && iuEl.TryGetProperty("url", out var uEl)
+                            && uEl.ValueKind == JsonValueKind.String)
+                            imageSources.Add(uEl.GetString()!);
+                    }
+                }
             }
         }
 
@@ -509,6 +525,9 @@ public sealed class OpenRouterClient
                     imageSources.Add(urlEl.GetString()!);
             }
         }
+
+        if (imageSources.Count == 0)
+            _logger.LogWarning("OpenRouter image-gen completion returned no image sources. Raw body: {Body}", body);
 
         return new ImageGenResult(
             Text: textBuilder.Length == 0 ? null : textBuilder.ToString(),

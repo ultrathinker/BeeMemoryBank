@@ -1212,6 +1212,7 @@ public static class ChatEndpoints
             // Materialize each image source → bytes, store as attachment, emit inline SSE event.
             // Reuses the same ResolveImageSourceToBytesAsync + ChatImageEvent plumbing as the old
             // image-gen path.
+            var savedCount = 0;
             foreach (var source in result.ImageSources)
             {
                 var (imgBytes, imgMime) = await ResolveImageSourceToBytesAsync(source, lc.Ct);
@@ -1236,11 +1237,24 @@ public static class ChatEndpoints
                     continue;
                 }
 
+                savedCount++;
                 var inlineUrl = "data:" + imgMime + ";base64," + Convert.ToBase64String(imgBytes);
                 await lc.Sse("image", new ChatImageEvent(attachmentId, inlineUrl, imgMime));
             }
 
             sw.Stop();
+
+            // Don't claim success if nothing was actually produced/stored — the model would otherwise
+            // hallucinate "here's your image" from a fake-positive tool result.
+            if (savedCount == 0)
+            {
+                var noImgJson = Err("The image model did not return an image. Tell the user image generation failed and they can try again.");
+                lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = noImgJson });
+                await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, noImgJson);
+                await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = "No image returned" });
+                return;
+            }
+
             var okJson = "{\"ok\":true,\"message\":\"Image generated.\"}";
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = okJson });
             await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, okJson);
