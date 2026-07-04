@@ -1,0 +1,89 @@
+@page "/AI"
+@model BeeMemoryBank.Web.Pages.AIModel
+@{
+    ViewData["Title"] = "AI";
+}
+
+<div id="page-content">
+<div class="main-content" style="display:flex;height:calc(100vh - 96px);gap:0;">
+
+    <!-- History sidebar (Phase 2) -->
+    <div id="chat-sidebar" style="width:240px;flex-shrink:0;border-right:1px solid var(--sl-panel-border-color);display:flex;flex-direction:column;overflow:hidden;">
+        <div style="padding:8px;">
+            <sl-button id="chat-new" variant="primary" outline style="width:100%;">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> New chat
+            </sl-button>
+        </div>
+        <div id="chat-history" style="flex:1;overflow-y:auto;padding:0 4px 8px 4px;"></div>
+    </div>
+
+    <!-- Chat area -->
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;padding-left:16px;">
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+            <h2 style="margin:0;"><sl-icon name="chat-left-text"></sl-icon> AI Chat</h2>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <sl-select id="chat-model" size="small" placeholder="Select a model" style="min-width:240px;max-width:46vw;">
+                </sl-select>
+            </div>
+        </div>
+
+        <sl-alert variant="neutral" open size="small" style="margin-bottom:8px;">
+            <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+            Everything the AI reads — and any text you ask it to write — is sent to your configured OpenRouter model/provider. Writes only run after you click <strong>Allow</strong>.
+        </sl-alert>
+
+        <!-- Empty / not-configured states -->
+        <div id="chat-empty-state" class="card" style="display:none;text-align:center;padding:32px;margin-bottom:8px;">
+            <sl-icon id="chat-empty-icon" name="robot" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p id="chat-empty-text" class="text-muted" style="margin:0;"></p>
+        </div>
+
+        <!-- Message list -->
+        <div id="chat-messages" style="flex:1;overflow-y:auto;padding:4px 4px 8px 4px;"></div>
+
+        <!-- Composer -->
+        <div style="padding-top:8px;border-top:1px solid var(--sl-panel-border-color);">
+            <!-- Phase 5: image-attach preview (shown only when an image is staged) -->
+            <div id="chat-attach-preview" style="display:none;margin-bottom:6px;"></div>
+            <div style="display:flex;gap:8px;align-items:flex-end;">
+                <!-- Phase 5: image-attach control (enabled only for vision models via chat.js) -->
+                <sl-button id="chat-attach" variant="default" outline style="height:fit-content;flex-shrink:0;" title="Attach an image">
+                    <sl-icon slot="prefix" name="image"></sl-icon>
+                </sl-button>
+                <input type="file" id="chat-attach-input" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" />
+                <sl-textarea id="chat-input" placeholder="Ask about your vault, or ask it to create/edit a note…"
+                    rows="2" resize="auto" style="flex:1;"></sl-textarea>
+                <sl-button id="chat-send" variant="primary" caret style="height:fit-content;">
+                    <sl-icon slot="prefix" name="cursor"></sl-icon> Send
+                </sl-button>
+            </div>
+            <div id="chat-attach-hint" class="text-muted" style="font-size:0.72rem;margin-top:4px;display:none;"></div>
+        </div>
+    </div>
+</div>
+</div>
+
+<!-- Phase 5: "Save to Bee" dialog — uploads a chat image to the vault media store (ACL-checked),
+     attached to a user-picked note via the EXISTING /api-proxy/media/upload flow. The note is found
+     through the existing /api-proxy/search (no new list endpoint added). -->
+<sl-dialog id="chat-save-to-bee" label="Save image to Bee">
+    <div style="display:flex;flex-direction:column;gap:10px;">
+        <div id="chat-save-preview" style="text-align:center;"></div>
+        <p class="text-muted" style="font-size:0.82rem;margin:0;">
+            Saves this chat image as an attachment on a note in your vault. Folder access is checked
+            server-side via the normal upload path — only folders you can write to are allowed.
+        </p>
+        <sl-input id="chat-save-search" placeholder="Search for a note…" clearable>
+            <sl-icon slot="prefix" name="search"></sl-icon>
+        </sl-input>
+        <div id="chat-save-results" style="max-height:220px;overflow:auto;border:1px solid var(--sl-panel-border-color);border-radius:6px;"></div>
+        <div id="chat-save-selected" class="text-muted" style="font-size:0.8rem;min-height:1.1rem;"></div>
+    </div>
+    <sl-button slot="footer" variant="default" data-save-close="1">Cancel</sl-button>
+    <sl-button slot="footer" variant="primary" id="chat-save-confirm" disabled>Save</sl-button>
+</sl-dialog>
+
+@section Scripts {
+    <script src="/js/chat.js" asp-append-version="true"></script>
+}

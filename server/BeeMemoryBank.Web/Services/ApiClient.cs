@@ -437,8 +437,18 @@ public class ApiClient(HttpClient http)
     }
 
     public async Task<(bool Ok, string? Body, int Status)> PostRawAsync(string path, string json)
+        => await PostRawAsync(path, json, method: "POST");
+
+    /// <summary>Generic JSON passthrough with a selectable HTTP method (POST/PATCH/PUT/DELETE).
+    /// Identity headers are injected by InternalKeyHandler. Used by the AI chat proxy routes that
+    /// need PATCH/DELETE on /api/chat/*. Keeps status + body verbatim.</summary>
+    public async Task<(bool Ok, string? Body, int Status)> PostRawAsync(string path, string json, string method)
     {
-        var resp = await http.PostAsync("/api/" + path, new StringContent(json, Encoding.UTF8, "application/json"));
+        var req = new HttpRequestMessage(new HttpMethod(method), "/api/" + path)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        };
+        var resp = await http.SendAsync(req);
         var body = await resp.Content.ReadAsStringAsync();
         return (resp.IsSuccessStatusCode, body, (int)resp.StatusCode);
     }
@@ -468,6 +478,13 @@ public class ApiClient(HttpClient http)
     // headers) and returns the raw upstream response. The caller copies status/body/headers.
     public Task<HttpResponseMessage> SendForwardAsync(HttpRequestMessage request) =>
         http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+
+    // Phase 2: same as above but forwards the caller's CancellationToken so a browser disconnect
+    // (ctx.RequestAborted) cancels the upstream API call. Used ONLY by the dedicated SSE streaming
+    // passthrough — the W1 catch-all keeps the parameterless overload. ResponseHeadersRead means the
+    // timeout/return is at headers, then the body streams unbounded (plan §2 Phase 2, §6).
+    public Task<HttpResponseMessage> SendForwardAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
     public async Task<HttpResponseMessage?> DownloadByTokenAsync(string token)
     {

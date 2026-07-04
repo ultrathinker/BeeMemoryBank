@@ -119,6 +119,26 @@ builder.Services.AddSingleton<SnapshotJoinCache>();
 var mediaDir = Path.Combine(dataPath, "media");
 Directory.CreateDirectory(mediaDir);
 builder.Services.AddSingleton(new BeeMemoryBank.Core.Services.MediaStorageOptions(mediaDir));
+
+// ── AI chat (Phase 0) ──────────────────────────────────────────────────────────
+// chat.db is a SEPARATE SQLite DB from beememorybank.db, owned entirely by the Api. Its
+// ChatDbConnectionFactory is a distinct DI type (does NOT implement Core's IDbConnectionFactory)
+// so it can never collide with BeeMemoryBank.Storage.DbConnectionFactory. NOT registered via
+// AddStorage; schema created by ChatDbInitializer (not MigrationRunner / Storage/Migrations).
+// See docs/ai-chat-implementation-plan.md §1 ("Chat DB").
+builder.Services.AddSingleton(new ChatDbConnectionFactory(dataPath));
+builder.Services.AddScoped<ChatDbInitializer>();
+builder.Services.AddScoped<ChatConversationRepository>();
+builder.Services.AddScoped<ChatMessageRepository>();
+builder.Services.AddScoped<ChatSettingsRepository>();
+// Phase 5: chat_attachment CRUD (vision uploads + generated images) — chat.db only, never synced.
+builder.Services.AddScoped<ChatAttachmentRepository>();
+builder.Services.AddScoped<OpenRouterClient>();
+// Phase 3: per-conversation destructive-op cap (in-memory singleton — see ChatDestructiveOpCounter).
+builder.Services.AddSingleton<ChatDestructiveOpCounter>();
+// Phase 1: curated read-only tool surface for the native AI chat. Scoped (depends on the
+// ambient CallerScope + SessionService, both request-scoped). See ChatToolDispatcher.
+builder.Services.AddScoped<ChatToolDispatcher>();
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
 {
     o.MultipartBodyLengthLimit = 500L * 1024 * 1024;
@@ -172,6 +192,15 @@ using (var scope = app.Services.CreateScope())
 {
     var bootstrapper = scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Storage.Sqlite.FolderBootstrapper>();
     await bootstrapper.RunIfNeededAsync();
+}
+
+// Initialize the AI chat DB schema (separate chat.db; idempotent CREATE TABLE IF NOT EXISTS).
+// Placed AFTER the beedb migration/bootstrapper blocks and deliberately does NOT use
+// MigrationRunner or Storage/Migrations. See docs/ai-chat-implementation-plan.md §1 ("Chat DB").
+using (var scope = app.Services.CreateScope())
+{
+    var chatInitializer = scope.ServiceProvider.GetRequiredService<ChatDbInitializer>();
+    await chatInitializer.InitializeAsync();
 }
 
 // Restore Lamport clock from DB
@@ -398,6 +427,7 @@ app.MapDownloadEndpoints();
     app.MapHardDeleteEndpoints();
     app.MapCompactionEndpoints();
     app.MapAdminEndpoints();
+    app.MapChatEndpoints();
     app.MapMcp("/mcp");
 
 app.Run();

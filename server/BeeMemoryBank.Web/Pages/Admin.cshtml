@@ -648,6 +648,241 @@
         </div>
     }
 
+    <!-- AI / Chat (OpenRouter) — node-global keys + model catalogue. Superadmin-only (whole page is). -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="chat-left-text"></sl-icon> AI / Chat</h3>
+    <sl-alert variant="neutral" open size="small" style="margin-bottom:16px;max-width:640px;">
+        <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+        Keys are encrypted at rest under the master DEK and only usable while the vault is unlocked.
+        The full key is shown <strong>once</strong> at creation; afterwards only a short prefix.
+        Everything the AI reads is sent to your configured OpenRouter model/provider.
+    </sl-alert>
+
+    <!-- Keys -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+        <strong>OpenRouter API keys</strong>
+        <sl-button size="small" variant="primary" id="btn-add-chat-key">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add key
+        </sl-button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:24px;">
+        <table class="version-table">
+            <thead>
+                <tr>
+                    <th>Label</th>
+                    <th>Prefix</th>
+                    <th>Priority</th>
+                    <th>Enabled</th>
+                    <th>Status</th>
+                    <th>Last used</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="chat-keys-body">
+                <tr><td colspan="7" class="text-muted text-sm" style="text-align:center;padding:16px;">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Models -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+        <strong>Model catalogue</strong>
+        <sl-button size="small" variant="primary" id="btn-add-chat-model">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add model
+        </sl-button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+        <table class="version-table">
+            <thead>
+                <tr>
+                    <th>Label</th>
+                    <th>Model ID</th>
+                    <th>Category</th>
+                    <th>Enabled</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="chat-models-body">
+                <tr><td colspan="5" class="text-muted text-sm" style="text-align:center;padding:16px;">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <sl-dialog id="dlg-add-chat-key" label="Add OpenRouter key" style="--width:480px;">
+        <div style="margin-bottom:16px;">
+            <sl-input id="chat-key-label" label="Label" placeholder="e.g. personal" required></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input id="chat-key-value" label="API key" type="password" password-toggle placeholder="sk-or-…" required autocomplete="off"></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input id="chat-key-priority" label="Priority (lower = used first)" type="number" value="0"></sl-input>
+        </div>
+        <p class="text-muted text-sm">The key needs an unlocked vault to be encrypted. Copy the full key now — it won't be shown again.</p>
+        <sl-button slot="footer" type="button" variant="default" onclick="document.getElementById('dlg-add-chat-key').hide()">Cancel</sl-button>
+        <sl-button slot="footer" type="button" variant="primary" id="btn-save-chat-key">
+            <sl-icon slot="prefix" name="save"></sl-icon> Save key
+        </sl-button>
+    </sl-dialog>
+
+    <sl-dialog id="dlg-add-chat-model" label="Add model" style="--width:480px;">
+        <div style="margin-bottom:16px;">
+            <sl-input id="chat-model-id" label="Model ID" placeholder="e.g. openai/gpt-4o-mini" required></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input id="chat-model-label" label="Label" placeholder="e.g. GPT-4o mini" required></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-select id="chat-model-category" value="text">
+                <sl-option value="text">text</sl-option>
+                <sl-option value="vision">vision</sl-option>
+                <sl-option value="image-gen">image-gen</sl-option>
+            </sl-select>
+            <div class="text-muted text-sm" style="margin-top:4px;">Phase 1 uses text-category models only.</div>
+        </div>
+        <sl-checkbox id="chat-model-enabled" checked>Enabled</sl-checkbox>
+        <sl-button slot="footer" type="button" variant="default" onclick="document.getElementById('dlg-add-chat-model').hide()">Cancel</sl-button>
+        <sl-button slot="footer" type="button" variant="primary" id="btn-save-chat-model">
+            <sl-icon slot="prefix" name="save"></sl-icon> Save model
+        </sl-button>
+    </sl-dialog>
+
+    <script>
+    (function () {
+        var keysBody = document.getElementById('chat-keys-body');
+        var modelsBody = document.getElementById('chat-models-body');
+
+        function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+        function rel(t) {
+            if (!t) return '—';
+            var d = new Date(t); if (isNaN(d)) return esc(t);
+            var s = (Date.now() - d.getTime()) / 1000;
+            if (s < 60) return Math.floor(s) + 's ago';
+            if (s < 3600) return Math.floor(s / 60) + 'm ago';
+            if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+            return Math.floor(s / 86400) + 'd ago';
+        }
+
+        // Phase 4: derives the per-key circuit-breaker status shown in the Status column. A disabled
+        // key (HTTP 401 → enabled=0) shows red; a cooling-down key (402/429 → future disabled_until)
+        // shows amber with its retry time; otherwise Active (green), with any last_error as a tooltip.
+        function keyStatus(k) {
+            if (!k.Enabled) return { label: 'Disabled', color: 'var(--sl-color-danger-600)' };
+            if (k.DisabledUntil) {
+                var d = new Date(k.DisabledUntil);
+                if (!isNaN(d) && d.getTime() > Date.now()) {
+                    return { label: 'Cooling down', color: 'var(--sl-color-warning-600)', title: 'auto-retries after ' + rel(k.DisabledUntil) };
+                }
+            }
+            if (k.LastError) return { label: 'Active', color: 'var(--sl-color-success-600)', title: 'last error: ' + k.LastError };
+            return { label: 'Active', color: 'var(--sl-color-success-600)' };
+        }
+
+        function loadKeys() {
+            fetch('/api-proxy/chat/keys').then(function (r) { return r.json(); }).then(function (keys) {
+                if (!Array.isArray(keys) || keys.length === 0) {
+                    keysBody.innerHTML = '<tr><td colspan="7" class="text-muted text-sm" style="text-align:center;padding:16px;">No keys. Add one to enable AI chat.</td></tr>';
+                    return;
+                }
+                keysBody.innerHTML = keys.map(function (k) {
+                    var st = keyStatus(k);
+                    return '<tr>'
+                        + '<td><strong>' + esc(k.Label) + '</strong></td>'
+                        + '<td><code class="text-sm">' + esc(k.KeyPrefix) + '</code></td>'
+                        + '<td class="text-muted text-sm">' + (k.Priority || 0) + '</td>'
+                        + '<td><sl-switch data-key-id="' + k.Id + '" ' + (k.Enabled ? 'checked' : '') + ' onsl-change="toggleChatKey"></sl-switch></td>'
+                        + '<td class="text-sm" style="color:' + st.color + ';"' + (st.title ? ' title="' + esc(st.title) + '"' : '') + '>' + st.label + '</td>'
+                        + '<td class="text-muted text-sm">' + rel(k.LastUsedAt) + '</td>'
+                        + '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" data-key-id="' + k.Id + '" onclick="deleteChatKey(this.dataset.keyId)"></sl-icon-button></td>'
+                        + '</tr>';
+                }).join('');
+            }).catch(function () { keysBody.innerHTML = '<tr><td colspan="7" class="text-muted text-sm">Failed to load keys.</td></tr>'; });
+        }
+
+        function loadModels() {
+            fetch('/api-proxy/chat/models/all').then(function (r) { return r.json(); }).then(function (models) {
+                if (!Array.isArray(models) || models.length === 0) {
+                    modelsBody.innerHTML = '<tr><td colspan="5" class="text-muted text-sm" style="text-align:center;padding:16px;">No models. Add a text model to enable AI chat.</td></tr>';
+                    return;
+                }
+                modelsBody.innerHTML = models.map(function (m) {
+                    return '<tr>'
+                        + '<td><strong>' + esc(m.Label) + '</strong></td>'
+                        + '<td><code class="text-sm">' + esc(m.ModelId) + '</code></td>'
+                        + '<td class="text-muted text-sm">' + esc(m.Category || 'text') + '</td>'
+                        + '<td><sl-switch data-model-id="' + m.Id + '" ' + (m.Enabled ? 'checked' : '') + ' onsl-change="toggleChatModel"></sl-switch></td>'
+                        + '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" data-model-id="' + m.Id + '" onclick="deleteChatModel(this.dataset.modelId)"></sl-icon-button></td>'
+                        + '</tr>';
+                }).join('');
+            }).catch(function () { modelsBody.innerHTML = '<tr><td colspan="5" class="text-muted text-sm">Failed to load models.</td></tr>'; });
+        }
+
+        window.toggleChatKey = function (e) {
+            var id = e.target.dataset.keyId; var enabled = e.target.checked;
+            fetch('/api-proxy/chat/keys/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled }) })
+                .catch(function () { loadKeys(); });
+        };
+        window.toggleChatModel = function (e) {
+            var id = e.target.dataset.modelId; var enabled = e.target.checked;
+            fetch('/api-proxy/chat/models/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled }) })
+                .catch(function () { loadModels(); });
+        };
+        window.deleteChatKey = function (id) {
+            if (!confirm('Delete this API key?')) return;
+            fetch('/api-proxy/chat/keys/' + id, { method: 'DELETE' }).then(function () { loadKeys(); });
+        };
+        window.deleteChatModel = function (id) {
+            if (!confirm('Delete this model?')) return;
+            fetch('/api-proxy/chat/models/' + id, { method: 'DELETE' }).then(function () { loadModels(); });
+        };
+
+        document.getElementById('btn-add-chat-key').addEventListener('click', function () {
+            document.getElementById('dlg-add-chat-key').show();
+        });
+        document.getElementById('btn-save-chat-key').addEventListener('click', function () {
+            var label = document.getElementById('chat-key-label').value.trim();
+            var key = document.getElementById('chat-key-value').value.trim();
+            var priority = parseInt(document.getElementById('chat-key-priority').value || '0', 10) || 0;
+            if (!label || !key) return;
+            fetch('/api-proxy/chat/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: label, apiKey: key, priority: priority }) })
+                .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+                .then(function (res) {
+                    document.getElementById('dlg-add-chat-key').hide();
+                    document.getElementById('chat-key-label').value = '';
+                    document.getElementById('chat-key-value').value = '';
+                    document.getElementById('chat-key-priority').value = '0';
+                    loadKeys();
+                    if (res.ok && res.body && res.body.ApiKey) {
+                        alert('Key created. Copy it now — it will not be shown again:\n\n' + res.body.ApiKey);
+                    } else if (!res.ok) {
+                        alert((res.body && res.body.error) ? res.body.error : 'Failed to save key (is the vault unlocked?).');
+                    }
+                });
+        });
+
+        document.getElementById('btn-add-chat-model').addEventListener('click', function () {
+            document.getElementById('dlg-add-chat-model').show();
+        });
+        document.getElementById('btn-save-chat-model').addEventListener('click', function () {
+            var modelId = document.getElementById('chat-model-id').value.trim();
+            var label = document.getElementById('chat-model-label').value.trim();
+            var category = document.getElementById('chat-model-category').value || 'text';
+            var enabled = document.getElementById('chat-model-enabled').checked;
+            if (!modelId || !label) return;
+            fetch('/api-proxy/chat/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelId: modelId, label: label, category: category, enabled: enabled }) })
+                .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+                .then(function (res) {
+                    document.getElementById('dlg-add-chat-model').hide();
+                    document.getElementById('chat-model-id').value = '';
+                    document.getElementById('chat-model-label').value = '';
+                    if (res.ok) { loadModels(); } else { alert((res.body && res.body.error) ? res.body.error : 'Failed to save model.'); }
+                });
+        });
+
+        loadKeys();
+        loadModels();
+    })();
+    </script>
+
     <!-- Change Node URL Dialog -->
     <sl-dialog id="dlg-change-url" label="Change Node URL">
         <form method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
