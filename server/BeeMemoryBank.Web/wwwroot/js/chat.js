@@ -471,10 +471,15 @@
         turn.statusEl.textContent = '';
         turn.streamEl.className = '';
         if (turn.pendingImage) {
-            var cap = document.createElement('div');
-            cap.style.marginTop = '4px';
-            cap.innerHTML = renderMarkdown(turn.assistantRaw || '');
-            turn.streamEl.appendChild(cap);
+            // Reuse the same dedicated text element the 'delta' handler streamed into (if any) so
+            // the final markdown render replaces it in place, below the image, instead of appending
+            // a second duplicate copy of the same text.
+            if (!turn.textEl) {
+                turn.textEl = document.createElement('div');
+                turn.textEl.style.marginTop = '4px';
+                turn.streamEl.appendChild(turn.textEl);
+            }
+            turn.textEl.innerHTML = renderMarkdown(turn.assistantRaw || '');
         } else {
             turn.streamEl.innerHTML = renderMarkdown(turn.assistantRaw || '(no response)');
         }
@@ -485,11 +490,22 @@
             // Stopped by the user or navigation. Keep whatever streamed; mark as interrupted.
             turn.statusEl.textContent = '';
             if (!turn.assistantRaw) {
-                turn.streamEl.className = 'text-muted';
-                turn.streamEl.textContent = '(stopped)';
+                if (!turn.pendingImage) {
+                    turn.streamEl.className = 'text-muted';
+                    turn.streamEl.textContent = '(stopped)';
+                }
             } else {
                 turn.streamEl.className = '';
-                turn.streamEl.innerHTML = renderMarkdown(turn.assistantRaw);
+                if (turn.pendingImage) {
+                    if (!turn.textEl) {
+                        turn.textEl = document.createElement('div');
+                        turn.textEl.style.marginTop = '4px';
+                        turn.streamEl.appendChild(turn.textEl);
+                    }
+                    turn.textEl.innerHTML = renderMarkdown(turn.assistantRaw);
+                } else {
+                    turn.streamEl.innerHTML = renderMarkdown(turn.assistantRaw);
+                }
             }
             return;
         }
@@ -624,14 +640,22 @@
             currentConversationId = obj.conversationId;
             loadHistory();
         } else if (eventType === 'delta' && obj) {
-            // Append text to the live bubble as plain text (markdown is rendered once on done to
-            // avoid partial-markdown flicker).
+            // Append text to a DEDICATED child element, never to streamEl's own textContent —
+            // streamEl may already hold an <figure> image (generated-image event, above), and
+            // `el.textContent += x` on an element with element children wipes ALL of them (it reads
+            // the current text, then rebuilds the whole subtree as a single text node), silently
+            // deleting the image. Markdown is rendered once on done to avoid partial-markdown flicker.
             if (!turn.streamEl._streamingStarted) {
                 turn.streamEl._streamingStarted = true;
                 turn.streamEl.className = '';
                 turn.streamEl.textContent = '';
             }
-            turn.streamEl.textContent += (obj.text || '');
+            if (!turn.textEl) {
+                turn.textEl = document.createElement('div');
+                turn.textEl.style.marginTop = '4px';
+                turn.streamEl.appendChild(turn.textEl);
+            }
+            turn.textEl.textContent += (obj.text || '');
         } else if (eventType === 'tool_call_start' && obj) {
             turn.statusEl.textContent = obj.label || ('Running ' + (obj.tool || 'tool') + '…');
         } else if (eventType === 'tool_call_result' && obj) {
