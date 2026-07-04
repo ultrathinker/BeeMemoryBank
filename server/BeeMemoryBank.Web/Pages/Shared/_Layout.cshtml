@@ -48,6 +48,9 @@
         @if (User.Identity?.IsAuthenticated == true)
         {
         <div class="header-right">
+            <a href="/AI" class="header-link" style="margin-right:16px;font-weight:700;color:var(--accent);background:color-mix(in srgb, var(--accent) 14%, transparent);padding:4px 10px;border-radius:var(--sl-border-radius-medium,6px);">
+                <sl-icon name="chat-left-text"></sl-icon> AI
+            </a>
             <div class="theme-picker">
                 <sl-dropdown id="theme-dropdown" placement="bottom-end">
                     <sl-button slot="trigger" size="small" variant="text" caret>
@@ -90,9 +93,6 @@
                 </div>
             </div>
             }
-            <a href="/AI" class="header-link" style="margin-right:16px;">
-                <sl-icon name="chat-left-text"></sl-icon> AI
-            </a>
             <a href="/Search" class="header-link">
                 <sl-icon name="search"></sl-icon> Search
             </a>
