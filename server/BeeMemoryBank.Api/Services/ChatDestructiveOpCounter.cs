@@ -27,18 +27,8 @@ public sealed class ChatDestructiveOpCounter
 
     private readonly ConcurrentDictionary<Guid, int> _counts = new();
 
-    /// <summary>True if executing one more destructive op in this conversation would exceed the cap
-    /// (i.e. the conversation has already reached <see cref="CapPerConversation"/> executions).</summary>
-    public bool WouldExceed(Guid conversationId)
-        => _counts.GetValueOrDefault(conversationId) >= CapPerConversation;
-
     /// <summary>The configured per-conversation cap.</summary>
     public int Cap => CapPerConversation;
-
-    /// <summary>Record one executed destructive op for a conversation. Called only after a successful
-    /// execution (on user Allow).</summary>
-    public void Record(Guid conversationId)
-        => _counts.AddOrUpdate(conversationId, 1, (_, c) => c + 1);
 
     /// <summary>Atomically reserve a destructive-op slot: checks the cap AND increments in a single
     /// CAS loop, so two concurrent Allows (e.g. two browser tabs, or a rapid double-click that slips

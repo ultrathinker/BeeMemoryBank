@@ -190,182 +190,6 @@ public static class ChatEndpoints
             return Results.Ok();
         });
 
-        // ── Completion (decrypts keys → needs unlocked; Phase 4: multi-key failover) ─────────
-
-        group.MapPost("/complete", async (ChatCompleteRequest req, ChatSettingsRepository repo,
-            OpenRouterClient openRouter, SessionService session, HttpContext ctx) =>
-        {
-            // Decrypting the egress keys needs the master DEK → vault must be unlocked.
-            if (!session.IsUnlocked)
-                return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
-
-            if (string.IsNullOrWhiteSpace(req.Model))
-                return Results.Json(new ErrorResponse("Model is required"), statusCode: 400);
-            if (req.Messages is not { Count: > 0 })
-                return Results.Json(new ErrorResponse("At least one message is required"), statusCode: 400);
-
-            // Phase 4: decrypt every available key (enabled, not cooling down) and try them in priority
-            // order; RunWithFailoverAsync records per-key cooldown/disable/success.
-            var keys = await DecryptAvailableKeysAsync(repo, session);
-            if (keys.Count == 0)
-                return Results.Json(
-                    new ErrorResponse("No chat API key is available (none configured, or all are disabled/cooling down). Have a superadmin add one under /api/chat/keys."),
-                    statusCode: 409);
-
-            try
-            {
-                var result = await RunWithFailoverAsync(repo, keys,
-                    (pk, ct) => openRouter.CompleteAsync(pk, req.Model, req.Messages, ct),
-                    ctx.RequestAborted);
-                return Results.Ok(result);
-            }
-            catch (AllKeysExhaustedException ex)
-            {
-                return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
-            }
-            catch (InvalidOperationException ex)
-            {
-                // Malformed 200 response (empty body / no choices) — not a key failure, no failover.
-                return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
-            }
-            finally
-            {
-                // Drop references to the transient plaintext keys now that the request is done.
-                keys = null!;
-            }
-        });
-
-        // ── Tool-aware message turn (Phase 1: read-only, non-streaming, ephemeral) ─────────
-        //
-        // Runs a server-side tool-call loop: send messages + curated read-only tool definitions
-        // to OpenRouter, execute any tool_calls via ChatToolDispatcher, append the results, and
-        // repeat until the assistant answers without tool calls (capped to avoid runaway loops).
-        // Nothing is persisted here — Phase 2 adds chat_conversation/chat_message storage.
-        //
-        // ACL: the request's ambient CallerScope (set by CallerScopeMiddleware from the Web proxy's
-        // X-User-Id/X-User-Role) flows into every tool, so the AI sees only what the user can.
-        // The /message endpoint itself gates on session.IsUnlocked because decrypting the egress
-        // key needs the master DEK; individual tools re-check IsUnlocked for content reads and
-        // report "locked" as a tool result (plan §1).
-        group.MapPost("/message", async (ChatMessageRequest req, ChatSettingsRepository repo,
-            OpenRouterClient openRouter, ChatToolDispatcher dispatcher, SessionService session,
-            HttpContext ctx) =>
-        {
-            // Decrypting the OpenRouter key needs the master DEK → vault must be unlocked.
-            if (!session.IsUnlocked)
-                return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
-
-            if (string.IsNullOrWhiteSpace(req.Model))
-                return Results.Json(new ErrorResponse("Model is required"), statusCode: 400);
-            // Reject a client-supplied model that isn't in the admin-curated enabled catalogue
-            // (plan §1: the per-conversation picker must only offer enabled models; an arbitrary
-            // OpenRouter model must never run on the shared, admin-funded key).
-            if (!await repo.IsModelEnabledAsync(req.Model))
-                return Results.Json(new ErrorResponse("model not in the enabled catalogue"), statusCode: 400);
-            if (req.Messages is not { Count: > 0 })
-                return Results.Json(new ErrorResponse("At least one message is required"), statusCode: 400);
-
-            var keys = await DecryptAvailableKeysAsync(repo, session);
-            if (keys.Count == 0)
-                return Results.Json(
-                    new ErrorResponse("No chat API key is available (none configured, or all are disabled/cooling down). Have a superadmin add one under /api/chat/keys."),
-                    statusCode: 409);
-
-            // Build the working message list. An optional system prompt is prepended verbatim.
-            var convo = new List<ChatToolMessage>();
-            if (!string.IsNullOrWhiteSpace(req.SystemPrompt))
-                convo.Add(new ChatToolMessage { Role = "system", Content = req.SystemPrompt });
-            foreach (var m in req.Messages)
-                convo.Add(new ChatToolMessage { Role = m.Role, Content = m.Content });
-
-            // Phase 1 /message is unused by the shipped UI (chat.js only calls /stream + /confirm)
-            // and has no confirm gate, so declare READ-ONLY tools only here: every write tool would
-            // be refused by InvokeAsync's confirm-gate guard anyway (verified safe — not a security
-            // bug), but advertising them just makes the model waste iterations trying refused writes.
-            // /stream keeps the FULL tool set (it needs writes for the confirm-gate flow).
-            var tools = ChatToolDispatcher.ToolDefinitions
-                .Where(t => !ChatToolDispatcher.WriteTools.Contains(t.Function.Name))
-                .ToList();
-            var log = new List<ChatToolCallLogEntry>();
-            const int maxIterations = 8;
-
-            try
-            {
-                for (int iteration = 0; iteration < maxIterations; iteration++)
-                {
-                    // Phase 4: each iteration goes through multi-key failover. Non-streaming → every
-                    // failure is at the response (before any output), so failover is always clean.
-                    var turn = await CompleteWithToolsFailoverAsync(
-                        repo, keys, openRouter, req.Model, convo, tools, ctx.RequestAborted);
-
-                    // No tool calls (or none with a function name) → terminal answer.
-                    if (turn.ToolCalls is null || turn.ToolCalls.Count == 0)
-                        return Results.Ok(new ChatMessageResponse(
-                            Content: turn.Content ?? "",
-                            Model: turn.Model,
-                            Iterations: iteration + 1,
-                            ToolCalls: log));
-
-                    // Record the assistant's tool-call turn verbatim so the model sees its own request.
-                    convo.Add(new ChatToolMessage
-                    {
-                        Role = "assistant",
-                        Content = turn.Content,
-                        ToolCalls = turn.ToolCalls.Select(tc => new ChatToolCall
-                        {
-                            Id = tc.Id,
-                            Function = new ChatToolCallFunction { Name = tc.Name, Arguments = tc.ArgumentsJson }
-                        }).ToList()
-                    });
-
-                    // Execute each tool call and append its result as a role="tool" message.
-                    foreach (var tc in turn.ToolCalls)
-                    {
-                        JsonElement args;
-                        try
-                        {
-                            // Empty arguments → treat as an empty object so tools report a clear
-                            // "X is required" result instead of throwing on a default JsonElement.
-                            var raw = string.IsNullOrWhiteSpace(tc.ArgumentsJson) ? "{}" : tc.ArgumentsJson;
-                            args = JsonDocument.Parse(raw).RootElement.Clone();
-                        }
-                        catch (JsonException)
-                        {
-                            // Malformed arguments from the model → report back so it can self-correct.
-                            convo.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = "{\"error\":\"malformed arguments JSON\"}" });
-                            log.Add(new ChatToolCallLogEntry(tc.Name, Ok: false, DurationMs: 0, Error: "malformed arguments JSON"));
-                            continue;
-                        }
-
-                        var result = await dispatcher.InvokeAsync(tc.Name, args, ctx);
-                        log.Add(new ChatToolCallLogEntry(tc.Name, result.Ok, result.DurationMs, result.Error));
-                        convo.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = result.Json });
-                    }
-                }
-
-                // Loop cap reached — return whatever the last turn produced (best-effort) with a notice.
-                return Results.Ok(new ChatMessageResponse(
-                    Content: "(reached the maximum number of tool-call rounds without a final answer — try rephrasing)",
-                    Model: req.Model,
-                    Iterations: maxIterations,
-                    ToolCalls: log));
-            }
-            catch (AllKeysExhaustedException ex)
-            {
-                return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
-            }
-            catch (InvalidOperationException ex)
-            {
-                // Malformed 200 response (empty body / no choices) — not a key failure, no failover.
-                return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
-            }
-            finally
-            {
-                // Drop references to the transient plaintext keys now that the turn is done.
-                keys = null!;
-            }
-        });
-
         // ── Phase 2: STREAMING tool-loop turn + persistence ─────────────────────────
         //
         // Runs the SAME tool-call loop as /message, but writes the response as a Server-Sent Events
@@ -1189,19 +1013,6 @@ public static class ChatEndpoints
         throw new AllKeysExhaustedException(last?.Message ?? "All configured API keys failed.");
     }
 
-    /// <summary>Non-streaming tool-loop iteration with multi-key failover. Thin wrapper over
-    /// <see cref="RunWithFailoverAsync{T}"/> so /message gets the same per-key circuit breaker.</summary>
-    private static Task<ToolCompletionResult> CompleteWithToolsFailoverAsync(
-        ChatSettingsRepository repo, IReadOnlyList<KeyMaterial> keys,
-        OpenRouterClient openRouter, string model,
-        IReadOnlyList<ChatToolMessage> messages, IReadOnlyList<ChatToolDefinition> tools,
-        CancellationToken ct)
-    {
-        return RunWithFailoverAsync(repo, keys,
-            (pk, token) => openRouter.CompleteWithToolsAsync(pk, model, messages, tools, token),
-            ct);
-    }
-
     // Short display fragment (never the full secret). Mirrors AgentKeyHelper.GetKeyPrefix length.
     private static string ComputeKeyPrefix(string apiKey)
         => apiKey.Length > 12 ? string.Concat(apiKey.AsSpan(0, 12), "…") : apiKey;
@@ -1435,13 +1246,14 @@ public static class ChatEndpoints
         {
             try
             {
-                // SSRF guard: the model response can name ANY host. Reject loopback / RFC1918
-                // private / link-local (incl. 169.254.169.254 cloud metadata) / multicast /
-                // unspecified destinations so a malicious/compromised model cannot use this
-                // server-side fetch to reach internal services or the app's own ports.
-                if (await IsDisallowedImageHostAsync(uri, ct))
-                    return (null, "image/png");
-
+                // SSRF guard lives entirely in ImageFetchClient's ConnectCallback: it resolves the
+                // host ONCE, rejects loopback / RFC1918 / IPv6 ULA / link-local (incl. the
+                // 169.254.169.254 cloud-metadata endpoint) / multicast / unspecified addresses, and
+                // connects to the validated IP — so a malicious/compromised model cannot reach
+                // internal services or the app's own ports, cannot bypass the check via a redirect
+                // (AllowAutoRedirect=false), and cannot win a DNS-rebinding race (the validated
+                // address IS the connected address). A disallowed host throws here and the catch
+                // below maps it to a null result.
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(TimeSpan.FromSeconds(20));
                 using var resp = await ImageFetchClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cts.Token);
@@ -1467,34 +1279,6 @@ public static class ChatEndpoints
         // Bare base64 (e.g. a b64_json value that slipped through without a data: prefix).
         try { return (Convert.FromBase64String(source), "image/png"); }
         catch { return (null, "image/png"); }
-    }
-
-    /// <summary>SSRF guard for the model-returned image fetch. A malicious/compromised model can
-    /// name ANY host in its image_url response; without this check it could point the server-side
-    /// fetch at loopback / RFC1918 private ranges / the link-local cloud-metadata endpoint
-    /// (169.254.169.254) / the app's own internal ports. Resolves the host and rejects if any
-    /// resolved address is loopback / private / link-local / multicast / broadcast / unspecified,
-    /// or if the host is unresolvable. A single DNS lookup before connect — the standard pragmatic
-    /// mitigation; a TOCTOU via DNS rebinding is out of scope for this targeted fix.</summary>
-    private static async Task<bool> IsDisallowedImageHostAsync(Uri uri, CancellationToken ct)
-    {
-        var host = uri.Host;
-        if (string.IsNullOrEmpty(host)) return true;
-
-        IPAddress[] addrs;
-        if (IPAddress.TryParse(host, out var literal))
-            addrs = new[] { literal };
-        else
-        {
-            try { addrs = await Dns.GetHostAddressesAsync(host, ct); }
-            catch { return true; } // unresolvable → reject
-        }
-
-        foreach (var a in addrs)
-        {
-            if (IsPrivateOrLoopbackAddress(a)) return true;
-        }
-        return false;
     }
 
     /// <summary>True for loopback / private / link-local / multicast / broadcast / unspecified
@@ -1525,6 +1309,7 @@ public static class ChatEndpoints
             var b6 = a.GetAddressBytes();
             if (b6.Length == 16)
             {
+                if ((b6[0] & 0xFE) == 0xFC) return true; // ULA fc00::/7 (RFC4193, the IPv6 RFC1918 analogue)
                 var allZero = true;
                 for (int i = 0; i < 16; i++) { if (b6[i] != 0) { allZero = false; break; } }
                 if (allZero) return true; // IPv6 unspecified "::"
@@ -1538,7 +1323,67 @@ public static class ChatEndpoints
     // (recommended HttpClient usage). NOT the pinned OpenRouter egress client — these are image CDN
     // URLs returned by OpenRouter/providers for a user-requested generation, fetched server-side so
     // they render inline under the strict img-src CSP. See ResolveImageSourceToBytesAsync.
-    private static readonly HttpClient ImageFetchClient = new() { Timeout = TimeSpan.FromSeconds(25) };
+    //
+    // SSRF HARDENING (the handler does BOTH jobs):
+    //  - AllowAutoRedirect = false → a public host that passes the address check cannot 302 to an
+    //    internal address; any 3xx is a non-success status and ResolveImageSourceToBytesAsync
+    //    rejects it (closes the redirect-bypass).
+    //  - ConnectCallback → resolves the host to IP(s) ONCE, validates EVERY resolved address via
+    //    IsPrivateOrLoopbackAddress, and connects DIRECTLY to a validated IP. The address that was
+    //    validated is therefore the EXACT address connected to — closing the DNS-rebinding TOCTOU
+    //    a separate "check-then-connect" pair would leave open.
+    private static readonly HttpClient ImageFetchClient = BuildImageFetchClient();
+
+    private static HttpClient BuildImageFetchClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            ConnectCallback = async (ctx, ct) =>
+            {
+                var host = ctx.DnsEndPoint.Host;
+                var port = ctx.DnsEndPoint.Port;
+
+                IPAddress[] addrs;
+                if (IPAddress.TryParse(host, out var literal))
+                    addrs = new[] { literal };
+                else
+                {
+                    try { addrs = await Dns.GetHostAddressesAsync(host, ct); }
+                    catch { throw new HttpRequestException($"Unable to resolve image host '{host}'."); }
+                }
+
+                // Reject the whole request if ANY resolved address is disallowed (loopback /
+                // RFC1918 / IPv6 ULA / link-local incl. cloud metadata / multicast / unspecified).
+                IPAddress? chosen = null;
+                foreach (var a in addrs)
+                {
+                    if (IsPrivateOrLoopbackAddress(a))
+                        throw new HttpRequestException($"Refusing to fetch an image from a private/loopback address ({a}).");
+                    chosen ??= a;
+                }
+                if (chosen is null)
+                    throw new HttpRequestException($"Image host '{host}' resolved to no usable address.");
+
+                // Connect to the validated IP directly (not a DnsEndPoint, which would re-resolve
+                // and re-open the rebinding window). ownsSocket:true so disposing this stream
+                // disposes the socket.
+                var socket = new Socket(chosen.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                try
+                {
+                    await socket.ConnectAsync(new IPEndPoint(chosen, port), ct);
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+            }
+        };
+        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
+    }
 
     // ── Phase 2 helpers ─────────────────────────────────────────────────────────
 

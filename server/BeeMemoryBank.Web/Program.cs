@@ -925,16 +925,6 @@ app.MapDelete("/api-proxy/chat/keys/{id:guid}", async (Guid id, ApiClient api) =
     return Results.Content(body ?? "", "application/json", null, statusCode: status);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
-// Non-streaming tool-aware message turn — open to any authenticated user (the Api /message
-// endpoint enforces session.IsUnlocked + ACL via the ambient CallerScope).
-app.MapPost("/api-proxy/chat/message", async (HttpContext ctx, ApiClient api) =>
-{
-    using var sr = new StreamReader(ctx.Request.Body);
-    var json = await sr.ReadToEndAsync();
-    var (ok, body, status) = await api.PostRawAsync("chat/message", json);
-    return Results.Content(body ?? "", "application/json", null, statusCode: status);
-}).RequireAuthorization();
-
 // ─── AI Chat proxy (Phase 2) — SSE streaming + conversation history ───────────
 // See docs/ai-chat-implementation-plan.md §2 Phase 2 + §6 ("Streaming disambiguated").
 

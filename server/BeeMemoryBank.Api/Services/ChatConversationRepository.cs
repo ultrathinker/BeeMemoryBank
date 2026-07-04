@@ -11,13 +11,6 @@ public sealed class ChatConversationRepository(ChatDbConnectionFactory factory) 
     private const string Cols = @"id AS Id, user_id AS UserId, title AS Title,
         created_at AS CreatedAt, updated_at AS UpdatedAt";
 
-    public async Task<Models.ChatConversation?> GetByIdAsync(Guid id)
-    {
-        using var conn = OpenConnection();
-        return await conn.QuerySingleOrDefaultAsync<Models.ChatConversation>(
-            $"SELECT {Cols} FROM chat_conversation WHERE id = @id", new { id });
-    }
-
     /// <summary>User-scoped read (Phase 2). Returns null when the conversation does not exist OR is
     /// owned by a different user — so the conversation/message endpoints can enforce "a user must
     /// never see another user's conversations" with a single lookup (plan §2 Phase 2). chat.db has
@@ -66,7 +59,12 @@ public sealed class ChatConversationRepository(ChatDbConnectionFactory factory) 
     public async Task DeleteAsync(Guid id)
     {
         using var conn = OpenConnection();
-        // ON semantics are app-managed (chat_message has no FK); delete children first.
+        // ON semantics are app-managed (no FKs/cascades): chat_attachment → chat_message →
+        // chat_conversation. Delete the attachments that reference this conversation's messages
+        // BEFORE the messages go away, otherwise their blobs are orphaned in chat.db forever.
+        await conn.ExecuteAsync(
+            "DELETE FROM chat_attachment WHERE message_id IN (SELECT id FROM chat_message WHERE conversation_id = @id)",
+            new { id });
         await conn.ExecuteAsync("DELETE FROM chat_message WHERE conversation_id = @id", new { id });
         await conn.ExecuteAsync("DELETE FROM chat_conversation WHERE id = @id", new { id });
     }

@@ -33,15 +33,6 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
             $"SELECT {KeyCols} FROM chat_api_key ORDER BY priority ASC, created_at ASC")).ToList();
     }
 
-    /// <summary>Enabled keys eligible for egress, highest priority first. Cooldown/last_error
-    /// handling (Phase 4 multi-key failover) is layered on top of this later.</summary>
-    public async Task<List<Models.ChatApiKey>> ListEnabledOrderedAsync()
-    {
-        using var conn = OpenConnection();
-        return (await conn.QueryAsync<Models.ChatApiKey>(
-            $"SELECT {KeyCols} FROM chat_api_key WHERE enabled = 1 ORDER BY priority ASC, created_at ASC")).ToList();
-    }
-
     /// <summary>Phase 4: enabled keys that are ALSO eligible right now — i.e. not currently in a
     /// cooldown window (<c>disabled_until</c> NULL or in the past), ordered by priority then age. This
     /// is the failover candidate list: a 402/429 sets a future <c>disabled_until</c>, dropping the key
