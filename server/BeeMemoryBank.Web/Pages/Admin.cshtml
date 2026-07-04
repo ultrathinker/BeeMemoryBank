@@ -992,11 +992,26 @@
 
         // Default-model dropdowns: each lists only models with the matching capability, sorted
         // oldest-first (matching the grid), with "Default" as the first option (= oldest-with-property).
+        // Guard against saveDefaults() firing from PROGRAMMATIC value assignment during
+        // loadDefaults()'s initial population (Shoelace's <sl-select> can emit its own
+        // 'sl-change' as a side effect of setting .value right after dynamically appending
+        // <sl-option> children — the exact same class of bug already fixed once in the /AI
+        // chat model picker). Without this guard, loading the page could immediately re-PATCH
+        // whatever partial/empty values the three selects happen to hold mid-population,
+        // clobbering an already-saved pin with null — which is what "my selection doesn't
+        // stick" looks like from the user's side.
+        var suppressSaveDefaults = false;
+
         function loadDefaults() {
             fetch('/api-proxy/chat/settings/defaults').then(function (r) { return r.ok ? r.json() : { defaultTextModelId: null, defaultVisionModelId: null, defaultImageGenModelId: null }; }).then(function (defaults) {
+                suppressSaveDefaults = true;
                 populateDefaultSelect('default-text-model', function (m) { return m.isText; }, defaults.defaultTextModelId);
                 populateDefaultSelect('default-vision-model', function (m) { return m.isVision; }, defaults.defaultVisionModelId);
                 populateDefaultSelect('default-imagegen-model', function (m) { return m.isImageGen; }, defaults.defaultImageGenModelId);
+                // Re-enable saving on the NEXT tick, after Shoelace's own internal reconciliation
+                // (and any 'sl-change' it dispatches as a side effect of the .value assignments
+                // above) has had a chance to run and settle.
+                setTimeout(function () { suppressSaveDefaults = false; }, 0);
             }).catch(function () {});
         }
         function populateDefaultSelect(selectId, filterFn, selectedId) {
@@ -1013,9 +1028,15 @@
                 opt.textContent = m.label || m.modelId;
                 sel.appendChild(opt);
             });
-            sel.value = selectedId || '';
+            // Defer setting .value to the next tick — right after appendChild, Shoelace's
+            // <sl-option> custom elements may not be upgraded/registered yet, so an immediate
+            // .value assignment can silently fail to select anything (reverting to the first
+            // option, "Default"). This is the same timing gotcha already worked around
+            // elsewhere in this app for dynamically populated <sl-select> lists.
+            setTimeout(function () { sel.value = selectedId || ''; }, 0);
         }
         function saveDefaults() {
+            if (suppressSaveDefaults) return;
             fetch('/api-proxy/chat/settings/defaults', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
