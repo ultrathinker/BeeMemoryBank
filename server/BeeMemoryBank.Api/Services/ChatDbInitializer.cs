@@ -33,7 +33,51 @@ public sealed class ChatDbInitializer
             await cmd.ExecuteNonQueryAsync();
         }
 
+        // Additive column migrations for existing tables. The CREATE TABLE IF NOT EXISTS
+        // statements above are a no-op on an existing DB, so these guarded ALTERs bring an
+        // older chat.db up to the current schema. Each is skipped if the column already exists
+        // (checked via PRAGMA table_info) so re-running is safe.
+        await EnsureColumnAsync(conn, "chat_model", "is_text",
+            "ALTER TABLE chat_model ADD COLUMN is_text INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnAsync(conn, "chat_model", "is_vision",
+            "ALTER TABLE chat_model ADD COLUMN is_vision INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnAsync(conn, "chat_model", "is_image_gen",
+            "ALTER TABLE chat_model ADD COLUMN is_image_gen INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnAsync(conn, "chat_model", "created_at",
+            "ALTER TABLE chat_model ADD COLUMN created_at TEXT");
+        await EnsureColumnAsync(conn, "chat_settings", "default_text_model_id",
+            "ALTER TABLE chat_settings ADD COLUMN default_text_model_id TEXT");
+        await EnsureColumnAsync(conn, "chat_settings", "default_vision_model_id",
+            "ALTER TABLE chat_settings ADD COLUMN default_vision_model_id TEXT");
+        await EnsureColumnAsync(conn, "chat_settings", "default_image_gen_model_id",
+            "ALTER TABLE chat_settings ADD COLUMN default_image_gen_model_id TEXT");
+
         _logger.LogInformation("chat.db schema initialized");
+    }
+
+    /// <summary>Adds a column to a table only if it doesn't already exist. Idempotent — uses
+    /// PRAGMA table_info to check before issuing the ALTER, so re-running on an already-migrated
+    /// DB is a no-op (never throws "duplicate column name").</summary>
+    private static async Task EnsureColumnAsync(SqliteConnection conn, string table, string column, string alterSql)
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var checkCmd = conn.CreateCommand())
+        {
+            checkCmd.CommandText = $"PRAGMA table_info({table})";
+            await using var reader = await checkCmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                if (reader["name"] is string name && !string.IsNullOrEmpty(name))
+                    existing.Add(name);
+            }
+        }
+
+        if (existing.Contains(column))
+            return;
+
+        await using var alterCmd = conn.CreateCommand();
+        alterCmd.CommandText = alterSql;
+        await alterCmd.ExecuteNonQueryAsync();
     }
 
     // Schema per plan §3. chat_api_key stores only (ciphertext, iv) — the
@@ -96,17 +140,26 @@ public sealed class ChatDbInitializer
             label                 TEXT NOT NULL,
             category              TEXT NOT NULL,
             default_for_category  INTEGER NOT NULL DEFAULT 0,
-            enabled               INTEGER NOT NULL DEFAULT 1
+            enabled               INTEGER NOT NULL DEFAULT 1,
+            is_text               INTEGER NOT NULL DEFAULT 0,
+            is_vision             INTEGER NOT NULL DEFAULT 0,
+            is_image_gen          INTEGER NOT NULL DEFAULT 0,
+            created_at            TEXT
         );
         """,
-        // Single-row settings table (id is always 1). Currently holds only auto_approve_writes —
-        // a superadmin-only opt-in that skips the human-in-the-loop confirm gate for write tools
-        // (the user has explicit article history/restore as a safety net). Node-local like the
-        // rest of chat.db; never synced.
+        // Single-row settings table (id is always 1). Holds auto_approve_writes (superadmin-only
+        // opt-in that skips the human-in-the-loop confirm gate for write tools) and the three
+        // pinned default-model ids (nullable GUIDs referencing chat_model.id; null = "use the
+        // oldest model with the matching property"). Node-local like the rest of chat.db; never
+        // synced. The old category/enabled/default_for_category columns on chat_model are kept
+        // for backward compatibility but are no longer read or written by application code.
         """
         CREATE TABLE IF NOT EXISTS chat_settings (
-            id                    INTEGER PRIMARY KEY CHECK (id = 1),
-            auto_approve_writes   INTEGER NOT NULL DEFAULT 0
+            id                         INTEGER PRIMARY KEY CHECK (id = 1),
+            auto_approve_writes        INTEGER NOT NULL DEFAULT 0,
+            default_text_model_id      TEXT,
+            default_vision_model_id    TEXT,
+            default_image_gen_model_id TEXT
         );
         """,
         "INSERT OR IGNORE INTO chat_settings (id, auto_approve_writes) VALUES (1, 0);"

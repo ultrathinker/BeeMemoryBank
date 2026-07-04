@@ -137,72 +137,96 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
     }
 
     // ── chat_model ────────────────────────────────────────────────────────────
+    //
+    // Each model has three independent capability booleans (is_text, is_vision, is_image_gen).
+    // A model existing in the catalogue means it's usable — there is no enabled/disabled concept
+    // anymore. Everything is sorted by created_at ASC (oldest first), consistently, so the admin
+    // grid and every dropdown that lists models present the same order.
 
     private const string ModelCols = @"id AS Id, model_id AS ModelId, label AS Label,
-        category AS Category, default_for_category AS DefaultForCategory, enabled AS Enabled";
+        is_text AS IsText, is_vision AS IsVision, is_image_gen AS IsImageGen, created_at AS CreatedAt";
 
+    /// <summary>All models for the picker / catalogue, oldest-first. Since "a model existing means
+    /// it's usable", this returns every row (the old enabled filter is gone).</summary>
     public async Task<List<Models.ChatModelRow>> ListEnabledAsync()
     {
         using var conn = OpenConnection();
         return (await conn.QueryAsync<Models.ChatModelRow>(
-            $"SELECT {ModelCols} FROM chat_model WHERE enabled = 1 ORDER BY category ASC, label ASC")).ToList();
+            $"SELECT {ModelCols} FROM chat_model ORDER BY created_at ASC")).ToList();
     }
 
-    /// <summary>All models (enabled + disabled) for the admin catalogue UI. Ordered for stable display.</summary>
+    /// <summary>All models for the admin catalogue UI. Ordered oldest-first by created_at.</summary>
     public async Task<List<Models.ChatModelRow>> ListAllModelsAsync()
     {
         using var conn = OpenConnection();
         return (await conn.QueryAsync<Models.ChatModelRow>(
-            $"SELECT {ModelCols} FROM chat_model ORDER BY category ASC, label ASC")).ToList();
+            $"SELECT {ModelCols} FROM chat_model ORDER BY created_at ASC")).ToList();
     }
 
-    /// <summary>Phase 5: resolves the category of a model by its model_id (the value the
-    /// per-conversation picker sends), preferring enabled models but falling back to any row so an
-    /// admin can still pick a disabled-by-typ model. Returns null when the model_id is unknown
-    /// (the caller then treats it as plain "text"). Used by the chat stream endpoint to decide
-    /// whether to accept an attached image (vision only) or run the image-generation path.</summary>
-    public async Task<string?> GetCategoryByModelIdAsync(string modelId)
+    /// <summary>Fetches a single model by its GUID id (used to check whether a pinned default
+    /// still exists). Returns null when the id is unknown.</summary>
+    public async Task<Models.ChatModelRow?> GetModelByIdAsync(Guid id)
     {
         using var conn = OpenConnection();
-        // Enabled first; if none enabled, fall back to a disabled row with the same id.
-        var enabled = await conn.QuerySingleOrDefaultAsync<string>(
-            "SELECT category FROM chat_model WHERE model_id = @modelId AND enabled = 1 LIMIT 1",
-            new { modelId });
-        if (enabled != null) return enabled;
-        return await conn.QuerySingleOrDefaultAsync<string>(
-            "SELECT category FROM chat_model WHERE model_id = @modelId LIMIT 1",
-            new { modelId });
+        return await conn.QuerySingleOrDefaultAsync<Models.ChatModelRow>(
+            $"SELECT {ModelCols} FROM chat_model WHERE id = @id", new { id });
     }
 
-    /// <summary>True iff a model with the given <paramref name="modelId"/> is in the
-    /// admin-curated enabled catalogue. Used by the chat completion endpoints (/stream, /message,
-    /// /confirm's resume model) to reject a client-supplied model that isn't enabled — so an
-    /// authenticated non-superadmin user cannot pick an arbitrary/expensive OpenRouter model never
-    /// added to the catalogue and run it on the shared, node-global, admin-funded key(s)
-    /// (plan §1 "curated/categorized model catalogue").</summary>
-    public async Task<bool> IsModelEnabledAsync(string modelId)
+    /// <summary>Resolves the effective model for a given capability at the start of a chat turn.
+    /// <para>Logic: if a model is pinned for this capability (via chat_settings) AND that model
+    /// still exists in the catalogue, use it. Otherwise fall back to the oldest model (by
+    /// created_at) that has the capability flag set. Returns null when no model has the
+    /// capability at all (the caller degrades gracefully — e.g. rejects an image attachment if
+    /// no vision model is configured).</para>
+    /// <param name="propertyColumn">One of <c>"is_text"</c>, <c>"is_vision"</c>,
+    /// <c>"is_image_gen"</c>.</param>
+    /// <param name="pinnedIdStr">The pinned model GUID as a string (from chat_settings), or
+    /// null/empty for "Default" (oldest-with-property).</param></summary>
+    public async Task<Models.ChatModelRow?> ResolveEffectiveModelAsync(string propertyColumn, string? pinnedIdStr)
     {
         using var conn = OpenConnection();
-        return await conn.ExecuteScalarAsync<bool>(
-            "SELECT COUNT(1) FROM chat_model WHERE model_id = @modelId AND enabled = 1",
-            new { modelId });
+
+        if (!string.IsNullOrWhiteSpace(pinnedIdStr) && Guid.TryParse(pinnedIdStr, out var pinnedId))
+        {
+            var pinned = await conn.QuerySingleOrDefaultAsync<Models.ChatModelRow>(
+                $"SELECT {ModelCols} FROM chat_model WHERE id = @id", new { id = pinnedId });
+            if (pinned != null) return pinned;
+        }
+
+        // Fall back to the oldest model with the requested capability. The column name is validated
+        // by the switch (never interpolated from untrusted input).
+        var col = propertyColumn switch
+        {
+            "is_text" => "is_text",
+            "is_vision" => "is_vision",
+            "is_image_gen" => "is_image_gen",
+            _ => throw new ArgumentException($"Unknown model property column: {propertyColumn}", nameof(propertyColumn))
+        };
+        return await conn.QuerySingleOrDefaultAsync<Models.ChatModelRow>(
+            $"SELECT {ModelCols} FROM chat_model WHERE {col} = 1 ORDER BY created_at ASC LIMIT 1");
     }
 
-    /// <summary>Toggles a model's enabled flag (admin catalogue). Label/category are immutable here.</summary>
-    public async Task UpdateModelMetadataAsync(Guid id, bool? enabled)
+    /// <summary>Updates a model's three capability booleans (admin catalogue edit dialog).
+    /// Each is optional (null = unchanged).</summary>
+    public async Task UpdateModelMetadataAsync(Guid id, bool? isText, bool? isVision, bool? isImageGen)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
-            "UPDATE chat_model SET enabled = COALESCE(@enabled, enabled) WHERE id = @id",
-            new { id, enabled });
+            @"UPDATE chat_model
+                 SET is_text    = COALESCE(@isText, is_text),
+                     is_vision  = COALESCE(@isVision, is_vision),
+                     is_image_gen = COALESCE(@isImageGen, is_image_gen)
+               WHERE id = @id",
+            new { id, isText, isVision, isImageGen });
     }
 
     public async Task CreateAsync(Models.ChatModelRow model)
     {
         using var conn = OpenConnection();
+        // 'text' is a placeholder for the legacy NOT NULL category column (unused by app code).
         await conn.ExecuteAsync(
-            @"INSERT INTO chat_model (id, model_id, label, category, default_for_category, enabled)
-              VALUES (@Id, @ModelId, @Label, @Category, @DefaultForCategory, @Enabled)",
+            @"INSERT INTO chat_model (id, model_id, label, category, is_text, is_vision, is_image_gen, created_at)
+              VALUES (@Id, @ModelId, @Label, 'text', @IsText, @IsVision, @IsImageGen, @CreatedAt)",
             model);
     }
 
@@ -210,6 +234,33 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync("DELETE FROM chat_model WHERE id = @id", new { id });
+    }
+
+    // ── chat_settings — pinned default models (single row, id=1) ────────────────
+
+    /// <summary>Returns the three pinned default-model ids (nullable GUID strings). Null means
+    /// "Default" (use the oldest model with the matching property).</summary>
+    public async Task<(string? TextId, string? VisionId, string? ImageGenId)> GetDefaultModelIdsAsync()
+    {
+        using var conn = OpenConnection();
+        var row = await conn.QuerySingleOrDefaultAsync<dynamic>(
+            "SELECT default_text_model_id, default_vision_model_id, default_image_gen_model_id FROM chat_settings WHERE id = 1");
+        if (row == null) return (null, null, null);
+        return ((string?)row.default_text_model_id, (string?)row.default_vision_model_id, (string?)row.default_image_gen_model_id);
+    }
+
+    /// <summary>Sets the three pinned default-model ids. Pass null/empty to un-pin (fall back to
+    /// oldest-with-property).</summary>
+    public async Task SetDefaultModelIdsAsync(string? textId, string? visionId, string? imageGenId)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE chat_settings
+                 SET default_text_model_id    = @textId,
+                     default_vision_model_id  = @visionId,
+                     default_image_gen_model_id = @imageGenId
+               WHERE id = 1",
+            new { textId, visionId, imageGenId });
     }
 
     // ── chat_settings (single row, id=1) ────────────────────────────────────────

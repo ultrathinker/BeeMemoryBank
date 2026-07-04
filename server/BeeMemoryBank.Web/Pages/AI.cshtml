@@ -15,6 +15,10 @@
            destination page with no sidebar at all, since nothing outside #page-content ever gets
            re-inserted by the swap. */
         body.ai-chat-page #app-sidebar { display: none; }
+        /* .main-content's global padding (site.css) is 24px top+bottom. Combined with this page's
+           own height:calc(100vh - 96px) flex column, that padding eats into the box, leaving a
+           visible empty strip below the composer. Shrink it to a small margin on this page only. */
+        body.ai-chat-page .main-content { padding-bottom: 8px; }
     </style>
 }
 <script>document.body.classList.add('ai-chat-page');</script>
@@ -37,9 +41,6 @@
 
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
             <h2 style="margin:0;"><sl-icon name="chat-left-text"></sl-icon> AI Chat</h2>
-            <div style="display:flex;align-items:center;gap:8px;">
-                <sl-select id="chat-model" size="small" placeholder="Select a model" style="min-width:240px;max-width:46vw;min-height:2.2rem;"></sl-select>
-            </div>
         </div>
 
         <!-- Empty / not-configured states -->
@@ -56,7 +57,7 @@
             <!-- Phase 5: image-attach preview (shown only when an image is staged) -->
             <div id="chat-attach-preview" style="display:none;margin-bottom:6px;"></div>
             <div style="display:flex;gap:8px;align-items:flex-end;">
-                <!-- Phase 5: image-attach control (enabled only for vision models via chat.js) -->
+                <!-- Image-attach control (always available — the server decides routing) -->
                 <sl-button id="chat-attach" variant="default" outline style="height:fit-content;flex-shrink:0;" title="Attach an image">
                     <sl-icon slot="prefix" name="image"></sl-icon>
                 </sl-button>

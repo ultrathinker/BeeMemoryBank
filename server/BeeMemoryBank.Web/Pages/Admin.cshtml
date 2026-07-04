@@ -705,21 +705,55 @@
             <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add model
         </sl-button>
     </div>
-    <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:24px;">
         <table class="version-table">
             <thead>
                 <tr>
                     <th>Label</th>
                     <th>Model ID</th>
-                    <th>Category</th>
-                    <th>Enabled</th>
+                    <th style="text-align:center;">Text</th>
+                    <th style="text-align:center;">Vision</th>
+                    <th style="text-align:center;">Image gen</th>
                     <th style="text-align:right;">Actions</th>
                 </tr>
             </thead>
             <tbody id="chat-models-body">
-                <tr><td colspan="5" class="text-muted text-sm" style="text-align:center;padding:16px;">Loading…</td></tr>
+                <tr><td colspan="6" class="text-muted text-sm" style="text-align:center;padding:16px;">Loading…</td></tr>
             </tbody>
         </table>
+    </div>
+
+    <!-- Default models: three pinned-default dropdowns. "Default" = oldest model with the matching
+         property; picking a specific model pins it. -->
+    <div style="margin-bottom:8px;">
+        <strong>Default models</strong>
+        <p class="text-muted text-sm" style="margin:4px 0 0 0;">
+            Pin a specific model for each role, or leave on "Default" to use the oldest model with
+            that capability. The text model is the entry point for every chat turn.
+        </p>
+    </div>
+    <div class="card" style="padding:16px;margin-bottom:32px;">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default text model</label>
+                <sl-select id="default-text-model" size="small" placeholder="Default">
+                    <sl-option value="">Default</sl-option>
+                </sl-select>
+            </div>
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default vision model</label>
+                <sl-select id="default-vision-model" size="small" placeholder="Default">
+                    <sl-option value="">Default</sl-option>
+                </sl-select>
+            </div>
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default image-gen model</label>
+                <sl-select id="default-imagegen-model" size="small" placeholder="Default">
+                    <sl-option value="">Default</sl-option>
+                </sl-select>
+            </div>
+        </div>
+        <p id="chat-defaults-hint" class="text-muted" style="font-size:0.74rem;margin:8px 0 0 0;"></p>
     </div>
 
     <sl-dialog id="dlg-add-chat-key" label="Add OpenRouter key" style="--width:480px;">
@@ -746,18 +780,34 @@
         <div style="margin-bottom:16px;">
             <sl-input id="chat-model-label" label="Label" placeholder="e.g. GPT-4o mini" required></sl-input>
         </div>
-        <div style="margin-bottom:16px;">
-            <sl-select id="chat-model-category" value="text">
-                <sl-option value="text">text</sl-option>
-                <sl-option value="vision">vision</sl-option>
-                <sl-option value="image-gen">image-gen</sl-option>
-            </sl-select>
-            <div class="text-muted text-sm" style="margin-top:4px;">Phase 1 uses text-category models only.</div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
+            <sl-checkbox id="chat-model-text" checked>Text</sl-checkbox>
+            <sl-checkbox id="chat-model-vision">Vision (accepts images)</sl-checkbox>
+            <sl-checkbox id="chat-model-imagegen">Image generation</sl-checkbox>
         </div>
-        <sl-checkbox id="chat-model-enabled" checked>Enabled</sl-checkbox>
+        <p class="text-muted text-sm">A model can have multiple capabilities (e.g. both text AND vision).</p>
         <sl-button slot="footer" type="button" variant="default" onclick="document.getElementById('dlg-add-chat-model').hide()">Cancel</sl-button>
         <sl-button slot="footer" type="button" variant="primary" id="btn-save-chat-model">
             <sl-icon slot="prefix" name="save"></sl-icon> Save model
+        </sl-button>
+    </sl-dialog>
+
+    <sl-dialog id="dlg-edit-chat-model" label="Edit model" style="--width:480px;">
+        <div style="margin-bottom:16px;">
+            <sl-input id="edit-chat-model-id" label="Model ID" disabled></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input id="edit-chat-model-label" label="Label" disabled></sl-input>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
+            <sl-checkbox id="edit-chat-model-text">Text</sl-checkbox>
+            <sl-checkbox id="edit-chat-model-vision">Vision (accepts images)</sl-checkbox>
+            <sl-checkbox id="edit-chat-model-imagegen">Image generation</sl-checkbox>
+        </div>
+        <p class="text-muted text-sm">Toggle which capabilities this model provides.</p>
+        <sl-button slot="footer" type="button" variant="default" onclick="document.getElementById('dlg-edit-chat-model').hide()">Cancel</sl-button>
+        <sl-button slot="footer" type="button" variant="primary" id="btn-save-edit-chat-model">
+            <sl-icon slot="prefix" name="save"></sl-icon> Save
         </sl-button>
     </sl-dialog>
 
@@ -813,33 +863,49 @@
             }).catch(function () { keysBody.innerHTML = '<tr><td colspan="7" class="text-muted text-sm">Failed to load keys.</td></tr>'; });
         }
 
+        var modelsCache = [];
+        var editingModelId = null;
+
         function loadModels() {
             fetch('/api-proxy/chat/models/all').then(function (r) { return r.json(); }).then(function (models) {
-                if (!Array.isArray(models) || models.length === 0) {
-                    modelsBody.innerHTML = '<tr><td colspan="5" class="text-muted text-sm" style="text-align:center;padding:16px;">No models. Add a text model to enable AI chat.</td></tr>';
+                modelsCache = Array.isArray(models) ? models : [];
+                if (modelsCache.length === 0) {
+                    modelsBody.innerHTML = '<tr><td colspan="6" class="text-muted text-sm" style="text-align:center;padding:16px;">No models. Add one (with the Text capability) to enable AI chat.</td></tr>';
+                    loadDefaults();
                     return;
                 }
-                modelsBody.innerHTML = models.map(function (m) {
+                modelsBody.innerHTML = modelsCache.map(function (m) {
                     return '<tr>'
                         + '<td><strong>' + esc(m.label) + '</strong></td>'
                         + '<td><code class="text-sm">' + esc(m.modelId) + '</code></td>'
-                        + '<td class="text-muted text-sm">' + esc(m.category || 'text') + '</td>'
-                        + '<td><sl-switch data-model-id="' + m.id + '" ' + (m.enabled ? 'checked' : '') + ' onsl-change="toggleChatModel"></sl-switch></td>'
-                        + '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" data-model-id="' + m.id + '" onclick="deleteChatModel(this.dataset.modelId)"></sl-icon-button></td>'
+                        + '<td style="text-align:center;"><sl-checkbox disabled ' + (m.isText ? 'checked' : '') + '></sl-checkbox></td>'
+                        + '<td style="text-align:center;"><sl-checkbox disabled ' + (m.isVision ? 'checked' : '') + '></sl-checkbox></td>'
+                        + '<td style="text-align:center;"><sl-checkbox disabled ' + (m.isImageGen ? 'checked' : '') + '></sl-checkbox></td>'
+                        + '<td style="text-align:right;">'
+                        + '<sl-icon-button name="pencil" label="Edit" data-edit-id="' + m.id + '" onclick="editChatModel(this.dataset.editId)"></sl-icon-button>'
+                        + '<sl-icon-button name="trash" label="Delete" data-model-id="' + m.id + '" onclick="deleteChatModel(this.dataset.modelId)"></sl-icon-button>'
+                        + '</td>'
                         + '</tr>';
                 }).join('');
-            }).catch(function () { modelsBody.innerHTML = '<tr><td colspan="5" class="text-muted text-sm">Failed to load models.</td></tr>'; });
+                loadDefaults();
+            }).catch(function () { modelsBody.innerHTML = '<tr><td colspan="6" class="text-muted text-sm">Failed to load models.</td></tr>'; });
         }
 
+        window.editChatModel = function (id) {
+            var m = modelsCache.find(function (x) { return x.id === id; });
+            if (!m) return;
+            document.getElementById('edit-chat-model-id').value = m.modelId || '';
+            document.getElementById('edit-chat-model-label').value = m.label || '';
+            document.getElementById('edit-chat-model-text').checked = !!m.isText;
+            document.getElementById('edit-chat-model-vision').checked = !!m.isVision;
+            document.getElementById('edit-chat-model-imagegen').checked = !!m.isImageGen;
+            editingModelId = id;
+            document.getElementById('dlg-edit-chat-model').show();
+        };
         window.toggleChatKey = function (e) {
             var id = e.target.dataset.keyId; var enabled = e.target.checked;
             fetch('/api-proxy/chat/keys/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled }) })
                 .catch(function () { loadKeys(); });
-        };
-        window.toggleChatModel = function (e) {
-            var id = e.target.dataset.modelId; var enabled = e.target.checked;
-            fetch('/api-proxy/chat/models/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled }) })
-                .catch(function () { loadModels(); });
         };
         window.deleteChatKey = function (id) {
             if (!confirm('Delete this API key?')) return;
@@ -881,13 +947,13 @@
             var modelIdInput = document.getElementById('chat-model-id');
             var modelId = modelIdInput.value.trim();
             var label = document.getElementById('chat-model-label').value.trim();
-            var category = document.getElementById('chat-model-category').value || 'text';
-            var enabled = document.getElementById('chat-model-enabled').checked;
+            var isText = document.getElementById('chat-model-text').checked;
+            var isVision = document.getElementById('chat-model-vision').checked;
+            var isImageGen = document.getElementById('chat-model-imagegen').checked;
             // OpenRouter model slugs are always clean "provider/model-name" strings — they never
             // contain spaces or colons. Reject a Model ID that does (someone pasted a label by
-            // mistake) with an inline error instead of submitting broken data that can corrupt the
-            // chat picker downstream (a space-containing value previously crashed /AI with a stack
-            // overflow). Clear any prior custom validity so the field isn't stuck invalid.
+            // mistake) with an inline error. Clear any prior custom validity so the field isn't
+            // stuck invalid.
             modelIdInput.setCustomValidity('');
             if (/[\s:]/.test(modelId)) {
                 modelIdInput.setCustomValidity('Model ID must not contain spaces — use the exact slug from OpenRouter, like provider/model-name');
@@ -895,14 +961,74 @@
                 return;
             }
             if (!modelId || !label) return;
-            fetch('/api-proxy/chat/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelId: modelId, label: label, category: category, enabled: enabled }) })
+            fetch('/api-proxy/chat/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelId: modelId, label: label, isText: isText, isVision: isVision, isImageGen: isImageGen }) })
                 .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
                 .then(function (res) {
                     document.getElementById('dlg-add-chat-model').hide();
                     document.getElementById('chat-model-id').value = '';
                     document.getElementById('chat-model-label').value = '';
+                    document.getElementById('chat-model-text').checked = true;
+                    document.getElementById('chat-model-vision').checked = false;
+                    document.getElementById('chat-model-imagegen').checked = false;
                     if (res.ok) { loadModels(); } else { alert((res.body && res.body.error) ? res.body.error : 'Failed to save model.'); }
                 });
+        });
+
+        document.getElementById('btn-save-edit-chat-model').addEventListener('click', function () {
+            if (!editingModelId) return;
+            var isText = document.getElementById('edit-chat-model-text').checked;
+            var isVision = document.getElementById('edit-chat-model-vision').checked;
+            var isImageGen = document.getElementById('edit-chat-model-imagegen').checked;
+            fetch('/api-proxy/chat/models/' + editingModelId, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ isText: isText, isVision: isVision, isImageGen: isImageGen })
+            }).then(function (r) {
+                document.getElementById('dlg-edit-chat-model').hide();
+                editingModelId = null;
+                if (r.ok) loadModels();
+            });
+        });
+
+        // Default-model dropdowns: each lists only models with the matching capability, sorted
+        // oldest-first (matching the grid), with "Default" as the first option (= oldest-with-property).
+        function loadDefaults() {
+            fetch('/api-proxy/chat/settings/defaults').then(function (r) { return r.ok ? r.json() : { defaultTextModelId: null, defaultVisionModelId: null, defaultImageGenModelId: null }; }).then(function (defaults) {
+                populateDefaultSelect('default-text-model', function (m) { return m.isText; }, defaults.defaultTextModelId);
+                populateDefaultSelect('default-vision-model', function (m) { return m.isVision; }, defaults.defaultVisionModelId);
+                populateDefaultSelect('default-imagegen-model', function (m) { return m.isImageGen; }, defaults.defaultImageGenModelId);
+            }).catch(function () {});
+        }
+        function populateDefaultSelect(selectId, filterFn, selectedId) {
+            var sel = document.getElementById(selectId);
+            if (!sel) return;
+            sel.innerHTML = '';
+            var defOpt = document.createElement('sl-option');
+            defOpt.value = '';
+            defOpt.textContent = 'Default (oldest)';
+            sel.appendChild(defOpt);
+            modelsCache.filter(filterFn).forEach(function (m) {
+                var opt = document.createElement('sl-option');
+                opt.value = m.id;
+                opt.textContent = m.label || m.modelId;
+                sel.appendChild(opt);
+            });
+            sel.value = selectedId || '';
+        }
+        function saveDefaults() {
+            fetch('/api-proxy/chat/settings/defaults', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    defaultTextModelId: (document.getElementById('default-text-model').value || '') || null,
+                    defaultVisionModelId: (document.getElementById('default-vision-model').value || '') || null,
+                    defaultImageGenModelId: (document.getElementById('default-imagegen-model').value || '') || null
+                })
+            }).catch(function () {});
+        }
+        ['default-text-model', 'default-vision-model', 'default-imagegen-model'].forEach(function (id) {
+            var sel = document.getElementById(id);
+            if (sel) sel.addEventListener('sl-change', saveDefaults);
         });
 
         // Auto-approve writes toggle.

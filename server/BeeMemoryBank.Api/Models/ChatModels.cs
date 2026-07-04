@@ -49,39 +49,56 @@ public record UpdateChatKeyRequest(
     [property: JsonPropertyName("priority")] int? Priority);
 
 // ── chat_model row + DTOs ────────────────────────────────────────────────────
+//
+// Each model has THREE independent capability booleans (is_text, is_vision, is_image_gen) — any
+// combination is valid (e.g. a model can be both text AND vision). A model existing in the
+// catalogue means it's usable (no more enabled/disabled concept). The old category/enabled/
+// default_for_category columns remain in the DB for backward compatibility but are unused.
 
 public class ChatModelRow
 {
     public Guid Id { get; set; }
     public string ModelId { get; set; } = "";
     public string Label { get; set; } = "";
-    public string Category { get; set; } = "text";
-    public bool DefaultForCategory { get; set; }
-    public bool Enabled { get; set; } = true;
+    public bool IsText { get; set; }
+    public bool IsVision { get; set; }
+    public bool IsImageGen { get; set; }
+    public DateTime? CreatedAt { get; set; }
 }
 
 public record ChatModelResponse(
     Guid Id,
     string ModelId,
     string Label,
-    string Category,
-    bool DefaultForCategory,
-    bool Enabled);
+    bool IsText,
+    bool IsVision,
+    bool IsImageGen,
+    DateTime? CreatedAt);
 
 public record CreateChatModelRequest(
     string ModelId,
     string Label,
-    string Category = "text",
-    bool DefaultForCategory = false,
-    bool Enabled = true);
+    bool IsText = true,
+    bool IsVision = false,
+    bool IsImageGen = false);
 
-/// <summary>Toggles a model's enabled flag (admin catalogue).</summary>
+/// <summary>Updates a model's three capability booleans (admin catalogue).</summary>
 public record UpdateChatModelRequest(
-    [property: JsonPropertyName("enabled")] bool? Enabled);
+    [property: JsonPropertyName("isText")] bool? IsText,
+    [property: JsonPropertyName("isVision")] bool? IsVision,
+    [property: JsonPropertyName("isImageGen")] bool? IsImageGen);
 
 /// <summary>Toggles the auto-approve-writes setting (skips the human confirm gate).</summary>
 public record UpdateAutoApproveRequest(
     [property: JsonPropertyName("enabled")] bool Enabled);
+
+/// <summary>Sets the three pinned default-model ids in chat_settings. Each is a nullable GUID
+/// string referencing chat_model.id; null (or empty) means "use the oldest model with the matching
+/// property" (the Default option in the admin dropdowns).</summary>
+public record UpdateChatDefaultsRequest(
+    [property: JsonPropertyName("defaultTextModelId")] string? DefaultTextModelId,
+    [property: JsonPropertyName("defaultVisionModelId")] string? DefaultVisionModelId,
+    [property: JsonPropertyName("defaultImageGenModelId")] string? DefaultImageGenModelId);
 
 // ── chat_conversation / chat_message rows ────────────────────────────────────
 
@@ -157,21 +174,22 @@ public record ChatCompleteResponse(
 /// <see cref="ConversationId"/> is null it creates a conversation, otherwise it loads that
 /// conversation's history (scoped to the caller), appends <see cref="Message"/>, runs the tool
 /// loop, and persists every turn. The browser receives the new conversation id via an early SSE
-/// <c>conversation</c> event.</summary>
+/// <c>conversation</c> event. The server resolves the effective model(s) internally from
+/// chat_settings + chat_model — the client no longer sends a <c>model</c> field (no picker).</summary>
 public record ChatStreamRequest(
-    [property: JsonPropertyName("model")] string Model,
     [property: JsonPropertyName("conversationId")] Guid? ConversationId,
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("systemPrompt")] string? SystemPrompt,
     [property: JsonPropertyName("attachment")] ChatStreamAttachment? Attachment);
 
-/// <summary>Phase 5: an optional image attached to the user turn. Only honored when the selected
-/// model is category='vision' (rejected otherwise — see ChatEndpoints /stream). The bytes travel
-/// inline in the /stream request (base64) rather than via a separate pre-message upload endpoint:
-/// the existing <c>chat_attachment.message_id</c> is NOT NULL, and the user message is created
-/// inside /stream, so linking the attachment to the just-created message avoids any schema change
-/// (plan §2 Phase 5 allows "whichever is simpler"). Server-side MIME allow-list + size cap +
-/// magic-byte check + resize are applied before storage and before the egress vision request.</summary>
+/// <summary>An optional image attached to the user turn. The server decides how to route it
+/// based on the effective vision model (delegation to a separate vision model, or inline if the
+/// text model handles vision itself). The bytes travel inline in the /stream request (base64)
+/// rather than via a separate pre-message upload endpoint: the existing
+/// <c>chat_attachment.message_id</c> is NOT NULL, and the user message is created inside /stream,
+/// so linking the attachment to the just-created message avoids any schema change. Server-side
+/// MIME allow-list + size cap + magic-byte check + resize are applied before storage and before
+/// the egress vision request.</summary>
 public record ChatStreamAttachment(
     [property: JsonPropertyName("mime")] string Mime,
     [property: JsonPropertyName("dataBase64")] string DataBase64);

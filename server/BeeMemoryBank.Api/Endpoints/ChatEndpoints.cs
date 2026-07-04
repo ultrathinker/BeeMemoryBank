@@ -149,9 +149,10 @@ public static class ChatEndpoints
                 Id = Guid.NewGuid(),
                 ModelId = req.ModelId.Trim(),
                 Label = req.Label.Trim(),
-                Category = string.IsNullOrWhiteSpace(req.Category) ? "text" : req.Category.Trim(),
-                DefaultForCategory = req.DefaultForCategory,
-                Enabled = req.Enabled
+                IsText = req.IsText,
+                IsVision = req.IsVision,
+                IsImageGen = req.IsImageGen,
+                CreatedAt = DateTime.UtcNow
             };
             await repo.CreateAsync(model);
             return Results.Created($"/api/chat/models/{model.Id}", ToModelResponse(model));
@@ -186,15 +187,38 @@ public static class ChatEndpoints
             return Results.Ok(models.Select(ToModelResponse));
         });
 
-        // Toggle a model's enabled flag (admin catalogue). Superadmin-only. No crypto → no IsUnlocked gate.
+        // Updates a model's three capability booleans (admin catalogue edit dialog). Superadmin-only.
+        // No crypto → no IsUnlocked gate.
         group.MapPatch("/models/{id:guid}", async (Guid id, UpdateChatModelRequest req,
             ChatSettingsRepository repo, HttpContext ctx) =>
         {
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
 
-            await repo.UpdateModelMetadataAsync(id, req.Enabled);
+            await repo.UpdateModelMetadataAsync(id, req.IsText, req.IsVision, req.IsImageGen);
             return Results.Ok();
+        });
+
+        // Pinned default models: three nullable GUIDs in chat_settings. Each dropdown's "Default"
+        // option maps to null (use oldest-with-property); picking a specific model pins it.
+        // Superadmin-only.
+        group.MapGet("/settings/defaults", async (ChatSettingsRepository repo, HttpContext ctx) =>
+        {
+            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
+                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+
+            var (textId, visionId, imageGenId) = await repo.GetDefaultModelIdsAsync();
+            return Results.Ok(new { defaultTextModelId = textId, defaultVisionModelId = visionId, defaultImageGenModelId = imageGenId });
+        });
+
+        group.MapPatch("/settings/defaults", async (UpdateChatDefaultsRequest req,
+            ChatSettingsRepository repo, HttpContext ctx) =>
+        {
+            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
+                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+
+            await repo.SetDefaultModelIdsAsync(req.DefaultTextModelId, req.DefaultVisionModelId, req.DefaultImageGenModelId);
+            return Results.Ok(new { defaultTextModelId = req.DefaultTextModelId, defaultVisionModelId = req.DefaultVisionModelId, defaultImageGenModelId = req.DefaultImageGenModelId });
         });
 
         // Auto-approve writes (opt-in, superadmin-only): when enabled, the streaming tool loop
@@ -262,20 +286,7 @@ public static class ChatEndpoints
                 await ctx.Response.WriteAsync(JsonSerializer.Serialize(new ErrorResponse(message), SseJsonOpts));
             }
 
-            if (req is null || string.IsNullOrWhiteSpace(req.Model))
-            {
-                await JsonError(400, "Model is required");
-                return;
-            }
-            // Reject a client-supplied model that isn't in the admin-curated enabled catalogue
-            // (plan §1: the per-conversation picker must only offer enabled models; an arbitrary
-            // OpenRouter model must never run on the shared, admin-funded key).
-            if (!await repo.IsModelEnabledAsync(req.Model))
-            {
-                await JsonError(400, "model not in the enabled catalogue");
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(req.Message))
+            if (req is null || string.IsNullOrWhiteSpace(req.Message))
             {
                 await JsonError(400, "Message is required");
                 return;
@@ -297,24 +308,31 @@ public static class ChatEndpoints
 
             var ct = ctx.RequestAborted;
 
-            // ── Phase 5: model category + image-attachment validation ──
-            // Resolve the model's category to decide whether this turn accepts an attached image
-            // (vision only) or runs the image-generation path. Unknown model_id → treated as text.
-            var category = await repo.GetCategoryByModelIdAsync(req.Model) ?? "text";
+            // ── Resolve the three effective models (admin-configured, node-global) ──
+            // The text model is the sole entry point for every chat turn. Vision and image-gen are
+            // resolved too so the loop can delegate/branch as needed. Each uses the pinned default
+            // id if set+existing, else the oldest model with the matching capability flag.
+            var defaults = await repo.GetDefaultModelIdsAsync();
+            var effectiveText = await repo.ResolveEffectiveModelAsync("is_text", defaults.TextId);
+            if (effectiveText is null)
+            {
+                await JsonError(400, "No text model is configured. Ask a superadmin to add one under Admin → AI / Chat.");
+                return;
+            }
+            var effectiveVision = await repo.ResolveEffectiveModelAsync("is_vision", defaults.VisionId);
+            var effectiveImageGen = await repo.ResolveEffectiveModelAsync("is_image_gen", defaults.ImageGenId);
 
-            // Decode + validate an attached image (vision only). text/image-gen models must NOT
-            // receive an image — reject with a clear error rather than letting OpenRouter reject it
-            // confusingly (plan §2 Phase 5).
+            // ── Image-attachment validation ──
+            // The server decides how to route an attached image based on the effective vision model
+            // (the client no longer picks a model). If no vision model is configured at all, reject
+            // gracefully with a clear message.
             byte[]? attachmentBytes = null;
             string attachmentMime = "";
             if (req.Attachment is not null)
             {
-                if (category != "vision")
+                if (effectiveVision is null)
                 {
-                    await JsonError(400,
-                        category == "image-gen"
-                            ? "This model generates images — remove the attached image to send a message."
-                            : "This model does not accept images. Select a vision model to attach one.");
+                    await JsonError(400, "No vision model is configured. Attach an image once a superadmin adds a vision model under Admin → AI / Chat.");
                     return;
                 }
                 var (okBytes, okMime, attachError) = ValidateAttachment(req.Attachment);
@@ -325,6 +343,39 @@ public static class ChatEndpoints
                 }
                 attachmentBytes = okBytes;
                 attachmentMime = okMime;
+            }
+
+            // ── Vision delegation ──
+            // If an image is attached AND the effective vision model is a DIFFERENT model than the
+            // effective text model, make a separate non-streaming, tools-less OpenRouter call to the
+            // vision model (just the image + the user's message text). The resulting description is
+            // injected into the text model's context so it can answer as a normal text-only turn.
+            // If the vision model IS the text model, the image is attached inline instead (current
+            // behavior — the text model handles vision itself, single call).
+            string? visionDescription = null;
+            bool textModelIsVision = effectiveVision is not null && effectiveVision.Id == effectiveText.Id;
+            if (attachmentBytes is not null && !textModelIsVision)
+            {
+                try
+                {
+                    visionDescription = await RunVisionDelegationAsync(repo, openRouter, logger, keys,
+                        effectiveVision!.ModelId, req.Message, attachmentBytes, attachmentMime, ct);
+                }
+                catch (AllKeysExhaustedException ex)
+                {
+                    await JsonError(502, ex.Message);
+                    return;
+                }
+                catch (OpenRouterHttpException ex)
+                {
+                    await JsonError(502, ex.Message);
+                    return;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    await JsonError(502, ex.Message);
+                    return;
+                }
             }
 
             // ── conversation load/create (scoped to the caller's own user_id) ──
@@ -394,9 +445,12 @@ public static class ChatEndpoints
                     if (!string.IsNullOrEmpty(row.ToolCallId))
                         m.ToolCallId = row.ToolCallId;
                     // Re-attach a prior user-uploaded image as a vision content part so the model
-                    // keeps the image in context across turns. The egress resize keeps the payload
-                    // bounded; generated-image attachments are skipped here (display-only).
-                    if (row.Role == "user"
+                    // keeps the image in context across turns — but ONLY when the effective text
+                    // model IS the vision model (single-model vision). In the delegation case (text
+                    // model != vision model), the text model is text-only and must not receive
+                    // prior images; it relies on injected descriptions instead. Generated-image
+                    // attachments are always skipped here (display-only).
+                    if (textModelIsVision && row.Role == "user"
                         && attachmentsByMessage.TryGetValue(row.Id, out var atts))
                     {
                         var img = atts.FirstOrDefault(a => a.Kind == ChatAttachmentKind.UserUpload);
@@ -433,6 +487,9 @@ public static class ChatEndpoints
             // Phase 5 (vision): persist the validated attachment linked to the new user message and
             // arm the egress image part. Stored as the ORIGINAL (validated) bytes so reopening the
             // conversation renders a faithful image; the egress resize happens in BuildVisionDataUrl.
+            // The image is attached inline to the text model's request ONLY when the text model
+            // handles vision itself (textModelIsVision). In the delegation case the image was already
+            // analyzed by the separate vision model; the text model sees only the injected description.
             if (attachmentBytes is not null)
             {
                 try
@@ -448,7 +505,19 @@ public static class ChatEndpoints
                     });
                 }
                 catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat attachment"); }
-                newUserTurn.ImageDataUrl = BuildVisionDataUrl(attachmentBytes, attachmentMime);
+                if (textModelIsVision)
+                    newUserTurn.ImageDataUrl = BuildVisionDataUrl(attachmentBytes, attachmentMime);
+            }
+
+            // Vision delegation: inject the vision model's description as a context message BEFORE
+            // the user turn so the text model has the analysis available when it reads the question.
+            if (visionDescription is not null)
+            {
+                convoMessages.Add(new ChatToolMessage
+                {
+                    Role = "system",
+                    Content = "[Image analysis from vision model]: " + visionDescription
+                });
             }
             convoMessages.Add(newUserTurn);
 
@@ -468,37 +537,19 @@ public static class ChatEndpoints
             // (and refresh the history sidebar) before any text arrives.
             await Sse("conversation", new { conversationId });
 
-            // Phase 5 (image-gen): image-generation models are served through the SAME pinned
-            // chat/completions endpoint but NON-streaming and WITHOUT the tool loop (a plain
-            // "generate an image of X" message routed to the model). The generated image(s) are
-            // materialized to bytes (decode data: URL, or fetch an http URL server-side), stored as
-            // chat_attachment (kind=generated-image) on an assistant message, and rendered inline by
-            // the UI via the CSP-allowed /api/chat/attachments/{id} route. See plan §2 Phase 5.
-            if (category == "image-gen")
-            {
-                try
-                {
-                    await RunImageGenAsync(ctx, repo, openRouter, msgRepo, convoRepo, attachRepo,
-                        logger, keys, req.Model, conversationId, convoMessages, ct, Sse);
-                }
-                finally
-                {
-                    keys = null!;
-                }
-                return;
-            }
-
-            // Phase 3: the streaming tool loop is shared with the confirm endpoint (it resumes the
-            // SAME loop after a human approves/denies a write tool call). The loop owns its own
-            // cancellation / egress-error handling; this wrapper only ensures the transient plaintext
-            // keys are dropped once the turn is fully done. Phase 4: the loop carries ALL available keys
-            // and fails over per-iteration (before the first byte — see StreamWithFailoverAsync).
+            // The streaming tool loop is shared with the confirm endpoint (it resumes the SAME loop
+            // after a human approves/denies a write tool call). The loop owns its own cancellation /
+            // egress-error handling; this wrapper only ensures the transient plaintext keys are
+            // dropped once the turn is fully done. Image generation is now reached via the
+            // generate_image tool from within this loop (not a per-request category branch).
             try
             {
                 await RunToolLoopAsync(new ChatLoopContext(
                     Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Repo: repo,
-                    MsgRepo: msgRepo, ConvoRepo: convoRepo, Logger: logger, Keys: keys,
-                    Model: req.Model, ConversationId: conversationId,
+                    MsgRepo: msgRepo, ConvoRepo: convoRepo, AttachRepo: attachRepo, Logger: logger,
+                    Keys: keys, Model: effectiveText.ModelId,
+                    EffectiveImageGenModelId: effectiveImageGen?.ModelId ?? "",
+                    ConversationId: conversationId,
                     ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter));
             }
             finally
@@ -510,7 +561,7 @@ public static class ChatEndpoints
         // ── Phase 3: human-in-the-loop confirm gate ──────────────────────────────────
         //
         // Resumes a turn that paused on a write tool call (the /stream loop emitted confirm_required
-        // and returned without executing the write). The client posts {toolCallId, allow, model,
+        // and returned without executing the write). The client posts {toolCallId, allow,
         // systemPrompt}; this endpoint:
         //   1. resolves the pending WRITE tool call from the persisted transcript (by toolCallId),
         //      rejecting non-write ids / already-resolved ids / foreign conversations;
@@ -525,7 +576,8 @@ public static class ChatEndpoints
         group.MapPost("/stream/{conversationId:guid}/confirm", async (Guid conversationId, HttpContext ctx,
             ChatSettingsRepository repo, OpenRouterClient openRouter, ChatToolDispatcher dispatcher,
             SessionService session, ChatConversationRepository convoRepo, ChatMessageRepository msgRepo,
-            ChatDestructiveOpCounter destructiveCounter, ILogger<Program> logger) =>
+            ChatAttachmentRepository attachRepo, ChatDestructiveOpCounter destructiveCounter,
+            ILogger<Program> logger) =>
         {
             ChatConfirmRequest? req;
             try { req = await ctx.Request.ReadFromJsonAsync<ChatConfirmRequest>(SseJsonOpts); }
@@ -565,9 +617,9 @@ public static class ChatEndpoints
                 return;
             }
 
-            // Resolve the resume model: client-supplied, else the model that emitted the pending call
-            // (stored on the assistant message), else 400. chat_message.model is populated on every
-            // assistant turn, so the fallback is the normal path.
+            // Resolve the effective models the SAME way /stream does (admin-configured, node-global —
+            // never trust a client-supplied model). The resumed loop uses the effective text model;
+            // generate_image (if called in the continuation) uses the effective image-gen model.
             List<ChatMessage> history;
             try { history = await msgRepo.ListByConversationAsync(conversationId); }
             catch (Exception ex)
@@ -577,21 +629,15 @@ public static class ChatEndpoints
                 return;
             }
 
-            string? resumeModel = string.IsNullOrWhiteSpace(req.Model)
-                ? history.LastOrDefault(m => m.Role == "assistant" && !string.IsNullOrWhiteSpace(m.Model))?.Model
-                : req.Model;
-            if (string.IsNullOrWhiteSpace(resumeModel))
+            var defaults = await repo.GetDefaultModelIdsAsync();
+            var effectiveText = await repo.ResolveEffectiveModelAsync("is_text", defaults.TextId);
+            if (effectiveText is null)
             {
-                await JsonError(400, "model is required");
+                await JsonError(400, "No text model is configured. Ask a superadmin to add one under Admin → AI / Chat.");
                 return;
             }
-            // Reject a resume model (client-supplied OR persisted fallback) that isn't in the
-            // admin-curated enabled catalogue (plan §1; mirrors /stream + /message).
-            if (!await repo.IsModelEnabledAsync(resumeModel))
-            {
-                await JsonError(400, "model not in the enabled catalogue");
-                return;
-            }
+            var effectiveImageGen = await repo.ResolveEffectiveModelAsync("is_image_gen", defaults.ImageGenId);
+            string resumeModel = effectiveText.ModelId;
 
             // Find the pending WRITE tool call by id (the source of truth for name+args — never trust
             // the client). The pending call lives on an assistant message's tool_calls_json.
@@ -704,8 +750,10 @@ public static class ChatEndpoints
                 {
                     await RunToolLoopAsync(new ChatLoopContext(
                         Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Repo: repo,
-                        MsgRepo: msgRepo, ConvoRepo: convoRepo, Logger: logger, Keys: keys,
-                        Model: resumeModel!, ConversationId: conversationId,
+                        MsgRepo: msgRepo, ConvoRepo: convoRepo, AttachRepo: attachRepo, Logger: logger,
+                        Keys: keys, Model: resumeModel,
+                        EffectiveImageGenModelId: effectiveImageGen?.ModelId ?? "",
+                        ConversationId: conversationId,
                         ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter));
                 }
                 catch (OperationCanceledException) { /* client gone */ }
@@ -986,7 +1034,7 @@ public static class ChatEndpoints
         => apiKey.Length > 12 ? string.Concat(apiKey.AsSpan(0, 12), "…") : apiKey;
 
     private static ChatModelResponse ToModelResponse(ChatModelRow m) => new(
-        m.Id, m.ModelId, m.Label, m.Category, m.DefaultForCategory, m.Enabled);
+        m.Id, m.ModelId, m.Label, m.IsText, m.IsVision, m.IsImageGen, m.CreatedAt);
 
     // ── Phase 5 helpers (vision + image generation) ────────────────────────────
 
@@ -1076,58 +1124,103 @@ public static class ChatEndpoints
         }
     }
 
-    /// <summary>Phase 5: image-generation turn (non-streaming, no tool loop). Runs
-    /// <see cref="OpenRouterClient.GenerateImageAsync"/> through multi-key failover, materializes
-    /// each returned image to bytes, persists it as a generated-image attachment on an assistant
-    /// message, and emits an <c>image</c> SSE event per image (the UI renders it inline via the
-    /// CSP-allowed /attachments/{id} route) followed by <c>done</c>. Image sources are decoded from
-    /// <c>data:</c> URLs directly; http(s) URLs are fetched server-side (size/time capped) so the
-    /// image renders inline despite the strict <c>img-src 'self' data: blob:</c> CSP.</summary>
-    private static async Task RunImageGenAsync(
-        HttpContext ctx, ChatSettingsRepository repo, OpenRouterClient openRouter,
-        ChatMessageRepository msgRepo, ChatConversationRepository convoRepo,
-        ChatAttachmentRepository attachRepo, ILogger logger,
-        IReadOnlyList<KeyMaterial> keys, string model, Guid conversationId,
-        List<ChatToolMessage> convoMessages, CancellationToken ct,
-        Func<string, object, Task> sse)
+    /// <summary>Vision delegation: makes a SEPARATE, non-streaming, tools-less OpenRouter call to
+    /// the effective vision model with just the image + the user's message text. Returns the text
+    /// description the vision model produced, which the caller injects into the text model's
+    /// context. Uses multi-key failover (same helper as the main loop). Never returns null — on a
+    /// no-content response, returns a placeholder so the text model has something to work with.</summary>
+    private static async Task<string> RunVisionDelegationAsync(
+        ChatSettingsRepository repo, OpenRouterClient openRouter, ILogger logger,
+        IReadOnlyList<KeyMaterial> keys, string visionModelId, string userMessage,
+        byte[] imageBytes, string imageMime, CancellationToken ct)
     {
+        var dataUrl = BuildVisionDataUrl(imageBytes, imageMime);
+        var visionMessages = new List<ChatToolMessage>
+        {
+            new()
+            {
+                Role = "user",
+                // Plain multimodal question — no Bee tools exposed to the vision model.
+                Content = "Describe and answer based on this image: " + userMessage,
+                ImageDataUrl = dataUrl
+            }
+        };
+
+        // CompleteWithToolsAsync with tools=null goes through ToWire() which serializes the image as
+        // a multimodal content array — exactly what a vision model needs. With no tools, ToolCalls is
+        // null and we just read Content.
+        var result = await RunWithFailoverAsync(repo, keys,
+            (pk, token) => openRouter.CompleteWithToolsAsync(pk, visionModelId, visionMessages, null, token),
+            ct);
+
+        return string.IsNullOrEmpty(result.Content)
+            ? "(The vision model provided no description of the image.)"
+            : result.Content;
+    }
+
+    /// <summary>Handles a <c>generate_image</c> tool call from the text model's tool loop. Makes a
+    /// non-streaming OpenRouter call to the effective image-gen model with the given prompt, stores
+    /// the resulting image(s) as chat_attachment (kind=generated-image) linked to the assistant
+    /// message that requested it, emits <c>event: image</c> SSE frames so the UI renders them
+    /// inline, and feeds a tool result back so the text model can continue. If no image-gen model is
+    /// configured, returns a graceful error tool result (not a crash) so the model can tell the user
+    /// in plain text. Reuses the existing GenerateImageAsync + ResolveImageSourceToBytesAsync
+    /// plumbing from the old image-gen path.</summary>
+    private static async Task RunGenerateImageToolAsync(
+        ChatLoopContext lc, ResolvedToolCall tc, JsonElement args, Guid assistantMessageId)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        // Local error-JSON helper (ChatEndpoints has no access to ChatToolDispatcher.ErrorJson).
+        string Err(string msg) => JsonSerializer.Serialize(new { error = msg }, SseJsonOpts);
+
+        // No image-gen model configured → graceful error tool result.
+        if (string.IsNullOrEmpty(lc.EffectiveImageGenModelId))
+        {
+            sw.Stop();
+            var noModelJson = Err("No image generation model is configured. Tell the user that image generation is not available on this node.");
+            lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = noModelJson });
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, noModelJson);
+            await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = true, durationMs = (int)sw.ElapsedMilliseconds, error = (string?)null });
+            return;
+        }
+
+        var prompt = args.TryGetProperty("prompt", out var pEl) ? pEl.GetString() : null;
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            sw.Stop();
+            var badArgsJson = Err("prompt is required");
+            lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = badArgsJson });
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, badArgsJson);
+            await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = "prompt is required" });
+            return;
+        }
+
+        // Build a single-user-message request with just the prompt (no conversation context — the
+        // text model already refined the prompt based on the conversation).
+        var imgMessages = new List<ChatToolMessage>
+        {
+            new() { Role = "user", Content = prompt }
+        };
+
         try
         {
-            // Multi-key failover around the non-streaming image-gen call (same helper as text/vision).
-            var result = await RunWithFailoverAsync(repo, keys,
-                (pk, token) => openRouter.GenerateImageAsync(pk, model, convoMessages, token),
-                ct);
+            var result = await RunWithFailoverAsync(lc.Repo, lc.Keys,
+                (pk, token) => lc.OpenRouter.GenerateImageAsync(pk, lc.EffectiveImageGenModelId, imgMessages, token),
+                lc.Ct);
 
-            // Persist an assistant message carrying any caption text + the model id, and link the
-            // generated image(s) to it as attachments so they persist with the conversation.
-            var assistantMessageId = Guid.NewGuid();
-            try
-            {
-                await msgRepo.CreateAsync(new ChatMessage
-                {
-                    Id = assistantMessageId,
-                    ConversationId = conversationId,
-                    Role = "assistant",
-                    ContentText = result.Text,
-                    Model = result.Model,
-                    CreatedAt = DateTime.UtcNow
-                });
-                await convoRepo.TouchAsync(conversationId);
-            }
-            catch (Exception ex) { logger.LogWarning(ex, "Failed to persist image-gen assistant message"); }
-
-            // Materialize each image source → bytes, store, emit. data: URLs decode directly; http(s)
-            // URLs are fetched (the CSP blocks external img-src, so the bytes must come from 'self').
-            var rendered = new List<ChatImageEvent>();
+            // Materialize each image source → bytes, store as attachment, emit inline SSE event.
+            // Reuses the same ResolveImageSourceToBytesAsync + ChatImageEvent plumbing as the old
+            // image-gen path.
             foreach (var source in result.ImageSources)
             {
-                var (imgBytes, imgMime) = await ResolveImageSourceToBytesAsync(source, ct);
+                var (imgBytes, imgMime) = await ResolveImageSourceToBytesAsync(source, lc.Ct);
                 if (imgBytes is null || imgBytes.Length == 0) continue;
 
                 var attachmentId = Guid.NewGuid();
                 try
                 {
-                    await attachRepo.CreateAsync(new ChatAttachment
+                    await lc.AttachRepo.CreateAsync(new ChatAttachment
                     {
                         Id = attachmentId,
                         MessageId = assistantMessageId,
@@ -1139,38 +1232,44 @@ public static class ChatEndpoints
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "Failed to persist generated image attachment");
+                    lc.Logger.LogWarning(ex, "Failed to persist generated image attachment");
                     continue;
                 }
 
-                // Inline a data: URL for immediate render; the persisted copy lives under /attachments.
                 var inlineUrl = "data:" + imgMime + ";base64," + Convert.ToBase64String(imgBytes);
-                rendered.Add(new ChatImageEvent(attachmentId, inlineUrl, imgMime));
+                await lc.Sse("image", new ChatImageEvent(attachmentId, inlineUrl, imgMime));
             }
 
-            foreach (var img in rendered)
-                await sse("image", img);
-
-            if (rendered.Count == 0 && string.IsNullOrEmpty(result.Text))
-            {
-                await sse("done", new { content = "(the model returned no image)", model = result.Model, conversationId, messageId = assistantMessageId });
-                return;
-            }
-            await sse("done", new { content = result.Text ?? "", model = result.Model, conversationId, messageId = assistantMessageId });
+            sw.Stop();
+            var okJson = "{\"ok\":true,\"message\":\"Image generated.\"}";
+            lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = okJson });
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, okJson);
+            await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = true, durationMs = (int)sw.ElapsedMilliseconds, error = (string?)null });
         }
-        catch (OperationCanceledException) { /* client gone */ }
+        catch (OperationCanceledException) { throw; }
         catch (AllKeysExhaustedException ex)
         {
-            try { await sse("error", new { error = ex.Message }); } catch { }
+            sw.Stop();
+            var errJson = Err("Image generation failed (all API keys exhausted): " + ex.Message);
+            lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errJson });
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson);
+            await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = ex.Message });
         }
         catch (OpenRouterHttpException ex)
         {
-            try { await sse("error", new { error = ex.Message }); } catch { }
+            sw.Stop();
+            var errJson = Err("Image generation failed: " + ex.Message);
+            lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errJson });
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson);
+            await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
-            // Malformed upstream response (empty body / no choices) — not a key failure.
-            try { await sse("error", new { error = ex.Message }); } catch { }
+            sw.Stop();
+            var errJson = Err("Image generation failed: " + ex.Message);
+            lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errJson });
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson);
+            await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = ex.Message });
         }
     }
 
@@ -1378,6 +1477,7 @@ public static class ChatEndpoints
         "bee_append_to_article" => "Preparing to append…",
         "bee_replace_in_article" => "Preparing to replace text…",
         "bee_delete_article" => "Preparing to delete a note…",
+        "generate_image" => "Generating an image…",
         _ => "Working…"
     };
 
@@ -1424,9 +1524,11 @@ public static class ChatEndpoints
         ChatSettingsRepository Repo,
         ChatMessageRepository MsgRepo,
         ChatConversationRepository ConvoRepo,
+        ChatAttachmentRepository AttachRepo,
         ILogger Logger,
         IReadOnlyList<KeyMaterial> Keys,
         string Model,
+        string EffectiveImageGenModelId,
         Guid ConversationId,
         List<ChatToolMessage> ConvoMessages,
         CancellationToken Ct,
@@ -1502,11 +1604,12 @@ public static class ChatEndpoints
                     Content = turn.Content,
                     ToolCalls = assistantToolCalls
                 });
+                var assistantMessageId = Guid.NewGuid();
                 try
                 {
                     await lc.MsgRepo.CreateAsync(new ChatMessage
                     {
-                        Id = Guid.NewGuid(),
+                        Id = assistantMessageId,
                         ConversationId = lc.ConversationId,
                         Role = "assistant",
                         ContentText = string.IsNullOrEmpty(turn.Content) ? null : turn.Content,
@@ -1537,6 +1640,15 @@ public static class ChatEndpoints
                         lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errMsg });
                         await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errMsg);
                         await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = 0, error = "malformed arguments JSON" });
+                        continue;
+                    }
+
+                    // generate_image: needs OpenRouter egress + attachment storage + SSE, so it's
+                    // handled here (not in the dispatcher). Intercepted before the write-tool check
+                    // and before InvokeAsync — the dispatcher has no OpenRouter/SSE access.
+                    if (tc.Name == "generate_image")
+                    {
+                        await RunGenerateImageToolAsync(lc, tc, args, assistantMessageId);
                         continue;
                     }
 
@@ -1777,12 +1889,11 @@ public static class ChatEndpoints
     }
 
     /// <summary>Request body for the confirm endpoint. <c>toolCallId</c>+<c>allow</c> are required;
-    /// <c>model</c>+<c>systemPrompt</c> let the client forward the same model/instructions used for
-    /// the original turn so the resumed completion stays consistent (fall back to the persisted model
-    /// if absent). The server resolves name/args from the transcript, never from the client.</summary>
+    /// <c>systemPrompt</c> lets the client forward the same instructions used for the original turn
+    /// so the resumed completion stays consistent. The server resolves the model internally (never
+    /// trusts client input) and resolves name/args from the transcript.</summary>
     public record ChatConfirmRequest(
         [property: JsonPropertyName("toolCallId")] string ToolCallId,
         [property: JsonPropertyName("allow")] bool Allow,
-        [property: JsonPropertyName("model")] string? Model,
         [property: JsonPropertyName("systemPrompt")] string? SystemPrompt);
 }

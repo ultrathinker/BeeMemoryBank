@@ -27,12 +27,13 @@
     var inputEl = document.getElementById('chat-input');
     var sendBtn = document.getElementById('chat-send');
     var newBtn = document.getElementById('chat-new');
-    var modelSelect = document.getElementById('chat-model');
     var emptyState = document.getElementById('chat-empty-state');
     var emptyIcon = document.getElementById('chat-empty-icon');
     var emptyText = document.getElementById('chat-empty-text');
     var historyEl = document.getElementById('chat-history');
-    // Phase 5: image-attach composer controls.
+    // Image-attach composer controls. The attach button is always available now (the SERVER
+    // decides how to route an image based on whichever vision model is configured — no
+    // client-side model selection).
     var attachBtn = document.getElementById('chat-attach');
     var attachInput = document.getElementById('chat-attach-input');
     var attachPreview = document.getElementById('chat-attach-preview');
@@ -41,10 +42,7 @@
     var currentConversationId = null;
     var sending = false;
     var abortCtrl = null;
-    // Phase 5: all enabled models keyed by modelId (for category lookup), the selected category,
-    // and a staged image attachment ({mime, dataBase64, previewUrl} or null).
-    var modelsById = {};
-    var currentCategory = 'text';
+    // A staged image attachment ({mime, dataBase64, previewUrl} or null).
     var stagedAttachment = null;
     // Client-side validation mirrors the server: MIME allow-list + size cap. The server re-validates
     // (never trust the client), but rejecting early here avoids a wasted round-trip for an oversized
@@ -110,125 +108,6 @@
     }
     function hideEmpty() { emptyState.style.display = 'none'; }
 
-    // ── model picker ─────────────────────────────────────────────────────────
-
-    // Parses the models response, distinguishing a genuine lock/auth failure (401/403/409 — often an
-    // HTML login page or a {"error":"Vault is locked"} body) from other failures. When the response
-    // isn't usable JSON, throws an Error carrying `.status`/`.body` so loadModels' .catch can tailor
-    // the message instead of always blaming the vault lock (which previously masked the real cause).
-    function readModelsResponse(r) {
-        var ct = r.headers.get('content-type') || '';
-        if (!r.ok || ct.indexOf('application/json') < 0) {
-            return r.text().then(function (bodyText) {
-                var err = new Error('models request failed: HTTP ' + r.status);
-                err.status = r.status;
-                err.body = bodyText;
-                throw err;
-            });
-        }
-        return r.json();
-    }
-
-    function loadModels(then) {
-        fetch('/api-proxy/chat/models', { headers: { 'Accept': 'application/json' } })
-            .then(readModelsResponse)
-            .then(function (models) {
-                if (!Array.isArray(models) || models.length === 0) {
-                    modelSelect.innerHTML = '';
-                    modelsById = {};
-                    showEmpty('robot',
-                        'No chat model is configured yet. Ask a superadmin to add one under Admin → AI / Chat.');
-                    return;
-                }
-                // ChatModelResponse is serialized in camelCase (ASP.NET Core Minimal API default — Api/
-                // Program.cs sets no PropertyNamingPolicy override, so JsonSerializerDefaults.Web applies).
-                // Phase 5: show ALL categories (text + vision + image-gen) in the picker, grouped so the
-                // user knows which models accept images and which generate them. Store a by-modelId map
-                // for category lookup.
-                modelsById = {};
-                models.forEach(function (m) { modelsById[m.modelId] = m; });
-                modelSelect.innerHTML = '';
-                var groups = { 'text': [], 'vision': [], 'image-gen': [] };
-                models.forEach(function (m) {
-                    var cat = (m.category || 'text');
-                    (groups[cat] || (groups[cat] = [])).push(m);
-                });
-                var labels = {
-                    'text': 'Text',
-                    'vision': 'Vision (accepts images)',
-                    'image-gen': 'Image generation'
-                };
-                var firstModel = null;
-                Object.keys(groups).forEach(function (cat) {
-                    var list = groups[cat];
-                    if (!list.length) return;
-                    var og = document.createElement('sl-option');
-                    og.disabled = true;
-                    og.textContent = labels[cat] || cat;
-                    modelSelect.appendChild(og);
-                    list.forEach(function (m) {
-                        if (!firstModel) firstModel = m;
-                        var opt = document.createElement('sl-option');
-                        opt.value = m.modelId;
-                        opt.textContent = m.label || m.modelId;
-                        modelSelect.appendChild(opt);
-                    });
-                });
-                modelSelect.value = firstModel.modelId;
-                onModelChanged();
-                hideEmpty();
-                if (then) then();
-            })
-            .catch(function (err) {
-                // Never assume a lock: only blame the vault when there's genuine evidence (401/403/409 or
-                // a "Vault is locked"/login body). Otherwise the message is generic and the real cause
-                // (status + body) is logged to the console so future debugging doesn't require guessing.
-                console.error('[chat] loadModels failed:', err && err.message, '| status:', err && err.status, '| body:', err && err.body);
-                var status = err && err.status;
-                var body = (err && err.body) || '';
-                var looksLocked = status === 401 || status === 403 || status === 409
-                    || /vault is locked|account\/login|\blogin\b/i.test(body);
-                showEmpty('exclamation-triangle',
-                    looksLocked
-                        ? 'Could not load chat models — the vault or your session is locked. Make sure the vault is unlocked.'
-                        : 'Could not load chat models (see browser console for details).');
-            });
-    }
-
-    // Phase 5: react to a model pick. The image-attach control is enabled ONLY for vision models
-    // (image-gen models GENERATE images — they do not accept an attached one). Switching away from a
-    // vision model discards any staged image so it cannot be sent to a non-vision model.
-    // Recursion guard: clearAttachment() calls onModelChanged() (to refresh the hint after dropping
-    // a staged image), so this function MUST NOT call clearAttachment() unconditionally — otherwise
-    // onModelChanged() <-> clearAttachment() form a base-case-less mutual recursion that overflows
-    // the stack (RangeError). Only discard the staged image when one actually exists; once
-    // clearAttachment() has nulled stagedAttachment, the next call here terminates the loop. This
-    // makes the picker safe for ANY modelId value (including malformed/whitespace-containing ones,
-    // which previously crashed the whole page — see loadModels' catch).
-    function onModelChanged() {
-        var m = modelsById[modelSelect.value];
-        currentCategory = (m && m.category) || 'text';
-        var isVision = currentCategory === 'vision';
-        if (attachBtn) {
-            attachBtn.disabled = !isVision;
-            attachBtn.style.opacity = isVision ? '1' : '0.5';
-            attachBtn.title = isVision
-                ? 'Attach an image (PNG, JPEG, WebP, GIF — max 8MB)'
-                : 'Image attach is available for vision models only';
-        }
-        if (!isVision && stagedAttachment) clearAttachment();
-        if (attachHint) {
-            attachHint.style.display = 'block';
-            if (currentCategory === 'vision') {
-                attachHint.textContent = 'Vision model selected — you can attach an image to ask about it.';
-            } else if (currentCategory === 'image-gen') {
-                attachHint.textContent = 'Image generation model selected — describe what to generate and Send.';
-            } else {
-                attachHint.style.display = 'none';
-            }
-        }
-    }
-
     // Intentionally a no-op — the user asked to remove the initial greeting bubble. Kept as a
     // named function (rather than deleting every call site) since it's invoked from several
     // places (initial load, new conversation, opening an empty conversation).
@@ -277,7 +156,7 @@
                     previewUrl: dataUrl
                 };
                 renderAttachPreview();
-                onModelChanged(); // re-render the hint (validation passed → neutral hint)
+                resetAttachHint();
             };
             img.src = reader.result;
         };
@@ -309,7 +188,15 @@
         stagedAttachment = null;
         if (attachInput) attachInput.value = '';
         renderAttachPreview();
-        onModelChanged();
+        resetAttachHint();
+    }
+
+    // Resets the attach hint to its static default (used after clearing an image or on init).
+    function resetAttachHint() {
+        if (!attachHint) return;
+        attachHint.style.display = 'block';
+        attachHint.textContent = 'Attach an image to ask about it (PNG, JPEG, WebP, GIF — max 8MB).';
+        attachHint.style.color = 'var(--text-secondary)';
     }
 
     // Renders an inline image + an explicit "Save to Bee" action inside a bubble body. `src` is a
@@ -492,17 +379,11 @@
         var text = (inputEl.value || '').trim();
         if (!text) return;
 
-        var model = modelSelect.value;
-        if (!model) {
-            showEmpty('robot',
-                'No chat model is configured yet. Ask a superadmin to add one under Admin → AI / Chat.');
-            return;
-        }
-
-        // Phase 5: a staged image is sent only with a vision model (the server rejects it otherwise).
+        // A staged image is always attachable now — the SERVER decides how to route it (inline
+        // to a vision-capable text model, or delegated to a separate vision model).
         var attachment = null;
         var stagedPreview = null;
-        if (stagedAttachment && currentCategory === 'vision') {
+        if (stagedAttachment) {
             attachment = { mime: stagedAttachment.mime, dataBase64: stagedAttachment.dataBase64 };
             stagedPreview = stagedAttachment.previewUrl;
         }
@@ -516,7 +397,6 @@
         hideEmpty();
 
         var body = {
-            model: model,
             conversationId: currentConversationId,
             message: text,
             systemPrompt: SYSTEM_PROMPT
@@ -674,7 +554,6 @@
         runTurn(turn, '/api-proxy/chat/' + currentConversationId + '/confirm', {
             toolCallId: toolCallId,
             allow: allow,
-            model: modelSelect.value,
             systemPrompt: SYSTEM_PROMPT
         });
     }
@@ -920,12 +799,9 @@
     }
     if (newBtn) newBtn.addEventListener('click', newConversation);
 
-    // Phase 5: model picker drives the attach-control enablement.
-    if (modelSelect) modelSelect.addEventListener('sl-change', onModelChanged);
-
-    // Image attach: button → hidden file input; drag/drop + paste onto the composer (vision only).
+    // Image attach: button → hidden file input; drag/drop + paste onto the composer. Always
+    // available — the server decides how to route the image based on the configured vision model.
     if (attachBtn) attachBtn.addEventListener('click', function () {
-        if (currentCategory !== 'vision' || attachBtn.disabled) return;
         if (attachInput) attachInput.click();
     });
     if (attachInput) attachInput.addEventListener('change', function () {
@@ -933,16 +809,13 @@
     });
     if (inputEl) {
         inputEl.addEventListener('dragover', function (e) {
-            if (currentCategory !== 'vision') return;
             e.preventDefault();
         });
         inputEl.addEventListener('drop', function (e) {
-            if (currentCategory !== 'vision') return;
             var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
             if (f) { e.preventDefault(); processImageFile(f); }
         });
         inputEl.addEventListener('paste', function (e) {
-            if (currentCategory !== 'vision') return;
             var items = e.clipboardData && e.clipboardData.items;
             if (!items) return;
             for (var i = 0; i < items.length; i++) {
@@ -978,7 +851,9 @@
     });
 
     if (sendBtn) sendBtn.disabled = true;
-    // Start on a fresh (new) conversation: load models, greet, and populate the sidebar.
-    loadModels(greet);
+    // Start on a fresh (new) conversation. No model picker — the server resolves the effective
+    // text model internally. If no text model is configured, the user gets a clear error on send.
+    resetAttachHint();
+    greet();
     loadHistory();
 })();

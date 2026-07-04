@@ -176,7 +176,11 @@ public sealed class ChatToolDispatcher(
                 "bee_append_to_article" => await AppendToArticleAsync(args),
                 "bee_replace_in_article" => await ReplaceInArticleAsync(args),
                 "bee_delete_article" => await DeleteArticleAsync(args),
-                _ => ErrorJson($"Unknown tool '{name}'. Available tools: search, list_articles, get_tree, get_article, search_content, save_article, update_article, append_to_article, replace_in_article, delete_article.")
+                // generate_image is handled directly in ChatEndpoints.RunToolLoopAsync (it needs
+                // OpenRouter egress + attachment storage + SSE). If InvokeAsync is reached for it,
+                // return a clear error rather than a confusing "unknown tool".
+                "generate_image" => ErrorJson("generate_image is handled by the chat loop, not the dispatcher."),
+                _ => ErrorJson($"Unknown tool '{name}'. Available tools: search, list_articles, get_tree, get_article, search_content, save_article, update_article, append_to_article, replace_in_article, delete_article, generate_image.")
             };
             sw.Stop();
             return new ToolDispatchResult(json, Ok: true, DurationMs: (int)sw.ElapsedMilliseconds, Error: null);
@@ -603,6 +607,14 @@ public sealed class ChatToolDispatcher(
             Tool("bee_delete_article", "Soft-delete an article (hidden from search/lists; restorable from the web UI). You MUST set confirm=true. The user will ALSO be asked to APPROVE this before it runs.",
                 P("id", "string", "Article ID (GUID).", required: true, format: "uuid"),
                 P("confirm", "boolean", "Must be true to delete. The user is separately asked to approve.")),
+            // Image generation tool — declared alongside the bee_* tools so the text model can call
+            // it from its normal tool loop. The actual egress (OpenRouter image-gen call + storing
+            // the result as a chat attachment + emitting the inline image SSE event) is handled in
+            // ChatEndpoints.RunToolLoopAsync, NOT here (the dispatcher has no OpenRouter/SSE access).
+            // If no image-gen model is configured, the handler returns a graceful error tool result
+            // so the model can tell the user in plain text.
+            Tool("generate_image", "Generate an image from a text prompt. The generated image appears inline in the chat. Use this ONLY when the user explicitly asks to create, generate, or draw an image. If image generation is not configured, you will receive an error — tell the user in plain text.",
+                P("prompt", "string", "A detailed description of the image to generate.", required: true)),
         ];
     }
 
