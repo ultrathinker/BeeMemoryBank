@@ -229,10 +229,10 @@
         }
     }
 
-    function greet() {
-        addBubble('assistant',
-            renderMarkdown('Hi! Ask me anything about your vault — e.g. *“what folders do I have?”*, *“summarize my notes under /Work”*, or *“add a line to my reading list”*. I can also create and edit notes: every change is shown to you for **Allow/Deny** approval before it runs.'));
-    }
+    // Intentionally a no-op — the user asked to remove the initial greeting bubble. Kept as a
+    // named function (rather than deleting every call site) since it's invoked from several
+    // places (initial load, new conversation, opening an empty conversation).
+    function greet() {}
 
     // ── Phase 5: image attachment (vision) ────────────────────────────────────
     // Client-side MIME + size validation mirrors the server; a canvas downscale (max 1568px, JPEG
@@ -668,12 +668,37 @@
             note.textContent = allow ? 'Allowed — applying…' : 'Denied — telling the AI…';
             card.appendChild(note);
         }
+        // Remembered so the confirm_resolved handler can append an "open article" link to the
+        // SAME card once the server reports the result (see handleFrame).
+        turn._activeConfirmCard = card;
         runTurn(turn, '/api-proxy/chat/' + currentConversationId + '/confirm', {
             toolCallId: toolCallId,
             allow: allow,
             model: modelSelect.value,
             systemPrompt: SYSTEM_PROMPT
         });
+    }
+
+    // When the AI creates/edits an article (save/update/append/replace — never delete, which
+    // leaves nothing to open), append a direct link to it that opens in a new tab. Appended into
+    // the confirm card if there was one (human-approved path), otherwise directly into the bubble
+    // body (auto-approve path, where there is no card).
+    function appendArticleLink(container, articleId, toolName) {
+        if (!container || !articleId) return;
+        var verbs = {
+            bee_save_article: 'Article created',
+            bee_update_article: 'Article updated',
+            bee_append_to_article: 'Article updated',
+            bee_replace_in_article: 'Article updated'
+        };
+        var link = document.createElement('a');
+        link.href = '/Article/View?id=' + encodeURIComponent(articleId);
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:0.82rem;';
+        link.innerHTML = '<sl-icon name="box-arrow-up-right" style="font-size:0.85rem;"></sl-icon> '
+            + (verbs[toolName] || 'Open article') + ' — view';
+        container.appendChild(link);
     }
 
     // Reads the SSE response body chunk by chunk, splits on blank-line frame boundaries, and
@@ -752,7 +777,12 @@
             renderConfirmCard(turn, obj);
         } else if (eventType === 'confirm_resolved' && obj) {
             // Server executed (allow) or denied the write; the continuation follows as deltas.
+            // Fires with NO preceding confirm_required when auto-approve is on (Admin -> AI/Chat) —
+            // in that case there is no card, so the link is appended straight into the bubble body.
             turn.statusEl.textContent = '';
+            if (obj.ok && obj.articleId) {
+                appendArticleLink(turn._activeConfirmCard || turn.body, obj.articleId, obj.toolName);
+            }
         } else if (eventType === 'done' && obj) {
             if (typeof obj.content === 'string') turn.assistantRaw = obj.content;
             if (obj.conversationId) currentConversationId = obj.conversationId;
@@ -881,8 +911,11 @@
             if (!sending) sendBtn.disabled = !(inputEl.value || '').trim();
         });
         inputEl.addEventListener('keydown', function (e) {
-            // Ctrl/Cmd+Enter sends (Enter inserts a newline, matching textarea expectations).
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
+            // Enter sends. Shift+Enter or Ctrl/Cmd+Enter inserts a newline instead.
+            if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                send();
+            }
         });
     }
     if (newBtn) newBtn.addEventListener('click', newConversation);

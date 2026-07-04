@@ -721,6 +721,15 @@ $(function () {
     }
 
     function spaAfterSwap() {
+        // Pages outside the SPA set (e.g. /AI, /Graph) tag <body> with their own class (via an
+        // inline script, since they're always full-loaded) to scope page-specific CSS — e.g.
+        // /AI hides the folder-tree sidebar with `body.ai-chat-page #app-sidebar { display:none }`.
+        // A SPA swap only replaces #page-content, so that class would otherwise never be removed
+        // after leaving such a page via a SPA-eligible link, silently breaking the destination
+        // page's sidebar too. Strip all such classes on every swap; the destination re-adds its
+        // own if (and only if) it's one of those pages (which never happens via SPA nav today,
+        // since none of them are in isSpaUrl — but this keeps the invariant safe either way).
+        document.body.classList.remove('graph-page', 'ai-chat-page');
         var pageContent = document.getElementById('page-content');
         if (!pageContent) return;
         initSlForms(pageContent);

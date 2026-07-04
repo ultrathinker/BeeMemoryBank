@@ -893,6 +893,21 @@ app.MapDelete("/api-proxy/chat/models/{id:guid}", async (Guid id, ApiClient api)
     return Results.Content(body ?? "", "application/json", null, statusCode: status);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
+// Auto-approve-writes setting — superadmin only (get + toggle).
+app.MapGet("/api-proxy/chat/settings/auto-approve", async (ApiClient api) =>
+{
+    var f = await api.ForwardGetAsync("chat/settings/auto-approve");
+    return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
+}).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
+app.MapMethods("/api-proxy/chat/settings/auto-approve", new[] { "PATCH" }, async (HttpContext ctx, ApiClient api) =>
+{
+    using var sr = new StreamReader(ctx.Request.Body);
+    var json = await sr.ReadToEndAsync();
+    var (ok, body, status) = await api.PostRawAsync("chat/settings/auto-approve", json, method: "PATCH");
+    return Results.Content(body ?? "", "application/json", null, statusCode: status);
+}).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
 // List API keys — superadmin only.
 app.MapGet("/api-proxy/chat/keys", async (ApiClient api) =>
 {

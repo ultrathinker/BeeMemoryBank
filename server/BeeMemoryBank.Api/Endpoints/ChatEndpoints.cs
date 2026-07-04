@@ -197,6 +197,29 @@ public static class ChatEndpoints
             return Results.Ok();
         });
 
+        // Auto-approve writes (opt-in, superadmin-only): when enabled, the streaming tool loop
+        // executes write tool calls immediately instead of pausing for a human Allow/Deny. ACL,
+        // the destructive-op cap, and audit tagging still apply in full — only the human-in-the-
+        // loop pause is skipped. Article history/restore is the accepted safety net.
+        group.MapGet("/settings/auto-approve", async (ChatSettingsRepository repo, HttpContext ctx) =>
+        {
+            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
+                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+
+            var enabled = await repo.GetAutoApproveWritesAsync();
+            return Results.Ok(new { autoApproveWrites = enabled });
+        });
+
+        group.MapPatch("/settings/auto-approve", async (UpdateAutoApproveRequest req,
+            ChatSettingsRepository repo, HttpContext ctx) =>
+        {
+            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
+                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+
+            await repo.SetAutoApproveWritesAsync(req.Enabled);
+            return Results.Ok(new { autoApproveWrites = req.Enabled });
+        });
+
         // ── Phase 2: STREAMING tool-loop turn + persistence ─────────────────────────
         //
         // Runs the SAME tool-call loop as /message, but writes the response as a Server-Sent Events
@@ -218,7 +241,8 @@ public static class ChatEndpoints
         group.MapPost("/stream", async (HttpContext ctx, ChatSettingsRepository repo,
             OpenRouterClient openRouter, ChatToolDispatcher dispatcher, SessionService session,
             ChatConversationRepository convoRepo, ChatMessageRepository msgRepo,
-            ChatAttachmentRepository attachRepo, ILogger<Program> logger) =>
+            ChatAttachmentRepository attachRepo, ChatDestructiveOpCounter destructiveCounter,
+            ILogger<Program> logger) =>
         {
             ChatStreamRequest? req;
             try
@@ -475,7 +499,7 @@ public static class ChatEndpoints
                     Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Repo: repo,
                     MsgRepo: msgRepo, ConvoRepo: convoRepo, Logger: logger, Keys: keys,
                     Model: req.Model, ConversationId: conversationId,
-                    ConvoMessages: convoMessages, Ct: ct, Sse: Sse));
+                    ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter));
             }
             finally
             {
@@ -653,72 +677,8 @@ public static class ChatEndpoints
                 }
                 else
                 {
-                    // Atomic destructive-op cap reservation (plan §2 Phase 3). TryReserve checks AND
-                    // increments in one CAS step so two concurrent Allows (e.g. two tabs each with its
-                    // OWN pending destructive call — a race the per-call in-flight guard above does NOT
-                    // cover) cannot both pass the cap. The reserved slot is released below when the op
-                    // does not actually execute (parse failure / error result), keeping the count on
-                    // EXECUTED destructive ops.
-                    bool reservedDestructive = ChatToolDispatcher.IsDestructiveTool(pending.Name)
-                        && destructiveCounter.TryReserve(conversationId);
-                    bool capRefused = ChatToolDispatcher.IsDestructiveTool(pending.Name) && !reservedDestructive;
-
-                    if (capRefused)
-                    {
-                        toolResultJson = JsonSerializer.Serialize(new
-                        {
-                            error = $"Destructive operation cap reached for this conversation (max {destructiveCounter.Cap} {pending.Name} calls). Start a new conversation to continue."
-                        }, SseJsonOpts);
-                    }
-                    else
-                    {
-                        JsonElement execArgs;
-                        bool parsed;
-                        try
-                        {
-                            var raw = string.IsNullOrWhiteSpace(pending.ArgumentsJson) ? "{}" : pending.ArgumentsJson;
-                            execArgs = JsonDocument.Parse(raw).RootElement.Clone();
-                            parsed = true;
-                        }
-                        catch (JsonException)
-                        {
-                            execArgs = default;
-                            parsed = false;
-                        }
-
-                        if (!parsed)
-                        {
-                            toolResultJson = "{\"error\":\"malformed arguments JSON\"}";
-                            // Parse failure means the op never ran — release the reserved destructive slot.
-                            if (reservedDestructive) destructiveCounter.Release(conversationId);
-                        }
-                        else
-                        {
-                            // The human's Allow click satisfies bee_delete_article's confirm=true two-step
-                            // requirement (defense-in-depth; avoids double-prompting the user).
-                            if (pending.Name == "bee_delete_article")
-                                execArgs = EnsureConfirmTrue(execArgs);
-
-                            // Confirm-gate marker: InvokeAsync refuses writes without it (so the non-streaming
-                            // /message loop can't execute ungated writes). Set only for this one approved call.
-                            ctx.Items[ChatToolDispatcher.ChatWriteExecItemsKey] = true;
-                            try
-                            {
-                                var result = await dispatcher.InvokeAsync(pending.Name, execArgs, ctx);
-                                toolResultJson = result.Json;
-                                toolOk = result.Ok;
-                                toolError = result.Error;
-                                // Release the reserved slot when the op did not actually execute (error
-                                // result) so the count reflects EXECUTED destructive ops (plan §2 Phase 3).
-                                if (reservedDestructive && (!result.Ok || toolResultJson.Contains("\"error\"")))
-                                    destructiveCounter.Release(conversationId);
-                            }
-                            finally
-                            {
-                                ctx.Items.Remove(ChatToolDispatcher.ChatWriteExecItemsKey);
-                            }
-                        }
-                    }
+                    (toolResultJson, toolOk, toolError) = await ExecuteApprovedWriteAsync(
+                        ctx, dispatcher, destructiveCounter, conversationId, pending.Name, pending.ArgumentsJson);
                 }
 
                 // Append + persist the tool result, then resume the loop.
@@ -737,7 +697,8 @@ public static class ChatEndpoints
                     await ctx.Response.Body.FlushAsync(ct);
                 }
 
-                await Sse("confirm_resolved", new { toolCallId = req.ToolCallId, allowed = req.Allow, ok = toolOk, error = toolError });
+                var articleId = req.Allow ? TryExtractArticleId(toolResultJson, pending.Name) : null;
+                await Sse("confirm_resolved", new { toolCallId = req.ToolCallId, allowed = req.Allow, ok = toolOk, error = toolError, toolName = pending.Name, articleId });
 
                 try
                 {
@@ -745,7 +706,7 @@ public static class ChatEndpoints
                         Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Repo: repo,
                         MsgRepo: msgRepo, ConvoRepo: convoRepo, Logger: logger, Keys: keys,
                         Model: resumeModel!, ConversationId: conversationId,
-                        ConvoMessages: convoMessages, Ct: ct, Sse: Sse));
+                        ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter));
                 }
                 catch (OperationCanceledException) { /* client gone */ }
                 finally
@@ -1469,7 +1430,8 @@ public static class ChatEndpoints
         Guid ConversationId,
         List<ChatToolMessage> ConvoMessages,
         CancellationToken Ct,
-        Func<string, object, Task> Sse);
+        Func<string, object, Task> Sse,
+        ChatDestructiveOpCounter DestructiveCounter);
 
     /// <summary>
     /// The streaming tool-call loop, shared by /stream and /confirm. Runs until ONE of:
@@ -1580,6 +1542,22 @@ public static class ChatEndpoints
 
                     if (ChatToolDispatcher.IsWriteTool(tc.Name))
                     {
+                        if (await lc.Repo.GetAutoApproveWritesAsync())
+                        {
+                            // Auto-approve (opt-in, superadmin-only, Admin -> AI/Chat): skip the human
+                            // confirm gate and execute immediately, through the SAME defense-in-depth
+                            // path /confirm uses (ACL via CallerScope reuse, the destructive-op cap,
+                            // the ChatWriteExecItemsKey marker, audit tagging). tool_call_start was
+                            // already emitted above for this call.
+                            var (autoJson, autoOk, autoErr) = await ExecuteApprovedWriteAsync(
+                                lc.Ctx, lc.Dispatcher, lc.DestructiveCounter, lc.ConversationId, tc.Name, tc.ArgumentsJson);
+                            var autoArticleId = TryExtractArticleId(autoJson, tc.Name);
+                            lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = autoJson });
+                            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, autoJson);
+                            await lc.Sse("confirm_resolved", new { toolCallId = tc.Id, allowed = true, ok = autoOk, error = autoErr, toolName = tc.Name, articleId = autoArticleId });
+                            continue;
+                        }
+
                         // CONFIRM GATE: do NOT execute. Emit a short human-readable summary and PAUSE.
                         // The confirm endpoint resolves {allow} and re-enters this loop.
                         var summary = ChatToolDispatcher.SummarizeWriteCall(tc.Name, args);
@@ -1717,6 +1695,85 @@ public static class ChatEndpoints
             : JsonNode.Parse("{}")) as JsonObject ?? new JsonObject();
         node["confirm"] = true;
         return JsonDocument.Parse(node.ToJsonString()).RootElement.Clone();
+    }
+
+    /// <summary>Executes ONE approved write tool call under full defense-in-depth — shared by
+    /// /confirm (human clicked Allow) and RunToolLoopAsync's auto-approve path (superadmin opted
+    /// out of the confirm gate). Handles, in order: the atomic destructive-op cap reservation
+    /// (never both check-then-act), argument parsing (graceful on malformed JSON), forcing
+    /// bee_delete_article's confirm=true (the caller's approval — human click or the auto-approve
+    /// setting — IS the confirmation), and the ChatWriteExecItemsKey marker that
+    /// ChatToolDispatcher.InvokeAsync requires before it will run ANY write tool. Never throws —
+    /// always returns a graceful tool-result JSON, exactly like the tools themselves.</summary>
+    private static async Task<(string Json, bool Ok, string? Error)> ExecuteApprovedWriteAsync(
+        HttpContext ctx, ChatToolDispatcher dispatcher, ChatDestructiveOpCounter destructiveCounter,
+        Guid conversationId, string toolName, string? argumentsJson)
+    {
+        bool reservedDestructive = ChatToolDispatcher.IsDestructiveTool(toolName)
+            && destructiveCounter.TryReserve(conversationId);
+        bool capRefused = ChatToolDispatcher.IsDestructiveTool(toolName) && !reservedDestructive;
+
+        if (capRefused)
+        {
+            var msg = $"Destructive operation cap reached for this conversation (max {destructiveCounter.Cap} {toolName} calls). Start a new conversation to continue.";
+            return (JsonSerializer.Serialize(new { error = msg }, SseJsonOpts), false, msg);
+        }
+
+        JsonElement execArgs;
+        bool parsed;
+        try
+        {
+            var raw = string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson;
+            execArgs = JsonDocument.Parse(raw).RootElement.Clone();
+            parsed = true;
+        }
+        catch (JsonException)
+        {
+            execArgs = default;
+            parsed = false;
+        }
+
+        if (!parsed)
+        {
+            if (reservedDestructive) destructiveCounter.Release(conversationId);
+            return ("{\"error\":\"malformed arguments JSON\"}", false, "malformed arguments JSON");
+        }
+
+        // The caller's approval (human Allow click, or the auto-approve setting) satisfies
+        // bee_delete_article's confirm=true two-step requirement — avoids double-prompting.
+        if (toolName == "bee_delete_article")
+            execArgs = EnsureConfirmTrue(execArgs);
+
+        ctx.Items[ChatToolDispatcher.ChatWriteExecItemsKey] = true;
+        try
+        {
+            var result = await dispatcher.InvokeAsync(toolName, execArgs, ctx);
+            if (reservedDestructive && (!result.Ok || result.Json.Contains("\"error\"")))
+                destructiveCounter.Release(conversationId);
+            return (result.Json, result.Ok, result.Error);
+        }
+        finally
+        {
+            ctx.Items.Remove(ChatToolDispatcher.ChatWriteExecItemsKey);
+        }
+    }
+
+    /// <summary>Pulls the article <c>id</c> out of a write tool's result JSON (SaveArticleAsync /
+    /// UpdateArticleAsync / AppendToArticleAsync / ReplaceInArticleAsync all include it via OkJson)
+    /// so the UI can render a direct "open article" link. Never for bee_delete_article — the
+    /// article is gone (hidden), a link would 404. Tolerates malformed/error JSON (no "id") by
+    /// returning null — never throws.</summary>
+    private static string? TryExtractArticleId(string toolResultJson, string toolName)
+    {
+        if (toolName == "bee_delete_article") return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(toolResultJson);
+            if (doc.RootElement.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String)
+                return idEl.GetString();
+        }
+        catch (JsonException) { /* no id present — not every tool result carries one */ }
+        return null;
     }
 
     /// <summary>Request body for the confirm endpoint. <c>toolCallId</c>+<c>allow</c> are required;

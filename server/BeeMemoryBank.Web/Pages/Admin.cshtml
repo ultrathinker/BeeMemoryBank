@@ -657,6 +657,21 @@
         Everything the AI reads is sent to your configured OpenRouter model/provider.
     </sl-alert>
 
+    <!-- Auto-approve writes: opt-in, skips the human-in-the-loop Allow/Deny gate for write tools.
+         ACL, the destructive-op cap, and audit tagging still apply in full — only the pause is
+         skipped. Article history/restore is the accepted safety net. -->
+    <div class="card" style="max-width:640px;margin-bottom:24px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+        <div>
+            <strong>Auto-approve writes</strong>
+            <p class="text-muted text-sm" style="margin:4px 0 0 0;">
+                When on, the AI creates/edits/deletes notes immediately without asking for Allow/Deny.
+                Folder access rules and the destructive-action limit still apply, and every change is
+                still visible in article history / restorable.
+            </p>
+        </div>
+        <sl-switch id="chat-auto-approve-toggle" style="flex-shrink:0;"></sl-switch>
+    </div>
+
     <!-- Keys -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
         <strong>OpenRouter API keys</strong>
@@ -889,6 +904,27 @@
                     if (res.ok) { loadModels(); } else { alert((res.body && res.body.error) ? res.body.error : 'Failed to save model.'); }
                 });
         });
+
+        // Auto-approve writes toggle.
+        var autoApproveToggle = document.getElementById('chat-auto-approve-toggle');
+        function loadAutoApprove() {
+            if (!autoApproveToggle) return;
+            fetch('/api-proxy/chat/settings/auto-approve', { headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.ok ? r.json() : { autoApproveWrites: false }; })
+                .then(function (data) { autoApproveToggle.checked = !!data.autoApproveWrites; })
+                .catch(function () {});
+        }
+        if (autoApproveToggle) {
+            autoApproveToggle.addEventListener('sl-change', function () {
+                var enabled = autoApproveToggle.checked;
+                fetch('/api-proxy/chat/settings/auto-approve', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: enabled })
+                }).catch(function () { autoApproveToggle.checked = !enabled; });
+            });
+        }
+        loadAutoApprove();
 
         loadKeys();
         loadModels();

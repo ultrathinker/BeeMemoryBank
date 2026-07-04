@@ -211,4 +211,24 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
         using var conn = OpenConnection();
         await conn.ExecuteAsync("DELETE FROM chat_model WHERE id = @id", new { id });
     }
+
+    // ── chat_settings (single row, id=1) ────────────────────────────────────────
+
+    /// <summary>Superadmin-only opt-in: when true, the streaming tool loop executes write tool
+    /// calls immediately (still ACL-checked, still destructive-op-capped, still audit-tagged)
+    /// instead of pausing for a human Allow/Deny. Off by default.</summary>
+    public async Task<bool> GetAutoApproveWritesAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<bool>(
+            "SELECT auto_approve_writes FROM chat_settings WHERE id = 1");
+    }
+
+    public async Task SetAutoApproveWritesAsync(bool enabled)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE chat_settings SET auto_approve_writes = @enabled WHERE id = 1",
+            new { enabled });
+    }
 }

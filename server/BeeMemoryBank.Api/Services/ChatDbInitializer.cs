@@ -98,6 +98,17 @@ public sealed class ChatDbInitializer
             default_for_category  INTEGER NOT NULL DEFAULT 0,
             enabled               INTEGER NOT NULL DEFAULT 1
         );
+        """,
+        // Single-row settings table (id is always 1). Currently holds only auto_approve_writes —
+        // a superadmin-only opt-in that skips the human-in-the-loop confirm gate for write tools
+        // (the user has explicit article history/restore as a safety net). Node-local like the
+        // rest of chat.db; never synced.
         """
+        CREATE TABLE IF NOT EXISTS chat_settings (
+            id                    INTEGER PRIMARY KEY CHECK (id = 1),
+            auto_approve_writes   INTEGER NOT NULL DEFAULT 0
+        );
+        """,
+        "INSERT OR IGNORE INTO chat_settings (id, auto_approve_writes) VALUES (1, 0);"
     ];
 }

@@ -79,6 +79,10 @@ public record CreateChatModelRequest(
 public record UpdateChatModelRequest(
     [property: JsonPropertyName("enabled")] bool? Enabled);
 
+/// <summary>Toggles the auto-approve-writes setting (skips the human confirm gate).</summary>
+public record UpdateAutoApproveRequest(
+    [property: JsonPropertyName("enabled")] bool Enabled);
+
 // ── chat_conversation / chat_message rows ────────────────────────────────────
 
 public class ChatConversation

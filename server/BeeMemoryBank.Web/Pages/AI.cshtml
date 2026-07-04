@@ -4,6 +4,21 @@
     ViewData["Title"] = "AI";
 }
 
+@section HeadStyles {
+    <style>
+        /* The AI page uses its own conversation-history sidebar (#chat-sidebar) instead of the
+           folder tree (#app-sidebar). We still RENDER <partial name="_Sidebar" /> below (just
+           hidden) so the persistent DOM shell matches every other page: site.js's SPA navigation
+           (see wwwroot/js/site.js spaNavigate) only swaps the innerHTML of #page-content and
+           assumes the sidebar element outside it already exists from the initial full page load.
+           Without it, leaving /AI via a SPA-eligible link (e.g. the header logo -> /Tree) left the
+           destination page with no sidebar at all, since nothing outside #page-content ever gets
+           re-inserted by the swap. */
+        body.ai-chat-page #app-sidebar { display: none; }
+    </style>
+}
+<script>document.body.classList.add('ai-chat-page');</script>
+<partial name="_Sidebar" />
 <div id="page-content">
 <div class="main-content" style="display:flex;height:calc(100vh - 96px);gap:0;">
 
@@ -24,14 +39,8 @@
             <h2 style="margin:0;"><sl-icon name="chat-left-text"></sl-icon> AI Chat</h2>
             <div style="display:flex;align-items:center;gap:8px;">
                 <sl-select id="chat-model" size="small" placeholder="Select a model" style="min-width:240px;max-width:46vw;min-height:2.2rem;"></sl-select>
-                </sl-select>
             </div>
         </div>
-
-        <sl-alert variant="neutral" open size="small" style="margin-bottom:8px;">
-            <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
-            Everything the AI reads — and any text you ask it to write — is sent to your configured OpenRouter model/provider. Writes only run after you click <strong>Allow</strong>.
-        </sl-alert>
 
         <!-- Empty / not-configured states -->
         <div id="chat-empty-state" class="card" style="display:none;text-align:center;padding:32px;margin-bottom:8px;">
