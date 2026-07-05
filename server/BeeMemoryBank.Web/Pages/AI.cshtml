@@ -148,6 +148,12 @@
             font-size: 1.3rem;
             color: var(--sl-color-danger-600);
         }
+
+        /* Save-to-Bee dialog: the search input's prefix (magnifying glass) icon sits flush
+           against the field's left edge by default — give it some breathing room. */
+        body.ai-chat-page #chat-save-search::part(prefix) {
+            margin-left: 6px;
+        }
     </style>
 }
 <script>document.body.classList.add('ai-chat-page');</script>
