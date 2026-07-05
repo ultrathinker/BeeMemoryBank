@@ -717,6 +717,7 @@
     var saveConfirm = document.getElementById('chat-save-confirm');
     var saveSourceBlob = null;     // Blob to upload (built from the image src).
     var saveFileName = 'chat-image.png';
+    var saveKind = null;           // 'generated-image' or 'attached' — picks the markdown alt text.
     var saveArticleId = null;
     var saveSearchTimer = null;
 
@@ -739,6 +740,7 @@
         fetch(src).then(function (r) { return r.blob(); }).then(function (b) {
             saveSourceBlob = b;
         }).catch(function () { saveSourceBlob = null; });
+        saveKind = kind;
         saveFileName = (kind === 'generated-image' ? 'chat-generated' : 'chat-upload')
             + '-' + (attachmentId ? attachmentId.toString().slice(0, 8) : Date.now()) + '.png';
         if (saveDialog) saveDialog.show();
@@ -760,7 +762,9 @@
                     saveResults.appendChild(empty);
                     return;
                 }
-                articles.slice(0, 50).forEach(function (a) {
+                // Server returns title-sorted results (underscore-prefixed system notes first);
+                // keep that order, just cap the dropdown at 20.
+                articles.slice(0, 20).forEach(function (a) {
                     var row = document.createElement('div');
                     row.style.cssText = 'padding:6px 8px;cursor:pointer;font-size:0.86rem;';
                     row.addEventListener('mouseenter', function () { row.style.background = 'var(--sl-color-neutral-100)'; });
@@ -785,28 +789,65 @@
             .catch(function () {});
     }
 
+    function showSaveError(msg) {
+        if (saveSelected) {
+            saveSelected.textContent = 'Save failed: ' + msg;
+            saveSelected.style.color = 'var(--sl-color-danger-600)';
+        }
+    }
+
     function doSaveToBee() {
         if (!saveArticleId || !saveSourceBlob) return;
         if (saveConfirm) { saveConfirm.loading = true; saveConfirm.disabled = true; }
-        var fd = new FormData();
-        // The existing /api-proxy/media/upload expects a "file" part + an "articleId" field. The API
-        // MediaEndpoints ACL-checks the article's folder path before storing — a read-only or
-        // access-denied folder is rejected server-side (never bypassed here).
-        fd.append('file', saveSourceBlob, saveFileName);
-        fd.append('articleId', saveArticleId);
-        fetch('/api-proxy/media/upload', { method: 'POST', body: fd })
+        // Three steps, all through existing ACL-checked proxies:
+        //   1. GET the article (refuse protected targets BEFORE uploading anything);
+        //   2. upload the image bytes (media row, FK'd to the article);
+        //   3. PUT the content back with a markdown image reference appended, so the image
+        //      actually appears in the note (View/Preview already rewrite /api/media/ src).
+        // The GET happens here, inside the click, so the read-modify-write window is one
+        // network hop — same order of magnitude as the server-side MCP append tool.
+        var articleContent = null;
+        fetch('/api-proxy/article/' + saveArticleId, { headers: { 'Accept': 'application/json' } })
             .then(function (r) {
-                if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Upload failed'); });
+                if (!r.ok) throw new Error('could not load the selected note.');
                 return r.json();
             })
-            .then(function () {
+            .then(function (data) {
+                if (data && data.article && data.article.protected) {
+                    throw new Error('this note is password-protected. Open it in the editor, unlock it, and paste the image there instead.');
+                }
+                if (!data || typeof data.content !== 'string') {
+                    throw new Error('could not read the note content (is the vault unlocked?).');
+                }
+                articleContent = data.content;
+                var fd = new FormData();
+                // The existing /api-proxy/media/upload expects a "file" part + an "articleId" field.
+                // The API MediaEndpoints ACL-checks the article's folder path before storing — a
+                // read-only or access-denied folder is rejected server-side (never bypassed here).
+                fd.append('file', saveSourceBlob, saveFileName);
+                fd.append('articleId', saveArticleId);
+                return fetch('/api-proxy/media/upload', { method: 'POST', body: fd });
+            })
+            .then(function (r) {
+                if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'the server rejected the upload (check folder access).'); });
+                return r.json();
+            })
+            .then(function (media) {
+                var alt = saveKind === 'generated-image' ? 'Generated image' : 'Image from chat';
+                var newContent = articleContent.replace(/\s+$/, '')
+                    + '\n\n![' + alt + '](/api/media/' + media.id + ')\n';
+                return fetch('/api-proxy/article/' + saveArticleId, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: newContent })
+                });
+            })
+            .then(function (r) {
+                if (!r.ok) throw new Error('the image was uploaded but could not be added to the note text.');
                 if (saveDialog) saveDialog.hide();
             })
             .catch(function (err) {
-                if (saveSelected) {
-                    saveSelected.textContent = 'Save failed: ' + ((err && err.message) || 'the server rejected it (check folder access).');
-                    saveSelected.style.color = 'var(--sl-color-danger-600)';
-                }
+                showSaveError((err && err.message) || 'the server rejected it (check folder access).');
             })
             .finally(function () {
                 if (saveConfirm) { saveConfirm.loading = false; saveConfirm.disabled = !saveArticleId; }
