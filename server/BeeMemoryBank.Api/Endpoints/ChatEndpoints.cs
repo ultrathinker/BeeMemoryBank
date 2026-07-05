@@ -1509,12 +1509,17 @@ public static class ChatEndpoints
         _ => "Working…"
     };
 
-    // First ~40 chars of the first user message → conversation title (plan §2 Phase 2). Truncated on
-    // a grapheme-ish boundary (Substring is fine here; titles are display-only).
+    // First ~120 chars of the first user message → conversation title (plan §2 Phase 2). This is
+    // stored as-is, permanently, at conversation-creation time — the sidebar's own CSS ellipsis
+    // (text-overflow:ellipsis) truncates it further for DISPLAY depending on the sidebar's current
+    // width, but it can never show more than what's actually stored here, no matter how wide the
+    // user drags the sidebar. 120 (up from an earlier 40) gives real room for that resizing to
+    // reveal more text. Truncated on a grapheme-ish boundary (Substring is fine here; titles are
+    // display-only).
     private static string TitleFromMessage(string message)
     {
         var trimmed = message.Trim();
-        return trimmed.Length <= 40 ? trimmed : trimmed[..40] + "…";
+        return trimmed.Length <= 120 ? trimmed : trimmed[..120] + "…";
     }
 
     // Best-effort persistence of a role="tool" result message: never let a chat.db write failure
