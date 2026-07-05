@@ -1,24 +1,33 @@
 -- 001_initial_schema.sql
--- Squashed baseline schema (consolidates former 001..008).
+-- Squashed baseline schema (consolidates former 001..007).
 -- On fresh DBs: creates the full current schema in one shot — no incremental migrations.
--- On existing DBs that already passed through 001..008: version=1 is in tbl_migration, so
--- this file is skipped on startup. Ghost Hunter in MigrationRunner removes the now-stale
--- tbl_migration rows for versions 2..8 automatically (no code changes required).
+-- On existing DBs that already passed through 001..007: version=1 is in tbl_migration, so
+-- this file is skipped on startup (its columns were already applied by the individual
+-- migration files that used to exist). Ghost Hunter in MigrationRunner removes the now-stale
+-- tbl_migration rows for versions 2..7 automatically (no code changes required).
 
 -- Parent tables (no outgoing FKs) ----------------------------------------
 
 CREATE TABLE tbl_folder (
-    id                    TEXT PRIMARY KEY,
-    path                  TEXT NOT NULL,
-    name                  TEXT NOT NULL,
-    parent_path           TEXT,
-    status                TEXT NOT NULL DEFAULT 'A',
-    lamport_ts            INTEGER NOT NULL DEFAULT 0,
-    source_node_id        TEXT,
-    created_at            TEXT NOT NULL,
-    updated_at            TEXT NOT NULL,
-    deleted_at            TEXT,
-    cascade_delete_op_id  TEXT
+    id                      TEXT PRIMARY KEY,
+    path                    TEXT NOT NULL,
+    name                    TEXT NOT NULL,
+    parent_path             TEXT,
+    status                  TEXT NOT NULL DEFAULT 'A',
+    lamport_ts              INTEGER NOT NULL DEFAULT 0,
+    source_node_id          TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    deleted_at              TEXT,
+    cascade_delete_op_id    TEXT,
+    -- Reserved name '_Drafts' is treated as a protected folder once created: service-layer
+    -- code refuses Rename/Move/Delete on rows with is_system=1 and TreeService omits empty
+    -- system folders from /api/tree responses.
+    is_system               INTEGER NOT NULL DEFAULT 0,
+    -- Remote-mirror shadow markers: rows with remote_subscription_id != NULL belong to a
+    -- mirrored remote share and are read-only at the repository layer.
+    remote_subscription_id  TEXT,
+    remote_origin_id        TEXT
 );
 
 CREATE TABLE tbl_key_slot (
@@ -216,7 +225,15 @@ CREATE TABLE tbl_user (
     key_slot_id   INTEGER,
     is_active     INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL,
-    last_login_at TEXT
+    last_login_at TEXT,
+    -- Node-local security stamp used to revoke stale Web cookies. Bumped on every
+    -- identity-affecting change (password/role change, IsActive flip, deletion). NOT
+    -- synchronized — never put in a sync event payload.
+    security_stamp TEXT NOT NULL DEFAULT '',
+    -- Node-local AI-chat access flag. When false, this user may not use the AI chat feature;
+    -- superadmins bypass this check regardless of its value. ANDed with chat.db's node-wide
+    -- chat_globally_enabled toggle — both must be true for a regular user to chat.
+    chat_access   INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE tbl_agent (
@@ -246,6 +263,10 @@ CREATE TABLE tbl_folder_acl_entry (
     folder_id TEXT    NOT NULL REFERENCES tbl_folder(id) ON DELETE CASCADE,
     effect    TEXT    NOT NULL CHECK(effect IN ('allow', 'deny')),
     created_at TEXT   NOT NULL,
+    -- Semantics: effect='deny' + is_read_only=* → no access at all (deny wins).
+    -- effect='allow' + is_read_only=0 → read + write (default). effect='allow' +
+    -- is_read_only=1 → read-only access.
+    is_read_only INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(user_id, folder_id, effect)
 );
 
@@ -264,7 +285,17 @@ CREATE TABLE tbl_article (
     deleted_at              TEXT,
     lamport_ts              INTEGER NOT NULL DEFAULT 0,
     source_node_id          TEXT,
-    folder_id               TEXT REFERENCES tbl_folder(id)
+    folder_id               TEXT REFERENCES tbl_folder(id),
+    -- Remote-mirror shadow markers (see tbl_folder above for the same pattern).
+    remote_subscription_id  TEXT,
+    remote_origin_id        TEXT,
+    remote_version          INTEGER,
+    remote_updated_by       TEXT,
+    -- protected: 1 when the body holds a passphrase-encrypted BMBENC1 blob. Derived from body
+    -- content on every write — a synced cache for UI (lock badge), never the source of truth.
+    protected               INTEGER NOT NULL DEFAULT 0,
+    -- Optional plaintext reminder phrase, shown on the lock screen BEFORE unlock.
+    protection_hint         TEXT
 );
 
 -- Tables depending on tbl_article ----------------------------------------
@@ -362,6 +393,49 @@ CREATE TABLE tbl_hard_delete_audit (
 );
 
 
+-- Remote accounts (read-only mirroring of folders on other BMB nodes) ----
+
+-- Friend-side: registers remote BMB nodes ("Remote Accounts") and per-device subscriptions
+-- to specific folders on those nodes.
+CREATE TABLE tbl_remote_account (
+    id                TEXT PRIMARY KEY,           -- local GUID
+    display_name      TEXT NOT NULL,              -- "Alice's BMB"
+    base_url          TEXT NOT NULL,              -- "https://her-node.example"
+    remote_username   TEXT NOT NULL,              -- login on owner-node
+    encrypted_token   BLOB NOT NULL,              -- bearer token, wrapped with our master DEK
+    token_iv          BLOB NOT NULL,
+    token_expires_at  TEXT,                       -- ISO-8601 informational
+    last_sync_at      TEXT,
+    last_sync_status  TEXT,                       -- 'ok' | 'auth_failed' | 'unreachable' | 'error'
+    last_error        TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+
+CREATE TABLE tbl_remote_subscription (
+    id                  TEXT PRIMARY KEY,
+    remote_account_id   TEXT NOT NULL REFERENCES tbl_remote_account(id) ON DELETE CASCADE,
+    remote_folder_id    TEXT NOT NULL,            -- folder GUID on owner-node
+    remote_folder_path  TEXT NOT NULL,            -- path on owner-node, for UI display
+    mount_path          TEXT NOT NULL,            -- local path where the replica is rooted
+    sync_cursor         TEXT,                     -- last applied event token for /changes
+    last_full_sync_at   TEXT,
+    created_at          TEXT NOT NULL,
+    UNIQUE(remote_account_id, remote_folder_id),
+    UNIQUE(mount_path)
+);
+
+-- Owner-side: tokens issued to remote accounts for cross-instance read access.
+CREATE TABLE tbl_remote_api_token (
+    id            TEXT PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES tbl_user(id) ON DELETE CASCADE,
+    token_hash    TEXT NOT NULL,                  -- SHA-256 hex
+    label         TEXT,
+    created_at    TEXT NOT NULL,
+    last_used_at  TEXT,
+    expires_at    TEXT NOT NULL                   -- ISO-8601
+);
+
 -- Indexes ----------------------------------------------------------------
 
 CREATE UNIQUE INDEX idx_folder_path_active  ON tbl_folder(path) WHERE status = 'A';
@@ -421,6 +495,13 @@ CREATE INDEX idx_restore_replay_shield_peer ON tbl_restore_replay_shield(peer_no
 CREATE INDEX idx_restore_event_state_state  ON tbl_restore_event_state(state);
 
 CREATE INDEX idx_dek_rotation_state_state   ON tbl_dek_rotation_state(state);
+
+CREATE INDEX idx_remote_account_url         ON tbl_remote_account(base_url);
+CREATE INDEX idx_remote_subscription_account ON tbl_remote_subscription(remote_account_id);
+CREATE INDEX idx_folder_remote_sub          ON tbl_folder(remote_subscription_id);
+CREATE INDEX idx_article_remote_sub         ON tbl_article(remote_subscription_id);
+CREATE UNIQUE INDEX idx_remote_api_token_hash ON tbl_remote_api_token(token_hash);
+CREATE INDEX idx_remote_api_token_user      ON tbl_remote_api_token(user_id);
 
 
 -- Triggers ---------------------------------------------------------------
