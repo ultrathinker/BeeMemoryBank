@@ -80,12 +80,21 @@
         /* Anchored to the panel's own top-right corner (position:relative on #chat-sidebar
            above) — independent of "New chat", not sharing its flex row. This is what lets the
            button below span the grid's own 30px inset exactly, instead of losing width to a
-           reserved chevron slot. */
+           reserved chevron slot. Shrunk via ::part(base) (Shoelace's default icon-button hit
+           area is wider than the visible glyph) so it fits in the ~30px strip to the right of
+           the button WITHOUT touching it — the button's own right edge sits at 30px from the
+           panel's border, so this button's rendered width plus its "right" offset must together
+           stay under that 30px, leaving a small visible gap. top:14px (nudged down from the
+           button's own 8px top padding) roughly centers it against the button's ~36px height. */
         body.ai-chat-page #btn-chat-sidebar-collapse {
             position: absolute;
-            top: 8px;
-            right: 8px;
+            top: 14px;
+            right: 4px;
             z-index: 2;
+        }
+        body.ai-chat-page #btn-chat-sidebar-collapse::part(base) {
+            padding: 2px;
+            font-size: 1rem;
         }
 
         /* New-chat flash: when a brand-new conversation appears at the top of the list (right
