@@ -92,16 +92,23 @@
             font-size: 0.75rem;
         }
 
-        /* Expand tab — fixed, hanging down from under the 48px header, top-centered over the
-           content area. ONE shared tab regardless of which mechanism collapsed the block
-           (send-triggered or manual): one mental model, one state. Same shape/colors as
-           #chat-sidebar-expand-tab in AI.cshtml / #sidebar-expand-tab in site.css, rotated:
-           top edge borderless, bottom corners rounded, chevron-down. */
+        /* Expand tab — fixed, hanging down from under the 48px header. ONE shared tab
+           regardless of which mechanism collapsed the block (send-triggered or manual): one
+           mental model, one state. Same shape/colors as #chat-sidebar-expand-tab in AI.cshtml /
+           #sidebar-expand-tab in site.css, rotated: top edge borderless, bottom corners
+           rounded, chevron-down.
+           Centering: the page is split into the (resizable/collapsible) folder-tree sidebar on
+           the left and .main-content on the right — centering this fixed element at 50% of the
+           viewport would center it over the WHOLE page, drifting into the sidebar's space. It
+           must instead center over .main-content alone, whose width changes as the sidebar is
+           dragged/collapsed. `left` is therefore NOT set here — chat.js computes and sets it in
+           px (the midpoint of .main-content's live bounding rect, kept in sync via a
+           ResizeObserver so it stays centered through any sidebar resize/collapse); this rule
+           only supplies the translateX(-50%) that centers the tab ON that computed midpoint. */
         body.home-chat-page #home-welcome-expand-tab {
             display: none;
             position: fixed;
             top: 48px;               /* .app-header height (site.css line 359) */
-            left: 50%;
             transform: translateX(-50%);
             z-index: 200;            /* matches #sidebar-expand-tab */
             width: 52px;
@@ -140,8 +147,9 @@
             flex: 1 1 auto;
         }
 
-        /* Chat action row (New chat / Close chat) above the composer. Close chat only renders
-           usefully in chat mode — hidden entirely in idle mode. */
+        /* Chat action row (New chat / Close chat) above the composer. Both are hidden in idle
+           mode — "New chat" has nothing to abandon yet (no conversation exists until the first
+           send), and "Close chat" has nothing to close. Both appear once a chat is active. */
         body.home-chat-page #home-chat-actions {
             display: flex;
             justify-content: flex-end;
@@ -152,11 +160,21 @@
             padding: 2px 12px;
             box-sizing: border-box;
         }
+        body.home-chat-page #chat-new,
         body.home-chat-page #home-chat-close {
             display: none;
         }
+        body.home-chat-page .main-content.home-chat-active #chat-new,
         body.home-chat-page .main-content.home-chat-active #home-chat-close {
             display: inline-block;
+        }
+
+        /* Explanatory blurb above the composer, idle mode only (it lives inside #home-welcome
+           so it collapses away with the rest of the block once a chat starts — by then the
+           chat itself is self-explanatory). Small gap from the four buttons above it. */
+        body.home-chat-page .welcome-chat-hint {
+            font-size: 0.85rem;
+            margin: 16px 0 0 0;
         }
     </style>
 }
@@ -189,6 +207,10 @@
                     <sl-icon slot="prefix" name="upload"></sl-icon> Import from Obsidian
                 </sl-button>
             </div>
+            <p class="text-muted welcome-chat-hint">
+                Or just ask below — chat with the AI about your notes. Have it find something,
+                create or edit an article, and it'll reply right here.
+            </p>
             <!-- Mechanism B: manual collapse pip — drops into an EMPTY chat view without
                  creating any conversation (identical to opening /AI fresh). -->
             <button id="home-welcome-collapse-tab" title="Hide welcome, open chat"

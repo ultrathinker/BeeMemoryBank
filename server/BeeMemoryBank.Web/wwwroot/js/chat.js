@@ -1081,6 +1081,25 @@
             if (homeMain) homeMain.classList.remove('home-chat-active');
             setWelcomeCollapsed(false);
         });
+
+        // Keep the expand tab centered over .main-content (the area right of the folder-tree
+        // sidebar) rather than the whole viewport — the sidebar is user-resizable/collapsible,
+        // so .main-content's width isn't static. A ResizeObserver on .main-content fires
+        // whenever its box changes (including as a side effect of the sidebar being dragged or
+        // collapsed elsewhere), so this stays correctly centered with no polling and no need to
+        // hook into the sidebar's own drag/collapse code.
+        if (homeExpandTab && homeMain) {
+            var repositionHomeExpandTab = function () {
+                var rect = homeMain.getBoundingClientRect();
+                homeExpandTab.style.left = (rect.left + rect.width / 2) + 'px';
+            };
+            repositionHomeExpandTab();
+            if (window.ResizeObserver) {
+                new ResizeObserver(repositionHomeExpandTab).observe(homeMain);
+            } else {
+                window.addEventListener('resize', repositionHomeExpandTab);
+            }
+        }
     }
 
     if (inputEl) {
