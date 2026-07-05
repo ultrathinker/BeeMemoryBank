@@ -157,16 +157,33 @@
             width: 100%;
             max-width: 820px;
             margin: 0 auto;
-            padding: 2px 12px;
+            /* Extra bottom margin (beyond the row's own top padding) so the message list below
+               doesn't start flush against these buttons. */
+            padding: 2px 12px 0 12px;
+            margin-bottom: 10px;
             box-sizing: border-box;
         }
         body.home-chat-page #chat-new,
         body.home-chat-page #home-chat-close {
             display: none;
+            font-size: 1.3rem;
         }
         body.home-chat-page .main-content.home-chat-active #chat-new,
         body.home-chat-page .main-content.home-chat-active #home-chat-close {
             display: inline-block;
+        }
+        /* Colored so intent reads at a glance without a text label. */
+        body.home-chat-page #chat-new {
+            color: var(--sl-color-success-600);
+        }
+        body.home-chat-page #chat-new:hover {
+            color: var(--sl-color-success-500);
+        }
+        body.home-chat-page #home-chat-close {
+            color: var(--sl-color-danger-600);
+        }
+        body.home-chat-page #home-chat-close:hover {
+            color: var(--sl-color-danger-500);
         }
 
         /* Explanatory blurb above the composer, idle mode only (it lives inside #home-welcome
@@ -222,14 +239,12 @@
 
     <!-- New chat / Close chat, directly above the composer. #chat-new deliberately reuses
          /AI's id so chat.js's existing newConversation wiring binds to it. Close chat exists
-         ONLY on this page (clears the home pin, never deletes the conversation). -->
+         ONLY on this page (clears the home pin, never deletes the conversation). Icon-only,
+         colored so their intent reads at a glance without a label (green = start something
+         new, red = destructive-feeling even though it's non-destructive under the hood). -->
     <div id="home-chat-actions">
-        <sl-button id="chat-new" size="small" variant="default" outline>
-            <sl-icon slot="prefix" name="plus-lg"></sl-icon> New chat
-        </sl-button>
-        <sl-button id="home-chat-close" size="small" variant="default" outline>
-            <sl-icon slot="prefix" name="x-lg"></sl-icon> Close chat
-        </sl-button>
+        <sl-icon-button id="chat-new" name="plus-circle" label="New chat" title="New chat"></sl-icon-button>
+        <sl-icon-button id="home-chat-close" name="x-circle" label="Close chat" title="Close chat"></sl-icon-button>
     </div>
 
     <partial name="_ChatUi" />
