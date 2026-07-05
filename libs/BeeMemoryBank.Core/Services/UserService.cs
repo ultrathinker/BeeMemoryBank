@@ -40,7 +40,7 @@ public class UserService(
         return user;
     }
 
-    public async Task<User> CreateUserAsync(string username, string displayName, string password, string role)
+    public async Task<User> CreateUserAsync(string username, string displayName, string password, string role, bool chatAccess = true)
     {
         if (string.IsNullOrWhiteSpace(username))
             throw new ArgumentException("Username is required");
@@ -61,6 +61,7 @@ public class UserService(
             PasswordHash = HashPassword(password),
             Role = role,
             IsActive = true,
+            ChatAccess = chatAccess,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -252,12 +253,15 @@ public class UserService(
         throw new InvalidOperationException("Failed to release username after 3 attempts. Please try again.");
     }
 
-    public async Task UpdateUserAsync(int userId, string displayName, string? role, string? password = null)
+    public async Task UpdateUserAsync(int userId, string displayName, string? role, string? password = null, bool? chatAccess = null)
     {
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
 
         user.DisplayName = displayName.Trim();
+
+        if (chatAccess.HasValue)
+            user.ChatAccess = chatAccess.Value;
 
         bool roleChanged = false;
         if (role != null && role != user.Role)

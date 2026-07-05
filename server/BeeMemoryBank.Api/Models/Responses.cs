@@ -101,7 +101,7 @@ public record JoinKeySlot(
 
 public record LoginResponse(int UserId, string Username, string DisplayName, string Role, bool IsUnlocked, string? MigratedSyntheticUsername = null, string? SecurityStamp = null);
 
-public record UserListItemResponse(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt);
+public record UserListItemResponse(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt, bool ChatAccess);
 
 public record WhitelistEntryResponse(
     Guid NodeId,

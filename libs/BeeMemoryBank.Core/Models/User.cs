@@ -13,6 +13,11 @@ public class User
     public string Role { get; set; } = UserRoles.User;
     public int? KeySlotId { get; set; }
     public bool IsActive { get; set; } = true;
+
+    /// <summary>Node-local flag controlling whether this user may use the AI chat feature;
+    /// superadmins bypass this check entirely regardless of its value.</summary>
+    public bool ChatAccess { get; set; } = true;
+
     public DateTime CreatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
 

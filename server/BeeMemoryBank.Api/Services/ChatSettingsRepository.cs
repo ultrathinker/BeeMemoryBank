@@ -282,4 +282,19 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
             "UPDATE chat_settings SET auto_approve_writes = @enabled WHERE id = 1",
             new { enabled });
     }
+
+    public async Task<bool> GetChatGloballyEnabledAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<bool>(
+            "SELECT chat_globally_enabled FROM chat_settings WHERE id = 1");
+    }
+
+    public async Task SetChatGloballyEnabledAsync(bool enabled)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE chat_settings SET chat_globally_enabled = @enabled WHERE id = 1",
+            new { enabled });
+    }
 }

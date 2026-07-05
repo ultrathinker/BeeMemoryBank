@@ -20,7 +20,7 @@ public static class UserEndpoints
         {
             var users = await repo.ListActiveAsync();
             return Results.Ok(users.Select(u => new UserListItemResponse(
-                u.Id, u.Username, u.DisplayName, u.Role, u.CreatedAt, u.LastLoginAt)));
+                u.Id, u.Username, u.DisplayName, u.Role, u.CreatedAt, u.LastLoginAt, u.ChatAccess)));
         });
 
         // GET /api/users/me/stamp — returns this caller's node-local security stamp.
@@ -48,11 +48,11 @@ public static class UserEndpoints
 
             try
             {
-                var user = await userService.CreateUserAsync(req.Username, req.DisplayName, req.Password, req.Role);
+                var user = await userService.CreateUserAsync(req.Username, req.DisplayName, req.Password, req.Role, req.ChatAccess);
                 var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
                 await auditRepo.LogAsync("user", user.Id.ToString(), "user_created", "web",
                     $"User '{user.Username}' (role={user.Role}) created by user {actor}");
-                return Results.Ok(new UserListItemResponse(user.Id, user.Username, user.DisplayName, user.Role, user.CreatedAt, user.LastLoginAt));
+                return Results.Ok(new UserListItemResponse(user.Id, user.Username, user.DisplayName, user.Role, user.CreatedAt, user.LastLoginAt, user.ChatAccess));
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
             {
@@ -68,7 +68,7 @@ public static class UserEndpoints
 
             try
             {
-                await userService.UpdateUserAsync(id, req.DisplayName, req.Role, req.Password);
+                await userService.UpdateUserAsync(id, req.DisplayName, req.Role, req.Password, req.ChatAccess);
                 var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
                 var changedPw = req.Password != null;
                 await auditRepo.LogAsync("user", id.ToString(), "user_updated", "web",

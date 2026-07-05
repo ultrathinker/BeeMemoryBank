@@ -48,9 +48,18 @@
         @if (User.Identity?.IsAuthenticated == true)
         {
         <div class="header-right">
-            <a href="/AI" class="header-link" style="margin-right:16px;font-weight:700;color:var(--accent);background:color-mix(in srgb, var(--accent) 14%, transparent);padding:4px 10px;border-radius:var(--sl-border-radius-medium,6px);">
+            <a href="/AI" id="nav-ai-link" class="header-link" style="margin-right:16px;font-weight:700;color:var(--accent);background:color-mix(in srgb, var(--accent) 14%, transparent);padding:4px 10px;border-radius:var(--sl-border-radius-medium,6px);">
                 <sl-icon name="chat-left-text"></sl-icon> AI
             </a>
+            <script>
+            (function () {
+                var link = document.getElementById('nav-ai-link');
+                if (!link) return;
+                fetch('/api-proxy/chat/access').then(function (r) { return r.ok ? r.json() : { allowed: true }; })
+                    .then(function (data) { if (!data.allowed) link.style.display = 'none'; })
+                    .catch(function () {});
+            })();
+            </script>
             <div class="theme-picker">
                 <sl-dropdown id="theme-dropdown" placement="bottom-end">
                     <sl-button slot="trigger" size="small" variant="text" caret>

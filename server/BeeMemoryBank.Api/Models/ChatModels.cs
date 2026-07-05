@@ -92,6 +92,10 @@ public record UpdateChatModelRequest(
 public record UpdateAutoApproveRequest(
     [property: JsonPropertyName("enabled")] bool Enabled);
 
+/// <summary>Toggles the node-wide "chat_globally_enabled" kill switch in chat_settings.</summary>
+public record UpdateChatEnabledRequest(
+    [property: JsonPropertyName("enabled")] bool Enabled);
+
 /// <summary>Sets the three pinned default-model ids in chat_settings. Each is a nullable GUID
 /// string referencing chat_model.id; null (or empty) means "use the oldest model with the matching
 /// property" (the Default option in the admin dropdowns).</summary>

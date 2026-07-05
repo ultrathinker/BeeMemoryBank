@@ -657,6 +657,22 @@
         Everything the AI reads is sent to your configured OpenRouter model/provider.
     </sl-alert>
 
+    <!-- Allow AI chat: node-wide kill switch. When off, no one except superadmins can use the
+         AI chat feature (web UI), regardless of each user's individual "Can use AI chat" setting
+         on the Users page. Per-user settings are preserved while this is off — turning it back on
+         restores whatever each user had configured. -->
+    <div class="card" style="max-width:640px;margin-bottom:24px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+        <div>
+            <strong>Allow AI chat for users</strong>
+            <p class="text-muted text-sm" style="margin:4px 0 0 0;">
+                When off, only superadmins can use the AI chat — everyone else is blocked regardless
+                of their individual chat-access setting (see <a href="/Users">Users</a>). Turning this
+                back on restores each user's own setting, nothing is lost while it's off.
+            </p>
+        </div>
+        <sl-switch id="chat-globally-enabled-toggle" style="flex-shrink:0;"></sl-switch>
+    </div>
+
     <!-- Auto-approve writes: opt-in, skips the human-in-the-loop Allow/Deny gate for write tools.
          ACL, the destructive-op cap, and audit tagging still apply in full — only the pause is
          skipped. Article history/restore is the accepted safety net. -->
@@ -1072,6 +1088,27 @@
             });
         }
         loadAutoApprove();
+
+        // "Allow AI chat for users" node-wide kill switch toggle.
+        var chatEnabledToggle = document.getElementById('chat-globally-enabled-toggle');
+        function loadChatEnabled() {
+            if (!chatEnabledToggle) return;
+            fetch('/api-proxy/chat/settings/chat-enabled', { headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.ok ? r.json() : { chatGloballyEnabled: true }; })
+                .then(function (data) { chatEnabledToggle.checked = !!data.chatGloballyEnabled; })
+                .catch(function () {});
+        }
+        if (chatEnabledToggle) {
+            chatEnabledToggle.addEventListener('sl-change', function () {
+                var enabled = chatEnabledToggle.checked;
+                fetch('/api-proxy/chat/settings/chat-enabled', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: enabled })
+                }).catch(function () { chatEnabledToggle.checked = !enabled; });
+            });
+        }
+        loadChatEnabled();
 
         loadKeys();
         loadModels();

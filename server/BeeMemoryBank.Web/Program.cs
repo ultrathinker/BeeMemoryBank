@@ -643,7 +643,7 @@ app.MapPost("/api-proxy/users", async (HttpContext ctx, ApiClient api) =>
 {
     var req = await ctx.Request.ReadFromJsonAsync<CreateUserProxyRequest>();
     if (req == null) return Results.BadRequest();
-    var (user, error, status) = await api.CreateUserAsync(req.Username, req.DisplayName, req.Password, req.Role);
+    var (user, error, status) = await api.CreateUserAsync(req.Username, req.DisplayName, req.Password, req.Role, req.ChatAccess);
     if (user != null) return Results.Ok(user);
     return Results.Json(new { error = error ?? "Failed to create user" }, statusCode: status);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
@@ -652,7 +652,7 @@ app.MapPut("/api-proxy/users/{id:int}", async (int id, HttpContext ctx, ApiClien
 {
     var req = await ctx.Request.ReadFromJsonAsync<UpdateUserProxyRequest>();
     if (req == null) return Results.BadRequest();
-    var (ok, error, status) = await api.UpdateUserAsync(id, req.DisplayName, req.Role);
+    var (ok, error, status) = await api.UpdateUserAsync(id, req.DisplayName, req.Role, req.ChatAccess);
     if (ok) return Results.Ok();
     return Results.Json(new { error = error ?? "Failed to update user" }, statusCode: status);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
@@ -907,6 +907,29 @@ app.MapMethods("/api-proxy/chat/settings/auto-approve", new[] { "PATCH" }, async
     var (ok, body, status) = await api.PostRawAsync("chat/settings/auto-approve", json, method: "PATCH");
     return Results.Content(body ?? "", "application/json", null, statusCode: status);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
+// "Allow AI chat for users" node-wide kill switch — superadmin only (get + toggle).
+app.MapGet("/api-proxy/chat/settings/chat-enabled", async (ApiClient api) =>
+{
+    var f = await api.ForwardGetAsync("chat/settings/chat-enabled");
+    return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
+}).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
+app.MapMethods("/api-proxy/chat/settings/chat-enabled", new[] { "PATCH" }, async (HttpContext ctx, ApiClient api) =>
+{
+    using var sr = new StreamReader(ctx.Request.Body);
+    var json = await sr.ReadToEndAsync();
+    var (ok, body, status) = await api.PostRawAsync("chat/settings/chat-enabled", json, method: "PATCH");
+    return Results.Content(body ?? "", "application/json", null, statusCode: status);
+}).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
+// "Am I allowed to use chat?" — open to ANY authenticated user (NOT superadmin-gated). Used by
+// the nav link, the /AI page, and the homepage composer to decide whether to show chat entry points.
+app.MapGet("/api-proxy/chat/access", async (ApiClient api) =>
+{
+    var f = await api.ForwardGetAsync("chat/access");
+    return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
+}).RequireAuthorization();
 
 // Effective TEXT model (read-only display label for the chat composer) — open to ANY
 // authenticated user (NOT superadmin-gated; mirrors /api-proxy/chat/models).
@@ -1228,8 +1251,8 @@ internal record CreateFolderProxyRequest(string Path);
 internal record RenameFolderProxyRequest(string NewPath);
 internal record MoveArticleProxyRequest(string NewPath);
 internal record MoveFolderProxyRequest(string NewParentPath);
-internal record CreateUserProxyRequest(string Username, string DisplayName, string Password, string Role);
-internal record UpdateUserProxyRequest(string DisplayName, string? Role);
+internal record CreateUserProxyRequest(string Username, string DisplayName, string Password, string Role, bool ChatAccess = true);
+internal record UpdateUserProxyRequest(string DisplayName, string? Role, bool? ChatAccess = null);
 internal record ChangeUserPasswordProxyRequest(string NewPassword);
 internal record ChangeOwnPasswordProxyRequest(string OldPassword, string NewPassword);
 internal record AddAclEntryProxyRequest(Guid FolderId, string Effect, bool IsReadOnly = false);

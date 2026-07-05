@@ -268,6 +268,23 @@
 </sl-dialog>
 
 <script>
+// UX-only chat gating (the API filter is the real boundary). If this caller isn't allowed to
+// use chat, hide the homepage chat entry points — the welcome hint, the collapse-to-chat tab,
+// the message area, the composer, and the new/close chat actions — leaving the four article
+// buttons untouched. Surgical per-element (no restructuring of the collapse/expand mechanics).
+(function () {
+    fetch('/api-proxy/chat/access').then(function (r) { return r.ok ? r.json() : { allowed: true }; })
+        .then(function (data) {
+            if (data.allowed) return;
+            var selectors = ['.welcome-chat-hint', '#home-welcome-collapse-tab', '#chat-messages', '.chat-composer-outer', '#home-chat-actions'];
+            selectors.forEach(function (sel) {
+                document.querySelectorAll(sel).forEach(function (el) { el.style.display = 'none'; });
+            });
+        }).catch(function () {});
+})();
+</script>
+
+<script>
 (function() {
     var btn = document.getElementById('btn-add-folder-home');
     var dlg = document.getElementById('dlg-add-folder-home');

@@ -51,6 +51,8 @@ public sealed class ChatDbInitializer
             "ALTER TABLE chat_settings ADD COLUMN default_vision_model_id TEXT");
         await EnsureColumnAsync(conn, "chat_settings", "default_image_gen_model_id",
             "ALTER TABLE chat_settings ADD COLUMN default_image_gen_model_id TEXT");
+        await EnsureColumnAsync(conn, "chat_settings", "chat_globally_enabled",
+            "ALTER TABLE chat_settings ADD COLUMN chat_globally_enabled INTEGER NOT NULL DEFAULT 1");
         // Homepage pinned chat: at most ONE conversation per user carries this flag (enforced
         // at the application layer by ChatConversationRepository.SetHomePinnedAsync's single
         // atomic UPDATE — chat.db has no index-based invariants, matching chat_settings).
@@ -163,11 +165,12 @@ public sealed class ChatDbInitializer
         CREATE TABLE IF NOT EXISTS chat_settings (
             id                         INTEGER PRIMARY KEY CHECK (id = 1),
             auto_approve_writes        INTEGER NOT NULL DEFAULT 0,
+            chat_globally_enabled      INTEGER NOT NULL DEFAULT 1,
             default_text_model_id      TEXT,
             default_vision_model_id    TEXT,
             default_image_gen_model_id TEXT
         );
         """,
-        "INSERT OR IGNORE INTO chat_settings (id, auto_approve_writes) VALUES (1, 0);"
+        "INSERT OR IGNORE INTO chat_settings (id, auto_approve_writes, chat_globally_enabled) VALUES (1, 0, 1);"
     ];
 }

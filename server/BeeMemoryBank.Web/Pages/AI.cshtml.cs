@@ -1,4 +1,6 @@
+using BeeMemoryBank.Web.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace BeeMemoryBank.Web.Pages;
@@ -11,7 +13,24 @@ namespace BeeMemoryBank.Web.Pages;
 /// enforces session.IsUnlocked (409 when locked) and ACL via the ambient CallerScope.
 /// </summary>
 [Authorize]
-public class AIModel : PageModel
+public class AIModel(ApiClient api) : PageModel
 {
-    public void OnGet() { }
+    public async Task<IActionResult> OnGetAsync()
+    {
+        // Defense-in-depth: even if the nav link is hidden, this page is reachable directly by URL.
+        // Ask the API whether this caller may use chat; if not, redirect to the homepage. The API
+        // filter is the real boundary — this just avoids rendering a dead chat UI for a blocked user.
+        var f = await api.ForwardGetAsync("chat/access");
+        if (f.Status == 200)
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(f.Body);
+                if (doc.RootElement.TryGetProperty("allowed", out var allowedProp) && !allowedProp.GetBoolean())
+                    return RedirectToPage("/Tree");
+            }
+            catch { /* malformed response — fail open, matches other best-effort checks here */ }
+        }
+        return Page();
+    }
 }

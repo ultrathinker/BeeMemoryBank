@@ -39,6 +39,7 @@
                         <th>Username</th>
                         <th>Display Name</th>
                         <th>Role</th>
+                        <th>Chat</th>
                         <th>Created</th>
                         <th>Last Login</th>
                         <th style="text-align:right;">Actions</th>
@@ -55,6 +56,11 @@
                                     @user.Role
                                 </sl-badge>
                             </td>
+                            <td>
+                                <sl-icon name="@(user.ChatAccess ? "check-circle" : "dash-circle")"
+                                    style="color:@(user.ChatAccess ? "var(--sl-color-success-600)" : "var(--sl-color-neutral-400)");font-size:1.1rem;"
+                                    title="@(user.ChatAccess ? "Can use AI chat" : "AI chat access denied")"></sl-icon>
+                            </td>
                             <td class="text-muted text-sm">@user.CreatedAt.ToString("g")</td>
                             <td class="text-muted text-sm">@(user.LastLoginAt?.ToString("g") ?? "—")</td>
                             <td style="text-align:right;">
@@ -70,8 +76,8 @@
                                     onclick="openChangePassword(this.dataset.uid, this.dataset.name)">
                                 </sl-icon-button>
                                 <sl-icon-button name="pencil" label="Edit"
-                                    data-uid="@user.Id" data-display="@user.DisplayName" data-role="@user.Role"
-                                    onclick="openEditUser(this.dataset.uid, this.dataset.display, this.dataset.role)">
+                                    data-uid="@user.Id" data-display="@user.DisplayName" data-role="@user.Role" data-chat-access="@user.ChatAccess.ToString().ToLower()"
+                                    onclick="openEditUser(this.dataset.uid, this.dataset.display, this.dataset.role, this.dataset.chatAccess)">
                                 </sl-icon-button>
                                 @* Gemini review flagged this confirm() as an apostrophe-in-username JS bug — not a bug:
                                    `this.dataset.name` reads the DOM attribute at runtime, it is not interpolated into
@@ -163,6 +169,12 @@
                     <sl-option value="user">User</sl-option>
                 </sl-select>
             </div>
+            <div style="margin-bottom:8px;">
+                <sl-checkbox id="edit-chat-access">Can use AI chat</sl-checkbox>
+                <p id="edit-chat-access-hint" class="text-muted text-sm" style="margin:4px 0 0 0;display:none;">
+                    AI chat is currently disabled for everyone (see Admin page) — this setting has no effect until it's re-enabled globally.
+                </p>
+            </div>
         </form>
         <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-edit-user').hide()">Cancel</sl-button>
         <sl-button id="btn-edit-user-submit" slot="footer" variant="primary" onclick="submitEditUser()">Save</sl-button>
@@ -242,6 +254,16 @@
 </div>
 
 <script>
+var chatGloballyEnabled = true;
+fetch('/api-proxy/chat/settings/chat-enabled').then(function (r) { return r.ok ? r.json() : { chatGloballyEnabled: true }; })
+    .then(function (data) {
+        chatGloballyEnabled = !!data.chatGloballyEnabled;
+        var cb = document.getElementById('edit-chat-access');
+        var hint = document.getElementById('edit-chat-access-hint');
+        if (cb) cb.disabled = !chatGloballyEnabled;
+        if (hint) hint.style.display = chatGloballyEnabled ? 'none' : '';
+    }).catch(function () {});
+
 var currentRestrictionUserId = null;
 var currentRestrictionType = 'user';
 var selectedFolderId = null;
@@ -348,11 +370,18 @@ async function submitChangePassword() {
     }
 }
 
-function openEditUser(userId, displayName, role) {
+function openEditUser(userId, displayName, role, chatAccess) {
     hideDlgError('edit-user-error');
     document.getElementById('edit-user-id').value = userId;
     document.getElementById('edit-display-name').value = displayName;
     document.getElementById('edit-role').value = role;
+    var cb = document.getElementById('edit-chat-access');
+    var hint = document.getElementById('edit-chat-access-hint');
+    if (cb) {
+        cb.checked = (chatAccess === 'true');
+        cb.disabled = !chatGloballyEnabled;
+    }
+    if (hint) hint.style.display = chatGloballyEnabled ? 'none' : '';
     document.getElementById('dlg-edit-user').show();
 }
 
@@ -361,11 +390,12 @@ async function submitEditUser() {
     var id = document.getElementById('edit-user-id').value;
     var displayName = document.getElementById('edit-display-name').value.trim();
     var role = document.getElementById('edit-role').value;
+    var chatAccess = document.getElementById('edit-chat-access').checked;
     if (!displayName) { showDlgError('edit-user-error', 'Display Name is required.'); return; }
 
     var btn = document.getElementById('btn-edit-user-submit');
     btn.loading = true;
-    var result = await postJson('/api-proxy/users/' + id, { displayName: displayName, role: role }, 'PUT');
+    var result = await postJson('/api-proxy/users/' + id, { displayName: displayName, role: role, chatAccess: chatAccess }, 'PUT');
     btn.loading = false;
     if (result.ok) {
         window.location = '?msg=' + encodeURIComponent('User updated');

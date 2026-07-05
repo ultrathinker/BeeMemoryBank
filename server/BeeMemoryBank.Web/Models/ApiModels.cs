@@ -105,7 +105,7 @@ public record LoginResult(
 
 public record LoginResponse(int UserId, string Username, string DisplayName, string Role, bool IsUnlocked, string? MigratedSyntheticUsername = null, string? SecurityStamp = null);
 
-public record UserDto(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt);
+public record UserDto(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt, bool ChatAccess);
 
 public record AclEntryDto(int Id, Guid FolderId, string FolderPath, string Effect, DateTime CreatedAt, bool IsReadOnly = false);
 

@@ -10,7 +10,7 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
     private const string SelectColumns =
         @"id AS Id, username AS Username, display_name AS DisplayName,
           password_hash AS PasswordHash, role AS Role, key_slot_id AS KeySlotId,
-          is_active AS IsActive, created_at AS CreatedAt, last_login_at AS LastLoginAt,
+          is_active AS IsActive, chat_access AS ChatAccess, created_at AS CreatedAt, last_login_at AS LastLoginAt,
           security_stamp AS SecurityStamp";
 
     public async Task<User?> GetByUsernameAsync(string username)
@@ -44,8 +44,8 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
 
         using var conn = OpenConnection();
         return await conn.ExecuteScalarAsync<int>(
-            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, created_at, last_login_at, security_stamp)
-              VALUES (@Username, @DisplayName, @PasswordHash, @Role, @KeySlotId, @IsActive, @CreatedAt, @LastLoginAt, @SecurityStamp);
+            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, chat_access, created_at, last_login_at, security_stamp)
+              VALUES (@Username, @DisplayName, @PasswordHash, @Role, @KeySlotId, @IsActive, @ChatAccess, @CreatedAt, @LastLoginAt, @SecurityStamp);
               SELECT last_insert_rowid()",
             user);
     }
@@ -56,13 +56,14 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
         await conn.ExecuteAsync(
             @"UPDATE tbl_user SET display_name = @DisplayName, role = @Role,
               key_slot_id = @KeySlotId, password_hash = @PasswordHash,
-              is_active = @IsActive
+              is_active = @IsActive, chat_access = @ChatAccess
               WHERE id = @Id",
             new
             {
                 user.Id, user.DisplayName, user.Role,
                 user.KeySlotId, user.PasswordHash,
-                IsActive = user.IsActive ? 1 : 0
+                IsActive = user.IsActive ? 1 : 0,
+                ChatAccess = user.ChatAccess ? 1 : 0
             });
     }
 

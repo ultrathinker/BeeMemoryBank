@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
@@ -50,7 +51,28 @@ public static class ChatEndpoints
 
     public static void MapChatEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/chat").WithTags("Chat").RequireInternalKey();
+        // "Am I allowed to use chat?" — ungated by the group-wide ChatAccessEndpointFilter
+        // (registered directly on app, NOT on the /api/chat group below) so a blocked user can
+        // still ask and get a straight yes/no answer for UI gating. Still behind the internal-key
+        // gate (RequireInternalKey). Superadmins and agent callers always pass; everyone else needs
+        // BOTH the node-wide toggle AND their own per-user flag.
+        app.MapGet("/api/chat/access", async (HttpContext ctx, IUserRepository userRepo, ChatSettingsRepository chatSettingsRepo) =>
+        {
+            var caller = CallerIdentity.Extract(ctx);
+            if (caller.IsSuperadmin || caller.AgentId.HasValue)
+                return Results.Ok(new { allowed = true });
+
+            if (caller.UserId is null)
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 401);
+
+            if (!await chatSettingsRepo.GetChatGloballyEnabledAsync())
+                return Results.Ok(new { allowed = false });
+
+            var user = await userRepo.GetByIdAsync(caller.UserId.Value);
+            return Results.Ok(new { allowed = user?.ChatAccess ?? false });
+        }).RequireInternalKey();
+
+        var group = app.MapGroup("/api/chat").WithTags("Chat").RequireInternalKey().RequireChatAccess();
 
         // ── API keys (superadmin-only; create decrypts the DEK path → also needs unlocked) ──
 
@@ -242,6 +264,28 @@ public static class ChatEndpoints
 
             await repo.SetAutoApproveWritesAsync(req.Enabled);
             return Results.Ok(new { autoApproveWrites = req.Enabled });
+        });
+
+        // Allow AI chat for users: node-wide kill switch. When off, no one except superadmins
+        // can use the AI chat feature (web UI), regardless of each user's individual "Can use AI
+        // chat" setting. Per-user settings are preserved while this is off. Superadmin-only.
+        group.MapGet("/settings/chat-enabled", async (ChatSettingsRepository repo, HttpContext ctx) =>
+        {
+            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
+                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+
+            var enabled = await repo.GetChatGloballyEnabledAsync();
+            return Results.Ok(new { chatGloballyEnabled = enabled });
+        });
+
+        group.MapPatch("/settings/chat-enabled", async (UpdateChatEnabledRequest req,
+            ChatSettingsRepository repo, HttpContext ctx) =>
+        {
+            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
+                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+
+            await repo.SetChatGloballyEnabledAsync(req.Enabled);
+            return Results.Ok(new { chatGloballyEnabled = req.Enabled });
         });
 
         // Effective TEXT model (read-only). Open to ANY authenticated caller (group-level

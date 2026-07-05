@@ -1033,11 +1033,11 @@ public class ApiClient(HttpClient http)
         return await resp.Content.ReadFromJsonAsync<List<UserDto>>(JsonOpts);
     }
 
-    public async Task<(UserDto? User, string? Error, int StatusCode)> CreateUserAsync(string username, string displayName, string password, string role)
+    public async Task<(UserDto? User, string? Error, int StatusCode)> CreateUserAsync(string username, string displayName, string password, string role, bool chatAccess = true)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/users")
         {
-            Content = Body(new { username, displayName, password, role })
+            Content = Body(new { username, displayName, password, role, chatAccess })
         };
 
         var resp = await http.SendAsync(request);
@@ -1054,11 +1054,11 @@ public class ApiClient(HttpClient http)
         catch { return (null, "Failed to create user", (int)resp.StatusCode); }
     }
 
-    public async Task<(bool Ok, string? Error, int StatusCode)> UpdateUserAsync(int id, string displayName, string? role)
+    public async Task<(bool Ok, string? Error, int StatusCode)> UpdateUserAsync(int id, string displayName, string? role, bool? chatAccess = null)
     {
         var request = new HttpRequestMessage(HttpMethod.Put, $"/api/users/{id}")
         {
-            Content = Body(new { displayName, role })
+            Content = Body(new { displayName, role, chatAccess })
         };
 
         var resp = await http.SendAsync(request);
