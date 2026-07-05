@@ -288,7 +288,11 @@
             var item = document.createElement('div');
             item.className = 'chat-history-item';
             item.dataset.id = c.id;
-            item.style.cssText = 'display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px;'
+            // No "gap" here (unlike before) — a single flexbox gap would space every child
+            // equally, but the title<->edit gap and edit<->delete gap need to differ (see below).
+            // Tighter horizontal padding (8px -> 4px each side) gives the title more room in the
+            // sidebar's fixed-width column.
+            item.style.cssText = 'display:flex;align-items:center;padding:6px 4px;border-radius:6px;cursor:pointer;margin-bottom:2px;'
                 + (active ? 'background:var(--sl-color-primary-100);' : '');
             item.addEventListener('mouseenter', function () { if (!active) item.style.background = 'var(--sl-color-neutral-100)'; });
             item.addEventListener('mouseleave', function () { if (!active) item.style.background = 'transparent'; });
@@ -302,14 +306,17 @@
 
             var renameIcon = document.createElement('sl-icon');
             renameIcon.setAttribute('name', 'pencil');
-            renameIcon.style.cssText = 'font-size:0.9rem;color:var(--text-secondary);cursor:pointer;flex-shrink:0;';
+            // marginLeft:4px reproduces the same title<->edit gap the old shared "gap:4px" gave.
+            renameIcon.style.cssText = 'font-size:0.9rem;color:var(--text-secondary);cursor:pointer;flex-shrink:0;margin-left:4px;';
             renameIcon.title = 'Rename';
             renameIcon.addEventListener('click', function (e) { e.stopPropagation(); renameConversation(c.id, c.title); });
             item.appendChild(renameIcon);
 
             var deleteIcon = document.createElement('sl-icon');
             deleteIcon.setAttribute('name', 'trash');
-            deleteIcon.style.cssText = 'font-size:0.9rem;color:var(--sl-color-danger-600);cursor:pointer;flex-shrink:0;';
+            // marginLeft:8px — a bit more breathing room than the edit icon gets, so edit/delete
+            // no longer look stuck together.
+            deleteIcon.style.cssText = 'font-size:0.9rem;color:var(--sl-color-danger-600);cursor:pointer;flex-shrink:0;margin-left:8px;';
             deleteIcon.title = 'Delete';
             deleteIcon.addEventListener('click', function (e) { e.stopPropagation(); deleteConversation(c.id); });
             item.appendChild(deleteIcon);
