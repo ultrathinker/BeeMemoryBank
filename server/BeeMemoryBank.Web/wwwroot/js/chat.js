@@ -25,19 +25,20 @@
 
     var messagesEl = document.getElementById('chat-messages');
     var inputEl = document.getElementById('chat-input');
-    var sendBtn = document.getElementById('chat-send');
     var newBtn = document.getElementById('chat-new');
     var emptyState = document.getElementById('chat-empty-state');
     var emptyIcon = document.getElementById('chat-empty-icon');
     var emptyText = document.getElementById('chat-empty-text');
     var historyEl = document.getElementById('chat-history');
-    // Image-attach composer controls. The attach button is always available now (the SERVER
-    // decides how to route an image based on whichever vision model is configured — no
-    // client-side model selection).
-    var attachBtn = document.getElementById('chat-attach');
     var attachInput = document.getElementById('chat-attach-input');
     var attachPreview = document.getElementById('chat-attach-preview');
     var attachHint = document.getElementById('chat-attach-hint');
+    var composerEl = document.getElementById('chat-composer');
+    var plusMenu = document.getElementById('chat-plus-menu');
+    var stopBtn = document.getElementById('chat-stop');
+    var modelLabelEl = document.getElementById('chat-model-label');
+    var sidebarEl = document.getElementById('chat-sidebar');
+    var sidebarToggle = document.getElementById('chat-sidebar-toggle');
 
     var currentConversationId = null;
     var sending = false;
@@ -191,11 +192,12 @@
         resetAttachHint();
     }
 
-    // Resets the attach hint to its static default (used after clearing an image or on init).
+    // Hides the attach hint (the pill design has no permanent hint line; flashAttachHint
+    // still surfaces errors/info on demand, e.g. bad MIME or oversized file).
     function resetAttachHint() {
         if (!attachHint) return;
-        attachHint.style.display = 'block';
-        attachHint.textContent = 'Attach an image to ask about it (PNG, JPEG, WebP, GIF — max 8MB).';
+        attachHint.style.display = 'none';
+        attachHint.textContent = '';
         attachHint.style.color = 'var(--text-secondary)';
     }
 
@@ -222,6 +224,20 @@
     }
 
     // ── history sidebar ──────────────────────────────────────────────────────
+
+    // Fetches the effective TEXT model's display label (read-only, non-superadmin
+    // endpoint) for the bottom-right of the composer pill. Informational only — model
+    // selection stays admin-only. On failure or when no text model is configured the
+    // label just stays empty.
+    function loadModelLabel() {
+        if (!modelLabelEl) return;
+        fetch('/api-proxy/chat/settings/effective-text-model', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+                modelLabelEl.textContent = (data && data.label) ? data.label : '';
+            })
+            .catch(function () { modelLabelEl.textContent = ''; });
+    }
 
     function loadHistory() {
         fetch('/api-proxy/chat/conversations', { headers: { 'Accept': 'application/json' } })
@@ -354,19 +370,10 @@
 
     function setSending(v) {
         sending = v;
-        if (v) {
-            // Turn the Send button into a Stop button while streaming.
-            sendBtn.variant = 'danger';
-            sendBtn.innerHTML = '<sl-icon slot="prefix" name="stop-circle"></sl-icon> Stop';
-            sendBtn.loading = false;
-            sendBtn.disabled = false;
-            inputEl.disabled = true;
-        } else {
-            sendBtn.variant = 'primary';
-            sendBtn.innerHTML = '<sl-icon slot="prefix" name="cursor"></sl-icon> Send';
-            sendBtn.disabled = !(inputEl.value || '').trim();
-            inputEl.disabled = false;
-        }
+        inputEl.disabled = v;
+        // The Stop icon-button (bottom-right of the pill) is the only visible control
+        // while streaming — there is no Send button; Enter sends (keydown handler below).
+        if (stopBtn) stopBtn.style.display = v ? 'inline-flex' : 'none';
     }
 
     function send() {
@@ -808,11 +815,16 @@
 
     // ── wiring ───────────────────────────────────────────────────────────────
 
-    if (sendBtn) sendBtn.addEventListener('click', send);
+    // Stop button: while streaming, send() acts as Stop (aborts the in-flight fetch).
+    if (stopBtn) stopBtn.addEventListener('click', send);
+
+    // Sidebar collapse toggle. Starts collapsed (class present in markup); no persistence
+    // by design — every fresh load is collapsed. (Optional localStorage persistence was
+    // considered and deliberately skipped to keep this simple.)
+    if (sidebarToggle) sidebarToggle.addEventListener('click', function () {
+        if (sidebarEl) sidebarEl.classList.toggle('collapsed');
+    });
     if (inputEl) {
-        inputEl.addEventListener('sl-input', function () {
-            if (!sending) sendBtn.disabled = !(inputEl.value || '').trim();
-        });
         inputEl.addEventListener('keydown', function (e) {
             // Enter sends. Shift+Enter or Ctrl/Cmd+Enter inserts a newline instead.
             if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
@@ -823,22 +835,16 @@
     }
     if (newBtn) newBtn.addEventListener('click', newConversation);
 
-    // Image attach: button → hidden file input; drag/drop + paste onto the composer. Always
-    // available — the server decides how to route the image based on the configured vision model.
-    if (attachBtn) attachBtn.addEventListener('click', function () {
-        if (attachInput) attachInput.click();
+    // "+" menu (Shoelace sl-dropdown, same pattern as the _Layout theme picker). One
+    // item only: "Add image" → the same hidden-file-input flow as before.
+    if (plusMenu) plusMenu.addEventListener('sl-select', function (e) {
+        var item = e.detail && e.detail.item;
+        if (item && item.value === 'add-image' && attachInput) attachInput.click();
     });
     if (attachInput) attachInput.addEventListener('change', function () {
         if (attachInput.files && attachInput.files[0]) processImageFile(attachInput.files[0]);
     });
     if (inputEl) {
-        inputEl.addEventListener('dragover', function (e) {
-            e.preventDefault();
-        });
-        inputEl.addEventListener('drop', function (e) {
-            var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-            if (f) { e.preventDefault(); processImageFile(f); }
-        });
         inputEl.addEventListener('paste', function (e) {
             var items = e.clipboardData && e.clipboardData.items;
             if (!items) return;
@@ -848,6 +854,32 @@
                     if (f) { e.preventDefault(); processImageFile(f); break; }
                 }
             }
+        });
+    }
+
+    // Drag-and-drop an image anywhere onto the composer pill. A depth counter handles
+    // dragenter/dragleave firing on child elements (textarea, buttons) so the highlight
+    // doesn't flicker. Drop reuses processImageFile — identical to the "+" menu path.
+    if (composerEl) {
+        var dragDepth = 0;
+        composerEl.addEventListener('dragenter', function (e) {
+            e.preventDefault();
+            dragDepth++;
+            composerEl.classList.add('drag-over');
+        });
+        composerEl.addEventListener('dragover', function (e) {
+            e.preventDefault(); // required, or the browser navigates to the file on drop
+        });
+        composerEl.addEventListener('dragleave', function () {
+            dragDepth = Math.max(0, dragDepth - 1);
+            if (dragDepth === 0) composerEl.classList.remove('drag-over');
+        });
+        composerEl.addEventListener('drop', function (e) {
+            e.preventDefault();
+            dragDepth = 0;
+            composerEl.classList.remove('drag-over');
+            var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (f) processImageFile(f);
         });
     }
 
@@ -874,10 +906,10 @@
         if (abortCtrl) { try { abortCtrl.abort(); } catch (e) {} }
     });
 
-    if (sendBtn) sendBtn.disabled = true;
-    // Start on a fresh (new) conversation. No model picker — the server resolves the effective
-    // text model internally. If no text model is configured, the user gets a clear error on send.
+    // Start on a fresh (new) conversation. No model picker — the server resolves the
+    // effective text model internally; the pill shows its label read-only.
     resetAttachHint();
     greet();
     loadHistory();
+    loadModelLabel();
 })();

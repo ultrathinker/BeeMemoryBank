@@ -908,6 +908,14 @@ app.MapMethods("/api-proxy/chat/settings/auto-approve", new[] { "PATCH" }, async
     return Results.Content(body ?? "", "application/json", null, statusCode: status);
 }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
+// Effective TEXT model (read-only display label for the chat composer) — open to ANY
+// authenticated user (NOT superadmin-gated; mirrors /api-proxy/chat/models).
+app.MapGet("/api-proxy/chat/settings/effective-text-model", async (ApiClient api) =>
+{
+    var f = await api.ForwardGetAsync("chat/settings/effective-text-model");
+    return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
+}).RequireAuthorization();
+
 // Pinned default models (text/vision/image-gen) — superadmin only (get + set).
 app.MapGet("/api-proxy/chat/settings/defaults", async (ApiClient api) =>
 {

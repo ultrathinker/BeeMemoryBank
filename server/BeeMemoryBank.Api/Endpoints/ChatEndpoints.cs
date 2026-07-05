@@ -244,6 +244,20 @@ public static class ChatEndpoints
             return Results.Ok(new { autoApproveWrites = req.Enabled });
         });
 
+        // Effective TEXT model (read-only). Open to ANY authenticated caller (group-level
+        // internal-key check only — no role gate): the chat page shows the model name in the
+        // composer for regular users too. Exposes ONLY {modelId,label} — no key/settings data.
+        // Resolution reuses ResolveEffectiveModelAsync (pinned-if-set-else-oldest-with-capability),
+        // identical to how /stream picks the model, so the label always matches what a send uses.
+        group.MapGet("/settings/effective-text-model", async (ChatSettingsRepository repo) =>
+        {
+            var defaults = await repo.GetDefaultModelIdsAsync();
+            var effective = await repo.ResolveEffectiveModelAsync("is_text", defaults.TextId);
+            // No text model configured → 200 with nulls (the UI just hides the label; the
+            // send path already produces its own clear error in that case).
+            return Results.Ok(new { modelId = effective?.ModelId, label = effective?.Label });
+        });
+
         // ── Phase 2: STREAMING tool-loop turn + persistence ─────────────────────────
         //
         // Runs the SAME tool-call loop as /message, but writes the response as a Server-Sent Events
