@@ -37,8 +37,9 @@
     var plusMenu = document.getElementById('chat-plus-menu');
     var stopBtn = document.getElementById('chat-stop');
     var modelLabelEl = document.getElementById('chat-model-label');
-    var sidebarEl = document.getElementById('chat-sidebar');
-    var sidebarToggle = document.getElementById('chat-sidebar-toggle');
+    var chatSidebar = document.getElementById('chat-sidebar');
+    var chatCollapseBtn = document.getElementById('btn-chat-sidebar-collapse');
+    var chatExpandTab = document.getElementById('chat-sidebar-expand-tab');
 
     var currentConversationId = null;
     var sending = false;
@@ -892,12 +893,83 @@
     // Stop button: while streaming, send() acts as Stop (aborts the in-flight fetch).
     if (stopBtn) stopBtn.addEventListener('click', send);
 
-    // Sidebar collapse toggle. Starts collapsed (class present in markup); no persistence
-    // by design — every fresh load is collapsed. (Optional localStorage persistence was
-    // considered and deliberately skipped to keep this simple.)
-    if (sidebarToggle) sidebarToggle.addEventListener('click', function () {
-        if (sidebarEl) sidebarEl.classList.toggle('collapsed');
-    });
+    // ── Chat history sidebar: resizable + collapsible ─────────────────────────
+    // Faithful clone of site.js's tree-sidebar mechanism ("Draggable splitter" + "Sidebar
+    // collapse / expand"), but with chat-specific ids/keys so it never touches the (also
+    // present, just hidden) #app-sidebar's own persisted state. Key product decision: this
+    // page ALWAYS starts collapsed on every fresh load — only the WIDTH the user drags it to
+    // is remembered across sessions, never the open/collapsed state itself.
+    var CHAT_SIDEBAR_WIDTH_KEY = 'chat-sidebar-width';
+    var chatSplitter = null;
+    var chatDragging = false; // scoped to THIS closure — site.js's own `dragging` flag is separate
+
+    if (chatSidebar) {
+        // Draggable splitter: reuse the global .splitter class (already loaded on every page
+        // from site.css) and insert it right after the sidebar, exactly like site.js does.
+        chatSplitter = document.createElement('div');
+        chatSplitter.className = 'splitter';
+        chatSidebar.after(chatSplitter);
+        var savedChatWidth = localStorage.getItem(CHAT_SIDEBAR_WIDTH_KEY);
+
+        chatSplitter.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            chatDragging = true;
+            chatSidebar.classList.add('no-transition');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!chatDragging) return;
+            // #chat-sidebar is the leftmost element of .main-content (flush at the page's
+            // left edge), so e.clientX IS its current width — same assumption site.js relies on.
+            var w = Math.min(Math.floor(window.innerWidth * 0.5), Math.max(160, e.clientX));
+            chatSidebar.style.width = w + 'px';
+        });
+        document.addEventListener('mouseup', function () {
+            if (!chatDragging) return;
+            chatDragging = false;
+            chatSidebar.classList.remove('no-transition');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            localStorage.setItem(CHAT_SIDEBAR_WIDTH_KEY, parseInt(chatSidebar.style.width));
+        });
+
+        function setChatSidebarCollapsed(collapsed) {
+            if (!chatSidebar) return;
+            if (chatSplitter) chatSplitter.style.display = collapsed ? 'none' : '';
+            if (collapsed) {
+                // Inline overrides win over CSS, so a previously-dragged inline width is reset.
+                chatSidebar.style.width = '0';
+                chatSidebar.style.minWidth = '0';
+                chatSidebar.style.overflow = 'hidden';
+                chatSidebar.classList.add('chat-sidebar-collapsed');
+                if (chatExpandTab) chatExpandTab.classList.add('visible');
+            } else {
+                // Restore the last-dragged width if any (so it's remembered within this session
+                // too), else clear inline to fall back to the CSS default (280px).
+                var w = localStorage.getItem(CHAT_SIDEBAR_WIDTH_KEY);
+                chatSidebar.style.width = w ? (parseInt(w, 10) + 'px') : '';
+                chatSidebar.style.minWidth = '';
+                chatSidebar.style.overflow = '';
+                chatSidebar.classList.remove('chat-sidebar-collapsed');
+                if (chatExpandTab) chatExpandTab.classList.remove('visible');
+            }
+            // Deliberately do NOT persist collapsed/expanded state — this page always starts
+            // collapsed on every fresh load (no collapsed-state localStorage key is read or written).
+        }
+
+        if (chatCollapseBtn) {
+            chatCollapseBtn.addEventListener('click', function () { setChatSidebarCollapsed(true); });
+        }
+        if (chatExpandTab) {
+            chatExpandTab.addEventListener('click', function () { setChatSidebarCollapsed(false); });
+        }
+
+        // Init: apply any saved width, then unconditionally start collapsed. The expand tab is
+        // .visible in the markup already, so it shows immediately on first paint.
+        if (savedChatWidth) chatSidebar.style.width = parseInt(savedChatWidth, 10) + 'px';
+        setChatSidebarCollapsed(true);
+    }
     if (inputEl) {
         inputEl.addEventListener('keydown', function (e) {
             // Enter sends. Shift+Enter or Ctrl/Cmd+Enter inserts a newline instead.

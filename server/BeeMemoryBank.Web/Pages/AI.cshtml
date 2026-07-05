@@ -41,56 +41,85 @@
             align-items: center;
             gap: 6px;
             margin-bottom: 8px;
-            padding-top: 8px;
         }
-        /* Sidebar shell: the collapsible content column + the permanent toggle rail, side by
-           side. flex-shrink:0 keeps the whole shell from being squeezed by the chat column. */
-        body.ai-chat-page #chat-sidebar-shell {
-            display: flex;
-            flex-shrink: 0;
-            height: 100%;
-        }
-
-        /* The rail is ALWAYS rendered (never collapses) — this is what keeps the toggle
-           reachable even while #chat-sidebar is fully collapsed. Its own border-right is what
-           visually separates the sidebar area from the chat column (moved here from
-           #chat-sidebar, since #chat-sidebar's border must disappear when collapsed but the
-           rail's border should not). padding-top:8px matches the "New chat" button's own
-           wrapper padding (8px) so the icon and button sit on the same visual line — both are
-           now ordinary normal-flow content, so this small matching offset is all that's needed
-           for them to line up; no pixel-matching against .main-content's own padding required. */
-        body.ai-chat-page #chat-sidebar-rail {
-            width: 44px;
-            height: 100%;
-            flex-shrink: 0;
-            display: flex;
-            justify-content: center;
-            padding-top: 8px;
-            border-right: 1px solid var(--sl-panel-border-color);
-            box-sizing: border-box;
-        }
-        body.ai-chat-page #chat-sidebar-rail #chat-sidebar-toggle {
-            font-size: 1.15rem;
-        }
-
-        /* Collapsible history sidebar. Starts with .collapsed in markup (hidden by
-           default on every load — no persistence). The fixed-width inner wrapper keeps
-           content from reflowing while the outer width animates. */
+        /* ── Chat history sidebar: a faithful clone of the app's global folder-tree
+           sidebar (.sidebar in site.css, rendered by _Sidebar.cshtml) — same default
+           width, border, transition, resizable .splitter handle, and collapse mechanism
+           — but with its own ids/classes so it never collides with #app-sidebar (which
+           is still in the DOM on this page, just display:none). See wwwroot/js/site.js
+           "Draggable splitter" + "Sidebar collapse / expand" for the canonical pattern
+           this mirrors. #chat-sidebar is a plain flex column with a real defined height
+           (it's a flex child of .main-content), so its own border-right spans the full
+           height with no special-casing — fixing the old "border stops partway down" bug
+           that was a side-effect of the now-removed rail architecture. */
         body.ai-chat-page #chat-sidebar {
-            width: 196px;
-            flex-shrink: 0;
-            overflow: hidden;
-            transition: width 0.2s ease;
-        }
-        body.ai-chat-page #chat-sidebar.collapsed {
-            width: 0;
-        }
-        body.ai-chat-page .chat-sidebar-inner {
-            width: 196px;
-            height: 100%;
+            width: 280px;
+            min-width: 280px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
+            flex-shrink: 0;
+            transition: width 0.22s ease, min-width 0.22s ease, border-color 0.22s ease;
             overflow: hidden;
+        }
+        /* Disable the width transition during an active splitter drag so resizing
+           doesn't lag behind the mouse (mirrors .sidebar.no-transition in site.css). */
+        body.ai-chat-page #chat-sidebar.no-transition {
+            transition: none;
+        }
+        /* width:0 (NOT display:none) so the collapse animates and the JS collapse/expand
+           helper's inline-style overrides + this class cooperate correctly. */
+        body.ai-chat-page #chat-sidebar.chat-sidebar-collapsed {
+            width: 0;
+            min-width: 0;
+            border-right-color: transparent;
+        }
+
+        /* Expand tab — fixed at the page's left edge, shown only while the chat sidebar
+           is collapsed, so the user can re-open it without reaching the now-width:0
+           collapse button inside the sidebar itself. Same visual shape as
+           #sidebar-expand-tab in site.css, but scoped to this page. .visible is present
+           in the markup from the very first render since this page always starts
+           collapsed. */
+        body.ai-chat-page #chat-sidebar-expand-tab {
+            display: none;
+            position: fixed;
+            top: 56px;
+            left: 0;
+            z-index: 200;
+            width: 18px;
+            height: 52px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-left: none;
+            border-radius: 0 6px 6px 0;
+            cursor: pointer;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            padding: 0;
+            transition: background 0.15s, color 0.15s;
+            box-shadow: 2px 0 6px rgba(0, 0, 0, 0.18);
+        }
+        body.ai-chat-page #chat-sidebar-expand-tab:hover {
+            background: var(--bg-hover, var(--border));
+            color: var(--accent);
+        }
+        body.ai-chat-page #chat-sidebar-expand-tab sl-icon {
+            font-size: 0.75rem;
+        }
+        body.ai-chat-page #chat-sidebar-expand-tab.visible {
+            display: flex;
+        }
+
+        /* #app-sidebar (the real folder tree) is hidden on this page via display:none, but
+           its sibling expand tab (#sidebar-expand-tab) is NOT covered by that rule. site.js
+           would show it on load if the user ever collapsed the global sidebar on another
+           page (persisted in localStorage under 'bee-sidebar-collapsed'), so a stray "tree
+           sidebar" arrow could appear stacked with our chat expand tab. Suppress it here. */
+        body.ai-chat-page #sidebar-expand-tab {
+            display: none !important;
         }
 
         /* Centered max-width column for messages + composer (Claude-style). Side padding keeps
@@ -241,33 +270,35 @@
 <div id="page-content">
 <div class="main-content" style="display:flex;height:calc(100vh - 96px);gap:0;">
 
-    <!-- Sidebar shell: the collapsible content region (#chat-sidebar) plus a permanent, always-
-         visible "rail" that holds the toggle button. The rail is a normal flex sibling (NOT
-         absolutely positioned) so it automatically inherits the correct vertical offset from
-         ordinary box-model layout, and it visually IS the reserved margin the New Chat button
-         and history rows stop short of. When #chat-sidebar collapses to width:0, the rail becomes
-         the leftmost visible thing on the page (flush with the page's left edge); when expanded,
-         it sits immediately to the right of the sidebar's 196px content column — i.e. immediately
-         right of the New Chat button / history delete icons, which now stop at that same edge. -->
-    <div id="chat-sidebar-shell">
-        <div id="chat-sidebar" class="collapsed">
-            <div class="chat-sidebar-inner">
-                <div style="padding:8px;">
-                    <sl-button id="chat-new" variant="primary" outline style="width:100%;">
-                        <sl-icon slot="prefix" name="plus-lg"></sl-icon> New chat
-                    </sl-button>
-                </div>
-                <div id="chat-history" style="flex:1;overflow-y:auto;padding:0 4px 8px 4px;"></div>
-            </div>
+    <!-- Chat history sidebar: a direct flex child of .main-content (same structural
+         position as the global folder-tree sidebar on other pages), resizable via a
+         .splitter handle that chat.js inserts right after it, and collapsible to width:0.
+         The collapse button lives INSIDE this sidebar's own header (next to "New chat"),
+         so it disappears with the rest of the content when collapsed — the fixed
+         #chat-sidebar-expand-tab below is what stays reachable at the page's edge. Starts
+         with .chat-sidebar-collapsed in markup: this page ALWAYS loads collapsed (an
+         earlier deliberate product decision — only the dragged WIDTH is persisted across
+         sessions, never the open/closed state). -->
+    <div id="chat-sidebar" class="chat-sidebar-collapsed">
+        <div style="display:flex;align-items:center;gap:4px;padding:8px;">
+            <sl-button id="chat-new" variant="primary" outline style="flex:1;">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> New chat
+            </sl-button>
+            <sl-icon-button id="btn-chat-sidebar-collapse" name="chevron-left"
+                label="Collapse panel" title="Collapse panel"></sl-icon-button>
         </div>
-        <div id="chat-sidebar-rail">
-            <sl-icon-button id="chat-sidebar-toggle" name="layout-sidebar"
-                label="Toggle chat history"></sl-icon-button>
-        </div>
+        <div id="chat-history" style="flex:1;overflow-y:auto;padding:0 4px 8px 4px;"></div>
     </div>
 
+    <!-- Expand tab: visible from the very first render (the sidebar starts collapsed).
+         chat.js toggles its .visible class as the sidebar collapses/expands. -->
+    <button id="chat-sidebar-expand-tab" class="visible" title="Show chat history"
+        aria-label="Expand chat history">
+        <sl-icon name="chevron-right"></sl-icon>
+    </button>
+
     <!-- Chat area -->
-    <div style="flex:1;display:flex;flex-direction:column;min-width:0;padding-left:64px;">
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;padding-left:16px;">
 
         <div class="chat-header-row">
             <h2 class="chat-heading"><sl-icon name="chat-left-text"></sl-icon> AI Chat</h2>
