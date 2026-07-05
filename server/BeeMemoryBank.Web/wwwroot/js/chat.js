@@ -210,8 +210,13 @@
         var img = document.createElement('img');
         img.src = src;
         img.loading = 'lazy';
+        img.className = 'chat-image-thumb';
         img.style.cssText = 'max-width:100%;max-height:300px;border-radius:6px;border:1px solid var(--sl-panel-border-color);object-fit:contain;';
         img.alt = kind === 'generated-image' ? 'Generated image' : 'Attached image';
+        // Click to view full-size in the lightbox — reuses the SAME src (already the full-
+        // resolution image; this thumbnail is only CSS-scaled down), so right-click "Save
+        // image as…"/"Copy image" in the lightbox gets the real full-resolution bytes.
+        img.addEventListener('click', function () { openImageLightbox(src); });
         figure.appendChild(img);
         var saveBtn = document.createElement('sl-button');
         saveBtn.size = 'small';
@@ -222,6 +227,22 @@
         container.appendChild(figure);
         return figure;
     }
+
+    // Full-size image lightbox: reuses the SAME src as the clicked thumbnail (already the
+    // full-resolution bytes — the thumbnail is only CSS-scaled down), so right-click "Save
+    // image as…"/"Copy image" here gets the real full-resolution image.
+    var lightboxDialog = document.getElementById('chat-image-lightbox');
+    var lightboxImg = document.getElementById('chat-lightbox-img');
+    function openImageLightbox(src) {
+        if (!lightboxDialog || !lightboxImg) return;
+        lightboxImg.src = src;
+        lightboxDialog.show();
+    }
+    // Clear the src once fully closed — avoids holding a (possibly large) data: URL in the DOM
+    // after the user is done looking at it.
+    if (lightboxDialog) lightboxDialog.addEventListener('sl-after-hide', function () {
+        lightboxImg.src = '';
+    });
 
     // ── history sidebar ──────────────────────────────────────────────────────
 

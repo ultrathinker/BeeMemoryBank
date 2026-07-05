@@ -154,6 +154,30 @@
         body.ai-chat-page #chat-save-search::part(prefix) {
             margin-left: 6px;
         }
+
+        /* Full-size image lightbox: shrink the dialog's own padding/panel so the image reads as
+           the star of the popup, and cap the image to the viewport so a huge image never
+           overflows the screen. object-fit:contain preserves aspect ratio at any size. */
+        body.ai-chat-page #chat-image-lightbox::part(panel) {
+            max-width: 92vw;
+        }
+        body.ai-chat-page #chat-image-lightbox::part(body) {
+            padding: 8px;
+            display: flex;
+            justify-content: center;
+        }
+        body.ai-chat-page #chat-lightbox-img {
+            display: block;
+            max-width: 88vw;
+            max-height: 85vh;
+            object-fit: contain;
+            border-radius: 6px;
+        }
+
+        /* Chat images (thumbnails) are clickable — hint it with a pointer cursor. */
+        body.ai-chat-page .chat-image-thumb {
+            cursor: zoom-in;
+        }
     </style>
 }
 <script>document.body.classList.add('ai-chat-page');</script>
@@ -233,8 +257,8 @@
     <div style="display:flex;flex-direction:column;gap:10px;">
         <div id="chat-save-preview" style="text-align:center;"></div>
         <p class="text-muted" style="font-size:0.82rem;margin:0;">
-            Saves this chat image as an attachment on a note in your vault. Folder access is checked
-            server-side via the normal upload path — only folders you can write to are allowed.
+            Adds this image to the end of a note you pick, as a new line at the bottom. Folder
+            access is checked server-side — only folders you can write to are allowed.
         </p>
         <sl-input id="chat-save-search" placeholder="Search for a note…" clearable>
             <sl-icon slot="prefix" name="search"></sl-icon>
@@ -244,6 +268,16 @@
     </div>
     <sl-button slot="footer" variant="default" data-save-close="1">Cancel</sl-button>
     <sl-button slot="footer" variant="primary" id="chat-save-confirm" disabled>Save</sl-button>
+</sl-dialog>
+
+<!-- Full-size image lightbox — click any chat image (uploaded or generated) to open it here.
+     The <img> below always reuses the SAME src as the thumbnail (already the full-resolution
+     bytes; the thumbnail is only CSS-scaled down), so right-click "Save image as…"/"Copy image"
+     here gets the real full-resolution image, not a downscaled copy. no-header matches the
+     existing no-header sl-dialog convention (see Admin.cshtml, Setup.cshtml). Closes via the X,
+     Escape, or clicking the backdrop — all built into sl-dialog. -->
+<sl-dialog id="chat-image-lightbox" no-header style="--width: auto;">
+    <img id="chat-lightbox-img" src="" alt="Full-size image" />
 </sl-dialog>
 
 @section Scripts {
