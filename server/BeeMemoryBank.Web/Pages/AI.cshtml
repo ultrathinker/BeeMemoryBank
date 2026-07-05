@@ -41,42 +41,49 @@
             align-items: center;
             gap: 6px;
             margin-bottom: 8px;
+            padding-top: 8px;
         }
-        /* Toggle button lives outside #chat-sidebar (see markup comment) so it survives the
-           sidebar's width:0/overflow:hidden collapse. Position is purely CSS-driven off
-           #chat-sidebar's own "collapsed" class via the general sibling selector below —
-           collapsed: hugs the page's left edge; expanded: sits just right of "New chat"
-           (240px sidebar + a bit of breathing room). top:8px lines up with the "New chat"
-           button's own 8px padding wrapper so both sit at the same height. */
-        body.ai-chat-page .main-content { position: relative; }
-        body.ai-chat-page #chat-sidebar-toggle {
-            position: absolute;
-            top: 8px;
-            left: 8px;
+        /* Sidebar shell: the collapsible content column + the permanent toggle rail, side by
+           side. flex-shrink:0 keeps the whole shell from being squeezed by the chat column. */
+        body.ai-chat-page #chat-sidebar-shell {
+            display: flex;
+            flex-shrink: 0;
+        }
+
+        /* The rail is ALWAYS rendered (never collapses) — this is what keeps the toggle
+           reachable even while #chat-sidebar is fully collapsed. Its own border-right is what
+           visually separates the sidebar area from the chat column (moved here from
+           #chat-sidebar, since #chat-sidebar's border must disappear when collapsed but the
+           rail's border should not). padding-top:8px matches the "New chat" button's own
+           wrapper padding (8px) so the icon and button sit on the same visual line — both are
+           now ordinary normal-flow content, so this small matching offset is all that's needed
+           for them to line up; no pixel-matching against .main-content's own padding required. */
+        body.ai-chat-page #chat-sidebar-rail {
+            width: 44px;
+            flex-shrink: 0;
+            display: flex;
+            justify-content: center;
+            padding-top: 8px;
+            border-right: 1px solid var(--sl-panel-border-color);
+        }
+        body.ai-chat-page #chat-sidebar-rail #chat-sidebar-toggle {
             font-size: 1.15rem;
-            z-index: 5;
-            transition: left 0.2s ease;
-        }
-        body.ai-chat-page #chat-sidebar:not(.collapsed) ~ #chat-sidebar-toggle {
-            left: 252px;
         }
 
         /* Collapsible history sidebar. Starts with .collapsed in markup (hidden by
            default on every load — no persistence). The fixed-width inner wrapper keeps
            content from reflowing while the outer width animates. */
         body.ai-chat-page #chat-sidebar {
-            width: 240px;
+            width: 196px;
             flex-shrink: 0;
-            border-right: 1px solid var(--sl-panel-border-color);
             overflow: hidden;
             transition: width 0.2s ease;
         }
         body.ai-chat-page #chat-sidebar.collapsed {
             width: 0;
-            border-right: none;
         }
         body.ai-chat-page .chat-sidebar-inner {
-            width: 240px;
+            width: 196px;
             height: 100%;
             display: flex;
             flex-direction: column;
@@ -231,30 +238,33 @@
 <div id="page-content">
 <div class="main-content" style="display:flex;height:calc(100vh - 96px);gap:0;">
 
-    <!-- History sidebar (chat conversations — NOT #app-sidebar, the global folder tree,
-         which stays hidden on this page). Collapsible; starts COLLAPSED on every load
-         (class "collapsed" in markup — no persistence). -->
-    <div id="chat-sidebar" class="collapsed">
-        <div class="chat-sidebar-inner">
-            <div style="padding:8px;">
-                <sl-button id="chat-new" variant="primary" outline style="width:100%;">
-                    <sl-icon slot="prefix" name="plus-lg"></sl-icon> New chat
-                </sl-button>
+    <!-- Sidebar shell: the collapsible content region (#chat-sidebar) plus a permanent, always-
+         visible "rail" that holds the toggle button. The rail is a normal flex sibling (NOT
+         absolutely positioned) so it automatically inherits the correct vertical offset from
+         ordinary box-model layout, and it visually IS the reserved margin the New Chat button
+         and history rows stop short of. When #chat-sidebar collapses to width:0, the rail becomes
+         the leftmost visible thing on the page (flush with the page's left edge); when expanded,
+         it sits immediately to the right of the sidebar's 196px content column — i.e. immediately
+         right of the New Chat button / history delete icons, which now stop at that same edge. -->
+    <div id="chat-sidebar-shell">
+        <div id="chat-sidebar" class="collapsed">
+            <div class="chat-sidebar-inner">
+                <div style="padding:8px;">
+                    <sl-button id="chat-new" variant="primary" outline style="width:100%;">
+                        <sl-icon slot="prefix" name="plus-lg"></sl-icon> New chat
+                    </sl-button>
+                </div>
+                <div id="chat-history" style="flex:1;overflow-y:auto;padding:0 8px 8px 4px;"></div>
             </div>
-            <div id="chat-history" style="flex:1;overflow-y:auto;padding:0 20px 8px 4px;"></div>
+        </div>
+        <div id="chat-sidebar-rail">
+            <sl-icon-button id="chat-sidebar-toggle" name="layout-sidebar"
+                label="Toggle chat history"></sl-icon-button>
         </div>
     </div>
 
-    <!-- Sidebar toggle: lives OUTSIDE #chat-sidebar (as a sibling, positioned absolutely against
-         .main-content) so it stays visible and clickable even while the sidebar is collapsed
-         (width:0, overflow:hidden would otherwise clip anything inside it). Its "left" position
-         is driven purely by CSS via the general sibling selector on #chat-sidebar's "collapsed"
-         class — collapsed: hugs the page's left edge; expanded: sits just right of "New chat". -->
-    <sl-icon-button id="chat-sidebar-toggle" name="layout-sidebar"
-        label="Toggle chat history"></sl-icon-button>
-
     <!-- Chat area -->
-    <div style="flex:1;display:flex;flex-direction:column;min-width:0;padding-left:16px;">
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;padding-left:64px;">
 
         <div class="chat-header-row">
             <h2 class="chat-heading"><sl-icon name="chat-left-text"></sl-icon> AI Chat</h2>
