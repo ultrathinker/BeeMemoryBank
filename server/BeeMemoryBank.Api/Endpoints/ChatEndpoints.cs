@@ -1672,7 +1672,7 @@ public static class ChatEndpoints
     /// </summary>
     private static async Task RunToolLoopAsync(ChatLoopContext lc)
     {
-        const int maxIterations = 8;
+        const int maxIterations = 25;
         try
         {
             for (int iteration = 0; iteration < maxIterations; iteration++)

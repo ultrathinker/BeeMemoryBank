@@ -23,7 +23,7 @@ namespace BeeMemoryBank.Api.Services;
 public sealed class ChatDestructiveOpCounter
 {
     /// <summary>Maximum destructive (delete/replace) tool executions allowed per conversation.</summary>
-    public const int CapPerConversation = 5;
+    public const int CapPerConversation = 10;
 
     private readonly ConcurrentDictionary<Guid, int> _counts = new();
 
