@@ -54,6 +54,7 @@
            no special-casing — fixing the old "border stops partway down" bug that was a
            side-effect of the now-removed rail architecture. */
         body.ai-chat-page #chat-sidebar {
+            position: relative;
             width: 280px;
             min-width: 280px;
             background: var(--bg-secondary);
@@ -75,6 +76,28 @@
             width: 0;
             min-width: 0;
             border-right-color: transparent;
+        }
+        /* Anchored to the panel's own top-right corner (position:relative on #chat-sidebar
+           above) — independent of "New chat", not sharing its flex row. This is what lets the
+           button below span the grid's own 30px inset exactly, instead of losing width to a
+           reserved chevron slot. */
+        body.ai-chat-page #btn-chat-sidebar-collapse {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 2;
+        }
+
+        /* New-chat flash: when a brand-new conversation appears at the top of the list (right
+           after sending the first message), pulse its box-shadow 3 times over ~0.8s so it's
+           obvious a new entry showed up — box-shadow (not background) so it never fights the
+           row's own persistent "active" background, which is what stays highlighted afterward. */
+        @@keyframes chat-history-flash {
+            0%, 100% { box-shadow: none; }
+            50% { box-shadow: 0 0 0 2px var(--sl-color-primary-500); }
+        }
+        body.ai-chat-page .chat-history-item-flash {
+            animation: chat-history-flash 0.267s ease-in-out 3;
         }
 
         /* Expand tab — fixed at the page's left edge, shown only while the chat sidebar
@@ -280,12 +303,17 @@
      ALWAYS loads collapsed (an earlier deliberate product decision — only the dragged WIDTH
      is persisted across sessions, never the open/closed state). -->
 <div id="chat-sidebar" class="chat-sidebar-collapsed">
-    <div style="display:flex;align-items:center;gap:4px;padding:8px;">
-        <sl-button id="chat-new" variant="primary" outline style="flex:1;">
+    <!-- The collapse chevron is independent of "New chat" — anchored to the panel's own
+         top-right corner (position:absolute, see the scoped <style> rule) rather than sharing
+         a flex row with the button. This lets the button be sized purely by the grid's own
+         30px left/right inset (matching #chat-history's rows below it exactly) with no need to
+         reserve extra width for the chevron. -->
+    <sl-icon-button id="btn-chat-sidebar-collapse" name="chevron-left"
+        label="Collapse panel" title="Collapse panel"></sl-icon-button>
+    <div style="padding:8px 30px;">
+        <sl-button id="chat-new" variant="primary" outline style="width:100%;">
             <sl-icon slot="prefix" name="plus-lg"></sl-icon> New chat
         </sl-button>
-        <sl-icon-button id="btn-chat-sidebar-collapse" name="chevron-left"
-            label="Collapse panel" title="Collapse panel"></sl-icon-button>
     </div>
     <div id="chat-history" style="flex:1;overflow-y:auto;padding:0 10px 8px 10px;"></div>
 </div>

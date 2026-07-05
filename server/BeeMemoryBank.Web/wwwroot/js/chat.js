@@ -42,6 +42,11 @@
     var chatExpandTab = document.getElementById('chat-sidebar-expand-tab');
 
     var currentConversationId = null;
+    // Set the moment a brand-new conversation is created (the 'conversation' SSE event firing
+    // while currentConversationId was still null). renderSidebar consumes this ONCE — flashing
+    // the matching row — then clears it, so switching between EXISTING conversations later never
+    // replays the animation.
+    var justCreatedConversationId = null;
     var sending = false;
     var abortCtrl = null;
     // A staged image attachment ({mime, dataBase64, previewUrl} or null).
@@ -297,11 +302,20 @@
                 + (active ? 'background:var(--sl-color-primary-100);' : '');
             item.addEventListener('mouseenter', function () { if (!active) item.style.background = 'var(--sl-color-neutral-100)'; });
             item.addEventListener('mouseleave', function () { if (!active) item.style.background = 'transparent'; });
+            // One-shot flash for a conversation that was JUST created by this very send() (see
+            // the 'conversation' SSE handler) — never replayed on later re-renders/switches.
+            if (c.id === justCreatedConversationId) {
+                item.classList.add('chat-history-item-flash');
+                justCreatedConversationId = null;
+            }
+            // Single tooltip for the whole row (title attribute on a PARENT wins only if the
+            // hovered child has none of its own — so this lives on `item`, not on the title
+            // span, otherwise hovering the text itself would shadow the date/time).
+            item.title = (c.title || '(untitled)') + '\n' + new Date(c.createdAt).toLocaleString();
 
             var title = document.createElement('span');
             title.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.88rem;';
             title.textContent = c.title || '(untitled)';
-            title.title = c.title || '';
             title.addEventListener('click', function () { openConversation(c.id); });
             item.appendChild(title);
 
@@ -677,7 +691,11 @@
         }
 
         if (eventType === 'conversation' && obj && obj.conversationId) {
-            // Pin the (possibly brand-new) conversation and refresh the sidebar.
+            // Pin the (possibly brand-new) conversation and refresh the sidebar. A null
+            // currentConversationId up to this point means this send() truly started a NEW
+            // conversation (as opposed to continuing an already-open one) — flag it so
+            // renderSidebar can flash the new row once it appears.
+            if (!currentConversationId) justCreatedConversationId = obj.conversationId;
             currentConversationId = obj.conversationId;
             loadHistory();
         } else if (eventType === 'delta' && obj) {
