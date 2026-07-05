@@ -171,6 +171,11 @@ public sealed class ChatDbInitializer
             default_image_gen_model_id TEXT
         );
         """,
-        "INSERT OR IGNORE INTO chat_settings (id, auto_approve_writes, chat_globally_enabled) VALUES (1, 0, 1);"
+        // chat_globally_enabled is intentionally NOT seeded here: on an existing chat.db this
+        // statement runs BEFORE EnsureColumnAsync below adds the column (CREATE TABLE IF NOT
+        // EXISTS above is a no-op for a pre-existing table), so referencing it here would throw
+        // "no such column" on upgrade. The column's own DEFAULT 1 (both in the CREATE TABLE for
+        // fresh DBs and in the ALTER for existing ones) already gives every row the correct value.
+        "INSERT OR IGNORE INTO chat_settings (id, auto_approve_writes) VALUES (1, 0);"
     ];
 }
