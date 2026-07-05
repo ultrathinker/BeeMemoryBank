@@ -91,6 +91,11 @@
         bubble.style.padding = '10px 14px';
         bubble.style.whiteSpace = 'normal';
         bubble.style.overflowWrap = 'anywhere';
+        // Keep the bubble off the message list's own edge (right edge for "You", left edge for
+        // the assistant) — set directly on the bubble itself (not just container padding) so it
+        // can never depend on a stale cached stylesheet.
+        if (role === 'user') bubble.style.marginRight = '8px';
+        else bubble.style.marginLeft = '8px';
         bubble.innerHTML =
             '<div style="font-size:0.72rem;color:var(--text-secondary);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em;">'
             + (role === 'user' ? 'You' : (opts.label || 'Assistant')) + '</div>'
