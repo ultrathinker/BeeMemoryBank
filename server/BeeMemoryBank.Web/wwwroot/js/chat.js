@@ -292,8 +292,9 @@
             // No "gap" here (unlike before) — a single flexbox gap would space every child
             // equally, but the title<->edit gap and edit<->delete gap need to differ (see below).
             // Tighter horizontal padding (8px -> 4px each side) gives the title more room in the
-            // sidebar's fixed-width column.
-            item.style.cssText = 'display:flex;align-items:center;padding:6px 4px;border-radius:6px;cursor:pointer;margin-bottom:2px;'
+            // sidebar's fixed-width column. Right side is deliberately roomy: 20px row + 10px
+            // container = 30px from the delete icon to the sidebar's right border.
+            item.style.cssText = 'display:flex;align-items:center;padding:6px 20px 6px 4px;border-radius:6px;cursor:pointer;margin-bottom:2px;'
                 + (active ? 'background:var(--sl-color-primary-100);' : '');
             item.addEventListener('mouseenter', function () { if (!active) item.style.background = 'var(--sl-color-neutral-100)'; });
             item.addEventListener('mouseleave', function () { if (!active) item.style.background = 'transparent'; });
@@ -307,8 +308,8 @@
 
             var renameIcon = document.createElement('sl-icon');
             renameIcon.setAttribute('name', 'pencil');
-            // marginLeft:4px reproduces the same title<->edit gap the old shared "gap:4px" gave.
-            renameIcon.style.cssText = 'font-size:0.9rem;color:var(--text-secondary);cursor:pointer;flex-shrink:0;margin-left:4px;';
+            // marginLeft:14px keeps the icons clearly separated from the (ellipsized) title text.
+            renameIcon.style.cssText = 'font-size:0.9rem;color:var(--text-secondary);cursor:pointer;flex-shrink:0;margin-left:14px;';
             renameIcon.title = 'Rename';
             renameIcon.addEventListener('click', function (e) { e.stopPropagation(); renameConversation(c.id, c.title); });
             item.appendChild(renameIcon);
