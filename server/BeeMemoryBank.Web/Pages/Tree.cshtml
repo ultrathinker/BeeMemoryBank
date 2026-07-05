@@ -3,34 +3,221 @@
 @{
     ViewData["Title"] = "Home";
 }
+
+@section HeadStyles {
+    <link rel="stylesheet" href="/css/chat.css" asp-append-version="true" />
+    <style>
+        /* ── Homepage chat (scoped to this page only) ─────────────────────────────
+           The welcome block (#home-welcome) is vertically collapsible: sending the first chat
+           message (or clicking the manual pip under the buttons) slides it up under the 48px
+           app header. Mirrors #chat-sidebar-expand-tab's collapse/expand-tab pattern from
+           /AI, rotated 90°: max-height+opacity+translateY instead of width, a fixed top-center
+           expand tab instead of a left-edge one. body.home-chat-page scoping follows the
+           established body.ai-chat-page convention (this page previously had no scoped block —
+           it now needs one, and the body-class approach is what site.js's spaAfterSwap already
+           knows how to clean up). */
+
+        body.home-chat-page .main-content {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            /* The default .welcome top padding (80px) provided the breathing room before;
+               keep a moderate page padding and let the block's own padding do the rest. */
+            padding-top: 12px;
+        }
+
+        /* Collapsible wrapper. max-height must comfortably exceed the block's natural height
+           (icon row + description + buttons + pip ≈ 300px) — 600px keeps the timing curve
+           acceptable while never clipping. overflow:hidden makes the slide-up read as the
+           block tucking under the header (the .app-body above already clips at the header's
+           bottom edge — no z-index changes needed). */
+        body.home-chat-page #home-welcome {
+            overflow: hidden;
+            max-height: 600px;
+            opacity: 1;
+            transform: translateY(0);
+            transition: max-height 0.22s ease, opacity 0.22s ease, transform 0.22s ease;
+        }
+        body.home-chat-page #home-welcome.home-welcome-collapsed {
+            max-height: 0;
+            opacity: 0;
+            transform: translateY(-24px);
+            pointer-events: none;
+        }
+        /* Suppress ALL transitions during initial load when a pinned conversation exists, so
+           the page opens straight into the chat view with no welcome-flash animation. */
+        body.home-chat-page #home-welcome.no-anim {
+            transition: none;
+        }
+
+        /* Welcome content: icon inline with the heading (was 3rem block-above; now 1.5rem on
+           the same flex row), tighter padding than the global .welcome so the composer below
+           reads as part of the block. */
+        body.home-chat-page .welcome {
+            padding: 40px 20px 8px 20px;
+        }
+        body.home-chat-page .welcome-heading-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        body.home-chat-page .welcome-heading-row h2 {
+            margin: 0;
+        }
+
+        /* Manual pre-send collapse pip: centered under the four buttons, same visual language
+           as the expand tab below (and as #chat-sidebar-expand-tab on /AI). */
+        body.home-chat-page #home-welcome-collapse-tab {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 14px auto 0 auto;
+            width: 52px;
+            height: 18px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 0;
+            transition: background 0.15s, color 0.15s;
+        }
+        body.home-chat-page #home-welcome-collapse-tab:hover {
+            background: var(--bg-hover, var(--border));
+            color: var(--accent);
+        }
+        body.home-chat-page #home-welcome-collapse-tab sl-icon {
+            font-size: 0.75rem;
+        }
+
+        /* Expand tab — fixed, hanging down from under the 48px header, top-centered over the
+           content area. ONE shared tab regardless of which mechanism collapsed the block
+           (send-triggered or manual): one mental model, one state. Same shape/colors as
+           #chat-sidebar-expand-tab in AI.cshtml / #sidebar-expand-tab in site.css, rotated:
+           top edge borderless, bottom corners rounded, chevron-down. */
+        body.home-chat-page #home-welcome-expand-tab {
+            display: none;
+            position: fixed;
+            top: 48px;               /* .app-header height (site.css line 359) */
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 200;            /* matches #sidebar-expand-tab */
+            width: 52px;
+            height: 18px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-top: none;
+            border-radius: 0 0 6px 6px;
+            cursor: pointer;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            padding: 0;
+            transition: background 0.15s, color 0.15s;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+        }
+        body.home-chat-page #home-welcome-expand-tab:hover {
+            background: var(--bg-hover, var(--border));
+            color: var(--accent);
+        }
+        body.home-chat-page #home-welcome-expand-tab sl-icon {
+            font-size: 0.75rem;
+        }
+        body.home-chat-page #home-welcome-expand-tab.visible {
+            display: flex;
+        }
+
+        /* Idle (welcome) mode: the empty message list takes no height, so the composer sits
+           directly below the welcome block/buttons. Chat mode (.home-chat-active, applied on
+           collapse-transition end / pinned auto-open): messages fill the column and the
+           composer settles at the bottom, exactly like /AI. */
+        body.home-chat-page #chat-messages {
+            flex: 0 1 auto;
+        }
+        body.home-chat-page .main-content.home-chat-active #chat-messages {
+            flex: 1 1 auto;
+        }
+
+        /* Chat action row (New chat / Close chat) above the composer. Close chat only renders
+           usefully in chat mode — hidden entirely in idle mode. */
+        body.home-chat-page #home-chat-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            width: 100%;
+            max-width: 820px;
+            margin: 0 auto;
+            padding: 2px 12px;
+            box-sizing: border-box;
+        }
+        body.home-chat-page #home-chat-close {
+            display: none;
+        }
+        body.home-chat-page .main-content.home-chat-active #home-chat-close {
+            display: inline-block;
+        }
+    </style>
+}
+<script>document.body.classList.add('home-chat-page', 'chat-ui');</script>
 <partial name="_Sidebar" />
 <div id="page-content">
 <div class="main-content">
-    <div class="welcome">
-        <sl-icon name="database" style="font-size:3rem;color:var(--accent);display:block;margin-bottom:16px;"></sl-icon>
-        <h2>Welcome to BeeMemoryBank</h2>
-        <p>Select a folder from the tree to view its articles, or use search.</p>
-        <div style="margin-top:16px;margin-bottom:8px;display:flex;justify-content:center;">
-            <sl-button size="large" variant="primary" href="/AI">
-                <sl-icon slot="prefix" name="chat-left-text"></sl-icon> Ask AI
-            </sl-button>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:16px;justify-content:center;">
-            <sl-button size="small" variant="success" href="/Article/Edit?treePath=%2F">
-                <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
-            </sl-button>
-            <sl-button size="small" variant="success" onclick="document.getElementById('dlg-add-folder-home').show()">
-                <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
-            </sl-button>
-            <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'all'})">
-                <sl-icon slot="prefix" name="download"></sl-icon> Export All
-            </sl-button>
-            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-import-obsidian').show()">
-                <sl-icon slot="prefix" name="upload"></sl-icon> Import from Obsidian
-            </sl-button>
+    <!-- Collapsible welcome block. chat.js detects home mode by this element's presence
+         (#home-welcome) — /AI has no such element, so all home-mode logic is inert there.
+         Starts EXPANDED in markup; chat.js collapses it (with .no-anim) during init if a
+         home-pinned conversation exists. -->
+    <div id="home-welcome">
+        <div class="welcome">
+            <div class="welcome-heading-row">
+                <sl-icon name="database" style="font-size:1.5rem;color:var(--accent);"></sl-icon>
+                <h2>Welcome to BeeMemoryBank</h2>
+            </div>
+            <p>Select a folder from the tree to view its articles, or use search.</p>
+            <div style="display:flex;gap:8px;margin-top:16px;justify-content:center;">
+                <sl-button size="small" variant="success" href="/Article/Edit?treePath=%2F">
+                    <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
+                </sl-button>
+                <sl-button size="small" variant="success" onclick="document.getElementById('dlg-add-folder-home').show()">
+                    <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
+                </sl-button>
+                <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'all'})">
+                    <sl-icon slot="prefix" name="download"></sl-icon> Export All
+                </sl-button>
+                <sl-button size="small" variant="default" onclick="document.getElementById('dlg-import-obsidian').show()">
+                    <sl-icon slot="prefix" name="upload"></sl-icon> Import from Obsidian
+                </sl-button>
+            </div>
+            <!-- Mechanism B: manual collapse pip — drops into an EMPTY chat view without
+                 creating any conversation (identical to opening /AI fresh). -->
+            <button id="home-welcome-collapse-tab" title="Hide welcome, open chat"
+                aria-label="Collapse welcome block">
+                <sl-icon name="chevron-up"></sl-icon>
+            </button>
         </div>
     </div>
+
+    <!-- New chat / Close chat, directly above the composer. #chat-new deliberately reuses
+         /AI's id so chat.js's existing newConversation wiring binds to it. Close chat exists
+         ONLY on this page (clears the home pin, never deletes the conversation). -->
+    <div id="home-chat-actions">
+        <sl-button id="chat-new" size="small" variant="default" outline>
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> New chat
+        </sl-button>
+        <sl-button id="home-chat-close" size="small" variant="default" outline>
+            <sl-icon slot="prefix" name="x-lg"></sl-icon> Close chat
+        </sl-button>
+    </div>
+
+    <partial name="_ChatUi" />
 </div>
+
+<!-- Expand tab: shared by BOTH collapse mechanisms; chat.js toggles .visible. -->
+<button id="home-welcome-expand-tab" title="Show welcome"
+    aria-label="Expand welcome block">
+    <sl-icon name="chevron-down"></sl-icon>
+</button>
 
 <!-- Add folder dialog (home) -->
 <sl-dialog id="dlg-add-folder-home" label="Add Folder">
@@ -166,4 +353,8 @@
     }
 })();
 </script>
+
+@section Scripts {
+    <script src="/js/chat.js" asp-append-version="true"></script>
+}
 </div>

@@ -5,6 +5,7 @@
 }
 
 @section HeadStyles {
+    <link rel="stylesheet" href="/css/chat.css" asp-append-version="true" />
     <style>
         /* The AI page uses its own conversation-history sidebar (#chat-sidebar) instead of the
            folder tree (#app-sidebar). We still RENDER <partial name="_Sidebar" /> below (just
@@ -15,10 +16,6 @@
            destination page with no sidebar at all, since nothing outside #page-content ever gets
            re-inserted by the swap. */
         body.ai-chat-page #app-sidebar { display: none; }
-        /* .main-content's global padding (site.css) is 24px top+bottom. Combined with this page's
-           own full-height flex column, that padding eats into the box, leaving a visible empty
-           strip below the composer. Shrink it to a small margin on this page only. */
-        body.ai-chat-page .main-content { padding-bottom: 8px; }
 
         /* ── Claude-style redesign (scoped to this page only) ─────────────────── */
 
@@ -154,151 +151,9 @@
         body.ai-chat-page #sidebar-expand-tab {
             display: none !important;
         }
-
-        /* Centered max-width column for messages + composer (Claude-style). Side padding keeps
-           bubbles (especially the right-aligned "You" ones) off the scrollbar edge. */
-        body.ai-chat-page #chat-messages {
-            width: 100%;
-            max-width: 820px;
-            margin: 0 auto;
-            padding-left: 12px;
-            padding-right: 12px;
-            box-sizing: border-box;
-        }
-
-        /* Markdown content inside a bubble must never overflow the bubble's own edge — lists in
-           particular default to a wide 40px left indent that can push long lines past the
-           bubble's max-width. Tighten the indent and force-wrap anything that could overflow
-           (long words, code, tables, images). */
-        body.ai-chat-page .chat-bubble-body ul,
-        body.ai-chat-page .chat-bubble-body ol {
-            padding-left: 20px;
-            margin: 6px 0;
-            max-width: 100%;
-        }
-        body.ai-chat-page .chat-bubble-body li {
-            overflow-wrap: anywhere;
-        }
-        body.ai-chat-page .chat-bubble-body pre {
-            overflow-x: auto;
-            max-width: 100%;
-        }
-        body.ai-chat-page .chat-bubble-body img {
-            max-width: 100%;
-            height: auto;
-        }
-        body.ai-chat-page .chat-bubble-body table {
-            display: block;
-            overflow-x: auto;
-            max-width: 100%;
-        }
-        body.ai-chat-page .chat-composer-outer {
-            width: 100%;
-            max-width: 820px;
-            margin: 0 auto;
-            padding-top: 4px;
-        }
-
-        /* The pill card. */
-        body.ai-chat-page .chat-composer {
-            border: 1px solid var(--sl-panel-border-color);
-            border-radius: 26px;
-            background: var(--sl-panel-background-color, var(--sl-color-neutral-0));
-            padding: 12px 16px 10px 16px;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-            transition: border-color 0.15s ease, box-shadow 0.15s ease;
-        }
-        body.ai-chat-page .chat-composer:focus-within {
-            border-color: var(--sl-color-primary-400);
-        }
-        /* Drag-and-drop feedback (class toggled by chat.js). */
-        body.ai-chat-page .chat-composer.drag-over {
-            border: 1px dashed var(--sl-color-primary-500);
-            box-shadow: 0 0 0 3px var(--sl-color-primary-100);
-        }
-
-        /* Strip the textarea's own chrome so it melts into the pill. */
-        body.ai-chat-page #chat-input::part(base) {
-            border: none;
-            box-shadow: none;
-            background: transparent;
-        }
-        body.ai-chat-page #chat-input::part(textarea) {
-            padding: 2px 4px 6px 4px;
-        }
-
-        /* Bottom row inside the pill: "+" left, model label + stop right. */
-        body.ai-chat-page .chat-composer-bottom {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-            margin-top: 2px;
-        }
-        body.ai-chat-page #chat-plus-btn::part(base) {
-            border: 1px solid var(--sl-panel-border-color);
-            border-radius: 50%;
-            width: 32px;
-            height: 32px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0;
-        }
-        body.ai-chat-page #chat-plus-btn::part(base):hover {
-            background: var(--sl-color-neutral-100);
-        }
-        body.ai-chat-page .chat-composer-right {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        body.ai-chat-page #chat-model-label {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 260px;
-            user-select: none;
-        }
-        body.ai-chat-page #chat-stop {
-            font-size: 1.3rem;
-            color: var(--sl-color-danger-600);
-        }
-
-        /* Save-to-Bee dialog: the search input's prefix (magnifying glass) icon sits flush
-           against the field's left edge by default — give it some breathing room. */
-        body.ai-chat-page #chat-save-search::part(prefix) {
-            margin-left: 6px;
-        }
-
-        /* Full-size image lightbox: shrink the dialog's own padding/panel so the image reads as
-           the star of the popup, and cap the image to the viewport so a huge image never
-           overflows the screen. object-fit:contain preserves aspect ratio at any size. */
-        body.ai-chat-page #chat-image-lightbox::part(panel) {
-            max-width: 92vw;
-        }
-        body.ai-chat-page #chat-image-lightbox::part(body) {
-            padding: 8px;
-            display: flex;
-            justify-content: center;
-        }
-        body.ai-chat-page #chat-lightbox-img {
-            display: block;
-            max-width: 88vw;
-            max-height: 85vh;
-            object-fit: contain;
-            border-radius: 6px;
-        }
-
-        /* Chat images (thumbnails) are clickable — hint it with a pointer cursor. */
-        body.ai-chat-page .chat-image-thumb {
-            cursor: zoom-in;
-        }
     </style>
 }
-<script>document.body.classList.add('ai-chat-page');</script>
+<script>document.body.classList.add('ai-chat-page', 'chat-ui');</script>
 <partial name="_Sidebar" />
 <div id="page-content">
 <!-- Chat history sidebar: a direct child of #page-content (display:contents in site.css),
@@ -340,76 +195,9 @@
         <h2 class="chat-heading"><sl-icon name="chat-left-text"></sl-icon> AI Chat</h2>
     </div>
 
-    <!-- Empty / not-configured states -->
-    <div id="chat-empty-state" class="card" style="display:none;text-align:center;padding:32px;margin-bottom:8px;">
-        <sl-icon id="chat-empty-icon" name="robot" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
-        <p id="chat-empty-text" class="text-muted" style="margin:0;"></p>
-    </div>
-
-    <!-- Message list -->
-    <div id="chat-messages" style="flex:1;overflow-y:auto;padding:4px 0 8px 0;"></div>
-
-    <!-- Composer: pill card. "+" menu (image attach) bottom-left; effective text-model
-         label + streaming Stop button bottom-right. No Send button — Enter sends
-         (see chat.js keydown handler). Drag-and-drop an image anywhere on the pill. -->
-    <div class="chat-composer-outer">
-        <div id="chat-composer" class="chat-composer">
-            <div id="chat-attach-preview" style="display:none;margin-bottom:6px;"></div>
-            <sl-textarea id="chat-input" placeholder="Ask about your vault, or ask it to create/edit a note…"
-                rows="2" resize="auto"></sl-textarea>
-            <div class="chat-composer-bottom">
-                <sl-dropdown id="chat-plus-dropdown" placement="top-start">
-                    <sl-icon-button slot="trigger" id="chat-plus-btn" name="plus-lg"
-                        label="Add to chat"></sl-icon-button>
-                    <sl-menu id="chat-plus-menu">
-                        <sl-menu-item value="add-image">
-                            <sl-icon slot="prefix" name="image"></sl-icon> Add image
-                        </sl-menu-item>
-                    </sl-menu>
-                </sl-dropdown>
-                <input type="file" id="chat-attach-input"
-                    accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" />
-                <div class="chat-composer-right">
-                    <span id="chat-model-label" title="Text model (set by admin)"></span>
-                    <sl-icon-button id="chat-stop" name="stop-circle-fill"
-                        label="Stop generating" style="display:none;"></sl-icon-button>
-                </div>
-            </div>
-        </div>
-        <div id="chat-attach-hint" class="text-muted" style="font-size:0.72rem;margin-top:4px;display:none;"></div>
-    </div>
+    <partial name="_ChatUi" />
 </div>
 </div>
-
-<!-- Phase 5: "Save to Bee" dialog — uploads a chat image to the vault media store (ACL-checked),
-     attached to a user-picked note via the EXISTING /api-proxy/media/upload flow. The note is found
-     through the existing /api-proxy/search (no new list endpoint added). -->
-<sl-dialog id="chat-save-to-bee" label="Save image to Bee">
-    <div style="display:flex;flex-direction:column;gap:10px;">
-        <div id="chat-save-preview" style="text-align:center;"></div>
-        <p class="text-muted" style="font-size:0.82rem;margin:0;">
-            Adds this image to the end of a note you pick, as a new line at the bottom. Folder
-            access is checked server-side — only folders you can write to are allowed.
-        </p>
-        <sl-input id="chat-save-search" placeholder="Search for a note…" clearable>
-            <sl-icon slot="prefix" name="search"></sl-icon>
-        </sl-input>
-        <div id="chat-save-results" style="max-height:220px;overflow:auto;border:1px solid var(--sl-panel-border-color);border-radius:6px;"></div>
-        <div id="chat-save-selected" class="text-muted" style="font-size:0.8rem;min-height:1.1rem;"></div>
-    </div>
-    <sl-button slot="footer" variant="default" data-save-close="1">Cancel</sl-button>
-    <sl-button slot="footer" variant="primary" id="chat-save-confirm" disabled>Save</sl-button>
-</sl-dialog>
-
-<!-- Full-size image lightbox — click any chat image (uploaded or generated) to open it here.
-     The <img> below always reuses the SAME src as the thumbnail (already the full-resolution
-     bytes; the thumbnail is only CSS-scaled down), so right-click "Save image as…"/"Copy image"
-     here gets the real full-resolution image, not a downscaled copy. no-header matches the
-     existing no-header sl-dialog convention (see Admin.cshtml, Setup.cshtml). Closes via the X,
-     Escape, or clicking the backdrop — all built into sl-dialog. -->
-<sl-dialog id="chat-image-lightbox" no-header style="--width: auto;">
-    <img id="chat-lightbox-img" src="" alt="Full-size image" />
-</sl-dialog>
 
 @section Scripts {
     <script src="/js/chat.js" asp-append-version="true"></script>

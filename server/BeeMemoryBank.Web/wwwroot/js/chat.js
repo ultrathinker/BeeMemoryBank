@@ -41,6 +41,15 @@
     var chatCollapseBtn = document.getElementById('btn-chat-sidebar-collapse');
     var chatExpandTab = document.getElementById('chat-sidebar-expand-tab');
 
+    // ── Homepage ("home mode") elements — /Tree only. Home mode is detected by the presence
+    // of #home-welcome (element-presence gating, same style as the sidebar block below);
+    // on /AI these are all null and every home-mode branch is inert.
+    var homeWelcome = document.getElementById('home-welcome');
+    var homeCollapseTab = document.getElementById('home-welcome-collapse-tab');
+    var homeExpandTab = document.getElementById('home-welcome-expand-tab');
+    var homeCloseBtn = document.getElementById('home-chat-close');
+    var homeMain = homeWelcome ? homeWelcome.closest('.main-content') : null;
+
     var currentConversationId = null;
     // Set the moment a brand-new conversation is created (the 'conversation' SSE event firing
     // while currentConversationId was still null). renderSidebar consumes this ONCE — flashing
@@ -272,6 +281,7 @@
     }
 
     function loadHistory() {
+        if (!historyEl) return; // homepage has no history sidebar — nothing to render
         fetch('/api-proxy/chat/conversations', { headers: { 'Accept': 'application/json' } })
             .then(function (r) { return r.json(); })
             .then(renderSidebar)
@@ -384,6 +394,11 @@
         messagesEl.innerHTML = '';
         greet();
         loadHistory();
+        // Home mode: "New chat" abandons the pinned conversation (clears the pin, never
+        // deletes the row — it stays listed on /AI). The NEXT send creates+pins a fresh one.
+        if (homeWelcome) {
+            fetch('/api-proxy/chat/home-pinned', { method: 'DELETE' }).catch(function () {});
+        }
     }
 
     function renameConversation(id, currentTitle) {
@@ -450,12 +465,18 @@
         inputEl.value = '';
         clearAttachment();
         hideEmpty();
+        // Home mode, mechanism A: the first send collapses the welcome block into chat view.
+        if (homeWelcome) setWelcomeCollapsed(true);
 
         var body = {
             conversationId: currentConversationId,
             message: text,
             systemPrompt: SYSTEM_PROMPT
         };
+        // Home mode: a send that CREATES a conversation (no current id) pins it to the
+        // homepage server-side. Continuations of an existing conversation never re-pin.
+        // /AI never sets this (homeWelcome is null there), so its behavior is unchanged.
+        if (homeWelcome && !currentConversationId) body.pinToHome = true;
         if (attachment) body.attachment = attachment;
         runTurn(makeTurn(), '/api-proxy/chat/stream', body);
     }
@@ -988,6 +1009,80 @@
         if (savedChatWidth) chatSidebar.style.width = parseInt(savedChatWidth, 10) + 'px';
         setChatSidebarCollapsed(true);
     }
+
+    // ── Homepage welcome block: vertical collapse/expand (home mode only) ────────
+    // The vertical twin of setChatSidebarCollapsed above: class toggle + shared fixed expand
+    // tab (.visible). ONE expand tab serves both triggers (send-triggered + manual pip) — a
+    // single mental model. .home-chat-active on .main-content switches #chat-messages to
+    // flex:1 so the composer settles at the bottom (chat view); it is applied on the collapse
+    // transition's END so the composer glides down after the slide-up instead of jumping.
+    function setWelcomeCollapsed(collapsed, skipAnim) {
+        if (!homeWelcome) return;
+        if (skipAnim) homeWelcome.classList.add('no-anim');
+        if (collapsed) {
+            if (!homeWelcome.classList.contains('home-welcome-collapsed')) {
+                homeWelcome.classList.add('home-welcome-collapsed');
+                if (skipAnim) {
+                    if (homeMain) homeMain.classList.add('home-chat-active');
+                } else {
+                    var applied = false;
+                    var applyActive = function () {
+                        if (applied) return;
+                        applied = true;
+                        if (homeMain) homeMain.classList.add('home-chat-active');
+                    };
+                    // transitionend bubbles — the collapse pip's own hover transition
+                    // (background/color 0.15s) ending on a CHILD would otherwise consume this
+                    // listener early if it were {once:true} (once:true removes the listener after
+                    // the FIRST event regardless of the target check below). Filter by target and
+                    // remove manually only once the transition we actually care about fires.
+                    var onTransitionEnd = function (e) {
+                        if (e.target !== homeWelcome) return;
+                        homeWelcome.removeEventListener('transitionend', onTransitionEnd);
+                        applyActive();
+                    };
+                    homeWelcome.addEventListener('transitionend', onTransitionEnd);
+                    setTimeout(applyActive, 300); // fallback if transitionend never fires
+                }
+            } else if (homeMain) {
+                homeMain.classList.add('home-chat-active');
+            }
+            if (homeExpandTab) homeExpandTab.classList.add('visible');
+        } else {
+            homeWelcome.classList.remove('home-welcome-collapsed');
+            if (homeExpandTab) homeExpandTab.classList.remove('visible');
+            // Only leave chat mode if there is no open/started chat (mechanism B reversal
+            // before any send). With an active chat, welcome + chat coexist vertically.
+            if (homeMain && !currentConversationId && messagesEl.childElementCount === 0) {
+                homeMain.classList.remove('home-chat-active');
+            }
+        }
+        if (skipAnim) {
+            // Force style flush, then re-enable transitions for subsequent toggles.
+            void homeWelcome.offsetHeight;
+            homeWelcome.classList.remove('no-anim');
+        }
+    }
+
+    if (homeWelcome) {
+        if (homeCollapseTab) homeCollapseTab.addEventListener('click', function () {
+            setWelcomeCollapsed(true); // mechanism B: empty chat view, NO conversation created
+        });
+        if (homeExpandTab) homeExpandTab.addEventListener('click', function () {
+            setWelcomeCollapsed(false);
+        });
+        if (homeCloseBtn) homeCloseBtn.addEventListener('click', function () {
+            // "Close chat": un-pin ONLY. The conversation row + messages stay intact and
+            // remain listed on /AI. Reverts this page to the default welcome view.
+            fetch('/api-proxy/chat/home-pinned', { method: 'DELETE' }).catch(function () {});
+            if (abortCtrl) { try { abortCtrl.abort(); } catch (e) {} }
+            currentConversationId = null;
+            messagesEl.innerHTML = '';
+            if (homeMain) homeMain.classList.remove('home-chat-active');
+            setWelcomeCollapsed(false);
+        });
+    }
+
     if (inputEl) {
         inputEl.addEventListener('keydown', function (e) {
             // Enter sends. Shift+Enter or Ctrl/Cmd+Enter inserts a newline instead.
@@ -1076,4 +1171,19 @@
     greet();
     loadHistory();
     loadModelLabel();
+
+    // Home mode: restore the pinned conversation (a real server-side per-user flag on the
+    // chat_conversation row — survives navigation AND logout/login). Pinned → open straight
+    // into the collapsed chat view with NO animation; none (or any error) → default welcome.
+    if (homeWelcome) {
+        fetch('/api-proxy/chat/home-pinned', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+                if (data && data.conversationId) {
+                    setWelcomeCollapsed(true, /* skipAnim */ true);
+                    openConversation(data.conversationId);
+                }
+            })
+            .catch(function () { /* welcome stays expanded */ });
+    }
 })();

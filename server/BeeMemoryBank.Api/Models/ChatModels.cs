@@ -109,6 +109,7 @@ public class ChatConversation
     public string Title { get; set; } = "";
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public bool IsHomePinned { get; set; }
 }
 
 public class ChatMessage
@@ -180,7 +181,8 @@ public record ChatStreamRequest(
     [property: JsonPropertyName("conversationId")] Guid? ConversationId,
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("systemPrompt")] string? SystemPrompt,
-    [property: JsonPropertyName("attachment")] ChatStreamAttachment? Attachment);
+    [property: JsonPropertyName("attachment")] ChatStreamAttachment? Attachment,
+    [property: JsonPropertyName("pinToHome")] bool PinToHome = false);
 
 /// <summary>An optional image attached to the user turn. The server decides how to route it
 /// based on the effective vision model (delegation to a separate vision model, or inline if the
@@ -200,6 +202,11 @@ public record ChatConversationResponse(
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("createdAt")] DateTime CreatedAt,
     [property: JsonPropertyName("updatedAt")] DateTime UpdatedAt);
+
+/// <summary>The caller's home-pinned conversation, if any (homepage chat).
+/// ConversationId is null when nothing is pinned.</summary>
+public record HomePinnedResponse(
+    [property: JsonPropertyName("conversationId")] Guid? ConversationId);
 
 /// <summary>One stored message in a conversation transcript. Only <c>user</c>/<c>assistant</c>
 /// text turns are rendered as bubbles; <c>tool</c> and assistant tool-call turns are kept for

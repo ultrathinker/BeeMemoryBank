@@ -1,0 +1,69 @@
+@* Shared AI-chat UI fragment: empty/not-configured state, message list, pill composer,
+   "Save to Bee" dialog, image lightbox. Rendered by BOTH /AI and /Tree (homepage chat) so the
+   two pages can never drift — chat.js dereferences several of these ids UNGUARDED
+   (#chat-empty-state, #chat-messages, #chat-input), so any page loading chat.js MUST render
+   this partial. Styles: wwwroot/css/chat.css (scoped body.chat-ui). *@
+
+<!-- Empty / not-configured states -->
+<div id="chat-empty-state" class="card" style="display:none;text-align:center;padding:32px;margin-bottom:8px;">
+    <sl-icon id="chat-empty-icon" name="robot" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+    <p id="chat-empty-text" class="text-muted" style="margin:0;"></p>
+</div>
+
+<!-- Message list -->
+<div id="chat-messages" style="overflow-y:auto;padding:4px 0 8px 0;"></div>
+
+<!-- Composer: pill card. "+" menu (image attach) bottom-left; effective text-model
+     label + streaming Stop button bottom-right. No Send button — Enter sends
+     (see chat.js keydown handler). Drag-and-drop an image anywhere on the pill. -->
+<div class="chat-composer-outer">
+    <div id="chat-composer" class="chat-composer">
+        <div id="chat-attach-preview" style="display:none;margin-bottom:6px;"></div>
+        <sl-textarea id="chat-input" placeholder="Ask about your vault, or ask it to create/edit a note…"
+            rows="2" resize="auto"></sl-textarea>
+        <div class="chat-composer-bottom">
+            <sl-dropdown id="chat-plus-dropdown" placement="top-start">
+                <sl-icon-button slot="trigger" id="chat-plus-btn" name="plus-lg"
+                    label="Add to chat"></sl-icon-button>
+                <sl-menu id="chat-plus-menu">
+                    <sl-menu-item value="add-image">
+                        <sl-icon slot="prefix" name="image"></sl-icon> Add image
+                    </sl-menu-item>
+                </sl-menu>
+            </sl-dropdown>
+            <input type="file" id="chat-attach-input"
+                accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" />
+            <div class="chat-composer-right">
+                <span id="chat-model-label" title="Text model (set by admin)"></span>
+                <sl-icon-button id="chat-stop" name="stop-circle-fill"
+                    label="Stop generating" style="display:none;"></sl-icon-button>
+            </div>
+        </div>
+    </div>
+    <div id="chat-attach-hint" class="text-muted" style="font-size:0.72rem;margin-top:4px;display:none;"></div>
+</div>
+
+<!-- "Save to Bee" dialog — uploads a chat image to the vault media store (ACL-checked),
+     attached to a user-picked note via the EXISTING /api-proxy/media/upload flow. -->
+<sl-dialog id="chat-save-to-bee" label="Save image to Bee">
+    <div style="display:flex;flex-direction:column;gap:10px;">
+        <div id="chat-save-preview" style="text-align:center;"></div>
+        <p class="text-muted" style="font-size:0.82rem;margin:0;">
+            Adds this image to the end of a note you pick, as a new line at the bottom. Folder
+            access is checked server-side — only folders you can write to are allowed.
+        </p>
+        <sl-input id="chat-save-search" placeholder="Search for a note…" clearable>
+            <sl-icon slot="prefix" name="search"></sl-icon>
+        </sl-input>
+        <div id="chat-save-results" style="max-height:220px;overflow:auto;border:1px solid var(--sl-panel-border-color);border-radius:6px;"></div>
+        <div id="chat-save-selected" class="text-muted" style="font-size:0.8rem;min-height:1.1rem;"></div>
+    </div>
+    <sl-button slot="footer" variant="default" data-save-close="1">Cancel</sl-button>
+    <sl-button slot="footer" variant="primary" id="chat-save-confirm" disabled>Save</sl-button>
+</sl-dialog>
+
+<!-- Full-size image lightbox — click any chat image (uploaded or generated) to open it here.
+     Reuses the SAME src as the thumbnail (full-resolution bytes). -->
+<sl-dialog id="chat-image-lightbox" no-header style="--width: auto;">
+    <img id="chat-lightbox-img" src="" alt="Full-size image" />
+</sl-dialog>

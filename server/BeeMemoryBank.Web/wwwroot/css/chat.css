@@ -1,0 +1,154 @@
+/* Shared AI-chat UI (composer pill, bubbles, lightbox, save dialog) — used by BOTH /AI
+   (body.ai-chat-page) and the homepage /Tree (body.home-chat-page). Every rule is scoped
+   under body.chat-ui, which both pages add via an inline script. Page-specific rules
+   (AI's history sidebar, Tree's collapsible welcome block) live in each page's HeadStyles. */
+
+body.chat-ui .main-content { padding-bottom: 8px; }
+
+/* Centered max-width column for messages + composer (Claude-style). Side padding keeps
+   bubbles (especially the right-aligned "You" ones) off the scrollbar edge. */
+body.chat-ui #chat-messages {
+    /* flex:1 lives here (not as an inline style on the shared partial's markup) specifically so
+       Tree.cshtml's idle-mode override (body.home-chat-page #chat-messages { flex: 0 1 auto; })
+       can win by source order — an inline style would beat any stylesheet rule regardless of
+       specificity, permanently pinning the composer to the bottom of the homepage even before
+       a chat has started. */
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: 820px;
+    margin: 0 auto;
+    padding-left: 12px;
+    padding-right: 12px;
+    box-sizing: border-box;
+}
+
+/* Markdown content inside a bubble must never overflow the bubble's own edge — lists in
+   particular default to a wide 40px left indent that can push long lines past the
+   bubble's max-width. Tighten the indent and force-wrap anything that could overflow
+   (long words, code, tables, images). */
+body.chat-ui .chat-bubble-body ul,
+body.chat-ui .chat-bubble-body ol {
+    padding-left: 20px;
+    margin: 6px 0;
+    max-width: 100%;
+}
+body.chat-ui .chat-bubble-body li {
+    overflow-wrap: anywhere;
+}
+body.chat-ui .chat-bubble-body pre {
+    overflow-x: auto;
+    max-width: 100%;
+}
+body.chat-ui .chat-bubble-body img {
+    max-width: 100%;
+    height: auto;
+}
+body.chat-ui .chat-bubble-body table {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+}
+body.chat-ui .chat-composer-outer {
+    width: 100%;
+    max-width: 820px;
+    margin: 0 auto;
+    padding-top: 4px;
+}
+
+/* The pill card. */
+body.chat-ui .chat-composer {
+    border: 1px solid var(--sl-panel-border-color);
+    border-radius: 26px;
+    background: var(--sl-panel-background-color, var(--sl-color-neutral-0));
+    padding: 12px 16px 10px 16px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+body.chat-ui .chat-composer:focus-within {
+    border-color: var(--sl-color-primary-400);
+}
+/* Drag-and-drop feedback (class toggled by chat.js). */
+body.chat-ui .chat-composer.drag-over {
+    border: 1px dashed var(--sl-color-primary-500);
+    box-shadow: 0 0 0 3px var(--sl-color-primary-100);
+}
+
+/* Strip the textarea's own chrome so it melts into the pill. */
+body.chat-ui #chat-input::part(base) {
+    border: none;
+    box-shadow: none;
+    background: transparent;
+}
+body.chat-ui #chat-input::part(textarea) {
+    padding: 2px 4px 6px 4px;
+}
+
+/* Bottom row inside the pill: "+" left, model label + stop right. */
+body.chat-ui .chat-composer-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 2px;
+}
+body.chat-ui #chat-plus-btn::part(base) {
+    border: 1px solid var(--sl-panel-border-color);
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+body.chat-ui #chat-plus-btn::part(base):hover {
+    background: var(--sl-color-neutral-100);
+}
+body.chat-ui .chat-composer-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+body.chat-ui #chat-model-label {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+    user-select: none;
+}
+body.chat-ui #chat-stop {
+    font-size: 1.3rem;
+    color: var(--sl-color-danger-600);
+}
+
+/* Save-to-Bee dialog: the search input's prefix (magnifying glass) icon sits flush
+   against the field's left edge by default — give it some breathing room. */
+body.chat-ui #chat-save-search::part(prefix) {
+    margin-left: 6px;
+}
+
+/* Full-size image lightbox: shrink the dialog's own padding/panel so the image reads as
+   the star of the popup, and cap the image to the viewport so a huge image never
+   overflows the screen. object-fit:contain preserves aspect ratio at any size. */
+body.chat-ui #chat-image-lightbox::part(panel) {
+    max-width: 92vw;
+}
+body.chat-ui #chat-image-lightbox::part(body) {
+    padding: 8px;
+    display: flex;
+    justify-content: center;
+}
+body.chat-ui #chat-lightbox-img {
+    display: block;
+    max-width: 88vw;
+    max-height: 85vh;
+    object-fit: contain;
+    border-radius: 6px;
+}
+
+/* Chat images (thumbnails) are clickable — hint it with a pointer cursor. */
+body.chat-ui .chat-image-thumb {
+    cursor: zoom-in;
+}

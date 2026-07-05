@@ -51,6 +51,11 @@ public sealed class ChatDbInitializer
             "ALTER TABLE chat_settings ADD COLUMN default_vision_model_id TEXT");
         await EnsureColumnAsync(conn, "chat_settings", "default_image_gen_model_id",
             "ALTER TABLE chat_settings ADD COLUMN default_image_gen_model_id TEXT");
+        // Homepage pinned chat: at most ONE conversation per user carries this flag (enforced
+        // at the application layer by ChatConversationRepository.SetHomePinnedAsync's single
+        // atomic UPDATE — chat.db has no index-based invariants, matching chat_settings).
+        await EnsureColumnAsync(conn, "chat_conversation", "is_home_pinned",
+            "ALTER TABLE chat_conversation ADD COLUMN is_home_pinned INTEGER NOT NULL DEFAULT 0");
 
         _logger.LogInformation("chat.db schema initialized");
     }
@@ -87,11 +92,12 @@ public sealed class ChatDbInitializer
     [
         """
         CREATE TABLE IF NOT EXISTS chat_conversation (
-            id           TEXT PRIMARY KEY,
-            user_id      INTEGER NOT NULL,
-            title        TEXT NOT NULL,
-            created_at   TEXT NOT NULL,
-            updated_at   TEXT NOT NULL
+            id              TEXT PRIMARY KEY,
+            user_id         INTEGER NOT NULL,
+            title           TEXT NOT NULL,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL,
+            is_home_pinned  INTEGER NOT NULL DEFAULT 0
         );
         """,
         """

@@ -684,10 +684,12 @@ $(function () {
     }
 
     // ===== SPA Navigation =====
+    // '/' and '/Tree' (the homepage) are deliberately NOT SPA-navigable anymore: the homepage
+    // now hosts the AI chat (chat.js + chat.css loaded via @section Scripts/HeadStyles, which
+    // render OUTSIDE #page-content and are never re-applied by a SPA swap). Full loads only —
+    // the exact same reason /AI has never been in this list.
     function isSpaUrl(pathname) {
-        return pathname === '/' ||
-               pathname === '/Tree' ||
-               pathname === '/Folder' ||
+        return pathname === '/Folder' ||
                pathname === '/Article/View' ||
                pathname === '/Search' ||
                pathname === '/Activity' ||
@@ -729,7 +731,7 @@ $(function () {
         // page's sidebar too. Strip all such classes on every swap; the destination re-adds its
         // own if (and only if) it's one of those pages (which never happens via SPA nav today,
         // since none of them are in isSpaUrl — but this keeps the invariant safe either way).
-        document.body.classList.remove('graph-page', 'ai-chat-page');
+        document.body.classList.remove('graph-page', 'ai-chat-page', 'home-chat-page', 'chat-ui');
         var pageContent = document.getElementById('page-content');
         if (!pageContent) return;
         initSlForms(pageContent);

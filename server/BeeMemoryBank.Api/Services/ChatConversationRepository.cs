@@ -9,7 +9,7 @@ namespace BeeMemoryBank.Api.Services;
 public sealed class ChatConversationRepository(ChatDbConnectionFactory factory) : ChatRepositoryBase(factory)
 {
     private const string Cols = @"id AS Id, user_id AS UserId, title AS Title,
-        created_at AS CreatedAt, updated_at AS UpdatedAt";
+        created_at AS CreatedAt, updated_at AS UpdatedAt, is_home_pinned AS IsHomePinned";
 
     /// <summary>User-scoped read (Phase 2). Returns null when the conversation does not exist OR is
     /// owned by a different user — so the conversation/message endpoints can enforce "a user must
@@ -67,5 +67,39 @@ public sealed class ChatConversationRepository(ChatDbConnectionFactory factory) 
             new { id });
         await conn.ExecuteAsync("DELETE FROM chat_message WHERE conversation_id = @id", new { id });
         await conn.ExecuteAsync("DELETE FROM chat_conversation WHERE id = @id", new { id });
+    }
+
+    /// <summary>The caller's home-pinned conversation id, if any. At most one row per user
+    /// ever has the flag (see SetHomePinnedAsync); LIMIT 1 is a belt-and-braces guard.</summary>
+    public async Task<Guid?> GetHomePinnedIdAsync(int userId)
+    {
+        using var conn = OpenConnection();
+        return await conn.QuerySingleOrDefaultAsync<Guid?>(
+            "SELECT id FROM chat_conversation WHERE user_id = @userId AND is_home_pinned = 1 LIMIT 1",
+            new { userId });
+    }
+
+    /// <summary>Pins one conversation to the user's homepage. ONE atomic UPDATE flips the flag
+    /// on for the target row and off for every other row of the same user — the application-
+    /// layer "at most one pin per user" invariant, with no window for two pins (chat.db has no
+    /// unique-index precedent to lean on; see ChatDbInitializer). The caller must have already
+    /// verified ownership of <paramref name="conversationId"/>.</summary>
+    public async Task SetHomePinnedAsync(int userId, Guid conversationId)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE chat_conversation
+              SET is_home_pinned = CASE WHEN id = @conversationId THEN 1 ELSE 0 END
+              WHERE user_id = @userId",
+            new { userId, conversationId });
+    }
+
+    /// <summary>Clears the user's home pin ("Close chat"). Never deletes any data.</summary>
+    public async Task ClearHomePinAsync(int userId)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE chat_conversation SET is_home_pinned = 0 WHERE user_id = @userId AND is_home_pinned = 1",
+            new { userId });
     }
 }

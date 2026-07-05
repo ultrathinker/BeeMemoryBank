@@ -422,8 +422,23 @@ public static class ChatEndpoints
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
-                try { await convoRepo.CreateAsync(convo); }
+                try
+                {
+                    await convoRepo.CreateAsync(convo);
+                }
                 catch (Exception ex) { logger.LogWarning(ex, "Failed to create chat conversation {Id}", conversationId); }
+
+                // Homepage chat: the FIRST send from /Tree pins the brand-new conversation to the
+                // caller's homepage (clearing any prior pin atomically). /AI never sends
+                // pinToHome, so its behavior is unchanged. Only a NEWLY created conversation can
+                // be pinned here — continuing an existing conversation (req.ConversationId set)
+                // never touches the pin. Separate try/catch from CreateAsync above so a pin
+                // failure is never misreported as a conversation-creation failure.
+                if (req.PinToHome)
+                {
+                    try { await convoRepo.SetHomePinnedAsync(userId, conversationId); }
+                    catch (Exception ex) { logger.LogWarning(ex, "Failed to pin conversation {Id} to home", conversationId); }
+                }
             }
 
             // ── build the working message list: system prompt + loaded history + new user turn ──
@@ -795,6 +810,35 @@ public static class ChatEndpoints
             var userId = identity.UserId.Value;
             var list = await convoRepo.ListByUserAsync(userId);
             return Results.Ok(list.Select(c => new ChatConversationResponse(c.Id, c.Title, c.CreatedAt, c.UpdatedAt)));
+        });
+
+        // ── Homepage pinned chat ─────────────────────────────────────────────────
+        // The pin is a flag on the user's OWN chat_conversation row (is_home_pinned); at most
+        // one per user (enforced in SetHomePinnedAsync). Read + clear only — the pin is SET
+        // exclusively by /stream's conversation-creation path (pinToHome), so no set endpoint
+        // is exposed. Per-user, no role gate (mirrors /conversations).
+
+        // The caller's home-pinned conversation id (null when none). Self-heals: a stale flag
+        // pointing at a row the user no longer owns cannot occur (the query is user-scoped),
+        // and a deleted conversation simply has no row, so null comes back naturally.
+        group.MapGet("/home-pinned", async (HttpContext ctx, ChatConversationRepository convoRepo) =>
+        {
+            var identity = CallerIdentity.Extract(ctx);
+            if (identity.UserId is null)
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 401);
+            var pinnedId = await convoRepo.GetHomePinnedIdAsync(identity.UserId.Value);
+            return Results.Ok(new HomePinnedResponse(pinnedId));
+        });
+
+        // "Close chat" / "New chat" on the homepage: clears the caller's pin. NEVER deletes
+        // the conversation — the row (and its messages) stays fully intact and listed in /AI.
+        group.MapDelete("/home-pinned", async (HttpContext ctx, ChatConversationRepository convoRepo) =>
+        {
+            var identity = CallerIdentity.Extract(ctx);
+            if (identity.UserId is null)
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 401);
+            await convoRepo.ClearHomePinAsync(identity.UserId.Value);
+            return Results.NoContent();
         });
 
         // Load a conversation's transcript (messages oldest-first). Ownership is re-checked by the

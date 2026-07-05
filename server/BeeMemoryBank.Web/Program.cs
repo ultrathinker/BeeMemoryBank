@@ -1094,6 +1094,20 @@ app.MapGet("/api-proxy/chat/conversations", async (ApiClient api) =>
     return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
 }).RequireAuthorization();
 
+// Homepage pinned chat — per-user, no role gate. GET returns {conversationId: guid|null};
+// DELETE clears the caller's pin (never deletes the conversation).
+app.MapGet("/api-proxy/chat/home-pinned", async (ApiClient api) =>
+{
+    var f = await api.ForwardGetAsync("chat/home-pinned");
+    return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
+}).RequireAuthorization();
+
+app.MapDelete("/api-proxy/chat/home-pinned", async (ApiClient api) =>
+{
+    var (ok, body, status) = await api.PostRawAsync("chat/home-pinned", "", method: "DELETE");
+    return Results.Content(body ?? "", "application/json", null, statusCode: status);
+}).RequireAuthorization();
+
 app.MapGet("/api-proxy/chat/conversations/{id:guid}/messages", async (Guid id, ApiClient api) =>
 {
     var f = await api.ForwardGetAsync($"chat/conversations/{id}/messages");
