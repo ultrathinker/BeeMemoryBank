@@ -150,7 +150,6 @@
             + '<div class="chat-bubble-body">' + contentHtml + '</div>';
 
         wrap.appendChild(bubble);
-        bubble._labelEl = bubble.firstElementChild; // the role-label div (firstElementChild)
         messagesEl.appendChild(wrap);
         messagesEl.scrollTop = messagesEl.scrollHeight;
         return bubble;

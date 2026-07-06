@@ -24,14 +24,19 @@
             /* The default .welcome top padding (80px) provided the breathing room before;
                keep a moderate page padding and let the block's own padding do the rest. */
             padding-top: 12px;
-            /* Override site.css's .main-content { overflow-y: auto } — with auto, re-expanding
-               #home-welcome (via the expand tab, see #home-welcome-expand-tab below) just makes
-               this flex column taller and lets IT scroll, so a user already scrolled to the
-               bottom of a long chat sees no visible change (the newly-revealed welcome block
-               scrolls in above, off-screen). Hidden here + min-height:0 + overflow-y:auto on
-               #chat-messages below makes #chat-messages the ONLY scrollable region, so it
-               actually SHRINKS to whatever space remains once the welcome block reclaims its
-               height — which is the whole point of the expand tab. */
+        }
+        /* Override site.css's .main-content { overflow-y: auto } — but ONLY in active-chat mode,
+           and ONLY here. With auto in that mode, re-expanding #home-welcome (via the expand tab,
+           see #home-welcome-expand-tab below) just makes this flex column taller and lets IT
+           scroll, so a user already scrolled to the bottom of a long chat sees no visible change
+           (the newly-revealed welcome block scrolls in above, off-screen). Hidden here +
+           min-height:0 + overflow-y:auto on #chat-messages below makes #chat-messages the ONLY
+           scrollable region, so it actually SHRINKS to reveal the welcome block — the whole point
+           of the expand tab. Scoped to .home-chat-active only: in idle (welcome) mode this MUST
+           stay auto (the base site.css rule), or the welcome block + hint + composer can get
+           clipped with no way to scroll to them on a short viewport (small window / landscape
+           phone) — #chat-messages has no overflow rule of its own in idle mode to compensate. */
+        body.home-chat-page .main-content.home-chat-active {
             overflow: hidden;
         }
 

@@ -219,6 +219,8 @@ public static class ChatEndpoints
         {
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+            if (req.ContextWindow is not null and <= 0)
+                return Results.Json(new ErrorResponse("Context window must be a positive number of tokens."), statusCode: 400);
 
             await repo.UpdateModelMetadataAsync(id, req.IsText, req.IsVision, req.IsImageGen, req.ContextWindow);
             return Results.Ok();
@@ -941,7 +943,14 @@ public static class ChatEndpoints
                 if (!string.IsNullOrEmpty(m.Model) && contextWindowByModelId.TryGetValue(m.Model, out var cw))
                     msgContextWindow = cw;
                 return new ChatMessageRowResponse(
-                    m.Id, m.Role, m.ContentText, m.ToolCallsJson, m.ToolCallId, m.Model, m.CreatedAt,
+                    m.Id, m.Role, m.ContentText, m.ToolCallsJson, m.ToolCallId, m.Model,
+                    // SQLite round-trips DateTime as Kind=Unspecified, which System.Text.Json
+                    // serializes WITHOUT a "Z" suffix — the client's `new Date(...)` then parses
+                    // it as LOCAL time instead of UTC, showing a wrong tooltip timestamp on
+                    // reload whenever the server's TZ differs from the browser's. The live SSE
+                    // `done` event uses DateTime.UtcNow (Kind=Utc, serializes with "Z") and is
+                    // unaffected — only this history path needs the explicit re-stamp.
+                    DateTime.SpecifyKind(m.CreatedAt, DateTimeKind.Utc),
                     m.TokensIn, m.TokensOut, m.ToolCallsCount, m.DurationMs,
                     ComputeContextFill(m.TokensIn, msgContextWindow), msgContextWindow,
                     byMessage.TryGetValue(m.Id, out var atts)
