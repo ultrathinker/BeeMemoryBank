@@ -37,6 +37,7 @@
     var plusMenu = document.getElementById('chat-plus-menu');
     var stopBtn = document.getElementById('chat-stop');
     var modelLabelEl = document.getElementById('chat-model-label');
+    var defaultsDialog = document.getElementById('chat-defaults-dialog'); // superadmin-only (server-rendered)
     var chatSidebar = document.getElementById('chat-sidebar');
     var chatCollapseBtn = document.getElementById('btn-chat-sidebar-collapse');
     var chatExpandTab = document.getElementById('chat-sidebar-expand-tab');
@@ -308,9 +309,109 @@
         fetch('/api-proxy/chat/settings/effective-text-model', { headers: { 'Accept': 'application/json' } })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (data) {
-                modelLabelEl.textContent = (data && data.label) ? data.label : '';
+                // Superadmin-only: when no text model resolves, show "Set model…" so the
+                // clickable label (the only entry point to fix it) never disappears.
+                var label = (data && data.label) ? data.label : '';
+                modelLabelEl.textContent = label ? label : (defaultsDialog ? 'Set model…' : '');
             })
-            .catch(function () { modelLabelEl.textContent = ''; });
+            .catch(function () { modelLabelEl.textContent = defaultsDialog ? 'Set model…' : ''; });
+    }
+
+    // ── Superadmin-only: "Default models" quick editor from the model label ────
+    // The dialog (#chat-defaults-dialog) is server-rendered ONLY for superadmins in
+    // _ChatUi.cshtml. When it's absent (regular user) this whole block is inert — the
+    // label keeps zero click affordance (no handler, no class, no cursor change).
+    // Editing here is GLOBAL and node-wide (same setting as Admin → AI / Chat
+    // "Default models"), NOT a per-conversation override.
+    if (defaultsDialog) {
+        // Make the composer's model label clickable (superadmin only).
+        if (modelLabelEl) {
+            modelLabelEl.classList.add('chat-model-label-clickable');
+            modelLabelEl.setAttribute('role', 'button');
+            modelLabelEl.setAttribute('tabindex', '0');
+            modelLabelEl.title = 'Text model — click to change the node-wide default models';
+            modelLabelEl.addEventListener('click', openDefaultsDialog);
+            modelLabelEl.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDefaultsDialog(); }
+            });
+        }
+
+        function openDefaultsDialog() {
+            // Fetch fresh every open — another superadmin may have changed things meanwhile.
+            Promise.all([
+                fetch('/api-proxy/chat/models/all', { headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { if (!r.ok) throw new Error('models'); return r.json(); }),
+                fetch('/api-proxy/chat/settings/defaults', { headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { if (!r.ok) throw new Error('defaults'); return r.json(); })
+            ]).then(function (res) {
+                var models = Array.isArray(res[0]) ? res[0] : [];
+                var defaults = res[1] || {};
+                populateDmSelect('chat-dm-text', models, function (m) { return m.isText; }, defaults.defaultTextModelId);
+                populateDmSelect('chat-dm-vision', models, function (m) { return m.isVision; }, defaults.defaultVisionModelId);
+                populateDmSelect('chat-dm-imagegen', models, function (m) { return m.isImageGen; }, defaults.defaultImageGenModelId);
+                var errEl = document.getElementById('chat-dm-error');
+                var saveBtn = document.getElementById('chat-dm-save');
+                if (models.length === 0) {
+                    errEl.textContent = 'No models in the catalog yet — add one under Admin → AI / Chat.';
+                    saveBtn.disabled = true;
+                } else {
+                    errEl.textContent = '';
+                    saveBtn.disabled = false;
+                }
+                defaultsDialog.show();
+            }).catch(function () {
+                // 403 (shouldn't happen — server-rendered gate) or network error: fail quietly.
+            });
+        }
+
+        function populateDmSelect(selectId, models, filterFn, selectedId) {
+            var sel = document.getElementById(selectId);
+            if (!sel) return;
+            sel.innerHTML = '';
+            var defOpt = document.createElement('sl-option');
+            defOpt.value = '';
+            defOpt.textContent = 'Default (oldest)';
+            sel.appendChild(defOpt);
+            models.filter(filterFn).forEach(function (m) {
+                var opt = document.createElement('sl-option');
+                opt.value = m.id;
+                opt.textContent = m.label || m.modelId;
+                sel.appendChild(opt);
+            });
+            // Shoelace timing gotcha (same workaround as Admin.cshtml populateDefaultSelect):
+            // right after appendChild the <sl-option> elements may not be upgraded yet, so an
+            // immediate .value assignment can silently select nothing. Defer to the next tick.
+            setTimeout(function () { sel.value = selectedId || ''; }, 0);
+        }
+
+        document.getElementById('chat-dm-cancel').addEventListener('click', function () {
+            defaultsDialog.hide();
+        });
+        document.getElementById('chat-dm-save').addEventListener('click', function () {
+            var body = {
+                defaultTextModelId: (document.getElementById('chat-dm-text').value || '') || null,
+                defaultVisionModelId: (document.getElementById('chat-dm-vision').value || '') || null,
+                defaultImageGenModelId: (document.getElementById('chat-dm-imagegen').value || '') || null
+            };
+            var saveBtn = document.getElementById('chat-dm-save');
+            saveBtn.loading = true;
+            fetch('/api-proxy/chat/settings/defaults', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(function (r) {
+                saveBtn.loading = false;
+                if (!r.ok) {
+                    document.getElementById('chat-dm-error').textContent = 'Save failed (' + r.status + ').';
+                    return;
+                }
+                defaultsDialog.hide();
+                loadModelLabel(); // re-fetch effective-text-model so the composer label reflects the new pin
+            }).catch(function () {
+                saveBtn.loading = false;
+                document.getElementById('chat-dm-error').textContent = 'Save failed — network error.';
+            });
+        });
     }
 
     function loadHistory() {

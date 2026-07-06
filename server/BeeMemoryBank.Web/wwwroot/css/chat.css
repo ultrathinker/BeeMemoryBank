@@ -118,6 +118,16 @@ body.chat-ui #chat-model-label {
     max-width: 260px;
     user-select: none;
 }
+/* Superadmin-only: chat.js adds this class when the default-models dialog is present.
+   Regular users never get it — their label stays a plain non-interactive span. */
+body.chat-ui #chat-model-label.chat-model-label-clickable {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+body.chat-ui #chat-model-label.chat-model-label-clickable:hover {
+    color: var(--text-primary);
+}
 body.chat-ui #chat-stop {
     font-size: 1.3rem;
     color: var(--sl-color-danger-600);

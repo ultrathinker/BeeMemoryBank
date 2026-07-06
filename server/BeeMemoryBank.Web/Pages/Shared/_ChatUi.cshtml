@@ -67,3 +67,35 @@
 <sl-dialog id="chat-image-lightbox" no-header style="--width: auto;">
     <img id="chat-lightbox-img" src="" alt="Full-size image" />
 </sl-dialog>
+
+@if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+{
+    <!-- Default-models quick editor (superadmin only; partial not rendered with this block
+         for regular users). Same three pinned-default dropdowns as Admin -> AI / Chat ->
+         "Default models", saving to the SAME global setting. This is a shortcut, not a
+         per-conversation override. -->
+    <sl-dialog id="chat-defaults-dialog" label="Default models (global)" style="--width:420px;">
+        <p class="text-muted" style="font-size:0.82rem;margin:0 0 12px 0;">
+            These are the node-wide defaults from Admin &rarr; AI / Chat. Saving changes them
+            permanently for <strong>every conversation and every user</strong> on this node
+            (applies from the next message).
+        </p>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default text model</label>
+                <sl-select id="chat-dm-text" size="small" placeholder="Default"></sl-select>
+            </div>
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default vision model</label>
+                <sl-select id="chat-dm-vision" size="small" placeholder="Default"></sl-select>
+            </div>
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default image-gen model</label>
+                <sl-select id="chat-dm-imagegen" size="small" placeholder="Default"></sl-select>
+            </div>
+        </div>
+        <div id="chat-dm-error" class="text-muted" style="font-size:0.8rem;color:var(--sl-color-danger-600);min-height:1rem;margin-top:8px;"></div>
+        <sl-button slot="footer" variant="default" id="chat-dm-cancel">Cancel</sl-button>
+        <sl-button slot="footer" variant="primary" id="chat-dm-save">Save for everyone</sl-button>
+    </sl-dialog>
+}
