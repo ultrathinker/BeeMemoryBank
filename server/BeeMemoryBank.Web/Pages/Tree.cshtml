@@ -51,6 +51,17 @@
             opacity: 1;
             transform: translateY(0);
             transition: max-height 0.22s ease, opacity 0.22s ease, transform 0.22s ease;
+            /* CRITICAL: without this, #home-welcome's own `overflow: hidden` gives it an
+               automatic flex min-height of 0 (per the flexbox spec — a non-"visible" overflow
+               drops the content-based minimum), making it just as "shrinkable to 0" as
+               #chat-messages (which has an explicit min-height:0 below). The two then compete
+               for space when re-expanding in active-chat mode, and the shrink algorithm can
+               squeeze THIS block down to a sliver instead of #chat-messages giving up its
+               space — exactly the "tiny empty gap, welcome/buttons never actually show" bug.
+               flex-shrink:0 removes it from that contest entirely: it always renders at its
+               natural height (still capped by max-height above), and #chat-messages is the
+               ONLY element the flex layout is allowed to shrink. */
+            flex-shrink: 0;
         }
         body.home-chat-page #home-welcome.home-welcome-collapsed {
             max-height: 0;
@@ -183,6 +194,9 @@
             padding: 2px 12px 0 12px;
             margin-bottom: 10px;
             box-sizing: border-box;
+            /* Keep this row out of the flex-shrink contest too (see #home-welcome's comment on
+               flex-shrink:0 above) — only #chat-messages should ever give up space. */
+            flex-shrink: 0;
         }
         body.home-chat-page #chat-new,
         body.home-chat-page #home-chat-close {
@@ -205,6 +219,12 @@
         }
         body.home-chat-page #home-chat-close:hover {
             color: var(--sl-color-danger-500);
+        }
+
+        /* Composer must also stay out of the flex-shrink contest (see #home-welcome's comment
+           above) — only #chat-messages should ever shrink. */
+        body.home-chat-page .chat-composer-outer {
+            flex-shrink: 0;
         }
 
         /* Explanatory blurb above the composer, idle mode only (it lives inside #home-welcome
