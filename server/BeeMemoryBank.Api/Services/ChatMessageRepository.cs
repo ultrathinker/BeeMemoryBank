@@ -10,7 +10,8 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory) : Cha
 {
     private const string Cols = @"id AS Id, conversation_id AS ConversationId, role AS Role,
         content_text AS ContentText, tool_calls_json AS ToolCallsJson, tool_call_id AS ToolCallId,
-        model AS Model, tokens_in AS TokensIn, tokens_out AS TokensOut, created_at AS CreatedAt";
+        model AS Model, tokens_in AS TokensIn, tokens_out AS TokensOut,
+        tool_calls_count AS ToolCallsCount, duration_ms AS DurationMs, created_at AS CreatedAt";
 
     public async Task<List<Models.ChatMessage>> ListByConversationAsync(Guid conversationId)
     {
@@ -26,9 +27,9 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory) : Cha
         await conn.ExecuteAsync(
             @"INSERT INTO chat_message
               (id, conversation_id, role, content_text, tool_calls_json, tool_call_id,
-               model, tokens_in, tokens_out, created_at)
+               model, tokens_in, tokens_out, tool_calls_count, duration_ms, created_at)
               VALUES (@Id, @ConversationId, @Role, @ContentText, @ToolCallsJson, @ToolCallId,
-                      @Model, @TokensIn, @TokensOut, @CreatedAt)",
+                      @Model, @TokensIn, @TokensOut, @ToolCallsCount, @DurationMs, @CreatedAt)",
             message);
     }
 }

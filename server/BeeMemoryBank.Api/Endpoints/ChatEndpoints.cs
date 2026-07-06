@@ -165,6 +165,8 @@ public static class ChatEndpoints
                 return Results.Json(new ErrorResponse("ModelId must not contain whitespace — use the exact OpenRouter slug (e.g. provider/model-name)."), statusCode: 400);
             if (string.IsNullOrWhiteSpace(req.Label))
                 return Results.Json(new ErrorResponse("Label is required"), statusCode: 400);
+            if (req.ContextWindow is not null and <= 0)
+                return Results.Json(new ErrorResponse("Context window must be a positive number of tokens."), statusCode: 400);
 
             var model = new ChatModelRow
             {
@@ -174,6 +176,7 @@ public static class ChatEndpoints
                 IsText = req.IsText,
                 IsVision = req.IsVision,
                 IsImageGen = req.IsImageGen,
+                ContextWindow = req.ContextWindow,
                 CreatedAt = DateTime.UtcNow
             };
             await repo.CreateAsync(model);
@@ -217,7 +220,7 @@ public static class ChatEndpoints
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
 
-            await repo.UpdateModelMetadataAsync(id, req.IsText, req.IsVision, req.IsImageGen);
+            await repo.UpdateModelMetadataAsync(id, req.IsText, req.IsVision, req.IsImageGen, req.ContextWindow);
             return Results.Ok();
         });
 
@@ -623,7 +626,8 @@ public static class ChatEndpoints
                     Keys: keys, Model: effectiveText.ModelId,
                     EffectiveImageGenModelId: effectiveImageGen?.ModelId ?? "",
                     ConversationId: conversationId,
-                    ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter));
+                    ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter,
+                    ContextWindow: effectiveText.ContextWindow));
             }
             finally
             {
@@ -827,7 +831,8 @@ public static class ChatEndpoints
                         Keys: keys, Model: resumeModel,
                         EffectiveImageGenModelId: effectiveImageGen?.ModelId ?? "",
                         ConversationId: conversationId,
-                        ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter));
+                        ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter,
+                        ContextWindow: effectiveText.ContextWindow));
                 }
                 catch (OperationCanceledException) { /* client gone */ }
                 finally
@@ -892,7 +897,7 @@ public static class ChatEndpoints
         // are NOT inlined here — the UI fetches them via GET /attachments/{id} (ownership-checked).
         group.MapGet("/conversations/{id:guid}/messages", async (Guid id, HttpContext ctx,
             ChatConversationRepository convoRepo, ChatMessageRepository msgRepo,
-            ChatAttachmentRepository attachRepo) =>
+            ChatAttachmentRepository attachRepo, ChatSettingsRepository repo) =>
         {
             var identity = CallerIdentity.Extract(ctx);
             if (identity.UserId is null)
@@ -917,11 +922,32 @@ public static class ChatEndpoints
             }
             catch { /* transcript still renders without attachments */ }
 
-            return Results.Ok(msgs.Select(m => new ChatMessageRowResponse(
-                m.Id, m.Role, m.ContentText, m.ToolCallsJson, m.ToolCallId, m.Model, m.CreatedAt,
-                byMessage.TryGetValue(m.Id, out var atts)
-                    ? atts.Select(a => new ChatAttachmentRef(a.Id, a.Kind, a.Mime)).ToList()
-                    : null)));
+            // Build a ModelId → ContextWindow map (first wins on duplicates) so each message can
+            // report its context-fill %. Loaded once for the whole transcript.
+            var contextWindowByModelId = new Dictionary<string, int?>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var mdl in await repo.ListAllModelsAsync())
+                {
+                    if (!string.IsNullOrEmpty(mdl.ModelId) && !contextWindowByModelId.ContainsKey(mdl.ModelId))
+                        contextWindowByModelId[mdl.ModelId] = mdl.ContextWindow;
+                }
+            }
+            catch { /* metrics are best-effort — transcript still renders without them */ }
+
+            return Results.Ok(msgs.Select(m =>
+            {
+                int? msgContextWindow = null;
+                if (!string.IsNullOrEmpty(m.Model) && contextWindowByModelId.TryGetValue(m.Model, out var cw))
+                    msgContextWindow = cw;
+                return new ChatMessageRowResponse(
+                    m.Id, m.Role, m.ContentText, m.ToolCallsJson, m.ToolCallId, m.Model, m.CreatedAt,
+                    m.TokensIn, m.TokensOut, m.ToolCallsCount, m.DurationMs,
+                    ComputeContextFill(m.TokensIn, msgContextWindow), msgContextWindow,
+                    byMessage.TryGetValue(m.Id, out var atts)
+                        ? atts.Select(a => new ChatAttachmentRef(a.Id, a.Kind, a.Mime)).ToList()
+                        : null);
+            }));
         });
 
         // ── Phase 5: serve a chat attachment's bytes (ownership-checked) ────────────────────
@@ -1136,7 +1162,7 @@ public static class ChatEndpoints
         => apiKey.Length > 12 ? string.Concat(apiKey.AsSpan(0, 12), "…") : apiKey;
 
     private static ChatModelResponse ToModelResponse(ChatModelRow m) => new(
-        m.Id, m.ModelId, m.Label, m.IsText, m.IsVision, m.IsImageGen, m.CreatedAt);
+        m.Id, m.ModelId, m.Label, m.IsText, m.IsVision, m.IsImageGen, m.ContextWindow, m.CreatedAt);
 
     // ── Phase 5 helpers (vision + image generation) ────────────────────────────
 
@@ -1654,7 +1680,17 @@ public static class ChatEndpoints
         List<ChatToolMessage> ConvoMessages,
         CancellationToken Ct,
         Func<string, object, Task> Sse,
-        ChatDestructiveOpCounter DestructiveCounter);
+        ChatDestructiveOpCounter DestructiveCounter,
+        // The effective text model's context-window size (tokens), for the context-fill % metric.
+        // Null when unset — ComputeContextFill returns null in that case.
+        int? ContextWindow);
+
+    /// <summary>Computes the context-fill percentage (0–100) from prompt tokens vs the model's
+    /// context window. Returns null when either value is missing or the window is invalid.</summary>
+    private static int? ComputeContextFill(int? promptTokens, int? contextWindow)
+        => promptTokens is int p && contextWindow is int w && w > 0
+            ? Math.Clamp((int)Math.Round(p * 100.0 / w), 0, 100)
+            : null;
 
     /// <summary>
     /// The streaming tool-call loop, shared by /stream and /confirm. Runs until ONE of:
@@ -1673,6 +1709,13 @@ public static class ChatEndpoints
     private static async Task RunToolLoopAsync(ChatLoopContext lc)
     {
         const int maxIterations = 25;
+        // Per-turn metrics (persisted only on the final assistant message): wall-clock duration,
+        // prompt tokens of the last reporting iteration (≈ context size at the final answer),
+        // summed completion tokens across iterations, and how many tool calls were processed.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int? promptTokensLast = null;
+        int? completionTokensTotal = null;
+        int toolCallsCount = 0;
         try
         {
             for (int iteration = 0; iteration < maxIterations; iteration++)
@@ -1684,6 +1727,12 @@ public static class ChatEndpoints
                 // recorded on that key and retried with the next. A failure AFTER a delta has reached
                 // the client propagates here (no splicing) and is surfaced as an event:error below.
                 var turn = await StreamWithFailoverAsync(lc);
+
+                // Accumulate per-iteration token usage. promptTokensLast ends up as the prompt size
+                // of the last iteration that reported usage (the context size at the final answer);
+                // completionTokensTotal sums output across iterations.
+                if (turn.PromptTokens is int pt) promptTokensLast = pt;
+                if (turn.CompletionTokens is int ctok) completionTokensTotal = (completionTokensTotal ?? 0) + ctok;
 
                 // No tool calls → terminal answer. Persist + emit done.
                 if (turn.ToolCalls is null || turn.ToolCalls.Count == 0)
@@ -1700,13 +1749,26 @@ public static class ChatEndpoints
                             Role = "assistant",
                             ContentText = finalContent,
                             Model = finalModel,
+                            TokensIn = promptTokensLast,
+                            TokensOut = completionTokensTotal,
+                            ToolCallsCount = toolCallsCount,
+                            DurationMs = sw.ElapsedMilliseconds,
                             CreatedAt = DateTime.UtcNow
                         });
                         await lc.ConvoRepo.TouchAsync(lc.ConversationId);
                     }
                     catch (Exception ex) { lc.Logger.LogWarning(ex, "Failed to persist assistant message"); }
 
-                    await lc.Sse("done", new { content = finalContent, model = finalModel, conversationId = lc.ConversationId, messageId });
+                    await lc.Sse("done", new {
+                        content = finalContent, model = finalModel, conversationId = lc.ConversationId, messageId,
+                        promptTokens = promptTokensLast,
+                        completionTokens = completionTokensTotal,
+                        toolCallsCount,
+                        durationMs = sw.ElapsedMilliseconds,
+                        contextFillPercent = ComputeContextFill(promptTokensLast, lc.ContextWindow),
+                        contextWindow = lc.ContextWindow,
+                        createdAt = DateTime.UtcNow
+                    });
                     return;
                 }
 
@@ -1747,6 +1809,8 @@ public static class ChatEndpoints
                 // re-derive (the model re-issues them if still needed) — simplest correct behavior.
                 foreach (var tc in turn.ToolCalls)
                 {
+                    toolCallsCount++; // counts every processed call: reads, writes (incl. auto-approved),
+                                      // generate_image, malformed-args ones — all of them.
                     await lc.Sse("tool_call_start", new { tool = tc.Name, callId = tc.Id, label = ToolLabel(tc.Name) });
 
                     JsonElement args;
@@ -1819,12 +1883,25 @@ public static class ChatEndpoints
                     Role = "assistant",
                     ContentText = capContent,
                     Model = lc.Model,
+                    TokensIn = promptTokensLast,
+                    TokensOut = completionTokensTotal,
+                    ToolCallsCount = toolCallsCount,
+                    DurationMs = sw.ElapsedMilliseconds,
                     CreatedAt = DateTime.UtcNow
                 });
                 await lc.ConvoRepo.TouchAsync(lc.ConversationId);
             }
             catch (Exception ex) { lc.Logger.LogWarning(ex, "Failed to persist cap message"); }
-            await lc.Sse("done", new { content = capContent, model = lc.Model, conversationId = lc.ConversationId, messageId = capMessageId });
+            await lc.Sse("done", new {
+                content = capContent, model = lc.Model, conversationId = lc.ConversationId, messageId = capMessageId,
+                promptTokens = promptTokensLast,
+                completionTokens = completionTokensTotal,
+                toolCallsCount,
+                durationMs = sw.ElapsedMilliseconds,
+                contextFillPercent = ComputeContextFill(promptTokensLast, lc.ContextWindow),
+                contextWindow = lc.ContextWindow,
+                createdAt = DateTime.UtcNow
+            });
         }
         catch (OperationCanceledException)
         {

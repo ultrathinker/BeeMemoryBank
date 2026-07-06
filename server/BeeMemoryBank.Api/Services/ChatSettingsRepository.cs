@@ -144,7 +144,8 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
     // grid and every dropdown that lists models present the same order.
 
     private const string ModelCols = @"id AS Id, model_id AS ModelId, label AS Label,
-        is_text AS IsText, is_vision AS IsVision, is_image_gen AS IsImageGen, created_at AS CreatedAt";
+        is_text AS IsText, is_vision AS IsVision, is_image_gen AS IsImageGen,
+        context_window AS ContextWindow, created_at AS CreatedAt";
 
     /// <summary>All models for the picker / catalogue, oldest-first. Since "a model existing means
     /// it's usable", this returns every row (the old enabled filter is gone).</summary>
@@ -206,18 +207,21 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
             $"SELECT {ModelCols} FROM chat_model WHERE {col} = 1 ORDER BY created_at ASC LIMIT 1");
     }
 
-    /// <summary>Updates a model's three capability booleans (admin catalogue edit dialog).
-    /// Each is optional (null = unchanged).</summary>
-    public async Task UpdateModelMetadataAsync(Guid id, bool? isText, bool? isVision, bool? isImageGen)
+    /// <summary>Updates a model's three capability booleans + context window (admin catalogue edit
+    /// dialog). The booleans are optional (null = unchanged via COALESCE). <paramref name="contextWindow"/>
+    /// is set UNCONDITIONALLY (null clears it) — unlike the COALESCE booleans, null must be able to
+    /// clear the value. The only PATCH caller always sends the field, so "omitted = cleared" is fine.</summary>
+    public async Task UpdateModelMetadataAsync(Guid id, bool? isText, bool? isVision, bool? isImageGen, int? contextWindow)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"UPDATE chat_model
                  SET is_text    = COALESCE(@isText, is_text),
                      is_vision  = COALESCE(@isVision, is_vision),
-                     is_image_gen = COALESCE(@isImageGen, is_image_gen)
+                     is_image_gen = COALESCE(@isImageGen, is_image_gen),
+                     context_window = @contextWindow
                WHERE id = @id",
-            new { id, isText, isVision, isImageGen });
+            new { id, isText, isVision, isImageGen, contextWindow });
     }
 
     public async Task CreateAsync(Models.ChatModelRow model)
@@ -225,8 +229,8 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
         using var conn = OpenConnection();
         // 'text' is a placeholder for the legacy NOT NULL category column (unused by app code).
         await conn.ExecuteAsync(
-            @"INSERT INTO chat_model (id, model_id, label, category, is_text, is_vision, is_image_gen, created_at)
-              VALUES (@Id, @ModelId, @Label, 'text', @IsText, @IsVision, @IsImageGen, @CreatedAt)",
+            @"INSERT INTO chat_model (id, model_id, label, category, is_text, is_vision, is_image_gen, context_window, created_at)
+              VALUES (@Id, @ModelId, @Label, 'text', @IsText, @IsVision, @IsImageGen, @ContextWindow, @CreatedAt)",
             model);
     }
 

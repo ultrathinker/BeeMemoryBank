@@ -24,6 +24,15 @@
             /* The default .welcome top padding (80px) provided the breathing room before;
                keep a moderate page padding and let the block's own padding do the rest. */
             padding-top: 12px;
+            /* Override site.css's .main-content { overflow-y: auto } — with auto, re-expanding
+               #home-welcome (via the expand tab, see #home-welcome-expand-tab below) just makes
+               this flex column taller and lets IT scroll, so a user already scrolled to the
+               bottom of a long chat sees no visible change (the newly-revealed welcome block
+               scrolls in above, off-screen). Hidden here + min-height:0 + overflow-y:auto on
+               #chat-messages below makes #chat-messages the ONLY scrollable region, so it
+               actually SHRINKS to whatever space remains once the welcome block reclaims its
+               height — which is the whole point of the expand tab. */
+            overflow: hidden;
         }
 
         /* Collapsible wrapper. max-height must comfortably exceed the block's natural height
@@ -145,6 +154,13 @@
         }
         body.home-chat-page .main-content.home-chat-active #chat-messages {
             flex: 1 1 auto;
+            /* min-height:0 overrides the flex default (min-height:auto, i.e. "never shrink
+               below content size"), which is what let this element ignore the space the
+               welcome block reclaims above it. overflow-y:auto makes it the scrollable region
+               (now that .main-content itself is overflow:hidden, see above) so long histories
+               still scroll internally instead of pushing the composer off-screen. */
+            min-height: 0;
+            overflow-y: auto;
         }
 
         /* Chat action row (New chat / Close chat) above the composer. Both are hidden in idle

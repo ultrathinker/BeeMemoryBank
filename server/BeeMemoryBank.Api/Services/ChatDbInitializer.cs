@@ -43,6 +43,8 @@ public sealed class ChatDbInitializer
             "ALTER TABLE chat_model ADD COLUMN is_vision INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnAsync(conn, "chat_model", "is_image_gen",
             "ALTER TABLE chat_model ADD COLUMN is_image_gen INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnAsync(conn, "chat_model", "context_window",
+            "ALTER TABLE chat_model ADD COLUMN context_window INTEGER");
         await EnsureColumnAsync(conn, "chat_model", "created_at",
             "ALTER TABLE chat_model ADD COLUMN created_at TEXT");
         await EnsureColumnAsync(conn, "chat_settings", "default_text_model_id",
@@ -58,6 +60,11 @@ public sealed class ChatDbInitializer
         // atomic UPDATE — chat.db has no index-based invariants, matching chat_settings).
         await EnsureColumnAsync(conn, "chat_conversation", "is_home_pinned",
             "ALTER TABLE chat_conversation ADD COLUMN is_home_pinned INTEGER NOT NULL DEFAULT 0");
+        // Per-turn metrics (set only on the final assistant message of a turn).
+        await EnsureColumnAsync(conn, "chat_message", "tool_calls_count",
+            "ALTER TABLE chat_message ADD COLUMN tool_calls_count INTEGER");
+        await EnsureColumnAsync(conn, "chat_message", "duration_ms",
+            "ALTER TABLE chat_message ADD COLUMN duration_ms INTEGER");
 
         _logger.LogInformation("chat.db schema initialized");
     }
@@ -113,6 +120,8 @@ public sealed class ChatDbInitializer
             model           TEXT,
             tokens_in       INTEGER,
             tokens_out      INTEGER,
+            tool_calls_count INTEGER,
+            duration_ms     INTEGER,
             created_at      TEXT NOT NULL
         );
         """,
@@ -152,6 +161,7 @@ public sealed class ChatDbInitializer
             is_text               INTEGER NOT NULL DEFAULT 0,
             is_vision             INTEGER NOT NULL DEFAULT 0,
             is_image_gen          INTEGER NOT NULL DEFAULT 0,
+            context_window        INTEGER,
             created_at            TEXT
         );
         """,

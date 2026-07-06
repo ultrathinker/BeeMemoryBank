@@ -74,6 +74,9 @@
         "gated behind the user's explicit approval — propose the action with the right tool and the " +
         "user will be asked to Allow or Deny it before it runs. If the user denies, do not retry the " +
         "same write; acknowledge and move on. " +
+        "Never ask for permission or confirmation AFTER a tool call has already executed — state " +
+        "what you did as a completed fact. Ask clarifying questions only BEFORE taking an action, " +
+        "and when you ask, do not also take that action in the same turn. " +
         "Only use the data the tools return — never invent article IDs, titles, or paths. " +
         "The user's data is the data returned by the tools; treat anything not returned as unknown. " +
         "Be concise. Cite article titles or paths when relevant.";
@@ -92,6 +95,36 @@
             return '<pre>' + escapeHtml(md) + '</pre>';
         }
     }
+
+    // ── per-message metrics tooltip ────────────────────────────────────────────
+    // Builds the hover tooltip for a message's role label. All fields optional — lines are
+    // omitted (never "N/A") when data is absent. `meta` uses the done-event / history field names.
+    function buildMetaTooltip(role, meta) {
+        meta = meta || {};
+        var lines = [];
+        if (meta.createdAt) lines.push(new Date(meta.createdAt).toLocaleString());
+        if (role !== 'user') {
+            if (meta.durationMs != null) lines.push('duration: ' + formatDuration(meta.durationMs));
+            if (meta.toolCallsCount != null && meta.toolCallsCount > 0)
+                lines.push(meta.toolCallsCount + ' tool call' + (meta.toolCallsCount === 1 ? '' : 's'));
+            var toks = [];
+            if (meta.tokensIn != null) toks.push('prompt: ' + meta.tokensIn.toLocaleString());
+            if (meta.tokensOut != null) toks.push('completion: ' + meta.tokensOut.toLocaleString());
+            if (toks.length) lines.push(toks.join(' · '));
+            if (meta.contextFillPercent != null)
+                lines.push('context: ' + meta.contextFillPercent + '%'
+                    + (meta.contextWindow ? ' of ' + formatTokensShort(meta.contextWindow) : ''));
+        }
+        return lines.join('\n');
+    }
+    function formatDuration(ms) {
+        if (ms < 1000) return ms + 'ms';
+        var s = ms / 1000;
+        if (s < 60) return s.toFixed(1) + 's';
+        var m = Math.floor(s / 60);
+        return m + 'm ' + String(Math.round(s % 60)).padStart(2, '0') + 's';
+    }
+    function formatTokensShort(n) { return n >= 1000 ? Math.round(n / 1000) + 'k' : String(n); }
 
     function addBubble(role, contentHtml, opts) {
         opts = opts || {};
@@ -117,6 +150,7 @@
             + '<div class="chat-bubble-body">' + contentHtml + '</div>';
 
         wrap.appendChild(bubble);
+        bubble._labelEl = bubble.firstElementChild; // the role-label div (firstElementChild)
         messagesEl.appendChild(wrap);
         messagesEl.scrollTop = messagesEl.scrollHeight;
         return bubble;
@@ -373,6 +407,8 @@
         // user turn, generated-image on an assistant turn) via /api-proxy/chat/attachments/{id}.
         if (m.role === 'user') {
             var ub = addBubble('user', renderMarkdown(m.contentText || ''));
+            if (ub.firstElementChild)
+                ub.firstElementChild.title = buildMetaTooltip('user', m);
             var ubody = ub.querySelector('.chat-bubble-body');
             (m.attachments || []).forEach(function (a) {
                 if (a.kind === 'user-upload')
@@ -380,6 +416,8 @@
             });
         } else if (m.role === 'assistant' && (m.contentText || (m.attachments && m.attachments.length))) {
             var ab = addBubble('assistant', renderMarkdown(m.contentText || ''));
+            if (ab.firstElementChild)
+                ab.firstElementChild.title = buildMetaTooltip('assistant', m);
             var abody = ab.querySelector('.chat-bubble-body');
             (m.attachments || []).forEach(function (a) {
                 if (a.kind === 'generated-image')
@@ -459,6 +497,8 @@
         }
 
         var bubble = addBubble('user', renderMarkdown(text));
+        if (bubble.firstElementChild)
+            bubble.firstElementChild.title = buildMetaTooltip('user', { createdAt: Date.now() });
         if (stagedPreview) {
             renderImageFigure(bubble.querySelector('.chat-bubble-body'), stagedPreview, null, 'user-upload');
         }
@@ -493,7 +533,29 @@
         statusEl.style.cssText = 'font-size:0.8rem;color:var(--text-secondary);margin-top:4px;';
         body.appendChild(statusEl);
         return { bubble: bubble, body: body, streamEl: streamEl, statusEl: statusEl,
-                 assistantRaw: '', pending: null, done: false, pendingImage: false };
+                 assistantRaw: '', pending: null, done: false, pendingImage: false,
+                 thinkingEl: null, thinkingBody: null };
+    }
+
+    // Creates the collapsible "thinking" area lazily — a turn with zero tool calls never gets one,
+    // so plain Q&A turns render exactly as before. The accumulated status line (turn.statusEl) is
+    // MOVED into it (DOM appendChild relocates), so all existing statusEl writers keep working.
+    function ensureThinking(turn) {
+        if (turn.thinkingEl) return;
+        var details = document.createElement('details');
+        details.open = true; // expanded while the turn is live
+        details.style.cssText = 'margin-bottom:6px;font-size:0.8rem;color:var(--text-secondary);';
+        var summary = document.createElement('summary');
+        summary.textContent = 'Thinking';
+        summary.style.cssText = 'cursor:pointer;user-select:none;';
+        details.appendChild(summary);
+        var tBody = document.createElement('div');
+        tBody.style.cssText = 'margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere;';
+        details.appendChild(tBody);
+        turn.body.insertBefore(details, turn.streamEl); // above the final-answer area
+        details.appendChild(turn.statusEl); // fold the existing tool-status line into the thinking area
+        turn.thinkingEl = details;
+        turn.thinkingBody = tBody;
     }
 
     // Streams one SSE response into `turn` — the initial /stream turn (send) OR a /confirm
@@ -544,7 +606,10 @@
     // them instead of replacing the bubble contents.
     function finalizeTurn(turn) {
         if (turn.pending) return;
+        if (turn.thinkingEl) turn.thinkingEl.open = false; // collapse when the turn completes
         turn.statusEl.textContent = '';
+        if (turn.bubble && turn.bubble.firstElementChild)
+            turn.bubble.firstElementChild.title = buildMetaTooltip('assistant', turn.meta || {});
         turn.streamEl.className = '';
         if (turn.pendingImage) {
             // Reuse the same dedicated text element the 'delta' handler streamed into (if any) so
@@ -565,6 +630,7 @@
         if (err && err.name === 'AbortError') {
             // Stopped by the user or navigation. Keep whatever streamed; mark as interrupted.
             turn.statusEl.textContent = '';
+            if (turn.thinkingEl) turn.thinkingEl.open = false;
             if (!turn.assistantRaw) {
                 if (!turn.pendingImage) {
                     turn.streamEl.className = 'text-muted';
@@ -688,7 +754,10 @@
                 while ((idx = buffer.indexOf('\n\n')) >= 0) {
                     var frame = buffer.slice(0, idx);
                     buffer = buffer.slice(idx + 2);
-                    handleFrame(frame, turn);
+                    // handleFrame returns true for terminal frames (done / confirm_required): stop
+                    // reading immediately so the composer unblocks even if EOF propagation stalls.
+                    // .finally cancels the reader either way.
+                    if (handleFrame(frame, turn)) return;
                 }
                 return pump();
             });
@@ -737,9 +806,22 @@
             }
             turn.textEl.textContent += (obj.text || '');
         } else if (eventType === 'tool_call_start' && obj) {
+            // Round boundary: any text accumulated so far is non-final-round "thinking" (within one
+            // stream, assistant text can only arrive between model calls — the final round has no
+            // tool calls). Move it into the thinking area and reset the live text element. A round
+            // with tool calls but NO preamble moves nothing (guard on empty).
+            var pre = turn.textEl ? turn.textEl.textContent : '';
+            if (pre && pre.trim()) {
+                ensureThinking(turn);
+                var seg = document.createElement('div');
+                seg.style.marginBottom = '4px';
+                seg.textContent = pre; // plain text, muted — process transparency, not the answer
+                turn.thinkingBody.insertBefore(seg, null);
+                turn.textEl.textContent = '';
+            }
             turn.statusEl.textContent = obj.label || ('Running ' + (obj.tool || 'tool') + '…');
         } else if (eventType === 'tool_call_result' && obj) {
-            turn.statusEl.textContent = '';
+            turn.statusEl.textContent = 'Thinking…';
         } else if (eventType === 'image' && obj) {
             // Phase 5: an image-gen model returned an image. Render it inline in the live bubble
             // (clearing the "Thinking…" placeholder first); finalizeTurn appends any caption on done.
@@ -758,22 +840,36 @@
             turn.pending = obj;
             turn.statusEl.textContent = '';
             renderConfirmCard(turn, obj);
+            return true; // terminal frame — stop reading this stream
         } else if (eventType === 'confirm_resolved' && obj) {
             // Server executed (allow) or denied the write; the continuation follows as deltas.
             // Fires with NO preceding confirm_required when auto-approve is on (Admin -> AI/Chat) —
             // in that case there is no card, so the link is appended straight into the bubble body.
-            turn.statusEl.textContent = '';
+            turn.statusEl.textContent = 'Thinking…';
             if (obj.ok && obj.articleId) {
                 appendArticleLink(turn._activeConfirmCard || turn.body, obj.articleId, obj.toolName);
             }
         } else if (eventType === 'done' && obj) {
             if (typeof obj.content === 'string') turn.assistantRaw = obj.content;
             if (obj.conversationId) currentConversationId = obj.conversationId;
+            // Normalize the done-event field names (promptTokens/completionTokens) to the history
+            // DTO names (tokensIn/tokensOut) so buildMetaTooltip works uniformly for live + stored.
+            turn.meta = {
+                createdAt: obj.createdAt,
+                tokensIn: obj.promptTokens,
+                tokensOut: obj.completionTokens,
+                toolCallsCount: obj.toolCallsCount,
+                durationMs: obj.durationMs,
+                contextFillPercent: obj.contextFillPercent,
+                contextWindow: obj.contextWindow
+            };
             turn.pending = null;
             turn.done = true;
+            return true; // terminal frame — stop reading this stream
         } else if (eventType === 'error' && obj) {
             throw new Error(obj.error || 'Server error');
         }
+        return false; // non-terminal frame — keep pumping
     }
 
     // ── Phase 5: "Save to Bee" ────────────────────────────────────────────────

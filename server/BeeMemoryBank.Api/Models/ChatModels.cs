@@ -63,6 +63,9 @@ public class ChatModelRow
     public bool IsText { get; set; }
     public bool IsVision { get; set; }
     public bool IsImageGen { get; set; }
+    /// <summary>Optional context-window size in tokens (e.g. 128000). Null = unset. Used for the
+    /// per-message context-fill percentage metric.</summary>
+    public int? ContextWindow { get; set; }
     public DateTime? CreatedAt { get; set; }
 }
 
@@ -73,6 +76,7 @@ public record ChatModelResponse(
     bool IsText,
     bool IsVision,
     bool IsImageGen,
+    int? ContextWindow,
     DateTime? CreatedAt);
 
 public record CreateChatModelRequest(
@@ -80,13 +84,15 @@ public record CreateChatModelRequest(
     string Label,
     bool IsText = true,
     bool IsVision = false,
-    bool IsImageGen = false);
+    bool IsImageGen = false,
+    int? ContextWindow = null);
 
-/// <summary>Updates a model's three capability booleans (admin catalogue).</summary>
+/// <summary>Updates a model's three capability booleans + context window (admin catalogue).</summary>
 public record UpdateChatModelRequest(
     [property: JsonPropertyName("isText")] bool? IsText,
     [property: JsonPropertyName("isVision")] bool? IsVision,
-    [property: JsonPropertyName("isImageGen")] bool? IsImageGen);
+    [property: JsonPropertyName("isImageGen")] bool? IsImageGen,
+    [property: JsonPropertyName("contextWindow")] int? ContextWindow);
 
 /// <summary>Toggles the auto-approve-writes setting (skips the human confirm gate).</summary>
 public record UpdateAutoApproveRequest(
@@ -127,6 +133,10 @@ public class ChatMessage
     public string? Model { get; set; }
     public int? TokensIn { get; set; }
     public int? TokensOut { get; set; }
+    // Per-turn metrics, set ONLY on the final assistant message of a turn (never on intermediate
+    // tool-call rows): how many tool calls the loop processed, and the wall-clock duration.
+    public int? ToolCallsCount { get; set; }
+    public long? DurationMs { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -225,6 +235,12 @@ public record ChatMessageRowResponse(
     [property: JsonPropertyName("toolCallId")] string? ToolCallId,
     [property: JsonPropertyName("model")] string? Model,
     [property: JsonPropertyName("createdAt")] DateTime CreatedAt,
+    [property: JsonPropertyName("tokensIn")] int? TokensIn,
+    [property: JsonPropertyName("tokensOut")] int? TokensOut,
+    [property: JsonPropertyName("toolCallsCount")] int? ToolCallsCount,
+    [property: JsonPropertyName("durationMs")] long? DurationMs,
+    [property: JsonPropertyName("contextFillPercent")] int? ContextFillPercent,
+    [property: JsonPropertyName("contextWindow")] int? ContextWindow,
     [property: JsonPropertyName("attachments")] List<ChatAttachmentRef>? Attachments);
 
 /// <summary>Rename request body for PATCH /api/chat/conversations/{id}.</summary>

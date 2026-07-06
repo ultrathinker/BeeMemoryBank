@@ -60,11 +60,16 @@ public sealed class ChatToolFunction
 }
 
 /// <summary>The assistant turn returned by a tool-aware completion. ToolCalls is null
-/// when the model produced a plain text answer (loop terminator).</summary>
+/// when the model produced a plain text answer (loop terminator). PromptTokens /
+/// CompletionTokens are nullable: the streaming path requests usage via
+/// stream_options.include_usage, but a provider/route can still omit it (fields stay null,
+/// never crash). Trailing optional params keep existing construction sites compiling.</summary>
 public sealed record ToolCompletionResult(
     string? Content,
     List<ResolvedToolCall>? ToolCalls,
-    string Model);
+    string Model,
+    int? PromptTokens = null,
+    int? CompletionTokens = null);
 
 /// <summary>A tool call resolved from the model response (arguments kept as the raw
 /// JSON string the model emitted, plus a parsed view for dispatch).</summary>

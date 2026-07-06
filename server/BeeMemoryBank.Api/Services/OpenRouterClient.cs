@@ -154,7 +154,9 @@ public sealed class OpenRouterClient
         return new ToolCompletionResult(
             Content: msg?.Content,
             ToolCalls: toolCalls,
-            Model: doc.Model ?? model);
+            Model: doc.Model ?? model,
+            PromptTokens: doc.Usage?.PromptTokens,
+            CompletionTokens: doc.Usage?.CompletionTokens);
     }
 
     /// <summary>
@@ -196,7 +198,10 @@ public sealed class OpenRouterClient
             Messages = ToWire(messages),
             Tools = tools is { Count: > 0 } ? tools : null,
             ToolChoice = tools is { Count: > 0 } ? "auto" : null,
-            Stream = true
+            Stream = true,
+            // Ask OpenRouter for a final usage chunk (OpenAI-compatible). Null-safe at the consumer
+            // side — a provider/route can still omit it.
+            StreamOptions = new StreamOptionsPayload { IncludeUsage = true }
         };
 
         using var req = new HttpRequestMessage(HttpMethod.Post, CompletionUrl);
@@ -226,6 +231,9 @@ public sealed class OpenRouterClient
         // deltas carry argument fragments. Accumulate per-index, then materialize at [DONE].
         var toolCallsByIndex = new SortedDictionary<int, AccumulatedToolCall>();
         string? resolvedModel = null;
+        // Captured from the final usage chunk (stream_options.include_usage). Null until/if it arrives.
+        int? promptTokens = null;
+        int? completionTokens = null;
 
         while (true)
         {
@@ -255,6 +263,14 @@ public sealed class OpenRouterClient
             if (chunk is null) continue;
             if (!string.IsNullOrEmpty(chunk.Model))
                 resolvedModel = chunk.Model;
+
+            // The usage chunk arrives with an empty/absent choices array (the choices guard below
+            // would otherwise skip it), so capture usage FIRST. Later usage chunks (if any) overwrite.
+            if (chunk.Usage is not null)
+            {
+                promptTokens = chunk.Usage.PromptTokens;
+                completionTokens = chunk.Usage.CompletionTokens;
+            }
 
             if (chunk.Choices is null || chunk.Choices.Count == 0)
                 continue;
@@ -326,7 +342,9 @@ public sealed class OpenRouterClient
         return new ToolCompletionResult(
             Content: contentBuilder.ToString(),
             ToolCalls: toolCalls,
-            Model: resolvedModel ?? model);
+            Model: resolvedModel ?? model,
+            PromptTokens: promptTokens,
+            CompletionTokens: completionTokens);
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
@@ -361,6 +379,18 @@ public sealed class OpenRouterClient
         [JsonPropertyName("tools")] public IReadOnlyList<ChatToolDefinition>? Tools { get; init; }
         [JsonPropertyName("tool_choice")] public string? ToolChoice { get; init; }
         [JsonPropertyName("stream")] public bool Stream { get; init; }
+        // stream_options.include_usage is set ONLY by StreamWithToolsAsync. JsonOpts ignores nulls,
+        // so CompleteWithToolsAsync / GenerateImageAsync (Stream=false) keep a byte-identical wire
+        // payload — sending stream_options on a non-streaming request is rejected by some providers.
+        [JsonPropertyName("stream_options")] public StreamOptionsPayload? StreamOptions { get; init; }
+    }
+
+    // OpenAI-compatible: requests a final SSE chunk carrying the aggregated `usage` object before
+    // `data: [DONE]`. OpenRouter normalizes usage across providers, so the chunk is present for
+    // virtually all models; the consumer tolerates its absence (fields stay null).
+    private sealed class StreamOptionsPayload
+    {
+        [JsonPropertyName("include_usage")] public bool IncludeUsage { get; init; }
     }
 
     // Phase 5: the on-the-wire message shape. `content` is `object?` so it serializes as a JSON
@@ -617,6 +647,9 @@ public sealed class OpenRouterClient
     {
         [JsonPropertyName("model")] public string? Model { get; set; }
         [JsonPropertyName("choices")] public List<StreamChoice>? Choices { get; set; }
+        // Present (with an empty/absent choices array) on the final usage chunk when
+        // stream_options.include_usage was requested. Nullable — a provider/route can omit it.
+        [JsonPropertyName("usage")] public Usage? Usage { get; set; }
     }
 
     private sealed class StreamChoice
