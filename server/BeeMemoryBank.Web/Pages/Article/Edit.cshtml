@@ -264,6 +264,13 @@
         autofocus: false,
         status: false,
         minHeight: '350px',
+        // CM's height is 'auto' (grows with content) and the actual scroll parent is
+        // .main-content (overflow-y:auto), not CM's own scroller. Without this, CM only
+        // measures/renders lines near its last-known viewport, which on a page that's taller
+        // than the window at init time leaves its internal line-height model out of sync with
+        // the real DOM further down — the caret then renders using the stale model (see the
+        // refresh() calls below for the other half of this fix).
+        viewportMargin: Infinity,
         toolbar: [
             'bold', 'italic', 'heading', '|',
             'code', 'quote', 'unordered-list', 'ordered-list', '|',
@@ -290,6 +297,22 @@
             return html.replace(/src="\/api\/media\//g, 'src="/api-proxy/media/');
         }
     });
+
+    // CM's internal line-height model can end up out of sync with the real DOM if it measures
+    // itself before the surrounding layout (fonts, .main-content's final width/scroll position)
+    // has settled — the caret is drawn from that stale model, so after scrolling down a click
+    // can land ~1-2 lines off from where it visually appears (confirmed: DOM/CM offset grows on
+    // wrapped lines, .CodeMirror-cursor ends up rendered above the clicked line). A double-click
+    // "fixes" it because CodeMirror re-measures on that interaction. Forcing a few refreshes once
+    // the layout has actually stabilized keeps the model accurate without waiting for that.
+    requestAnimationFrame(function() { easyMDE.codemirror.refresh(); });
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function() { easyMDE.codemirror.refresh(); });
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+        var mdeWrapper = easyMDE.codemirror.getWrapperElement().closest('.EasyMDEContainer') || easyMDE.codemirror.getWrapperElement();
+        new ResizeObserver(function() { easyMDE.codemirror.refresh(); }).observe(mdeWrapper);
+    }
 
     // Swap every FontAwesome <i> EasyMDE built in the toolbar for a local <sl-icon>
     // (bootstrap-icons via Shoelace). Only the inner <i> is replaced; the <button> and its
