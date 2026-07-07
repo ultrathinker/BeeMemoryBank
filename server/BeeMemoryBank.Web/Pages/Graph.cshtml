@@ -454,7 +454,7 @@
         }
 
         function nodeColor(d) {
-            if (focusedNodeId && d.id === focusedNodeId) return '#f59e0b';
+            if (focusedNodeId && d.id === focusedNodeId) return '#ef4444';
             if (d.group === 'more-match') return '#86efac';
             if (d.group === 'more-neigh') return '#cbd5e1';
             if (d.group === 'base') return '#3b82f6';
@@ -887,7 +887,7 @@
                     {
                         selector: 'node',
                         style: {
-                            'background-color': ele => ele.data('id') === initialFocus ? '#f59e0b' : '#a78bfa',
+                            'background-color': ele => ele.data('id') === initialFocus ? '#ef4444' : '#a78bfa',
                             'width': ele => 16 + Math.sqrt(ele.data('count')) * 16,
                             'height': ele => 16 + Math.sqrt(ele.data('count')) * 16,
                             'border-color': '#ffffff',
