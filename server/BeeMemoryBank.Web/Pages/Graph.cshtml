@@ -163,6 +163,18 @@
 <!-- Legend: explains what node colors mean in the current mode -->
 <div id="graph-legend" style="margin-bottom:8px; display:flex; flex-wrap:wrap; gap:16px; font-size:0.85rem; color:var(--sl-color-neutral-500);"></div>
 
+<!-- Folder-scope picker: restricts graph search to a folder subtree -->
+<div id="folder-scope-bar" style="margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+    <a id="folder-scope-link" href="javascript:void(0)" title="Restrict the graph search to a specific folder" style="font-size:0.8rem; color:var(--sl-color-neutral-500); text-decoration:none; display:inline-flex; align-items:center; gap:3px;">
+        <sl-icon name="folder2" style="font-size:0.85rem;"></sl-icon> Select folder
+    </a>
+    <div id="folder-scope-picker" class="bmb-folder-picker" hidden style="flex:1 1 auto; max-width:380px;">
+        <sl-input class="bmb-fp-input" placeholder="Type to search folders, or pick / for root" autocomplete="off" size="small"></sl-input>
+        <div class="bmb-fp-dropdown" hidden></div>
+    </div>
+    <sl-icon-button id="folder-scope-clear" name="x-lg" label="Clear folder scope" size="small" style="display:none;"></sl-icon-button>
+</div>
+
 <!-- Filter bar -->
 <div style="margin-bottom:16px; display: flex; gap: 8px;">
     <sl-input id="concept-filter" placeholder="Filter tags locally, press Enter to search across the whole graph..." clearable size="small" style="flex-grow: 1; min-width: 0;">
@@ -277,6 +289,10 @@
         let allConcepts = [];
         let currentTablePage = 1;
         const tablePageSize = 200;
+
+        // Folder-scope for graph search (null or '/' = no restriction). Set by the
+        // "Select folder" picker above the filter bar; threaded into the search fetch URL.
+        let searchFolderScope = null;
 
         function escTableHtml(s) {
             return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -415,8 +431,8 @@
                 { color: 'transparent', border: 'var(--sl-color-warning-500)', label: 'Dashed — has hidden neighbors (double-click to expand)' },
             ],
             search: [
-                { color: '#10b981', label: 'Match — your query' },
-                { color: '#94a3b8', label: 'Neighbor — linked to matches' },
+                { color: '#f97316', label: 'Match — your query' },
+                { color: '#3b82f6', label: 'Neighbor — linked to matches' },
                 { color: '#86efac', label: 'More matches — click to reveal 10 more' },
                 { color: '#cbd5e1', label: 'More neighbors — click to reveal 10 more' },
                 { color: 'transparent', border: 'var(--sl-color-warning-500)', label: 'Dashed — has deeper tags (double-click to expand)' },
@@ -443,8 +459,8 @@
             if (d.group === 'more-neigh') return '#cbd5e1';
             if (d.group === 'base') return '#3b82f6';
             if (d.group === 'pulse') return '#f97316';
-            if (d.group === 'match') return '#10b981';
-            if (d.group === 'neighbor') return '#94a3b8';
+            if (d.group === 'match') return '#f97316';
+            if (d.group === 'neighbor') return '#3b82f6';
             return '#a78bfa';
         }
 
@@ -531,7 +547,8 @@
                     }
                     filterInput.value = q;
                     const depth = 1;
-                    const r = await fetch('/api-proxy/concept-tags/graph/search?q=' + encodeURIComponent(q) + '&depth=' + depth + '&maxNodes=200');
+                    const r = await fetch('/api-proxy/concept-tags/graph/search?q=' + encodeURIComponent(q) + '&depth=' + depth + '&maxNodes=200'
+                        + (searchFolderScope && searchFolderScope !== '/' ? '&treePath=' + encodeURIComponent(searchFolderScope) : ''));
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     payload = await r.json();
                 } else {
@@ -598,8 +615,8 @@
                         nodes.push({ id: GREEN_MORE_ID, name: '+' + hiddenMatches.length, count: 1, group: 'more-match', synthetic: true, totalNeighbors: 0 });
                     }
                 }
-                if (mode === 'full' || mode === 'home') {
-                    allConcepts = nodes.map(n => ({ name: n.name, count: n.count }));
+                if (mode === 'full' || mode === 'home' || mode === 'search') {
+                    allConcepts = nodes.filter(n => !n.synthetic).map(n => ({ name: n.name, count: n.count }));
                     renderConceptTable();
                 }
                 if (nodes.length === 0) {
@@ -1111,6 +1128,63 @@
             if (e.key === 'Enter') {
                 e.preventDefault();
                 if ((filterInput.value || '').trim()) loadMode('search');
+            }
+        });
+
+        // ─── Folder-scope picker (restricts the graph search to a folder subtree) ──
+        // Compact "Select folder" link reveals the shared bmbFolderPicker combobox.
+        // The X button: first click clears a selected folder (keeps picker open for a
+        // new pick); second click closes the picker back to the link.
+        const folderScopeLink = document.getElementById('folder-scope-link');
+        const folderScopePickerEl = document.getElementById('folder-scope-picker');
+        const folderScopeClearBtn = document.getElementById('folder-scope-clear');
+        let folderPickerApi = null;
+
+        function setFolderScope(path) {
+            searchFolderScope = (path && path !== '/') ? path : null;
+        }
+
+        function openFolderPicker() {
+            if (typeof window.bmbFolderPicker !== 'function') return;
+            if (!folderPickerApi) {
+                folderPickerApi = window.bmbFolderPicker({
+                    rootEl: folderScopePickerEl,
+                    initialPath: searchFolderScope || '/',
+                    onChange: function(p) {
+                        // The picker input already shows the picked path via pickPath.
+                        // Keep the picker open so the user can confirm/adjust; the X
+                        // button is the way to clear the selection.
+                        setFolderScope(p);
+                    }
+                });
+            } else {
+                folderPickerApi.setPath(searchFolderScope || '/');
+            }
+            folderScopeLink.style.display = 'none';
+            folderScopePickerEl.hidden = false;
+            folderScopeClearBtn.style.display = 'inline-flex';
+            folderPickerApi.focus();
+        }
+
+        function closeFolderPicker() {
+            folderScopePickerEl.hidden = true;
+            folderScopeClearBtn.style.display = 'none';
+            folderScopeLink.style.display = 'inline-flex';
+        }
+
+        folderScopeLink.addEventListener('click', function(e) {
+            e.preventDefault();
+            openFolderPicker();
+        });
+
+        folderScopeClearBtn.addEventListener('click', function() {
+            if (searchFolderScope != null) {
+                // A folder is selected: clear it, keep the picker open for a new choice.
+                setFolderScope(null);
+                if (folderPickerApi) folderPickerApi.setPath('/');
+            } else {
+                // Nothing selected: close the picker and revert to the link.
+                closeFolderPicker();
             }
         });
 

@@ -59,8 +59,8 @@ public static class ConceptTagEndpoints
             });
         }).RequireInternalKey().WithTags("ConceptTags");
 
-        // GET /api/concept-tags/graph/search?q=...&depth=1..3&maxNodes=... — search graph with BFS expansion
-        app.MapGet("/api/concept-tags/graph/search", async (HttpContext ctx, IConceptTagRepository conceptTagRepo, string? q, int depth = 2, int maxNodes = 100) =>
+        // GET /api/concept-tags/graph/search?q=...&depth=1..3&maxNodes=...&treePath=/Foo — search graph with BFS expansion
+        app.MapGet("/api/concept-tags/graph/search", async (HttpContext ctx, IConceptTagRepository conceptTagRepo, string? q, int depth = 2, int maxNodes = 100, string? treePath = null) =>
         {
 
             if (string.IsNullOrWhiteSpace(q))
@@ -69,7 +69,7 @@ public static class ConceptTagEndpoints
             depth = Math.Clamp(depth, 1, 3);
             maxNodes = Math.Clamp(maxNodes, 10, 500);
 
-            var data = await conceptTagRepo.SearchGraphAsync(q, depth, maxNodes);
+            var data = await conceptTagRepo.SearchGraphAsync(q, depth, maxNodes, treePath);
             return Results.Ok(new
             {
                 nodes = data.Nodes.Select(n => new { name = n.Name, articleCount = n.ArticleCount, group = n.Group, totalNeighbors = n.TotalNeighbors }),

@@ -24,7 +24,7 @@ public interface IConceptTagRepository
     Task UpdateEmbeddingAsync(string name, byte[] embedding, string modelVersion);
 
     Task<ConceptTagGraphData> GetHomeGraphAsync();
-    Task<ConceptTagGraphData> SearchGraphAsync(string query, int depth, int maxNodes);
+    Task<ConceptTagGraphData> SearchGraphAsync(string query, int depth, int maxNodes, string? treePath = null);
     Task<ConceptTagEdgeStats> GetEdgeStatsAsync();
     Task<ConceptTagEdgeRebuildReport> CheckAndRebuildEdgesAsync();
 }

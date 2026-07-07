@@ -56,12 +56,15 @@ public partial class ApiClient
         catch { return null; }
     }
 
-    public async Task<JsonElement?> GetConceptGraphSearchAsync(string q, int depth, int maxNodes)
+    public async Task<JsonElement?> GetConceptGraphSearchAsync(string q, int depth, int maxNodes, string? treePath = null)
     {
         try
         {
-            return await http.GetFromJsonAsync<JsonElement>(
-                $"/api/concept-tags/graph/search?q={Uri.EscapeDataString(q)}&depth={depth}&maxNodes={maxNodes}", JsonOpts);
+            var url = "/api/concept-tags/graph/search?q=" + Uri.EscapeDataString(q)
+                + "&depth=" + depth + "&maxNodes=" + maxNodes;
+            if (!string.IsNullOrEmpty(treePath))
+                url += "&treePath=" + Uri.EscapeDataString(treePath);
+            return await http.GetFromJsonAsync<JsonElement>(url, JsonOpts);
         }
         catch { return null; }
     }

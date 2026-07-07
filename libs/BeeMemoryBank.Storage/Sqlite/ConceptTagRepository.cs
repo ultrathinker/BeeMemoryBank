@@ -480,7 +480,7 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
         return new ConceptTagGraphData(nodes, inducedEdges);
     }
 
-    public async Task<ConceptTagGraphData> SearchGraphAsync(string query, int depth, int maxNodes)
+    public async Task<ConceptTagGraphData> SearchGraphAsync(string query, int depth, int maxNodes, string? treePath = null)
     {
         depth = Math.Clamp(depth, 1, 3);
         maxNodes = Math.Clamp(maxNodes, 10, 500);
@@ -574,12 +574,12 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
             frontier = nextFrontier;
         }
 
-        var countsByTagId = await GetVisibleArticleCountsBatchAsync(conn, visitedIds, scope);
+        var countsByTagId = await GetVisibleArticleCountsBatchAsync(conn, visitedIds, scope, treePath);
 
         var visibleIds = visitedIds.Where(id => countsByTagId.GetValueOrDefault(id) > 0).ToHashSet();
         var visibleNames = visibleIds.Select(id => idToName[id]).ToHashSet();
 
-        var edges = await GetInducedEdgesAsync(conn, visibleNames, scope);
+        var edges = await GetInducedEdgesAsync(conn, visibleNames, scope, treePath);
 
         // Prune neighbor-only nodes whose connection to the search origin is visible
         // exclusively through articles the caller cannot see. Keeping them would leak
@@ -590,7 +590,7 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
             .Where(id => matchIds.Contains(id) || namesInVisibleEdges.Contains(idToName[id]))
             .ToHashSet();
 
-        var neighborCounts = await GetTotalVisibleNeighborsBatchAsync(conn, keptIds, scope);
+        var neighborCounts = await GetTotalVisibleNeighborsBatchAsync(conn, keptIds, scope, treePath);
 
         var nodes = keptIds.Select(id => new ConceptTagGraphNode(
             idToName[id],
@@ -745,11 +745,26 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
         public int Cnt { get; set; }
     }
 
-    private async Task<List<ConceptGraphEdge>> GetInducedEdgesAsync(IDbConnection conn, HashSet<string> nodeNames, ICallerScope scope)
+    // Normalize an optional folder-scope path into the (exactPath, likePattern) pair
+    // consumed by the folder-prefix filter added to the graph-search SQL. A null,
+    // empty, or "/" path means "no restriction": both values come back null so the
+    // SQL `@treePath IS NULL` guard short-circuits and the query returns everything.
+    // The exact branch uses the raw path (a = b match needs no LIKE escaping); the
+    // like branch escapes \ % _ exactly like the tag-name LIKE search at the top of
+    // SearchGraphAsync, then appends "/%" to match everything nested under it.
+    private static (string? treePath, string? treePathLike) NormalizeTreePath(string? treePath)
+    {
+        if (string.IsNullOrEmpty(treePath) || treePath == "/") return (null, null);
+        var escaped = treePath.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
+        return (treePath, escaped + "/%");
+    }
+
+    private async Task<List<ConceptGraphEdge>> GetInducedEdgesAsync(IDbConnection conn, HashSet<string> nodeNames, ICallerScope scope, string? treePath = null)
     {
         if (nodeNames.Count < 2) return [];
 
         var nameList = nodeNames.ToList();
+        var (tp, tpl) = NormalizeTreePath(treePath);
 
         if (scope.IsSuperadmin)
         {
@@ -760,8 +775,9 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
                   JOIN tbl_concept_tag ct2 ON e.tag_id_b = ct2.id
                   JOIN tbl_article a ON e.article_id = a.id AND a.status = 'A'
                   WHERE ct1.name IN @names AND ct2.name IN @names
+                    AND (@treePath IS NULL OR a.tree_path = @treePath OR a.tree_path LIKE @treePathLike ESCAPE '\')
                   GROUP BY ct1.name, ct2.name",
-                new { names = nameList })).ToList();
+                new { names = nameList, treePath = tp, treePathLike = tpl })).ToList();
         }
 
         var rows = (await conn.QueryAsync<GraphEdgeRow>(
@@ -770,8 +786,9 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
               JOIN tbl_concept_tag ct1 ON e.tag_id_a = ct1.id
               JOIN tbl_concept_tag ct2 ON e.tag_id_b = ct2.id
               JOIN tbl_article a ON e.article_id = a.id AND a.status = 'A'
-              WHERE ct1.name IN @names AND ct2.name IN @names",
-            new { names = nameList })).ToList();
+              WHERE ct1.name IN @names AND ct2.name IN @names
+                AND (@treePath IS NULL OR a.tree_path = @treePath OR a.tree_path LIKE @treePathLike ESCAPE '\')",
+            new { names = nameList, treePath = tp, treePathLike = tpl })).ToList();
 
         return rows
             .Where(r => !scope.IsAccessDenied(r.TreePath))
@@ -784,22 +801,33 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
     // respecting ACL (scope-limited — a neighbor only known through hidden articles
     // doesn't count). Used to render a "has more neighbors" indicator on the graph
     // without shipping every neighbor's name to the client.
-    private async Task<Dictionary<int, int>> GetTotalVisibleNeighborsBatchAsync(IDbConnection conn, HashSet<int> tagIds, ICallerScope scope)
+    private async Task<Dictionary<int, int>> GetTotalVisibleNeighborsBatchAsync(IDbConnection conn, HashSet<int> tagIds, ICallerScope scope, string? treePath = null)
     {
         if (tagIds.Count == 0) return new Dictionary<int, int>();
         var ids = tagIds.ToList();
+        var (tp, tpl) = NormalizeTreePath(treePath);
 
         if (scope.IsSuperadmin)
         {
+            // Superadmin ignores ACL, so this branch originally read tbl_concept_tag_edge
+            // with no article join. To enable folder-scoping we LEFT JOIN tbl_article
+            // (no status filter, LEFT so orphan edges are preserved → identical counts
+            // when @treePath is null) and carry tree_path out of the subquery so the
+            // outer WHERE can filter on it.
             var rows = await conn.QueryAsync<(int TagId, int Cnt)>(
                 @"SELECT tag_id AS TagId, COUNT(DISTINCT other_tag) AS Cnt
                   FROM (
-                      SELECT tag_id_a AS tag_id, tag_id_b AS other_tag FROM tbl_concept_tag_edge
+                      SELECT e.tag_id_a AS tag_id, e.tag_id_b AS other_tag, a.tree_path AS tree_path
+                      FROM tbl_concept_tag_edge e
+                      LEFT JOIN tbl_article a ON a.id = e.article_id
                       UNION ALL
-                      SELECT tag_id_b AS tag_id, tag_id_a AS other_tag FROM tbl_concept_tag_edge
+                      SELECT e.tag_id_b AS tag_id, e.tag_id_a AS other_tag, a.tree_path AS tree_path
+                      FROM tbl_concept_tag_edge e
+                      LEFT JOIN tbl_article a ON a.id = e.article_id
                   )
                   WHERE tag_id IN @ids
-                  GROUP BY tag_id", new { ids });
+                    AND (@treePath IS NULL OR tree_path = @treePath OR tree_path LIKE @treePathLike ESCAPE '\')
+                  GROUP BY tag_id", new { ids, treePath = tp, treePathLike = tpl });
             return rows.ToDictionary(r => r.TagId, r => r.Cnt);
         }
 
@@ -814,7 +842,8 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
                   FROM tbl_concept_tag_edge e
                   JOIN tbl_article a ON a.id = e.article_id AND a.status = 'A'
               )
-              WHERE tag_id IN @ids", new { ids })).ToList();
+              WHERE tag_id IN @ids
+                AND (@treePath IS NULL OR tree_path = @treePath OR tree_path LIKE @treePathLike ESCAPE '\')", new { ids, treePath = tp, treePathLike = tpl })).ToList();
 
         return all
             .Where(r => !scope.IsAccessDenied(r.TreePath))
@@ -822,10 +851,11 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
             .ToDictionary(g => g.Key, g => g.Select(r => r.OtherTag).Distinct().Count());
     }
 
-    private async Task<Dictionary<int, int>> GetVisibleArticleCountsBatchAsync(IDbConnection conn, HashSet<int> tagIds, ICallerScope scope)
+    private async Task<Dictionary<int, int>> GetVisibleArticleCountsBatchAsync(IDbConnection conn, HashSet<int> tagIds, ICallerScope scope, string? treePath = null)
     {
         if (tagIds.Count == 0) return new Dictionary<int, int>();
         var ids = tagIds.ToList();
+        var (tp, tpl) = NormalizeTreePath(treePath);
 
         if (scope.IsSuperadmin)
         {
@@ -834,8 +864,9 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
                   FROM tbl_article_concept_tag act
                   JOIN tbl_article a ON a.id = act.article_id AND a.status = 'A'
                   WHERE act.concept_tag_id IN @ids
+                    AND (@treePath IS NULL OR a.tree_path = @treePath OR a.tree_path LIKE @treePathLike ESCAPE '\')
                   GROUP BY act.concept_tag_id",
-                new { ids });
+                new { ids, treePath = tp, treePathLike = tpl });
             return rows.ToDictionary(r => r.TagId, r => r.Cnt);
         }
 
@@ -843,8 +874,9 @@ public class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder
             @"SELECT act.concept_tag_id AS TagId, act.article_id AS ArticleId, a.tree_path AS TreePath
               FROM tbl_article_concept_tag act
               JOIN tbl_article a ON a.id = act.article_id AND a.status = 'A'
-              WHERE act.concept_tag_id IN @ids",
-            new { ids })).ToList();
+              WHERE act.concept_tag_id IN @ids
+                AND (@treePath IS NULL OR a.tree_path = @treePath OR a.tree_path LIKE @treePathLike ESCAPE '\')",
+            new { ids, treePath = tp, treePathLike = tpl })).ToList();
 
         return all
             .Where(r => !scope.IsAccessDenied(r.TreePath))
