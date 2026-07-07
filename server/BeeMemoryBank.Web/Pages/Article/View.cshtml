@@ -152,7 +152,7 @@
     @if (Model.RelatedArticles.Count > 0)
     {
         var totalRelated = Model.RelatedArticles.Count;
-        var relatedPageSize = 10;
+        var relatedPageSize = 5;
         var totalRelatedPages = (int)Math.Ceiling(totalRelated / (double)relatedPageSize);
         <div class="card mt-md">
             <h4 style="font-size:0.95rem;margin-bottom:14px;">
@@ -1160,7 +1160,7 @@ else
     var info = document.getElementById('related-pager-info');
     var articleIdLocal = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
     if (!articleIdLocal) return;
-    var page = 1, pageSize = 10, totalPages = 1;
+    var page = 1, pageSize = 5, totalPages = 1;
     function escRel(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
     function load(p) {
         prev.loading = next.loading = true;

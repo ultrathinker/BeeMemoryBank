@@ -162,7 +162,7 @@ public static class ArticleProxyEndpoints
             return ok ? Results.Ok() : Results.Json(new { error }, statusCode: status);
         }).RequireAuthorization();
 
-        app.MapGet("/api-proxy/article/{id:guid}/related", async (Guid id, ApiClient api, int page = 1, int pageSize = 10) =>
+        app.MapGet("/api-proxy/article/{id:guid}/related", async (Guid id, ApiClient api, int page = 1, int pageSize = 5) =>
         {
             var all = await api.GetRelatedArticlesAsync(id) ?? [];
             var ordered = all.OrderByDescending(r => r.Strength).ToList();
