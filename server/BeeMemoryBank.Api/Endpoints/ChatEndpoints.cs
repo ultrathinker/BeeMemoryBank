@@ -386,43 +386,49 @@ public static class ChatEndpoints
             var effectiveImageGen = await repo.ResolveEffectiveModelAsync("is_image_gen", defaults.ImageGenId);
 
             // ── Image-attachment validation ──
-            // The server decides how to route an attached image based on the effective vision model
+            // The server decides how to route attached images based on the effective vision model
             // (the client no longer picks a model). If no vision model is configured at all, reject
             // gracefully with a clear message.
-            byte[]? attachmentBytes = null;
-            string attachmentMime = "";
-            if (req.Attachment is not null)
+            var attachments = new List<(byte[] Bytes, string Mime)>();
+            if (req.Attachments is { Count: > 0 })
             {
                 if (effectiveVision is null)
                 {
                     await JsonError(400, "No vision model is configured. Attach an image once a superadmin adds a vision model under Admin → AI / Chat.");
                     return;
                 }
-                var (okBytes, okMime, attachError) = ValidateAttachment(req.Attachment);
-                if (okBytes is null)
+                if (req.Attachments.Count > MaxAttachmentsPerMessage)
                 {
-                    await JsonError(400, attachError ?? "Invalid image attachment.");
+                    await JsonError(400, $"Too many images (max {MaxAttachmentsPerMessage} per message).");
                     return;
                 }
-                attachmentBytes = okBytes;
-                attachmentMime = okMime;
+                foreach (var reqAtt in req.Attachments)
+                {
+                    var (okBytes, okMime, attachError) = ValidateAttachment(reqAtt);
+                    if (okBytes is null)
+                    {
+                        await JsonError(400, attachError ?? "Invalid image attachment.");
+                        return;
+                    }
+                    attachments.Add((okBytes, okMime));
+                }
             }
 
             // ── Vision delegation ──
-            // If an image is attached AND the effective vision model is a DIFFERENT model than the
+            // If images are attached AND the effective vision model is a DIFFERENT model than the
             // effective text model, make a separate non-streaming, tools-less OpenRouter call to the
-            // vision model (just the image + the user's message text). The resulting description is
+            // vision model (all the images + the user's message text). The resulting description is
             // injected into the text model's context so it can answer as a normal text-only turn.
-            // If the vision model IS the text model, the image is attached inline instead (current
+            // If the vision model IS the text model, the images are attached inline instead (current
             // behavior — the text model handles vision itself, single call).
             string? visionDescription = null;
             bool textModelIsVision = effectiveVision is not null && effectiveVision.Id == effectiveText.Id;
-            if (attachmentBytes is not null && !textModelIsVision)
+            if (attachments.Count > 0 && !textModelIsVision)
             {
                 try
                 {
                     visionDescription = await RunVisionDelegationAsync(repo, openRouter, logger, keys,
-                        effectiveVision!.ModelId, req.Message, attachmentBytes, attachmentMime, ct);
+                        effectiveVision!.ModelId, req.Message, attachments, ct);
                 }
                 catch (AllKeysExhaustedException ex)
                 {
@@ -522,19 +528,19 @@ public static class ChatEndpoints
                         m.ToolCalls = JsonSerializer.Deserialize<List<ChatToolCall>>(row.ToolCallsJson, SseJsonOpts);
                     if (!string.IsNullOrEmpty(row.ToolCallId))
                         m.ToolCallId = row.ToolCallId;
-                    // Re-attach a prior user-uploaded image as a vision content part so the model
-                    // keeps the image in context across turns — but ONLY when the effective text
-                    // model IS the vision model (single-model vision). In the delegation case (text
+                    // Re-attach prior user-uploaded image(s) as vision content parts so the model
+                    // keeps them in context across turns — but ONLY when the effective text model
+                    // IS the vision model (single-model vision). In the delegation case (text
                     // model != vision model), the text model is text-only and must not receive
                     // prior images; it relies on injected descriptions instead. Generated-image
                     // attachments are always skipped here (display-only).
                     if (textModelIsVision && row.Role == "user"
                         && attachmentsByMessage.TryGetValue(row.Id, out var atts))
                     {
-                        var img = atts.FirstOrDefault(a => a.Kind == ChatAttachmentKind.UserUpload);
-                        var imgBlob = img?.Blob;
-                        if (imgBlob is { Length: > 0 })
-                            m.ImageDataUrl = BuildVisionDataUrl(imgBlob, img!.Mime);
+                        var imgs = atts.Where(a => a.Kind == ChatAttachmentKind.UserUpload
+                            && a.Blob is { Length: > 0 }).ToList();
+                        if (imgs.Count > 0)
+                            m.ImageDataUrls = imgs.Select(a => BuildVisionDataUrl(a.Blob!, a.Mime)).ToList();
                     }
                     convoMessages.Add(m);
                 }
@@ -562,29 +568,36 @@ public static class ChatEndpoints
             }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat user message"); }
 
-            // Phase 5 (vision): persist the validated attachment linked to the new user message and
-            // arm the egress image part. Stored as the ORIGINAL (validated) bytes so reopening the
-            // conversation renders a faithful image; the egress resize happens in BuildVisionDataUrl.
-            // The image is attached inline to the text model's request ONLY when the text model
-            // handles vision itself (textModelIsVision). In the delegation case the image was already
-            // analyzed by the separate vision model; the text model sees only the injected description.
-            if (attachmentBytes is not null)
+            // Phase 5 (vision): persist each validated attachment linked to the new user message and
+            // arm the egress image parts. Stored as the ORIGINAL (validated) bytes so reopening the
+            // conversation renders faithful images; the egress resize happens in BuildVisionDataUrl.
+            // The images are attached inline to the text model's request ONLY when the text model
+            // handles vision itself (textModelIsVision). In the delegation case the images were
+            // already analyzed by the separate vision model; the text model sees only the injected
+            // description.
+            if (attachments.Count > 0)
             {
-                try
+                var imageDataUrls = new List<string>(attachments.Count);
+                foreach (var att in attachments)
                 {
-                    await attachRepo.CreateAsync(new ChatAttachment
+                    try
                     {
-                        Id = Guid.NewGuid(),
-                        MessageId = newUserMessage.Id,
-                        Kind = ChatAttachmentKind.UserUpload,
-                        Mime = attachmentMime,
-                        Blob = attachmentBytes,
-                        CreatedAt = DateTime.UtcNow
-                    });
+                        await attachRepo.CreateAsync(new ChatAttachment
+                        {
+                            Id = Guid.NewGuid(),
+                            MessageId = newUserMessage.Id,
+                            Kind = ChatAttachmentKind.UserUpload,
+                            Mime = att.Mime,
+                            Blob = att.Bytes,
+                            CreatedAt = DateTime.UtcNow
+                        });
+                    }
+                    catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat attachment"); }
+                    if (textModelIsVision)
+                        imageDataUrls.Add(BuildVisionDataUrl(att.Bytes, att.Mime));
                 }
-                catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat attachment"); }
-                if (textModelIsVision)
-                    newUserTurn.ImageDataUrl = BuildVisionDataUrl(attachmentBytes, attachmentMime);
+                if (imageDataUrls.Count > 0)
+                    newUserTurn.ImageDataUrls = imageDataUrls;
             }
 
             // Vision delegation: inject the vision model's description as a context message BEFORE
@@ -1187,6 +1200,11 @@ public static class ChatEndpoints
     // server-side regardless of any client-side resize.
     private const long MaxAttachmentBytes = 8L * 1024 * 1024;
 
+    /// <summary>Max number of images accepted on a single user turn. Mirrored client-side in
+    /// chat.js; bounds both the egress payload size (each image becomes its own content part) and
+    /// the vision-delegation call's cost.</summary>
+    public const int MaxAttachmentsPerMessage = 10;
+
     // OpenAI-recommended longest-side cap for vision inputs. Applied server-side when building the
     // egress data URL (the stored attachment keeps the original bytes for faithful display).
     private const int VisionMaxDimension = 1568;
@@ -1262,24 +1280,25 @@ public static class ChatEndpoints
     }
 
     /// <summary>Vision delegation: makes a SEPARATE, non-streaming, tools-less OpenRouter call to
-    /// the effective vision model with just the image + the user's message text. Returns the text
-    /// description the vision model produced, which the caller injects into the text model's
-    /// context. Uses multi-key failover (same helper as the main loop). Never returns null — on a
-    /// no-content response, returns a placeholder so the text model has something to work with.</summary>
+    /// the effective vision model with all the attached images + the user's message text. Returns
+    /// the text description the vision model produced, which the caller injects into the text
+    /// model's context. Uses multi-key failover (same helper as the main loop). Never returns null —
+    /// on a no-content response, returns a placeholder so the text model has something to work
+    /// with.</summary>
     private static async Task<string> RunVisionDelegationAsync(
         ChatSettingsRepository repo, OpenRouterClient openRouter, ILogger logger,
         IReadOnlyList<KeyMaterial> keys, string visionModelId, string userMessage,
-        byte[] imageBytes, string imageMime, CancellationToken ct)
+        List<(byte[] Bytes, string Mime)> images, CancellationToken ct)
     {
-        var dataUrl = BuildVisionDataUrl(imageBytes, imageMime);
+        var dataUrls = images.Select(i => BuildVisionDataUrl(i.Bytes, i.Mime)).ToList();
         var visionMessages = new List<ChatToolMessage>
         {
             new()
             {
                 Role = "user",
                 // Plain multimodal question — no Bee tools exposed to the vision model.
-                Content = "Describe and answer based on this image: " + userMessage,
-                ImageDataUrl = dataUrl
+                Content = "Describe and answer based on " + (dataUrls.Count > 1 ? "these images: " : "this image: ") + userMessage,
+                ImageDataUrls = dataUrls
             }
         };
 

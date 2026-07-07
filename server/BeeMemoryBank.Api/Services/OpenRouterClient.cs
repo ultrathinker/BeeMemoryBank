@@ -418,24 +418,23 @@ public sealed class OpenRouterClient
     }
 
     /// <summary>Maps the in-memory <see cref="ChatToolMessage"/> list to the egress wire shape. A
-    /// message carrying <see cref="ChatToolMessage.ImageDataUrl"/> becomes a multimodal content
-    /// array (text part + image part) for vision models; every other message serializes content as
-    /// a plain string (or null for assistant tool-call turns). Used by the tool-calling completion
-    /// paths; image-gen uses the same mapping (its messages carry no image, so they stay plain
-    /// text).</summary>
+    /// message carrying <see cref="ChatToolMessage.ImageDataUrls"/> becomes a multimodal content
+    /// array (one text part + one image part per attached image) for vision models; every other
+    /// message serializes content as a plain string (or null for assistant tool-call turns). Used by
+    /// the tool-calling completion paths; image-gen uses the same mapping (its messages carry no
+    /// image, so they stay plain text).</summary>
     private static List<WireMessage> ToWire(IReadOnlyList<ChatToolMessage> messages)
     {
         var list = new List<WireMessage>(messages.Count);
         foreach (var m in messages)
         {
             object? content;
-            if (!string.IsNullOrEmpty(m.ImageDataUrl))
+            if (m.ImageDataUrls is { Count: > 0 })
             {
-                content = new List<WireContentPart>
-                {
-                    new() { Type = "text", Text = m.Content ?? "" },
-                    new() { Type = "image_url", ImageUrl = new WireImageUrl { Url = m.ImageDataUrl } }
-                };
+                var parts = new List<WireContentPart> { new() { Type = "text", Text = m.Content ?? "" } };
+                foreach (var url in m.ImageDataUrls)
+                    parts.Add(new WireContentPart { Type = "image_url", ImageUrl = new WireImageUrl { Url = url } });
+                content = parts;
             }
             else
             {

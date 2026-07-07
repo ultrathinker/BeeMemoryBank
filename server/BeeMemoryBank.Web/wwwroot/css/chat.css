@@ -155,7 +155,7 @@ body.chat-ui #chat-lightbox-img {
     max-width: 88vw;
     max-height: 85vh;
     object-fit: contain;
-    border-radius: 6px;
+    border-radius: 12px;
 }
 
 /* Chat images (thumbnails) are clickable — hint it with a pointer cursor. */

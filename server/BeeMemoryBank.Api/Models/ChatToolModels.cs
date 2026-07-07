@@ -19,14 +19,14 @@ public sealed class ChatToolMessage
     /// <summary>Present only on role="tool" messages, echoing the call this answers.</summary>
     [JsonPropertyName("tool_call_id")] public string? ToolCallId { get; set; }
 
-    /// <summary>Phase 5 (vision): an in-memory-only carrier for an image attached to this message.
-    /// When set, <see cref="BeeMemoryBank.Api.Services.OpenRouterClient"/> builds a multimodal
-    /// egress content array <c>[{type:text},{type:image_url}]</c> instead of a plain string. It is
-    /// deliberately <c>[JsonIgnore]</c> so it NEVER persists (the bytes live in chat_attachment
-    /// keyed by message_id) and never leaks onto the wire as a top-level field — the egress client
-    /// reads it explicitly via its wire-message mapping. Only used transiently for the turn it
-    /// belongs to.</summary>
-    [JsonIgnore] public string? ImageDataUrl { get; set; }
+    /// <summary>Phase 5 (vision): an in-memory-only carrier for the image(s) attached to this
+    /// message. When set, <see cref="BeeMemoryBank.Api.Services.OpenRouterClient"/> builds a
+    /// multimodal egress content array <c>[{type:text},{type:image_url},...]</c> instead of a plain
+    /// string. It is deliberately <c>[JsonIgnore]</c> so it NEVER persists (the bytes live in
+    /// chat_attachment keyed by message_id) and never leaks onto the wire as a top-level field —
+    /// the egress client reads it explicitly via its wire-message mapping. Only used transiently for
+    /// the turn it belongs to.</summary>
+    [JsonIgnore] public List<string>? ImageDataUrls { get; set; }
 }
 
 /// <summary>An assistant-issued tool call (OpenAI "function" call shape).</summary>

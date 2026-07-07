@@ -195,15 +195,16 @@ public record ChatStreamRequest(
     [property: JsonPropertyName("conversationId")] Guid? ConversationId,
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("systemPrompt")] string? SystemPrompt,
-    [property: JsonPropertyName("attachment")] ChatStreamAttachment? Attachment,
+    [property: JsonPropertyName("attachments")] List<ChatStreamAttachment>? Attachments,
     [property: JsonPropertyName("pinToHome")] bool PinToHome = false);
 
-/// <summary>An optional image attached to the user turn. The server decides how to route it
-/// based on the effective vision model (delegation to a separate vision model, or inline if the
-/// text model handles vision itself). The bytes travel inline in the /stream request (base64)
-/// rather than via a separate pre-message upload endpoint: the existing
+/// <summary>One of possibly several images attached to the user turn (see
+/// <see cref="ChatEndpoints.MaxAttachmentsPerMessage"/> for the per-message cap). The server
+/// decides how to route them based on the effective vision model (delegation to a separate vision
+/// model, or inline if the text model handles vision itself). The bytes travel inline in the
+/// /stream request (base64) rather than via a separate pre-message upload endpoint: the existing
 /// <c>chat_attachment.message_id</c> is NOT NULL, and the user message is created inside /stream,
-/// so linking the attachment to the just-created message avoids any schema change. Server-side
+/// so linking each attachment to the just-created message avoids any schema change. Server-side
 /// MIME allow-list + size cap + magic-byte check + resize are applied before storage and before
 /// the egress vision request.</summary>
 public record ChatStreamAttachment(

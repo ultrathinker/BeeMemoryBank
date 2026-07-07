@@ -59,14 +59,17 @@
     var justCreatedConversationId = null;
     var sending = false;
     var abortCtrl = null;
-    // A staged image attachment ({mime, dataBase64, previewUrl} or null).
-    var stagedAttachment = null;
+    // Staged image attachments: an array of {mime, dataBase64, previewUrl}, rendered as a
+    // horizontally-scrollable row of thumbnails above the composer, in the order added.
+    var stagedAttachments = [];
     // Client-side validation mirrors the server: MIME allow-list + size cap. The server re-validates
     // (never trust the client), but rejecting early here avoids a wasted round-trip for an oversized
     // or wrong-type file. Resize target matches the server's egress cap.
     var ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
     var MAX_IMAGE_BYTES = 8 * 1024 * 1024;
     var VISION_MAX_DIM = 1568;
+    // Mirrors ChatEndpoints.MaxAttachmentsPerMessage on the server.
+    var MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
     var SYSTEM_PROMPT =
         "You are an assistant inside BeeMemoryBank, a personal knowledge base. " +
@@ -182,6 +185,10 @@
 
     function processImageFile(file) {
         if (!file) return;
+        if (stagedAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+            flashAttachHint('Too many images (max ' + MAX_ATTACHMENTS_PER_MESSAGE + ' per message).', true);
+            return;
+        }
         if (ALLOWED_IMAGE_TYPES.indexOf(file.type) < 0) {
             flashAttachHint('Unsupported image type. Allowed: PNG, JPEG, WebP, GIF.', true);
             return;
@@ -205,11 +212,11 @@
                 ctx.drawImage(img, 0, 0, w, h);
                 var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
                 var comma = dataUrl.indexOf(',');
-                stagedAttachment = {
+                stagedAttachments.push({
                     mime: 'image/jpeg',
                     dataBase64: comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl,
                     previewUrl: dataUrl
-                };
+                });
                 renderAttachPreview();
                 resetAttachHint();
             };
@@ -221,26 +228,35 @@
     function renderAttachPreview() {
         if (!attachPreview) return;
         attachPreview.innerHTML = '';
-        if (!stagedAttachment) { attachPreview.style.display = 'none'; return; }
-        attachPreview.style.display = 'flex';
-        var wrap = document.createElement('div');
-        wrap.style.cssText = 'position:relative;display:inline-block;border:1px solid var(--sl-panel-border-color);border-radius:6px;overflow:hidden;';
-        var img = document.createElement('img');
-        img.src = stagedAttachment.previewUrl;
-        img.style.cssText = 'display:block;max-height:96px;max-width:160px;object-fit:cover;';
-        wrap.appendChild(img);
-        var rm = document.createElement('button');
-        rm.type = 'button';
-        rm.title = 'Remove image';
-        rm.innerHTML = '&times;';
-        rm.style.cssText = 'position:absolute;top:0;right:0;border:0;cursor:pointer;color:#fff;background:rgba(0,0,0,0.55);width:22px;height:22px;border-radius:0 0 0 6px;font-size:1rem;line-height:1;';
-        rm.addEventListener('click', clearAttachment);
-        wrap.appendChild(rm);
-        attachPreview.appendChild(wrap);
+        if (!stagedAttachments.length) { attachPreview.style.display = 'none'; return; }
+        attachPreview.style.cssText = 'display:flex;margin-bottom:6px;gap:6px;overflow-x:auto;max-width:100%;padding-bottom:2px;';
+        stagedAttachments.forEach(function (att, idx) {
+            var wrap = document.createElement('div');
+            wrap.style.cssText = 'position:relative;display:inline-block;flex-shrink:0;border:1px solid var(--sl-panel-border-color);border-radius:12px;overflow:hidden;';
+            var img = document.createElement('img');
+            img.src = att.previewUrl;
+            img.style.cssText = 'display:block;height:96px;width:96px;object-fit:cover;';
+            wrap.appendChild(img);
+            var rm = document.createElement('button');
+            rm.type = 'button';
+            rm.title = 'Remove image';
+            rm.innerHTML = '&times;';
+            rm.style.cssText = 'position:absolute;top:0;right:0;border:0;cursor:pointer;color:#fff;background:rgba(0,0,0,0.55);width:22px;height:22px;border-radius:0 0 0 12px;font-size:1rem;line-height:1;';
+            rm.addEventListener('click', function () { removeAttachmentAt(idx); });
+            wrap.appendChild(rm);
+            attachPreview.appendChild(wrap);
+        });
+    }
+
+    function removeAttachmentAt(idx) {
+        stagedAttachments.splice(idx, 1);
+        if (attachInput) attachInput.value = '';
+        renderAttachPreview();
+        resetAttachHint();
     }
 
     function clearAttachment() {
-        stagedAttachment = null;
+        stagedAttachments = [];
         if (attachInput) attachInput.value = '';
         renderAttachPreview();
         resetAttachHint();
@@ -265,7 +281,7 @@
         img.src = src;
         img.loading = 'lazy';
         img.className = 'chat-image-thumb';
-        img.style.cssText = 'max-width:100%;max-height:300px;border-radius:6px;border:1px solid var(--sl-panel-border-color);object-fit:contain;';
+        img.style.cssText = 'max-width:100%;max-height:300px;border-radius:12px;border:1px solid var(--sl-panel-border-color);object-fit:contain;';
         img.alt = kind === 'generated-image' ? 'Generated image' : 'Attached image';
         // Click to view full-size in the lightbox — reuses the SAME src (already the full-
         // resolution image; this thumbnail is only CSS-scaled down), so right-click "Save
@@ -587,21 +603,19 @@
         var text = (inputEl.value || '').trim();
         if (!text) return;
 
-        // A staged image is always attachable now — the SERVER decides how to route it (inline
+        // Staged images are always attachable now — the SERVER decides how to route them (inline
         // to a vision-capable text model, or delegated to a separate vision model).
-        var attachment = null;
-        var stagedPreview = null;
-        if (stagedAttachment) {
-            attachment = { mime: stagedAttachment.mime, dataBase64: stagedAttachment.dataBase64 };
-            stagedPreview = stagedAttachment.previewUrl;
-        }
+        var attachments = stagedAttachments.map(function (a) {
+            return { mime: a.mime, dataBase64: a.dataBase64 };
+        });
+        var stagedPreviews = stagedAttachments.map(function (a) { return a.previewUrl; });
 
         var bubble = addBubble('user', renderMarkdown(text));
         if (bubble.firstElementChild)
             bubble.firstElementChild.title = buildMetaTooltip('user', { createdAt: Date.now() });
-        if (stagedPreview) {
-            renderImageFigure(bubble.querySelector('.chat-bubble-body'), stagedPreview, null, 'user-upload');
-        }
+        stagedPreviews.forEach(function (previewUrl) {
+            renderImageFigure(bubble.querySelector('.chat-bubble-body'), previewUrl, null, 'user-upload');
+        });
         inputEl.value = '';
         clearAttachment();
         hideEmpty();
@@ -617,7 +631,7 @@
         // homepage server-side. Continuations of an existing conversation never re-pin.
         // /AI never sets this (homeWelcome is null there), so its behavior is unchanged.
         if (homeWelcome && !currentConversationId) body.pinToHome = true;
-        if (attachment) body.attachment = attachment;
+        if (attachments.length) body.attachments = attachments;
         runTurn(makeTurn(), '/api-proxy/chat/stream', body);
     }
 
@@ -1316,7 +1330,7 @@
         if (item && item.value === 'add-image' && attachInput) attachInput.click();
     });
     if (attachInput) attachInput.addEventListener('change', function () {
-        if (attachInput.files && attachInput.files[0]) processImageFile(attachInput.files[0]);
+        if (attachInput.files) for (var i = 0; i < attachInput.files.length; i++) processImageFile(attachInput.files[i]);
     });
     if (inputEl) {
         inputEl.addEventListener('paste', function (e) {
@@ -1325,7 +1339,7 @@
             for (var i = 0; i < items.length; i++) {
                 if (items[i].type && items[i].type.indexOf('image/') === 0) {
                     var f = items[i].getAsFile();
-                    if (f) { e.preventDefault(); processImageFile(f); break; }
+                    if (f) { e.preventDefault(); processImageFile(f); }
                 }
             }
         });
@@ -1352,8 +1366,8 @@
             e.preventDefault();
             dragDepth = 0;
             composerEl.classList.remove('drag-over');
-            var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-            if (f) processImageFile(f);
+            var files = e.dataTransfer && e.dataTransfer.files;
+            if (files) for (var i = 0; i < files.length; i++) processImageFile(files[i]);
         });
     }
 
