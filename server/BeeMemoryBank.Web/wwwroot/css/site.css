@@ -715,6 +715,7 @@ a.search-result-title:hover {
 .tree-view { padding: 4px 0; }
 
 .tree-node-row {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -725,7 +726,18 @@ a.search-result-title:hover {
     transition: background 0.12s;
 }
 .tree-node-row:hover { background: var(--tree-hover); }
-.tree-refresh-node-btn { opacity: 0; transition: opacity 0.15s; }
+/* Positioned out of flow so it doesn't eat flex width from .tree-node-link — otherwise
+   folder rows (which have this button) get less room for their label than article rows
+   (which don't), making folder names truncate/ellipsis earlier and look like they have
+   extra right padding. */
+.tree-refresh-node-btn {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
 .tree-node-row:hover .tree-refresh-node-btn { opacity: 1; }
 
 .tree-chevron {
