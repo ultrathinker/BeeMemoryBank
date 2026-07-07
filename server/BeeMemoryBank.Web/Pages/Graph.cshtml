@@ -79,10 +79,30 @@
         #btn-fullscreen {
             display: inline-flex;
         }
+        /* Make the page's own content column fill the available viewport height
+           instead of sizing the graph area off a fragile magic-number
+           calc(100vh - Npx). Rows above the graph (header, legend, folder-scope
+           bar, filter bar, tags table) keep their natural content height
+           (flex-shrink:0 below); the graph area is the only flexible row and
+           consumes whatever space is left via flex:1. That way, adding, removing,
+           or resizing any row above automatically resizes the graph instead of
+           pushing it below the viewport.
+           .main-content's own height is already fully determined by the outer
+           flex chain (body -> .app-body -> .main-content), so height:100% here
+           resolves to a real pixel value, not an intrinsic/auto one. */
+        body.graph-page .main-content {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 0;
+        }
+        body.graph-page .main-content > * {
+            flex-shrink: 0;
+        }
         #graph-fullscreen-wrap {
             position: relative;
-            height: calc(100vh - 220px);
-            min-height: 450px;
+            flex: 1 1 auto;
+            min-height: 320px;
             max-width: 100%;
         }
         /* The graph page has its own floating sidebars (bee-panel-left/right) whose
