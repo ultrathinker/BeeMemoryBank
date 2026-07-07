@@ -172,6 +172,9 @@
         <sl-input class="bmb-fp-input" placeholder="Type to search folders, or pick / for root" autocomplete="off" size="small"></sl-input>
         <div class="bmb-fp-dropdown" hidden></div>
     </div>
+    <sl-tooltip content="Apply folder + re-run search" id="folder-scope-apply-tip" style="display:none;">
+        <sl-icon-button id="folder-scope-apply" name="check-lg" label="Apply folder scope" size="small"></sl-icon-button>
+    </sl-tooltip>
     <sl-icon-button id="folder-scope-clear" name="x-lg" label="Clear folder scope" size="small" style="display:none;"></sl-icon-button>
 </div>
 
@@ -1138,6 +1141,8 @@
         const folderScopeLink = document.getElementById('folder-scope-link');
         const folderScopePickerEl = document.getElementById('folder-scope-picker');
         const folderScopeClearBtn = document.getElementById('folder-scope-clear');
+        const folderScopeApplyTip = document.getElementById('folder-scope-apply-tip');
+        const folderScopeApplyBtn = document.getElementById('folder-scope-apply');
         let folderPickerApi = null;
 
         function setFolderScope(path) {
@@ -1163,14 +1168,25 @@
             folderScopeLink.style.display = 'none';
             folderScopePickerEl.hidden = false;
             folderScopeClearBtn.style.display = 'inline-flex';
+            folderScopeApplyTip.style.display = 'inline-flex';
             folderPickerApi.focus();
         }
 
         function closeFolderPicker() {
             folderScopePickerEl.hidden = true;
             folderScopeClearBtn.style.display = 'none';
+            folderScopeApplyTip.style.display = 'none';
             folderScopeLink.style.display = 'inline-flex';
         }
+
+        // Re-runs the graph search with whatever tag is currently typed in the
+        // filter box, now that the folder scope has changed — lets the user pick
+        // a folder AFTER already having typed/searched a tag and have both apply
+        // together (picking a folder alone doesn't re-trigger the search, since
+        // the tag box might still be mid-edit).
+        folderScopeApplyBtn.addEventListener('click', function() {
+            if ((filterInput.value || '').trim()) loadMode('search');
+        });
 
         folderScopeLink.addEventListener('click', function(e) {
             e.preventDefault();
