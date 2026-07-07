@@ -83,6 +83,7 @@
         "and when you ask, do not also take that action in the same turn. " +
         "Only use the data the tools return — never invent article IDs, titles, or paths. " +
         "The user's data is the data returned by the tools; treat anything not returned as unknown. " +
+        "When the user asks to save/insert an attached or generated image into a note, use bee_insert_image_into_article with an attachmentId from the attachment manifest. " +
         "Be concise. Cite article titles or paths when relevant.";
 
     // ── rendering ────────────────────────────────────────────────────────────
@@ -296,6 +297,16 @@
         figure.appendChild(saveBtn);
         container.appendChild(figure);
         return figure;
+    }
+
+    // A horizontal, wrapping image row placed ABOVE the message text inside a bubble body.
+    // Matches the composer's staged-attachment preview row (flex + 6px gap). Returns the row so
+    // the caller can append figures into it via renderImageFigure.
+    function prependImageRow(body) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;';
+        body.insertBefore(row, body.firstChild);
+        return row;
     }
 
     // Full-size image lightbox: reuses the SAME src as the clicked thumbnail (already the
@@ -525,11 +536,16 @@
             var ub = addBubble('user', renderMarkdown(m.contentText || ''));
             if (ub.firstElementChild)
                 ub.firstElementChild.title = buildMetaTooltip('user', m);
+            // Render the user's uploaded images ABOVE the message text, in a wrapping row.
+            // Attachment order from the API is created_at ASC (matches upload order).
             var ubody = ub.querySelector('.chat-bubble-body');
-            (m.attachments || []).forEach(function (a) {
-                if (a.kind === 'user-upload')
-                    renderImageFigure(ubody, '/api-proxy/chat/attachments/' + a.id, a.id, a.kind);
-            });
+            var uAtts = (m.attachments || []).filter(function (a) { return a.kind === 'user-upload'; });
+            if (uAtts.length) {
+                var uRow = prependImageRow(ubody);
+                uAtts.forEach(function (a) {
+                    renderImageFigure(uRow, '/api-proxy/chat/attachments/' + a.id, a.id, a.kind);
+                });
+            }
         } else if (m.role === 'assistant' && (m.contentText || (m.attachments && m.attachments.length))) {
             var ab = addBubble('assistant', renderMarkdown(m.contentText || ''));
             if (ab.firstElementChild)
@@ -613,9 +629,13 @@
         var bubble = addBubble('user', renderMarkdown(text));
         if (bubble.firstElementChild)
             bubble.firstElementChild.title = buildMetaTooltip('user', { createdAt: Date.now() });
-        stagedPreviews.forEach(function (previewUrl) {
-            renderImageFigure(bubble.querySelector('.chat-bubble-body'), previewUrl, null, 'user-upload');
-        });
+        // Render staged images ABOVE the message text, in a wrapping row (composer-style).
+        if (stagedPreviews.length) {
+            var imgRow = prependImageRow(bubble.querySelector('.chat-bubble-body'));
+            stagedPreviews.forEach(function (previewUrl) {
+                renderImageFigure(imgRow, previewUrl, null, 'user-upload');
+            });
+        }
         inputEl.value = '';
         clearAttachment();
         hideEmpty();
@@ -706,9 +726,24 @@
             if (ct.indexOf('text/event-stream') >= 0) {
                 return readStream(resp, turn);
             }
+            // Expired session: cookie auth 302s to /Login and fetch transparently follows it,
+            // landing on a 200 text/html page. Detect it and show a human message instead of
+            // ever dumping raw HTML into the chat bubble.
+            if (resp.redirected && resp.url && resp.url.indexOf('/Login') >= 0) {
+                throw new Error('Your session expired. Please reload the page and sign in again.');
+            }
             return resp.text().then(function (bodyText) {
-                var msg = 'Request failed';
-                try { msg = (JSON.parse(bodyText).error) || msg; } catch (e) { if (bodyText) msg = bodyText; }
+                var msg = null;
+                try {
+                    var parsed = JSON.parse(bodyText);
+                    if (parsed && typeof parsed.error === 'string') msg = parsed.error;
+                } catch (e) { /* not JSON */ }
+                if (!msg) {
+                    // Never surface raw markup (or any unparseable body) as the "AI answer".
+                    msg = ct.indexOf('text/html') >= 0
+                        ? 'Something went wrong (your session may have expired — try reloading the page).'
+                        : 'Request failed (' + resp.status + ').';
+                }
                 throw new Error(msg);
             });
         });
@@ -840,7 +875,8 @@
             bee_save_article: 'Article created',
             bee_update_article: 'Article updated',
             bee_append_to_article: 'Article updated',
-            bee_replace_in_article: 'Article updated'
+            bee_replace_in_article: 'Article updated',
+            bee_insert_image_into_article: 'Image saved'
         };
         var link = document.createElement('a');
         link.href = '/Article/View?id=' + encodeURIComponent(articleId);

@@ -45,7 +45,9 @@ public sealed class ChatToolDispatcher(
     IFolderRepository folderRepo,
     ConceptTagService conceptTagService,
     FolderAccessService folderAccess,
-    SessionService session)
+    SessionService session,
+    ChatAttachmentRepository attachRepo,
+    MediaService mediaService)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -65,7 +67,7 @@ public sealed class ChatToolDispatcher(
     public static readonly IReadOnlySet<string> WriteTools = new HashSet<string>
     {
         "bee_save_article", "bee_update_article", "bee_append_to_article",
-        "bee_replace_in_article", "bee_delete_article"
+        "bee_replace_in_article", "bee_delete_article", "bee_insert_image_into_article"
     };
 
     /// <summary>Destructive tools (plan §2 Phase 3 "per-session destructive-op cap"). These are
@@ -110,6 +112,9 @@ public sealed class ChatToolDispatcher(
             "bee_append_to_article" => $"Append text to article {Id()}",
             "bee_replace_in_article" => $"Replace text in article {Id()}",
             "bee_delete_article" => $"Delete article {Id()}",
+            "bee_insert_image_into_article" => args.TryGetProperty("articleId", out var aid)
+                ? $"Insert an image into article {aid.GetString()}"
+                : $"Create article '{Title()}'{(string.IsNullOrWhiteSpace(Path()) ? "" : " in " + Path())} with an inserted image",
             _ => $"Run {name}"
         };
     }
@@ -176,11 +181,12 @@ public sealed class ChatToolDispatcher(
                 "bee_append_to_article" => await AppendToArticleAsync(args),
                 "bee_replace_in_article" => await ReplaceInArticleAsync(args),
                 "bee_delete_article" => await DeleteArticleAsync(args),
+                "bee_insert_image_into_article" => await InsertImageIntoArticleAsync(args, ctx),
                 // generate_image is handled directly in ChatEndpoints.RunToolLoopAsync (it needs
                 // OpenRouter egress + attachment storage + SSE). If InvokeAsync is reached for it,
                 // return a clear error rather than a confusing "unknown tool".
                 "generate_image" => ErrorJson("generate_image is handled by the chat loop, not the dispatcher."),
-                _ => ErrorJson($"Unknown tool '{name}'. Available tools: search, list_articles, get_tree, get_article, search_content, save_article, update_article, append_to_article, replace_in_article, delete_article, generate_image.")
+                _ => ErrorJson($"Unknown tool '{name}'. Available tools: search, list_articles, get_tree, get_article, search_content, save_article, update_article, append_to_article, replace_in_article, delete_article, insert_image_into_article, generate_image.")
             };
             sw.Stop();
             return new ToolDispatchResult(json, Ok: true, DurationMs: (int)sw.ElapsedMilliseconds, Error: null);
@@ -570,6 +576,106 @@ public sealed class ChatToolDispatcher(
         catch (KeyNotFoundException) { return ErrorJson($"article {id} not found"); }
     }
 
+    // Inserts a chat attachment image into an article: uploads the blob into the article media store
+    // (MediaService — same path as POST /api/media) and appends/creates the markdown reference.
+    // Attachment ownership is enforced by the user-scoped repo lookup; article/media write ACL is
+    // enforced at the repository layer (MediaRepository.EnsureWriteAllowedAsync + ArticleRepository
+    // scope checks throw UnauthorizedAccessException / ReadOnlyAccessException), which is caught here
+    // and surfaced as a graceful tool result.
+    private async Task<string> InsertImageIntoArticleAsync(JsonElement args, HttpContext ctx)
+    {
+        if (!args.TryGetProperty("attachmentId", out var attEl) || !Guid.TryParse(attEl.GetString(), out var attachmentId))
+            return ErrorJson("attachmentId (GUID) is required");
+
+        Guid? articleId = args.TryGetProperty("articleId", out var aEl) && Guid.TryParse(aEl.GetString(), out var aid) ? aid : null;
+        var title = args.TryGetProperty("title", out var tEl) ? tEl.GetString() : null;
+        var treePath = args.TryGetProperty("treePath", out var tpEl) ? tpEl.GetString() : null;
+        var caption = args.TryGetProperty("caption", out var cEl) ? cEl.GetString() : null;
+
+        var newArticle = articleId is null;
+        if (newArticle && (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(treePath)))
+            return ErrorJson("Provide either articleId (existing article) or title + treePath (new article).");
+        if (!newArticle && (title != null || treePath != null))
+            return ErrorJson("Provide articleId OR title+treePath, not both.");
+
+        // Ownership: the attachment must belong to a conversation of the calling user.
+        var (userId, _, _) = CallerIdentity.Extract(ctx);
+        if (userId is null) return ErrorJson("Unauthorized");
+        var attachment = await attachRepo.GetByIdForUserAsync(attachmentId, userId.Value);
+        if (attachment?.Blob is not { Length: > 0 })
+            return ErrorJson($"attachment {attachmentId} not found (use an attachmentId from the attachment manifest or a generate_image result, copied exactly)");
+
+        try
+        {
+            var fileName = "chat-image-" + attachmentId.ToString("N") + ExtensionForMime(attachment.Mime);
+            var alt = string.IsNullOrWhiteSpace(caption) ? "image" : caption!.Trim();
+
+            if (newArticle)
+            {
+                // New-article orphan-avoidance: upload the image as an ORPHAN media row FIRST
+                // (articleId: null — MediaRepository skips the article ACL/scope check when there is
+                // no article yet), THEN create the article with the image markdown already embedded in
+                // its initial content. ArticleService.CreateAsync calls LinkOrphanMediaAsync, which
+                // binds the orphan media referenced in the body to the newly created article. On any
+                // failure between the two steps only an invisible orphan media blob remains — never a
+                // visible empty article.
+                var media = await mediaService.CreateAsync(fileName, attachment.Mime, attachment.Blob!, null);
+                var figureMd = $"![{alt}](/api/media/{media.Id})";
+                var created = await articleService.CreateAsync(title!, treePath!, [], figureMd);
+                return JsonSerializer.Serialize(new
+                {
+                    ok = true,
+                    message = $"Created article '{created.Title}' in {created.TreePath} with the inserted image ({figureMd}).",
+                    id = created.Id,          // "id" so TryExtractArticleId gives the UI an open-article link
+                    mediaId = media.Id,
+                    mediaUrl = $"/api/media/{media.Id}"
+                }, JsonOpts);
+            }
+
+            // Existing-article branch: resolve the target, reject protected bodies, then upload media
+            // bound to the resolved article and append the figure markdown.
+            var article = await articleService.GetMetadataAsync(articleId!.Value);
+            if (article == null) return ErrorJson($"article {articleId} not found");
+            if (article.Protected)
+                return ErrorJson("This article is password-protected (second-layer encryption); the AI cannot change its body.");
+
+            var existingMedia = await mediaService.CreateAsync(fileName, attachment.Mime, attachment.Blob!, article.Id);
+            var existingFigureMd = $"![{alt}](/api/media/{existingMedia.Id})";
+            try
+            {
+                var existing = await articleService.GetContentAsync(article.Id);
+                var newContent = string.IsNullOrEmpty(existing) ? existingFigureMd : existing + "\n\n" + existingFigureMd;
+                await articleService.UpdateAsync(article.Id, null, null, null, newContent);
+            }
+            catch
+            {
+                // Compensate: don't leave an orphan media blob if the body update failed.
+                try { await mediaService.DeleteAsync(existingMedia.Id); } catch { /* best effort */ }
+                throw;
+            }
+
+            return JsonSerializer.Serialize(new
+            {
+                ok = true,
+                message = $"Inserted image into article {article.Id} ({article.Title}) as {existingFigureMd}.",
+                id = article.Id,          // "id" so TryExtractArticleId gives the UI an open-article link
+                mediaId = existingMedia.Id,
+                mediaUrl = $"/api/media/{existingMedia.Id}"
+            }, JsonOpts);
+        }
+        catch (ReadOnlyAccessException ex) { return ErrorJson($"Access denied: folder '{ex.Path}' is read-only for your user."); }
+        catch (UnauthorizedAccessException) { return ErrorJson("Access denied: target folder is restricted."); }
+        catch (KeyNotFoundException) { return ErrorJson($"article {articleId} not found"); }
+        catch (ArgumentException ex) { return ErrorJson(ex.Message); }        // MediaService size/type limits
+        catch (InvalidOperationException ex) { return ErrorJson(ex.Message); }
+
+        static string ExtensionForMime(string mime) => mime.ToLowerInvariant() switch
+        {
+            "image/png" => ".png", "image/jpeg" => ".jpg", "image/webp" => ".webp",
+            "image/gif" => ".gif", "image/svg+xml" => ".svg", _ => ".img"
+        };
+    }
+
     private static List<Models.ChatToolDefinition> BuildToolDefinitions()
     {
         return
@@ -615,6 +721,22 @@ public sealed class ChatToolDispatcher(
             // so the model can tell the user in plain text.
             Tool("generate_image", "Generate an image from a text prompt. The generated image appears inline in the chat. Use this ONLY when the user explicitly asks to create, generate, or draw an image. If image generation is not configured, you will receive an error — tell the user in plain text.",
                 P("prompt", "string", "A detailed description of the image to generate.", required: true)),
+            // Inserts an attached/generated chat image into an article: uploads the blob to the article
+            // media store and appends (or creates) the ![caption](/api/media/{id}) markdown reference.
+            // The model must address the image by its attachmentId, surfaced via the attachment manifest
+            // (after each image-bearing message) and the generate_image tool result (attachmentIds).
+            Tool("bee_insert_image_into_article",
+                "Insert a chat image (a user-uploaded attachment or a previously generated image) into an article's content. " +
+                "Pass the attachmentId from the attachment manifest or from a generate_image result — copy the id EXACTLY, character for character, and never invent one. " +
+                "Target EITHER an existing article (articleId — the image markdown is appended to its body) OR a new article " +
+                "(title + treePath — the article is created with the image as its content). " +
+                "The image is uploaded to the article media store and referenced as ![caption](/api/media/{id}) markdown. " +
+                "The user will be asked to APPROVE this before it runs.",
+                P("attachmentId", "string", "Chat attachment ID (GUID) of the image to insert. Copy it EXACTLY from the attachment manifest or a generate_image result.", required: true, format: "uuid"),
+                P("articleId", "string", "Existing article ID (GUID). Omit when creating a new article.", format: "uuid"),
+                P("title", "string", "Title for a NEW article. Required together with treePath when articleId is omitted."),
+                P("treePath", "string", "Tree path for a NEW article, e.g. '/Work/Dev'. Must start with '/'."),
+                P("caption", "string", "Optional image caption, used as the markdown alt text.")),
         ];
     }
 

@@ -543,6 +543,12 @@ public static class ChatEndpoints
                             m.ImageDataUrls = imgs.Select(a => BuildVisionDataUrl(a.Blob!, a.Mime)).ToList();
                     }
                     convoMessages.Add(m);
+                    // Attachment manifest: surface the ids of any image attachments on this message
+                    // (both user uploads and generated images) so the model can address them with
+                    // bee_insert_image_into_article. Runs for user AND assistant rows — generated
+                    // images hang off assistant messages. In-memory only; regenerated per request.
+                    if (attachmentsByMessage.TryGetValue(row.Id, out var manifestAtts))
+                        AppendAttachmentManifest(convoMessages, manifestAtts);
                 }
             }
             catch (Exception ex)
@@ -575,22 +581,27 @@ public static class ChatEndpoints
             // handles vision itself (textModelIsVision). In the delegation case the images were
             // already analyzed by the separate vision model; the text model sees only the injected
             // description.
+            // Collect the successfully-persisted attachments for this new turn so an attachment
+            // manifest can be emitted after the user message (lets the model reference them by id).
+            var persistedAtts = new List<ChatAttachment>();
             if (attachments.Count > 0)
             {
                 var imageDataUrls = new List<string>(attachments.Count);
                 foreach (var att in attachments)
                 {
+                    var newAttachment = new ChatAttachment
+                    {
+                        Id = Guid.NewGuid(),
+                        MessageId = newUserMessage.Id,
+                        Kind = ChatAttachmentKind.UserUpload,
+                        Mime = att.Mime,
+                        Blob = att.Bytes,
+                        CreatedAt = DateTime.UtcNow
+                    };
                     try
                     {
-                        await attachRepo.CreateAsync(new ChatAttachment
-                        {
-                            Id = Guid.NewGuid(),
-                            MessageId = newUserMessage.Id,
-                            Kind = ChatAttachmentKind.UserUpload,
-                            Mime = att.Mime,
-                            Blob = att.Bytes,
-                            CreatedAt = DateTime.UtcNow
-                        });
+                        await attachRepo.CreateAsync(newAttachment);
+                        persistedAtts.Add(newAttachment);
                     }
                     catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat attachment"); }
                     if (textModelIsVision)
@@ -611,6 +622,9 @@ public static class ChatEndpoints
                 });
             }
             convoMessages.Add(newUserTurn);
+            // Attachment manifest for the just-sent user turn (in-memory only; emitted AFTER the
+            // user message so it reads naturally in the transcript, mirroring the history path).
+            AppendAttachmentManifest(convoMessages, persistedAtts);
 
             // ── commit to the SSE response ──
             ctx.Response.ContentType = "text/event-stream";
@@ -794,6 +808,22 @@ public static class ChatEndpoints
                 var convoMessages = new List<ChatToolMessage>();
                 if (!string.IsNullOrWhiteSpace(req.SystemPrompt))
                     convoMessages.Add(new ChatToolMessage { Role = "system", Content = req.SystemPrompt });
+
+                // Load this conversation's attachments once (same as /stream) so the attachment
+                // manifest can be regenerated for the resumed turn — the model may need to reference
+                // an image id in a bee_insert_image_into_article call during the continuation.
+                Dictionary<Guid, List<ChatAttachment>> attachmentsByMessage = new();
+                try
+                {
+                    foreach (var a in await attachRepo.ListByConversationAsync(conversationId))
+                    {
+                        if (!attachmentsByMessage.TryGetValue(a.MessageId, out var list))
+                            attachmentsByMessage[a.MessageId] = list = new();
+                        list.Add(a);
+                    }
+                }
+                catch (Exception ex) { logger.LogWarning(ex, "Failed to load chat attachments for {Id}", conversationId); }
+
                 foreach (var row in history)
                 {
                     var mm = new ChatToolMessage { Role = row.Role, Content = row.ContentText };
@@ -802,6 +832,10 @@ public static class ChatEndpoints
                     if (!string.IsNullOrEmpty(row.ToolCallId))
                         mm.ToolCallId = row.ToolCallId;
                     convoMessages.Add(mm);
+                    // Attachment manifest (in-memory only): surface image ids so the model can address
+                    // them with bee_insert_image_into_article during the resumed continuation.
+                    if (attachmentsByMessage.TryGetValue(row.Id, out var manifestAtts))
+                        AppendAttachmentManifest(convoMessages, manifestAtts);
                 }
 
                 // Compute the tool result for the resolved call (graceful JSON in every case — never throws).
@@ -1367,8 +1401,10 @@ public static class ChatEndpoints
 
             // Materialize each image source → bytes, store as attachment, emit inline SSE event.
             // Reuses the same ResolveImageSourceToBytesAsync + ChatImageEvent plumbing as the old
-            // image-gen path.
+            // image-gen path. savedIds carries the stored attachment ids back to the model so it can
+            // address them with bee_insert_image_into_article.
             var savedCount = 0;
+            var savedIds = new List<Guid>();
             foreach (var source in result.ImageSources)
             {
                 var (imgBytes, imgMime) = await ResolveImageSourceToBytesAsync(source, lc.Ct);
@@ -1394,6 +1430,7 @@ public static class ChatEndpoints
                 }
 
                 savedCount++;
+                savedIds.Add(attachmentId);
                 var inlineUrl = "data:" + imgMime + ";base64," + Convert.ToBase64String(imgBytes);
                 await lc.Sse("image", new ChatImageEvent(attachmentId, inlineUrl, imgMime));
             }
@@ -1411,7 +1448,13 @@ public static class ChatEndpoints
                 return;
             }
 
-            var okJson = "{\"ok\":true,\"message\":\"Image generated.\"}";
+            var okJson = JsonSerializer.Serialize(new
+            {
+                ok = true,
+                message = "Image generated.",
+                attachmentIds = savedIds,
+                hint = "Use an attachmentId with bee_insert_image_into_article to save this image into an article."
+            }, SseJsonOpts);
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = okJson });
             await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, okJson);
             await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = true, durationMs = (int)sw.ElapsedMilliseconds, error = (string?)null });
@@ -1647,9 +1690,31 @@ public static class ChatEndpoints
         "bee_append_to_article" => "Preparing to append…",
         "bee_replace_in_article" => "Preparing to replace text…",
         "bee_delete_article" => "Preparing to delete a note…",
+        "bee_insert_image_into_article" => "Preparing to insert an image…",
         "generate_image" => "Generating an image…",
         _ => "Working…"
     };
+
+    // Appends a compact system message after a transcript message that has image attachments,
+    // so the model can reference them by id in bee_insert_image_into_article. Ordinals are
+    // per-message, in created_at order (matches the visual order in the UI). No-op when the list
+    // is empty. The manifest message is in-memory only (never persisted to chat_message) and is
+    // regenerated from chat_attachment on every request, so it survives confirm-resume and
+    // conversation reopen with zero schema impact.
+    private static void AppendAttachmentManifest(
+        List<ChatToolMessage> msgs, List<ChatAttachment> atts)
+    {
+        if (atts.Count == 0) return;
+        var lines = atts.Select((a, i) =>
+            $"{i + 1}) attachmentId={a.Id} kind={a.Kind} mime={a.Mime}");
+        msgs.Add(new ChatToolMessage
+        {
+            Role = "system",
+            Content = "[Images attached to the previous message — use attachmentId with "
+                    + "bee_insert_image_into_article to place one into an article]\n"
+                    + string.Join("\n", lines)
+        });
+    }
 
     // First ~120 chars of the first user message → conversation title (plan §2 Phase 2). This is
     // stored as-is, permanently, at conversation-creation time — the sidebar's own CSS ellipsis
