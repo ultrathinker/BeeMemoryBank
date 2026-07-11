@@ -1,6 +1,9 @@
 using System.Text;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.Extensions.Options;
 
 namespace BeeMemoryBank.Web.Endpoints;
 
@@ -75,6 +78,35 @@ public static class SnapshotProxyEndpoints
             var unlocked = await api.IsUnlockedAsync();
             return Results.Ok(new { isUnlocked = unlocked });
         }).RequireAuthorization();
+
+        app.MapGet("/api-proxy/session/settings", async (ApiClient api) =>
+        {
+            var settings = await api.GetSessionSettingsAsync();
+            return settings != null ? Results.Ok(settings) : Results.StatusCode(502);
+        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
+        app.MapPut("/api-proxy/session/settings", async (
+            HttpContext ctx, ApiClient api,
+            WebSessionSettingsService liveSettings,
+            IOptionsMonitorCache<CookieAuthenticationOptions> optionsCache) =>
+        {
+            var body = await ctx.Request.ReadFromJsonAsync<SessionSettingsDto>();
+            if (body == null) return Results.BadRequest();
+
+            var (ok, error) = await api.SetSessionSettingsAsync(body.ExpireHours, body.SlidingExpiration);
+            if (!ok) return Results.Json(new { error }, statusCode: 400);
+
+            // Apply immediately in THIS process — no restart needed. The lazy-load
+            // middleware only runs once per process lifetime, so a save must push the
+            // new values into the live singleton and force the cookie options to be
+            // recomputed on the very next request.
+            liveSettings.ExpireHours = body.ExpireHours;
+            liveSettings.SlidingExpiration = body.SlidingExpiration;
+            liveSettings.Loaded = true;
+            optionsCache.TryRemove("BeeWebCookie");
+
+            return Results.Ok(new { expireHours = body.ExpireHours, slidingExpiration = body.SlidingExpiration });
+        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
         app.MapGet("/api-proxy/sync/status", async (ApiClient api) =>
         {

@@ -59,6 +59,8 @@ public record JoinRequest(
 
 public record LoginRequest(string Username, string Password);
 
+public record SessionSettingsRequest(int ExpireHours, bool SlidingExpiration);
+
 public record CreateUserRequest(string Username, string DisplayName, string Password, string Role, bool ChatAccess = true);
 
 public record UpdateUserRequest(string DisplayName, string? Role = null, string? Password = null, bool? ChatAccess = null);

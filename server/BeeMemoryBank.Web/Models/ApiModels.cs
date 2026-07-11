@@ -22,6 +22,8 @@ public record EditContentDto(Guid Id, bool Protected, bool Unlocked, string? Con
 
 public record SessionStatusDto(bool IsUnlocked);
 
+public record SessionSettingsDto(int ExpireHours, bool SlidingExpiration);
+
 public record FolderInfoDto(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt, bool IsSystem = false);
 
 public record TreeChildrenDto(

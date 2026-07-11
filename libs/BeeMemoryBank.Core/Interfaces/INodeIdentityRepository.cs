@@ -15,4 +15,11 @@ public interface INodeIdentityRepository
     /// Idempotent: only updates rows where v=0; no-op if v=1 already.
     /// </summary>
     Task UpgradePrivateKeyToV1Async(Guid nodeId, byte[] wrappedPrivateKey, byte[] iv);
+
+    /// <summary>
+    /// Admin-configurable web login cookie lifetime. Falls back to (48, true) if the node
+    /// identity row doesn't exist yet (pre-init).
+    /// </summary>
+    Task<(int ExpireHours, bool SlidingExpiration)> GetSessionSettingsAsync();
+    Task SetSessionSettingsAsync(int expireHours, bool slidingExpiration);
 }

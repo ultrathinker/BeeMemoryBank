@@ -30,6 +30,8 @@ public record EditContentResponse(Guid Id, bool Protected, bool Unlocked, string
 
 public record SessionStatusResponse(bool IsUnlocked);
 
+public record SessionSettingsResponse(int ExpireHours, bool SlidingExpiration);
+
 public record UnlockResponse(bool IsUnlocked, string? MigratedSyntheticUsername);
 
 public record RecoveryKeyResponse(string RecoveryKey);

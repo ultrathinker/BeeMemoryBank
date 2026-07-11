@@ -95,5 +95,29 @@ public static class SessionEndpoints
 
         group.MapGet("/status", (SessionService session) =>
             Results.Ok(new SessionStatusResponse(session.IsUnlocked))).WithMetadata(new SkipInternalKey());
+
+        // Admin-configurable web login cookie lifetime (Web project applies these to its
+        // own CookieAuthenticationOptions — see BeeWebCookie config in Web's Program.cs).
+        // Bearer-token (agent) access never touches this cookie at all, so it is intentionally
+        // NOT part of this setting's scope — RequireNonAgent below just keeps write access to
+        // human superadmins via the browser, same as /lock.
+        group.MapGet("/settings", async (INodeIdentityRepository nodeRepo) =>
+        {
+            var (hours, sliding) = await nodeRepo.GetSessionSettingsAsync();
+            return Results.Ok(new SessionSettingsResponse(hours, sliding));
+        });
+
+        group.MapPut("/settings", async (SessionSettingsRequest req, INodeIdentityRepository nodeRepo, HttpContext ctx) =>
+        {
+            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
+            if (role != UserRoles.Superadmin)
+                return Results.Json(new ErrorResponse("Only superadmin can change session settings"), statusCode: 403);
+
+            if (req.ExpireHours < 1 || req.ExpireHours > 24 * 30)
+                return Results.Json(new ErrorResponse("expireHours must be between 1 and 720"), statusCode: 400);
+
+            await nodeRepo.SetSessionSettingsAsync(req.ExpireHours, req.SlidingExpiration);
+            return Results.Ok(new SessionSettingsResponse(req.ExpireHours, req.SlidingExpiration));
+        }).RequireNonAgent();
     }
 }

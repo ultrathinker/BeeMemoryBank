@@ -1123,6 +1123,52 @@
         }
         loadChatEnabled();
 
+        // Web session (cookie) settings: duration + sliding-expiration toggle.
+        var sessionHoursInput = document.getElementById('session-expire-hours');
+        var sessionSlidingToggle = document.getElementById('session-sliding-toggle');
+        var sessionSaveBtn = document.getElementById('btn-save-session-settings');
+        var sessionSavedMsg = document.getElementById('session-settings-saved-msg');
+        function loadSessionSettings() {
+            if (!sessionHoursInput || !sessionSlidingToggle) return;
+            fetch('/api-proxy/session/settings', { headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.ok ? r.json() : { expireHours: 48, slidingExpiration: true }; })
+                .then(function (data) {
+                    sessionHoursInput.value = data.expireHours;
+                    sessionSlidingToggle.checked = !!data.slidingExpiration;
+                })
+                .catch(function () {});
+        }
+        if (sessionSaveBtn) {
+            sessionSaveBtn.addEventListener('click', function () {
+                if (sessionSavedMsg) sessionSavedMsg.style.display = 'none';
+                var hours = parseInt(sessionHoursInput.value, 10);
+                if (!hours || hours < 1 || hours > 720) {
+                    alert('Session duration must be between 1 and 720 hours.');
+                    return;
+                }
+                sessionSaveBtn.loading = true;
+                fetch('/api-proxy/session/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expireHours: hours, slidingExpiration: sessionSlidingToggle.checked })
+                })
+                    .then(function (r) {
+                        sessionSaveBtn.loading = false;
+                        if (r.ok && sessionSavedMsg) {
+                            sessionSavedMsg.style.display = 'inline';
+                            setTimeout(function () { sessionSavedMsg.style.display = 'none'; }, 3000);
+                        } else if (!r.ok) {
+                            alert('Failed to save session settings.');
+                        }
+                    })
+                    .catch(function () {
+                        sessionSaveBtn.loading = false;
+                        alert('Failed to save session settings.');
+                    });
+            });
+        }
+        loadSessionSettings();
+
         loadKeys();
         loadModels();
     })();
@@ -1161,6 +1207,32 @@
             onclick="return confirm('Lock the server? The decryption key will be cleared from memory. All users will need to re-authenticate to access encrypted content.')">
             <sl-icon slot="prefix" name="lock"></sl-icon> Lock Server
         </sl-button>
+    </div>
+
+    <!-- Web Session -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="clock-history"></sl-icon> Web Session</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Controls how long a browser login (the "bee_session" cookie) stays valid before
+            requiring a fresh sign-in on the <a href="/Login">Login</a> page. This has no effect
+            on AI/MCP agents connected via a bearer token — those never use or extend this cookie.
+        </p>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <sl-input id="session-expire-hours" type="number" min="1" max="720" size="small"
+                label="Session duration (hours)" style="max-width:160px;"></sl-input>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+            <sl-switch id="session-sliding-toggle" size="small">Extend on activity (sliding)</sl-switch>
+        </div>
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            When sliding is on, each web visit resets the countdown — someone active every day
+            never gets logged out. When off, the session expires exactly N hours after login no
+            matter how often they visit.
+        </p>
+        <sl-button id="btn-save-session-settings" variant="primary" size="small">
+            <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
+        </sl-button>
+        <span id="session-settings-saved-msg" style="display:none;margin-left:8px;color:var(--sl-color-success-600);font-size:0.85rem;">Saved.</span>
     </div>
 
     <!-- Hard Delete -->

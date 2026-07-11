@@ -82,4 +82,30 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
               WHERE node_id = @nodeId AND ed25519_private_key_v = 0",
             new { nodeId, wrappedPrivateKey, iv });
     }
+
+    public async Task<(int ExpireHours, bool SlidingExpiration)> GetSessionSettingsAsync()
+    {
+        using var conn = OpenConnection();
+        var row = await conn.QuerySingleOrDefaultAsync<SessionSettingsRow>(
+            @"SELECT session_expire_hours AS ExpireHours, session_sliding_expiration AS SlidingExpiration
+              FROM tbl_node_identity LIMIT 1");
+        return row is null ? (48, true) : (row.ExpireHours, row.SlidingExpiration);
+    }
+
+    public async Task SetSessionSettingsAsync(int expireHours, bool slidingExpiration)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_node_identity
+              SET session_expire_hours = @expireHours,
+                  session_sliding_expiration = @slidingExpiration
+              WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+            new { expireHours, slidingExpiration });
+    }
+
+    private sealed class SessionSettingsRow
+    {
+        public int ExpireHours { get; set; }
+        public bool SlidingExpiration { get; set; }
+    }
 }

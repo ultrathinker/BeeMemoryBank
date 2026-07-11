@@ -4,6 +4,7 @@ using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 using System.Text;
 
 // If a published bundle sits next to the binary (wwwroot present), anchor ContentRoot
@@ -67,13 +68,12 @@ builder.Services.AddAuthentication("BeeWebCookie")
         // Development can still log in over http://localhost because Chrome
         // exempts localhost from the Secure cookie restriction.
         options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
-        // W3 (Option B): short, NON-sliding cookie lifetime. A stolen/leaked cookie is
-        // good for at most 8h and never refreshes, bounding the window for a stale
-        // credential (deleted/demoted/password-reset user) to hours, not days. This is
-        // the immediate ceiling on its own; Option A (security-stamp revalidation) adds
-        // per-event revocation on top.
-        options.ExpireTimeSpan = TimeSpan.FromHours(8);
-        options.SlidingExpiration = false;
+        // W3 (Option B): the actual ExpireTimeSpan/SlidingExpiration values are admin-
+        // configurable (default 48h, sliding ON) — see the AddOptions<CookieAuthenticationOptions>
+        // .Configure<WebSessionSettingsService> registration below, which runs AFTER this
+        // delegate and overrides these two properties with the current DB-backed values.
+        // Option A (security-stamp revalidation) adds independent per-event revocation on top,
+        // regardless of the configured lifetime.
 
         // W3 (Option A): revalidate the cookie's embedded security stamp against the API.
         // Runs on every AUTHENTICATED request (static files run before auth, so never on
@@ -155,6 +155,20 @@ builder.Services.AddAuthentication("BeeWebCookie")
         };
     });
 
+// Admin-configurable web login cookie lifetime (default 48h, sliding ON — see
+// WebSessionSettingsService). Registered as a separate named-options Configure so it
+// composes with (and runs after, overriding) the base AddCookie(...) setup above.
+// Runtime changes take effect immediately via IOptionsMonitorCache<CookieAuthenticationOptions>
+// invalidation — see the session-settings lazy-load middleware and the
+// /api-proxy/session/settings PUT handler.
+builder.Services.AddSingleton<WebSessionSettingsService>();
+builder.Services.AddOptions<CookieAuthenticationOptions>("BeeWebCookie")
+    .Configure<WebSessionSettingsService>((opts, settings) =>
+    {
+        opts.ExpireTimeSpan = TimeSpan.FromHours(settings.ExpireHours);
+        opts.SlidingExpiration = settings.SlidingExpiration;
+    });
+
 builder.Services.AddAuthorization();
 
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
@@ -199,6 +213,33 @@ app.Use(async (context, next) =>
             }
         }
         // initialized == null → API unreachable, let the request through
+    }
+    await next();
+});
+
+// ─── Session (cookie) settings — lazy-fetch once, refresh live on save ────────────
+// Fetches the admin-configured cookie lifetime/sliding-expiration from the API on the
+// first request (same "try once, stick once confirmed" idiom as the init-status check
+// above), then invalidates the named CookieAuthenticationOptions cache so the framework
+// picks up the DB-backed values instead of WebSessionSettingsService's hardcoded
+// defaults. If the API is unreachable, defaults are used and the next request retries.
+var sessionSettingsLoaded = 0;
+app.Use(async (context, next) =>
+{
+    if (Volatile.Read(ref sessionSettingsLoaded) == 0)
+    {
+        var api = context.RequestServices.GetRequiredService<ApiClient>();
+        var settings = context.RequestServices.GetRequiredService<WebSessionSettingsService>();
+        var fetched = await api.GetSessionSettingsAsync();
+        if (fetched != null)
+        {
+            settings.ExpireHours = fetched.ExpireHours;
+            settings.SlidingExpiration = fetched.SlidingExpiration;
+            settings.Loaded = true;
+            Volatile.Write(ref sessionSettingsLoaded, 1);
+            context.RequestServices.GetRequiredService<IOptionsMonitorCache<CookieAuthenticationOptions>>()
+                .TryRemove("BeeWebCookie");
+        }
     }
     await next();
 });

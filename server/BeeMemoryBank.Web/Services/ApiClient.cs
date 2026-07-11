@@ -116,6 +116,27 @@ public partial class ApiClient(HttpClient http)
         return resp?.IsUnlocked ?? false;
     }
 
+    public async Task<SessionSettingsDto?> GetSessionSettingsAsync()
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<SessionSettingsDto>("/api/session/settings", JsonOpts);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<(bool Ok, string? Error)> SetSessionSettingsAsync(int expireHours, bool slidingExpiration)
+    {
+        var resp = await http.PutAsJsonAsync("/api/session/settings",
+            new { expireHours, slidingExpiration }, JsonOpts);
+        if (resp.IsSuccessStatusCode) return (true, null);
+        var error = await TryReadErrorAsync(resp);
+        return (false, error ?? $"HTTP {(int)resp.StatusCode}");
+    }
+
     // W3 (Option A): fetch this user's node-local security stamp for cookie revalidation.
     // userId is passed EXPLICITLY (not read from HttpContext) because this is called from
     // OnValidatePrincipal, where HttpContext.User is not yet the authenticated principal —
