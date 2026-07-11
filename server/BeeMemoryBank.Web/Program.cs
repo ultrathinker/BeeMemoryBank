@@ -228,18 +228,26 @@ app.Use(async (context, next) =>
 {
     if (Volatile.Read(ref sessionSettingsLoaded) == 0)
     {
-        var api = context.RequestServices.GetRequiredService<ApiClient>();
         var settings = context.RequestServices.GetRequiredService<WebSessionSettingsService>();
-        var fetched = await api.GetSessionSettingsAsync();
-        if (fetched != null)
+        if (!settings.Loaded)
         {
-            settings.ExpireHours = fetched.ExpireHours;
-            settings.SlidingExpiration = fetched.SlidingExpiration;
-            settings.Loaded = true;
-            Volatile.Write(ref sessionSettingsLoaded, 1);
-            context.RequestServices.GetRequiredService<IOptionsMonitorCache<CookieAuthenticationOptions>>()
-                .TryRemove("BeeWebCookie");
+            var api = context.RequestServices.GetRequiredService<ApiClient>();
+            var fetched = await api.GetSessionSettingsAsync();
+            if (fetched != null && !settings.Loaded)
+            {
+                settings.ExpireHours = fetched.ExpireHours;
+                settings.SlidingExpiration = fetched.SlidingExpiration;
+                settings.Loaded = true;
+                context.RequestServices.GetRequiredService<IOptionsMonitorCache<CookieAuthenticationOptions>>()
+                    .TryRemove("BeeWebCookie");
+            }
         }
+        // Stick only on a definitive answer — same idiom as the init-status middleware
+        // above: stop retrying once real values exist (a successful fetch OR an admin save
+        // that set Loaded=true underneath us). If the API was unreachable and no save has
+        // happened, leave the flag at 0 so the next request retries.
+        if (settings.Loaded)
+            Volatile.Write(ref sessionSettingsLoaded, 1);
     }
     await next();
 });

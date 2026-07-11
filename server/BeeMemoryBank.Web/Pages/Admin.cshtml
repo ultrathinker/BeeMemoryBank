@@ -1229,6 +1229,10 @@
             never gets logged out. When off, the session expires exactly N hours after login no
             matter how often they visit.
         </p>
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Changes apply only to new logins going forward — sessions already signed in keep the
+            expiry they were given at sign-in and are not shortened or revoked.
+        </p>
         <sl-button id="btn-save-session-settings" variant="primary" size="small">
             <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
         </sl-button>
