@@ -206,11 +206,15 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrEmpty(targetUrl))
                 {
                     _frontUrl = targetUrl;
-                    BmbWebView.Source = new Uri(targetUrl);
+                    // Subscribe BEFORE assigning Source: the origin-lock handlers must be in
+                    // place before the very first navigation happens, otherwise a tampered
+                    // .runtime.json that passed the loose /node/status probe could navigate
+                    // once, unguarded, before these handlers ever attach.
                     BmbWebView.NavigationStarted -= OnWebViewNavigationStarted;
                     BmbWebView.NavigationStarted += OnWebViewNavigationStarted;
                     BmbWebView.NewWindowRequested -= OnWebViewNewWindowRequested;
                     BmbWebView.NewWindowRequested += OnWebViewNewWindowRequested;
+                    BmbWebView.Source = new Uri(targetUrl);
                     StartPowerEventsMonitoring();
                 }
                 SplashPanel.IsVisible = false;
@@ -405,7 +409,21 @@ public partial class MainWindow : Window
         {
             return false;
         }
-        return string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase);
+
+        // Compare the full origin (scheme + host + port) against the app's own actual
+        // front URL, not just "is the host 127.0.0.1" - 127.0.0.1 is shared by every local
+        // service on the machine, and cookies are host-scoped (not port-scoped) in
+        // browsers, so a loose host-only check would let the WebView navigate into an
+        // unrelated local service on another port while still carrying this app's session
+        // cookie.
+        if (_frontUrl == null || !Uri.TryCreate(_frontUrl, UriKind.Absolute, out var frontUri))
+        {
+            return false;
+        }
+
+        return string.Equals(uri.Scheme, frontUri.Scheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(uri.Host, frontUri.Host, StringComparison.OrdinalIgnoreCase)
+            && uri.Port == frontUri.Port;
     }
 
     private void OpenUrlInExternalBrowser(Uri uri)
