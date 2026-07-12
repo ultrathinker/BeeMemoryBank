@@ -1,3 +1,5 @@
+using System.Net.Http.Json;
+using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
@@ -12,6 +14,15 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static class SyncEndpoints
 {
+    // JSON options for deserializing peer-to-peer relay responses. Matches the API's global
+    // ConfigureHttpJsonOptions (web defaults + JsonStringEnumConverter) so enum-typed relay
+    // DTOs round-trip correctly — HttpContent.ReadFromJsonAsync uses plain web defaults by
+    // default, which would choke on string-serialized enums.
+    private static readonly JsonSerializerOptions PeerJsonOpts = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+
     public static void MapSyncEndpoints(this WebApplication app)
     {
         // ─── Identity (no auth) ─────────────────────────────────────────────────
@@ -419,6 +430,190 @@ public static class SyncEndpoints
 
             return Results.Ok(new DeliveryStatusResponse(identity?.NodeId, invisibleMode.IsInvisible, statuses));
         }).RequireInternalKey().WithTags("Sync");
+
+        // ─── Reachability self-test: probe (local wizard call, internal-key-gated) ──
+        // The originating node (running the internet-access wizard) calls THIS endpoint on
+        // itself. It picks one active whitelisted peer, authenticates to it (reusing the same
+        // challenge/sign/authenticate flow as SyncClient via PeerAuthenticator), and asks that
+        // peer to relay-fetch the candidate URL — because a node can't prove its OWN public
+        // reachability from inside its own LAN. See probe-relay below for the peer side.
+        app.MapPost("/api/sync/probe", async (
+            HttpContext ctx,
+            IWhitelistRepository whitelistRepo,
+            INodeIdentityRepository nodeRepo,
+            INodeAuthSigner authSigner,
+            System.Net.Http.IHttpClientFactory httpClientFactory,
+            ILoggerFactory loggerFactory) =>
+        {
+            var logger = loggerFactory.CreateLogger("SyncProbe");
+
+            SyncProbeRequest? req;
+            try { req = await ctx.Request.ReadFromJsonAsync<SyncProbeRequest>(); }
+            catch { return Results.BadRequest(new ErrorResponse("Invalid JSON")); }
+            if (req == null || string.IsNullOrWhiteSpace(req.Url))
+                return Results.Json(new SyncProbeResponse(
+                    SyncProbeOutcome.InvalidUrl, null, null, null, SyncProbeErrorCategory.None,
+                    "No URL supplied."), statusCode: 400);
+
+            if (!Uri.TryCreate(req.Url, UriKind.Absolute, out var uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                return Results.Json(new SyncProbeResponse(
+                    SyncProbeOutcome.InvalidUrl, null, null, null, SyncProbeErrorCategory.None,
+                    "Invalid URL — must be an absolute http(s) URL."), statusCode: 400);
+            }
+            var targetUrl = uri.ToString().TrimEnd('/');
+
+            var identity = await nodeRepo.GetAsync();
+            if (identity == null)
+                return Results.Problem("Node is not initialized.", statusCode: 503);
+
+            // Pick active, reachable whitelisted peers — same filter convention as
+            // /api/sync/status, /delivery-status, etc. (Status == "A" && !empty ApiAddress).
+            var whitelist = await whitelistRepo.GetAllActiveAsync();
+            var peers = whitelist
+                .Where(p => p.Status == "A" && !string.IsNullOrEmpty(p.ApiAddress))
+                .ToList();
+
+            if (peers.Count == 0)
+            {
+                return Results.Ok(new SyncProbeResponse(
+                    SyncProbeOutcome.NoPeersAvailable,
+                    null, null, null, SyncProbeErrorCategory.None,
+                    "No whitelisted peers with a known address are available to verify reachability. " +
+                    "Try opening this URL on your phone over mobile data (disconnect from Wi-Fi) to check manually."));
+            }
+
+            // Try peers in order until one successfully relays. A peer that is offline or
+            // refuses auth is skipped (the result still needs to come from AT LEAST one
+            // independent outside observer to be meaningful).
+            var http = httpClientFactory.CreateClient();
+            WhitelistEntry? usedPeer = null;
+            SyncProbeRelayResponse? relayResult = null;
+            foreach (var peer in peers)
+            {
+                var peerBase = peer.ApiAddress!.TrimEnd('/');
+                string token;
+                try
+                {
+                    token = await PeerAuthenticator.AuthenticateAsync(
+                        authSigner, http, peerBase, identity, ctx.RequestAborted);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Probe: could not authenticate to peer {Peer} ({Base})",
+                        peer.DisplayName, peerBase);
+                    continue; // try next peer
+                }
+
+                // Ask the peer to relay-fetch the target URL.
+                try
+                {
+                    using var relayReq = new HttpRequestMessage(HttpMethod.Post, $"{peerBase}/api/sync/probe-relay");
+                    relayReq.Headers.Authorization =
+                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                    relayReq.Content = JsonContent.Create(new SyncProbeRelayRequest(targetUrl));
+                    var relayResp = await http.SendAsync(relayReq, ctx.RequestAborted);
+                    relayResp.EnsureSuccessStatusCode();
+                    relayResult = await relayResp.Content.ReadFromJsonAsync<SyncProbeRelayResponse>(PeerJsonOpts)
+                        ?? throw new InvalidDataException("Invalid relay response.");
+                    usedPeer = peer;
+                    break; // got a real relay result from this peer
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Probe: relay call to peer {Peer} ({Base}) failed",
+                        peer.DisplayName, peerBase);
+                    continue; // try next peer
+                }
+            }
+
+            if (relayResult == null)
+            {
+                // No peer could be reached/authenticated at all.
+                return Results.Ok(new SyncProbeResponse(
+                    SyncProbeOutcome.PeerUnreachable,
+                    null, null, null, SyncProbeErrorCategory.Unknown,
+                    "Could not reach any whitelisted peer to perform the check. Verify your peers are online."));
+            }
+
+            return Results.Ok(new SyncProbeResponse(
+                relayResult.Reachable ? SyncProbeOutcome.Reachable : SyncProbeOutcome.Unreachable,
+                usedPeer!.NodeId,
+                usedPeer.DisplayName,
+                relayResult.HttpStatusCode,
+                relayResult.ErrorCategory,
+                relayResult.Reachable
+                    ? $"Peer '{usedPeer.DisplayName}' confirmed {targetUrl} is reachable (HTTP {relayResult.HttpStatusCode})."
+                    : $"Peer '{usedPeer.DisplayName}' could not reach {targetUrl} " +
+                      $"({relayResult.ErrorCategory}). No response came back at all — this typically " +
+                      $"means the port is not forwarded, or your ISP uses CGNAT."));
+        }).RequireInternalKey().WithTags("Sync");
+
+        // ─── Reachability self-test: relay (peer-to-peer, Bearer auth) ──────────
+        // Called BY a whitelisted peer (standard TryAuth Bearer token), this node fetches
+        // {url}/api/sync/ping and reports whether it got any HTTP response back. ANY HTTP
+        // status (even the 403 from the ping endpoint's internal-key gate, or 503 invisible
+        // mode) proves the target server is reachable from outside its LAN — i.e. the port
+        // forward works. Only a total connection failure (refused/timeout/DNS) means
+        // "unreachable", which is the signal that lets the wizard suggest CGNAT.
+        app.MapPost("/api/sync/probe-relay", async (
+            HttpContext ctx,
+            SyncTokenStore store,
+            System.Net.Http.IHttpClientFactory httpClientFactory,
+            ILoggerFactory loggerFactory) =>
+        {
+            if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
+
+            SyncProbeRelayRequest? req;
+            try { req = await ctx.Request.ReadFromJsonAsync<SyncProbeRelayRequest>(); }
+            catch { return Results.BadRequest(new ErrorResponse("Invalid JSON")); }
+            if (req == null || string.IsNullOrWhiteSpace(req.Url))
+                return Results.BadRequest(new ErrorResponse("No URL supplied."));
+
+            if (!Uri.TryCreate(req.Url, UriKind.Absolute, out var uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                return Results.BadRequest(new ErrorResponse("Invalid URL — must be an absolute http(s) URL."));
+
+            var logger = loggerFactory.CreateLogger("SyncProbeRelay");
+            var target = $"{uri.ToString().TrimEnd('/')}/api/sync/ping";
+
+            // Bound the reachability check so a stealth-dropping firewall (silent packet drop,
+            // typical CGNAT symptom) doesn't hang the wizard indefinitely.
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+            cts.CancelAfter(TimeSpan.FromSeconds(15));
+
+            var http = httpClientFactory.CreateClient();
+            try
+            {
+                using var resp = await http.GetAsync(target, cts.Token);
+                return Results.Ok(new SyncProbeRelayResponse(
+                    Reachable: true,
+                    HttpStatusCode: (int)resp.StatusCode,
+                    ErrorCategory: SyncProbeErrorCategory.None,
+                    ErrorDetail: null));
+            }
+            catch (OperationCanceledException)
+            {
+                logger.LogInformation("Probe-relay: target {Url} timed out", target);
+                return Results.Ok(new SyncProbeRelayResponse(
+                    Reachable: false,
+                    HttpStatusCode: null,
+                    ErrorCategory: SyncProbeErrorCategory.Timeout,
+                    ErrorDetail: "Connection timed out."));
+            }
+            catch (HttpRequestException ex)
+            {
+                var category = ClassifyHttpError(ex);
+                logger.LogInformation("Probe-relay: target {Url} unreachable ({Category}): {Msg}",
+                    target, category, ex.Message);
+                return Results.Ok(new SyncProbeRelayResponse(
+                    Reachable: false,
+                    HttpStatusCode: null,
+                    ErrorCategory: category,
+                    ErrorDetail: ex.Message));
+            }
+        }).WithTags("Sync");
     }
 
     private static bool TryAuth(HttpContext ctx, SyncTokenStore store, out Guid nodeId)
@@ -429,6 +624,40 @@ public static class SyncEndpoints
             return false;
         var token = authHeader["Bearer ".Length..];
         return store.TryValidateToken(token, out nodeId);
+    }
+
+    /// <summary>
+    /// Maps a connection-level <see cref="HttpRequestException"/> to a coarse category so the
+    /// probe response can tell the wizard "no response came back at all" (CGNAT candidate) apart
+    /// from e.g. a TLS misconfiguration. Intentionally coarse-grained — exact socket errors vary
+    /// by platform/runtime, and the wizard only needs the broad distinction.
+    /// </summary>
+    private static SyncProbeErrorCategory ClassifyHttpError(HttpRequestException ex)
+    {
+        if (ex.InnerException is System.Net.Sockets.SocketException sock)
+        {
+            return sock.SocketErrorCode switch
+            {
+                System.Net.Sockets.SocketError.ConnectionRefused => SyncProbeErrorCategory.ConnectionRefused,
+                System.Net.Sockets.SocketError.TimedOut => SyncProbeErrorCategory.Timeout,
+                System.Net.Sockets.SocketError.HostNotFound or
+                System.Net.Sockets.SocketError.HostUnreachable or
+                System.Net.Sockets.SocketError.HostDown => SyncProbeErrorCategory.DnsFailure,
+                _ => SyncProbeErrorCategory.Unknown,
+            };
+        }
+
+        // Authentication/cert failures surface as HttpRequestException with an SSL/TLS message
+        // (no socket inner exception on some runtimes).
+        var msg = ex.Message.AsSpan();
+        if (msg.Contains("SSL", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("TLS", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("certificate", StringComparison.OrdinalIgnoreCase))
+        {
+            return SyncProbeErrorCategory.TlsError;
+        }
+
+        return SyncProbeErrorCategory.Unknown;
     }
 
     /// <summary>
