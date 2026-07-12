@@ -20,6 +20,8 @@ public partial class MainWindow : Window
     private string? _frontUrl;
     private Services.PowerEventsService? _powerEventsService;
 
+    public string? FrontUrl => _frontUrl;
+
     public MainWindow()
     {
         InitializeComponent();

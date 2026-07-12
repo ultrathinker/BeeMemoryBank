@@ -21,9 +21,27 @@ public partial class ApiClient
         catch { return null; }
     }
 
-    public async Task<JsonElement?> CheckForUpdatesAsync()
+    public async Task<JsonElement?> CheckForUpdatesAsync(string manifestJson, string manifestSignatureBase64)
     {
-        try { return await http.GetFromJsonAsync<JsonElement>("/api/admin/update/check", JsonOpts); }
+        try
+        {
+            var resp = await http.PostAsJsonAsync("/node/update/check", new { manifestJson, manifestSignatureBase64 }, JsonOpts);
+            if (resp.IsSuccessStatusCode)
+                return await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+            return null;
+        }
+        catch { return null; }
+    }
+
+    public async Task<JsonElement?> DownloadUpdateAsync(string manifestJson)
+    {
+        try
+        {
+            var resp = await http.PostAsJsonAsync("/node/update/download", new { manifestJson }, JsonOpts);
+            if (resp.IsSuccessStatusCode)
+                return await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+            return null;
+        }
         catch { return null; }
     }
 
@@ -31,7 +49,7 @@ public partial class ApiClient
     {
         try
         {
-            var resp = await http.PostAsync("/api/admin/update/apply", null);
+            var resp = await http.PostAsync("/node/update/apply", null);
             return resp.IsSuccessStatusCode;
         }
         catch { return false; }
@@ -39,8 +57,18 @@ public partial class ApiClient
 
     public async Task<JsonElement?> GetUpdateStatusAsync()
     {
-        try { return await http.GetFromJsonAsync<JsonElement>("/api/admin/update/status", JsonOpts); }
+        try { return await http.GetFromJsonAsync<JsonElement>("/node/update/status", JsonOpts); }
         catch { return null; }
+    }
+
+    public async Task<bool> ResetUpdateAsync()
+    {
+        try
+        {
+            var resp = await http.PostAsync("/node/update/reset", null);
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
     }
 
     public async Task<List<SnapshotDto>?> GetSnapshotsAsync() =>

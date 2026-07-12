@@ -31,6 +31,7 @@ public class AdminModel(ApiClient api) : PageModel
     public string? CurrentVersion { get; set; }
     public JsonElement? UpdateStatus { get; set; }
     public JsonElement? UpdateCheck { get; set; }
+    public string? CheckedManifestJson { get; set; }
 
     public async Task OnGetAsync(string? msg = null, string? err = null)
     {
@@ -39,6 +40,7 @@ public class AdminModel(ApiClient api) : PageModel
         GraphRebuildReport = TempData["GraphRebuildReport"] as string;
         DekRotationCommitId = TempData.Peek("DekRotationCommitId") as string;
         ShowRecoveryKeyReminder = TempData["RecoveryKeyReminder"] as string == "true";
+        CheckedManifestJson = TempData.Peek("CheckedManifestJson") as string;
         if (TempData["UpdateCheck"] is string uc && !string.IsNullOrEmpty(uc))
         {
             try { UpdateCheck = JsonSerializer.Deserialize<JsonElement>(uc); }
@@ -47,10 +49,20 @@ public class AdminModel(ApiClient api) : PageModel
         await LoadDataAsync();
     }
 
-    public async Task<IActionResult> OnPostCheckUpdateAsync()
+    public async Task<IActionResult> OnPostCheckUpdateAsync(string? manifestJson, string? manifestSignatureBase64)
     {
-        var result = await api.CheckForUpdatesAsync();
+        manifestJson ??= "";
+        manifestSignatureBase64 ??= "";
+        var result = await api.CheckForUpdatesAsync(manifestJson, manifestSignatureBase64);
         TempData["UpdateCheck"] = result?.GetRawText();
+        TempData["CheckedManifestJson"] = manifestJson;
+        return RedirectToPage();
+    }
+
+    public async Task<IActionResult> OnPostDownloadUpdateAsync(string? manifestJson)
+    {
+        manifestJson ??= "";
+        await api.DownloadUpdateAsync(manifestJson);
         return RedirectToPage();
     }
 
@@ -60,6 +72,16 @@ public class AdminModel(ApiClient api) : PageModel
         return ok
             ? RedirectToPage(new { msg = "Update triggered. The server is rebuilding and will restart — refresh this page in 30–60 seconds." })
             : RedirectToPage(new { err = "Failed to trigger the update." });
+    }
+
+    public async Task<IActionResult> OnPostResetUpdateAsync()
+    {
+        var ok = await api.ResetUpdateAsync();
+        TempData.Remove("UpdateCheck");
+        TempData.Remove("CheckedManifestJson");
+        return ok
+            ? RedirectToPage(new { msg = "Update state machine has been reset." })
+            : RedirectToPage(new { err = "Failed to reset update state machine." });
     }
 
     public async Task<IActionResult> OnPostRevokeNodeAsync(Guid nodeId)
