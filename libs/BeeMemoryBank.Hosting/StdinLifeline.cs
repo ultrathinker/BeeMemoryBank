@@ -24,7 +24,29 @@ public sealed class StdinLifeline : IDisposable
     {
         _callback = callback ?? throw new ArgumentNullException(nameof(callback));
         _cts = new CancellationTokenSource();
-        Completion = RunLoopAsync(reader, _cts.Token);
+
+        // Captured immediately (not re-read as `_cts.Token` inside the lambda below): the
+        // lambda runs later, on a dedicated thread, and by then Dispose() may already have
+        // disposed _cts - accessing _cts.Token at that point throws ObjectDisposedException.
+        var token = _cts.Token;
+
+        // Console.In.ReadLineAsync() on a redirected/piped stdin is not genuinely
+        // asynchronous on Windows - it blocks a real OS thread waiting for data or EOF.
+        // Running that on the default thread pool can starve it during process startup
+        // (few worker threads exist yet), stalling unrelated async work - e.g. Kestrel
+        // never finishing its bind, ASP.NET Core startup services never running - for as
+        // long as the pool takes to inject a new thread. TaskCreationOptions.LongRunning
+        // gives this loop its own dedicated thread instead of competing for pool threads.
+        // CancellationToken.None here deliberately: RunLoopAsync already handles cancellation
+        // internally (loop condition + catch), so the outer StartNew must not ALSO be
+        // cancellable via the same token - otherwise disposing very quickly after Start()
+        // can cancel this scheduling task before the dedicated thread ever runs the loop,
+        // producing a canceled Completion instead of one that finishes normally.
+        Completion = Task.Factory.StartNew(
+            () => RunLoopAsync(reader, token),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default).Unwrap();
     }
 
     /// <summary>
