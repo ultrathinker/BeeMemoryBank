@@ -1,3 +1,8 @@
+using System.IO;
+using Velopack;
+using Velopack.Locators;
+using Velopack.Sources;
+
 namespace BeeMemoryBank.Api.Services;
 
 /// <summary>
@@ -39,3 +44,49 @@ public sealed class InMemoryArtifactSource : IUpdateArtifactSource
     /// <summary>Registers (or replaces) an artifact by name. Test convenience.</summary>
     public void AddOrUpdate(string name, byte[] bytes) => _artifacts[name] = bytes;
 }
+
+/// <summary>
+/// Real Velopack-backed artifact source that uses Velopack.UpdateManager.
+/// </summary>
+public sealed class VelopackArtifactSource : IUpdateArtifactSource
+{
+    private readonly string _localReleasesDir;
+    private readonly IVelopackLocator? _locator;
+
+    public UpdateManager? UpdateManager { get; private set; }
+    public VelopackAsset? UpdateAsset { get; private set; }
+
+    public VelopackArtifactSource(string localReleasesDir, IVelopackLocator? locator = null)
+    {
+        _localReleasesDir = localReleasesDir;
+        _locator = locator;
+    }
+
+    public async Task<byte[]> GetArtifactBytesAsync(ArtifactDescriptor artifact, CancellationToken cancellationToken = default)
+    {
+        var source = new SimpleFileSource(new DirectoryInfo(_localReleasesDir));
+        var mgr = new UpdateManager(source, null, _locator);
+        UpdateManager = mgr;
+
+        var updateInfo = await mgr.CheckForUpdatesAsync().ConfigureAwait(false);
+        if (updateInfo == null)
+        {
+            throw new InvalidOperationException("No updates found via Velopack.");
+        }
+
+        UpdateAsset = updateInfo.TargetFullRelease;
+
+        await mgr.DownloadUpdatesAsync(updateInfo).ConfigureAwait(false);
+
+        var locator = _locator ?? VelopackLocator.CreateDefaultForPlatform();
+        var packagePath = Path.Combine(locator.PackagesDir, updateInfo.TargetFullRelease.FileName);
+
+        if (!File.Exists(packagePath))
+        {
+            throw new FileNotFoundException($"Downloaded Velopack package not found at: {packagePath}");
+        }
+
+        return await File.ReadAllBytesAsync(packagePath, cancellationToken).ConfigureAwait(false);
+    }
+}
+
