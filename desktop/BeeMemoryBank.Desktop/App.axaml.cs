@@ -5,6 +5,11 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using System;
+using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace BeeMemoryBank.Desktop;
 
@@ -97,8 +102,102 @@ public partial class App : Application
                 });
             };
 
+            var checkItem = new NativeMenuItem("Check for updates");
+            var statusItem = new NativeMenuItem("Updates: Unknown") { IsEnabled = false };
+
+            checkItem.Click += (s, e) =>
+            {
+                Dispatcher.UIThread.Post(async () =>
+                {
+                    checkItem.IsEnabled = false;
+                    statusItem.Header = "Updates: Checking...";
+
+                    var frontUrl = mainWindow.FrontUrl;
+                    if (string.IsNullOrEmpty(frontUrl))
+                    {
+                        statusItem.Header = "Updates: Node not ready";
+                        checkItem.IsEnabled = true;
+                        return;
+                    }
+
+                    try
+                    {
+                        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                        var dataDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "data"));
+                        var keyFile = Path.Combine(dataDir, ".internal-key");
+                        var key = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
+                        if (string.IsNullOrEmpty(key) && File.Exists(keyFile))
+                        {
+                            key = File.ReadAllText(keyFile).Trim();
+                        }
+
+                        var request = new HttpRequestMessage(HttpMethod.Post, $"{frontUrl.TrimEnd('/')}/node/update/check");
+                        if (!string.IsNullOrEmpty(key))
+                        {
+                            request.Headers.TryAddWithoutValidation("X-Internal-Key", key);
+                        }
+                        request.Headers.TryAddWithoutValidation("X-User-Role", "superadmin");
+
+                        var reqObj = new
+                        {
+                            manifestJson = "{}",
+                            manifestSignatureBase64 = "AAAA"
+                        };
+                        var json = JsonSerializer.Serialize(reqObj);
+                        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                        var response = await client.SendAsync(request);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var statusRequest = new HttpRequestMessage(HttpMethod.Get, $"{frontUrl.TrimEnd('/')}/node/update/status");
+                            if (!string.IsNullOrEmpty(key))
+                            {
+                                statusRequest.Headers.TryAddWithoutValidation("X-Internal-Key", key);
+                            }
+                            statusRequest.Headers.TryAddWithoutValidation("X-User-Role", "superadmin");
+
+                            var statusResponse = await client.SendAsync(statusRequest);
+                            if (statusResponse.IsSuccessStatusCode)
+                            {
+                                var body = await statusResponse.Content.ReadAsStringAsync();
+                                using var doc = JsonDocument.Parse(body);
+                                var step = doc.RootElement.GetProperty("currentStep").GetString();
+                                if (step == "Failed")
+                                {
+                                    statusItem.Header = "Updates: Failed (signature mismatch)";
+                                }
+                                else
+                                {
+                                    statusItem.Header = $"Updates: {step}";
+                                }
+                            }
+                            else
+                            {
+                                statusItem.Header = "Updates: Check succeeded";
+                            }
+                        }
+                        else
+                        {
+                            statusItem.Header = $"Updates: Error {(int)response.StatusCode}";
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        statusItem.Header = "Updates: Check failed";
+                        Console.WriteLine($"Error checking updates: {ex.Message}");
+                    }
+                    finally
+                    {
+                        checkItem.IsEnabled = true;
+                    }
+                });
+            };
+
             menu.Items.Add(openItem);
             menu.Items.Add(autostartItem);
+            menu.Items.Add(new NativeMenuItemSeparator());
+            menu.Items.Add(checkItem);
+            menu.Items.Add(statusItem);
             menu.Items.Add(new NativeMenuItemSeparator());
             menu.Items.Add(exitItem);
 
