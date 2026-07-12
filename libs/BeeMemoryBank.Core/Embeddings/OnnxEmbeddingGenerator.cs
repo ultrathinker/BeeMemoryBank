@@ -79,7 +79,17 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
             NamedOnnxValue.CreateFromTensor("token_type_ids", tokenTypeIdsTensor),
         };
 
-        using var results = _session.Value.Run(inputs);
+        InferenceSession session;
+        try
+        {
+            session = _session.Value;
+        }
+        catch (FileNotFoundException ex)
+        {
+            throw new ModelUnavailableException(ex.Message, ex);
+        }
+
+        using var results = session.Run(inputs);
         // Cast to DenseTensor to get a flat Span — avoids int[] allocation per element access
         var denseTensor = results[0].AsTensor<float>() as DenseTensor<float>
             ?? throw new InvalidOperationException("ONNX output is not a DenseTensor<float>.");

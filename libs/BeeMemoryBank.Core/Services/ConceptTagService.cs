@@ -25,7 +25,15 @@ public class ConceptTagService(
 
     private async Task<List<ConceptTagInfo>> SemanticSearchAsync(string query, int limit)
     {
-        var queryEmbedding = embeddingGenerator.Generate(query);
+        float[] queryEmbedding;
+        try
+        {
+            queryEmbedding = embeddingGenerator.Generate(query);
+        }
+        catch (ModelUnavailableException)
+        {
+            return await repo.ListAsync(query, limit);
+        }
         var allWithEmbeddings = await repo.GetWithEmbeddingsAsync();
 
         if (allWithEmbeddings.Count == 0)
@@ -64,8 +72,15 @@ public class ConceptTagService(
         {
             if (!existingNames.Contains(name))
             {
-                var embedding = embeddingGenerator.Generate(name);
-                await repo.UpdateEmbeddingAsync(name, FloatsToBytes(embedding), ModelVersion);
+                try
+                {
+                    var embedding = embeddingGenerator.Generate(name);
+                    await repo.UpdateEmbeddingAsync(name, FloatsToBytes(embedding), ModelVersion);
+                }
+                catch (ModelUnavailableException)
+                {
+                    break;
+                }
             }
         }
     }
@@ -81,9 +96,16 @@ public class ConceptTagService(
         {
             if (!existingNames.Contains(name))
             {
-                var embedding = embeddingGenerator.Generate(name);
-                var bytes = FloatsToBytes(embedding);
-                await repo.UpdateEmbeddingAsync(name, bytes, ModelVersion);
+                try
+                {
+                    var embedding = embeddingGenerator.Generate(name);
+                    var bytes = FloatsToBytes(embedding);
+                    await repo.UpdateEmbeddingAsync(name, bytes, ModelVersion);
+                }
+                catch (ModelUnavailableException)
+                {
+                    break;
+                }
             }
         }
     }
@@ -98,6 +120,9 @@ public class ConceptTagService(
         {
             if (!hasEmbedding.Contains(concept.Name))
             {
+                // Missing model applies uniformly to every remaining concept - let it
+                // propagate rather than retry per-tag; PendingEmbeddingProcessor catches
+                // this centrally to avoid per-cycle log spam.
                 var embedding = embeddingGenerator.Generate(concept.Name);
                 var bytes = FloatsToBytes(embedding);
                 await repo.UpdateEmbeddingAsync(concept.Name, bytes, ModelVersion);
@@ -110,8 +135,14 @@ public class ConceptTagService(
     public async Task RenameAsync(string name, string newName)
     {
         await repo.RenameAsync(name, newName);
-        var embedding = embeddingGenerator.Generate(newName);
-        await repo.UpdateEmbeddingAsync(newName, FloatsToBytes(embedding), ModelVersion);
+        try
+        {
+            var embedding = embeddingGenerator.Generate(newName);
+            await repo.UpdateEmbeddingAsync(newName, FloatsToBytes(embedding), ModelVersion);
+        }
+        catch (ModelUnavailableException)
+        {
+        }
         await eventLogger.LogConceptTagRenameAsync(name, newName);
     }
 
