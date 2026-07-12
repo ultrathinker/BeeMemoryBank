@@ -17,6 +17,8 @@ public partial class MainWindow : Window
     private bool _isRealClose;
     private CancellationTokenSource? _initCts;
     private bool _startMinimized = Program.StartMinimized;
+    private string? _frontUrl;
+    private Services.PowerEventsService? _powerEventsService;
 
     public MainWindow()
     {
@@ -203,7 +205,9 @@ public partial class MainWindow : Window
             {
                 if (!string.IsNullOrEmpty(targetUrl))
                 {
+                    _frontUrl = targetUrl;
                     BmbWebView.Source = new Uri(targetUrl);
+                    StartPowerEventsMonitoring();
                 }
                 SplashPanel.IsVisible = false;
                 WebPanel.IsVisible = true;
@@ -315,6 +319,53 @@ public partial class MainWindow : Window
                 Debug.WriteLine($"Error killing node process: {ex.Message}");
             }
         }
+
+        try
+        {
+            _powerEventsService?.Dispose();
+            _powerEventsService = null;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error disposing power events service: {ex.Message}");
+        }
+    }
+
+    private void StartPowerEventsMonitoring()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        try
+        {
+            _powerEventsService?.Dispose();
+            _powerEventsService = new Services.PowerEventsService(HandleSystemSleep);
+            _powerEventsService.Start();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to start power events monitoring: {ex.Message}");
+        }
+    }
+
+    private void HandleSystemSleep()
+    {
+        var url = _frontUrl;
+        if (string.IsNullOrEmpty(url)) return;
+
+        // Fire-and-forget: /node/lock is currently a 501 stub pending the internal-key
+        // client wiring, so failures here are expected for now - don't crash the app.
+        Task.Run(async () =>
+        {
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                await client.PostAsync($"{url.TrimEnd('/')}/node/lock", null);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to POST /node/lock on sleep: {ex.Message}");
+            }
+        });
     }
 }
 
