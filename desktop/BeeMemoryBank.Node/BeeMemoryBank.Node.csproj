@@ -4,6 +4,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Hosting\BeeMemoryBank.Hosting.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Hosting.AspNetCore\BeeMemoryBank.Hosting.AspNetCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.2.0" />
   </ItemGroup>
 </Project>
+
