@@ -3,6 +3,12 @@
 @{
     ViewData["Title"] = "Setup";
     Layout = null;
+    // Determine which UI panel to show:
+    //   "" or null  → step 1: mode selection
+    //   "form"      → step 2: form (shown when returning with validation errors)
+    //   "done"      → step 3: completion screen
+    var step = Model.Step;
+    var mode = Model.Mode; // "standalone" or "join"
 }
 
 <!DOCTYPE html>
@@ -19,15 +25,44 @@
     <link href="/css/site.css" rel="stylesheet" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <style>
-        body { display: flex; align-items: center; justify-content: center; height: 100vh; }
-        .setup-card { width: 440px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; }
-        .setup-card h2 { margin-bottom: 24px; font-size: 1.3rem; text-align: center; }
+        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px 0; }
+        .setup-card { width: 460px; max-width: calc(100vw - 32px); background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; }
+        .setup-card h2 { margin-bottom: 8px; font-size: 1.3rem; text-align: center; }
         .setup-card .logo-icon { font-size: 1.6rem; vertical-align: middle; margin-right: 6px; }
-        .setup-tabs { margin-bottom: 16px; }
+        .setup-subtitle { text-align: center; color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 24px; }
+
+        /* Step indicator */
+        .step-indicator { display: flex; align-items: center; justify-content: center; gap: 0; margin-bottom: 28px; }
+        .step-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); background: var(--bg-app); transition: all 0.2s; flex-shrink: 0; }
+        .step-dot.active { border-color: var(--sl-color-primary-600); color: var(--sl-color-primary-600); background: var(--sl-color-primary-950); }
+        .step-dot.done { border-color: var(--sl-color-success-500); background: var(--sl-color-success-950); color: var(--sl-color-success-400); }
+        .step-line { flex: 1; height: 2px; background: var(--border); max-width: 48px; }
+        .step-line.done { background: var(--sl-color-success-500); }
+
+        /* Mode selection cards */
+        .mode-cards { display: flex; flex-direction: column; gap: 12px; }
+        .mode-card { display: flex; align-items: center; gap: 16px; padding: 18px; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--bg-app); transition: border-color 0.15s, background 0.15s; text-align: left; width: 100%; }
+        .mode-card:hover { border-color: var(--sl-color-primary-500); background: var(--sl-color-primary-950); }
+        .mode-card sl-icon { font-size: 1.8rem; flex-shrink: 0; color: var(--sl-color-primary-400); }
+        .mode-card-text strong { display: block; margin-bottom: 2px; }
+        .mode-card-text small { color: var(--text-secondary); font-size: 0.83rem; }
+
+        /* Form step */
         .tab-panel-form { display: flex; flex-direction: column; gap: 16px; }
         .tab-panel-form sl-input { width: 100%; }
         .form-actions { margin-top: 4px; }
         .form-actions sl-button { width: 100%; }
+        .back-link { display: inline-flex; align-items: center; gap: 4px; font-size: 0.85rem; color: var(--text-secondary); text-decoration: none; margin-bottom: 16px; cursor: pointer; background: none; border: none; padding: 0; }
+        .back-link:hover { color: var(--text-primary); }
+
+        /* Done step */
+        .done-icon { text-align: center; margin-bottom: 16px; }
+        .done-icon sl-icon { font-size: 3rem; color: var(--sl-color-success-400); }
+        .done-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+
+        /* Hide/show panels */
+        .wizard-panel { display: none; }
+        .wizard-panel.active { display: block; }
     </style>
 </head>
 <body class="sl-theme-dark">
@@ -36,6 +71,7 @@
             <sl-icon name="bee" class="logo-icon"></sl-icon>
             BeeMemoryBank Setup
         </h2>
+        <p class="setup-subtitle">Set up your personal memory node in three steps.</p>
 
         <partial name="_HttpsRequiredAlert" />
 
@@ -47,56 +83,134 @@
             </sl-alert>
         }
 
-        <div class="setup-tabs">
-            <sl-tab-group>
-                <sl-tab slot="nav" panel="standalone">
-                    <sl-icon name="plus-circle" style="margin-right:4px;"></sl-icon> New Network
-                </sl-tab>
-                <sl-tab slot="nav" panel="join">
-                    <sl-icon name="link" style="margin-right:4px;"></sl-icon> Join Network
-                </sl-tab>
-                <sl-tab-panel name="standalone">
-                    <form method="post" asp-page-handler="Standalone" class="tab-panel-form" data-setup-form="standalone">
-                        @Html.AntiForgeryToken()
-                        <sl-input name="adminUsername" label="Admin Username" required autofocus
-                                  placeholder="e.g. admin" autocomplete="username"></sl-input>
-                        <small class="text-muted" style="margin-top:-12px;">Used to log in. Can be different from the node name. Rename later via Profile.</small>
-                        <sl-input name="displayName" label="Node Name" required
-                                  placeholder="e.g. My Laptop"></sl-input>
-                        <sl-input name="password" label="Password" type="password" required
-                                  password-toggle minlength="6"></sl-input>
-                        <sl-input name="confirmPassword" label="Confirm Password" type="password" required
-                                  password-toggle minlength="6"></sl-input>
-                        <div class="form-actions">
-                            <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
-                                <sl-icon slot="prefix" name="plus-circle"></sl-icon> Create Network
-                            </sl-button>
-                        </div>
-                    </form>
-                </sl-tab-panel>
-                <sl-tab-panel name="join">
-                    <form method="post" asp-page-handler="Join" class="tab-panel-form" data-setup-form="join">
-                        @Html.AntiForgeryToken()
-                        <sl-input name="joinAdminUsername" label="Admin Username" required
-                                  placeholder="e.g. admin" autocomplete="username"></sl-input>
-                        <small class="text-muted" style="margin-top:-12px;">Used to log in on this node. Can be different from the node name.</small>
-                        <sl-input name="joinDisplayName" label="Node Name" required
-                                  placeholder="e.g. My Phone"></sl-input>
-                        <sl-input name="remoteUrl" label="Remote Node URL" required
-                                  placeholder="https://bee.example.com" type="url"></sl-input>
-                        <sl-input name="joinPassword" label="Password" type="password" required
-                                  password-toggle minlength="6"></sl-input>
-                        <div class="form-actions">
-                            <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
-                                <sl-icon slot="prefix" name="link"></sl-icon> Join Network
-                            </sl-button>
-                        </div>
-                    </form>
-                </sl-tab-panel>
-            </sl-tab-group>
+        @{
+            // Step numbers: 1 = mode, 2 = form, 3 = done
+            int currentStepNum = step == "done" ? 3 : (step == "form" ? 2 : 1);
+        }
+
+        <!-- Step indicator -->
+        <div class="step-indicator">
+            <div class="step-dot @(currentStepNum > 1 ? "done" : currentStepNum == 1 ? "active" : "")">
+                @if (currentStepNum > 1) { <sl-icon name="check-lg"></sl-icon> } else { <text>1</text> }
+            </div>
+            <div class="step-line @(currentStepNum > 1 ? "done" : "")"></div>
+            <div class="step-dot @(currentStepNum > 2 ? "done" : currentStepNum == 2 ? "active" : "")">
+                @if (currentStepNum > 2) { <sl-icon name="check-lg"></sl-icon> } else { <text>2</text> }
+            </div>
+            <div class="step-line @(currentStepNum > 2 ? "done" : "")"></div>
+            <div class="step-dot @(currentStepNum == 3 ? "done" : "")">
+                @if (currentStepNum == 3) { <sl-icon name="check-lg"></sl-icon> } else { <text>3</text> }
+            </div>
+        </div>
+
+        <!-- ═══ STEP 1: Mode selection ═══ -->
+        <div class="wizard-panel @(currentStepNum == 1 ? "active" : "")" id="panel-mode">
+            <div class="mode-cards">
+                <button class="mode-card" id="btn-mode-standalone" type="button">
+                    <sl-icon name="plus-circle"></sl-icon>
+                    <div class="mode-card-text">
+                        <strong>Create a new network</strong>
+                        <small>Start fresh — set up the first node and become the admin.</small>
+                    </div>
+                </button>
+                <button class="mode-card" id="btn-mode-join" type="button">
+                    <sl-icon name="link"></sl-icon>
+                    <div class="mode-card-text">
+                        <strong>Join an existing network</strong>
+                        <small>Connect this node to a network that's already running elsewhere.</small>
+                    </div>
+                </button>
+            </div>
+        </div>
+
+        <!-- ═══ STEP 2: Forms ═══ -->
+        <div class="wizard-panel @(currentStepNum == 2 ? "active" : "")" id="panel-form">
+            <!-- Back button -->
+            <a href="/Setup" class="back-link">
+                <sl-icon name="arrow-left"></sl-icon> Back
+            </a>
+
+            <!-- Standalone form — visible when mode=standalone -->
+            <div id="form-standalone" style="display:@(mode == "standalone" || currentStepNum == 2 && mode != "join" ? "block" : "none");">
+                <form method="post" asp-page-handler="Standalone" class="tab-panel-form" data-setup-form="standalone">
+                    @Html.AntiForgeryToken()
+                    <sl-input name="adminUsername" label="Admin Username" required autofocus
+                              placeholder="e.g. admin" autocomplete="username"></sl-input>
+                    <small class="text-muted" style="margin-top:-12px;">Used to log in. Can be different from the node name. Rename later via Profile.</small>
+                    <sl-input name="displayName" label="Node Name" required
+                              placeholder="e.g. My Laptop"></sl-input>
+                    <sl-input name="password" label="Password" type="password" required
+                              password-toggle minlength="6"></sl-input>
+                    <sl-input name="confirmPassword" label="Confirm Password" type="password" required
+                              password-toggle minlength="6"></sl-input>
+                    <div class="form-actions">
+                        <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
+                            <sl-icon slot="prefix" name="plus-circle"></sl-icon> Create Network
+                        </sl-button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Join form — visible when mode=join -->
+            <div id="form-join" style="display:@(mode == "join" ? "block" : "none");">
+                <form method="post" asp-page-handler="Join" class="tab-panel-form" data-setup-form="join">
+                    @Html.AntiForgeryToken()
+                    <sl-input name="joinAdminUsername" label="Admin Username" required
+                              placeholder="e.g. admin" autocomplete="username"></sl-input>
+                    <small class="text-muted" style="margin-top:-12px;">Used to log in on this node. Can be different from the node name.</small>
+                    <sl-input name="joinDisplayName" label="Node Name" required
+                              placeholder="e.g. My Phone"></sl-input>
+                    <sl-input name="remoteUrl" label="Remote Node URL" required
+                              placeholder="https://bee.example.com" type="url"></sl-input>
+                    <sl-input name="joinPassword" label="Password" type="password" required
+                              password-toggle minlength="6"></sl-input>
+                    <div class="form-actions">
+                        <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
+                            <sl-icon slot="prefix" name="link"></sl-icon> Join Network
+                        </sl-button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- ═══ STEP 3: Done ═══ -->
+        <div class="wizard-panel @(currentStepNum == 3 ? "active" : "")" id="panel-done">
+            <div class="done-icon">
+                <sl-icon name="check-circle"></sl-icon>
+            </div>
+            <h3 style="text-align:center;margin-bottom:8px;">You're all set!</h3>
+            <p class="text-muted" style="text-align:center;font-size:0.9rem;margin-bottom:20px;">
+                @if (mode == "join")
+                {
+                    <text>Your node has joined the network. Log in whenever you're ready.</text>
+                }
+                else
+                {
+                    <text>Your node is ready. Log in whenever you're ready.</text>
+                }
+            </p>
+
+            <sl-alert variant="neutral" open style="margin-bottom:0;">
+                <sl-icon slot="icon" name="search"></sl-icon>
+                <strong>About AI-powered search</strong><br />
+                Semantic search improves once a language model is available on this node.
+                You can configure this later via <strong>Profile &rarr; AI Agents</strong>.
+            </sl-alert>
+
+            <div class="done-actions">
+                <sl-button variant="primary" size="large" href="/Profile?createAgent=1" style="width:100%;">
+                    <sl-icon slot="prefix" name="robot"></sl-icon>
+                    Connect an AI agent now
+                </sl-button>
+                <sl-button variant="default" href="/Login" style="width:100%;">
+                    <sl-icon slot="prefix" name="box-arrow-in-right"></sl-icon>
+                    Continue to my node
+                </sl-button>
+            </div>
         </div>
     </div>
 
+    <!-- Loading dialog (shown while forms are submitting) -->
     <sl-dialog id="setup-loader" label="Please wait" no-header style="--width: 360px;">
         <div style="text-align:center;padding:24px 12px;">
             <sl-spinner style="font-size:2.5rem;--track-width:4px;"></sl-spinner>
@@ -109,17 +223,48 @@
 
     <script>
         (function () {
-            const dlg = document.getElementById('setup-loader');
-            const title = document.getElementById('setup-loader-title');
-            const msg = document.getElementById('setup-loader-msg');
+            // ── Step 1 → Step 2 navigation (client-side) ──────────────────────────
+            function goToForm(mode) {
+                // Show panel-form, hide panel-mode
+                document.getElementById('panel-mode').classList.remove('active');
+                document.getElementById('panel-form').classList.add('active');
+                // Show the right form
+                document.getElementById('form-standalone').style.display = (mode === 'standalone') ? 'block' : 'none';
+                document.getElementById('form-join').style.display = (mode === 'join') ? 'block' : 'none';
+                // Update step dots
+                updateStepDots(2);
+            }
+
+            function updateStepDots(activeStep) {
+                var dots = document.querySelectorAll('.step-dot');
+                var lines = document.querySelectorAll('.step-line');
+                dots.forEach(function (dot, i) {
+                    dot.classList.remove('active', 'done');
+                    if (i + 1 < activeStep) dot.classList.add('done');
+                    else if (i + 1 === activeStep) dot.classList.add('active');
+                });
+                lines.forEach(function (line, i) {
+                    line.classList.toggle('done', i + 1 < activeStep);
+                });
+            }
+
+            var btnStandalone = document.getElementById('btn-mode-standalone');
+            var btnJoin = document.getElementById('btn-mode-join');
+            if (btnStandalone) btnStandalone.addEventListener('click', function () { goToForm('standalone'); });
+            if (btnJoin) btnJoin.addEventListener('click', function () { goToForm('join'); });
+
+            // ── Loading dialog on form submit ─────────────────────────────────────
+            var dlg = document.getElementById('setup-loader');
+            var title = document.getElementById('setup-loader-title');
+            var msg = document.getElementById('setup-loader-msg');
             document.querySelectorAll('form[data-setup-form]').forEach(function (form) {
                 form.addEventListener('submit', function () {
-                    const kind = form.getAttribute('data-setup-form');
+                    var kind = form.getAttribute('data-setup-form');
                     if (kind === 'join') {
-                        title.textContent = 'Joining network…';
+                        title.textContent = 'Joining network\u2026';
                         msg.textContent = 'Exchanging keys, downloading signed snapshot, importing data. This may take up to a minute.';
                     } else {
-                        title.textContent = 'Creating network…';
+                        title.textContent = 'Creating network\u2026';
                         msg.textContent = 'Generating keys and initializing local database.';
                     }
                     form.querySelectorAll('[data-submit-btn]').forEach(function (b) { b.loading = true; b.disabled = true; });
