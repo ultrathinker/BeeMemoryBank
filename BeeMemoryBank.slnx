@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/desktop/">
+    <Project Path="desktop/BeeMemoryBank.Desktop/BeeMemoryBank.Desktop.csproj" />
     <Project Path="desktop/BeeMemoryBank.Node/BeeMemoryBank.Node.csproj" />
   </Folder>
   <Folder Name="/libs/">

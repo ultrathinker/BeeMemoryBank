@@ -1,0 +1,82 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:web="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.WebView"
+        x:Class="BeeMemoryBank.Desktop.MainWindow"
+        Title="BeeMemoryBank"
+        Width="1200"
+        Height="800"
+        MinWidth="800"
+        MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Background="#111119"
+        Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">
+    
+    <Grid>
+        <!-- Web View Container -->
+        <Grid Name="WebPanel" IsVisible="False">
+            <web:NativeWebView Name="BmbWebView" />
+        </Grid>
+
+        <!-- Splash Screen / Loader -->
+        <Grid Name="SplashPanel" IsVisible="True" Background="#111119">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="25">
+                <Image Source="/Assets/icon.png" Width="100" Height="100" HorizontalAlignment="Center"/>
+                
+                <TextBlock Text="BeeMemoryBank" 
+                           FontSize="28" 
+                           FontWeight="SemiBold" 
+                           Foreground="#FFFFFF" 
+                           HorizontalAlignment="Center"/>
+                
+                <ProgressBar Name="SplashProgress" 
+                             IsIndeterminate="True" 
+                             Width="200" 
+                             Height="4" 
+                             Background="#2D2D3D"
+                             Foreground="#F59E0B"
+                             HorizontalAlignment="Center"/>
+                
+                <TextBlock Name="StatusText" 
+                           Text="Initializing services..." 
+                           FontSize="14" 
+                           Foreground="#A0A0B0" 
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Error Screen -->
+        <Grid Name="ErrorPanel" IsVisible="False" Background="#111119">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="500" Spacing="20">
+                <Path Data="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM13,17h-2v-2h2v2zM13,13h-2V7h2v6z"
+                      Fill="#EF4444"
+                      Width="64"
+                      Height="64"
+                      Stretch="Uniform"
+                      HorizontalAlignment="Center"/>
+                
+                <TextBlock Text="Startup Failed" 
+                           FontSize="24" 
+                           FontWeight="Bold" 
+                           Foreground="#EF4444" 
+                           HorizontalAlignment="Center"/>
+                
+                <TextBlock Name="ErrorText" 
+                           Text="An error occurred while launching or connecting to the BeeMemoryBank Node service." 
+                           FontSize="14" 
+                           Foreground="#D1D5DB" 
+                           TextWrapping="Wrap" 
+                           TextAlignment="Center"
+                           HorizontalAlignment="Center"/>
+
+                <Button Content="Retry Startup" 
+                        Click="OnRetryClick" 
+                        Padding="16,10"
+                        Background="#F59E0B" 
+                        Foreground="#111119"
+                        FontWeight="SemiBold"
+                        CornerRadius="6"
+                        HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>
