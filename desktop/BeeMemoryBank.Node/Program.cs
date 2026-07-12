@@ -217,8 +217,27 @@ public static class Program
             await orchestrator.StartAsync(CancellationToken.None);
 
             Console.WriteLine("[Node] Orchestrator started. Building and starting front...");
-            app = BuildFront(Array.Empty<string>(), orchestrator.ReadyChildren);
-            await app.StartAsync();
+            // Default to the plan's designated port (127.0.0.1:5310, distinct from
+            // standalone/Docker's 5300/5301) instead of ASP.NET Core's own default
+            // (5000), which commonly collides with other local dev tools. If it's
+            // taken, fall back to an OS-assigned free port - the real bound port
+            // always ends up in .runtime.json/node.status.json regardless.
+            const int preferredFrontPort = 5310;
+            try
+            {
+                app = BuildFront(new[] { "--urls", $"http://127.0.0.1:{preferredFrontPort}" }, orchestrator.ReadyChildren);
+                await app.StartAsync();
+            }
+            catch (IOException)
+            {
+                Console.WriteLine($"[Node] Port {preferredFrontPort} is unavailable, falling back to an OS-assigned port...");
+                if (app != null)
+                {
+                    try { await app.DisposeAsync(); } catch { }
+                }
+                app = BuildFront(new[] { "--urls", "http://127.0.0.1:0" }, orchestrator.ReadyChildren);
+                await app.StartAsync();
+            }
 
             var frontUrl = app.Urls.FirstOrDefault();
             if (!string.IsNullOrEmpty(frontUrl))
