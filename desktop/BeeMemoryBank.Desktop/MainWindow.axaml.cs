@@ -207,6 +207,10 @@ public partial class MainWindow : Window
                 {
                     _frontUrl = targetUrl;
                     BmbWebView.Source = new Uri(targetUrl);
+                    BmbWebView.NavigationStarted -= OnWebViewNavigationStarted;
+                    BmbWebView.NavigationStarted += OnWebViewNavigationStarted;
+                    BmbWebView.NewWindowRequested -= OnWebViewNewWindowRequested;
+                    BmbWebView.NewWindowRequested += OnWebViewNewWindowRequested;
                     StartPowerEventsMonitoring();
                 }
                 SplashPanel.IsVisible = false;
@@ -375,6 +379,46 @@ public partial class MainWindow : Window
                 Debug.WriteLine($"Failed to POST /node/lock on sleep: {ex.Message}");
             }
         });
+    }
+
+    private void OnWebViewNavigationStarted(object? sender, WebViewNavigationStartingEventArgs e)
+    {
+        if (e.Request != null && !IsLocalOrigin(e.Request))
+        {
+            e.Cancel = true;
+            OpenUrlInExternalBrowser(e.Request);
+        }
+    }
+
+    private void OnWebViewNewWindowRequested(object? sender, WebViewNewWindowRequestedEventArgs e)
+    {
+        if (e.Request != null && !IsLocalOrigin(e.Request))
+        {
+            e.Handled = true;
+            OpenUrlInExternalBrowser(e.Request);
+        }
+    }
+
+    private bool IsLocalOrigin(Uri uri)
+    {
+        if (!uri.IsAbsoluteUri)
+        {
+            return false;
+        }
+        return string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void OpenUrlInExternalBrowser(Uri uri)
+    {
+        try
+        {
+            var url = uri.AbsoluteUri;
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to open URL in browser: {ex.Message}");
+        }
     }
 }
 
