@@ -339,6 +339,8 @@ app.MapFolderProxyEndpoints();
 app.MapSnapshotProxyEndpoints();
 app.MapUserProxyEndpoints();
 app.MapChatProxyEndpoints();
+// ca.crt download for the "Connect a device" page — anonymous, no proxy/auth.
+app.MapConnectEndpoints();
 app.MapMiscProxyEndpoints();
 
 // ─── Razor Pages ──────────────────────────────────────────────────────────────

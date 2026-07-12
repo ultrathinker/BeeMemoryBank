@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Hosting;
 
 namespace BeeMemoryBank.Node;
@@ -223,9 +224,23 @@ public static class Program
             // taken, fall back to an OS-assigned free port - the real bound port
             // always ends up in .runtime.json/node.status.json regardless.
             const int preferredFrontPort = 5310;
+
+            // Opt-in HTTPS front on :5311. Gated behind BMB_HTTPS_ENABLED=1 (absent/false = OFF),
+            // matching "по кнопке" in the superplan — a later task wires an actual UI toggle. When
+            // disabled (the default) the front is byte-for-byte identical to before: only the
+            // plain-HTTP listener runs.
+            var httpsEnabled = Environment.GetEnvironmentVariable("BMB_HTTPS_ENABLED") == "1";
+            if (httpsEnabled)
+            {
+                Console.WriteLine("[Node] BMB_HTTPS_ENABLED=1: additive HTTPS listener will be started on :5311.");
+            }
             try
             {
-                app = BuildFront(new[] { "--urls", $"http://127.0.0.1:{preferredFrontPort}" }, orchestrator.ReadyChildren);
+                app = BuildFront(
+                    new[] { "--urls", $"http://127.0.0.1:{preferredFrontPort}" },
+                    orchestrator.ReadyChildren,
+                    httpsEnabled,
+                    resolvedDataDirectory);
                 await app.StartAsync();
             }
             catch (IOException)
@@ -235,14 +250,44 @@ public static class Program
                 {
                     try { await app.DisposeAsync(); } catch { }
                 }
-                app = BuildFront(new[] { "--urls", "http://127.0.0.1:0" }, orchestrator.ReadyChildren);
+                app = BuildFront(
+                    new[] { "--urls", "http://127.0.0.1:0" },
+                    orchestrator.ReadyChildren,
+                    httpsEnabled,
+                    resolvedDataDirectory);
                 await app.StartAsync();
+            }
+
+            // Best-effort inbound firewall rule for the HTTPS port. This genuinely requires
+            // administrator privileges (inbound rules have no CurrentUser escape hatch); a caught,
+            // logged failure here leaves the HTTPS listener itself still running, just without an
+            // automatic rule — the documented acceptable degraded outcome.
+            if (httpsEnabled && OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    var firewall = new FirewallService();
+                    var ok = firewall.EnsureInboundTcpRule(NodeFront.HttpsPort, "BeeMemoryBank Node");
+                    Console.WriteLine(ok
+                        ? $"[Node] Inbound firewall rule ensured for TCP {NodeFront.HttpsPort}."
+                        : $"[Node] WARNING: could not add inbound firewall rule for TCP {NodeFront.HttpsPort} " +
+                          "(administrator elevation is required for inbound firewall rules). The HTTPS listener " +
+                          "is running, but may be unreachable from other devices until the rule is added manually.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Node] WARNING: firewall rule setup failed: {ex.Message}");
+                }
             }
 
             var frontUrl = app.Urls.FirstOrDefault();
             if (!string.IsNullOrEmpty(frontUrl))
             {
                 Console.WriteLine($"[Node] Front is listening at: {frontUrl}");
+                if (httpsEnabled)
+                {
+                    Console.WriteLine($"[Node] Front HTTPS listener on: https://<this-host>:{NodeFront.HttpsPort}");
+                }
                 orchestrator.UpdateFrontUrl(frontUrl);
             }
 
@@ -271,10 +316,14 @@ public static class Program
         }
     }
 
-    public static WebApplication BuildFront(string[] webArgs, IReadOnlyDictionary<string, ReadyFileInfo> readyChildren)
+    public static WebApplication BuildFront(
+        string[] webArgs,
+        IReadOnlyDictionary<string, ReadyFileInfo> readyChildren,
+        bool enableHttps = false,
+        string? dataPath = null)
     {
         var builder = WebApplication.CreateBuilder(webArgs);
-        var front = NodeFrontBuilder.Build(builder, readyChildren);
+        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath);
         var app = builder.Build();
         front.MapEndpoints(app);
         return app;
