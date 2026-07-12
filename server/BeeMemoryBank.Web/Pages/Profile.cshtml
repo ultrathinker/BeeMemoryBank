@@ -111,20 +111,55 @@
         <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
         Copy this key now. For your security, it will <strong>never be shown again</strong>.
     </sl-alert>
-    <div style="background:var(--bg-app);padding:16px;border-radius:8px;border:1px solid var(--border);position:relative;">
+    <div style="background:var(--bg-app);padding:16px;border-radius:8px;border:1px solid var(--border);position:relative;margin-bottom:16px;">
         <code id="secret-key-code" style="word-break:break-all;font-family:var(--font-mono);font-size:0.9rem;display:block;padding-right:40px;"></code>
         <sl-icon-button name="clipboard" label="Copy" 
             style="position:absolute;top:10px;right:10px;font-size:1.2rem;"
             onclick="copySecret()">
         </sl-icon-button>
     </div>
+
+    <sl-divider></sl-divider>
+
+    <p class="text-muted" style="font-size:0.85rem;margin:16px 0 12px;">
+        <sl-icon name="plug"></sl-icon> These snippets already contain your key and server URL — paste them into your AI client now, while the key is visible.
+    </p>
+
+    <div style="margin-bottom:16px;">
+        <div style="margin-bottom:6px;font-size:0.85rem;font-weight:600;"><sl-icon name="terminal"></sl-icon> Claude Code (CLI)</div>
+        <div style="background:var(--bg-app);padding:16px;border-radius:8px;border:1px solid var(--border);position:relative;">
+            <code id="mcp-cli-code" style="word-break:break-all;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.85rem;display:block;padding-right:40px;"></code>
+            <sl-icon-button name="clipboard" label="Copy"
+                style="position:absolute;top:10px;right:10px;font-size:1.2rem;"
+                onclick="copyEl('mcp-cli-code', 'Claude Code command copied')">
+            </sl-icon-button>
+        </div>
+    </div>
+
+    <div>
+        <div style="margin-bottom:6px;font-size:0.85rem;font-weight:600;"><sl-icon name="braces"></sl-icon> Cursor / Windsurf (<code>.cursor/mcp.json</code>)</div>
+        <div style="background:var(--bg-app);padding:16px;border-radius:8px;border:1px solid var(--border);position:relative;">
+            <code id="mcp-cursor-code" style="white-space:pre;font-family:var(--font-mono);font-size:0.85rem;display:block;padding-right:40px;overflow-x:auto;"></code>
+            <sl-icon-button name="clipboard" label="Copy"
+                style="position:absolute;top:10px;right:10px;font-size:1.2rem;"
+                onclick="copyEl('mcp-cursor-code', 'Cursor config copied')">
+            </sl-icon-button>
+        </div>
+    </div>
+
     <sl-button slot="footer" variant="primary" onclick="document.getElementById('dlg-show-secret').hide()">I have copied it</sl-button>
 </sl-dialog>
 
 <script>
+var mcpBaseUrl = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.McpBaseUrl));
+
+function copyEl(id, message) {
+    navigator.clipboard.writeText(document.getElementById(id).textContent);
+    showAlert('success', message);
+}
+
 function copySecret() {
-    navigator.clipboard.writeText(document.getElementById('secret-key-code').textContent);
-    showAlert('success', 'Key copied to clipboard');
+    copyEl('secret-key-code', 'Key copied to clipboard');
 }
 
 document.getElementById('btn-change-password').addEventListener('click', function() {
@@ -239,8 +274,16 @@ document.getElementById('btn-do-create-agent').addEventListener('click', functio
         document.getElementById('dlg-create-agent').hide();
         document.getElementById('agent-name').value = '';
         document.getElementById('agent-desc').value = '';
-        
-        document.getElementById('secret-key-code').textContent = data.apiKey;
+
+        var key = data.apiKey;
+        var mcpUrl = mcpBaseUrl + '/mcp';
+
+        document.getElementById('secret-key-code').textContent = key;
+        document.getElementById('mcp-cli-code').textContent =
+            'claude mcp add --transport http bee-memory-bank ' + mcpUrl + ' --header "Authorization: Bearer ' + key + '"';
+        document.getElementById('mcp-cursor-code').textContent =
+            '{\n  "mcpServers": {\n    "bee-memory-bank": {\n      "type": "http",\n      "url": "' + mcpUrl + '",\n      "headers": {\n        "Authorization": "Bearer ' + key + '"\n      }\n    }\n  }\n}';
+
         document.getElementById('dlg-show-secret').show();
         loadAgents();
     }).catch(err => {
