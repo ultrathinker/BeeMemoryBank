@@ -6,6 +6,8 @@ namespace BeeMemoryBank.Desktop;
 
 class Program
 {
+    public static bool StartMinimized { get; private set; }
+
     private static Mutex? _singleInstanceMutex;
 
     // Initialization code. Don't use any Avalonia, third-party APIs or any
@@ -14,6 +16,14 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        foreach (var arg in args)
+        {
+            if (arg.Equals("--minimized", StringComparison.OrdinalIgnoreCase))
+            {
+                StartMinimized = true;
+            }
+        }
+
         const string mutexName = "BeeMemoryBank.Desktop.Mutex";
         _singleInstanceMutex = new Mutex(true, mutexName, out bool isNewInstance);
 
