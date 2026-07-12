@@ -8,16 +8,106 @@ public class SetupModel(ApiClient api) : PageModel
 {
     public string? ErrorMessage { get; set; }
 
-    /// <summary>"" = mode-select (step 1), "form" = show form (step 2), "done" = completion (step 3)</summary>
+    /// <summary>"legacy" = migration wizard (step 0), "" = mode-select (step 1), "form" = show form (step 2), "done" = completion (step 3)</summary>
     public string Step { get; set; } = "";
 
     /// <summary>"standalone" or "join" — tracks which path the user took, shown in step 3</summary>
     public string Mode { get; set; } = "standalone";
 
+    public List<LegacyCandidate> Candidates { get; set; } = new();
+
     public void OnGet(string? step, string? mode)
     {
-        Step = step ?? "";
         Mode = mode ?? "standalone";
+
+        if (step == null)
+        {
+            bool hasLegacyDirs = false;
+            var paths = new[]
+            {
+                @"C:\bee\data",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bmb", "data")
+            };
+            foreach (var path in paths)
+            {
+                if (Directory.Exists(Environment.ExpandEnvironmentVariables(path)))
+                {
+                    hasLegacyDirs = true;
+                    break;
+                }
+            }
+
+            Step = hasLegacyDirs ? "legacy" : "";
+        }
+        else
+        {
+            Step = step;
+        }
+
+        if (Step == "legacy")
+        {
+            Candidates = LegacyMigrationService.GetCandidates();
+        }
+    }
+
+    public async Task<IActionResult> OnPostMigrateAsync(string sourcePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            ErrorMessage = "Please specify a directory path.";
+            Step = "legacy";
+            Candidates = LegacyMigrationService.GetCandidates();
+            return Page();
+        }
+
+        var candidate = LegacyMigrationService.ValidatePath(sourcePath);
+        if (candidate == null || !candidate.IsValid)
+        {
+            ErrorMessage = "The specified directory is not a valid legacy BeeMemoryBank data directory.";
+            Step = "legacy";
+            Candidates = LegacyMigrationService.GetCandidates();
+            return Page();
+        }
+
+        // Guard: if Api is already running it has the destination db open.
+        // Overwriting the file while Api holds it causes a silent no-op — Api's
+        // connection pool keeps serving the old in-memory state and never notices
+        // the file changed. The only safe fix is to ensure nothing has the db open
+        // before copying. Since coordinating a full orchestrator stop/restart is
+        // out of scope here, we detect this condition honestly and ask the user to
+        // restart the app before migrating (so Api's first boot opens the just-copied
+        // file instead of its own auto-created empty one).
+        var apiReachable = await api.GetInitStatusAsync();
+        if (apiReachable != null)
+        {
+            ErrorMessage =
+                "Migration cannot proceed while the app is fully running: the Api process " +
+                "already has the destination database open, so copying the file now would " +
+                "have no effect on the live process. " +
+                "Please fully close BeeMemoryBank (including the tray icon / desktop app), " +
+                "then reopen it and perform the migration immediately — before Api's own " +
+                "auto-created empty database has any account data in it.";
+            Step = "legacy";
+            Candidates = LegacyMigrationService.GetCandidates();
+            return Page();
+        }
+
+        try
+        {
+            var destPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH")
+                ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
+
+            await LegacyMigrationService.CopyLegacyDataAsync(sourcePath, destPath);
+
+            return RedirectToPage("/Setup", new { step = "done", mode = "standalone" });
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Failed to copy database: {ex.Message}";
+            Step = "legacy";
+            Candidates = LegacyMigrationService.GetCandidates();
+            return Page();
+        }
     }
 
     public async Task<IActionResult> OnPostStandaloneAsync(
