@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Hosting.AspNetCore\BeeMemoryBank.Hosting.AspNetCore.csproj" />
   </ItemGroup>
 
 </Project>
