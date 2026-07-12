@@ -7,6 +7,8 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using Velopack;
+
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -73,6 +75,12 @@ public sealed class UpdateService
     public Func<RestoreFlowStep> RestoreStepProvider = () => RestoreFlowStep.Idle;
     public Func<bool> HeavyOperationLockHeldProvider = () => false;
 
+    // Seam to allow mocking the actual process-killing Velopack call in integration tests.
+    public Action<UpdateManager, VelopackAsset> ApplyUpdatesAndRestartAction { get; set; } =
+        (mgr, asset) => mgr.ApplyUpdatesAndRestart(asset);
+
+    private readonly string _applyBehavior;
+
     // ── State ─────────────────────────────────────────────────────────────────
     private volatile UpdateFlowStep _step = UpdateFlowStep.Idle;
     private volatile int _pct;
@@ -97,11 +105,13 @@ public sealed class UpdateService
         SnapshotRestoreService snapshotRestore,
         SessionService sessionService,
         string dataPath,
-        ILogger<UpdateService> logger)
+        ILogger<UpdateService> logger,
+        string applyBehavior = "simulate")
         : this(DefaultReleasePublicKeys, snapshotService, maintenance, dekRotation,
                snapshotRestore, sessionService, dataPath, logger,
                new InMemoryArtifactSource(new Dictionary<string, byte[]>()),
-               new AlwaysHealthyHealthCheck())
+               new AlwaysHealthyHealthCheck(),
+               applyBehavior)
     {
     }
 
@@ -118,7 +128,8 @@ public sealed class UpdateService
         string dataPath,
         ILogger<UpdateService> logger,
         IUpdateArtifactSource artifactSource,
-        IUpdateHealthCheck healthCheck)
+        IUpdateHealthCheck healthCheck,
+        string applyBehavior = "simulate")
     {
         _releasePublicKeys = releasePublicKeys;
         _snapshotService = snapshotService;
@@ -130,6 +141,7 @@ public sealed class UpdateService
         _logger = logger;
         _artifactSource = artifactSource;
         _healthCheck = healthCheck;
+        _applyBehavior = applyBehavior;
 
         // Wire the gate-check seams to the real collaborators (production behaviour).
         // Tests override individual providers to simulate a busy gate.
@@ -364,12 +376,36 @@ public sealed class UpdateService
 
             try
             {
-                // ── Simulated Apply ───────────────────────────────────────────
-                SetState(UpdateFlowStep.Applying, 50, "Applying update (simulated)…");
-                // NOTE: Real binary-swap and process-tree restart are explicitly out of scope
-                // for this task. In the later Velopack-integration task this is where
-                // ApplyUpdatesAndRestart() would be called. We simulate a brief delay.
-                await Task.Delay(50, ct);
+                if (_applyBehavior == "real")
+                {
+                    if (_artifactSource is VelopackArtifactSource veloSource)
+                    {
+                        var mgr = veloSource.UpdateManager;
+                        var asset = veloSource.UpdateAsset;
+                        if (mgr != null && asset != null)
+                        {
+                            SetState(UpdateFlowStep.Applying, 50, "Applying update via Velopack…");
+                            ApplyUpdatesAndRestartAction(mgr, asset);
+                        }
+                        else
+                        {
+                            throw new InvalidOperationException("Velopack UpdateManager or UpdateAsset is not initialized. Was Download completed?");
+                        }
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("Cannot perform real Apply when artifact source is not Velopack.");
+                    }
+                }
+                else
+                {
+                    // ── Simulated Apply ───────────────────────────────────────────
+                    SetState(UpdateFlowStep.Applying, 50, "Applying update (simulated)…");
+                    // NOTE: Real binary-swap and process-tree restart are explicitly out of scope
+                    // for this task. In the later Velopack-integration task this is where
+                    // ApplyUpdatesAndRestart() would be called. We simulate a brief delay.
+                    await Task.Delay(50, ct);
+                }
 
                 // ── Health checks (up to 3 failures) ─────────────────────────
                 SetState(UpdateFlowStep.Applying, 70, "Running post-apply health checks…");

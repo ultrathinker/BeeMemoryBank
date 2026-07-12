@@ -44,3 +44,42 @@ public sealed class FlakyHealthCheck : IUpdateHealthCheck
         return Task.FromResult(true);
     }
 }
+
+/// <summary>
+/// A real health check that hits the running node's /health endpoint via HTTP.
+/// </summary>
+public sealed class HttpUpdateHealthCheck : IUpdateHealthCheck
+{
+    private readonly HttpClient _httpClient;
+    private readonly string _healthUrl;
+
+    public HttpUpdateHealthCheck(HttpClient httpClient, string healthUrl = "http://localhost:5146/health")
+    {
+        _httpClient = httpClient;
+        _healthUrl = healthUrl;
+    }
+
+    public async Task<bool> CheckAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await _httpClient.GetAsync(_healthUrl, cancellationToken).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                using var doc = System.Text.Json.JsonDocument.Parse(content);
+                if (doc.RootElement.TryGetProperty("status", out var statusProp) &&
+                    statusProp.GetString() == "ok")
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+            // Ignore and return unhealthy
+        }
+        return false;
+    }
+}
+
