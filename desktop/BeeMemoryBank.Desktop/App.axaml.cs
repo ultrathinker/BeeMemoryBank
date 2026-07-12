@@ -58,6 +58,35 @@ public partial class App : Application
                 Dispatcher.UIThread.Post(() => mainWindow.ShowAndFocusWindow());
             };
 
+            var autostartService = new Services.AutostartService();
+            var autostartItem = new NativeMenuItem("Autostart")
+            {
+                ToggleType = MenuItemToggleType.CheckBox,
+                IsChecked = autostartService.IsEnabled
+            };
+            autostartItem.Click += (s, e) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    try
+                    {
+                        if (autostartService.IsEnabled)
+                        {
+                            autostartService.Disable();
+                        }
+                        else
+                        {
+                            autostartService.Enable();
+                        }
+                        autostartItem.IsChecked = autostartService.IsEnabled;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error toggling autostart: {ex.Message}");
+                    }
+                });
+            };
+
             var exitItem = new NativeMenuItem("Exit");
             exitItem.Click += (s, e) =>
             {
@@ -69,6 +98,7 @@ public partial class App : Application
             };
 
             menu.Items.Add(openItem);
+            menu.Items.Add(autostartItem);
             menu.Items.Add(new NativeMenuItemSeparator());
             menu.Items.Add(exitItem);
 

@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private Process? _nodeProcess;
     private bool _isRealClose;
     private CancellationTokenSource? _initCts;
+    private bool _startMinimized = Program.StartMinimized;
 
     public MainWindow()
     {
@@ -25,6 +26,11 @@ public partial class MainWindow : Window
 
     private void MainWindow_Opened(object? sender, EventArgs e)
     {
+        if (_startMinimized)
+        {
+            _startMinimized = false;
+            Hide();
+        }
         StartHostOrAttach();
     }
 
