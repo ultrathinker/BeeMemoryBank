@@ -6,8 +6,19 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
+    <!-- Hosting + Logging abstractions are needed by MdnsAnnouncer (BackgroundService) and the
+         mDNS services' ILogger usage. The same versions are used by BeeMemoryBank.Sync. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <!-- mDNS / DNS-SD (RFC 6762/6763) for LAN node discovery (TASK_BRIEF §5 Этап 5).
+         Chosen over Zeroconf (browse/resolve-only — cannot advertise) and Tmds.MDns
+         (Linux/Avahi-only). Makaretu.Dns.Multicast is the only single package that covers
+         BOTH advertising (ServiceDiscovery.Advertise) and browsing (QueryServiceInstances)
+         on a cross-platform .NET runtime. netstandard2.0 build runs unchanged on net10.0.
+         Repo (richardschneider/net-mdns) is active: not archived, commits through 2024, 266★. -->
+    <PackageReference Include="Makaretu.Dns.Multicast" Version="0.27.0" />
   </ItemGroup>
 
   <ItemGroup>

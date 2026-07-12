@@ -62,4 +62,35 @@ public static class DependencyInjection
         services.AddSingleton<IEmbeddingGenerator>(_ => new OnnxEmbeddingGenerator(modelBytes));
         return services;
     }
+
+    // ── mDNS / DNS-SD LAN discovery (TASK_BRIEF §5 Этап 5) ──────────────────────
+    // mDNS services live in Core (not Sync) so BOTH the API host (which runs the MdnsAnnouncer
+    // alongside SyncScheduler, next to the authoritative InvisibleModeService + node identity)
+    // and the Web host (which needs the MdnsBrowser for the Setup join wizard) can use them via the
+    // Core project reference they already carry — no new project-graph edges required.
+
+    /// <summary>
+    /// Registers the <see cref="MdnsBrowser"/> singleton used by the join wizard to discover peer
+    /// nodes on the LAN. Call this from the Web host.
+    /// </summary>
+    public static IServiceCollection AddMdnsBrowser(this IServiceCollection services)
+    {
+        services.TryAddSingleton<MdnsBrowser>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the <see cref="MdnsAnnouncer"/> background service that advertises this node via
+    /// mDNS. Call this from the host that owns the authoritative
+    /// <see cref="InvisibleModeService"/> and the node identity (the API).
+    /// </summary>
+    public static IServiceCollection AddMdnsAnnouncer(
+        this IServiceCollection services, Action<MdnsAnnouncerOptions>? configure = null)
+    {
+        var options = new MdnsAnnouncerOptions();
+        configure?.Invoke(options);
+        services.AddSingleton(options);
+        services.AddHostedService<MdnsAnnouncer>();
+        return services;
+    }
 }

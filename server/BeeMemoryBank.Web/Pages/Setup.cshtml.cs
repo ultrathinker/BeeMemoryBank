@@ -1,10 +1,11 @@
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace BeeMemoryBank.Web.Pages;
 
-public class SetupModel(ApiClient api) : PageModel
+public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
 {
     public string? ErrorMessage { get; set; }
 
@@ -174,5 +175,27 @@ public class SetupModel(ApiClient api) : PageModel
         }
 
         return RedirectToPage("/Setup", new { step = "done", mode = "join" });
+    }
+
+    /// <summary>
+    /// JSON endpoint backing the "Found nodes on your network" list in the join step. Performs a
+    /// short bounded mDNS scan and returns the discovered peers so the browser can render clickable
+    /// chips that pre-fill the manual Remote Node URL field. This is purely ADDITIVE — the manual
+    /// entry path is unchanged and is what actually submits <c>remoteUrl</c> in <c>OnPostJoinAsync</c>.
+    /// </summary>
+    public async Task<JsonResult> OnGetDiscoveredNodesAsync(CancellationToken cancellationToken)
+    {
+        var nodes = await mdnsBrowser.DiscoverAsync(TimeSpan.FromSeconds(2.5), cancellationToken: cancellationToken);
+        var payload = nodes.Select(n => new
+        {
+            nodeId = n.NodeId,
+            name = n.Name,
+            version = n.Version,
+            https = n.Https,
+            host = n.Host,
+            port = n.Port,
+            url = n.Url,
+        });
+        return new JsonResult(payload);
     }
 }

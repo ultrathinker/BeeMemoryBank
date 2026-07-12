@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core; // AddMdnsBrowser (join-wizard LAN node discovery)
 using BeeMemoryBank.Web.Endpoints;
 using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
@@ -53,6 +54,9 @@ builder.Services.AddHttpClient<ApiClient>(client =>
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddRazorPages();
+// mDNS browser: powers the "Found nodes on your network" list in the Setup join wizard.
+// Web only browses (the API does the announcing); the manual-URL-entry path stays fully functional.
+builder.Services.AddMdnsBrowser();
 // W3 (Option A): Web-side cache for security-stamp lookups so OnValidatePrincipal does not
 // round-trip the API on every authenticated request. TTL 5 minutes bounds staleness.
 builder.Services.AddMemoryCache();

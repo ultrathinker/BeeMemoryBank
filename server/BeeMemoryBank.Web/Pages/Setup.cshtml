@@ -221,7 +221,20 @@
                     <small class="text-muted" style="margin-top:-12px;">Used to log in on this node. Can be different from the node name.</small>
                     <sl-input name="joinDisplayName" label="Node Name" required
                               placeholder="e.g. My Phone"></sl-input>
-                    <sl-input name="remoteUrl" label="Remote Node URL" required
+
+                    <!-- ADDITIVE: discovered-nodes list. Populated by a mDNS scan (OnGetDiscoveredNodes).
+                         Clicking a chip only pre-fills the manual Remote Node URL field below — the
+                         manual-entry path is unchanged and still does the actual submit. -->
+                    <div id="join-discovered" style="margin-bottom:4px;">
+                        <sl-button variant="default" size="small" id="btn-scan-network" type="button" outline
+                                   style="width:100%;">
+                            <sl-icon slot="prefix" name="broadcast-pin"></sl-icon>
+                            Scan my network for nodes
+                        </sl-button>
+                        <div id="discovered-nodes" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"></div>
+                    </div>
+
+                    <sl-input name="remoteUrl" id="join-remote-url" label="Remote Node URL" required
                               placeholder="https://bee.example.com" type="url"></sl-input>
                     <sl-input name="joinPassword" label="Password" type="password" required
                               password-toggle minlength="6"></sl-input>
@@ -294,6 +307,8 @@
                 document.getElementById('form-join').style.display = (mode === 'join') ? 'block' : 'none';
                 // Update step dots
                 updateStepDots(2);
+                // Kick off an mDNS scan automatically when the join form is first shown.
+                if (mode === 'join') scanNetwork();
             }
 
             function updateStepDots(activeStep) {
@@ -313,6 +328,68 @@
             var btnJoin = document.getElementById('btn-mode-join');
             if (btnStandalone) btnStandalone.addEventListener('click', function () { goToForm('standalone'); });
             if (btnJoin) btnJoin.addEventListener('click', function () { goToForm('join'); });
+
+            var btnScan = document.getElementById('btn-scan-network');
+            if (btnScan) btnScan.addEventListener('click', scanNetwork);
+
+            // If the join form is already visible on load (e.g. returning with a validation error),
+            // kick off a scan right away.
+            var joinFormOnLoad = document.getElementById('form-join');
+            if (joinFormOnLoad && joinFormOnLoad.style.display !== 'none') scanNetwork();
+
+            // ── mDNS discovered-nodes list (ADDITIVE; only pre-fills the manual URL field) ────
+            function escapeHtml(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            }
+
+            function scanNetwork() {
+                var box = document.getElementById('discovered-nodes');
+                if (!box) return;
+                box.innerHTML =
+                    '<small class="text-muted">' +
+                    '<sl-spinner style="font-size:0.85em;vertical-align:-2px;"></sl-spinner> ' +
+                    'Searching your network\u2026</small>';
+                fetch('/Setup?handler=DiscoveredNodes', { headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { return r.ok ? r.json() : []; })
+                    .then(function (nodes) { renderDiscovered(nodes || []); })
+                    .catch(function () { renderDiscovered([]); });
+            }
+
+            function renderDiscovered(nodes) {
+                var box = document.getElementById('discovered-nodes');
+                if (!box) return;
+                box.innerHTML = '';
+                if (!nodes.length) {
+                    box.innerHTML =
+                        '<small class="text-muted">No BeeMemoryBank nodes found on your network. ' +
+                        'Enter the remote node URL manually below.</small>';
+                    return;
+                }
+                var head = document.createElement('small');
+                head.className = 'text-muted';
+                head.textContent = nodes.length + ' node' + (nodes.length > 1 ? 's' : '') +
+                    ' found on your network \u2014 click to use:';
+                box.appendChild(head);
+                nodes.forEach(function (n) {
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'mode-card';
+                    btn.style.cssText = 'padding:12px; border-width:1px; align-items:center;';
+                    var label = escapeHtml(n.name || n.host || n.url);
+                    var sub = escapeHtml(n.url) + (n.version ? ' \u00b7 v' + escapeHtml(n.version) : '');
+                    btn.innerHTML =
+                        '<sl-icon name="hdd-network"></sl-icon>' +
+                        '<div class="mode-card-text"><strong>' + label + '</strong>' +
+                        '<small>' + sub + '</small></div>';
+                    btn.addEventListener('click', function () {
+                        var inp = document.getElementById('join-remote-url');
+                        if (inp) { inp.value = n.url; inp.focus(); }
+                    });
+                    box.appendChild(btn);
+                });
+            }
 
             // ── Loading dialog on form submit ─────────────────────────────────────
             var dlg = document.getElementById('setup-loader');
