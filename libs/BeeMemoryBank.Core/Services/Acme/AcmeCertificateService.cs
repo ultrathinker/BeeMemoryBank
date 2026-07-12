@@ -109,16 +109,23 @@ public sealed class AcmeCertificateService
         _trace?.Invoke($"ACME: selected challenge type '{challenge.Type}' token='{challenge.Token}'");
 
         // 3. Build the ephemeral challenge cert and register it so the TLS listener serves it.
-        //    For the cross-process hand-off: also write the cert to the shared file so that the
-        //    Node process's live HTTPS listener (which runs in a separate process) can pick it up.
         var challengeCert = TlsAlpn01CertificateBuilder.Build(domain, challenge.KeyAuthz);
-        _responder.SetChallenge(domain, challengeCert);
-        _challengePersister?.Write(domain, challengeCert);
-        _trace?.Invoke($"ACME: challenge cert registered (domain={domain})" +
-            (_challengePersister != null ? $"; written to {_challengePersister.FilePath}" : " (no file persister)"));
+        var responderRegistered = false;
 
         try
         {
+            // Registration itself lives INSIDE the try: if the shared-file write throws (disk
+            // full, permissions), the finally below must still run so the in-memory responder
+            // entry and challengeCert don't leak as a permanently "active" (but unreachable)
+            // challenge for this domain.
+            _responder.SetChallenge(domain, challengeCert);
+            responderRegistered = true;
+            // Cross-process hand-off: also write the cert to the shared file so that the Node
+            // process's live HTTPS listener (a separate process) can pick it up.
+            _challengePersister?.Write(domain, challengeCert);
+            _trace?.Invoke($"ACME: challenge cert registered (domain={domain})" +
+                (_challengePersister != null ? $"; written to {_challengePersister.FilePathFor(domain)}" : " (no file persister)"));
+
             // 4. Ask the CA to validate. The CA will connect with SNI=domain, ALPN=acme-tls/1; the
             //    listener's selector returns challengeCert via TlsAlpnChallengeResponder (in-process
             //    path) or AcmeChallengePersister (cross-process path via the shared file).
@@ -140,9 +147,11 @@ public sealed class AcmeCertificateService
         finally
         {
             // Always tear down the challenge registration, even on failure, so a leftover ephemeral
-            // cert can't shadow the real cert for the same SNI.
-            _responder.RemoveChallenge(domain);
-            _challengePersister?.Delete();
+            // cert can't shadow the real cert for the same SNI. RemoveChallenge disposes the cert;
+            // if SetChallenge itself never ran, dispose it here instead so it isn't leaked.
+            if (responderRegistered) _responder.RemoveChallenge(domain);
+            else challengeCert.Dispose();
+            _challengePersister?.Delete(domain);
             _trace?.Invoke("ACME: challenge cert deregistered");
         }
     }

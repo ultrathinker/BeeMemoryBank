@@ -126,7 +126,7 @@ public class NodeFrontAcmeChallengeTests : IAsyncLifetime
         }
         finally
         {
-            persister.Delete();
+            persister.Delete(challengeDomain);
         }
 
         // ── After the challenge is cleared, the original domain falls back to the leaf again. ──

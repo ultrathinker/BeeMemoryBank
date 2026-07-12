@@ -11,9 +11,10 @@ namespace BeeMemoryBank.Core.Services.Acme;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>File path.</b>  <c>&lt;dataDir&gt;/certs/acme/live-challenge.json</c>.
-/// The file contains the PFX bytes (base64-encoded) and the domain the challenge is for plus an
-/// expiry hint so the reader can discard stale files without parsing the certificate itself.
+/// <b>File path.</b>  <c>&lt;dataDir&gt;/certs/acme/&lt;domain&gt;.live-challenge.json</c> — one
+/// file PER DOMAIN (mirroring the existing <c>&lt;domain&gt;.pfx</c>/<c>&lt;domain&gt;.chain.pem</c>
+/// naming), so two concurrent ACME requests for different domains never contend for the same file
+/// or delete each other's in-flight challenge.
 /// </para>
 /// <para>
 /// <b>Lifecycle.</b>
@@ -29,10 +30,12 @@ namespace BeeMemoryBank.Core.Services.Acme;
 /// </para>
 /// <para>
 /// <b>Read semantics for Node.</b>  The listener's certificate selector calls
-/// <see cref="TryReadChallengeCert"/> on every TLS handshake. The call is deliberately stateless
-/// (fresh file read each time) so no cross-process coordination beyond the filesystem is needed.
-/// If the file is absent, malformed, or its <c>ExpiresAt</c> hint is in the past the method
-/// returns <c>null</c>, causing the selector to fall through to the normal leaf certificate.
+/// <see cref="TryReadChallengeCert"/> on every TLS handshake. The file is only re-read/re-parsed
+/// when its last-write time changes since the previous call for that SNI (cached otherwise), so
+/// repeated handshakes during one active challenge don't re-import the PFX/re-allocate a CNG key
+/// container each time; the previously cached certificate is disposed when superseded. If the
+/// file is absent, malformed, or its <c>ExpiresAt</c> hint is in the past the method returns
+/// <c>null</c>, causing the selector to fall through to the normal leaf certificate.
 /// </para>
 /// <para>
 /// <b>Windows SChannel note.</b>  The PFX is exported with
@@ -44,33 +47,37 @@ namespace BeeMemoryBank.Core.Services.Acme;
 /// </remarks>
 public sealed class AcmeChallengePersister
 {
-    private readonly string _filePath;
+    private readonly string _dir;
+    private readonly object _cacheGate = new();
+    private string? _cachedDomain;
+    private DateTime _cachedWriteTimeUtc;
+    private X509Certificate2? _cachedCert;
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
     /// <summary>
     /// Creates the persister.
     /// </summary>
-    /// <param name="dataDir">The application data root. The challenge file is written under
+    /// <param name="dataDir">The application data root. Challenge files are written under
     /// <c>&lt;dataDir&gt;/certs/acme/</c>.</param>
     public AcmeChallengePersister(string dataDir)
     {
         if (string.IsNullOrWhiteSpace(dataDir))
             throw new ArgumentException("dataDir must not be empty.", nameof(dataDir));
-        _filePath = Path.Combine(dataDir, "certs", "acme", "live-challenge.json");
+        _dir = Path.Combine(dataDir, "certs", "acme");
     }
 
     /// <summary>
-    /// The absolute path of the shared challenge file.
+    /// The absolute path of the per-domain challenge file for <paramref name="domain"/>.
     /// Exposed for testing.
     /// </summary>
-    public string FilePath => _filePath;
+    public string FilePathFor(string domain) => Path.Combine(_dir, Normalize(domain) + ".live-challenge.json");
 
     /// <summary>
-    /// Atomically writes the challenge certificate for <paramref name="domain"/> to the shared
+    /// Atomically writes the challenge certificate for <paramref name="domain"/> to its own shared
     /// file so that the Node process's TLS listener can pick it up on the next handshake.
     /// </summary>
-    /// <param name="domain">The lower-cased DNS identifier being validated.</param>
+    /// <param name="domain">The DNS identifier being validated.</param>
     /// <param name="cert">The ephemeral challenge certificate (with private key attached).
     /// Must be exportable as a PFX.</param>
     public void Write(string domain, X509Certificate2 cert)
@@ -79,7 +86,7 @@ public sealed class AcmeChallengePersister
             throw new ArgumentException("Domain must not be empty.", nameof(domain));
         ArgumentNullException.ThrowIfNull(cert);
 
-        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+        Directory.CreateDirectory(_dir);
 
         // Export the cert + private key as a PFX. We use no password (the file is protected by
         // OS filesystem permissions like the other files in <data>/certs/acme/). EphemeralKeySet
@@ -97,43 +104,65 @@ public sealed class AcmeChallengePersister
         };
 
         var json = JsonSerializer.Serialize(record, JsonOpts);
-        var tmp = _filePath + ".tmp";
+        var path = FilePathFor(domain);
+        var tmp = path + ".tmp";
         File.WriteAllText(tmp, json);
-        File.Move(tmp, _filePath, overwrite: true);
+        File.Move(tmp, path, overwrite: true);
     }
 
     /// <summary>
-    /// Deletes the shared challenge file. Safe to call when the file does not exist.
+    /// Deletes the shared challenge file for <paramref name="domain"/> only. Safe to call when the
+    /// file does not exist. Never affects another domain's in-flight challenge file.
     /// </summary>
-    public void Delete()
+    public void Delete(string domain)
     {
-        try { File.Delete(_filePath); }
+        if (string.IsNullOrWhiteSpace(domain)) return;
+        try { File.Delete(FilePathFor(domain)); }
         catch (IOException) { /* best-effort: the file may already be gone */ }
         catch (UnauthorizedAccessException) { /* ditto */ }
     }
 
     /// <summary>
-    /// Reads the current challenge from the shared file and returns its certificate if a challenge
-    /// is active for <paramref name="sni"/>. Returns <c>null</c> when:
+    /// Reads the challenge file for <paramref name="sni"/> and returns its certificate if a
+    /// challenge is active for that exact domain. Returns <c>null</c> when:
     /// <list type="bullet">
-    ///   <item>the file does not exist;</item>
+    ///   <item>the per-domain file does not exist;</item>
     ///   <item>the file is malformed or cannot be read;</item>
-    ///   <item>the recorded domain does not match <paramref name="sni"/>;</item>
     ///   <item>the challenge has already expired (<c>ExpiresAt</c> is in the past).</item>
     /// </list>
-    /// The returned certificate is loaded with <see cref="X509KeyStorageFlags.PersistKeySet"/>
-    /// so Windows SChannel can use it for a server-side TLS handshake. The caller is responsible
-    /// for disposing it.
+    /// The returned certificate is loaded with <see cref="X509KeyStorageFlags.PersistKeySet"/> so
+    /// Windows SChannel can use it for a server-side TLS handshake. It is cached internally (keyed
+    /// on the file's last-write time) and MUST NOT be disposed by the caller — ownership stays with
+    /// this instance, which disposes the previous cert once superseded or cleared.
     /// </summary>
     public X509Certificate2? TryReadChallengeCert(string? sni)
     {
         if (string.IsNullOrWhiteSpace(sni)) return null;
+        var domain = Normalize(sni);
+        var path = FilePathFor(domain);
+
+        DateTime writeTimeUtc;
+        try
+        {
+            if (!File.Exists(path)) { ClearCache(domain); return null; }
+            writeTimeUtc = File.GetLastWriteTimeUtc(path);
+        }
+        catch
+        {
+            ClearCache(domain);
+            return null;
+        }
+
+        lock (_cacheGate)
+        {
+            if (_cachedCert != null && _cachedDomain == domain && _cachedWriteTimeUtc == writeTimeUtc)
+                return _cachedCert;
+        }
 
         ChallengeRecord? record;
         try
         {
-            if (!File.Exists(_filePath)) return null;
-            var json = File.ReadAllText(_filePath);
+            var json = File.ReadAllText(path);
             record = JsonSerializer.Deserialize<ChallengeRecord>(json, JsonOpts);
         }
         catch
@@ -143,22 +172,47 @@ public sealed class AcmeChallengePersister
         }
 
         if (record is null) return null;
-        if (!string.Equals(record.Domain, Normalize(sni), StringComparison.OrdinalIgnoreCase))
-            return null;
-        if (record.ExpiresAt <= DateTime.UtcNow)
-            return null;
+        if (record.ExpiresAt <= DateTime.UtcNow) return null;
 
+        X509Certificate2 loaded;
         try
         {
             var pfxBytes = Convert.FromBase64String(record.PfxBase64 ?? "");
             // PersistKeySet so Windows SChannel can acquire credentials.
-            return X509CertificateLoader.LoadPkcs12(
+            loaded = X509CertificateLoader.LoadPkcs12(
                 pfxBytes, (string?)null,
                 X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);
         }
         catch
         {
             return null;
+        }
+
+        lock (_cacheGate)
+        {
+            // Another thread may have already cached the same (domain, writeTime) — dispose our
+            // redundant load and reuse theirs rather than leaking a second key container.
+            if (_cachedCert != null && _cachedDomain == domain && _cachedWriteTimeUtc == writeTimeUtc)
+            {
+                loaded.Dispose();
+                return _cachedCert;
+            }
+            _cachedCert?.Dispose();
+            _cachedCert = loaded;
+            _cachedDomain = domain;
+            _cachedWriteTimeUtc = writeTimeUtc;
+            return loaded;
+        }
+    }
+
+    private void ClearCache(string domain)
+    {
+        lock (_cacheGate)
+        {
+            if (_cachedDomain != domain) return;
+            _cachedCert?.Dispose();
+            _cachedCert = null;
+            _cachedDomain = null;
         }
     }
 

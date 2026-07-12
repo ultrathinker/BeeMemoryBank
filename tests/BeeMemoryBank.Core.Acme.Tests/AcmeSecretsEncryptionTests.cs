@@ -53,9 +53,18 @@ public class AcmeSecretsEncryptionTests : IDisposable
         var json = JsonSerializer.Serialize(stored, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(metaPath, json);
 
-        // 3. Verify plaintext password is NOT present in the file content on disk
+        // 3. Encryption is Windows-only (DPAPI); off Windows StoredCertificate.EncryptPassword is
+        //    never called (see step 1) so the "password" here IS the plaintext by design — only
+        //    assert non-recoverability where encryption actually happened.
         var fileContent = File.ReadAllText(metaPath);
-        fileContent.Should().NotContain(plaintextPassword);
+        if (OperatingSystem.IsWindows())
+        {
+            fileContent.Should().NotContain(plaintextPassword);
+        }
+        else
+        {
+            fileContent.Should().Contain(plaintextPassword);
+        }
 
         // 4. Deserialize and decrypt
         var deserialized = JsonSerializer.Deserialize<StoredCertificate>(fileContent);
