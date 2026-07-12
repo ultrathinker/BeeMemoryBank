@@ -171,4 +171,62 @@ public class StdinLifelineTests
 
         callbackRan.Should().BeTrue();
     }
+
+    /// <summary>
+    /// A reader whose ReadLineAsync blocks a REAL thread synchronously (via a manual-reset
+    /// event) rather than truly suspending - simulating Console.In's behavior on a
+    /// redirected/piped stdin on Windows, where the "async" read is effectively a blocking
+    /// OS-level read wrapped in a Task.
+    /// </summary>
+    private class SyncBlockingReader : TextReader
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+
+        public void Release() => _release.Set();
+
+        public override ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken)
+        {
+            // Blocks the CALLING thread for real - not a genuine suspension point.
+            _release.Wait(cancellationToken);
+            return new ValueTask<string?>((string?)null);
+        }
+    }
+
+    [Fact]
+    public async Task Start_WithBlockingReader_DoesNotStarveThreadPool()
+    {
+        // Regression test: a real production bug where StdinLifeline ran its read loop
+        // directly on the default thread pool. Console.In.ReadLineAsync() on a
+        // redirected/piped stdin is not genuinely async on Windows, so that loop could tie
+        // up a scarce startup-time worker thread indefinitely, starving unrelated async
+        // work scheduled around the same time (e.g. Kestrel/ASP.NET Core startup) until the
+        // pool grew - which can take seconds and stalls the whole app in the meantime.
+        // Reproduced directly against real Api.exe/Web.exe via manual Process.Start
+        // (RedirectStandardInput=true, BMB_STDIN_LIFELINE=1): startup hung indefinitely
+        // before the fix (TaskCreationOptions.LongRunning - a dedicated thread instead of a
+        // pool thread) and completed in ~1-2s after.
+        ThreadPool.GetMinThreads(out var originalWorkerMin, out var originalIoMin);
+        try
+        {
+            // Force a minimal pool so a starved thread is actually observable quickly.
+            ThreadPool.SetMinThreads(1, 1);
+
+            var reader = new SyncBlockingReader();
+            using var lifeline = StdinLifeline.Start(() => { }, reader);
+
+            // Unrelated thread-pool work queued while the lifeline's blocking read is in
+            // flight must still complete promptly - it must NOT be stuck behind the
+            // lifeline's read waiting for the pool to grow a new thread.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await Task.Run(() => { });
+            sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+                "unrelated thread-pool work must not be starved by the lifeline's blocking read");
+
+            reader.Release();
+        }
+        finally
+        {
+            ThreadPool.SetMinThreads(originalWorkerMin, originalIoMin);
+        }
+    }
 }
