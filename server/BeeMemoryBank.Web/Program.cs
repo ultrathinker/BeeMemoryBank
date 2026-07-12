@@ -2,6 +2,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Web.Endpoints;
 using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
+using BeeMemoryBank.Hosting.AspNetCore;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
@@ -21,6 +22,8 @@ var builder = Directory.Exists(publishedWwwroot)
             ContentRootPath = AppContext.BaseDirectory,
         })
     : WebApplication.CreateBuilder(args);
+
+builder.Services.AddLoopbackForwardedHeaders(builder.Configuration);
 
 // Auto-resolve BMB_INTERNAL_KEY from shared key file if not set (non-Docker / local dev).
 // API generates the file; Web reads it.
@@ -181,6 +184,8 @@ builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServe
 });
 
 var app = builder.Build();
+
+app.UseLoopbackForwardedHeaders();
 
 // ─── Init-status redirect (cache forever once initialized) ────────────────
 // Only redirect to /Setup when the API explicitly confirms the node is NOT initialized.

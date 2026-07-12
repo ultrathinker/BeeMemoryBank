@@ -6,6 +6,7 @@ using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Hosting.AspNetCore;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -24,6 +25,8 @@ TaskScheduler.UnobservedTaskException += (sender, e) =>
 };
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddLoopbackForwardedHeaders(builder.Configuration);
 
 // BMB_INTERNAL_KEY: shared secret for Web→API internal auth (added to every request by InternalKeyHandler).
 // In production: always set by docker-entrypoint.sh before both processes start.
@@ -179,6 +182,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 var app = builder.Build();
+
+app.UseLoopbackForwardedHeaders();
 
 // Run migrations on startup
 using (var scope = app.Services.CreateScope())
