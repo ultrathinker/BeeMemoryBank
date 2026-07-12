@@ -31,8 +31,10 @@
     <Project Path="tests/BeeMemoryBank.Storage.Tests/BeeMemoryBank.Storage.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Sync.Tests/BeeMemoryBank.Sync.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Migrator.Tests/BeeMemoryBank.Migrator.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.ReleaseTool.Tests/BeeMemoryBank.ReleaseTool.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/BeeMemoryBank.Migrator/BeeMemoryBank.Migrator.csproj" />
+    <Project Path="tools/BeeMemoryBank.ReleaseTool/BeeMemoryBank.ReleaseTool.csproj" />
   </Folder>
 </Solution>
