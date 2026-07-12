@@ -164,6 +164,13 @@ public static class InitEndpoints
                 if (joinResponse == null)
                     return Results.Json(new ErrorResponse("Empty response from remote node"), statusCode: 502);
 
+                if (joinResponse.RemoteNode.ProtocolVersion > BeeMemoryBank.Sync.SyncProtocolVersion.Current)
+                {
+                    return Results.Json(
+                        new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is higher than local version ({BeeMemoryBank.Sync.SyncProtocolVersion.Current})"),
+                        statusCode: 400);
+                }
+
                 var slot = joinResponse.KeySlot;
                 var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
                 var remoteIv = Convert.FromBase64String(slot.IvB64);
@@ -480,7 +487,7 @@ public static class InitEndpoints
         JoinKeySlotDto KeySlot,
         List<JoinWhitelistEntryDto>? Whitelist);
 
-    private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
+    private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
 
     private sealed record JoinWhitelistEntryDto(
         Guid NodeId,

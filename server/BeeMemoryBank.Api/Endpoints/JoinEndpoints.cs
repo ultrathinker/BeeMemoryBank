@@ -126,7 +126,8 @@ public static class JoinEndpoints
                 RemoteNode: new JoinRemoteIdentity(
                     identity.NodeId,
                     identity.DisplayName,
-                    Convert.ToBase64String(identity.Ed25519PublicKey)),
+                    Convert.ToBase64String(identity.Ed25519PublicKey),
+                    BeeMemoryBank.Sync.SyncProtocolVersion.Current),
                 KeySlot: new JoinKeySlot(
                     Convert.ToBase64String(passwordSlot.EncryptedMasterDek),
                     Convert.ToBase64String(passwordSlot.IV),

@@ -8,6 +8,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Api.Models;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -246,4 +247,106 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
 
     private sealed record ChallengeDto(string Challenge, Guid ServerNodeId);
     private sealed record AuthTokenDto(string Token);
+
+    [Fact]
+    public async Task Join_RemoteNodeNewerProtocol_RefusesToJoin()
+    {
+        var mockHandler = new MockHttpMessageHandler(async request =>
+        {
+            if (request.RequestUri!.PathAndQuery.EndsWith("/api/join"))
+            {
+                var responseContent = new
+                {
+                    remoteNode = new
+                    {
+                        nodeId = Guid.NewGuid(),
+                        displayName = "RemoteNode",
+                        ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+                        protocolVersion = 999
+                    },
+                    keySlot = new
+                    {
+                        encryptedMasterDekB64 = Convert.ToBase64String(new byte[32]),
+                        ivB64 = Convert.ToBase64String(new byte[16]),
+                        saltB64 = Convert.ToBase64String(new byte[16]),
+                        argonMemory = 1024,
+                        argonIterations = 2,
+                        argonParallelism = 1
+                    },
+                    whitelist = new List<object>()
+                };
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(responseContent)
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        using var factory = new BmbWebApplicationFactory();
+        var client = factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                var clientFactoryMock = new MockHttpClientFactory(mockHandler.CreateClient());
+                services.AddSingleton<IHttpClientFactory>(clientFactoryMock);
+            });
+        }).CreateClient();
+
+        client.DefaultRequestHeaders.Add("X-Internal-Key", "test-internal-key-for-integration");
+        client.DefaultRequestHeaders.Add("X-User-Role", "superadmin");
+
+        var joinRequest = new
+        {
+            adminUsername = "admin",
+            displayName = "LocalJoiner",
+            remoteUrl = "http://remote-node-address",
+            password = "SecurePassword123!"
+        };
+
+        var resp = await client.PostAsJsonAsync("/api/init/join", joinRequest);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = await resp.Content.ReadFromJsonAsync<ErrorResponse>(JsonOpts);
+        error.Should().NotBeNull();
+        error!.Error.Should().Contain("protocol version");
+        error.Error.Should().Contain("higher than local version");
+    }
+
+    private class MockHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, Task<HttpResponseMessage>> _handler;
+
+        public MockHttpMessageHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> handler)
+        {
+            _handler = handler;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
+        {
+            return _handler(request);
+        }
+
+        public HttpClient CreateClient()
+        {
+            return new HttpClient(this);
+        }
+    }
+
+    private class MockHttpClientFactory : IHttpClientFactory
+    {
+        private readonly HttpClient _client;
+
+        public MockHttpClientFactory(HttpClient client)
+        {
+            _client = client;
+        }
+
+        public HttpClient CreateClient(string name)
+        {
+            return _client;
+        }
+    }
 }

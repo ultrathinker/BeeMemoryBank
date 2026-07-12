@@ -76,6 +76,34 @@ static int RunGenKey(string[] args)
     var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
 
     File.WriteAllText(privatePath, Convert.ToBase64String(privateKey));
+
+    if (OperatingSystem.IsWindows())
+    {
+        try
+        {
+            var fileInfo = new FileInfo(privatePath);
+            var fileSecurity = fileInfo.GetAccessControl();
+            fileSecurity.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            var currentUser = System.Security.Principal.WindowsIdentity.GetCurrent().User;
+            if (currentUser != null)
+            {
+                fileSecurity.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    currentUser,
+                    System.Security.AccessControl.FileSystemRights.FullControl,
+                    System.Security.AccessControl.AccessControlType.Allow));
+            }
+            fileInfo.SetAccessControl(fileSecurity);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: Failed to restrict permissions on private key file: {ex.Message}");
+        }
+    }
+    else
+    {
+        Console.Error.WriteLine("Warning: Restricted file permissions can only be set on Windows. Skipping.");
+    }
+
     File.WriteAllText(publicPath,  Convert.ToBase64String(publicKey));
 
     Console.WriteLine($"Generated Ed25519 key pair:");
@@ -134,7 +162,16 @@ static int RunSign(string[] args)
     }
 
     byte[] data = File.ReadAllBytes(filePath);
-    byte[] signature = Ed25519Signer.Sign(privateKey, data);
+    byte[] signature;
+    try
+    {
+        signature = Ed25519Signer.Sign(privateKey, data);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Failed to sign file: {ex.Message}");
+        return 1;
+    }
 
     // Ensure output directory exists
     string? outDir = Path.GetDirectoryName(outPath);
@@ -211,7 +248,16 @@ static int RunVerify(string[] args)
 
     byte[] data = File.ReadAllBytes(filePath);
 
-    bool valid = Ed25519Signer.Verify(publicKey, data, signature);
+    bool valid;
+    try
+    {
+        valid = Ed25519Signer.Verify(publicKey, data, signature);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Signature verification failed: {ex.Message}");
+        return 2;
+    }
 
     if (valid)
     {

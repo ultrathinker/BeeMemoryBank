@@ -89,7 +89,7 @@ public record ActivityResponse(
 
 public record JoinResponse(JoinRemoteIdentity RemoteNode, JoinKeySlot KeySlot, List<JoinWhitelistEntry> Whitelist);
 
-public record JoinRemoteIdentity(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
+public record JoinRemoteIdentity(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
 
 public record JoinWhitelistEntry(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false);
 
