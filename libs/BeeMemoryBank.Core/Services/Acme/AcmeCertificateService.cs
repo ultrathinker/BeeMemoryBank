@@ -51,6 +51,7 @@ public sealed class AcmeCertificateService
     private readonly string _dataDir;
     private readonly AcmeOptions _options;
     private readonly TlsAlpnChallengeResponder _responder;
+    private readonly AcmeChallengePersister? _challengePersister;
     private readonly Action<string>? _trace;
 
     private string AcmeDir => Path.Combine(_dataDir, "certs", "acme");
@@ -63,11 +64,17 @@ public sealed class AcmeCertificateService
     /// <c>&lt;dataDir&gt;/certs/acme/</c>.</param>
     /// <param name="options">ACME configuration (directory, contacts, renewal threshold, polling).</param>
     /// <param name="responder">The shared TLS-ALPN-01 challenge registry the TLS listener queries.</param>
+    /// <param name="challengePersister">Optional cross-process challenge file writer. When provided,
+    /// <see cref="RequestCertificateAsync"/> also writes the challenge certificate to the shared
+    /// data directory so that the Node process's live HTTPS listener can serve it during the
+    /// validation probe. Pass <c>null</c> (or omit) to disable cross-process file hand-off (e.g.
+    /// when constructing a transient service for read-only metadata access).</param>
     /// <param name="trace">Optional diagnostic sink (e.g. a logger wrapper). May be <c>null</c>.</param>
     public AcmeCertificateService(
         string dataDir,
         AcmeOptions options,
         TlsAlpnChallengeResponder responder,
+        AcmeChallengePersister? challengePersister = null,
         Action<string>? trace = null)
     {
         if (string.IsNullOrWhiteSpace(dataDir))
@@ -75,6 +82,7 @@ public sealed class AcmeCertificateService
         _dataDir = dataDir;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _responder = responder ?? throw new ArgumentNullException(nameof(responder));
+        _challengePersister = challengePersister;
         _trace = trace;
     }
 
@@ -101,13 +109,19 @@ public sealed class AcmeCertificateService
         _trace?.Invoke($"ACME: selected challenge type '{challenge.Type}' token='{challenge.Token}'");
 
         // 3. Build the ephemeral challenge cert and register it so the TLS listener serves it.
+        //    For the cross-process hand-off: also write the cert to the shared file so that the
+        //    Node process's live HTTPS listener (which runs in a separate process) can pick it up.
         var challengeCert = TlsAlpn01CertificateBuilder.Build(domain, challenge.KeyAuthz);
         _responder.SetChallenge(domain, challengeCert);
+        _challengePersister?.Write(domain, challengeCert);
+        _trace?.Invoke($"ACME: challenge cert registered (domain={domain})" +
+            (_challengePersister != null ? $"; written to {_challengePersister.FilePath}" : " (no file persister)"));
 
         try
         {
             // 4. Ask the CA to validate. The CA will connect with SNI=domain, ALPN=acme-tls/1; the
-            //    listener's selector returns challengeCert via TlsAlpnChallengeResponder.
+            //    listener's selector returns challengeCert via TlsAlpnChallengeResponder (in-process
+            //    path) or AcmeChallengePersister (cross-process path via the shared file).
             await challenge.Validate();
             _trace?.Invoke("ACME: validation triggered; polling authorization status");
 
@@ -128,6 +142,8 @@ public sealed class AcmeCertificateService
             // Always tear down the challenge registration, even on failure, so a leftover ephemeral
             // cert can't shadow the real cert for the same SNI.
             _responder.RemoveChallenge(domain);
+            _challengePersister?.Delete();
+            _trace?.Invoke("ACME: challenge cert deregistered");
         }
     }
 

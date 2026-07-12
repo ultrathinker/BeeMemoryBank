@@ -25,13 +25,30 @@ namespace BeeMemoryBank.Node.Tests;
 /// fixed <see cref="NodeFront.HttpsPort"/> (5311); the test assumes that port is free on the
 /// machine running it.
 /// </summary>
+/// <summary>
+/// Shared xUnit collection for every test that binds the fixed <see cref="NodeFront.HttpsPort"/>
+/// (5311), forcing them to run sequentially rather than in parallel (xUnit's default across test
+/// classes) — otherwise two tests binding the same fixed port race and one fails with
+/// <c>SocketException: address already in use</c>.
+/// </summary>
+[CollectionDefinition("NodeFrontHttpsPort", DisableParallelization = true)]
+public class NodeFrontHttpsPortCollection { }
+
 [SupportedOSPlatform("windows")]
-public class NodeFrontHttpsTests : IAsyncDisposable
+[Collection("NodeFrontHttpsPort")]
+public class NodeFrontHttpsTests : IAsyncLifetime
 {
     private readonly List<WebApplication> _apps = new();
     private readonly List<string> _tempDirs = new();
 
-    public async ValueTask DisposeAsync()
+    // IAsyncDisposable alone is NOT an xUnit lifecycle hook — xUnit v2 only recognizes
+    // IAsyncLifetime (InitializeAsync/DisposeAsync returning Task). Without this, DisposeAsync
+    // below was never actually called, leaking this test's WebApplication (and its bound
+    // NodeFront.HttpsPort socket) for the rest of the test process — which made every
+    // subsequent test binding that same fixed port fail with "address already in use".
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         foreach (var app in _apps)
         {
