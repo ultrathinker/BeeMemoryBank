@@ -22,7 +22,8 @@ public static class SyncEndpoints
             return Results.Ok(new SyncIdentityResponse(
                 identity.NodeId,
                 identity.DisplayName,
-                Convert.ToBase64String(identity.Ed25519PublicKey)));
+                Convert.ToBase64String(identity.Ed25519PublicKey),
+                SyncProtocolVersion.Current));
         }).WithTags("Sync");
 
         // ─── Sentinel (no auth — encrypted, useless without DEK) ───────────────
@@ -302,7 +303,8 @@ public static class SyncEndpoints
             ISyncPositionRepository syncPositionRepo,
             IWhitelistRepository whitelistRepo,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
-            INodeIdentityRepository nodeRepo) =>
+            INodeIdentityRepository nodeRepo,
+            PeerNewerProtocolState peerNewerProtocolState) =>
         {
             var identity = await nodeRepo.GetAsync();
             var totalEvents = await eventLogRepo.GetTotalCountAsync();
@@ -331,6 +333,7 @@ public static class SyncEndpoints
                 totalLocalEvents = totalEvents,
                 connectedNodes = remoteNodes.Count,
                 isInvisible = invisibleMode.IsInvisible,
+                peerNewerProtocol = peerNewerProtocolState.HasNewerProtocol,
                 nodes = nodeStatuses
             });
         }).RequireInternalKey().WithTags("Sync");

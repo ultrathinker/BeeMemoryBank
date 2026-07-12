@@ -168,6 +168,7 @@
     </header>
 
     <div class="app-body">
+        <partial name="_PeerNewerProtocolAlert" />
         @if (TempData["MigrationBanner"] is string migrationBanner)
         {
             <sl-alert variant="primary" open closable style="margin:12px 16px 0;">

@@ -1,0 +1,18 @@
+@inject BeeMemoryBank.Web.Services.ApiClient ApiClient
+
+@{
+    var hasNewer = false;
+    try
+    {
+        hasNewer = await ApiClient.HasPeerNewerProtocolAsync();
+    }
+    catch {}
+}
+
+@if (hasNewer)
+{
+    <sl-alert variant="warning" open style="margin:12px 16px 0;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>A peer node has a newer protocol version — update this node.</strong>
+    </sl-alert>
+}

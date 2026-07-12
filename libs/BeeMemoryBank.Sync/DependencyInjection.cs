@@ -11,6 +11,7 @@ public static class DependencyInjection
     public static IServiceCollection AddSync(this IServiceCollection services)
     {
         services.AddSingleton<SnapshotRequiredState>();
+        services.AddSingleton<PeerNewerProtocolState>();
 
         services.AddSingleton<LamportClock>();
         services.AddSingleton<ILamportClock>(sp => sp.GetRequiredService<LamportClock>());
