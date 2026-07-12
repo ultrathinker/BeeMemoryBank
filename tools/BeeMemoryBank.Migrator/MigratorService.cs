@@ -57,7 +57,7 @@ public class MigratorService
         var services = new ServiceCollection()
             .AddStorage(_opts.V2DataPath)
             .AddCore()
-            .AddOnnxEmbeddings()
+            .AddOnnxEmbeddings(_opts.V2DataPath)
             .AddSync()
             .BuildServiceProvider();
 

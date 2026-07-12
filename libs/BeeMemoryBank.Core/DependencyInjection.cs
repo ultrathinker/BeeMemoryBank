@@ -40,9 +40,20 @@ public static class DependencyInjection
         return services;
     }
 
-    public static IServiceCollection AddOnnxEmbeddings(this IServiceCollection services, string? modelPath = null)
+    public static IServiceCollection AddOnnxEmbeddings(this IServiceCollection services, string dataDirectory)
     {
-        services.AddSingleton<IEmbeddingGenerator>(_ => new OnnxEmbeddingGenerator(modelPath));
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentException.ThrowIfNullOrWhiteSpace(dataDirectory);
+
+        // Resolve + verify the model up front via ModelManager (its SHA-256 result is cached on disk
+        // after the first run). Only a Valid resolution hands the real path to OnnxEmbeddingGenerator;
+        // Corrupt and NotFound both yield a non-existent sentinel path so the generator degrades to
+        // ModelUnavailableException exactly as it already does for a missing model, and a corrupt file
+        // is never loaded into the ONNX runtime. See EmbeddingModelWiring for the placeholder hash.
+        var manager = new ModelManager(EmbeddingModelWiring.DefaultManifest, dataDirectory);
+        var generatorPath =
+            EmbeddingModelWiring.ResolveGeneratorPathAsync(manager).GetAwaiter().GetResult();
+        services.AddSingleton<IEmbeddingGenerator>(_ => new OnnxEmbeddingGenerator(generatorPath));
         return services;
     }
 

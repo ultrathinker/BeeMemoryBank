@@ -66,7 +66,7 @@ if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"))
 builder.Services.AddStorage(dataPath);
 builder.Services.AddCore();
 builder.Services.AddMemoryCache();
-builder.Services.AddOnnxEmbeddings();
+builder.Services.AddOnnxEmbeddings(dataPath);
 builder.Services.AddSync();
 builder.Services.AddSingleton<SyncTokenStore>();
 // BMB_SYNC_INTERVAL_SECONDS: override scheduler tick (default 60s). Useful for tests with
