@@ -222,12 +222,21 @@ public partial class MainWindow : Window
     private string ResolveNodeExePath()
     {
         var baseDir = AppContext.BaseDirectory;
-        
+
         // 1. Production published layout: sibling to desktop
         var prodPath = Path.GetFullPath(Path.Combine(baseDir, "..", "bmbd", "BeeMemoryBank.Node.exe"));
         if (File.Exists(prodPath))
         {
             return prodPath;
+        }
+
+        // 1b. Packaged (Velopack) layout: vpk requires the main exe at the root of
+        // --packDir, so bmbd/api/web/cli ship as subfolders alongside Desktop.exe
+        // itself rather than as siblings of a desktop/ folder one level up.
+        var packagedPath = Path.GetFullPath(Path.Combine(baseDir, "bmbd", "BeeMemoryBank.Node.exe"));
+        if (File.Exists(packagedPath))
+        {
+            return packagedPath;
         }
 
         // 2. Development tree: search up for solution file then down

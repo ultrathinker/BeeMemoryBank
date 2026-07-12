@@ -301,9 +301,9 @@ app.Use(async (ctx, next) =>
         "default-src 'self'; " +
         "script-src 'self' 'unsafe-inline'; " +
         // W5b: removed https://maxcdn.bootstrapcdn.com (EasyMDE's FontAwesome CDN). EasyMDE is
-        // now pointed away from the CDN via autoDownloadFontAwesome:false (Article/Edit.cshtml).
-        // The toolbar icon GLYPHS therefore do not render until a self-hosted FontAwesome subset
-        // is vendored under wwwroot/lib/fontawesome — see the TODO in Article/Edit.cshtml.
+        // pointed away from the CDN via autoDownloadFontAwesome:false, and its toolbar icons are
+        // swapped for the app's own vendored Shoelace <sl-icon> set immediately after construction
+        // (see replaceToolbarIcons in Article/Edit.cshtml) — no FontAwesome vendoring needed.
         "style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data: blob:; " +
         "font-src 'self' data:; " +
