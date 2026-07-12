@@ -22,6 +22,7 @@ public class NodeOrchestrator : IDisposable
     private Task? _orchestrationTask;
     private bool _isStopping;
     private bool _hasFailed;
+    private WindowsJobObject? _jobObject;
 
     public event Action? OnAllReady;
     public event Action<string>? OnCriticalFailure;
@@ -61,6 +62,11 @@ public class NodeOrchestrator : IDisposable
             _isStopping = false;
             _hasFailed = false;
             AllReady = false;
+
+            if (OperatingSystem.IsWindows())
+            {
+                _jobObject = new WindowsJobObject();
+            }
         }
 
         try
@@ -164,6 +170,10 @@ public class NodeOrchestrator : IDisposable
             try
             {
                 process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
+                if (OperatingSystem.IsWindows() && _jobObject != null)
+                {
+                    _jobObject.AssignProcess(process);
+                }
             }
             catch (Exception ex)
             {
@@ -432,6 +442,12 @@ public class NodeOrchestrator : IDisposable
             _directoryLock = null;
         }
 
+        if (_jobObject != null)
+        {
+            _jobObject.Dispose();
+            _jobObject = null;
+        }
+
         Console.WriteLine("[Orchestrator] Stopped successfully.");
     }
 
@@ -451,6 +467,11 @@ public class NodeOrchestrator : IDisposable
     {
         StopAsync().GetAwaiter().GetResult();
         _lifecycleCts?.Dispose();
+        if (_jobObject != null)
+        {
+            _jobObject.Dispose();
+            _jobObject = null;
+        }
     }
 
     private class MonitoredChild
