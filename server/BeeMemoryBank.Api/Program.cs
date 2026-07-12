@@ -77,6 +77,20 @@ builder.Services.AddSyncScheduler(interval: syncInterval, periodicCleanupFactory
     sp.GetRequiredService<SyncTokenStore>().CleanupExpired);
 builder.Services.AddCleanupService();
 builder.Services.AddEmbeddingProcessor();
+
+// ── mDNS announce: advertise this node on the LAN (_beememorybank._tcp.local) ──
+// Runs in the API because that is where the authoritative InvisibleModeService (registered by
+// AddCore) and the node identity (INodeIdentityRepository) live — the announcer checks both on its
+// refresh cycle and withdraws its announcement when invisible mode is on.
+// BMB_MDNS_PORT / BMB_MDNS_HTTPS let the deployment supply the reachable port/HTTPS flag; the HTTPS
+// flag's real wiring (Ярус-1 local CA) is a later task.
+builder.Services.AddMdnsAnnouncer(o =>
+{
+    if (int.TryParse(Environment.GetEnvironmentVariable("BMB_MDNS_PORT"), out var port) && port > 0)
+        o.Port = port;
+    if (bool.TryParse(Environment.GetEnvironmentVariable("BMB_MDNS_HTTPS"), out var https))
+        o.Https = https;
+});
 builder.Services.AddHttpClient();
 builder.Services.AddTransient<HttpClient>(sp =>
     sp.GetRequiredService<IHttpClientFactory>().CreateClient());
