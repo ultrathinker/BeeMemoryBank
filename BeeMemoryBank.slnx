@@ -1,7 +1,11 @@
 <Solution>
+  <Folder Name="/desktop/">
+    <Project Path="desktop/BeeMemoryBank.Node/BeeMemoryBank.Node.csproj" />
+  </Folder>
   <Folder Name="/libs/">
     <Project Path="libs/BeeMemoryBank.Core/BeeMemoryBank.Core.csproj" />
     <Project Path="libs/BeeMemoryBank.Crypto/BeeMemoryBank.Crypto.csproj" />
+    <Project Path="libs/BeeMemoryBank.Hosting/BeeMemoryBank.Hosting.csproj" />
     <Project Path="libs/BeeMemoryBank.Storage/BeeMemoryBank.Storage.csproj" />
     <Project Path="libs/BeeMemoryBank.Sync/BeeMemoryBank.Sync.csproj" />
   </Folder>
@@ -17,7 +21,10 @@
     <Project Path="tests/BeeMemoryBank.Cli.Tests/BeeMemoryBank.Cli.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Core.Tests/BeeMemoryBank.Core.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Crypto.Tests/BeeMemoryBank.Crypto.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Hosting.Tests/BeeMemoryBank.Hosting.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Integration.Tests/BeeMemoryBank.Integration.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Node.Tests/BeeMemoryBank.Node.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Node.Tests.StubProcess/BeeMemoryBank.Node.Tests.StubProcess.csproj" />
     <Project Path="tests/BeeMemoryBank.Storage.Tests/BeeMemoryBank.Storage.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Sync.Tests/BeeMemoryBank.Sync.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Migrator.Tests/BeeMemoryBank.Migrator.Tests.csproj" />
