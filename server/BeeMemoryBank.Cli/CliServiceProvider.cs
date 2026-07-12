@@ -28,7 +28,7 @@ public static class CliServiceProvider
                               .SetMinimumLevel(LogLevel.Warning))
             .AddStorage(dataPath)
             .AddCore()
-            .AddOnnxEmbeddings()
+            .AddOnnxEmbeddings(dataPath)
             .AddSync()
             .AddSingleton<IActorProvider>(new CliActorProvider())
             .BuildServiceProvider();
