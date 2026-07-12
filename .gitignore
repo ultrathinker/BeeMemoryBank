@@ -49,6 +49,10 @@ _*_article.md
 ## Personal deployment configs (use docker-compose.yml + .env.example instead)
 deploy/
 
+## Velopack packaging output (generated at build time, not committed)
+installers/windows/velopack/icon.ico
+installers/windows/velopack/releases/
+
 ## Secrets
 *.pfx
 *.keystore
