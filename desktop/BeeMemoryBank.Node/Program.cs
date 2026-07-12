@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using BeeMemoryBank.Hosting;
 
 namespace BeeMemoryBank.Node;
 
@@ -62,6 +64,7 @@ public static class Program
 
         using var orchestrator = new NodeOrchestrator(config.DataDirectory, childConfigs);
 
+        WebApplication? app = null;
         var tcs = new TaskCompletionSource<int>();
 
         orchestrator.OnAllReady += () =>
@@ -72,6 +75,18 @@ public static class Program
         orchestrator.OnCriticalFailure += (reason) =>
         {
             Console.Error.WriteLine($"[Node] CRITICAL FAILURE: {reason}");
+            if (app != null)
+            {
+                try
+                {
+                    Console.WriteLine("[Node] Stopping front app due to critical failure...");
+                    app.StopAsync().GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
+                }
+            }
             tcs.TrySetResult(2);
         };
 
@@ -79,6 +94,18 @@ public static class Program
         {
             Console.WriteLine("[Node] Cancel key pressed. Stopping orchestrator...");
             e.Cancel = true; // Prevent process from immediately terminating
+            if (app != null)
+            {
+                try
+                {
+                    Console.WriteLine("[Node] Stopping front app first...");
+                    await app.StopAsync();
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
+                }
+            }
             await orchestrator.StopAsync();
             tcs.TrySetResult(0);
         };
@@ -87,6 +114,18 @@ public static class Program
         {
             Console.WriteLine($"[Node] Launching children with lock on data dir: '{config.DataDirectory}'...");
             await orchestrator.StartAsync(CancellationToken.None);
+
+            Console.WriteLine("[Node] Orchestrator started. Building and starting front...");
+            app = BuildFront(Array.Empty<string>(), orchestrator.ReadyChildren);
+            await app.StartAsync();
+
+            var frontUrl = app.Urls.FirstOrDefault();
+            if (!string.IsNullOrEmpty(frontUrl))
+            {
+                Console.WriteLine($"[Node] Front is listening at: {frontUrl}");
+                orchestrator.UpdateFrontUrl(frontUrl);
+            }
+
             Console.WriteLine("[Node] Node is running. Press Ctrl+C to shut down.");
 
             // Wait for shutdown or failure
@@ -98,6 +137,27 @@ public static class Program
             Console.Error.WriteLine($"[Node] Orchestrator failed to start: {ex.Message}");
             return 3;
         }
+        finally
+        {
+            if (app != null)
+            {
+                try
+                {
+                    await app.StopAsync();
+                }
+                catch { }
+                await app.DisposeAsync();
+            }
+        }
+    }
+
+    public static WebApplication BuildFront(string[] webArgs, IReadOnlyDictionary<string, ReadyFileInfo> readyChildren)
+    {
+        var builder = WebApplication.CreateBuilder(webArgs);
+        var front = NodeFrontBuilder.Build(builder, readyChildren);
+        var app = builder.Build();
+        front.MapEndpoints(app);
+        return app;
     }
 
     private static void ShowUsage()

@@ -30,6 +30,19 @@ public class NodeOrchestrator : IDisposable
     public bool AllReady { get; private set; }
     public bool HasFailed => _hasFailed;
 
+    public IReadOnlyDictionary<string, ReadyFileInfo> ReadyChildren
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _children
+                    .Where(c => c.ReadyInfo != null)
+                    .ToDictionary(c => c.Config.ApplicationName, c => c.ReadyInfo!);
+            }
+        }
+    }
+
     public NodeOrchestrator(string dataDirectory, IReadOnlyList<ChildProcessConfig> configs)
         : this(dataDirectory, configs, null)
     {
@@ -363,9 +376,32 @@ public class NodeOrchestrator : IDisposable
             _hasFailed = true;
         }
 
+        try
+        {
+            OnCriticalFailure?.Invoke(reason);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Orchestrator] Error invoking OnCriticalFailure: {ex.Message}");
+        }
+
         // Stop other processes asynchronously
         Task.Run(() => StopAsync());
-        OnCriticalFailure?.Invoke(reason);
+    }
+
+    /// <summary>
+    /// Updates the front URL in the status and runtime files by re-writing them.
+    /// </summary>
+    public void UpdateFrontUrl(string frontUrl)
+    {
+        lock (_lock)
+        {
+            var tempManager = new NodeStatusManager(_dataDirectory, frontUrl);
+            var readyDict = _children
+                .Where(c => c.ReadyInfo != null)
+                .ToDictionary(c => c.Config.ApplicationName, c => c.ReadyInfo!);
+            tempManager.WriteStatus(readyDict);
+        }
     }
 
     /// <summary>
