@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.Versioning;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BeeMemoryBank.Api.Helpers;
@@ -118,6 +121,11 @@ public static class InternetAccessEndpoints
             }
 
             var dataPath = ResolveDataPath(config);
+            if (OperatingSystem.IsWindows())
+            {
+                req.Token = EncryptSecret(req.Token);
+                req.ApiToken = EncryptSecret(req.ApiToken);
+            }
             await SaveAsync(DdnsConfigPath(dataPath), req);
             return Results.Ok(ReadDdnsView(dataPath));
         });
@@ -136,6 +144,12 @@ public static class InternetAccessEndpoints
             if (cfg == null)
                 return Results.Json(new ErrorResponse(
                     "No DDNS provider configured yet. Save your provider settings first."), statusCode: 409);
+
+            if (OperatingSystem.IsWindows())
+            {
+                cfg.Token = DecryptSecret(cfg.Token);
+                cfg.ApiToken = DecryptSecret(cfg.ApiToken);
+            }
 
             var logger = loggerFactory.CreateLogger<DdnsUpdater>();
             try
@@ -375,6 +389,31 @@ public static class InternetAccessEndpoints
         config["BeeMemoryBank:DataPath"]
         ?? Environment.GetEnvironmentVariable("BMB_DATA_PATH")
         ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
+
+    [SupportedOSPlatform("windows")]
+    private static string? EncryptSecret(string? plainText)
+    {
+        if (string.IsNullOrEmpty(plainText)) return plainText;
+        var plainBytes = Encoding.UTF8.GetBytes(plainText);
+        var encryptedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
+        return Convert.ToBase64String(encryptedBytes);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static string? DecryptSecret(string? cipherText)
+    {
+        if (string.IsNullOrEmpty(cipherText)) return cipherText;
+        try
+        {
+            var encryptedBytes = Convert.FromBase64String(cipherText);
+            var plainBytes = ProtectedData.Unprotect(encryptedBytes, null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(plainBytes);
+        }
+        catch
+        {
+            return cipherText;
+        }
+    }
 }
 
 // ──────────────────────────── request DTOs ──────────────────────────────────────

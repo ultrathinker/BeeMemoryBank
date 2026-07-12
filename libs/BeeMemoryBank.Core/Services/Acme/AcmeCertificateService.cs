@@ -187,7 +187,25 @@ public sealed class AcmeCertificateService
         IKey accountKey;
         if (File.Exists(AccountKeyPath))
         {
-            var pem = await File.ReadAllTextAsync(AccountKeyPath, ct);
+            string pem;
+            if (OperatingSystem.IsWindows())
+            {
+                var bytes = await File.ReadAllBytesAsync(AccountKeyPath, ct);
+                try
+                {
+                    var decryptedBytes = ProtectedData.Unprotect(bytes, null, DataProtectionScope.CurrentUser);
+                    pem = Encoding.UTF8.GetString(decryptedBytes);
+                }
+                catch (CryptographicException)
+                {
+                    // Fallback if the file is plain text PEM
+                    pem = Encoding.UTF8.GetString(bytes);
+                }
+            }
+            else
+            {
+                pem = await File.ReadAllTextAsync(AccountKeyPath, ct);
+            }
             accountKey = KeyFactory.FromPem(pem);
             _trace?.Invoke("ACME: loaded existing account key");
         }
@@ -207,7 +225,17 @@ public sealed class AcmeCertificateService
         // Persist the key only after the account is known-good.
         if (accountKey is IEncodable encodable)
         {
-            await File.WriteAllTextAsync(AccountKeyPath, encodable.ToPem(), ct);
+            var pem = encodable.ToPem();
+            if (OperatingSystem.IsWindows())
+            {
+                var pemBytes = Encoding.UTF8.GetBytes(pem);
+                var encryptedBytes = ProtectedData.Protect(pemBytes, null, DataProtectionScope.CurrentUser);
+                await File.WriteAllBytesAsync(AccountKeyPath, encryptedBytes, ct);
+            }
+            else
+            {
+                await File.WriteAllTextAsync(AccountKeyPath, pem, ct);
+            }
         }
         else
         {
@@ -296,7 +324,7 @@ public sealed class AcmeCertificateService
             Domain = domain,
             PfxPath = pfxPath,
             ChainPemPath = chainPemPath,
-            PfxPassword = password,
+            PfxPassword = OperatingSystem.IsWindows() ? StoredCertificate.EncryptPassword(password) : password,
             NotBefore = notBefore.UtcDateTime,
             NotAfter = notAfter.UtcDateTime,
             IssuedAt = DateTime.UtcNow,
