@@ -316,4 +316,17 @@ function showAlert(variant, message) {
 }
 
 loadAgents();
+
+// Auto-open the Create Agent dialog when arriving from the Setup wizard (?createAgent=1).
+(function () {
+    if (new URLSearchParams(window.location.search).get('createAgent') === '1') {
+        var dlg = document.getElementById('dlg-create-agent');
+        if (dlg && typeof dlg.show === 'function') {
+            dlg.show();
+        } else if (dlg) {
+            // Shoelace not yet upgraded — wait for it
+            customElements.whenDefined('sl-dialog').then(function () { dlg.show(); });
+        }
+    }
+})();
 </script>
