@@ -196,3 +196,97 @@ public record DekRotationInitiationResponse(
     Guid ProposedEventId,
     string Message
 );
+
+// ─── Reachability self-test: probe (superplan §5 Ярус 2, Этап 5) ──────────
+
+/// <summary>
+/// Request body for <c>POST /api/sync/probe</c> — the candidate public URL the user wants
+/// to verify is reachable from outside their LAN. Originates from the local Web UI wizard
+/// (gated by <c>RequireInternalKey</c>), not from a peer.
+/// </summary>
+public record SyncProbeRequest(string Url);
+
+/// <summary>
+/// Request body for <c>POST /api/sync/probe-relay</c> — sent peer-to-peer by the probing
+/// node to one of its whitelisted peers, asking that peer to fetch the target URL's
+/// <c>/api/sync/ping</c> and report whether it got a response.
+/// </summary>
+public record SyncProbeRelayRequest(string Url);
+
+/// <summary>
+/// Outcome categories for a probe. Drives the wizard UI's branching messages
+/// (CGNAT hint, success, no-peers, etc.) without hardcoding UI text here.
+/// </summary>
+public enum SyncProbeOutcome
+{
+    /// <summary>A peer confirmed the target URL responded — port forwarding works.</summary>
+    Reachable,
+
+    /// <summary>
+    /// A peer tried but got NO response at all (connection refused / timeout / DNS failure).
+    /// This is the signal that lets a later wizard suggest a CGNAT diagnosis.
+    /// </summary>
+    Unreachable,
+
+    /// <summary>No active whitelisted peers with a reachable <c>ApiAddress</c> exist to relay through.</summary>
+    NoPeersAvailable,
+
+    /// <summary>The selected peer(s) themselves couldn't be reached (offline/unreachable).</summary>
+    PeerUnreachable,
+
+    /// <summary>Authentication to the selected peer(s) failed.</summary>
+    PeerAuthFailed,
+
+    /// <summary>The supplied URL was invalid.</summary>
+    InvalidUrl,
+}
+
+/// <summary>
+/// Granular error category when the target was unreachable, so the wizard can distinguish
+/// "nothing came back at all" (CGNAT / stealth-drop candidate) from other failures.
+/// </summary>
+public enum SyncProbeErrorCategory
+{
+    /// <summary>No error (target was reachable).</summary>
+    None,
+
+    /// <summary>TCP connection refused — port closed / not forwarded.</summary>
+    ConnectionRefused,
+
+    /// <summary>Connection timed out — packet dropped silently (firewall stealth / CGNAT).</summary>
+    Timeout,
+
+    /// <summary>DNS resolution failed — hostname wrong or not resolvable.</summary>
+    DnsFailure,
+
+    /// <summary>TLS handshake failed — cert problem, not a reachability issue.</summary>
+    TlsError,
+
+    /// <summary>An unexpected error occurred.</summary>
+    Unknown,
+}
+
+/// <summary>
+/// Response from <c>POST /api/sync/probe</c>. Carries enough detail for a later wizard UI
+/// to show a sensible, honest message — including the CGNAT-specific hint when the target
+/// was completely unreachable (i.e. <see cref="Outcome"/> is <see cref="SyncProbeOutcome.Unreachable"/>
+/// with an error category indicating no response at all).
+/// </summary>
+public record SyncProbeResponse(
+    SyncProbeOutcome Outcome,
+    Guid? PeerNodeId,
+    string? PeerDisplayName,
+    int? TargetHttpStatusCode,
+    SyncProbeErrorCategory ErrorCategory,
+    string? Message);
+
+/// <summary>
+/// Response from <c>POST /api/sync/probe-relay</c> (peer-to-peer). Reports whether the
+/// relay peer got any HTTP response from the target URL. ANY HTTP status (even 401/403/503)
+/// counts as reachable — it proves the server is listening and the port forward works.
+/// </summary>
+public record SyncProbeRelayResponse(
+    bool Reachable,
+    int? HttpStatusCode,
+    SyncProbeErrorCategory ErrorCategory,
+    string? ErrorDetail);

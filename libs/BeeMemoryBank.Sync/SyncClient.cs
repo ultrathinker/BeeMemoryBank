@@ -248,37 +248,11 @@ public class SyncClient(
             ?? throw new InvalidDataException("Invalid identity response.");
     }
 
-    private async Task<string> AuthenticateAsync(
+    // Delegates to the shared PeerAuthenticator helper — same flow, single source of truth,
+    // now also reused by the reachability self-test (POST /api/sync/probe) endpoint.
+    private Task<string> AuthenticateAsync(
         HttpClient http, string baseUrl, NodeIdentity identity, CancellationToken ct)
-    {
-        // Get challenge
-        var challengeResp = await http.PostAsync($"{baseUrl}/api/sync/challenge", null, ct);
-        challengeResp.EnsureSuccessStatusCode();
-        var challengeData = await challengeResp.Content.ReadFromJsonAsync<ChallengeDto>(JsonOpts, ct)
-            ?? throw new InvalidDataException("Invalid challenge response.");
-
-        // Sign challenge with domain tag (server-side verifier requires tagged form).
-        var challengeBytes = Convert.FromBase64String(challengeData.Challenge);
-        var domainTag = "BMB-CHALLENGE-V1\0"u8.ToArray();
-        var challengePayload = domainTag.Concat(challengeBytes).ToArray();
-        // Signing is delegated to INodeAuthSigner: the default derives the key via the master
-        // DEK (server/CLI/unlocked foreground), while the mobile background ingest path signs
-        // via a hardware-backed Keystore key with no DEK — enabling unattended backup-sync.
-        var signature = authSigner.SignChallenge(identity, challengePayload);
-
-        // Authenticate
-        var authResp = await http.PostAsJsonAsync($"{baseUrl}/api/sync/authenticate", new
-        {
-            NodeId = identity.NodeId,
-            ChallengeB64 = challengeData.Challenge,
-            SignatureB64 = Convert.ToBase64String(signature)
-        }, ct);
-        authResp.EnsureSuccessStatusCode();
-        var authData = await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts, ct)
-            ?? throw new InvalidDataException("Invalid authenticate response.");
-
-        return authData.Token;
-    }
+        => PeerAuthenticator.AuthenticateAsync(authSigner, http, baseUrl, identity, ct);
 
     private static async Task<List<SyncEvent>> PullEventsAsync(
         HttpClient http, string baseUrl, string token, long afterSequence, CancellationToken ct)
@@ -342,8 +316,6 @@ public class SyncClient(
     // Local DTOs for remote API responses
     private sealed record SentinelDto(string? SentinelB64);
     private sealed record RemoteIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
-    private sealed record ChallengeDto(string Challenge, Guid ServerNodeId);
-    private sealed record AuthTokenDto(string Token);
     // LastAppliedSequence is nullable for backward compat with older servers — fall back to
     // the prior batch[^1] behaviour if absent. New servers always populate it (see
     // SyncApplyResult in BeeMemoryBank.Api.Models). (Brainstorm bug #3.)
