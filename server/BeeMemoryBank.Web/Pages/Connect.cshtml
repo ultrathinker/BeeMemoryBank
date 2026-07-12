@@ -1,0 +1,90 @@
+@page
+@model ConnectModel
+@{
+    ViewData["Title"] = "Connect a device";
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] - BeeMemoryBank</title>
+    <script type="module">
+        import { setBasePath } from '/lib/shoelace/shoelace-bundle.js';
+        setBasePath('/lib/shoelace');
+    </script>
+    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
+    <link href="/css/site.css" rel="stylesheet" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <style>
+        body { display: flex; align-items: flex-start; justify-content: center; min-height: 100vh; padding: 24px 0; }
+        .connect-card { width: 520px; max-width: calc(100vw - 32px); background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; }
+        .connect-card h2 { margin-bottom: 8px; font-size: 1.3rem; text-align: center; }
+        .connect-subtitle { text-align: center; color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 24px; }
+        .endpoint { display: flex; flex-direction: column; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; background: var(--bg-app); }
+        .endpoint .qr { width: 256px; height: 256px; image-rendering: pixelated; }
+        .endpoint .url { font-family: monospace; font-size: 0.95rem; word-break: break-all; text-align: center; color: var(--sl-color-primary-400); }
+        .download-row { text-align: center; margin: 20px 0; }
+        .instructions { font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary); }
+        .instructions h3 { color: var(--text-primary); font-size: 0.95rem; margin: 18px 0 6px 0; }
+        .instructions code { background: var(--bg-app); padding: 1px 5px; border-radius: 4px; font-size: 0.82rem; }
+        .no-lan { text-align: center; color: var(--text-secondary); font-size: 0.9rem; padding: 24px 0; }
+    </style>
+</head>
+<body class="sl-theme-dark">
+    <div class="connect-card">
+        <h2>
+            <sl-icon name="qr-code" style="font-size:1.4rem;vertical-align:middle;margin-right:6px;"></sl-icon>
+            Connect a device
+        </h2>
+        <p class="connect-subtitle">Scan a code with your phone to open this node over HTTPS.</p>
+
+        @if (Model.HasLanAddress)
+        {
+            @foreach (var ep in Model.Endpoints)
+            {
+                <div class="endpoint">
+                    <img class="qr" src="@ep.QrDataUri" alt="QR code for @ep.Url" />
+                    <span class="url">@ep.Url</span>
+                </div>
+            }
+        }
+        else
+        {
+            <p class="no-lan">No LAN IPv4 address was detected on this machine. Connect to a network and refresh.</p>
+        }
+
+        <div class="download-row">
+            <sl-button variant="primary" href="/connect/ca.crt" download>
+                <sl-icon slot="prefix" name="download"></sl-icon>
+                Download CA certificate (ca.crt)
+            </sl-button>
+        </div>
+
+        <div class="instructions">
+            <p>Your phone must trust this node's CA certificate before it will accept the HTTPS
+               connection. Open the downloaded <code>ca.crt</code> on your device and install it.</p>
+
+            <h3>Android</h3>
+            <p>Open the file, name the certificate (e.g. <code>BeeMemoryBank</code>), and choose
+               <strong>VPN and apps</strong> as the use. Then in
+               <em>Settings &rarr; Security &rarr; Encryption &amp; credentials &rarr; Trusted
+               credentials</em>, confirm it appears under the user tab.</p>
+
+            <h3>iOS</h3>
+            <p>Open the file to add a profile under
+               <em>Settings &rarr; Profile Downloaded &rarr; Install</em>. <strong>This is not
+               enough on iOS</strong> &mdash; afterwards go to
+               <em>Settings &rarr; General &rarr; About &rarr; Certificate Trust Settings</em> and
+               enable full trust for this CA. Until that switch is on, iOS still rejects the
+               connection.</p>
+
+            <h3>Windows / macOS</h3>
+            <p>Double-click <code>ca.crt</code> and place it in the <strong>Trusted Root
+               Certification Authorities</strong> (Windows) or <strong>System</strong> keychain
+               (macOS, mark it as <em>Always Trust</em>).</p>
+        </div>
+    </div>
+</body>
+</html>
