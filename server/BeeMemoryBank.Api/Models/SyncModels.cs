@@ -10,7 +10,7 @@ public record SyncAuthRequest(Guid NodeId, string ChallengeB64, string Signature
 public record SyncAuthResponse(string Token);
 
 /// <summary>Identity of this node for remote nodes.</summary>
-public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
+public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
 
 /// <summary>Result of applying events.</summary>
 /// <param name="Applied">Count of events successfully persisted via ApplyAsync.</param>

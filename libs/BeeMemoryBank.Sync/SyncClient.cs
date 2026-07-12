@@ -22,6 +22,7 @@ public class SyncClient(
     SessionService sessionService,
     INodeAuthSigner authSigner,
     ILogger<SyncClient> logger,
+    PeerNewerProtocolState peerNewerProtocolState,
     IRestoreRetrier? restoreRetrier = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
@@ -54,59 +55,69 @@ public class SyncClient(
         // 2. Authentication
         var token = await AuthenticateAsync(http, remoteApiBase, identity, ct);
 
-        // 3. Pull: download new events from the remote node
-        var position = await syncPositionRepo.GetAsync(remoteIdentity.NodeId);
-        var afterSeq = position?.LastSequenceNum ?? 0;
-
-        var remoteEvents = await PullEventsAsync(http, remoteApiBase, token, afterSeq, ct);
-        logger.LogDebug("Received {Count} events from {NodeId}", remoteEvents.Count, remoteIdentity.NodeId);
-
-        long lastApplied = afterSeq;
         int appliedCount = 0;
-        int droppedCount = 0;
-        foreach (var evt in remoteEvents)
+
+        if (remoteIdentity.ProtocolVersion > SyncProtocolVersion.Current)
         {
-            try
+            logger.LogWarning("Remote node {NodeId} has a newer protocol version ({RemoteVersion} > {LocalVersion}). Skipping pull-and-apply.",
+                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion, SyncProtocolVersion.Current);
+            peerNewerProtocolState.HasNewerProtocol = true;
+        }
+        else
+        {
+            // 3. Pull: download new events from the remote node
+            var position = await syncPositionRepo.GetAsync(remoteIdentity.NodeId);
+            var afterSeq = position?.LastSequenceNum ?? 0;
+
+            var remoteEvents = await PullEventsAsync(http, remoteApiBase, token, afterSeq, ct);
+            logger.LogDebug("Received {Count} events from {NodeId}", remoteEvents.Count, remoteIdentity.NodeId);
+
+            long lastApplied = afterSeq;
+            int droppedCount = 0;
+            foreach (var evt in remoteEvents)
             {
-                var result = await eventApplier.ApplyAsync(evt);
-                if (result == EventApplyResult.SilentlyDropped)
+                try
                 {
-                    // Permanently dropped — advance cursor so we don't re-fetch this event next cycle.
-                    // Replay shield and hard-delete gate are monotone (only get raised, not lowered;
-                    // shield is auto-cleared by next RESTORE_NETWORK or manual admin action — neither
-                    // makes us "want to retry" the dropped event).
-                    lastApplied = evt.SequenceNum;
-                    droppedCount++;
+                    var result = await eventApplier.ApplyAsync(evt);
+                    if (result == EventApplyResult.SilentlyDropped)
+                    {
+                        // Permanently dropped — advance cursor so we don't re-fetch this event next cycle.
+                        // Replay shield and hard-delete gate are monotone (only get raised, not lowered;
+                        // shield is auto-cleared by next RESTORE_NETWORK or manual admin action — neither
+                        // makes us "want to retry" the dropped event).
+                        lastApplied = evt.SequenceNum;
+                        droppedCount++;
+                    }
+                    else
+                    {
+                        lastApplied = evt.SequenceNum;
+                        appliedCount++;
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    lastApplied = evt.SequenceNum;
-                    appliedCount++;
+                    logger.LogError(ex, "Failed to apply event {Seq} from remote, stopping sync. Will retry from this position.", evt.SequenceNum);
+                    break;
                 }
             }
-            catch (Exception ex)
+
+            if (remoteEvents.Count > 0)
             {
-                logger.LogError(ex, "Failed to apply event {Seq} from remote, stopping sync. Will retry from this position.", evt.SequenceNum);
-                break;
+                await syncPositionRepo.UpsertAsync(new SyncPosition
+                {
+                    RemoteNodeId = remoteIdentity.NodeId,
+                    LastSequenceNum = lastApplied,
+                    UpdatedAt = DateTime.UtcNow
+                });
+                logger.LogInformation("Pull: applied {Applied}, dropped {Dropped}. Position: {Seq}",
+                    appliedCount, droppedCount, lastApplied);
             }
-        }
 
-        if (remoteEvents.Count > 0)
-        {
-            await syncPositionRepo.UpsertAsync(new SyncPosition
-            {
-                RemoteNodeId = remoteIdentity.NodeId,
-                LastSequenceNum = lastApplied,
-                UpdatedAt = DateTime.UtcNow
-            });
-            logger.LogInformation("Pull: applied {Applied}, dropped {Dropped}. Position: {Seq}",
-                appliedCount, droppedCount, lastApplied);
+            // Always report our current position back to the remote — even when we're fully caught up
+            // and there were no new events. Otherwise the remote never learns our position and shows
+            // "Waiting for first sync — Never" forever, and compaction thinks we have no active peers.
+            await ReportPositionAsync(http, remoteApiBase, token, lastApplied, ct);
         }
-
-        // Always report our current position back to the remote — even when we're fully caught up
-        // and there were no new events. Otherwise the remote never learns our position and shows
-        // "Waiting for first sync — Never" forever, and compaction thinks we have no active peers.
-        await ReportPositionAsync(http, remoteApiBase, token, lastApplied, ct);
 
         // 4. Push: relay all events to the remote node (excluding its own events)
         const int PushBatchSize = 500;
@@ -328,7 +339,7 @@ public class SyncClient(
 
     // Local DTOs for remote API responses
     private sealed record SentinelDto(string? SentinelB64);
-    private sealed record RemoteIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
+    private sealed record RemoteIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
     private sealed record ChallengeDto(string Challenge, Guid ServerNodeId);
     private sealed record AuthTokenDto(string Token);
     // LastAppliedSequence is nullable for backward compat with older servers — fall back to

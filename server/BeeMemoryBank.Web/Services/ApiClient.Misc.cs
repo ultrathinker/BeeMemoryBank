@@ -85,6 +85,20 @@ public partial class ApiClient
         catch { return null; }
     }
 
+    public async Task<bool> HasPeerNewerProtocolAsync()
+    {
+        try
+        {
+            var doc = await http.GetFromJsonAsync<JsonDocument>("/api/sync/status", JsonOpts);
+            if (doc != null && doc.RootElement.TryGetProperty("peerNewerProtocol", out var prop))
+            {
+                return prop.GetBoolean();
+            }
+        }
+        catch { }
+        return false;
+    }
+
     public async Task<bool> GetInvisibleModeAsync()
     {
         try
