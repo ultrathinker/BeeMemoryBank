@@ -250,12 +250,37 @@ public static class Program
                 {
                     try { await app.DisposeAsync(); } catch { }
                 }
-                app = BuildFront(
-                    new[] { "--urls", "http://127.0.0.1:0" },
-                    orchestrator.ReadyChildren,
-                    httpsEnabled,
-                    resolvedDataDirectory);
-                await app.StartAsync();
+                try
+                {
+                    app = BuildFront(
+                        new[] { "--urls", "http://127.0.0.1:0" },
+                        orchestrator.ReadyChildren,
+                        httpsEnabled,
+                        resolvedDataDirectory);
+                    await app.StartAsync();
+                }
+                catch (IOException) when (httpsEnabled)
+                {
+                    // The opt-in HTTPS listener binds the FIXED NodeFront.HttpsPort — if THAT is what's
+                    // actually unavailable (not the HTTP port), retrying with a different HTTP port
+                    // won't help and would otherwise take the whole front down. HTTPS is additive and
+                    // must never be able to prevent the plain-HTTP path from starting — degrade it off
+                    // and retry once more with HTTPS disabled for this session.
+                    Console.WriteLine(
+                        $"[Node] WARNING: could not bind the opt-in HTTPS listener on :{NodeFront.HttpsPort} " +
+                        "(port unavailable) — starting with HTTPS disabled for this session.");
+                    if (app != null)
+                    {
+                        try { await app.DisposeAsync(); } catch { }
+                    }
+                    httpsEnabled = false;
+                    app = BuildFront(
+                        new[] { "--urls", "http://127.0.0.1:0" },
+                        orchestrator.ReadyChildren,
+                        httpsEnabled,
+                        resolvedDataDirectory);
+                    await app.StartAsync();
+                }
             }
 
             // Best-effort inbound firewall rule for the HTTPS port. This genuinely requires

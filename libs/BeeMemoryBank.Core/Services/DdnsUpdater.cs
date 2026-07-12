@@ -55,8 +55,12 @@ public class DdnsUpdater
 
         if (currentIp == null)
         {
+            // A null IP means detection genuinely failed (e.g. UPnP couldn't reach the router) —
+            // this must surface as a failure, not NoChange/IsSuccess=true, or the wizard would show
+            // a green "checked — no change" result for a check that didn't actually run.
             _logger?.LogWarning("Detected external IP was null. Skipping update.");
-            return DdnsUpdateResult.NoChange("Detected IP is null.");
+            return DdnsUpdateResult.Failure(
+                "Could not detect the external IP (router did not respond to UPnP, or no static IP is configured).");
         }
 
         var currentIpStr = currentIp.ToString();

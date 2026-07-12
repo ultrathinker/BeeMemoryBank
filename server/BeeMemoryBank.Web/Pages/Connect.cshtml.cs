@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using QRCoder;
@@ -18,6 +19,7 @@ namespace BeeMemoryBank.Web.Pages;
 /// forbids modifying <c>LocalCaService.cs</c>. The duplication is kept byte-for-byte consistent
 /// (same adapter filters) so the QR's hosts always match the leaf certificate's SAN list.
 /// </remarks>
+[Authorize]
 public class ConnectModel : PageModel
 {
     /// <summary>The HTTPS port the node's opt-in front listens on (mirrors NodeFront.HttpsPort).</summary>

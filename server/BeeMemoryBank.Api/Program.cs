@@ -69,6 +69,7 @@ builder.Services.AddMemoryCache();
 builder.Services.AddOnnxEmbeddings(dataPath);
 builder.Services.AddSync();
 builder.Services.AddSingleton<SyncTokenStore>();
+builder.Services.AddSingleton<BeeMemoryBank.Api.Services.IPublicHostValidator, BeeMemoryBank.Api.Services.DnsPublicHostValidator>();
 // BMB_SYNC_INTERVAL_SECONDS: override scheduler tick (default 60s). Useful for tests with
 // fast iteration; set to e.g. 5 to push/pull every 5s. Production should leave it unset.
 TimeSpan? syncInterval = int.TryParse(Environment.GetEnvironmentVariable("BMB_SYNC_INTERVAL_SECONDS"), out var s) && s >= 1

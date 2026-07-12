@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.Versioning;
 
 namespace BeeMemoryBank.Core.Services;
@@ -58,12 +59,13 @@ public class FirewallService
         {
             // Delete first so re-runs always re-add with current parameters; ignore the exit
             // code here (a missing rule is not an error condition).
-            RunNetsh($"advfirewall firewall delete rule name=\"{_ruleName}\" protocol=TCP localport={port}");
+            RunNetsh("advfirewall", "firewall", "delete", "rule",
+                $"name={_ruleName}", "protocol=TCP", $"localport={port}");
 
             var label = string.IsNullOrWhiteSpace(appName) ? "BeeMemoryBank" : appName;
-            var exitCode = RunNetsh(
-                $"advfirewall firewall add rule name=\"{_ruleName}\" dir=in action=allow " +
-                $"protocol=TCP localport={port} description=\"Inbound HTTPS listener for {label}\"");
+            var exitCode = RunNetsh("advfirewall", "firewall", "add", "rule",
+                $"name={_ruleName}", "dir=in", "action=allow", "protocol=TCP", $"localport={port}",
+                $"description=Inbound HTTPS listener for {label}");
 
             return exitCode == 0;
         }
@@ -81,7 +83,8 @@ public class FirewallService
         if (!OperatingSystem.IsWindows()) return false;
         try
         {
-            RunNetsh($"advfirewall firewall delete rule name=\"{_ruleName}\" protocol=TCP localport={port}");
+            RunNetsh("advfirewall", "firewall", "delete", "rule",
+                $"name={_ruleName}", "protocol=TCP", $"localport={port}");
             return true;
         }
         catch
@@ -90,17 +93,25 @@ public class FirewallService
         }
     }
 
-    private static int RunNetsh(string arguments)
+    private static int RunNetsh(params string[] arguments)
     {
+        // Fully-qualified path (not a bare "netsh") so an elevated process can't be hijacked by a
+        // malicious netsh.exe earlier on PATH. ArgumentList (not a formatted string) so each
+        // argument is passed as its own array element with no shell-quoting ambiguity.
+        var netshPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System), "netsh.exe");
         var psi = new ProcessStartInfo
         {
-            FileName = "netsh",
-            Arguments = arguments,
+            FileName = netshPath,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        foreach (var arg in arguments)
+        {
+            psi.ArgumentList.Add(arg);
+        }
 
         using var proc = Process.Start(psi);
         if (proc == null)

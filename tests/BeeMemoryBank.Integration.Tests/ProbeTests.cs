@@ -316,7 +316,19 @@ public class ProbeTests : IAsyncLifetime
             {
                 services.AddHttpClient(string.Empty)
                     .ConfigurePrimaryHttpMessageHandler(() => _outboundHandler);
+
+                // The real IPublicHostValidator does a genuine DNS lookup, but this test's
+                // "node-a"/"node-b" hostnames only exist inside TestRoutingHandler's in-memory
+                // routing table (no real DNS record) — swap in a stub that treats every host as
+                // public so the SSRF guard doesn't reject these synthetic test targets.
+                services.AddSingleton<BeeMemoryBank.Api.Services.IPublicHostValidator>(
+                    new AlwaysPublicHostValidator());
             });
+        }
+
+        private sealed class AlwaysPublicHostValidator : BeeMemoryBank.Api.Services.IPublicHostValidator
+        {
+            public Task<bool> IsPublicHostAsync(string host, CancellationToken ct) => Task.FromResult(true);
         }
     }
 }

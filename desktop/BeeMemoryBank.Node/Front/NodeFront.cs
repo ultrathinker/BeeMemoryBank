@@ -281,7 +281,12 @@ public class NodeFront
             {
                 if (_served is null || _servedThumbprint != fresh.Thumbprint)
                 {
-                    _served?.Dispose();
+                    // Deliberately NOT disposing the retired cert here: Kestrel may still be
+                    // mid-handshake with a client holding a reference to it (ServerCertificateSelector
+                    // runs outside this lock's critical section once it returns). Rotation happens
+                    // only ~every 90 days, so leaving the old instance for the GC/finalizer to reclaim
+                    // is a negligible cost next to the risk of disposing a cert an in-flight TLS
+                    // handshake is still reading.
                     _served = ToSchannelUsable(fresh);
                     _servedThumbprint = fresh.Thumbprint;
                 }

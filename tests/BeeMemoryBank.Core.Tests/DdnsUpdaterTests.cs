@@ -78,8 +78,11 @@ public class DdnsUpdaterTests : IDisposable
     }
 
     [Fact]
-    public async Task SkipsUpdateWhenDetectedIpIsNull()
+    public async Task ReturnsFailureWhenDetectedIpIsNull()
     {
+        // A null IP means detection genuinely failed — this must be a Failure (IsSuccess=false),
+        // not NoChange, or the wizard would show a green "checked — no change" result for a check
+        // that didn't actually run.
         var ipProvider = ScriptedIpProvider.Sequence((IPAddress?)null);
         var dns = new RecordingDdnsProvider();
         var updater = new DdnsUpdater(ipProvider, dns, _tempDir);
@@ -87,7 +90,7 @@ public class DdnsUpdaterTests : IDisposable
         var result = await updater.CheckAndUpdateAsync();
 
         result.Changed.Should().BeFalse();
-        result.IsSuccess.Should().BeTrue();
+        result.IsSuccess.Should().BeFalse();
         dns.CallCount.Should().Be(0);
     }
 

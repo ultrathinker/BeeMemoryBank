@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
@@ -445,6 +446,9 @@ public static class SyncEndpoints
             System.Net.Http.IHttpClientFactory httpClientFactory,
             ILoggerFactory loggerFactory) =>
         {
+            if (!CallerIdentity.Extract(ctx).IsSuperadmin)
+                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
+
             var logger = loggerFactory.CreateLogger("SyncProbe");
 
             SyncProbeRequest? req;
@@ -561,7 +565,8 @@ public static class SyncEndpoints
             HttpContext ctx,
             SyncTokenStore store,
             System.Net.Http.IHttpClientFactory httpClientFactory,
-            ILoggerFactory loggerFactory) =>
+            ILoggerFactory loggerFactory,
+            IPublicHostValidator hostValidator) =>
         {
             if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
 
@@ -576,6 +581,15 @@ public static class SyncEndpoints
                 return Results.BadRequest(new ErrorResponse("Invalid URL — must be an absolute http(s) URL."));
 
             var logger = loggerFactory.CreateLogger("SyncProbeRelay");
+
+            // SSRF guard: a whitelisted peer's whole purpose here is "fetch this PUBLIC URL for
+            // me" — it must not become a way for a peer to make this node probe its own loopback,
+            // LAN, or cloud-metadata addresses. Reject any target that resolves to a
+            // loopback/private/link-local/unspecified address.
+            if (!await hostValidator.IsPublicHostAsync(uri.Host, ctx.RequestAborted))
+                return Results.BadRequest(new ErrorResponse(
+                    "Target host must resolve to a public address (not loopback/private/link-local)."));
+
             var target = $"{uri.ToString().TrimEnd('/')}/api/sync/ping";
 
             // Bound the reachability check so a stealth-dropping firewall (silent packet drop,
