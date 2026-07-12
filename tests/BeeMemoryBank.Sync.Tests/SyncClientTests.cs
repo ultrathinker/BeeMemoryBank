@@ -181,6 +181,34 @@ public class SyncClientTests : IAsyncLifetime
         _mockHandler.CallLog.Should().Contain(s => s.StartsWith("POST") && s.Contains("/api/sync/events")); // push still happens
     }
 
+    [Fact]
+    public async Task SyncWith_PeerHigherVersion_ThenPeerEqualVersion_ClearsFlag()
+    {
+        _peerNewerProtocolState.HasNewerProtocol = false;
+        
+        bool isHigher = true;
+        _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                nodeId = _remoteNodeId,
+                displayName = "RemoteNode",
+                ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+                protocolVersion = isHigher ? SyncProtocolVersion.Current + 1 : SyncProtocolVersion.Current
+            }), Encoding.UTF8, "application/json")
+        });
+
+        var result1 = await _client.SyncWithAsync(_http, "http://remote.local");
+        result1.Should().Be(0);
+        _peerNewerProtocolState.HasNewerProtocol.Should().BeTrue();
+
+        isHigher = false;
+
+        var result2 = await _client.SyncWithAsync(_http, "http://remote.local");
+        result2.Should().Be(0);
+        _peerNewerProtocolState.HasNewerProtocol.Should().BeFalse();
+    }
+
     private class ConcreteFixture : SyncTestFixture { }
 
     private class MockHandler : HttpMessageHandler

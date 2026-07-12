@@ -65,6 +65,8 @@ public class SyncClient(
         }
         else
         {
+            peerNewerProtocolState.HasNewerProtocol = false;
+
             // 3. Pull: download new events from the remote node
             var position = await syncPositionRepo.GetAsync(remoteIdentity.NodeId);
             var afterSeq = position?.LastSequenceNum ?? 0;
