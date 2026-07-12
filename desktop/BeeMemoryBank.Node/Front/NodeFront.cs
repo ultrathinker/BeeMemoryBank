@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Security;
 using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Builder;
@@ -14,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Forwarder;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Services.Acme;
 using BeeMemoryBank.Hosting;
 using BeeMemoryBank.Hosting.AspNetCore;
 
@@ -89,6 +91,20 @@ public class NodeFront
             ? new LocalCaService(dataPath)
             : null;
         var leafProvider = caService != null ? new CachedLeafCert(caService) : null;
+        // When HTTPS is active, also create a challenge persister so the cert selector can read
+        // the shared challenge file written by the Api process during a TLS-ALPN-01 validation.
+        var challengePersister = (leafProvider != null && dataPath != null)
+            ? new AcmeChallengePersister(dataPath)
+            : null;
+
+        // The ALPN protocol "acme-tls/1" must be included in ApplicationProtocols so that Kestrel
+        // will negotiate it when the Let's Encrypt CA probes the listener during TLS-ALPN-01
+        // validation (RFC 8737 §4). Without it the TLS handshake will reject the protocol.
+        // This is deliberately added to every HTTPS handshake (not just challenge ones) because
+        // SslClientHelloInfo does not expose the client's offered ALPN list so we cannot filter
+        // at the protocol-offer stage; selection falls back to SNI matching in the cert selector.
+        var acmeTlsAlpnProtocol = new SslApplicationProtocol(
+            TlsAlpn01CertificateBuilder.AcmeTlsAlpnProtocol);
 
         // Limit request body size to 500 MB (large file uploads must pass through) and, when
         // opted in, add the additive HTTPS listener. Both compose onto the same Kestrel options
@@ -103,7 +119,39 @@ public class NodeFront
                 {
                     listenOptions.UseHttps(httpsOptions =>
                     {
-                        httpsOptions.ServerCertificateSelector = (_, _) => leafProvider.Get();
+                        // ALPN: advertise acme-tls/1 so the ACME CA can negotiate it during
+                        // TLS-ALPN-01 validation probes. HTTP/1.1 and h2 must stay in the list
+                        // so normal browser/client traffic continues to work.
+                        httpsOptions.SslProtocols = System.Security.Authentication.SslProtocols.Tls12
+                            | System.Security.Authentication.SslProtocols.Tls13;
+                        httpsOptions.OnAuthenticate = (_, sslOptions) =>
+                        {
+                            // Add acme-tls/1 ahead of the standard protocols so ACME probes can
+                            // negotiate it while normal clients pick HTTP/1.1 or h2 instead.
+                            var protocols = new List<SslApplicationProtocol>
+                            {
+                                acmeTlsAlpnProtocol,
+                                SslApplicationProtocol.Http11,
+                                SslApplicationProtocol.Http2,
+                            };
+                            sslOptions.ApplicationProtocols = protocols;
+                        };
+
+                        // Cert selector: check the shared challenge file first (cross-process
+                        // TLS-ALPN-01 hand-off), then fall back to the normal LocalCa leaf.
+                        httpsOptions.ServerCertificateSelector = (_, serverName) =>
+                        {
+                            // Check whether a TLS-ALPN-01 challenge is currently in flight for
+                            // this SNI. The persister reads the shared file fresh on every call
+                            // (cheap: just a file read + small JSON parse) so no restart is needed
+                            // when a challenge starts or ends.
+                            if (challengePersister != null)
+                            {
+                                var challengeCert = challengePersister.TryReadChallengeCert(serverName);
+                                if (challengeCert != null) return challengeCert;
+                            }
+                            return leafProvider.Get();
+                        };
                     });
                 });
             }

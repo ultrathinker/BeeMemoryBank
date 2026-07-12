@@ -225,13 +225,16 @@ public static class InternetAccessEndpoints
                 ContactsEmail = email,
             };
 
-            // Fresh responder per call. Correct for wiring isolation; see class summary. The trace
-            // sink surfaces the service's step-by-step diagnostics in the response so the wizard can
-            // show exactly where a (likely) validation failure happened.
+            // Fresh responder per call. The trace sink surfaces the service's step-by-step
+            // diagnostics in the response so the wizard can show exactly where a (likely) validation
+            // failure happened. The AcmeChallengePersister also writes the challenge cert to the
+            // shared file under <data>/certs/acme/live-challenge.json so that the Node process's
+            // live HTTPS listener (running in a separate process) can serve it during the probe.
             var traceLines = new List<string>();
             var responder = new TlsAlpnChallengeResponder();
+            var persister = new AcmeChallengePersister(dataPath);
             var service = new AcmeCertificateService(
-                dataPath, options, responder,
+                dataPath, options, responder, persister,
                 trace: msg => { traceLines.Add(msg); logger.LogInformation("{Trace}", msg); });
 
             try
@@ -253,8 +256,9 @@ public static class InternetAccessEndpoints
                     error = ex.Message,
                     trace = traceLines,
                     hint = "TLS-ALPN-01 issuance needs a real public domain with DNS pointing here " +
-                           "and port 443 reachable by the CA. Until the front TLS listener shares the " +
-                           "challenge responder, validation will fail — this is expected.",
+                           "and port 443 forwarded to this host's HTTPS listener. " +
+                           "The challenge cert is now written to the shared file so the Node front " +
+                           "can serve it — the remaining requirement is a reachable public endpoint.",
                 }, statusCode: 500);
             }
         });
