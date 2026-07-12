@@ -1,4 +1,8 @@
+using System;
+using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 
 namespace BeeMemoryBank.Core.Services.Acme;
 
@@ -45,9 +49,41 @@ public sealed class StoredCertificate
     /// </summary>
     public X509Certificate2 LoadCertificate()
     {
+        var password = PfxPassword;
+        if (OperatingSystem.IsWindows())
+        {
+            password = DecryptPassword(password);
+        }
+
         return X509CertificateLoader.LoadPkcs12FromFile(
             PfxPath,
-            PfxPassword,
+            password,
             X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+    }
+
+    [SupportedOSPlatform("windows")]
+    public static string EncryptPassword(string password)
+    {
+        if (string.IsNullOrEmpty(password)) return password;
+        var plainBytes = Encoding.UTF8.GetBytes(password);
+        var encryptedBytes = ProtectedData.Protect(plainBytes, null, DataProtectionScope.CurrentUser);
+        return Convert.ToBase64String(encryptedBytes);
+    }
+
+    [SupportedOSPlatform("windows")]
+    public static string DecryptPassword(string encryptedPassword)
+    {
+        if (string.IsNullOrEmpty(encryptedPassword)) return encryptedPassword;
+        try
+        {
+            var encryptedBytes = Convert.FromBase64String(encryptedPassword);
+            var decryptedBytes = ProtectedData.Unprotect(encryptedBytes, null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(decryptedBytes);
+        }
+        catch
+        {
+            // Fallback: if it's not encrypted or not valid base64/DPAPI, return the raw value
+            return encryptedPassword;
+        }
     }
 }
