@@ -105,6 +105,10 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<SnapshotRestoreService>(sp, dataPath));
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<DekRotationService>(sp, dataPath));
 builder.Services.AddSingleton<IDekRotationApplier>(sp => sp.GetRequiredService<DekRotationService>());
+// Singleton: UpdateService holds in-memory state-machine state for /node/update/status polling.
+// All collaborators (Snapshot/Maintenance/DekRotation/SnapshotRestore/Session services) are
+// singletons resolved from the container; dataPath is the explicit ActivatorUtilities arg.
+builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<UpdateService>(sp, dataPath));
 // LazySlotRewrapService is registered by AddSync() in Sync DI now (so CLI/mobile get it too).
 builder.Services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.GetRequiredService<SnapshotRestoreService>());
 // Core-side retry contract: SessionService.UnlockCoreAsync resolves IRestoreRetrier to sweep
@@ -450,6 +454,7 @@ app.MapInitEndpoints();
 app.MapSyncEndpoints();
 app.MapSnapshotEndpoints();
     app.MapDekRotationEndpoints();
+    app.MapUpdateEndpoints();
 app.MapActivityEndpoints();
 app.MapCommentEndpoints();
 app.MapRestrictionEndpoints();
