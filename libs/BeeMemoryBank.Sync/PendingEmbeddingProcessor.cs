@@ -29,6 +29,10 @@ public class PendingEmbeddingProcessor(
             {
                 await ProcessPendingAsync(stoppingToken);
             }
+            catch (ModelUnavailableException ex)
+            {
+                logger.LogInformation("Embedding model is unavailable. Skipping pending embedding processing. Details: {Message}", ex.Message);
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "Error processing pending embeddings");
@@ -38,7 +42,7 @@ public class PendingEmbeddingProcessor(
         }
     }
 
-    private async Task ProcessPendingAsync(CancellationToken ct)
+    public async Task ProcessPendingAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var session = scope.ServiceProvider.GetRequiredService<SessionService>();
@@ -81,6 +85,10 @@ public class PendingEmbeddingProcessor(
 
                 await projectionService.ProjectArticleAsync(article, plaintext);
                 processed++;
+            }
+            catch (ModelUnavailableException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

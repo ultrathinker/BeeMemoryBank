@@ -71,6 +71,10 @@ public static class SearchEndpoints
                 }
                 return Results.Ok(articleResponses);
             }
+            catch (ModelUnavailableException ex)
+            {
+                return Results.Problem(ex.Message, statusCode: 503);
+            }
             catch (InvalidOperationException ex)
             {
                 return Results.Problem(ex.Message, statusCode: 503);

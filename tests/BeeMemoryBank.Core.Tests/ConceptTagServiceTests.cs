@@ -1,0 +1,108 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Sqlite;
+using FluentAssertions;
+using Xunit;
+
+namespace BeeMemoryBank.Core.Tests;
+
+internal sealed class ThrowingEmbeddingGenerator : IEmbeddingGenerator
+{
+    public int Dimension => 384;
+    public float[] Generate(string text) => throw new ModelUnavailableException("Model is missing");
+}
+
+public class ConceptTagServiceTests : TestFixture
+{
+    private ConceptTagRepository _conceptTagRepo = null!;
+    private ConceptTagService _degradedService = null!;
+
+    public override async Task InitializeAsync()
+    {
+        await base.InitializeAsync();
+        await InitService.InitializeAsync("admin", "TestNode", "password");
+        await Session.UnlockAsync("password");
+
+        _conceptTagRepo = new ConceptTagRepository(Factory, ScopeHolder);
+        _degradedService = new ConceptTagService(_conceptTagRepo, new ThrowingEmbeddingGenerator(), new NullEventLogger());
+    }
+
+    [Fact]
+    public async Task SemanticSearch_WhenModelUnavailable_FallsBackToSimpleList()
+    {
+        // Arrange
+        var article = await ArticleService.CreateAsync("Apple Article", "/Path", [], "Content");
+        await _conceptTagRepo.AddToArticleAsync(article.Id, new List<string> { "Apple", "Banana" });
+
+        // Act
+        var results = await _degradedService.ListAsync("~Apple");
+
+        // Assert
+        results.Should().ContainSingle(c => c.Name == "Apple");
+    }
+
+    [Fact]
+    public async Task SetForArticle_WhenModelUnavailable_StillAssociatesTags()
+    {
+        // Arrange
+        var article = await ArticleService.CreateAsync("Cherry Article", "/Path", [], "Content");
+
+        // Act
+        await _degradedService.SetForArticleAsync(article.Id, new List<string> { "Cherry", "Date" });
+
+        // Assert
+        var tags = await _conceptTagRepo.GetByArticleIdAsync(article.Id);
+        tags.Should().BeEquivalentTo("Cherry", "Date");
+
+        var withEmbeddings = await _conceptTagRepo.GetWithEmbeddingsAsync();
+        withEmbeddings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AddToArticle_WhenModelUnavailable_StillAssociatesTags()
+    {
+        // Arrange
+        var article = await ArticleService.CreateAsync("Fig Article", "/Path", [], "Content");
+
+        // Act
+        await _degradedService.AddToArticleAsync(article.Id, new List<string> { "Fig", "Grape" });
+
+        // Assert
+        var tags = await _conceptTagRepo.GetByArticleIdAsync(article.Id);
+        tags.Should().BeEquivalentTo("Fig", "Grape");
+    }
+
+    [Fact]
+    public async Task BackfillEmbeddings_WhenModelUnavailable_AbortsLoopByPropagating()
+    {
+        // Arrange
+        var article = await ArticleService.CreateAsync("Lemon Article", "/Path", [], "Content");
+        await _conceptTagRepo.AddToArticleAsync(article.Id, new List<string> { "Lemon", "Mango" });
+
+        // Act
+        var act = () => _degradedService.BackfillEmbeddingsAsync();
+
+        // Assert
+        await act.Should().ThrowAsync<ModelUnavailableException>();
+    }
+
+    [Fact]
+    public async Task Rename_WhenModelUnavailable_StillRenamesTag()
+    {
+        // Arrange
+        var article = await ArticleService.CreateAsync("Nectarine Article", "/Path", [], "Content");
+        await _conceptTagRepo.AddToArticleAsync(article.Id, new List<string> { "Nectarine" });
+
+        // Act
+        await _degradedService.RenameAsync("Nectarine", "Orange");
+
+        // Assert
+        var tags = await _conceptTagRepo.GetByArticleIdAsync(article.Id);
+        tags.Should().BeEquivalentTo("Orange");
+    }
+}
