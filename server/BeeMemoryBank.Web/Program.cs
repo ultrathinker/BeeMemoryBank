@@ -187,6 +187,34 @@ var app = builder.Build();
 
 app.UseLoopbackForwardedHeaders();
 
+// BMB_READY_FILE: signals startup completion to a parent orchestrator (bmbd) by writing
+// {pid, urls, applicationName, version, startupTimeUtc} once Kestrel has bound its actual
+// port — ApplicationStarted fires after that. Off by default: standalone/Docker/tests don't
+// set this env var and see no behavior change.
+var readyFilePath = Environment.GetEnvironmentVariable("BMB_READY_FILE");
+if (!string.IsNullOrEmpty(readyFilePath))
+{
+    app.Lifetime.ApplicationStarted.Register(() =>
+    {
+        var readyInfo = new BeeMemoryBank.Hosting.ReadyFileInfo(
+            Pid: Environment.ProcessId,
+            Urls: app.Urls.ToList(),
+            ApplicationName: "BeeMemoryBank.Web",
+            Version: "1.0.1",
+            StartupTimeUtc: DateTime.UtcNow
+        );
+        BeeMemoryBank.Hosting.ReadyFileManager.Write(readyFilePath, readyInfo);
+    });
+}
+
+// BMB_STDIN_LIFELINE: when the parent orchestrator closes this process's stdin (graceful
+// stop signal) or dies without closing it (still an EOF from this end), trigger a normal
+// graceful shutdown via StopApplication() instead of relying solely on a hard kill.
+if (Environment.GetEnvironmentVariable("BMB_STDIN_LIFELINE") == "1")
+{
+    BeeMemoryBank.Hosting.StdinLifeline.Start(() => app.Lifetime.StopApplication());
+}
+
 // ─── Init-status redirect (cache forever once initialized) ────────────────
 // Only redirect to /Setup when the API explicitly confirms the node is NOT initialized.
 // If the API is unreachable (null), let the request through — don't block existing nodes.
