@@ -1,0 +1,394 @@
+@page "/InternetAccess"
+@using System.Text.Json
+@model BeeMemoryBank.Web.Pages.InternetAccessModel
+@{
+    ViewData["Title"] = "Internet Access";
+
+    var info = Model.Info;
+    var lanIps = info?.TryGetProperty("lanIpAddresses", out var li) == true && li.ValueKind == JsonValueKind.Array
+        ? li.EnumerateArray().Select(x => x.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList()
+        : new List<string>();
+    var ports = info?.TryGetProperty("localPorts", out var p) == true ? (JsonElement?)p : null;
+    var ddns = info?.TryGetProperty("ddns", out var d) == true ? (JsonElement?)d : null;
+    var acme = info?.TryGetProperty("acme", out var a) == true ? (JsonElement?)a : null;
+    var cert = acme?.TryGetProperty("certificate", out var cv) == true && cv.ValueKind == JsonValueKind.Object ? (JsonElement?)cv : null;
+
+    string FrontPort(string? key, int fallback) =>
+        ports?.TryGetProperty(key ?? "", out var pv) == true && pv.ValueKind == JsonValueKind.Number ? pv.GetInt32().ToString() : fallback.ToString();
+
+    // The API always includes a "useStaging" field (defaulting to true), so checking whether the
+    // property EXISTS is always true and never reflects the actual persisted value — read the
+    // real boolean instead, defaulting to staging (true) only when it's genuinely absent.
+    var useStagingSelected = !(acme?.TryGetProperty("useStaging", out var usVal) == true && usVal.ValueKind == JsonValueKind.False);
+    var useStagingValue = useStagingSelected ? "true" : "false";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <h2 style="margin-bottom:8px;"><sl-icon name="globe"></sl-icon> Access from the Internet</h2>
+    <p class="text-muted" style="margin:0 0 20px;max-width:680px;">
+        Expose this node to the internet so other devices and peers can reach it from anywhere.
+        This wizard ties together <strong>port forwarding</strong>, <strong>dynamic DNS</strong>,
+        a <strong>trusted HTTPS certificate</strong> (Let's Encrypt), and a <strong>reachability self-test</strong>.
+    </p>
+
+    @if (!string.IsNullOrEmpty(Model.SuccessMessage))
+    {
+        <sl-alert variant="success" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="check-circle"></sl-icon>
+            @Model.SuccessMessage
+        </sl-alert>
+    }
+    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+    {
+        <sl-alert variant="danger" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            @Model.ErrorMessage
+        </sl-alert>
+    }
+
+    @if (info == null)
+    {
+        <sl-alert variant="warning" open style="margin-bottom:24px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            Could not load internet-access info from the API. Check that the API is running.
+        </sl-alert>
+    }
+
+    <!-- ─────────────────────── 1. Port + LAN-IP info ─────────────────────── -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="router"></sl-icon> 1. Port &amp; LAN address</h3>
+    <div class="card" style="margin-bottom:24px;max-width:680px;">
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px 24px;margin-bottom:16px;">
+            <div>
+                <div class="text-muted text-sm">This machine's LAN IP</div>
+                @if (lanIps.Count > 0)
+                {
+                    <strong style="font-size:1.05rem;">@string.Join(", ", lanIps)</strong>
+                }
+                else
+                {
+                    <strong style="color:var(--sl-color-warning-600);">none detected</strong>
+                }
+            </div>
+            <div>
+                <div class="text-muted text-sm">Local front port (HTTP / HTTPS)</div>
+                <strong>@FrontPort("frontHttp", 5310) / @FrontPort("frontHttps", 5311)</strong>
+            </div>
+        </div>
+
+        <sl-alert variant="primary" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="info-circle"></sl-icon>
+            <strong>Set up port forwarding on your router.</strong>
+            <ol style="margin:8px 0 0 20px;line-height:1.7;">
+                <li>Open your router's admin page (usually <code>http://192.168.1.1</code> or <code>http://192.168.0.1</code>).</li>
+                <li>Find the <strong>Port Forwarding</strong> / <strong>Virtual Server</strong> section.</li>
+                <li>
+                    Map <strong>external port 443 (TCP)</strong> &rarr; this machine's LAN IP
+                    <strong>@((lanIps.Count > 0) ? lanIps[0] : "192.168.x.y")</strong>, internal port
+                    <strong>5443</strong> (or whichever port the front HTTPS listener is bound to — confirm in the
+                    server's runtime status, default @FrontPort("frontHttps", 5311)).
+                </li>
+                <li>For the API channel (peer-to-peer sync) you may also forward port 443 to the API's HTTPS port if separate.</li>
+            </ol>
+        </sl-alert>
+
+        <sl-alert variant="neutral" open style="margin-bottom:0;">
+            <sl-icon slot="icon" name="lightbulb"></sl-icon>
+            <strong>Reserve the LAN IP.</strong> In your router's DHCP/LAN settings, assign a static lease
+            (DHCP reservation) to this machine so its LAN IP doesn't change after a reboot — otherwise your
+            port-forward rule silently stops pointing at the right device.
+        </sl-alert>
+    </div>
+
+    <!-- ─────────────────────── 2. DDNS ─────────────────────── -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="arrow-repeat"></sl-icon> 2. Dynamic DNS (DDNS)</h3>
+    <div class="card" style="margin-bottom:24px;max-width:680px;">
+        <p class="text-muted text-sm" style="margin:0 0 12px;">
+            Keeps a hostname (e.g. <code>mynode.duckdns.org</code>) pointed at your home IP as it changes.
+            Pick a provider, enter its credentials, and choose how this node detects its external IP.
+        </p>
+
+        @if (ddns != null)
+        {
+            var lastIp = ddns.Value.TryGetProperty("lastIp", out var lip) && lip.ValueKind == JsonValueKind.String ? lip.GetString() : null;
+            var lastUpdated = ddns.Value.TryGetProperty("lastUpdated", out var lu) && lu.ValueKind == JsonValueKind.String ? lu.GetString() : null;
+            var configured = ddns.Value.TryGetProperty("configured", out var cfd) && cfd.GetBoolean();
+            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;">
+                <div><span class="text-muted text-sm">Status: </span>
+                    @if (configured)
+                    {
+                        <sl-badge variant="success" pill>configured</sl-badge>
+                    }
+                    else
+                    {
+                        <sl-badge variant="neutral" pill>not configured</sl-badge>
+                    }
+                </div>
+                @if (!string.IsNullOrEmpty(lastIp))
+                {
+                    <div><span class="text-muted text-sm">Last IP: </span><strong>@lastIp</strong></div>
+                }
+                @if (!string.IsNullOrEmpty(lastUpdated))
+                {
+                    <div><span class="text-muted text-sm">Last check: </span><strong>@InternetAccessModel.FormatTime(lastUpdated)</strong></div>
+                }
+            </div>
+        }
+
+        <form method="post" asp-page-handler="SaveDdnsConfig" class="sl-form" style="display:flex;flex-direction:column;gap:14px;">
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Provider</label>
+                <sl-select id="ddns-provider" name="provider" size="small" value="@(ddns?.TryGetProperty("provider", out var dprov) == true ? dprov.GetString() : "duckdns")">
+                    <sl-option value="duckdns">DuckDNS (free, simple)</sl-option>
+                    <sl-option value="desec">deSEC (free, EU)</sl-option>
+                    <sl-option value="cloudflare">Cloudflare (API token)</sl-option>
+                </sl-select>
+            </div>
+
+            <!-- domain/record name: common to all providers (DuckDNS/deSEC domain, Cloudflare record name). -->
+            <div>
+                <sl-input name="domain" id="ddns-domain" label="Domain / record name" size="small"
+                          placeholder="mynode.duckdns.org"
+                          value="@(ddns?.TryGetProperty("domain", out var dd) == true ? dd.GetString() : "")"></sl-input>
+            </div>
+
+            <!-- DuckDNS / deSEC token — disabled (so it isn't submitted) when Cloudflare is selected. -->
+            <div id="ddns-simple-fields">
+                <sl-input name="token" id="ddns-token" label="Token" size="small" type="password" password-toggle
+                          placeholder="paste your DuckDNS / deSEC token" autocomplete="off"></sl-input>
+            </div>
+
+            <!-- Cloudflare-only fields — disabled when DuckDNS/deSEC is selected. -->
+            <div id="ddns-cloudflare-fields" style="display:flex;flex-direction:column;gap:12px;">
+                <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                    <sl-input name="zoneId" id="ddns-zone" label="Zone ID" size="small" style="flex:1;min-width:200px;"
+                              placeholder="Cloudflare zone id"></sl-input>
+                    <sl-input name="recordId" id="ddns-record" label="Record ID" size="small" style="flex:1;min-width:200px;"
+                              placeholder="DNS record id"></sl-input>
+                </div>
+                <sl-input name="apiToken" id="ddns-cf-token" label="API Token" size="small" type="password" password-toggle
+                          placeholder="API token with Zone.DNS edit" autocomplete="off"></sl-input>
+            </div>
+
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">External IP detection</label>
+                <sl-radio-group id="ddns-ipmode" name="ipMode" value="@(ddns?.TryGetProperty("ipMode", out var dim) == true ? dim.GetString() : "upnp")">
+                    <sl-radio value="upnp">Auto via UPnP (recommended if your router supports it)</sl-radio>
+                    <sl-radio value="static">Enter my external IP manually</sl-radio>
+                </sl-radio-group>
+            </div>
+            <div id="ddns-static-ip-wrap" style="display:none;">
+                <sl-input name="staticIp" label="Static external IP" size="small" style="max-width:280px;"
+                          placeholder="203.0.113.5"
+                          value="@(ddns?.TryGetProperty("staticIp", out var sip) == true ? sip.GetString() : "")"></sl-input>
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <sl-button type="submit" variant="primary" size="small">
+                    <sl-icon slot="prefix" name="save"></sl-icon> Save DDNS settings
+                </sl-button>
+            </div>
+        </form>
+
+        <!-- "Check now" lives in its OWN form, outside the save form — nested <form> elements
+             are invalid HTML and the inner button would otherwise submit the outer (save) form. -->
+        <form method="post" asp-page-handler="CheckDdnsNow" style="margin-top:14px;">
+            <sl-button type="submit" variant="default" size="small"
+                       onclick="return confirm('Run a DDNS check now? This contacts your provider to update the DNS record if your IP changed.')">
+                <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Check now
+            </sl-button>
+        </form>
+    </div>
+
+    <!-- ─────────────────────── 3. ACME certificate ─────────────────────── -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="shield-lock"></sl-icon> 3. HTTPS certificate (Let's Encrypt)</h3>
+    <div class="card" style="margin-bottom:24px;max-width:680px;">
+        <p class="text-muted text-sm" style="margin:0 0 12px;">
+            Issues a real, publicly-trusted certificate for your domain via ACME (TLS-ALPN-01 challenge,
+            port 443). Issuance only succeeds once the domain's DNS points here and port 443 is forwarded.
+        </p>
+
+        @if (cert != null && cert.Value.TryGetProperty("present", out var cp) && cp.GetBoolean())
+        {
+            var notAfter = cert.Value.TryGetProperty("notAfter", out var na) ? na.GetString() : null;
+            var days = cert.Value.TryGetProperty("daysRemaining", out var dr) ? dr.GetDouble() : 0;
+            var needsRenewal = cert.Value.TryGetProperty("needsRenewal", out var nr) && nr.GetBoolean();
+            var issuedByStaging = cert.Value.TryGetProperty("issuedByStaging", out var ibs) && ibs.GetBoolean();
+            <sl-alert variant="@(needsRenewal ? "warning" : "success")" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="@(needsRenewal ? "shield-exclamation" : "patch-check")"></sl-icon>
+                <strong>@(issuedByStaging ? "Staging" : "Production") certificate stored</strong>
+                for <code>@(cert.Value.TryGetProperty("domain", out var cd) ? cd.GetString() : "")</code>,
+                valid until <strong>@InternetAccessModel.FormatTime(notAfter)</strong> (@days days remaining).
+                @if (needsRenewal) { <text>Renewal is due.</text> }
+                @if (issuedByStaging) { <text><br/>This is an <em>untrusted</em> staging cert — re-issue with production to get a browser-trusted one.</text> }
+            </sl-alert>
+        }
+        else
+        {
+            <sl-alert variant="neutral" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                No certificate stored yet for the configured domain.
+            </sl-alert>
+        }
+
+        <form method="post" asp-page-handler="SaveAcmeConfig" class="sl-form" style="display:flex;flex-direction:column;gap:14px;">
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                <sl-input name="domain" label="Domain" size="small" required style="flex:1;min-width:200px;"
+                          placeholder="mynode.duckdns.org"
+                          value="@(acme?.TryGetProperty("domain", out var ad) == true ? ad.GetString() : "")"></sl-input>
+                <sl-input name="contactsEmail" label="Contact email (optional)" size="small" type="email" style="flex:1;min-width:200px;"
+                          placeholder="you@example.com"
+                          value="@(acme?.TryGetProperty("contactsEmail", out var ae) == true ? ae.GetString() : "")"></sl-input>
+            </div>
+
+            <div>
+                <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">CA environment</label>
+                <sl-radio-group id="acme-staging" name="useStaging" value="@useStagingValue">
+                    <sl-radio value="true">Staging — untrusted cert, generous rate limits (recommended first)</sl-radio>
+                    <sl-radio value="false">Production — real, browser-trusted cert (rate-limited)</sl-radio>
+                </sl-radio-group>
+            </div>
+            <sl-alert id="acme-prod-warning" variant="danger" open style="display:none;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>Production Let's Encrypt has strict rate limits.</strong> Repeated failed issuances for the
+                same domain can lock you out for a week. Confirm DNS + port forwarding work (section 4) before
+                requesting a production cert.
+            </sl-alert>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <sl-button type="submit" variant="default" size="small">
+                    <sl-icon slot="prefix" name="save"></sl-icon> Save ACME settings
+                </sl-button>
+                <sl-button type="button" id="btn-acme-request" variant="primary" size="small"
+                        onclick="document.getElementById('dlg-acme-request').show()">
+                    <sl-icon slot="prefix" name="cloud-download"></sl-icon> Request certificate
+                </sl-button>
+            </div>
+        </form>
+    </div>
+
+    <!-- ─────────────────────── 4. Reachability self-test ─────────────────────── -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="check2-circle"></sl-icon> 4. Reachability self-test</h3>
+    <div class="card" style="margin-bottom:24px;max-width:680px;">
+        <p class="text-muted text-sm" style="margin:0 0 12px;">
+            Verifies your candidate public URL is actually reachable from outside your LAN. The node asks one of
+            your whitelisted peers to fetch it; <strong>any</strong> HTTP response (even an error) proves the
+            port forward works. A total connection failure (refused / timeout) is the signal that you may be
+            behind <strong>CGNAT</strong> or the port isn't forwarded.
+        </p>
+        <form method="post" asp-page-handler="Probe" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+            <sl-input name="candidateUrl" label="Candidate public URL" size="small" required style="flex:1;min-width:260px;"
+                      placeholder="https://mynode.duckdns.org"
+                      value="@(acme?.TryGetProperty("domain", out var pdom) == true && !string.IsNullOrEmpty(pdom.GetString()) ? "https://" + pdom.GetString() : "")"></sl-input>
+            <sl-button type="submit" variant="primary" size="small">
+                <sl-icon slot="prefix" name="broadcast"></sl-icon> Run self-test
+            </sl-button>
+        </form>
+
+        <sl-alert variant="primary" open style="margin-top:16px;">
+            <sl-icon slot="icon" name="geo-alt"></sl-icon>
+            <strong>If the probe reports unreachable / connection-refused / timeout</strong> and you've confirmed
+            the port forward is correct, your ISP is likely using <strong>Carrier-Grade NAT (CGNAT)</strong> — your
+            router doesn't have a public IP at all. Workarounds:
+            <ul style="margin:6px 0 0 20px;line-height:1.7;">
+                <li>Run a cheap VPS (e.g. €4/mo Hetzner) as a relay node with a real public IP, and sync to it.</li>
+                <li>Use a mesh VPN like <strong>Tailscale</strong> / <strong>WireGuard</strong> to reach this node directly.</li>
+                <li>If your ISP offers a global <strong>IPv6</strong> address, see the note below.</li>
+            </ul>
+        </sl-alert>
+    </div>
+
+    <!-- ─────────────────────── 5. IPv6 note ─────────────────────── -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="diagram-2"></sl-icon> 5. IPv6</h3>
+    <div class="card" style="margin-bottom:32px;max-width:680px;">
+        <p class="text-muted text-sm" style="margin:0;">
+            The front listens dual-stack (IPv4 + IPv6) whenever an IPv6 address is available. If your ISP assigns
+            you a <strong>global IPv6 address</strong>, an <code>AAAA</code> DNS record is a viable alternative to
+            IPv4 port forwarding — set one via your DDNS provider and forward port 443 over IPv6 in your router.
+            No additional configuration is needed in this wizard for IPv6; this is informational.
+        </p>
+    </div>
+
+</div>
+</div>
+
+<!-- Request certificate confirmation dialog -->
+<sl-dialog id="dlg-acme-request" label="Request certificate">
+    <sl-alert variant="warning" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Issuance takes 10–60 seconds and will <strong>fail</strong> unless the domain's DNS resolves to this node
+        and port 443 is reachable by the CA. A failed production request still counts against Let's Encrypt's
+        rate limits — prefer staging until the self-test passes.
+    </sl-alert>
+    <p style="margin:0 0 12px;">Choose which CA environment to issue against for this request (overrides saved settings):</p>
+    <form id="form-acme-request" method="post" asp-page-handler="RequestCertificate" style="display:flex;flex-direction:column;gap:12px;">
+        <sl-input name="domain" label="Domain" size="small" required
+                  value="@(acme?.TryGetProperty("domain", out var rd) == true ? rd.GetString() : "")"></sl-input>
+        <sl-radio-group name="useStaging" value="@useStagingValue">
+            <sl-radio value="true">Staging (untrusted, safe to retry)</sl-radio>
+            <sl-radio value="false">Production (real cert, rate-limited)</sl-radio>
+        </sl-radio-group>
+        <sl-button slot="footer" type="button" variant="default" onclick="document.getElementById('dlg-acme-request').hide()">Cancel</sl-button>
+        <sl-button slot="footer" type="submit" variant="primary">
+            <sl-icon slot="prefix" name="cloud-download"></sl-icon> Request
+        </sl-button>
+    </form>
+</sl-dialog>
+
+<script>
+(function () {
+    function ready(fn) {
+        // Wait for Shoelace <sl-select>/<sl-radio-group> to upgrade before reading .value.
+        Promise.all([
+            customElements.whenDefined('sl-select'),
+            customElements.whenDefined('sl-radio-group')
+        ]).then(fn);
+    }
+
+    ready(function () {
+        // DDNS provider → toggle which credential fields are visible AND enabled. Fields are
+        // toggled with the `disabled` attribute (not just display:none) so a hidden provider's
+        // credentials are excluded from form submission entirely — otherwise both the DuckDNS
+        // token and the Cloudflare zone/record/token would always be posted.
+        var prov = document.getElementById('ddns-provider');
+        var simpleWrap = document.getElementById('ddns-simple-fields');
+        var cfWrap = document.getElementById('ddns-cloudflare-fields');
+        var tokenEl = document.getElementById('ddns-token');
+        var zoneEl = document.getElementById('ddns-zone');
+        var recordEl = document.getElementById('ddns-record');
+        var cfTokenEl = document.getElementById('ddns-cf-token');
+        function setDisabled(el, disabled) { if (el) el.disabled = disabled; }
+        function syncProvider() {
+            var v = (prov && prov.value) || 'duckdns';
+            var isCf = v === 'cloudflare';
+            if (simpleWrap) simpleWrap.style.display = isCf ? 'none' : 'block';
+            if (cfWrap) cfWrap.style.display = isCf ? 'flex' : 'none';
+            setDisabled(tokenEl, isCf);
+            setDisabled(zoneEl, !isCf);
+            setDisabled(recordEl, !isCf);
+            setDisabled(cfTokenEl, !isCf);
+        }
+        if (prov) { prov.addEventListener('sl-change', syncProvider); syncProvider(); }
+
+        // IP mode → show/hide static-IP input.
+        var ipmode = document.getElementById('ddns-ipmode');
+        var staticWrap = document.getElementById('ddns-static-ip-wrap');
+        function syncIpMode() {
+            var v = (ipmode && ipmode.value) || 'upnp';
+            if (staticWrap) staticWrap.style.display = (v === 'static') ? 'block' : 'none';
+        }
+        if (ipmode) { ipmode.addEventListener('sl-change', syncIpMode); syncIpMode(); }
+
+        // ACME staging → show production rate-limit warning when production selected.
+        var staging = document.getElementById('acme-staging');
+        var warn = document.getElementById('acme-prod-warning');
+        function syncStaging() {
+            var v = (staging && staging.value) || 'true';
+            if (warn) warn.style.display = (v === 'false') ? 'block' : 'none';
+        }
+        if (staging) { staging.addEventListener('sl-change', syncStaging); syncStaging(); }
+    });
+})();
+</script>

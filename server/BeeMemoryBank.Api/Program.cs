@@ -479,6 +479,7 @@ app.MapDownloadEndpoints();
     app.MapHardDeleteEndpoints();
     app.MapCompactionEndpoints();
     app.MapAdminEndpoints();
+    app.MapInternetAccessEndpoints();
     app.MapChatEndpoints();
     app.MapMcp("/mcp");
 

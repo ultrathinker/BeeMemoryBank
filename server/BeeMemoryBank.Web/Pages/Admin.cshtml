@@ -123,6 +123,19 @@
         </sl-alert>
     }
 
+    <!-- Internet Access — shortcut to the DDNS + HTTPS + reachability wizard -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="globe"></sl-icon> Internet Access</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Expose this node over the internet: port forwarding, dynamic DNS, a Let's Encrypt HTTPS
+            certificate, and a reachability self-test (with a CGNAT diagnosis). Configure it in the
+            dedicated wizard.
+        </p>
+        <sl-button variant="primary" size="small" href="/InternetAccess">
+            <sl-icon slot="prefix" name="globe"></sl-icon> Open Internet Access wizard
+        </sl-button>
+    </div>
+
     <!-- Software Updates -->
     <h3 style="margin-bottom:12px;"><sl-icon name="arrow-up-circle"></sl-icon> Software Updates</h3>
     <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
