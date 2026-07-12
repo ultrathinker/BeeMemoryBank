@@ -1,4 +1,11 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using BeeMemoryBank.Hosting;
 
@@ -10,59 +17,153 @@ public static class Program
     {
         Console.WriteLine("=== BeeMemoryBank Node Orchestrator ===");
 
-        string configPath = "node.config.json";
-        if (args.Length > 0)
+        bool isAutoMode = false;
+        string? dataDirectory = null;
+        string? configPath = null;
+
+        for (int i = 0; i < args.Length; i++)
         {
-            if (args[0] == "--help" || args[0] == "-h")
+            var arg = args[i];
+            if (arg == "--help" || arg == "-h")
             {
                 ShowUsage();
                 return 0;
             }
-            configPath = args[0];
+            else if (arg == "--auto" || arg == "-a")
+            {
+                isAutoMode = true;
+            }
+            else if (arg == "--data" || arg == "-d")
+            {
+                if (i + 1 < args.Length)
+                {
+                    dataDirectory = args[++i];
+                }
+                else
+                {
+                    Console.Error.WriteLine("[Error] Missing value for --data / -d argument.");
+                    ShowUsage();
+                    return 1;
+                }
+            }
+            else if (!arg.StartsWith("-"))
+            {
+                if (configPath != null)
+                {
+                    Console.Error.WriteLine($"[Error] Multiple configuration files specified: '{configPath}' and '{arg}'.");
+                    ShowUsage();
+                    return 1;
+                }
+                configPath = arg;
+            }
+            else
+            {
+                Console.Error.WriteLine($"[Error] Unknown option '{arg}'.");
+                ShowUsage();
+                return 1;
+            }
         }
 
-        if (!File.Exists(configPath))
+        // Determine if auto-discovery is triggered
+        if (!isAutoMode)
         {
-            Console.Error.WriteLine($"[Error] Configuration file '{configPath}' not found.");
-            ShowUsage();
-            return 1;
+            if (configPath == null)
+            {
+                if (File.Exists("node.config.json"))
+                {
+                    configPath = "node.config.json";
+                }
+                else
+                {
+                    isAutoMode = true;
+                }
+            }
         }
 
-        NodeConfig config;
-        try
+        string resolvedDataDirectory;
+        List<ChildProcessConfig> childConfigs;
+
+        if (isAutoMode)
         {
-            var content = await File.ReadAllTextAsync(configPath);
-            config = JsonSerializer.Deserialize<NodeConfig>(content, new JsonSerializerOptions(JsonSerializerDefaults.Web))
-                     ?? throw new InvalidOperationException("Failed to deserialize configuration.");
+            Console.WriteLine("[Node] Running in Auto-Discovery mode.");
+
+            if (string.IsNullOrWhiteSpace(dataDirectory))
+            {
+                dataDirectory = Path.Combine(AppContext.BaseDirectory, "data");
+            }
+            resolvedDataDirectory = Path.GetFullPath(dataDirectory);
+
+            try
+            {
+                Directory.CreateDirectory(resolvedDataDirectory);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Error] Failed to create data directory '{resolvedDataDirectory}': {ex.Message}");
+                return 1;
+            }
+
+            try
+            {
+                childConfigs = AutoDiscovery.Discover(AppContext.BaseDirectory, resolvedDataDirectory);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Error] Auto-discovery failed: {ex.Message}");
+                return 1;
+            }
         }
-        catch (Exception ex)
+        else
         {
-            Console.Error.WriteLine($"[Error] Failed to load configuration: {ex.Message}");
-            return 1;
+            if (configPath == null)
+            {
+                configPath = "node.config.json";
+            }
+
+            if (!File.Exists(configPath))
+            {
+                Console.Error.WriteLine($"[Error] Configuration file '{configPath}' not found.");
+                ShowUsage();
+                return 1;
+            }
+
+            NodeConfig config;
+            try
+            {
+                var content = await File.ReadAllTextAsync(configPath);
+                config = JsonSerializer.Deserialize<NodeConfig>(content, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                         ?? throw new InvalidOperationException("Failed to deserialize configuration.");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Error] Failed to load configuration: {ex.Message}");
+                return 1;
+            }
+
+            if (string.IsNullOrWhiteSpace(config.DataDirectory))
+            {
+                Console.Error.WriteLine("[Error] 'dataDirectory' must be specified in the configuration.");
+                return 1;
+            }
+
+            if (config.Children == null || config.Children.Count == 0)
+            {
+                Console.Error.WriteLine("[Error] No child processes configured under 'children'.");
+                return 1;
+            }
+
+            resolvedDataDirectory = config.DataDirectory;
+            childConfigs = config.Children.Select(c => new ChildProcessConfig(
+                c.ApplicationName,
+                c.ExecutablePath,
+                c.WorkingDirectory,
+                c.ReadyFilePath,
+                c.Arguments,
+                c.EnvironmentVariables
+            )).ToList();
         }
 
-        if (string.IsNullOrWhiteSpace(config.DataDirectory))
-        {
-            Console.Error.WriteLine("[Error] 'dataDirectory' must be specified in the configuration.");
-            return 1;
-        }
-
-        if (config.Children == null || config.Children.Count == 0)
-        {
-            Console.Error.WriteLine("[Error] No child processes configured under 'children'.");
-            return 1;
-        }
-
-        var childConfigs = config.Children.Select(c => new ChildProcessConfig(
-            c.ApplicationName,
-            c.ExecutablePath,
-            c.WorkingDirectory,
-            c.ReadyFilePath,
-            c.Arguments,
-            c.EnvironmentVariables
-        )).ToList();
-
-        using var orchestrator = new NodeOrchestrator(config.DataDirectory, childConfigs);
+        using var orchestrator = new NodeOrchestrator(resolvedDataDirectory, childConfigs);
 
         WebApplication? app = null;
         var tcs = new TaskCompletionSource<int>();
@@ -112,7 +213,7 @@ public static class Program
 
         try
         {
-            Console.WriteLine($"[Node] Launching children with lock on data dir: '{config.DataDirectory}'...");
+            Console.WriteLine($"[Node] Launching children with lock on data dir: '{resolvedDataDirectory}'...");
             await orchestrator.StartAsync(CancellationToken.None);
 
             Console.WriteLine("[Node] Orchestrator started. Building and starting front...");
@@ -164,6 +265,11 @@ public static class Program
     {
         Console.WriteLine("\nUsage:");
         Console.WriteLine("  BeeMemoryBank.Node.exe [path-to-node.config.json]");
+        Console.WriteLine("  BeeMemoryBank.Node.exe --auto [-d/--data <data-directory-path>]");
+        Console.WriteLine("\nOptions:");
+        Console.WriteLine("  -a, --auto              Run in auto-discovery mode. Looks for sibling 'api' and 'web' directories.");
+        Console.WriteLine("  -d, --data <path>       Specify custom directory for data, status, and ready files (used with --auto).");
+        Console.WriteLine("  -h, --help              Show this help message.");
         Console.WriteLine("\nExample node.config.json:");
         var example = new NodeConfig(
             DataDirectory: @"C:\Users\evgeny\AppData\Local\Temp\bmb-node-data",
@@ -200,3 +306,109 @@ public record ChildConfig(
     string? Arguments = null,
     Dictionary<string, string>? EnvironmentVariables = null
 );
+
+public static class AutoDiscovery
+{
+    public static List<ChildProcessConfig> Discover(string baseDirectory, string dataDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(baseDirectory))
+        {
+            throw new ArgumentNullException(nameof(baseDirectory));
+        }
+        if (string.IsNullOrWhiteSpace(dataDirectory))
+        {
+            throw new ArgumentNullException(nameof(dataDirectory));
+        }
+
+        var absBaseDir = Path.GetFullPath(baseDirectory);
+        var absDataDir = Path.GetFullPath(dataDirectory);
+
+        var apiReadyFilePath = Path.Combine(absDataDir, "api.ready");
+        var webReadyFilePath = Path.Combine(absDataDir, "web.ready");
+
+        var apiInfo = ResolveApplicationStartInfo(absBaseDir, "api", "BeeMemoryBank.Api");
+        var webInfo = ResolveApplicationStartInfo(absBaseDir, "web", "BeeMemoryBank.Web");
+
+        // Base environment variables
+        var apiEnv = new Dictionary<string, string>
+        {
+            ["ASPNETCORE_URLS"] = "http://127.0.0.1:0",
+            ["BMB_READY_FILE"] = apiReadyFilePath,
+            ["BMB_STDIN_LIFELINE"] = "1",
+            ["BMB_BEHIND_LOOPBACK_PROXY"] = "1",
+            ["BMB_DATA_PATH"] = absDataDir
+        };
+
+        // NOTE: BMB_API_URL is deliberately NOT set here. Api binds to a random port
+        // (ASPNETCORE_URLS=http://127.0.0.1:0) that isn't known until Api's own ready-file
+        // is written - but NodeOrchestrator starts every child concurrently, with no
+        // "wait for Api, then start Web with its resolved port" staging. Web already falls
+        // back to http://localhost:5300 when BMB_API_URL is unset (see its Program.cs), so
+        // it still starts and becomes ready correctly; its own Api-proxy calls just won't
+        // reach the real Api process in auto-discovered mode until NodeOrchestrator gains
+        // genuine staged/dependency-ordered startup - tracked as follow-up work, not
+        // attempted here to avoid a fragile workaround.
+        var webEnv = new Dictionary<string, string>
+        {
+            ["ASPNETCORE_URLS"] = "http://127.0.0.1:0",
+            ["BMB_READY_FILE"] = webReadyFilePath,
+            ["BMB_STDIN_LIFELINE"] = "1",
+            ["BMB_BEHIND_LOOPBACK_PROXY"] = "1",
+            ["BMB_DATA_PATH"] = absDataDir
+        };
+
+        var apiConfig = new ChildProcessConfig(
+            ApplicationName: "BeeMemoryBank.Api",
+            ExecutablePath: apiInfo.ExecutablePath,
+            WorkingDirectory: apiInfo.WorkingDirectory,
+            ReadyFilePath: apiReadyFilePath,
+            Arguments: apiInfo.Arguments,
+            EnvironmentVariables: apiEnv
+        );
+
+        var webConfig = new ChildProcessConfig(
+            ApplicationName: "BeeMemoryBank.Web",
+            ExecutablePath: webInfo.ExecutablePath,
+            WorkingDirectory: webInfo.WorkingDirectory,
+            ReadyFilePath: webReadyFilePath,
+            Arguments: webInfo.Arguments,
+            EnvironmentVariables: webEnv
+        );
+
+        return new List<ChildProcessConfig> { apiConfig, webConfig };
+    }
+
+    private static ResolvedApp ResolveApplicationStartInfo(string baseDir, string folderName, string appName)
+    {
+        var folderPath = Path.GetFullPath(Path.Combine(baseDir, "..", folderName));
+        if (!Directory.Exists(folderPath))
+        {
+            throw new DirectoryNotFoundException($"Sibling directory '{folderName}' not found relative to '{baseDir}' (expected at '{folderPath}').");
+        }
+
+        var exeNameWindows = $"{appName}.exe";
+        var exeNameUnix = appName;
+
+        var exePathWindows = Path.Combine(folderPath, exeNameWindows);
+        var exePathUnix = Path.Combine(folderPath, exeNameUnix);
+
+        if (File.Exists(exePathWindows))
+        {
+            return new ResolvedApp(exePathWindows, folderPath, null);
+        }
+        if (File.Exists(exePathUnix))
+        {
+            return new ResolvedApp(exePathUnix, folderPath, null);
+        }
+
+        var dllPath = Path.Combine(folderPath, $"{appName}.dll");
+        if (File.Exists(dllPath))
+        {
+            return new ResolvedApp("dotnet", folderPath, $"\"{dllPath}\"");
+        }
+
+        throw new FileNotFoundException($"Could not find executable or DLL for '{appName}' in directory '{folderPath}'.");
+    }
+
+    private record ResolvedApp(string ExecutablePath, string WorkingDirectory, string? Arguments);
+}
