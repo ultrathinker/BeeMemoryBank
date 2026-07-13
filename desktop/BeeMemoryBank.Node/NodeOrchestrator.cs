@@ -482,11 +482,6 @@ public class NodeOrchestrator : IDisposable
 
         Console.WriteLine("[Orchestrator] Stopping all managed child processes...");
 
-        if (cts != null)
-        {
-            cts.Cancel();
-        }
-
         List<MonitoredChild> childrenSnapshot;
         lock (_lock)
         {
@@ -526,6 +521,20 @@ public class NodeOrchestrator : IDisposable
         }).ToList();
 
         await Task.WhenAll(stopTasks);
+
+        // Cancel lifecycle monitoring only AFTER children have been asked to exit gracefully
+        // (and force-killed above if they didn't within the timeout) - cancelling this token
+        // any earlier races the per-child lifecycle loop's own WaitForExitAsync(stoppingToken):
+        // that call would observe the cancellation and immediately hard-Kill() the child itself,
+        // before the stdin-close-then-wait sequence above ever got a chance to run, defeating
+        // graceful shutdown essentially at random depending on which task got scheduled first
+        // (Codex-reviewed finding). Any child still waiting on its OWN ready-file poll (not yet
+        // running) still needs this cancellation to unblock promptly, so it isn't dropped -
+        // just deferred until it can no longer race the graceful path above.
+        if (cts != null)
+        {
+            cts.Cancel();
+        }
 
         List<Task> childTasksCopy;
         lock (_lock)

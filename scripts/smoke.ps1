@@ -331,20 +331,16 @@ Write-Host "  Default AppData vault directory: $DefaultVaultDir (Exists: $Defaul
 
 $PathTestPassed = $false
 if ($LocalDataExists) {
-    # Legacy behavior still active because parallel changes are not merged yet.
-    Write-Host "Legacy behavior detected: local 'data' directory was created."
-    Write-Host "This is expected since parallel changes in feat/1-node-default-path are not yet merged."
+    # feat/1-node-default-path is merged - this is the exact Velopack data-loss regression
+    # (bmbd falling back to AppContext.BaseDirectory\data) and must fail smoke, not pass it.
+    Write-Error "Failure: Regression detected - a local 'data' directory was created next to the executable ($LocalDataDir). bmbd must resolve its default data path via BmbPaths.DefaultVaultDir, not AppContext.BaseDirectory."
+    $PathTestPassed = $false
+} elseif ($DefaultVaultExists) {
+    Write-Host "Success: no local 'data' directory next to the executable; default AppData vault directory exists."
     $PathTestPassed = $true
 } else {
-    # New behavior active (or parallel changes merged)
-    Write-Host "New behavior detected: no local 'data' directory created next to the executable."
-    if ($DefaultVaultExists) {
-        Write-Host "Success: Default AppData vault directory exists."
-        $PathTestPassed = $true
-    } else {
-        Write-Error "Failure: Neither local 'data' directory nor default AppData vault directory exists!"
-        $PathTestPassed = $false
-    }
+    Write-Error "Failure: Neither local 'data' directory nor default AppData vault directory exists!"
+    $PathTestPassed = $false
 }
 
 if (-not $PathTestPassed) {
