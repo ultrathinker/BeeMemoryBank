@@ -1,0 +1,10 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+    <OutputName>BeeMemoryBank.ServerService</OutputName>
+    <InstallerVersion>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\..\..\VERSION').Trim())</InstallerVersion>
+    <DefineConstants>InstallerVersion=$(InstallerVersion);PublishFolder=$(MSBuildProjectDirectory)\..\..\..\publish\win-x64</DefineConstants>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,66 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="BeeMemoryBank Server" Manufacturer="BeeMemoryBank Contributors"
+           Version="$(var.InstallerVersion)" UpgradeCode="F5D7CEE1-3A26-4C5C-99B7-798B5F956DF1"
+           Scope="perMachine">
+    
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <!-- Directory Structure -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="BeeMemoryBank">
+        <Directory Id="BmbdFolder" Name="bmbd" />
+        <Directory Id="ApiFolder" Name="api" />
+        <Directory Id="WebFolder" Name="web" />
+        <Directory Id="CliFolder" Name="cli" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Components -->
+    <ComponentGroup Id="ProductComponents">
+      <!-- Service Component (explicit file + service registration) -->
+      <Component Directory="BmbdFolder" Guid="6655A7F8-E73F-4ED6-B10A-F597AE2A4CF8">
+        <File Source="$(var.PublishFolder)\bmbd\BeeMemoryBank.Node.exe" KeyPath="yes" />
+        
+        <ServiceInstall Id="BmbdServiceInstall" Name="bmbd" DisplayName="BeeMemoryBank Node Service"
+                        Description="Runs the BeeMemoryBank node as a background service."
+                        Type="ownProcess" Start="auto" ErrorControl="normal"
+                        Account="NT SERVICE\bmbd" />
+        
+        <ServiceControl Id="BmbdServiceControl" Name="bmbd" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        
+        <ServiceConfig ServiceName="bmbd" DelayedAutoStart="yes" OnInstall="yes" OnReinstall="yes" />
+        
+        <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\bmbd"
+                       Name="DelayedAutoStart" Type="integer" Value="1" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="BmbdFiles" Directory="BmbdFolder">
+      <Files Include="$(var.PublishFolder)\bmbd\**">
+        <Exclude Files="$(var.PublishFolder)\bmbd\BeeMemoryBank.Node.exe" />
+      </Files>
+    </ComponentGroup>
+
+    <ComponentGroup Id="ApiFiles" Directory="ApiFolder">
+      <Files Include="$(var.PublishFolder)\api\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="WebFiles" Directory="WebFolder">
+      <Files Include="$(var.PublishFolder)\web\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="CliFiles" Directory="CliFolder">
+      <Files Include="$(var.PublishFolder)\cli\**" />
+    </ComponentGroup>
+
+    <!-- Features -->
+    <Feature Id="MainFeature" Title="BeeMemoryBank Server Service" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="BmbdFiles" />
+      <ComponentGroupRef Id="ApiFiles" />
+      <ComponentGroupRef Id="WebFiles" />
+      <ComponentGroupRef Id="CliFiles" />
+    </Feature>
+
+  </Package>
+</Wix>
