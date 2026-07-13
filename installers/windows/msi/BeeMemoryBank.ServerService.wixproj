@@ -7,4 +7,8 @@
     <InstallerVersion>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\..\..\VERSION').Trim())</InstallerVersion>
     <DefineConstants>InstallerVersion=$(InstallerVersion);PublishFolder=$(MSBuildProjectDirectory)\..\..\..\publish\win-x64</DefineConstants>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Firewall.wixext" Version="5.0.2" />
+  </ItemGroup>
 </Project>

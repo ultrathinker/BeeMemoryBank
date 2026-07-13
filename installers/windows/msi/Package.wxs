@@ -1,4 +1,6 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall">
   <Package Name="BeeMemoryBank Server" Manufacturer="BeeMemoryBank Contributors"
            Version="$(var.InstallerVersion)" UpgradeCode="F5D7CEE1-3A26-4C5C-99B7-798B5F956DF1"
            Scope="perMachine">
@@ -15,6 +17,10 @@
       </Directory>
     </StandardDirectory>
 
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="CommonAppBeeMemoryBank" Name="BeeMemoryBank" />
+    </StandardDirectory>
+
     <!-- Components -->
     <ComponentGroup Id="ProductComponents">
       <!-- Service Component (explicit file + service registration) -->
@@ -24,7 +30,8 @@
         <ServiceInstall Id="BmbdServiceInstall" Name="bmbd" DisplayName="BeeMemoryBank Node Service"
                         Description="Runs the BeeMemoryBank node as a background service."
                         Type="ownProcess" Start="auto" ErrorControl="normal"
-                        Account="NT SERVICE\bmbd" />
+                        Account="NT SERVICE\bmbd"
+                        Arguments="--auto --data &quot;[CommonAppDataFolder]BeeMemoryBank&quot;" />
         
         <ServiceControl Id="BmbdServiceControl" Name="bmbd" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
         
@@ -32,6 +39,13 @@
         
         <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\bmbd"
                        Name="DelayedAutoStart" Type="integer" Value="1" />
+      </Component>
+
+      <!-- Data Folder with permissions for the virtual service account -->
+      <Component Id="CreateDataFolder" Directory="CommonAppBeeMemoryBank" Guid="E6347A22-38B0-449C-A85A-FA2309C5A85A">
+        <CreateFolder>
+          <util:PermissionEx User="NT SERVICE\bmbd" GenericAll="yes" />
+        </CreateFolder>
       </Component>
     </ComponentGroup>
 
@@ -53,6 +67,18 @@
       <Files Include="$(var.PublishFolder)\cli\**" />
     </ComponentGroup>
 
+    <!-- Firewall Rule Component -->
+    <DirectoryRef Id="BmbdFolder">
+      <Component Id="FirewallRulesComponent" Guid="A76F32E5-23F7-4180-87F7-BE6CA5F15647">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\BeeMemoryBank\Firewall"
+                       Name="RulesInstalled" Type="integer" Value="1" KeyPath="yes" />
+        <fw:FirewallException Id="NodeHttpFirewallException" Name="BeeMemoryBank Node HTTP (5310)"
+                              Port="5310" Protocol="tcp" Scope="any" IgnoreFailure="yes" />
+        <fw:FirewallException Id="NodeHttpsFirewallException" Name="BeeMemoryBank Node HTTPS (5311)"
+                              Port="5311" Protocol="tcp" Scope="any" IgnoreFailure="yes" />
+      </Component>
+    </DirectoryRef>
+
     <!-- Features -->
     <Feature Id="MainFeature" Title="BeeMemoryBank Server Service" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
@@ -60,6 +86,12 @@
       <ComponentGroupRef Id="ApiFiles" />
       <ComponentGroupRef Id="WebFiles" />
       <ComponentGroupRef Id="CliFiles" />
+
+      <!-- Opt-in Firewall Feature (Level 2 = off by default when INSTALLLEVEL=1) -->
+      <Feature Id="FirewallFeature" Title="Configure Windows Firewall Exception" Level="2"
+               Description="Adds inbound Windows Firewall rules to allow other devices to connect to BeeMemoryBank on HTTP (5310) and HTTPS (5311) ports.">
+        <ComponentRef Id="FirewallRulesComponent" />
+      </Feature>
     </Feature>
 
   </Package>
