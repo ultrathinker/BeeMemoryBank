@@ -42,15 +42,15 @@ public class SourcePathsGuardTests
     // location. The line number anchors to the explanatory COMMENT above the actual code
     // line ("// §73-89: Rescue legacy data..."), not the code line itself, because the
     // comment's own prose contains "AppContext.BaseDirectory" and the regex's line-number
-    // calculation picks the FIRST occurrence within the matched span. It shifts whenever
-    // code is added ABOVE it in the file (moved once already when
-    // feat/4-profile-switching added the INodeLifecycleService interface above the class)
-    // - re-run the test and read the reported offender before assuming a failure here is a
-    // real regression.
+    // calculation picks the FIRST occurrence within the matched span. It has already shifted
+    // TWICE from code added above it in the same file (feat/4-profile-switching's
+    // INodeLifecycleService interface, then the orchestrator's own single-flight-gate fix
+    // for the Codex Этап 4 review) - this is not a one-time fixup, re-check with `grep -n`
+    // every time this file changes above the comment, not just once.
     private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase)
     {
         // Stage 2 rescue sources — intentionally reference the legacy Velopack path as read-only source
-        "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:80",
+        "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:109",
         "desktop/BeeMemoryBank.Node/Program.cs:156",
         // Stage 3 transit guards — same rationale
         "desktop/BeeMemoryBank.Desktop/Program.cs:28",
