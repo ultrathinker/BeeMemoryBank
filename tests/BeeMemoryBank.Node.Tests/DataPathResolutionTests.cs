@@ -46,6 +46,97 @@ public class DataPathResolutionTests : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// Writes a minimal file with a valid SQLite magic header (what LegacyDataRescue treats as a
+    /// "valid legacy database"), so we can prove the rescue is gated on the target being the
+    /// DEFAULT vault — not on whether a legacy DB happens to exist.
+    /// </summary>
+    private static void WriteValidSqliteMagic(string path)
+    {
+        var magic = System.Text.Encoding.ASCII.GetBytes("SQLite format 3\0");
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+        fs.Write(magic, 0, magic.Length);
+        // Pad so it looks like a non-empty DB (matches LegacyDataRescueTests' helper).
+        fs.Write(new byte[4096], 0, 4096);
+    }
+
+    // ── Этап 6, §6 пункт 1.3 — rescue is a no-op for non-default vaults ─────────
+
+    /// <summary>
+    /// Fix #4 regression guard: <c>LegacyDataRescue.TryRescue</c> must NOT be invoked at all
+    /// when the resolved data directory is anything other than the canonical default vault —
+    /// even if a perfectly valid legacy database is sitting in <c>&lt;AppContext.BaseDirectory&gt;/data</c>.
+    /// An explicit second profile's vault (or any portable/alternate install path) represents a
+    /// deliberate operator choice and must never be silently mutated by the rescue.
+    /// </summary>
+    [Fact]
+    public async Task RunOrchestratorAsync_NonDefaultExplicitVaultDir_DoesNotTriggerRescue_EvenWithValidLegacyDb()
+    {
+        // 1) Plant a VALID legacy database exactly where Program.cs looks for it.
+        var legacyDir = Path.Combine(AppContext.BaseDirectory, "data");
+        var legacyExistedBefore = Directory.Exists(legacyDir);
+        var legacyDbPath = Path.Combine(legacyDir, "beememorybank.db");
+        Directory.CreateDirectory(legacyDir);
+        WriteValidSqliteMagic(legacyDbPath);
+
+        // 2) Sandbox LOCALAPPDATA: keeps BmbPaths.DefaultVaultDir + any rescue logs hermetic AND
+        //    guarantees the canonical default dir is a different physical path from our explicit
+        //    non-default target.
+        var fakeLocalAppData = GetTempPath("bmb-fakela");
+        Directory.CreateDirectory(fakeLocalAppData);
+        var originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
+
+        var nonDefaultTarget = GetTempPath("bmb-nondvault");
+        Directory.CreateDirectory(nonDefaultTarget);
+
+        try
+        {
+            // Setup invariant: the explicit target is genuinely NOT the canonical default vault
+            // (otherwise this guard test would be meaningless).
+            var canonicalDefault = Path.GetFullPath(BmbPaths.DefaultVaultDir);
+            string.Equals(
+                Path.GetFullPath(nonDefaultTarget), canonicalDefault,
+                StringComparison.OrdinalIgnoreCase).Should().BeFalse(
+                    "test setup: the explicit target must NOT equal the canonical default vault");
+
+            // Act — auto-discovery will fail (no api/web siblings under the test bin dir), but the
+            // rescue guard runs strictly BEFORE auto-discovery, so exit code 1 still exercises it.
+            var exitCode = await Program.RunOrchestratorAsync(
+                isAutoMode: true,
+                dataDirectory: nonDefaultTarget,
+                configPath: null,
+                stopToken: CancellationToken.None);
+
+            exitCode.Should().Be(1);
+
+            // Assert — CRITICAL: rescue must NOT have fired for a non-default vault.
+            File.Exists(Path.Combine(nonDefaultTarget, "beememorybank.db")).Should().BeFalse(
+                "rescue must not copy a legacy DB into an explicitly non-default vault");
+            File.Exists(Path.Combine(nonDefaultTarget, "rescued-from.json")).Should().BeFalse(
+                "no rescue marker may be written into a non-default vault");
+
+            // No rescue log must exist either (the migration log is only written when rescue runs).
+            var migrationDir = Path.Combine(fakeLocalAppData, "BeeMemoryBankData", "migration");
+            var rescueLogs = Directory.Exists(migrationDir)
+                ? Directory.GetFiles(migrationDir, "rescue-*.log")
+                : Array.Empty<string>();
+            rescueLogs.Should().BeEmpty(
+                "no rescue log may exist — TryRescue must never have been called for a non-default vault");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", originalLocalAppData);
+
+            // Only remove the legacy dir WE created; never clobber a pre-existing one.
+            if (!legacyExistedBefore)
+            {
+                try { if (Directory.Exists(legacyDir)) Directory.Delete(legacyDir, recursive: true); }
+                catch { /* best-effort cleanup */ }
+            }
+        }
+    }
+
     [Fact]
     public async Task RunOrchestratorAsync_ExplicitDataArg_ShouldWinOverEnvAndDefault()
     {

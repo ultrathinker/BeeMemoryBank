@@ -366,6 +366,45 @@ public class ProfileSwitchServiceTests : IDisposable
             "the other must be rejected as already-in-progress, not silently queued or corrupted");
     }
 
+    // ── Scenario 8: lastUsed is PERSISTED to disk — a restart after a switch reopens the right profile ──
+
+    /// <summary>
+    /// Этап 6, §6 пункт 2.3: after a REAL switch via <see cref="ProfileSwitchService.SwitchToAsync"/>
+    /// (not a direct <see cref="ProfileService.SetLastUsed"/> call), the <c>lastUsedProfileId</c>
+    /// must be physically persisted to <c>profiles.json</c> on disk — so that if the process is
+    /// killed immediately after the switch, the next launch still reopens the switched-to profile.
+    /// The existing tests only assert the in-memory <see cref="ProfileService.LastUsedProfileId"/>
+    /// getter; this one reopens the SAME registry file through a brand-new ProfileService to prove
+    /// the write actually reached disk.
+    /// </summary>
+    [Fact]
+    public async Task SuccessfulSwitch_PersistsLastUsedToDisk_SurvivesProcessRestart()
+    {
+        var (svc, a, b, dir) = CreateTwoProfiles();
+        var profilesPath = Path.Combine(dir, "profiles.json");
+        var lifecycle = new FakeNodeLifecycle();
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        // Precondition: before the switch, lastUsed points at A.
+        svc.LastUsedProfileId.Should().Be(a.Id);
+
+        // A → B succeeds.
+        var result = await switchSvc.SwitchToAsync(b.Id, currentProfileId: a.Id, activeFrontUrl: null,
+            new FakeCookieClearer(), progress: null, CancellationToken.None);
+        result.Success.Should().BeTrue();
+
+        // Simulate a process restart: a BRAND-NEW ProfileService over the SAME profiles.json file.
+        var restarted = new ProfileService(
+            profilesPath,
+            defaultVaultDir: Path.Combine(dir, "vault-a"),
+            vaultsParentDir: dir);
+
+        restarted.GetLastUsedOrDefault().Id.Should().Be(b.Id,
+            "lastUsedProfileId must be physically persisted to profiles.json so that a restart " +
+            "right after a switch reopens the switched-to profile, not the pre-switch one");
+        restarted.LastUsedProfileId.Should().Be(b.Id);
+    }
+
     // ── Cancellation: an already-cancelled token refuses the switch before touching anything ──
 
     [Fact]
