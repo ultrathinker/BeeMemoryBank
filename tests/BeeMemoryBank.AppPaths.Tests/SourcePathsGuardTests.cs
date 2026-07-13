@@ -20,15 +20,10 @@ public class SourcePathsGuardTests
         @"(?s)(?:AppContext\.BaseDirectory(?:[^\n]*\n){0,3}[^\n]*?""data"")|(?:""data""(?:[^\n]*\n){0,3}[^\n]*?AppContext\.BaseDirectory)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // TEMPORARY ALLOWLIST:
-    // TODO: Remove these from allowlist after merge of feat/1-desktop-paths and feat/1-node-default-path
-    private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "desktop/BeeMemoryBank.Desktop/App.axaml.cs:162",
-        "desktop/BeeMemoryBank.Desktop/MainWindow.axaml.cs:60",
-        "desktop/BeeMemoryBank.Desktop/Services/PreventSleepService.cs:27",
-        "desktop/BeeMemoryBank.Node/Program.cs:112"
-    };
+    // feat/1-desktop-paths and feat/1-node-default-path (the four known pre-existing sites) are
+    // merged - no allowlist needed anymore. A newly-added entry here should be treated as a real
+    // regression, not silenced.
+    private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase);
 
     private static string FindRepoRoot()
     {
