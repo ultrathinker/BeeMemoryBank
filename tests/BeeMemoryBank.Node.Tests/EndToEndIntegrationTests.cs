@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -168,5 +169,160 @@ public class EndToEndIntegrationTests : IDisposable
         // Verify status files are cleaned up
         File.Exists(statusPath).Should().BeFalse();
         File.Exists(runtimePath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task E2E_GracefulStop_ViaStdinLifeline()
+    {
+        // 1. Setup child process configs for the orchestrator using StubProcess
+        var apiReadyFile = Path.Combine(_testDataDir, "api.ready");
+        var webReadyFile = Path.Combine(_testDataDir, "web.ready");
+
+        var config = new NodeConfig(
+            DataDirectory: _testDataDir,
+            Children: new List<ChildConfig>
+            {
+                new ChildConfig(
+                    ApplicationName: "BeeMemoryBank.Api",
+                    ExecutablePath: "dotnet",
+                    WorkingDirectory: AppContext.BaseDirectory,
+                    ReadyFilePath: apiReadyFile,
+                    Arguments: $"\"{_stubDllPath}\" --ready-file \"{apiReadyFile}\" --app-name BeeMemoryBank.Api --urls http://127.0.0.1:9095"
+                ),
+                new ChildConfig(
+                    ApplicationName: "BeeMemoryBank.Web",
+                    ExecutablePath: "dotnet",
+                    WorkingDirectory: AppContext.BaseDirectory,
+                    ReadyFilePath: webReadyFile,
+                    Arguments: $"\"{_stubDllPath}\" --ready-file \"{webReadyFile}\" --app-name BeeMemoryBank.Web --urls http://127.0.0.1:9096"
+                )
+            }
+        );
+
+        var configPath = Path.Combine(_testDataDir, "node.config.json");
+        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(config));
+
+        // 2. Locate the BeeMemoryBank.Node.exe executable
+        var nodeExeName = OperatingSystem.IsWindows() ? "BeeMemoryBank.Node.exe" : "BeeMemoryBank.Node";
+        var nodeExePath = Path.Combine(AppContext.BaseDirectory, nodeExeName);
+        File.Exists(nodeExePath).Should().BeTrue($"Node executable not found at: {nodeExePath}");
+
+        // 3. Start BeeMemoryBank.Node.exe process with RedirectStandardInput = true and BMB_STDIN_LIFELINE=1
+        var outputLines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var errorLines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = nodeExePath,
+            Arguments = $"\"{configPath}\"", // Run with our temp config
+            WorkingDirectory = AppContext.BaseDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.EnvironmentVariables["BMB_STDIN_LIFELINE"] = "1";
+
+        using var nodeProcess = new Process { StartInfo = psi };
+        nodeProcess.OutputDataReceived += (s, e) => { if (e.Data != null) outputLines.Enqueue(e.Data); };
+        nodeProcess.ErrorDataReceived += (s, e) => { if (e.Data != null) errorLines.Enqueue(e.Data); };
+
+        nodeProcess.Start().Should().BeTrue();
+        nodeProcess.BeginOutputReadLine();
+        nodeProcess.BeginErrorReadLine();
+
+        // 4. Wait for node.status.json to appear and report "Ready"
+        var statusPath = Path.Combine(_testDataDir, "node.status.json");
+        var startTime = DateTime.UtcNow;
+        var timeout = TimeSpan.FromSeconds(30);
+        bool isReady = false;
+
+        while (DateTime.UtcNow - startTime < timeout)
+        {
+            if (File.Exists(statusPath))
+            {
+                try
+                {
+                    var statusJson = await File.ReadAllTextAsync(statusPath);
+                    var status = JsonSerializer.Deserialize<NodeStatus>(statusJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                    if (status?.Status == "Ready")
+                    {
+                        isReady = true;
+                        break;
+                    }
+                }
+                catch
+                {
+                    // Ignore transient file read issues
+                }
+            }
+            await Task.Delay(200);
+        }
+
+        if (!isReady)
+        {
+            Console.WriteLine("=== NODE OUT ===");
+            foreach (var line in outputLines) Console.WriteLine(line);
+            Console.WriteLine("=== NODE ERR ===");
+            foreach (var line in errorLines) Console.WriteLine(line);
+        }
+        isReady.Should().BeTrue("Node process should have reached 'Ready' status.");
+
+        // Check that the child processes were started (their PIDs will be in node.status.json or we check process existence)
+        var statusJsonFinal = await File.ReadAllTextAsync(statusPath);
+        var statusObj = JsonSerializer.Deserialize<NodeStatus>(statusJsonFinal, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        statusObj.Should().NotBeNull();
+        statusObj!.Children.Should().HaveCount(2);
+
+        var childPids = statusObj.Children.Values.Select(c => c.Pid).ToList();
+        childPids.Should().HaveCount(2);
+
+        // Verify that the child processes are indeed running
+        var runningChildren = childPids.Select(pid => {
+            try { return Process.GetProcessById(pid); } catch { return null; }
+        }).ToList();
+        runningChildren.Should().OnlyContain(p => p != null && !p.HasExited);
+
+        // 5. Close the Node's stdin to trigger EOF and graceful shutdown
+        nodeProcess.StandardInput.Close();
+
+        // 6. Wait for the Node process to exit
+        var sw = Stopwatch.StartNew();
+        bool exited = false;
+        while (sw.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            if (nodeProcess.HasExited)
+            {
+                exited = true;
+                break;
+            }
+            await Task.Delay(100);
+        }
+
+        if (!exited || nodeProcess.ExitCode != 0)
+        {
+            try
+            {
+                var tempPath = Path.GetTempPath();
+                File.WriteAllLines(Path.Combine(tempPath, "node-stdout.log"), outputLines);
+                File.WriteAllLines(Path.Combine(tempPath, "node-stderr.log"), errorLines);
+            }
+            catch { }
+        }
+
+        exited.Should().BeTrue("Node process should have exited gracefully after stdin was closed.");
+        nodeProcess.ExitCode.Should().Be(0, "Node process should exit with code 0 on graceful shutdown.");
+
+        // 7. Verify that children processes also exited gracefully
+        foreach (var proc in runningChildren)
+        {
+            proc.Should().NotBeNull();
+            proc!.HasExited.Should().BeTrue("Child processes of Node should have exited after Node shutdown.");
+        }
+
+        // 8. Verify status files on disk are cleaned up
+        File.Exists(statusPath).Should().BeFalse("node.status.json should be deleted.");
+        File.Exists(Path.Combine(_testDataDir, ".runtime.json")).Should().BeFalse(".runtime.json should be deleted.");
     }
 }
