@@ -182,7 +182,12 @@ public static class Program
             )).ToList();
         }
 
-        using var orchestrator = new NodeOrchestrator(resolvedDataDirectory, childConfigs);
+        var apiConfig = childConfigs.FirstOrDefault(c => c.ApplicationName == "BeeMemoryBank.Api");
+        var webConfig = childConfigs.FirstOrDefault(c => c.ApplicationName == "BeeMemoryBank.Web");
+
+        using var orchestrator = (isAutoMode && apiConfig != null && webConfig != null)
+            ? new NodeOrchestrator(resolvedDataDirectory, new List<ChildProcessConfig> { apiConfig })
+            : new NodeOrchestrator(resolvedDataDirectory, childConfigs);
 
         WebApplication? app = null;
         var tcs = new TaskCompletionSource<int>();
@@ -242,6 +247,27 @@ public static class Program
         {
             Console.WriteLine($"[Node] Launching children with lock on data dir: '{resolvedDataDirectory}'...");
             await orchestrator.StartAsync(stopToken);
+
+            if (isAutoMode && apiConfig != null && webConfig != null)
+            {
+                if (!orchestrator.ReadyChildren.TryGetValue("BeeMemoryBank.Api", out var apiReadyInfo))
+                {
+                    throw new InvalidOperationException("Api ready info not found after orchestrator started.");
+                }
+                var apiUrl = apiReadyInfo.Urls.FirstOrDefault()
+                    ?? throw new InvalidOperationException("Api child process has no registered URLs.");
+
+                Console.WriteLine($"[Node] Api resolved URL: {apiUrl}. Injecting into Web environment...");
+
+                var updatedWebEnv = new Dictionary<string, string>(webConfig.EnvironmentVariables ?? new Dictionary<string, string>());
+                updatedWebEnv["BMB_API_URL"] = apiUrl;
+
+                var updatedWebConfig = webConfig with { EnvironmentVariables = updatedWebEnv };
+
+                orchestrator.StartAdditionalChild(updatedWebConfig);
+
+                await orchestrator.WaitForAllReadyOrFailureAsync(stopToken);
+            }
 
             Console.WriteLine("[Node] Orchestrator started. Building and starting front...");
             // Default to the plan's designated port (127.0.0.1:5310, distinct from

@@ -19,7 +19,7 @@ public class NodeOrchestrator : IDisposable
 
     private DirectoryLock? _directoryLock;
     private CancellationTokenSource? _lifecycleCts;
-    private Task? _orchestrationTask;
+    private readonly List<Task> _childTasks = new();
     private bool _isStopping;
     private bool _hasFailed;
     private WindowsJobObject? _jobObject;
@@ -99,24 +99,34 @@ public class NodeOrchestrator : IDisposable
             throw;
         }
 
-        // Prepare monitored children
-        foreach (var config in _configs)
+        lock (_lock)
         {
-            _children.Add(new MonitoredChild(config));
+            // Prepare monitored children
+            foreach (var config in _configs)
+            {
+                _children.Add(new MonitoredChild(config));
+            }
+        }
+
+        // Start lifecycle tasks
+        foreach (var child in _children)
+        {
+            var task = RunChildLifecycleAsync(child, _lifecycleCts.Token);
+            lock (_lock)
+            {
+                _childTasks.Add(task);
+            }
         }
 
         // With zero children, no per-child lifecycle loop will ever run to report readiness,
         // so the "all ready" check must be triggered here instead or it would never resolve.
         CheckAndPublishOverallStatus();
 
-        // Start the lifecycle tasks in the background
-        _orchestrationTask = RunOrchestrationLifecycleAsync(_lifecycleCts.Token);
-
         // Wait until all children are ready, or orchestration fails/cancels
         await WaitForAllReadyOrFailureAsync(cancellationToken);
     }
 
-    private async Task WaitForAllReadyOrFailureAsync(CancellationToken cancellationToken)
+    public async Task WaitForAllReadyOrFailureAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -136,20 +146,33 @@ public class NodeOrchestrator : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private async Task RunOrchestrationLifecycleAsync(CancellationToken token)
+    public void StartAdditionalChild(ChildProcessConfig config)
     {
-        var tasks = _children.Select(child => RunChildLifecycleAsync(child, token)).ToList();
-        try
+        MonitoredChild child;
+        CancellationToken token;
+
+        lock (_lock)
         {
-            await Task.WhenAll(tasks);
+            if (_lifecycleCts == null || _lifecycleCts.IsCancellationRequested)
+            {
+                throw new InvalidOperationException("Orchestrator is not running.");
+            }
+
+            child = new MonitoredChild(config);
+            _children.Add(child);
+            AllReady = false;
+
+            // Delete the status file since not all children are ready now
+            _statusManager.DeleteStatus();
+            
+            token = _lifecycleCts.Token;
         }
-        catch (OperationCanceledException)
+
+        var task = RunChildLifecycleAsync(child, token);
+
+        lock (_lock)
         {
-            // Normal shutdown or abort
-        }
-        catch (Exception ex)
-        {
-            TriggerCriticalFailure($"Orchestration thread encountered an unexpected error: {ex.Message}");
+            _childTasks.Add(task);
         }
     }
 
@@ -460,14 +483,16 @@ public class NodeOrchestrator : IDisposable
 
         await Task.WhenAll(stopTasks);
 
-        if (_orchestrationTask != null)
+        List<Task> childTasksCopy;
+        lock (_lock)
         {
-            try
-            {
-                await _orchestrationTask;
-            }
-            catch { }
+            childTasksCopy = _childTasks.ToList();
         }
+        try
+        {
+            await Task.WhenAll(childTasksCopy);
+        }
+        catch { }
 
         // Clean files
         _statusManager.DeleteStatus();
