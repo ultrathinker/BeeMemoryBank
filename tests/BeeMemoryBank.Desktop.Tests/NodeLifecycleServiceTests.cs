@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Desktop.Services;
 using FluentAssertions;
 using Xunit;
@@ -240,6 +241,107 @@ public class NodeLifecycleServiceTests
                 KillPidIfAlive(spawnedPid.Value);
             }
             try { Directory.Delete(dataDir, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Writes a minimal file with a valid SQLite magic header — what <c>LegacyDataRescue</c>
+    /// treats as a "valid legacy database" — mirroring the helper in
+    /// BeeMemoryBank.Node.Tests/DataPathResolutionTests.cs.
+    /// </summary>
+    private static void WriteValidSqliteMagic(string path)
+    {
+        var magic = System.Text.Encoding.ASCII.GetBytes("SQLite format 3\0");
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+        fs.Write(magic, 0, magic.Length);
+        fs.Write(new byte[4096], 0, 4096);
+    }
+
+    // ── Этап 6 Codex-review fix — rescue must not fire for a non-default vault ─
+
+    /// <summary>
+    /// Regression guard for the Этап 6 review finding: <c>StartOrAttachAsync</c> (the DESKTOP
+    /// side, used for every profile — not just the default one) must gate
+    /// <c>LegacyDataRescue.TryRescue</c> on the target being the canonical default vault, exactly
+    /// like <c>desktop/BeeMemoryBank.Node/Program.cs</c> already does. Before this fix, a brand
+    /// new non-default profile's FIRST start would find its own vault empty and the legacy DB
+    /// still on disk, and would silently copy the legacy data into it — defeating multi-account
+    /// isolation for every newly created profile. This test proves a non-default target is left
+    /// untouched even though a perfectly valid legacy database is present.
+    /// </summary>
+    [Fact]
+    public async Task StartOrAttachAsync_NonDefaultVaultDir_DoesNotRescueLegacyData_EvenWithValidLegacyDb()
+    {
+        if (!File.Exists(StubExePath))
+        {
+            throw new FileNotFoundException($"Stub process exe not found at: {StubExePath}.");
+        }
+
+        // 1) Plant a VALID legacy database exactly where StartOrAttachAsync looks for it. This is
+        // shared test-output state, so back up any pre-existing content wholesale instead of just
+        // tracking whether the directory existed.
+        var legacyDir = Path.Combine(AppContext.BaseDirectory, "data");
+        string? legacyBackupDir = null;
+        if (Directory.Exists(legacyDir))
+        {
+            legacyBackupDir = legacyDir + ".bak-" + Guid.NewGuid().ToString("N");
+            Directory.Move(legacyDir, legacyBackupDir);
+        }
+        Directory.CreateDirectory(legacyDir);
+        WriteValidSqliteMagic(Path.Combine(legacyDir, "beememorybank.db"));
+
+        // 2) Sandbox LOCALAPPDATA so the canonical default vault dir is guaranteed to be a
+        // different physical path from our explicit non-default target below.
+        var fakeLocalAppData = Path.Combine(Path.GetTempPath(), "bmb-nls-fakela-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(fakeLocalAppData);
+        var originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
+
+        var dataDir = Path.Combine(Path.GetTempPath(), "bmb-nls-nondvault-" + Guid.NewGuid().ToString("N"));
+
+        var svc = new NodeLifecycleService
+        {
+            TestOnly_NodeExePathOverride = StubExePath,
+            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2)
+        };
+        int? spawnedPid = null;
+        svc.TestOnly_OnHostedProcessStarted = pid => spawnedPid = pid;
+
+        try
+        {
+            var canonicalDefault = Path.GetFullPath(BmbPaths.DefaultVaultDir);
+            string.Equals(
+                Path.GetFullPath(dataDir), canonicalDefault,
+                StringComparison.OrdinalIgnoreCase).Should().BeFalse(
+                    "test setup: the explicit target must NOT equal the canonical default vault");
+
+            // Act — the stub never satisfies the readiness probe, so this times out; the rescue
+            // guard runs strictly before that poll, so the timeout still exercises it.
+            var result = await svc.StartOrAttachAsync(dataDir, progress: null, CancellationToken.None);
+            result.Success.Should().BeFalse("the stub never satisfies the readiness probe, so this must time out");
+
+            // Assert — CRITICAL: rescue must NOT have fired for a non-default vault.
+            File.Exists(Path.Combine(dataDir, "beememorybank.db")).Should().BeFalse(
+                "rescue must not copy a legacy DB into an explicitly non-default vault");
+            File.Exists(Path.Combine(dataDir, "rescued-from.json")).Should().BeFalse(
+                "no rescue marker may be written into a non-default vault");
+        }
+        finally
+        {
+            if (spawnedPid.HasValue)
+            {
+                KillPidIfAlive(spawnedPid.Value);
+            }
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", originalLocalAppData);
+            try { Directory.Delete(dataDir, recursive: true); } catch { }
+
+            try { if (Directory.Exists(legacyDir)) Directory.Delete(legacyDir, recursive: true); }
+            catch { /* best-effort cleanup */ }
+            if (legacyBackupDir != null)
+            {
+                try { Directory.Move(legacyBackupDir, legacyDir); }
+                catch { /* best-effort restore */ }
+            }
         }
     }
 }

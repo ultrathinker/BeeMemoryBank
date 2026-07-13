@@ -108,16 +108,28 @@ public sealed class NodeLifecycleService : INodeLifecycleService
 
             // §73-89: Rescue legacy data (from <AppContext.BaseDirectory>\data) STRICTLY before
             // any host-or-attach logic. Legacy path = the old pre-Stage-1 default location.
-            progress?.Report("Checking for legacy data to rescue...");
-            var legacyDataDir = Path.Combine(AppContext.BaseDirectory, "data");
-            var rescueResult = LegacyDataRescue.TryRescue(legacyDataDir, dataDir);
-            if (rescueResult.Outcome == RescueOutcome.LegacyFoundButRescueFailed)
+            // Mirrors the same guard in desktop/BeeMemoryBank.Node/Program.cs (Fix #4): rescue
+            // only ever targets the canonical default vault. Without this guard, ANY profile's
+            // first start (not just the default one) would find the target vault empty and the
+            // legacy DB still sitting on disk, and would silently copy the legacy data into that
+            // profile too — defeating multi-account isolation for every newly created profile.
+            var canonicalDefaultDir = Path.GetFullPath(BmbPaths.DefaultVaultDir);
+            var isDefaultVaultDir = string.Equals(
+                Path.GetFullPath(dataDir), canonicalDefaultDir, StringComparison.OrdinalIgnoreCase);
+
+            if (isDefaultVaultDir)
             {
-                return NodeLifecycleResult.Error(
-                    $"Legacy data rescue failed — cannot start with an empty vault.\n\n" +
-                    $"Source: {legacyDataDir}\n" +
-                    $"Reason: {rescueResult.Message}\n\n" +
-                    "Please free up the data directory (e.g. stop any running BeeMemoryBank node) and retry.");
+                progress?.Report("Checking for legacy data to rescue...");
+                var legacyDataDir = Path.Combine(AppContext.BaseDirectory, "data");
+                var rescueResult = LegacyDataRescue.TryRescue(legacyDataDir, dataDir);
+                if (rescueResult.Outcome == RescueOutcome.LegacyFoundButRescueFailed)
+                {
+                    return NodeLifecycleResult.Error(
+                        $"Legacy data rescue failed — cannot start with an empty vault.\n\n" +
+                        $"Source: {legacyDataDir}\n" +
+                        $"Reason: {rescueResult.Message}\n\n" +
+                        "Please free up the data directory (e.g. stop any running BeeMemoryBank node) and retry.");
+                }
             }
 
             progress?.Report("Probing existing node instance...");

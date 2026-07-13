@@ -72,9 +72,18 @@ public class DataPathResolutionTests : IDisposable
     [Fact]
     public async Task RunOrchestratorAsync_NonDefaultExplicitVaultDir_DoesNotTriggerRescue_EvenWithValidLegacyDb()
     {
-        // 1) Plant a VALID legacy database exactly where Program.cs looks for it.
+        // 1) Plant a VALID legacy database exactly where Program.cs looks for it. This directory
+        // is shared test-output state (<AppContext.BaseDirectory>/data), so if it already exists
+        // (e.g. a leftover from another test/run), move its ENTIRE contents aside rather than
+        // just noting "it existed" — a bare existence flag would leave the real prior contents
+        // clobbered by our WriteValidSqliteMagic write and never restored.
         var legacyDir = Path.Combine(AppContext.BaseDirectory, "data");
-        var legacyExistedBefore = Directory.Exists(legacyDir);
+        string? legacyBackupDir = null;
+        if (Directory.Exists(legacyDir))
+        {
+            legacyBackupDir = legacyDir + ".bak-" + Guid.NewGuid().ToString("N");
+            Directory.Move(legacyDir, legacyBackupDir);
+        }
         var legacyDbPath = Path.Combine(legacyDir, "beememorybank.db");
         Directory.CreateDirectory(legacyDir);
         WriteValidSqliteMagic(legacyDbPath);
@@ -128,11 +137,14 @@ public class DataPathResolutionTests : IDisposable
         {
             Environment.SetEnvironmentVariable("LOCALAPPDATA", originalLocalAppData);
 
-            // Only remove the legacy dir WE created; never clobber a pre-existing one.
-            if (!legacyExistedBefore)
+            // Remove the test fixture we created, then restore whatever was really there before.
+            try { if (Directory.Exists(legacyDir)) Directory.Delete(legacyDir, recursive: true); }
+            catch { /* best-effort cleanup */ }
+
+            if (legacyBackupDir != null)
             {
-                try { if (Directory.Exists(legacyDir)) Directory.Delete(legacyDir, recursive: true); }
-                catch { /* best-effort cleanup */ }
+                try { Directory.Move(legacyBackupDir, legacyDir); }
+                catch { /* best-effort restore */ }
             }
         }
     }

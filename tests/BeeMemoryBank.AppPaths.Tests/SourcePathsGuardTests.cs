@@ -39,18 +39,18 @@ public class SourcePathsGuardTests
     // EXCEPTION — feat/4-node-lifecycle:
     // The Stage 2 MainWindow.axaml.cs rescue call site moved verbatim into the new
     // NodeLifecycleService.cs during the 1:1 lifecycle extraction; same rationale, new
-    // location. The line number anchors to the explanatory COMMENT above the actual code
-    // line ("// §73-89: Rescue legacy data..."), not the code line itself, because the
-    // comment's own prose contains "AppContext.BaseDirectory" and the regex's line-number
-    // calculation picks the FIRST occurrence within the matched span. It has already shifted
-    // TWICE from code added above it in the same file (feat/4-profile-switching's
-    // INodeLifecycleService interface, then the orchestrator's own single-flight-gate fix
-    // for the Codex Этап 4 review) - this is not a one-time fixup, re-check with `grep -n`
-    // every time this file changes above the comment, not just once.
+    // location. The reported line has shifted THREE times from code added above it in the
+    // same file (feat/4-profile-switching's INodeLifecycleService interface, the
+    // orchestrator's own single-flight-gate fix for the Codex Этап 4 review, and the Этап 6
+    // review fix that added a default-vault guard around the call site) - this is not a
+    // one-time fixup, re-check with `grep -n` every time this file changes above the call
+    // site, not just once. As of the Этап 6 fix, the comment/code gap is wide enough that the
+    // regex now anchors directly to the actual call-site LINE (not an explanatory comment
+    // above it), since the {0,3}-newline lookahead no longer bridges the two.
     private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase)
     {
         // Stage 2 rescue sources — intentionally reference the legacy Velopack path as read-only source
-        "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:109",
+        "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:123",
         "desktop/BeeMemoryBank.Node/Program.cs:156",
         // Stage 3 transit guards — same rationale
         "desktop/BeeMemoryBank.Desktop/Program.cs:28",

@@ -7,14 +7,15 @@
     packId (BmbSmokeUpdateTest) so the real BeeMemoryBank installation is never touched.
 
     IMPORTANT NOTE ON DATA DIRECTORY SANDBOXING:
-    BmbPaths.Root is computed via Environment.GetFolderPath(SpecialFolder.LocalApplicationData),
-    which reads from the Windows registry CSIDL/KnownFolderID and is NOT overridable via the
-    LOCALAPPDATA environment variable -- even for freshly spawned child processes.
-    This was verified empirically: launching a child .exe with
-    ProcessStartInfo.EnvironmentVariables["LOCALAPPDATA"] = "C:\SandboxPath" still results in
-    GetFolderPath returning the real %LOCALAPPDATA%.
+    BmbPaths.Root (libs/BeeMemoryBank.AppPaths/BmbPaths.cs) now prefers the LOCALAPPDATA
+    environment variable over Environment.GetFolderPath(SpecialFolder.LocalApplicationData) when
+    it is set, so a sandboxed LOCALAPPDATA passed to the bmbd child process WOULD be honored.
+    This script still exercises the REAL %LOCALAPPDATA%\BeeMemoryBankData rather than a sandbox,
+    because the whole point of this smoke test is to prove real Velopack apply/uninstall behavior
+    against the actual install-and-update lifecycle a real user goes through on this machine, not
+    against a synthetic stand-in.
 
-    Therefore this script uses a BACKUP/RESTORE strategy:
+    Therefore this script uses a BACKUP/RESTORE strategy instead of a LOCALAPPDATA sandbox:
       1. Any real %LOCALAPPDATA%\BeeMemoryBankData is backed up before the test run.
       2. Test scenarios use the real directory.
       3. After the test, the test directory is cleaned and the real backup is restored.
@@ -99,6 +100,21 @@ function New-MinimalSqliteFile {
     # byte 16 (page size MSB) = 0x10, byte 17 = 0x00 -> page size 4096
     $header[16] = 0x10
     [System.IO.File]::WriteAllBytes($Path, $header)
+}
+
+# Recursively snapshots a directory as a map of relative-path -> SHA256 hash, so a caller can
+# prove NOTHING inside changed (not just that a couple of marker files survived). Returns an
+# ordered, sorted hashtable-like string (one "path=hash" line per file) so two snapshots can be
+# compared with a straight string/array comparison.
+function Get-DirSnapshot {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return @() }
+    $root = (Resolve-Path $Path).Path
+    Get-ChildItem -Path $root -Recurse -File | Sort-Object FullName | ForEach-Object {
+        $rel = $_.FullName.Substring($root.Length).TrimStart('\', '/')
+        $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash
+        "$rel=$hash"
+    }
 }
 
 # Escape a single argument for Windows CreateProcess (CommandLine string).
@@ -779,6 +795,12 @@ Write-Host "  Default storage marker (from Step 11-13): $LegacyGuid11"
 
 $VaultCountBeforeS14 = (Get-ChildItem $RealVaultsDir -Directory | Measure-Object).Count
 
+# Full-content snapshot (relative path + SHA256 per file) of BOTH vaults before the apply.
+# Marker-file + count checks alone would miss a regression that rewrites/deletes
+# beememorybank.db or other vault files while happening to leave the marker files untouched.
+$DefaultSnapshotBeforeS14 = Get-DirSnapshot -Path $RealDefaultVault
+$SecondSnapshotBeforeS14  = Get-DirSnapshot -Path $SecondVaultDir
+
 # Re-apply v1.0.1 (repair semantics, same real Update.exe apply path as Steps 7/10) with
 # BOTH storages present.
 Write-Host "  Re-applying v1.0.1 with two storages present..."
@@ -788,6 +810,17 @@ Assert-True ($ec -eq 0) "Step 14 apply exit code = 0 (got $ec)"
 # Neither storage's marker may have moved, changed, or vanished.
 Assert-FileContains -FilePath $DefaultMarker11 -Marker $LegacyGuid11 -Label "Step 14 default storage untouched"
 Assert-FileContains -FilePath $SecondVaultMarkerFile -Marker $SecondVaultGuid -Label "Step 14 second storage untouched"
+
+# Full-content re-snapshot: every file's relative path AND hash must match exactly, proving
+# the apply touched nothing inside either vault -- not just the two marker files above.
+$DefaultSnapshotAfterS14 = Get-DirSnapshot -Path $RealDefaultVault
+$SecondSnapshotAfterS14  = Get-DirSnapshot -Path $SecondVaultDir
+$DefaultSnapshotDiff = Compare-Object $DefaultSnapshotBeforeS14 $DefaultSnapshotAfterS14
+$SecondSnapshotDiff  = Compare-Object $SecondSnapshotBeforeS14 $SecondSnapshotAfterS14
+Assert-True ($null -eq $DefaultSnapshotDiff) "Step 14: default vault byte-identical after apply (full content snapshot)"
+Assert-True ($null -eq $SecondSnapshotDiff) "Step 14: second vault byte-identical after apply (full content snapshot)"
+if ($DefaultSnapshotDiff) { $DefaultSnapshotDiff | ForEach-Object { Write-Host "    DIFF (default vault): $_" } }
+if ($SecondSnapshotDiff) { $SecondSnapshotDiff | ForEach-Object { Write-Host "    DIFF (second vault): $_" } }
 
 # The update must not have created or removed any vault directory as a side effect.
 $VaultCountAfterS14 = (Get-ChildItem $RealVaultsDir -Directory | Measure-Object).Count
