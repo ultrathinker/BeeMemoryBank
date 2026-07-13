@@ -752,19 +752,62 @@ Assert-FileContains -FilePath $DefaultMarker11 -Marker $LegacyGuid11 -Label "Ste
 Write-Pass "Step 13: negative scenario -- no-op, data untouched"
 
 # ---------------------------------------------------------------------------
-# Step 14: Uninstall throwaway package
+# Step 14: Two-storage scenario (Superplan section 6 Stage 6, point 3 / section 7 point 8):
+#   an update/repair must not touch ANY storage, not just the default one.
+# ---------------------------------------------------------------------------
+# Default vault (vaults\default) already holds LegacyGuid11 from Steps 11-13 and was just
+# proven untouched across Steps 10/13's own applies. This step adds a SECOND, independent
+# vault directory and proves a real Update.exe apply leaves BOTH alone -- the update wipes
+# and rebuilds current\ only; %LOCALAPPDATA%\BeeMemoryBankData\vaults\ is a sibling of the
+# Velopack install root entirely, so this should hold regardless of how many vaults exist
+# under it, but "should" is exactly the kind of claim this whole script exists to verify
+# empirically rather than trust by inspection.
+
+Write-Step "Step 14: Two-storage scenario (update must not touch either storage)"
+
+$SecondVaultDir = Join-Path $RealVaultsDir "smoke-second-storage"
+$SecondVaultDb  = Join-Path $SecondVaultDir "beememorybank.db"
+$SecondVaultMarkerFile = Join-Path $SecondVaultDir "smoke-marker-s14-second.txt"
+$SecondVaultGuid = [System.Guid]::NewGuid().ToString()
+
+New-Item -ItemType Directory -Path $SecondVaultDir -Force | Out-Null
+New-MinimalSqliteFile -Path $SecondVaultDb
+Set-Content -Path $SecondVaultMarkerFile -Value $SecondVaultGuid -Encoding ASCII
+Write-Host "  Second storage dir   : $SecondVaultDir"
+Write-Host "  Second storage marker: $SecondVaultGuid"
+Write-Host "  Default storage marker (from Step 11-13): $LegacyGuid11"
+
+$VaultCountBeforeS14 = (Get-ChildItem $RealVaultsDir -Directory | Measure-Object).Count
+
+# Re-apply v1.0.1 (repair semantics, same real Update.exe apply path as Steps 7/10) with
+# BOTH storages present.
+Write-Host "  Re-applying v1.0.1 with two storages present..."
+$ec = Invoke-Exe -Exe $UpdateExe -ExeArgs @("apply", "--package", $NupkgV101.FullName, "--norestart", "--silent") -TimeoutSec 120 -ShowOutput
+Assert-True ($ec -eq 0) "Step 14 apply exit code = 0 (got $ec)"
+
+# Neither storage's marker may have moved, changed, or vanished.
+Assert-FileContains -FilePath $DefaultMarker11 -Marker $LegacyGuid11 -Label "Step 14 default storage untouched"
+Assert-FileContains -FilePath $SecondVaultMarkerFile -Marker $SecondVaultGuid -Label "Step 14 second storage untouched"
+
+# The update must not have created or removed any vault directory as a side effect.
+$VaultCountAfterS14 = (Get-ChildItem $RealVaultsDir -Directory | Measure-Object).Count
+Assert-True ($VaultCountAfterS14 -eq $VaultCountBeforeS14) "Step 14: vault count unchanged by update ($VaultCountBeforeS14 before, $VaultCountAfterS14 after)"
+Write-Pass "Step 14: two-storage scenario -- update touched neither storage"
+
+# ---------------------------------------------------------------------------
+# Step 15: Uninstall throwaway package
 # ---------------------------------------------------------------------------
 
-Write-Step "Step 14: Uninstall throwaway package"
+Write-Step "Step 15: Uninstall throwaway package"
 if (Test-Path $UpdateExe) {
     Write-Host "  Running: Update.exe uninstall --silent"
     $ec = Invoke-Exe -Exe $UpdateExe -ExeArgs @("uninstall", "--silent") -TimeoutSec 60 -ShowOutput
     Write-Host "  Uninstall exit code: $ec"
     # Velopack schedules rmdir via cmd.exe, so the dir may not be gone yet; that is fine
-    Write-Pass "Step 14: uninstall command completed (exit $ec)"
+    Write-Pass "Step 15: uninstall command completed (exit $ec)"
 } else {
     Write-Host "  Update.exe not found (already gone?). Skipping."
-    Write-Pass "Step 14: (skipped, Update.exe already absent)"
+    Write-Pass "Step 15: (skipped, Update.exe already absent)"
 }
 
 # Allow a moment for the scheduled rmdir to run
@@ -803,7 +846,8 @@ Write-Host "  Step 10 : Repair scenario                  - PASS"
 Write-Host "  Step 11 : Legacy rescue + idempotency      - PASS"
 Write-Host "  Step 12 : Conflict scenario                - PASS"
 Write-Host "  Step 13 : Negative (no-op)                 - PASS"
-Write-Host "  Step 14 : Uninstall throwaway package      - PASS"
+Write-Host "  Step 14 : Two-storage scenario              - PASS"
+Write-Host "  Step 15 : Uninstall throwaway package      - PASS"
 Write-Host "  Cleanup : Restore original data            - PASS"
 Write-Host "================================================================"
 
