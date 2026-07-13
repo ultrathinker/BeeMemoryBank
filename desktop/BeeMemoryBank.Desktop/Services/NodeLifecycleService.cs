@@ -11,6 +11,18 @@ using BeeMemoryBank.AppPaths;
 namespace BeeMemoryBank.Desktop.Services;
 
 /// <summary>
+/// Abstraction over <see cref="NodeLifecycleService"/> used by orchestrators (notably
+/// <see cref="ProfileSwitchService"/>) so they can be unit-tested with a fake lifecycle
+/// instead of a real bmbd process. <see cref="NodeLifecycleService"/> implements this with
+/// no behavior change — the members mirror its public surface verbatim.
+/// </summary>
+public interface INodeLifecycleService
+{
+    Task<NodeLifecycleResult> StartOrAttachAsync(string dataDir, IProgress<string>? progress, CancellationToken ct);
+    Task StopAsync(TimeSpan gracefulTimeout, CancellationToken ct);
+}
+
+/// <summary>
 /// Outcome of a start-or-attach attempt. Deliberately UI-agnostic: it carries only the
 /// data the caller (MainWindow) needs to decide what to render — never any Avalonia types
 /// or a reference to a specific <c>Window</c>/<c>Dispatcher</c>.
@@ -35,7 +47,7 @@ public sealed record NodeLifecycleResult
 /// <c>Dispatcher</c>; it reports textual progress via <see cref="IProgress{T}"/> and
 /// returns a <see cref="NodeLifecycleResult"/>. The caller decides what to show on screen.
 /// </summary>
-public sealed class NodeLifecycleService
+public sealed class NodeLifecycleService : INodeLifecycleService
 {
     private Process? _nodeProcess;
 
