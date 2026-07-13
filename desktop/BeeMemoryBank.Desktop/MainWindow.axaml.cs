@@ -158,16 +158,83 @@ public partial class MainWindow : Window
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardInput = false,
-                    RedirectStandardOutput = false,
-                    RedirectStandardError = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
                     WorkingDirectory = Path.GetDirectoryName(nodeExePath)
                 };
 
-                var proc = Process.Start(startInfo);
-                if (proc == null)
+                // Simple log rotation: leave at most 10 bmbd-*.log files
+                try
+                {
+                    var logsDir = BeeMemoryBank.AppPaths.BmbPaths.LogsDir;
+                    var existingLogs = Directory.GetFiles(logsDir, "bmbd-*.log")
+                        .Select(f => new FileInfo(f))
+                        .OrderByDescending(f => f.LastWriteTimeUtc)
+                        .ToList();
+
+                    if (existingLogs.Count >= 10)
+                    {
+                        for (int i = 9; i < existingLogs.Count; i++)
+                        {
+                            try
+                            {
+                                existingLogs[i].Delete();
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.WriteLine($"Failed to delete old bmbd log file: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Failed to rotate logs: {ex.Message}");
+                }
+
+                var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+                var logPath = Path.Combine(BeeMemoryBank.AppPaths.BmbPaths.LogsDir, $"bmbd-{timestamp}.log");
+                var logLock = new object();
+
+                var proc = new Process { StartInfo = startInfo };
+
+                proc.OutputDataReceived += (s, e) =>
+                {
+                    if (e.Data != null)
+                    {
+                        lock (logLock)
+                        {
+                            try
+                            {
+                                File.AppendAllText(logPath, $"[OUT] {e.Data}{Environment.NewLine}");
+                            }
+                            catch { }
+                        }
+                    }
+                };
+
+                proc.ErrorDataReceived += (s, e) =>
+                {
+                    if (e.Data != null)
+                    {
+                        lock (logLock)
+                        {
+                            try
+                            {
+                                File.AppendAllText(logPath, $"[ERR] {e.Data}{Environment.NewLine}");
+                            }
+                            catch { }
+                        }
+                    }
+                };
+
+                if (!proc.Start())
                 {
                     throw new Exception("Failed to start BeeMemoryBank.Node process.");
                 }
+
+                proc.BeginOutputReadLine();
+                proc.BeginErrorReadLine();
 
                 _nodeProcess = proc;
                 

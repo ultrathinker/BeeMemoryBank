@@ -363,5 +363,33 @@ public class UpdateServiceTests : IAsyncLifetime
         var marker = Path.Combine(_tempDir, "updates", "update.inprogress");
         File.Exists(marker).Should().BeFalse("update.inprogress marker must be removed on success");
     }
+
+    [Fact]
+    public async Task ApplyAsync_DangerousLegacyDbExists_BlocksApply()
+    {
+        var dataDir = Path.Combine(AppContext.BaseDirectory, "data");
+        var dangerousDbPath = Path.Combine(dataDir, "beememorybank.db");
+        Directory.CreateDirectory(dataDir);
+        await File.WriteAllTextAsync(dangerousDbPath, "dummy db contents");
+
+        try
+        {
+            await DriveToReadyToApply(new byte[] { 1, 2, 3 });
+            ClearSideGates();
+
+            await _svc.ApplyAsync();
+
+            var p = _svc.GetProgress();
+            p.CurrentStep.Should().Be(UpdateFlowStep.Failed);
+            p.ErrorMessage.Should().Contain("Apply blocked: dangerous legacy database file detected");
+        }
+        finally
+        {
+            if (File.Exists(dangerousDbPath))
+            {
+                try { File.Delete(dangerousDbPath); } catch { }
+            }
+        }
+    }
 }
 

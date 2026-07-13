@@ -30,11 +30,19 @@ public class SourcePathsGuardTests
     // This is the opposite of the anti-pattern: they read from the old broken location in order
     // to COPY data away from it, never to write mutable user data there. They are not
     // regressions and must remain in the allowlist for the lifetime of the rescue feature.
+    // EXCEPTION — feat/3-transit-guards:
+    // Two more legitimate sites, same read-only-legacy-source pattern as Stage 2 above:
+    // the VelopackApp post-update hook re-runs rescue as a belt-and-suspenders safety net,
+    // and UpdateService's pre-apply guard reads (never writes) the legacy path to refuse
+    // applying an update that would still wipe it.
     private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase)
     {
         // Stage 2 rescue sources — intentionally reference the legacy Velopack path as read-only source
         "desktop/BeeMemoryBank.Desktop/MainWindow.axaml.cs:63",
         "desktop/BeeMemoryBank.Node/Program.cs:156",
+        // Stage 3 transit guards — same rationale
+        "desktop/BeeMemoryBank.Desktop/Program.cs:28",
+        "server/BeeMemoryBank.Api/Services/UpdateService.cs:344",
     };
 
     private static string FindRepoRoot()

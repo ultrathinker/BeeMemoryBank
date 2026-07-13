@@ -20,8 +20,8 @@
 
 .NOTES
     - Code signing is intentionally OMITTED (out of scope).
-    - The app does not yet call VelopackApp.Build().Run(), so --skipVeloAppCheck
-      is required.
+    - Desktop calls VelopackApp.Build().Run() as the first line of Main(), so
+      --skipVeloAppCheck is no longer needed and is not passed to 'vpk pack'.
     - Requires: dotnet CLI, vpk 1.2.0+ (dotnet tool install -g vpk)
 
 .PARAMETER SkipNodePublish
@@ -259,7 +259,6 @@ $vpkArgs = @(
     '--mainExe',        'BeeMemoryBank.Desktop.exe',
     '--icon',           $IconIco,
     '--outputDir',      $ReleasesDir,
-    '--skipVeloAppCheck',
     '-y'
 )
 
