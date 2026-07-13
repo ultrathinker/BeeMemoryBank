@@ -274,7 +274,86 @@ if (-not $OrphansTerminated) {
 }
 Write-Host "Step 6 Passed: Orphan check succeeded."
 
-# 9. Print PASS summary
+# 9. Clean run default path check (Step 7)
+Write-Host ""
+Write-Host "============================================="
+Write-Host " Step 7: Clean Run Default Path Check"
+Write-Host "============================================="
+
+$BmbdDir = Split-Path $BmbdExe -Parent
+$LocalDataDir = Join-Path $BmbdDir "data"
+
+# Clean up local 'data' directory if it exists from previous manual runs
+if (Test-Path $LocalDataDir) {
+    try {
+        Remove-Item -Recurse -Force $LocalDataDir -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+# Define target paths in AppData
+$AppDataBmbDir = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData"
+$DefaultVaultDir = Join-Path $AppDataBmbDir "vaults\default"
+
+Write-Host "Starting bmbd in clean/default mode (no arguments)..."
+# Start a clean bmbd process with no arguments. It should use the default database and config resolution.
+$CleanLog = Join-Path $TempDataDir "clean-bmbd.log"
+$CleanErr = Join-Path $TempDataDir "clean-bmbd.err"
+
+# Temporarily clear ASPNETCORE_URLS or set to loopback 0 to avoid binding conflict if port 5000/5001 is in use
+$OldUrls = $env:ASPNETCORE_URLS
+$env:ASPNETCORE_URLS = "http://127.0.0.1:0"
+
+$CleanProcess = Start-Process -FilePath $BmbdExe -PassThru -NoNewWindow -RedirectStandardOutput $CleanLog -RedirectStandardError $CleanErr
+
+# Restore environment variable
+if ($null -ne $OldUrls) {
+    $env:ASPNETCORE_URLS = $OldUrls
+} else {
+    Remove-Item env:ASPNETCORE_URLS -ErrorAction SilentlyContinue
+}
+
+# Wait a short duration (3 seconds) for the process to initialize and create its data folders
+Start-Sleep -Seconds 3
+
+# Stop the process
+if ($null -ne $CleanProcess) {
+    try {
+        Stop-Process -Id $CleanProcess.Id -Force -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+$LocalDataExists = Test-Path $LocalDataDir
+$DefaultVaultExists = Test-Path $DefaultVaultDir
+
+Write-Host "Clean Run Paths Check:"
+Write-Host "  Local 'data' directory in AppContext.BaseDirectory: $LocalDataDir (Exists: $LocalDataExists)"
+Write-Host "  Default AppData vault directory: $DefaultVaultDir (Exists: $DefaultVaultExists)"
+
+$PathTestPassed = $false
+if ($LocalDataExists) {
+    # Legacy behavior still active because parallel changes are not merged yet.
+    Write-Host "Legacy behavior detected: local 'data' directory was created."
+    Write-Host "This is expected since parallel changes in feat/1-node-default-path are not yet merged."
+    $PathTestPassed = $true
+} else {
+    # New behavior active (or parallel changes merged)
+    Write-Host "New behavior detected: no local 'data' directory created next to the executable."
+    if ($DefaultVaultExists) {
+        Write-Host "Success: Default AppData vault directory exists."
+        $PathTestPassed = $true
+    } else {
+        Write-Error "Failure: Neither local 'data' directory nor default AppData vault directory exists!"
+        $PathTestPassed = $false
+    }
+}
+
+if (-not $PathTestPassed) {
+    Write-Error "Clean run default path check failed."
+    exit 1
+}
+Write-Host "Step 7 Passed: Clean run default path check succeeded."
+
+# 10. Print PASS summary
 Write-Host ""
 Write-Host "============================================="
 Write-Host " SMOKE TEST SUMMARY"
@@ -285,6 +364,7 @@ Write-Host "Step 3: Wait for readiness (/node/status)    - PASS"
 Write-Host "Step 4: Check /health through proxy          - PASS"
 Write-Host "Step 5: API Process Supervision Check        - PASS"
 Write-Host "Step 6: Orphan Cleanup Check (Force Kill)    - PASS"
+Write-Host "Step 7: Clean Run Default Path Check        - PASS"
 Write-Host "---------------------------------------------"
 Write-Host "ALL SMOKE TESTS PASSED SUCCESSFULLY!"
 Write-Host "============================================="

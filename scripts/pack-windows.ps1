@@ -272,6 +272,13 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# ---- Packaging Assert --------------------------------------------------------
+$PayloadDataDir = Join-Path $PayloadDir "data"
+if (Test-Path $PayloadDataDir) {
+    Write-Error "Packaging Assert Failed: The mutable user data directory 'data' was found directly inside the payload folder ($PayloadDataDir). Mutable user data must not be packaged."
+    exit 1
+}
+
 # ---- Step 7: Report results --------------------------------------------------
 Write-Host ""
 Write-Host "================================================================"
