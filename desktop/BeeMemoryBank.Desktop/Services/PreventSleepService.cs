@@ -24,9 +24,7 @@ public class PreventSleepService
 
     public PreventSleepService()
     {
-        var dataDir = Path.Combine(AppContext.BaseDirectory, "data");
-        Directory.CreateDirectory(dataDir);
-        _settingsFilePath = Path.Combine(dataDir, "desktop-settings.json");
+        _settingsFilePath = BeeMemoryBank.AppPaths.BmbPaths.DesktopSettingsFile;
         LoadSettings();
     }
 
