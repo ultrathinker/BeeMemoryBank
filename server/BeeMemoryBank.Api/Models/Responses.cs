@@ -36,6 +36,11 @@ public record UnlockResponse(bool IsUnlocked, string? MigratedSyntheticUsername)
 
 public record RecoveryKeyResponse(string RecoveryKey);
 
+/// <summary>Response for GET /api/keys/auto-unlock/status and the enable/disable endpoints.</summary>
+/// <param name="Enabled">Whether the os_auto_unlock slot is currently active.</param>
+/// <param name="Supported">Whether the current platform supports OS auto-unlock (Windows only).</param>
+public record AutoUnlockStatusResponse(bool Enabled, bool Supported);
+
 public record ErrorResponse(string Error);
 
 public record FolderInfoResponse(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt, bool IsSystem = false, bool IsRemote = false)

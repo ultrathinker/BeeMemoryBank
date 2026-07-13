@@ -132,6 +132,16 @@ builder.Services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<Snaps
 builder.Services.AddSingleton(new McpResponseManager(dataPath));
 builder.Services.AddSingleton<DownloadTokenService>();
 builder.Services.AddSingleton<BeeMemoryBank.Api.Services.ProtectedUnlockCache>();
+// OsAutoUnlockService is Windows-only; registered as a conditional singleton so other code can
+// resolve it as OsAutoUnlockService? (nullable) and safely get null on non-Windows platforms.
+if (OperatingSystem.IsWindows())
+{
+    builder.Services.AddSingleton(sp =>
+        new BeeMemoryBank.Core.Services.OsAutoUnlockService(
+            sp.GetRequiredService<BeeMemoryBank.Core.Interfaces.IKeySlotRepository>(),
+            sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
+            dataPath));
+}
 builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();
 builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler>();
@@ -364,6 +374,38 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
+// ── OS auto-unlock (opt-in, Windows-only) ──────────────────────────────────────────────────
+// Attempt to auto-unlock the session using the DPAPI-protected secret, if the feature was
+// previously enabled by the admin. This runs in-process (Api's SessionService is the
+// authoritative singleton), after all migrations so the tbl_key_slot table is fully ready.
+// No new HTTP endpoint is needed: SessionService lives in-process and UnlockWithDek/
+// TryAutoUnlockAsync are direct method calls. If auto-unlock fails for any reason (file absent,
+// DPAPI decryption error, sentinel mismatch) we log a warning and continue — the admin can still
+// unlock manually via /Login.
+if (OperatingSystem.IsWindows())
+{
+    using var autoUnlockScope = app.Services.CreateScope();
+    var autoUnlockLogger = autoUnlockScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    try
+    {
+        var autoUnlockSvc = app.Services.GetService<BeeMemoryBank.Core.Services.OsAutoUnlockService>();
+        if (autoUnlockSvc != null)
+        {
+            var nodeRepo = autoUnlockScope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.INodeIdentityRepository>();
+            var unlocked = await autoUnlockSvc.TryAutoUnlockAsync(nodeRepo);
+            if (unlocked)
+                autoUnlockLogger.LogInformation("Session auto-unlocked via OS auto-unlock slot (DPAPI).");
+            else
+                autoUnlockLogger.LogDebug("OS auto-unlock: slot or secret file not present, or unlock failed — manual unlock required.");
+        }
+    }
+    catch (Exception ex)
+    {
+        app.Services.GetRequiredService<ILogger<Program>>()
+            .LogWarning(ex, "OS auto-unlock attempt failed at startup (non-fatal); manual unlock required.");
+    }
+}
+
 // Backfill concept tag embeddings in background
 {
     using var scope = app.Services.CreateScope();
@@ -481,6 +523,7 @@ app.MapDownloadEndpoints();
     app.MapCompactionEndpoints();
     app.MapAdminEndpoints();
     app.MapInternetAccessEndpoints();
+    app.MapAutoUnlockEndpoints();
     app.MapChatEndpoints();
     app.MapMcp("/mcp");
 

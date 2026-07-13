@@ -28,6 +28,9 @@ public class AdminModel(ApiClient api) : PageModel
     public bool ShowRecoveryKeyReminder { get; set; }
     public List<PeerPendingDekRotationDto> PeerPendingRotations { get; set; } = new();
 
+    public bool OsAutoUnlockEnabled { get; set; }
+    public bool OsAutoUnlockSupported { get; set; }
+
     public string? CurrentVersion { get; set; }
     public JsonElement? UpdateStatus { get; set; }
     public JsonElement? UpdateCheck { get; set; }
@@ -265,6 +268,22 @@ public class AdminModel(ApiClient api) : PageModel
             : RedirectToPage(new { err = err ?? "Failed to reject peer DEK rotation" });
     }
 
+    public async Task<IActionResult> OnPostEnableAutoUnlockAsync()
+    {
+        var (ok, err) = await api.EnableAutoUnlockAsync();
+        return ok
+            ? RedirectToPage(new { msg = "OS auto-unlock enabled. Anyone with access to this Windows account can now open the vault without a password." })
+            : RedirectToPage(new { err = err ?? "Failed to enable OS auto-unlock." });
+    }
+
+    public async Task<IActionResult> OnPostDisableAutoUnlockAsync()
+    {
+        var (ok, err) = await api.DisableAutoUnlockAsync();
+        return ok
+            ? RedirectToPage(new { msg = "OS auto-unlock disabled. The vault will no longer unlock automatically on startup." })
+            : RedirectToPage(new { err = err ?? "Failed to disable OS auto-unlock." });
+    }
+
     private async Task LoadDataAsync()
     {
         var tasks = new Task[]
@@ -282,6 +301,11 @@ public class AdminModel(ApiClient api) : PageModel
             api.GetPeerPendingDekRotationsAsync().ContinueWith(t => PeerPendingRotations = t.Result ?? new()),
             api.GetServerVersionAsync().ContinueWith(t => CurrentVersion = t.Result),
             api.GetUpdateStatusAsync().ContinueWith(t => UpdateStatus = t.Result),
+            api.GetAutoUnlockStatusAsync().ContinueWith(t =>
+            {
+                OsAutoUnlockEnabled = t.Result.Enabled;
+                OsAutoUnlockSupported = t.Result.Supported;
+            }),
         };
         await Task.WhenAll(tasks);
     }
