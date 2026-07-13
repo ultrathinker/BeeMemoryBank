@@ -340,6 +340,14 @@ public sealed class UpdateService
             if (_step != UpdateFlowStep.ReadyToApply)
                 throw new InvalidOperationException($"Cannot apply from state {_step}; must be ReadyToApply.");
 
+            // ── Pre-apply guard check ─────────────────────────────────────────
+            var dangerousLegacyDbPath = System.IO.Path.Combine(System.AppContext.BaseDirectory, "data", "beememorybank.db");
+            if (System.IO.File.Exists(dangerousLegacyDbPath))
+            {
+                SetFailed($"Apply blocked: dangerous legacy database file detected at '{dangerousLegacyDbPath}'. Update cannot be applied to avoid data loss.");
+                return;
+            }
+
             // ── Gate checks ───────────────────────────────────────────────────
             SetState(UpdateFlowStep.Applying, 5, "Checking safety gates…");
 
