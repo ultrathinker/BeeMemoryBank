@@ -57,6 +57,15 @@ public sealed class NodeLifecycleService : INodeLifecycleService
     private bool _ownsProcess;
     private StreamWriter? _hostedStdin;
 
+    // Serializes StartOrAttachAsync/StopAsync against each other and against themselves: two
+    // overlapping calls on the SAME instance (e.g. a caller invoking SwitchToAsync twice in
+    // quick succession before the first finishes) would otherwise race on
+    // _nodeProcess/_ownsProcess/_hostedStdin - the second Start's assignment could silently
+    // clobber tracking of a process the first Start/Stop is still working with, leaving it
+    // unstoppable. A plain lock cannot wrap this method (it awaits), so a 1-slot semaphore
+    // provides the same single-flight guarantee across await boundaries.
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+
     /// <summary>
     /// Resolves the data directory, attempts rescue of legacy data, probes for an already
     /// running node via <c>.runtime.json</c> + <c>/node/status</c> (attach), and otherwise
@@ -72,6 +81,26 @@ public sealed class NodeLifecycleService : INodeLifecycleService
         IProgress<string>? progress,
         CancellationToken ct)
     {
+        await _lifecycleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await StartOrAttachCoreAsync(dataDir, progress, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    private async Task<NodeLifecycleResult> StartOrAttachCoreAsync(
+        string dataDir,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        // Tracks a process spawned DURING this call so a failure below (timeout, cancellation,
+        // premature exit) can kill/dispose it instead of leaving it running but no longer
+        // reachable from any future StopAsync call - see the catch block.
+        Process? hostedProc = null;
         try
         {
             progress?.Report("Resolving data directory...");
@@ -150,7 +179,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
             if (!attached)
             {
                 progress?.Report("Locating BeeMemoryBank.Node executable...");
-                var nodeExePath = ResolveNodeExePath();
+                var nodeExePath = TestOnly_NodeExePathOverride ?? ResolveNodeExePath();
 
                 progress?.Report("Starting background node service...");
 
@@ -258,15 +287,17 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
 
+                hostedProc = proc;
                 _nodeProcess = proc;
                 _ownsProcess = true;
                 _hostedStdin = proc.StandardInput;
+                TestOnly_OnHostedProcessStarted?.Invoke(proc.Id);
 
                 // Start polling for .runtime.json
                 progress?.Report("Waiting for node services to start (up to 60s)...");
                 var stopwatch = Stopwatch.StartNew();
 
-                while (stopwatch.Elapsed.TotalSeconds < 60 && !ct.IsCancellationRequested)
+                while (stopwatch.Elapsed < TestOnly_ReadinessTimeout && !ct.IsCancellationRequested)
                 {
                     if (proc.HasExited)
                     {
@@ -313,6 +344,42 @@ public sealed class NodeLifecycleService : INodeLifecycleService
         }
         catch (Exception ex)
         {
+            if (hostedProc != null)
+            {
+                // This call spawned hostedProc but failed before returning success (readiness
+                // timeout, premature exit, cancellation). Kill it now - otherwise it keeps
+                // running as an orphan that no future StopAsync can reach, since Success=false
+                // never hands the caller anything to remember it by, and a subsequent
+                // StartOrAttachAsync call (e.g. ProfileSwitchService reverting to the previous
+                // profile) would overwrite _nodeProcess with a DIFFERENT process, permanently
+                // losing the only reference to this one.
+                try
+                {
+                    if (!hostedProc.HasExited)
+                    {
+                        hostedProc.Kill(entireProcessTree: true);
+                    }
+                }
+                catch (Exception killEx)
+                {
+                    Debug.WriteLine($"Error killing orphaned node process after failed start: {killEx.Message}");
+                }
+                try
+                {
+                    hostedProc.Dispose();
+                }
+                catch (Exception disposeEx)
+                {
+                    Debug.WriteLine($"Error disposing orphaned node process after failed start: {disposeEx.Message}");
+                }
+
+                if (ReferenceEquals(_nodeProcess, hostedProc))
+                {
+                    _nodeProcess = null;
+                    _ownsProcess = false;
+                    _hostedStdin = null;
+                }
+            }
             return NodeLifecycleResult.Error(ex.Message);
         }
     }
@@ -330,6 +397,22 @@ public sealed class NodeLifecycleService : INodeLifecycleService
     /// </list>
     /// </summary>
     public async Task StopAsync(TimeSpan gracefulTimeout, CancellationToken ct)
+    {
+        // Same gate as StartOrAttachAsync: serializes Stop against a concurrent Start (or
+        // another Stop) on this instance so neither observes the other's half-updated
+        // ownership state.
+        await _lifecycleGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            await StopCoreAsync(gracefulTimeout, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    private async Task StopCoreAsync(TimeSpan gracefulTimeout, CancellationToken ct)
     {
         var proc = _nodeProcess;
         var stdin = _hostedStdin;
@@ -400,6 +483,19 @@ public sealed class NodeLifecycleService : INodeLifecycleService
     // spawn through StartOrAttachAsync (which would require the full bmbd/api/web stack).
     // These inject a pre-started process directly, mirroring exactly the state the real
     // host/attach paths produce. Marked internal + used only under InternalsVisibleTo.
+
+    /// <summary>Overrides the resolved bmbd executable path so tests can point at a stand-in
+    /// process instead of a real bmbd. Null in production (default resolution applies).</summary>
+    internal string? TestOnly_NodeExePathOverride { get; set; }
+
+    /// <summary>Overrides the 60s readiness-wait ceiling so timeout tests do not actually wait
+    /// 60 seconds. Defaults to the production value.</summary>
+    internal TimeSpan TestOnly_ReadinessTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Fired with the OS pid the moment a hosted process is spawned, before the
+    /// readiness wait - lets a test capture the pid of a process that StartOrAttachAsync may
+    /// later kill+clear on failure, without racing a same-name process scan.</summary>
+    internal Action<int>? TestOnly_OnHostedProcessStarted { get; set; }
 
     internal void TestOnly_SetHosted(Process proc, StreamWriter stdin)
     {

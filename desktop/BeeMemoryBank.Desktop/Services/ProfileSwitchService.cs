@@ -63,6 +63,18 @@ public sealed class ProfileSwitchService : IDisposable
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
 
+    // Single-flight guard for the WHOLE switch operation. NodeLifecycleService itself
+    // serializes its own StartOrAttachAsync/StopAsync calls, but that alone does not stop two
+    // overlapping SwitchToAsync calls from interleaving at the orchestration level: e.g.
+    // switch-to-B's Stop(A)+Start(B) and switch-to-C's Stop(no-op)+Start(C) could each acquire
+    // NodeLifecycleService's gate in turn, and whichever Start call runs LAST simply
+    // overwrites the other's successfully-started (not failed - so the orphan-cleanup catch
+    // path never fires) process, permanently losing the ability to stop it. Rejecting a
+    // second concurrent switch outright (rather than queueing it) keeps behavior predictable:
+    // the caller asked to switch to a specific target and should not have that silently
+    // reordered behind an unrelated switch it did not request.
+    private readonly SemaphoreSlim _switchGate = new(1, 1);
+
     /// <summary>
     /// Creates a switch service that owns its own <see cref="HttpClient"/> for the update
     /// guard. Use this in production wiring.
@@ -125,6 +137,32 @@ public sealed class ProfileSwitchService : IDisposable
         IProgress<string>? progress,
         CancellationToken ct)
     {
+        // Single-flight: reject a second concurrent switch outright rather than queueing it
+        // (see _switchGate's own comment for why queueing would be worse).
+        if (!await _switchGate.WaitAsync(0, CancellationToken.None).ConfigureAwait(false))
+        {
+            return SwitchResult.Error("Another profile switch is already in progress. Please wait for it to finish.");
+        }
+
+        try
+        {
+            return await SwitchToCoreAsync(targetProfileId, currentProfileId, activeFrontUrl, cookieClearer, progress, ct)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _switchGate.Release();
+        }
+    }
+
+    private async Task<SwitchResult> SwitchToCoreAsync(
+        string targetProfileId,
+        string? currentProfileId,
+        string? activeFrontUrl,
+        IWebViewCookieClearer cookieClearer,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
         if (string.IsNullOrWhiteSpace(targetProfileId))
         {
             return SwitchResult.Error("Target profile id must not be empty.");
@@ -148,6 +186,18 @@ public sealed class ProfileSwitchService : IDisposable
                     $"Cannot switch profiles right now — an update is being applied on the active node ({reason}). " +
                     "Please wait for it to finish and try again.");
             }
+        }
+
+        // A cancellation that arrived during the guard's HTTP call is swallowed there as
+        // fail-open (by design - a cancelled guard must not be mistaken for "update is
+        // applying"). But proceeding into Stop(A)/Start(B) with an already-cancelled token is
+        // a different problem: StopAsync would link that token and could skip straight to a
+        // hard Kill of the perfectly-healthy current node instead of the intended graceful
+        // stdin-close wait, just because the caller cancelled for an unrelated reason (e.g.
+        // the window closing). Check explicitly rather than let that happen implicitly.
+        if (ct.IsCancellationRequested)
+        {
+            return SwitchResult.Error("Profile switch was cancelled before it started.");
         }
 
         // ── Step 2: Resolve target profile.

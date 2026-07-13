@@ -27,6 +27,11 @@ public class NodeLifecycleServiceTests
     private static readonly string StubDllPath = Path.Combine(
         AppContext.BaseDirectory, "BeeMemoryBank.Node.Tests.StubProcess.dll");
 
+    // Native apphost - StartOrAttachAsync sets ProcessStartInfo.FileName directly (no "dotnet"
+    // prefix), so TestOnly_NodeExePathOverride needs a directly-executable path.
+    private static readonly string StubExePath = Path.Combine(
+        AppContext.BaseDirectory, "BeeMemoryBank.Node.Tests.StubProcess.exe");
+
     /// <summary>
     /// Launches the stub via `dotnet stub.dll [extraArgs]` with a redirected stdin, and
     /// returns the started process (whose StandardInput the caller owns) plus its OS pid.
@@ -191,5 +196,50 @@ public class NodeLifecycleServiceTests
         var svc = new NodeLifecycleService();
         var act = () => svc.StopAsync(TimeSpan.FromSeconds(1), CancellationToken.None);
         await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task StartOrAttachAsync_ReadinessTimeout_KillsTheOrphanedProcess()
+    {
+        // The stub never writes the .runtime.json format StartOrAttachAsync polls for, so it
+        // is guaranteed to time out - exercising the real spawn path (not TestOnly_SetHosted)
+        // to prove the FAILED start actually kills the process it spawned, rather than leaving
+        // it running and untracked (the bug this test guards against: a caller that reverts to
+        // a different profile after this failure would otherwise permanently lose the only
+        // handle to this orphan).
+        if (!File.Exists(StubExePath))
+        {
+            throw new FileNotFoundException($"Stub process exe not found at: {StubExePath}.");
+        }
+
+        var dataDir = Path.Combine(Path.GetTempPath(), "bmb-nls-timeout-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dataDir);
+
+        var svc = new NodeLifecycleService
+        {
+            TestOnly_NodeExePathOverride = StubExePath,
+            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2)
+        };
+
+        int? spawnedPid = null;
+        svc.TestOnly_OnHostedProcessStarted = pid => spawnedPid = pid;
+
+        try
+        {
+            var result = await svc.StartOrAttachAsync(dataDir, progress: null, CancellationToken.None);
+
+            result.Success.Should().BeFalse("the stub never satisfies the readiness probe, so this must time out");
+            spawnedPid.Should().NotBeNull("the stub process must have been spawned before the timeout");
+            IsPidAlive(spawnedPid!.Value).Should().BeFalse(
+                "a failed start must kill the process it spawned, not leave it running as an orphan");
+        }
+        finally
+        {
+            if (spawnedPid.HasValue)
+            {
+                KillPidIfAlive(spawnedPid.Value);
+            }
+            try { Directory.Delete(dataDir, recursive: true); } catch { }
+        }
     }
 }

@@ -212,6 +212,21 @@ public sealed class ProfileServiceTests : IDisposable
     }
 
     [Fact]
+    public void AddProfile_ThrowsOnDataPathCollisionWithExistingProfile()
+    {
+        // Arrange
+        var service = new ProfileService(_profilesFilePath, _defaultVaultDir, _vaultsParentDir);
+        var first = service.AddProfile("First", Path.Combine(_vaultsParentDir, "shared-vault"));
+
+        // Act & Assert: a second profile pointing at the SAME resolved path must be rejected -
+        // otherwise two "independent accounts" would silently share one DB/DEK/auto-unlock file.
+        Action actSamePath = () => service.AddProfile("Second", first.DataPath);
+        actSamePath.Should().Throw<ArgumentException>().WithMessage("*already used by profile*");
+
+        service.GetAll().Should().HaveCount(2, "the default profile plus 'First' only - the collision must not be added");
+    }
+
+    [Fact]
     public void RenameProfile_ModifiesNameOnly_AndSaves()
     {
         // Arrange

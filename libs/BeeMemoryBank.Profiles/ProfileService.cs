@@ -195,6 +195,20 @@ public sealed class ProfileService
                 }
             }
 
+            // Two profiles pointing at the same vault would silently share one DB, one
+            // encryption/key-slot state, one auto-unlock file, one node.lock - the switch
+            // engine would present them as independent accounts while they are actually the
+            // same storage. Only reachable via an explicit dataPath (the auto-generated path
+            // is always a fresh per-id subdirectory), but still worth refusing outright.
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            var collision = _registry.Profiles.FirstOrDefault(p => string.Equals(p.DataPath, finalDataPath, comparison));
+            if (collision != null)
+            {
+                throw new ArgumentException(
+                    $"Data path '{finalDataPath}' is already used by profile '{collision.Name}' ({collision.Id}).",
+                    nameof(dataPath));
+            }
+
             var entry = new ProfileEntry
             {
                 Id = id,

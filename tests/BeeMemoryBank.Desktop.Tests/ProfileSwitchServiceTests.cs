@@ -331,6 +331,56 @@ public class ProfileSwitchServiceTests : IDisposable
         lifecycle.StartCalls.Should().Be(0);
     }
 
+    // ── Single-flight: a second concurrent switch is rejected, not queued ────────
+
+    [Fact]
+    public async Task ConcurrentSwitches_SecondCallIsRejected_FirstStillSucceeds()
+    {
+        var (svc, a, b, _) = CreateTwoProfiles();
+        var lifecycle = new FakeNodeLifecycle();
+        // Hold the first call inside StopAsync long enough for the second call to observe
+        // the gate as held.
+        lifecycle.StopAction = async () => await Task.Delay(300);
+        var cookies = new FakeCookieClearer();
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var task1 = switchSvc.SwitchToAsync(b.Id, currentProfileId: a.Id, activeFrontUrl: null,
+            cookies, progress: null, CancellationToken.None);
+        // Started without awaiting task1 - by now task1 has synchronously acquired the gate
+        // and is inside the delayed StopAsync.
+        var task2 = switchSvc.SwitchToAsync(b.Id, currentProfileId: a.Id, activeFrontUrl: null,
+            cookies, progress: null, CancellationToken.None);
+
+        var results = await Task.WhenAll(task1, task2);
+
+        results.Count(r => r.Success).Should().Be(1, "exactly one of the two concurrent switches must succeed");
+        results.Count(r => !r.Success && r.ErrorMessage!.Contains("already in progress")).Should().Be(1,
+            "the other must be rejected as already-in-progress, not silently queued or corrupted");
+    }
+
+    // ── Cancellation: an already-cancelled token refuses the switch before touching anything ──
+
+    [Fact]
+    public async Task AlreadyCancelledToken_RefusesSwitch_WithoutStoppingOrStartingNode()
+    {
+        var (svc, a, b, _) = CreateTwoProfiles();
+        var lifecycle = new FakeNodeLifecycle();
+        var cookies = new FakeCookieClearer();
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = await switchSvc.SwitchToAsync(b.Id, currentProfileId: a.Id, activeFrontUrl: null,
+            cookies, progress: null, cts.Token);
+
+        result.Success.Should().BeFalse();
+        lifecycle.StopCalls.Should().Be(0,
+            "a switch cancelled before it starts must not hard-kill the perfectly healthy current node");
+        lifecycle.StartCalls.Should().Be(0);
+        svc.LastUsedProfileId.Should().Be(a.Id);
+    }
+
     /// <summary>Grabs an ephemeral loopback port, releases it, and returns a URL that is
     /// therefore (almost certainly) closed — for fail-open guard tests.</summary>
     private static string GetClosedLoopbackUrl()
