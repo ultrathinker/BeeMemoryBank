@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multiple Storages & Data Isolation (Windows Desktop):**
+  - **Stable Data Root:** Relocated all user database files, media, logs, and settings to a persistent per-user directory (`%LOCALAPPDATA%\BeeMemoryBankData`) outside the versioned Velopack installation path, ensuring data survives program updates, repairs, and uninstallation.
+  - **Multiple Vaults:** Added desktop support for running multiple isolated vaults. Users can create, rename, and switch between vaults via the system tray menu. "Forgetting" a vault removes it from the UI profile list while safely preserving files on disk.
+  - **Automatic Legacy Data Rescue:** Integrated a startup rescue utility (`LegacyDataRescue`) that detects and migrates data from the old `current\data` directory to the stable data root. Conflicting data is automatically quarantined into a `recovered-<date>` vault, and the app fails-closed with a diagnostic screen if a migration error occurs.
+  - **E2E Update Verification:** Added `smoke-update.ps1` to test the full Velopack update and repair lifecycle on throwaway packages, ensuring data preservation across updates.
+  - **Pre-Apply Safety Guards:** Added checks in the update service to block application updates if legacy database files are found in mutable folders.
+  - **Process Log Redirection:** Redirected backend `bmbd` process logs (stdout/stderr) to `<DataRoot>\logs` with automatic rotation for easier troubleshooting.
 - **Obsidian vault import:** Upload an Obsidian vault as a ZIP archive — Markdown files become articles, folder hierarchy is preserved, Obsidian `![[image.png]]` embeds are rewritten to encrypted media links. Per-article error isolation (one bad file does not abort the whole import), Windows-ZIP path normalization, oversized images auto-downscaled to 4096px before reject. Endpoint: `POST /api/import/obsidian`.
 - **Hard delete (Superadmin only):** Permanent purge of an article or folder subtree and all attached media. Propagates to every synced node via the new `hard_delete` sync event. Subsequent `article_update` events for a purged entity are suppressed via the `tbl_event(event_type, entity_id)` gate index. New admin page `/HardDelete` with preview, filter, status chips, and paginated audit log; entry point lives in the Admin page (removed from the header to avoid accidental clicks).
 - **Hard-delete audit log:** New `tbl_hard_delete_audit` records every hard delete (actor, source node, entity type/id/title, counts of rows removed) with pagination UI.
