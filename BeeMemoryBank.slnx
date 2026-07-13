@@ -26,6 +26,7 @@
     <Project Path="tests/BeeMemoryBank.Core.Tests/BeeMemoryBank.Core.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Core.Acme.Tests/BeeMemoryBank.Core.Acme.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Crypto.Tests/BeeMemoryBank.Crypto.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Desktop.Tests/BeeMemoryBank.Desktop.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Hosting.Tests/BeeMemoryBank.Hosting.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Hosting.AspNetCore.Tests/BeeMemoryBank.Hosting.AspNetCore.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Integration.Tests/BeeMemoryBank.Integration.Tests.csproj" />

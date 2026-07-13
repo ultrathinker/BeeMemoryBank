@@ -138,9 +138,12 @@ public partial class MainWindow : Window
 
     private void StopNodeProcess()
     {
-        // gracefulTimeout is part of the lifecycle service's stable contract; today StopAsync
-        // still hard-kills the process tree (verbatim previous behavior), the graceful path
-        // arrives in a follow-up change without touching this call site.
+        // StopAsync now does an ownership-aware graceful stop: for the hosted node process it
+        // closes the child's stdin (EOF → bmbd's stdin-lifeline → clean shutdown) and waits up
+        // to the given timeout before falling back to a hard kill; for an attached node it
+        // leaves the foreign process untouched. OnClosing is synchronous, so we block on the
+        // bounded graceful wait (15s ceiling) — safe because the service never touches the UI
+        // synchronization context.
         try
         {
             _nodeLifecycle.StopAsync(TimeSpan.FromSeconds(15), CancellationToken.None)

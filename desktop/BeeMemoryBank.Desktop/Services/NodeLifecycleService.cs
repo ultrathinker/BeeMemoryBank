@@ -39,6 +39,12 @@ public sealed class NodeLifecycleService
 {
     private Process? _nodeProcess;
 
+    // Ownership + graceful-stop state. We only ever Kill / close stdin on a process we
+    // ourselves spawned (hosted). When we merely attach to an already-running node, we hold
+    // no handle to it at all (see StartOrAttachAsync) and StopAsync must leave it untouched.
+    private bool _ownsProcess;
+    private StreamWriter? _hostedStdin;
+
     /// <summary>
     /// Resolves the data directory, attempts rescue of legacy data, probes for an already
     /// running node via <c>.runtime.json</c> + <c>/node/status</c> (attach), and otherwise
@@ -147,17 +153,25 @@ public sealed class NodeLifecycleService
                 // hygiene on stop) and forwarded-headers itself - no need to hand-author a
                 // node.config.json here, and no risk of drifting from bmbd's own conventions
                 // (e.g. hardcoding ports that collide with the standalone/Docker defaults).
+                //
+                // RedirectStandardInput + BMB_STDIN_LIFELINE opt the hosted process into
+                // bmbd's stdin-EOF graceful shutdown: closing our end of the pipe in
+                // StopAsync delivers EOF, which bmbd's StdinLifeline turns into a clean
+                // session-close + status-file cleanup instead of a hard kill. The env var is
+                // set on the CHILD's ProcessStartInfo only (not on this process) so nothing
+                // else in Desktop accidentally enters stdin-lifeline mode.
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = nodeExePath,
                     Arguments = $"--auto --data \"{dataDir}\"",
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    RedirectStandardInput = false,
+                    RedirectStandardInput = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     WorkingDirectory = Path.GetDirectoryName(nodeExePath)
                 };
+                startInfo.EnvironmentVariables["BMB_STDIN_LIFELINE"] = "1";
 
                 // Simple log rotation: leave at most 10 bmbd-*.log files
                 try
@@ -233,6 +247,8 @@ public sealed class NodeLifecycleService
                 proc.BeginErrorReadLine();
 
                 _nodeProcess = proc;
+                _ownsProcess = true;
+                _hostedStdin = proc.StandardInput;
 
                 // Start polling for .runtime.json
                 progress?.Report("Waiting for node services to start (up to 60s)...");
@@ -290,29 +306,101 @@ public sealed class NodeLifecycleService
     }
 
     /// <summary>
-    /// Stops the hosted node process. Today this is a hard kill of the whole process tree
-    /// (verbatim from the previous MainWindow.StopNodeProcess). The
-    /// <paramref name="gracefulTimeout"/>/<paramref name="ct"/> parameters are part of the
-    /// stable contract for the upcoming graceful-stop work and are intentionally unused
-    /// here so the call site does not have to change again.
+    /// Stops the node. Behavior depends on ownership:
+    /// <list type="bullet">
+    /// <item><b>Hosted</b> (this service spawned the process): attempt a graceful shutdown
+    /// first by closing the child's stdin pipe — EOF triggers bmbd's stdin-lifeline, which
+    /// closes the Api session and cleans up status files. If the process does not exit within
+    /// <paramref name="gracefulTimeout"/>, fall back to <c>Kill(entireProcessTree: true)</c>
+    /// (the previous hard-kill behavior).</item>
+    /// <item><b>Attached</b> (we only attached to an already-running node we do not own): do
+    /// not touch the foreign process at all — just forget it.</item>
+    /// </list>
     /// </summary>
-    public Task StopAsync(TimeSpan gracefulTimeout, CancellationToken ct)
+    public async Task StopAsync(TimeSpan gracefulTimeout, CancellationToken ct)
     {
-        if (_nodeProcess != null && !_nodeProcess.HasExited)
+        var proc = _nodeProcess;
+        var stdin = _hostedStdin;
+        var owned = _ownsProcess;
+
+        // Clear references up front so a concurrent/re-entrant StopAsync is a no-op.
+        _nodeProcess = null;
+        _hostedStdin = null;
+        _ownsProcess = false;
+
+        if (proc == null || !owned)
         {
+            // Attached to a foreign process (or nothing tracked) — leave it running.
+            return;
+        }
+
+        // Graceful: deliver EOF on the child's stdin → its StdinLifeline runs a clean shutdown.
+        try
+        {
+            stdin?.Close();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error closing node stdin for graceful stop: {ex.Message}");
+        }
+
+        try
+        {
+            // Bound the graceful wait by gracefulTimeout via a linked token. If the caller's
+            // own token is already cancelled we still wait up to gracefulTimeout.
+            using var stopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            stopCts.CancelAfter(gracefulTimeout);
+            await proc.WaitForExitAsync(stopCts.Token).ConfigureAwait(false);
+            // Exited gracefully within the timeout — nothing more to do.
+        }
+        catch (OperationCanceledException) when (!proc.HasExited)
+        {
+            // Timed out (or caller cancelled) while the process was still alive — hard-kill
+            // the whole tree as a fallback (today's previous behavior).
+            Debug.WriteLine(
+                $"Node did not exit gracefully within {gracefulTimeout.TotalSeconds:F0}s; hard-killing process tree.");
             try
             {
-                _nodeProcess.Kill(entireProcessTree: true);
-                _nodeProcess.Dispose();
-                _nodeProcess = null;
+                proc.Kill(entireProcessTree: true);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error killing node process: {ex.Message}");
+                Debug.WriteLine($"Error killing node process after graceful timeout: {ex.Message}");
             }
         }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error during graceful node stop: {ex.Message}");
+        }
 
-        return Task.CompletedTask;
+        try
+        {
+            proc.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error disposing node process: {ex.Message}");
+        }
+    }
+
+    // --- Test-only seams -----------------------------------------------------
+    // NodeLifecycleServiceTests need to exercise StopAsync against a process it did NOT
+    // spawn through StartOrAttachAsync (which would require the full bmbd/api/web stack).
+    // These inject a pre-started process directly, mirroring exactly the state the real
+    // host/attach paths produce. Marked internal + used only under InternalsVisibleTo.
+
+    internal void TestOnly_SetHosted(Process proc, StreamWriter stdin)
+    {
+        _nodeProcess = proc;
+        _hostedStdin = stdin;
+        _ownsProcess = true;
+    }
+
+    internal void TestOnly_SetAttached(Process proc)
+    {
+        _nodeProcess = proc;
+        _hostedStdin = null;
+        _ownsProcess = false;
     }
 
     private static string ResolveNodeExePath()
