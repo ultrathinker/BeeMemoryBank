@@ -224,6 +224,45 @@ Open `http://localhost:5301` in your browser and log in with your master passwor
 
 Data is stored in `./data` on the host (including `model.onnx`). To customize ports, copy `.env.example` to `.env` and edit as needed.
 
+### Windows Desktop App and Service (native, no NSSM needed)
+
+Windows has two native install modes, built on a small orchestrator (`bmbd`) that manages the
+API and Web processes for you — no manual `BMB_INTERNAL_KEY` juggling between two services. No
+public release binary is published yet, so build from source (requires the
+[.NET 10 SDK](https://dotnet.microsoft.com/download)):
+
+```powershell
+git clone https://github.com/ultrathinker/BeeMemoryBank.git C:\bee
+cd C:\bee
+```
+
+**Desktop mode** (recommended for a personal machine/laptop) — a per-user install, no admin
+rights needed, tray icon, starts on login:
+```powershell
+.\scripts\pack-windows.ps1
+# Produces installers\windows\velopack\releases\BeeMemoryBank-win-Setup.exe — run it.
+```
+This installs to your user profile and runs `bmbd` as a child of the tray app. Right-click the
+tray icon for Autostart, Prevent-sleep, and update-check toggles.
+
+**Server mode** (recommended for an always-on / headless machine) — a machine-wide install that
+registers `bmbd` as a real Windows Service (`NT SERVICE\bmbd`, Automatic/Delayed Start), no tray
+UI, no logged-in user required:
+```powershell
+dotnet tool install --global wix --version 5.0.2
+.\scripts\pack-windows-msi.ps1
+# Produces installers\windows\msi\bin\x64\Release\BeeMemoryBank.ServerService.msi
+msiexec /i installers\windows\msi\bin\x64\Release\BeeMemoryBank.ServerService.msi
+```
+Data lives in `C:\ProgramData\BeeMemoryBank`; the service survives logoff/reboot. Check it with
+`Get-Service bmbd`. To also open the Windows Firewall for LAN access, select the "Configure
+Windows Firewall Exception" feature during install (e.g. `msiexec /i ... ADDLOCAL=ALL`).
+Uninstall via **Settings → Apps** or `msiexec /x installers\windows\msi\bin\x64\Release\BeeMemoryBank.ServerService.msi`
+(data in `ProgramData` is left in place).
+
+Either way, once it's running, open `http://localhost:5310` and follow the Setup wizard (or log
+in if you already initialized via the CLI, see below).
+
 ### From Source (Linux / macOS / Windows, native services)
 
 Requires .NET 10 SDK. Pick your OS below — each block has the full sequence (build, init, generate the shared `BMB_INTERNAL_KEY`, register a service, restart on boot, logs).
@@ -415,6 +454,8 @@ tail -f ~/bmb/api.log
 <details>
 <summary><b>Windows + NSSM</b> — runs as a Windows Service, visible in services.msc</summary>
 
+> **Prefer the native [Windows Desktop App and Service](#windows-desktop-app-and-service-native-no-nssm-needed) above** — it manages both processes as one unit via `bmbd` and needs no third-party tool. This NSSM path (running Api/Web as two independent standalone services) still works and is documented here for anyone who prefers it or was already using it.
+
 Install:
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [Git for Windows](https://git-scm.com/download/win)
@@ -542,6 +583,8 @@ Then `sudo certbot --nginx -d bee.example.com`.
 | Linux/systemd | `git pull` → `dotnet publish ...` → `sudo systemctl restart beememorybank-api beememorybank-web` |
 | macOS/launchd | `git pull` → `dotnet publish ...` → `launchctl kickstart -k gui/$(id -u)/com.beememorybank.api` (and `.web`) |
 | Windows/NSSM | `git pull` → `dotnet publish ...` → `nssm restart BeeMemoryBankApi BeeMemoryBankWeb` |
+| Windows Desktop | Tray icon → Check for updates (or rebuild `pack-windows.ps1` and re-run the new `Setup.exe`) |
+| Windows Server (MSI) | `git pull` → `.\scripts\pack-windows-msi.ps1` → `msiexec /i ...` (the stable `UpgradeCode` lets it upgrade in place; data in `ProgramData` is preserved) |
 
 Tip: take a snapshot via Admin → Snapshots → Create before updating, in case a DB migration goes sideways.
 
