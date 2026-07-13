@@ -198,6 +198,33 @@ public static class Program
             tcs.TrySetResult(0);
         });
 
+        StdinLifeline? lifeline = null;
+        if (Environment.GetEnvironmentVariable("BMB_STDIN_LIFELINE") == "1")
+        {
+            Console.WriteLine("[Node] BMB_STDIN_LIFELINE=1: monitoring stdin for EOF...");
+            lifeline = StdinLifeline.Start(() =>
+            {
+                Console.WriteLine("[Node] Stdin lifeline triggered EOF. Initiating graceful shutdown...");
+                Task.Run(async () =>
+                {
+                    if (app != null)
+                    {
+                        try
+                        {
+                            Console.WriteLine("[Node] Stopping front app...");
+                            await app.StopAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
+                        }
+                    }
+                    await orchestrator.StopAsync();
+                    tcs.TrySetResult(0);
+                });
+            });
+        }
+
         orchestrator.OnAllReady += () =>
         {
             Console.WriteLine("[Node] Orchestrator successfully started all child processes and verified readiness.");
@@ -287,6 +314,11 @@ public static class Program
             {
                 Console.WriteLine("[Node] BMB_HTTPS_ENABLED=1: additive HTTPS listener will be started on :5311.");
             }
+            if (tcs.Task.IsCompleted)
+            {
+                return await tcs.Task;
+            }
+
             try
             {
                 app = BuildFront(
@@ -298,6 +330,11 @@ public static class Program
             }
             catch (IOException)
             {
+                if (tcs.Task.IsCompleted)
+                {
+                    return await tcs.Task;
+                }
+
                 Console.WriteLine($"[Node] Port {preferredFrontPort} is unavailable, falling back to an OS-assigned port...");
                 if (app != null)
                 {
@@ -314,6 +351,11 @@ public static class Program
                 }
                 catch (IOException) when (httpsEnabled)
                 {
+                    if (tcs.Task.IsCompleted)
+                    {
+                        return await tcs.Task;
+                    }
+
                     // The opt-in HTTPS listener binds the FIXED NodeFront.HttpsPort — if THAT is what's
                     // actually unavailable (not the HTTP port), retrying with a different HTTP port
                     // won't help and would otherwise take the whole front down. HTTPS is additive and
@@ -382,6 +424,8 @@ public static class Program
         }
         finally
         {
+            lifeline?.Dispose();
+
             if (app != null)
             {
                 try
