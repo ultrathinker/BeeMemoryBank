@@ -78,7 +78,7 @@ public static class Program
         return await RunOrchestratorAsync(isAutoMode, dataDirectory, configPath, CancellationToken.None);
     }
 
-    internal static async Task<int> RunOrchestratorAsync(
+    public static async Task<int> RunOrchestratorAsync(
         bool isAutoMode,
         string? dataDirectory,
         string? configPath,
@@ -109,7 +109,15 @@ public static class Program
 
             if (string.IsNullOrWhiteSpace(dataDirectory))
             {
-                dataDirectory = Path.Combine(AppContext.BaseDirectory, "data");
+                var envDataPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH");
+                if (!string.IsNullOrWhiteSpace(envDataPath))
+                {
+                    dataDirectory = envDataPath;
+                }
+                else
+                {
+                    dataDirectory = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
+                }
             }
             resolvedDataDirectory = Path.GetFullPath(dataDirectory);
 
