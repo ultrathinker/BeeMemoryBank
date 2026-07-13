@@ -1,0 +1,64 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="BeeMemoryBank.Desktop.Views.RenameStorageDialog"
+        Title="Переименование хранилища"
+        Width="440"
+        Height="220"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="#111119"
+        Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="Новое название"
+                   FontSize="18"
+                   FontWeight="SemiBold"
+                   Foreground="#FFFFFF"
+                   Margin="0,0,0,12" />
+
+        <TextBox Grid.Row="1"
+                 Name="NameBox"
+                 FontSize="14"
+                 Background="#1E1E2A"
+                 Foreground="#FFFFFF" />
+
+        <TextBlock Grid.Row="2"
+                   Name="ErrorText"
+                   Text=""
+                   FontSize="12"
+                   Foreground="#EF4444"
+                   TextWrapping="Wrap"
+                   IsVisible="False"
+                   Margin="0,8,0,0" />
+
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="0,12,0,0">
+            <Button Content="Отмена"
+                    Click="OnCancelClick"
+                    Padding="20,10"
+                    Background="#2D2D3D"
+                    Foreground="#FFFFFF"
+                    CornerRadius="6" />
+            <Button Name="SaveButton"
+                    Content="Сохранить"
+                    Click="OnSaveClick"
+                    Padding="20,10"
+                    Background="#F59E0B"
+                    Foreground="#111119"
+                    FontWeight="SemiBold"
+                    CornerRadius="6" />
+        </StackPanel>
+    </Grid>
+</Window>

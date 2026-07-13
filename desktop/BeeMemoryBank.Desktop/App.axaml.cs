@@ -17,6 +17,9 @@ public partial class App : Application
 {
     private TrayIcon? _trayIcon;
     private Services.PreventSleepService? _preventSleepService;
+    // Single-instance reference for the manage-storages window so re-clicking "Manage…"
+    // focuses the already-open window instead of stacking duplicates.
+    private Avalonia.Controls.Window? _manageStoragesWindow;
 
     public override void Initialize()
     {
@@ -66,6 +69,27 @@ public partial class App : Application
             openItem.Click += (s, e) =>
             {
                 Dispatcher.UIThread.Post(() => mainWindow.ShowAndFocusWindow());
+            };
+
+            // ── §4.5 Storage submenu ─────────────────────────────────────────────
+            // The submenu lists every registered profile as a radio entry (checkmark on the
+            // active one), plus "Create..." and "Manage..." commands. It is rebuilt on every
+            // ActiveProfileChanged event because NativeMenu/NativeMenuItem don't expose a
+            // clean way to reach into individual child items across platforms to flip just
+            // their IsChecked — a full rebuild is simpler, idempotent and small (single-digit
+            // items).
+            var storageItem = new NativeMenuItem("Хранилище");
+            var storageMenu = new NativeMenu();
+            storageItem.Menu = storageMenu;
+            RebuildStorageMenu(storageMenu, mainWindow);
+
+            mainWindow.ActiveProfileChanged += (s, e) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    UpdateTrayTooltip();
+                    RebuildStorageMenu(storageMenu, mainWindow);
+                });
             };
 
             var autostartService = new Services.AutostartService();
@@ -230,6 +254,7 @@ public partial class App : Application
             };
 
             menu.Items.Add(openItem);
+            menu.Items.Add(storageItem);
             menu.Items.Add(autostartItem);
             if (preventSleepItem != null)
             {
@@ -242,6 +267,9 @@ public partial class App : Application
             menu.Items.Add(exitItem);
 
             _trayIcon.Menu = menu;
+
+            // Initial tooltip reflects the active profile (no-op when only one profile exists).
+            UpdateTrayTooltip();
 
             // Left-clicking tray icon brings app to front
             _trayIcon.Clicked += (s, e) =>
@@ -256,5 +284,137 @@ public partial class App : Application
         {
             Console.WriteLine($"Error creating tray icon: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Rebuilds the nested "Хранилище" submenu from the current profile registry. Called on
+    /// app start and on every <see cref="MainWindow.ActiveProfileChanged"/> so the radio
+    /// checkmark follows the live active profile.
+    ///
+    /// Clicking a profile item triggers <see cref="MainWindow.SwitchProfileAsync"/>; the
+    /// single-flight guard inside ProfileSwitchService makes a double-click safe (the second
+    /// call returns "another switch in progress").
+    /// </summary>
+    private void RebuildStorageMenu(NativeMenu storageMenu, MainWindow mainWindow)
+    {
+        storageMenu.Items.Clear();
+
+        var profiles = mainWindow.Profiles.GetAll();
+        var activeId = mainWindow.ActiveProfileId;
+
+        foreach (var p in profiles)
+        {
+            var isActive = !string.IsNullOrEmpty(activeId)
+                && string.Equals(p.Id, activeId, System.StringComparison.Ordinal);
+            var item = new NativeMenuItem(p.Name)
+            {
+                ToggleType = MenuItemToggleType.Radio,
+                IsChecked = isActive,
+            };
+            if (isActive)
+            {
+                // Disable re-selecting the active profile: SwitchProfileAsync would no-op
+                // anyway, but greying it out makes the radio's "you are here" state obvious.
+                item.IsEnabled = false;
+            }
+
+            // Capture locally — closures over the loop variable must take its current value.
+            var targetId = p.Id;
+            item.Click += (s, e) =>
+            {
+                Dispatcher.UIThread.Post(async () =>
+                {
+                    try
+                    {
+                        await mainWindow.SwitchProfileAsync(targetId);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error switching to profile '{targetId}': {ex.Message}");
+                    }
+                });
+            };
+            storageMenu.Items.Add(item);
+        }
+
+        storageMenu.Items.Add(new NativeMenuItemSeparator());
+
+        var createItem = new NativeMenuItem("Создать хранилище…");
+        createItem.Click += (s, e) =>
+        {
+            Dispatcher.UIThread.Post(async () =>
+            {
+                try { await ShowCreateStorageDialogAsync(mainWindow); }
+                catch (Exception ex) { Console.WriteLine($"Error in create-storage dialog: {ex.Message}"); }
+            });
+        };
+        storageMenu.Items.Add(createItem);
+
+        var manageItem = new NativeMenuItem("Управление хранилищами…");
+        manageItem.Click += (s, e) =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                try { ShowManageStoragesWindow(mainWindow); }
+                catch (Exception ex) { Console.WriteLine($"Error opening manage-storages window: {ex.Message}"); }
+            });
+        };
+        storageMenu.Items.Add(manageItem);
+    }
+
+    private async System.Threading.Tasks.Task ShowCreateStorageDialogAsync(MainWindow mainWindow)
+    {
+        mainWindow.ShowAndFocusWindow();
+
+        // ShowDialog(owner) sets Owner internally; no direct assignment here.
+        var dialog = new Views.CreateStorageDialog(mainWindow.Profiles);
+        var ok = await dialog.ShowDialog<bool?>(mainWindow);
+        if (ok != true || dialog.CreatedProfile == null) return;
+
+        // Newly-created profile → switch to it like a normal target. The empty data dir will
+        // surface the existing /Setup wizard, nothing else to do here.
+        try
+        {
+            await mainWindow.SwitchProfileAsync(dialog.CreatedProfile.Id);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error switching to newly created profile: {ex.Message}");
+        }
+    }
+
+    private void ShowManageStoragesWindow(MainWindow mainWindow)
+    {
+        mainWindow.ShowAndFocusWindow();
+
+        // Modal-ish but non-blocking: the user may want to keep the manage window open while
+        // clicking around the tray. We track a single instance so re-opening focuses the
+        // existing one rather than stacking duplicates.
+        if (_manageStoragesWindow?.IsVisible == true)
+        {
+            _manageStoragesWindow.Activate();
+            return;
+        }
+
+        _manageStoragesWindow = new Views.ManageStoragesWindow(mainWindow, mainWindow.Profiles);
+        _manageStoragesWindow.Closed += (_, _) => _manageStoragesWindow = null;
+        // Show(owner) sets Owner internally; we pass it positionally.
+        _manageStoragesWindow.Show(mainWindow);
+    }
+
+    /// <summary>
+    /// Updates <see cref="TrayIcon.ToolTipText"/> to follow §4.5: bare product name when ≤ 1
+    /// profile, "BeeMemoryBank — &lt;active profile name&gt;" when ≥ 2.
+    /// </summary>
+    private void UpdateTrayTooltip()
+    {
+        if (_trayIcon == null) return;
+        // mainWindow is captured via closure of CreateTrayIcon callers; but this helper can
+        // also be invoked from ActiveProfileChanged which has the mainWindow in scope. We
+        // resolve MainWindow through the application lifetime to avoid juggling references.
+        if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) return;
+        if (desktop.MainWindow is not MainWindow mw) return;
+
+        _trayIcon.ToolTipText = Services.StorageDisplayLogic.FormatShellTitle(mw.Profiles, mw.ActiveProfileId);
     }
 }

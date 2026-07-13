@@ -1,0 +1,94 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="BeeMemoryBank.Desktop.Views.CreateStorageDialog"
+        Title="Создание хранилища"
+        Width="480"
+        Height="320"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="#111119"
+        Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="Новое хранилище"
+                   FontSize="20"
+                   FontWeight="SemiBold"
+                   Foreground="#FFFFFF"
+                   Margin="0,0,0,16" />
+
+        <StackPanel Grid.Row="1" Spacing="4" Margin="0,0,0,12">
+            <TextBlock Text="Название"
+                       FontSize="13"
+                       Foreground="#A0A0B0" />
+            <TextBox Name="NameBox"
+                     PlaceholderText="Например: Рабочий банк"
+                     FontSize="14"
+                     Background="#1E1E2A"
+                     Foreground="#FFFFFF" />
+        </StackPanel>
+
+        <Expander Grid.Row="2"
+                  Name="AdvancedExpander"
+                  Header="Дополнительные настройки"
+                  IsExpanded="False"
+                  Margin="0,0,0,12"
+                  Foreground="#A0A0B0">
+            <StackPanel Spacing="4" Margin="0,8,0,0">
+                <TextBlock Text="Каталог данных (абсолютный путь)"
+                           FontSize="13"
+                           Foreground="#A0A0B0" />
+                <TextBox Name="DataPathBox"
+                         PlaceholderText="vaults\&lt;будет сгенерирован автоматически&gt;"
+                         FontSize="13"
+                         Background="#1E1E2A"
+                         Foreground="#FFFFFF" />
+                <TextBlock Text="Если оставить пустым — путь будет сгенерирован автоматически."
+                           FontSize="11"
+                           Foreground="#6B6B7B"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,0" />
+            </StackPanel>
+        </Expander>
+
+        <TextBlock Grid.Row="4"
+                   Name="ErrorText"
+                   Text=""
+                   FontSize="12"
+                   Foreground="#EF4444"
+                   TextWrapping="Wrap"
+                   IsVisible="False"
+                   Margin="0,8,0,12" />
+
+        <StackPanel Grid.Row="5"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10">
+            <Button Name="CancelButton"
+                    Content="Отмена"
+                    Click="OnCancelClick"
+                    Padding="20,10"
+                    Background="#2D2D3D"
+                    Foreground="#FFFFFF"
+                    CornerRadius="6" />
+            <Button Name="CreateButton"
+                    Content="Создать"
+                    Click="OnCreateClick"
+                    Padding="20,10"
+                    Background="#F59E0B"
+                    Foreground="#111119"
+                    FontWeight="SemiBold"
+                    CornerRadius="6" />
+        </StackPanel>
+    </Grid>
+</Window>
