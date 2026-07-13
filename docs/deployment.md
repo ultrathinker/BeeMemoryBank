@@ -136,6 +136,26 @@ docker compose exec bmb dotnet /app/api/BeeMemoryBank.Cli.dll join \
   --password "..." --name "NewNode" \
   --data /app/data
 ```
+## Stable Data Root and Multiple Storages (Windows Desktop)
+
+In Windows Desktop installations (via Velopack), user data is isolated from the application binary files to prevent data loss during updates and repairs.
+
+### Stable Data Root Directory
+* **Data Path:** `%LOCALAPPDATA%\BeeMemoryBankData`
+* **Why it is separate:** Previously, user data was stored within the versioned application directory (`current\data`). Velopack deletes and recreates the `current` folder during application updates and repairs, which leads to total loss of user data. Moving the data path to a separate root outside the application folder completely resolves this issue.
+* **Uninstallation Behavior:** When the user uninstalls the Desktop application (either by running `Update.exe uninstall` or via the Windows "Apps & Features" Settings panel), Velopack only cleans up its own installation folder (`%LOCALAPPDATA%\BeeMemoryBank`). The stable data root (`%LOCALAPPDATA%\BeeMemoryBankData`) **is NOT deleted or modified during uninstallation**, meaning user profiles, credentials, and databases survive uninstallation.
+
+### Directory Structure
+Inside the stable data root, files are organized as follows:
+* `profiles.json` — The profile registry which tracks all defined storages, their names, unique identifiers, and the last used profile.
+* `desktop-settings.json` — Settings for the Desktop shell.
+* `logs\` — Log files for both the Desktop shell and the backend node process (`bmbd`).
+* `migration\` — Logs and markers for startup data rescue migrations.
+* `vaults\<vaultId>\` — Individual directories for each created storage (vault). Each vault folder contains the standard data directory layout (such as `beememorybank.db`, `media\`, etc.).
+
+### Transition and Test Scripts
+* **Legacy Data Migration:** If you have an older installation with data locked inside the versioned folder, the Desktop application automatically attempts to rescue the data on startup. Alternatively, you can use the manual PowerShell script [rescue-velopack-data.ps1](../scripts/rescue-velopack-data.ps1) to copy data from a legacy path to the new stable directory before updating.
+* **Update Verification:** The E2E update verification process is implemented in [smoke-update.ps1](../scripts/smoke-update.ps1). This script tests the full Velopack update cycle using a throwaway application package to guarantee that user data is preserved after update and repair procedures.
 
 ## Database Schema
 

@@ -200,6 +200,17 @@ Agent runs: python bmb-upload.py --url https://your-server.example.com --bearer 
 
 ---
 
+## :card_index_dividers: Multiple Storages
+
+BeeMemoryBank supports running multiple isolated data stores (storages or vaults) within the same Desktop application. 
+
+* **What is a Storage?** Each storage is a completely independent database with its own credentials, keys, articles, media files, and settings. Think of it like having a "Personal Bank" and a "Work Bank" that never touch or share any data.
+* **Creating a Storage:** To create a new storage, right-click the system tray icon, navigate to **Storage**, and click **Create Storage...**. You will be prompted to give it a name.
+* **Switching:** You can switch between storages directly from the system tray menu. The Desktop application will safely shut down the backend for the current storage, clean up the session context in the web view, and spin up the new storage in a matter of seconds.
+* **Managing and "Forgetting":** Through the **Manage Storages...** menu, you can rename profiles or "forget" them. Forgetting a storage simply removes it from the list of profiles in the application—your encrypted files and databases are **never deleted from the disk** and will remain exactly where they were.
+
+---
+
 ## :rocket: Quick Start
 
 ### Docker (recommended)
