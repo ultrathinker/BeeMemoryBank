@@ -475,24 +475,33 @@ public static class AutoDiscovery
         var webInfo = ResolveApplicationStartInfo(absBaseDir, "web", "BeeMemoryBank.Web");
 
         // Base environment variables
+        // The Node front's own default HTTP port (see RunOrchestratorAsync's preferredFrontPort)
+        // and opt-in HTTPS gate — mDNS should advertise the port peers can ACTUALLY reach (the
+        // front, :5310/:5311), not Api's own random ASPNETCORE_URLS=:0 port or Api's unrelated
+        // standalone/Docker port. This is the front's PREFERRED port; if it's unavailable and
+        // Program.cs falls back to an OS-assigned port, mDNS will still announce the preferred
+        // one — a known, narrow edge case, not fixed here (would need the same
+        // start-front-first-then-inject staging as the BMB_API_URL fix, for a much rarer trigger).
+        const int frontHttpPort = 5310;
+        const int frontHttpsPort = 5311;
+        var httpsEnabled = Environment.GetEnvironmentVariable("BMB_HTTPS_ENABLED") == "1";
+
         var apiEnv = new Dictionary<string, string>
         {
             ["ASPNETCORE_URLS"] = "http://127.0.0.1:0",
             ["BMB_READY_FILE"] = apiReadyFilePath,
             ["BMB_STDIN_LIFELINE"] = "1",
             ["BMB_BEHIND_LOOPBACK_PROXY"] = "1",
-            ["BMB_DATA_PATH"] = absDataDir
+            ["BMB_DATA_PATH"] = absDataDir,
+            ["BMB_MDNS_PORT"] = (httpsEnabled ? frontHttpsPort : frontHttpPort).ToString(),
+            ["BMB_MDNS_HTTPS"] = httpsEnabled ? "true" : "false"
         };
 
-        // NOTE: BMB_API_URL is deliberately NOT set here. Api binds to a random port
-        // (ASPNETCORE_URLS=http://127.0.0.1:0) that isn't known until Api's own ready-file
-        // is written - but NodeOrchestrator starts every child concurrently, with no
-        // "wait for Api, then start Web with its resolved port" staging. Web already falls
-        // back to http://localhost:5300 when BMB_API_URL is unset (see its Program.cs), so
-        // it still starts and becomes ready correctly; its own Api-proxy calls just won't
-        // reach the real Api process in auto-discovered mode until NodeOrchestrator gains
-        // genuine staged/dependency-ordered startup - tracked as follow-up work, not
-        // attempted here to avoid a fragile workaround.
+        // NOTE: BMB_API_URL is NOT set here — Api binds to a random port
+        // (ASPNETCORE_URLS=http://127.0.0.1:0) that isn't known until Api's own ready-file is
+        // written. RunOrchestratorAsync handles this: in auto-discovery mode it starts Api
+        // alone first, reads its real resolved URL once ready, and injects BMB_API_URL into
+        // Web's environment before starting Web (see the two-phase startup there).
         var webEnv = new Dictionary<string, string>
         {
             ["ASPNETCORE_URLS"] = "http://127.0.0.1:0",
