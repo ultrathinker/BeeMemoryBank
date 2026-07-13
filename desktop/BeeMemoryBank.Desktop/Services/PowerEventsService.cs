@@ -197,6 +197,81 @@ public sealed class PowerEventsService : IDisposable
         UnregisterClass(_className, hInst);
     }
 
+    private const uint NIM_ADD = 0x00000000;
+    private const uint NIM_DELETE = 0x00000002;
+    private const int NIF_TIP = 0x00000004;
+    private const int NIF_INFO = 0x00000010;
+    private const int NIIF_WARNING = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct NOTIFYICONDATA
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public int uID;
+        public int uFlags;
+        public int uCallbackMessage;
+        public IntPtr hIcon;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string szTip;
+        public int dwState;
+        public int dwStateMask;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+        public string szInfo;
+        public int uTimeoutOrVersion;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+        public string szInfoTitle;
+        public int dwInfoFlags;
+        public Guid guidItem;
+        public IntPtr hBalloonIcon;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
+
+    private void ShowSleepWarningNotification()
+    {
+        if (!OperatingSystem.IsWindows() || _hwnd == IntPtr.Zero) return;
+
+        try
+        {
+            var nid = new NOTIFYICONDATA
+            {
+                hWnd = _hwnd,
+                uID = 1001,
+                uFlags = NIF_INFO | NIF_TIP,
+                szTip = "BeeMemoryBank",
+                szInfo = "This machine is about to sleep — the BeeMemoryBank node will be unreachable until it wakes.",
+                szInfoTitle = "BeeMemoryBank Warning",
+                dwInfoFlags = NIIF_WARNING,
+                uTimeoutOrVersion = 10000
+            };
+            nid.cbSize = Marshal.SizeOf(nid);
+
+            Shell_NotifyIcon(NIM_ADD, ref nid);
+
+            // Clean up the temporary icon after 10 seconds asynchronously
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                await System.Threading.Tasks.Task.Delay(10000);
+                if (OperatingSystem.IsWindows())
+                {
+                    var localNid = new NOTIFYICONDATA
+                    {
+                        hWnd = nid.hWnd,
+                        uID = nid.uID
+                    };
+                    localNid.cbSize = Marshal.SizeOf(localNid);
+                    Shell_NotifyIcon(NIM_DELETE, ref localNid);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[PowerEventsService] Failed to show warning notification: {ex.Message}");
+        }
+    }
+
     private IntPtr CustomWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         if (msg == WM_POWERBROADCAST)
@@ -204,6 +279,10 @@ public sealed class PowerEventsService : IDisposable
             if ((int)wParam == PBT_APMSUSPEND)
             {
                 Console.WriteLine("[PowerEventsService] System is going to sleep (PBT_APMSUSPEND)!");
+                
+                // Show warning notification
+                ShowSleepWarningNotification();
+
                 try
                 {
                     _onSleep();
@@ -221,6 +300,23 @@ public sealed class PowerEventsService : IDisposable
     public void Dispose()
     {
         _cts?.Cancel();
+
+        // Clean up temporary notify icon if active
+        if (OperatingSystem.IsWindows() && _hwnd != IntPtr.Zero)
+        {
+            try
+            {
+                var localNid = new NOTIFYICONDATA
+                {
+                    hWnd = _hwnd,
+                    uID = 1001
+                };
+                localNid.cbSize = Marshal.SizeOf(localNid);
+                Shell_NotifyIcon(NIM_DELETE, ref localNid);
+            }
+            catch { }
+        }
+
         if (_hwnd != IntPtr.Zero)
         {
             PostMessage(_hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);

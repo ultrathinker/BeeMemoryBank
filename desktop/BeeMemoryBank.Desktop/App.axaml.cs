@@ -16,6 +16,7 @@ namespace BeeMemoryBank.Desktop;
 public partial class App : Application
 {
     private TrayIcon? _trayIcon;
+    private Services.PreventSleepService? _preventSleepService;
 
     public override void Initialize()
     {
@@ -32,10 +33,14 @@ public partial class App : Application
             // Setup tray icon
             CreateTrayIcon(mainWindow, desktop);
 
-            // Hook application exit to dispose the tray icon properly
+            // Hook application exit to dispose the tray icon properly and release sleep prevention
             desktop.Exit += (s, e) =>
             {
                 _trayIcon?.Dispose();
+                if (OperatingSystem.IsWindows() && _preventSleepService != null)
+                {
+                    _preventSleepService.DisableSleepPreventionOnly();
+                }
             };
         }
 
@@ -69,6 +74,37 @@ public partial class App : Application
                 ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = autostartService.IsEnabled
             };
+
+            NativeMenuItem? preventSleepItem = null;
+            if (OperatingSystem.IsWindows())
+            {
+                _preventSleepService = new Services.PreventSleepService();
+                _preventSleepService.ApplyState();
+
+                preventSleepItem = new NativeMenuItem("Prevent sleep")
+                {
+                    ToggleType = MenuItemToggleType.CheckBox,
+                    IsChecked = _preventSleepService.IsEnabled
+                };
+                preventSleepItem.Click += (s, e) =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        try
+                        {
+                            if (OperatingSystem.IsWindows() && _preventSleepService != null)
+                            {
+                                _preventSleepService.IsEnabled = !_preventSleepService.IsEnabled;
+                                preventSleepItem.IsChecked = _preventSleepService.IsEnabled;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error toggling prevent sleep: {ex.Message}");
+                        }
+                    });
+                };
+            }
             autostartItem.Click += (s, e) =>
             {
                 Dispatcher.UIThread.Post(() =>
@@ -195,6 +231,10 @@ public partial class App : Application
 
             menu.Items.Add(openItem);
             menu.Items.Add(autostartItem);
+            if (preventSleepItem != null)
+            {
+                menu.Items.Add(preventSleepItem);
+            }
             menu.Items.Add(new NativeMenuItemSeparator());
             menu.Items.Add(checkItem);
             menu.Items.Add(statusItem);
