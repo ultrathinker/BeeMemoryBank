@@ -650,8 +650,15 @@ public class DekRotationService : IDekRotationApplier
                 _progress.Update(DekRotationFlowStep.InvalidatingAgents, 80,
                     "Auto-accept: removing recovery key slots...");
 
+                // os_auto_unlock must be invalidated here too, not just recovery: this node's
+                // DPAPI secret file is unchanged, but its slot still wraps the OLD (now invalid)
+                // DEK, and the server has no access to the plaintext secret to re-wrap it here.
+                // Leaving it would make IsEnabledAsync() report "enabled" while auto-unlock
+                // silently fails sentinel verification and returns false forever afterward — a
+                // Codex-reviewed finding (leaving the feature enabled-looking but non-functional
+                // is worse than requiring the admin to notice and re-enable it).
                 slotsDeleted = await conn.ExecuteAsync(
-                    "DELETE FROM tbl_key_slot WHERE slot_type = 'recovery'", transaction: tx);
+                    "DELETE FROM tbl_key_slot WHERE slot_type IN ('recovery', 'os_auto_unlock')", transaction: tx);
             }
 
             _progress.Update(DekRotationFlowStep.Finalizing, 85,
