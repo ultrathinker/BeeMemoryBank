@@ -118,6 +118,18 @@ function ConvertTo-CmdArg {
 
 # Run a process via ProcessStartInfo, capture stdout+stderr, return exit code.
 # Uses Arguments (string) instead of ArgumentList for PS 5.1 compatibility.
+#
+# Uses Process.Start() directly (NOT Start-Process -PassThru): empirically verified in
+# this environment that Start-Process -PassThru's returned Process object never populates
+# .ExitCode (stays $null forever, even after Refresh() and after WaitForExit() confirms
+# the process exited) -- silently breaking every caller's "$ec -eq 0" check. Reads stdout/
+# stderr via ReadToEndAsync() (started BEFORE WaitForExit, never awaited synchronously
+# before it) instead of the old synchronous ReadToEnd(), which blocked until the pipe
+# closed with no timeout of its own -- making TimeoutSec dead code and meaning a genuinely
+# hung child (Setup.exe / Update.exe) would hang this script forever, with real user data
+# already backed up/swapped and no way to reach the try/finally restore. This needed NO
+# OutputDataReceived event handlers, avoiding the PS 5.1 event-handler strictmode issue
+# noted below (on Start-Bmbd) entirely.
 function Invoke-Exe {
     param(
         [string]$Exe,
@@ -135,15 +147,30 @@ function Invoke-Exe {
     foreach ($k in $EnvOverrides.Keys) {
         $psi.EnvironmentVariables[$k] = $EnvOverrides[$k]
     }
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $stdout = $p.StandardOutput.ReadToEnd()
-    $stderr = $p.StandardError.ReadToEnd()
-    $p.WaitForExit($TimeoutSec * 1000) | Out-Null
-    if ($ShowOutput -or $p.ExitCode -ne 0) {
+
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    [void]$p.Start()
+
+    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+    $stderrTask = $p.StandardError.ReadToEndAsync()
+
+    $exited = $p.WaitForExit($TimeoutSec * 1000)
+    if (-not $exited) {
+        Write-Host "  [TIMEOUT] $Exe did not exit within ${TimeoutSec}s -- killing process tree."
+        try { taskkill /PID $p.Id /T /F 2>$null | Out-Null } catch {}
+        $p.WaitForExit(10000) | Out-Null
+    }
+
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    $exitCode = if ($exited) { $p.ExitCode } else { -9999 }
+
+    if ($ShowOutput -or $exitCode -ne 0) {
         if ($stdout) { Write-Host $stdout }
         if ($stderr) { Write-Host $stderr }
     }
-    return $p.ExitCode
+    return $exitCode
 }
 
 # Start bmbd in --auto mode as a background process; return the Process object.
@@ -400,7 +427,6 @@ try {
     Write-Pass "Step 3: vpk pack v1.0.0 done"
 } catch {
     Write-Fail "Step 3: $_"
-    Invoke-Cleanup
     exit 1
 }
 
@@ -558,6 +584,15 @@ Write-Pass "Step 8: rescue succeeded, data preserved through Velopack update lif
 # ---------------------------------------------------------------------------
 # Step 9: Verify marker still present (update did not destroy data)
 # ---------------------------------------------------------------------------
+# NOTE ON COVERAGE: this step re-checks the marker Step 8 just wrote -- it does NOT by
+# itself prove "data present in the stable vault BEFORE an apply survives that apply",
+# because at the time of the v1.0.0->v1.0.1 apply (Step 7) the stable vault was still
+# empty (the marker was only created afterward, in Step 8, to exercise rescue). The step
+# that actually proves stable-vault data survives a real Update.exe apply is Step 10
+# (repair = a second real apply, this time with data already sitting in the stable vault
+# beforehand) -- per ADR 0002 P1, a same-version repair and a version-upgrade apply wipe
+# and rebuild current\ via the identical mechanism, so Step 10 is mechanically equivalent
+# proof for the version-upgrade case too, not merely a repair-specific check.
 
 Write-Step "Step 9: Verify data survives (post-update check)"
 Assert-FileContains -FilePath $DefaultVaultMarker -Marker $NewLegacyMarkerGuid -Label "Step 9 data-survival"

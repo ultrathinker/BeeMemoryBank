@@ -341,10 +341,18 @@ public sealed class UpdateService
                 throw new InvalidOperationException($"Cannot apply from state {_step}; must be ReadyToApply.");
 
             // ── Pre-apply guard check ─────────────────────────────────────────
-            var dangerousLegacyDbPath = System.IO.Path.Combine(System.AppContext.BaseDirectory, "data", "beememorybank.db");
-            if (System.IO.File.Exists(dangerousLegacyDbPath))
+            // Checks the ACTUAL active data directory (_dataPath), not AppContext.BaseDirectory:
+            // this service runs inside the Api process, whose own BaseDirectory is
+            // <install>\current\api\ in the packaged layout — never the dangerous
+            // <install>\current\data\ / <install>\current\bmbd\data\ paths a prior regression
+            // could resurrect. Walking up from _dataPath for a directory literally named
+            // "current" with a sibling Update.exe is deployment-topology-agnostic: it fires
+            // for any process (Desktop/bmbd/Api) whose active data lives inside a Velopack
+            // live-payload folder that gets wiped/replaced on every apply, and never fires for
+            // Docker/standalone deployments that have no such folder.
+            if (IsInsideVelopackCurrentDir(_dataPath))
             {
-                SetFailed($"Apply blocked: dangerous legacy database file detected at '{dangerousLegacyDbPath}'. Update cannot be applied to avoid data loss.");
+                SetFailed($"Apply blocked: active data directory '{_dataPath}' is inside a Velopack-managed 'current' folder that gets wiped/replaced on apply. Update cannot be applied to avoid data loss.");
                 return;
             }
 
@@ -612,4 +620,34 @@ public sealed class UpdateService
 
     private static string SanitizeVersion(string v) =>
         string.Join("", v.Where(c => char.IsAsciiLetterOrDigit(c) || c == '.' || c == '-'));
+
+    /// <summary>
+    /// True if <paramref name="path"/> has an ancestor directory literally named "current"
+    /// that has a sibling Update.exe — the exact, deployment-agnostic signature of a Velopack
+    /// live-payload folder (see docs/adr/0002-stable-data-root.md). Such a folder is entirely
+    /// replaced on every apply, so any data living inside it would be destroyed.
+    /// </summary>
+    private static bool IsInsideVelopackCurrentDir(string path)
+    {
+        try
+        {
+            var dir = new System.IO.DirectoryInfo(System.IO.Path.GetFullPath(path));
+            while (dir != null)
+            {
+                if (string.Equals(dir.Name, "current", StringComparison.OrdinalIgnoreCase)
+                    && dir.Parent != null
+                    && System.IO.File.Exists(System.IO.Path.Combine(dir.Parent.FullName, "Update.exe")))
+                {
+                    return true;
+                }
+                dir = dir.Parent;
+            }
+        }
+        catch
+        {
+            // Any path-resolution error is not our concern here — the normal gate checks
+            // (SnapshotService, DB validation, etc.) will surface real problems.
+        }
+        return false;
+    }
 }

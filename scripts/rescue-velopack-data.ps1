@@ -187,6 +187,96 @@ function Copy-DirectoryRecursive {
     }
 }
 
+# Fix #5 parity with the C# LegacyDataRescue.ExecuteRescue: performs one atomic copy
+# attempt (temp sibling -> rename) into $Destination. Returns a result object instead of
+# exiting directly, so the caller can retry into a recovered-<date> vault when the target
+# turns out to be non-empty-but-invalid (e.g. a partial leftover from a previous failed
+# attempt) rather than aborting outright -- matching ExecuteRescue's !isRecovery retry.
+function Invoke-RescueCopyAttempt {
+    param ([string]$LegacyDir, [string]$Destination, [bool]$IsRecovery)
+
+    $tempDir   = "$Destination.rescue-tmp-$([Guid]::NewGuid().ToString('N'))"
+    $fileCount = 0
+    $totalBytes = [long]0
+    $refFileCount  = [ref]$fileCount
+    $refTotalBytes = [ref]$totalBytes
+
+    try {
+        Copy-DirectoryRecursive -Source $LegacyDir -Dest $tempDir `
+            -FileCount $refFileCount -TotalBytes $refTotalBytes
+
+        # Handle desktop-settings.json -> BeeMemoryBankData root
+        $settingsInTemp = Join-Path $tempDir "desktop-settings.json"
+        if (Test-Path $settingsInTemp -PathType Leaf) {
+            $settingsDest = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\desktop-settings.json"
+            if (-not (Test-Path $settingsDest)) {
+                Copy-Item -LiteralPath $settingsInTemp -Destination $settingsDest
+                Write-Verbose "  Moved desktop-settings.json to Root."
+            }
+            Remove-Item $settingsInTemp -Force
+        }
+
+        # Write rescued-from.json marker
+        $marker = [ordered]@{
+            sourcePath  = $LegacyDir
+            rescuedAt   = (Get-Date -Format 'o')
+            appVersion  = "manual-ps-rescue"
+            fileCount   = $refFileCount.Value
+            totalBytes  = $refTotalBytes.Value
+        }
+        $markerJson = $marker | ConvertTo-Json
+        Set-Content -Path (Join-Path $tempDir "rescued-from.json") -Value $markerJson -Encoding UTF8
+
+        # Ensure parent directory exists
+        $parentDir = Split-Path $Destination -Parent
+        if ($parentDir -and -not (Test-Path $parentDir)) {
+            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+        }
+
+        # Atomic rename: remove empty target if present, then move
+        if (Test-Path $Destination) {
+            $existing = @(Get-ChildItem -LiteralPath $Destination -Force)
+            if ($existing.Count -eq 0) {
+                Remove-Item $Destination -Force
+            } else {
+                # Fix #5: re-validate before failing -- could be a concurrent rescue that already succeeded
+                $recheckStatus = Get-SqliteFileStatus -Path (Join-Path $Destination "beememorybank.db")
+                if ($recheckStatus -eq 'ValidSqlite') {
+                    if (Test-Path $tempDir) { try { Remove-Item $tempDir -Recurse -Force } catch { } }
+                    return [PSCustomObject]@{ Outcome = 'AlreadyValid'; Destination = $Destination; FileCount = 0; TotalBytes = 0 }
+                }
+
+                # Non-empty, no valid DB: genuine unexpected state (e.g. a partial leftover).
+                # Same policy as ExecuteRescue's !isRecovery branch: retry into a fresh
+                # recovered-<date> vault instead of aborting outright, unless we are ALREADY
+                # in a recovery attempt (avoids infinite recursion).
+                if (Test-Path $tempDir) { try { Remove-Item $tempDir -Recurse -Force } catch { } }
+                if (-not $IsRecovery) {
+                    return [PSCustomObject]@{ Outcome = 'RetryAsRecovery'; Destination = $null; FileCount = 0; TotalBytes = 0 }
+                }
+                return [PSCustomObject]@{
+                    Outcome = 'Failed'; Destination = $Destination; FileCount = 0; TotalBytes = 0
+                    Error   = "Destination '$Destination' was non-empty and did not contain a valid DB, even as a recovery target."
+                }
+            }
+        }
+
+        Move-Item -LiteralPath $tempDir -Destination $Destination
+        return [PSCustomObject]@{
+            Outcome = if ($IsRecovery) { 'RescuedToRecoveredVault' } else { 'RescuedSuccessfully' }
+            Destination = $Destination; FileCount = $refFileCount.Value; TotalBytes = $refTotalBytes.Value
+        }
+    } catch {
+        if (Test-Path $tempDir) {
+            try { Remove-Item $tempDir -Recurse -Force } catch { }
+        }
+        return [PSCustomObject]@{
+            Outcome = 'Failed'; Destination = $Destination; FileCount = $refFileCount.Value; TotalBytes = $refTotalBytes.Value
+            Error = $_.Exception.Message
+        }
+    }
+}
+
 # Fix #7: Write log to BOTH migration\ and logs\ directories
 function Write-MigrationLog {
     param ([string]$LegacyDir, [string]$TargetDir, [int]$FileCount, [long]$TotalBytes, [string]$Outcome, [string]$Error)
@@ -286,88 +376,47 @@ try {
         Write-Host "Both vaults have different valid databases. Copying legacy to recovery vault: $destinationDir" -ForegroundColor Yellow
     }
 
-    # Atomic copy: temp sibling -> rename
-    $tempDir   = "$destinationDir.rescue-tmp-$([Guid]::NewGuid().ToString('N'))"
-    $fileCount = 0
-    $totalBytes = [long]0
-    $refFileCount  = [ref]$fileCount
-    $refTotalBytes = [ref]$totalBytes
+    if ($PSCmdlet.ShouldProcess($destinationDir, "Copy legacy data")) {
+        $result = Invoke-RescueCopyAttempt -LegacyDir $LegacyDir -Destination $destinationDir -IsRecovery $isRecovery
 
-    try {
-        if ($PSCmdlet.ShouldProcess($destinationDir, "Copy legacy data")) {
-            Copy-DirectoryRecursive -Source $LegacyDir -Dest $tempDir `
-                -FileCount $refFileCount -TotalBytes $refTotalBytes
-
-            # Handle desktop-settings.json -> BeeMemoryBankData root
-            $settingsInTemp = Join-Path $tempDir "desktop-settings.json"
-            if (Test-Path $settingsInTemp -PathType Leaf) {
-                $settingsDest = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\desktop-settings.json"
-                if (-not (Test-Path $settingsDest)) {
-                    Copy-Item -LiteralPath $settingsInTemp -Destination $settingsDest
-                    Write-Verbose "  Moved desktop-settings.json to Root."
-                }
-                Remove-Item $settingsInTemp -Force
-            }
-
-            # Write rescued-from.json marker
-            $marker = [ordered]@{
-                sourcePath  = $LegacyDir
-                rescuedAt   = (Get-Date -Format 'o')
-                appVersion  = "manual-ps-rescue"
-                fileCount   = $refFileCount.Value
-                totalBytes  = $refTotalBytes.Value
-            }
-            $markerJson = $marker | ConvertTo-Json
-            Set-Content -Path (Join-Path $tempDir "rescued-from.json") -Value $markerJson -Encoding UTF8
-
-            # Ensure parent directory exists
-            $parentDir = Split-Path $destinationDir -Parent
-            if ($parentDir -and -not (Test-Path $parentDir)) {
-                New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
-            }
-
-            # Atomic rename: remove empty target if present, then move
-            if (Test-Path $destinationDir) {
-                $existing = @(Get-ChildItem -LiteralPath $destinationDir -Force)
-                if ($existing.Count -eq 0) {
-                    Remove-Item $destinationDir -Force
-                } else {
-                    # Fix #5: re-validate before failing -- could be a concurrent rescue that already succeeded
-                    $recheckStatus = Get-SqliteFileStatus -Path (Join-Path $destinationDir "beememorybank.db")
-                    if ($recheckStatus -eq 'ValidSqlite') {
-                        Write-Host "Target vault was populated concurrently by another rescue process. TargetAlreadyValid." -ForegroundColor Green
-                        if (Test-Path $tempDir) { try { Remove-Item $tempDir -Recurse -Force } catch { } }
-                        exit 0
-                    }
-                    throw "Destination '$destinationDir' is non-empty. Aborting to avoid data loss."
-                }
-            }
-
-            Move-Item -LiteralPath $tempDir -Destination $destinationDir
-
-            $outcomeMsg = if ($isRecovery) { "RescuedToRecoveredVault" } else { "RescuedSuccessfully" }
-            Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $destinationDir `
-                -FileCount $refFileCount.Value -TotalBytes $refTotalBytes.Value `
-                -Outcome $outcomeMsg -Error ""
-
-            Write-Host ""
-            Write-Host "Rescue complete! $outcomeMsg" -ForegroundColor Green
-            Write-Host "  Files copied : $($refFileCount.Value)"
-            Write-Host "  Total bytes  : $($refTotalBytes.Value)"
-            Write-Host "  Destination  : $destinationDir"
-            Write-Host ""
-            Write-Host "The source at '$LegacyDir' was NOT deleted (Velopack will handle it on next update/uninstall)." -ForegroundColor Yellow
+        # Fix #5 parity with ExecuteRescue's !isRecovery retry: target was non-empty but
+        # invalid (not a concurrent-success, not our own recovered-vault target either) --
+        # retry once into a fresh recovered-<date> vault instead of aborting, so a valid
+        # legacy DB is never left exposed to the next Velopack update/repair just because
+        # the stable vault happened to contain unrelated leftover debris.
+        if ($result.Outcome -eq 'RetryAsRecovery') {
+            $recoveredName = "recovered-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            $destinationDir = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\vaults\$recoveredName"
+            $isRecovery = $true
+            Write-Host "Target vault was non-empty but invalid. Retrying as recovery vault: $destinationDir" -ForegroundColor Yellow
+            $result = Invoke-RescueCopyAttempt -LegacyDir $LegacyDir -Destination $destinationDir -IsRecovery $isRecovery
         }
-    } catch {
-        # Clean up temp dir on failure
-        if (Test-Path $tempDir) {
-            try { Remove-Item $tempDir -Recurse -Force } catch { }
+
+        switch ($result.Outcome) {
+            'AlreadyValid' {
+                Write-Host "Target vault was populated concurrently by another rescue process. TargetAlreadyValid." -ForegroundColor Green
+                exit 0
+            }
+            'Failed' {
+                Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $result.Destination -FileCount 0 -TotalBytes 0 `
+                    -Outcome "LegacyFoundButRescueFailed" -Error $result.Error
+                Write-Error "Rescue failed: $($result.Error)"
+                exit 5
+            }
+            default {
+                Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $result.Destination `
+                    -FileCount $result.FileCount -TotalBytes $result.TotalBytes `
+                    -Outcome $result.Outcome -Error ""
+
+                Write-Host ""
+                Write-Host "Rescue complete! $($result.Outcome)" -ForegroundColor Green
+                Write-Host "  Files copied : $($result.FileCount)"
+                Write-Host "  Total bytes  : $($result.TotalBytes)"
+                Write-Host "  Destination  : $($result.Destination)"
+                Write-Host ""
+                Write-Host "The source at '$LegacyDir' was NOT deleted (Velopack will handle it on next update/uninstall)." -ForegroundColor Yellow
+            }
         }
-        Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $destinationDir `
-            -FileCount $refFileCount.Value -TotalBytes $refTotalBytes.Value `
-            -Outcome "LegacyFoundButRescueFailed" -Error $_.Exception.Message
-        Write-Error "Rescue failed: $_"
-        exit 5
     }
 } finally {
     # Fix #2: release the exclusive lock hold after copy is fully done (or failed)

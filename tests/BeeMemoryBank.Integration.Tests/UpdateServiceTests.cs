@@ -367,29 +367,69 @@ public class UpdateServiceTests : IAsyncLifetime
     [Fact]
     public async Task ApplyAsync_DangerousLegacyDbExists_BlocksApply()
     {
-        var dataDir = Path.Combine(AppContext.BaseDirectory, "data");
-        var dangerousDbPath = Path.Combine(dataDir, "beememorybank.db");
-        Directory.CreateDirectory(dataDir);
-        await File.WriteAllTextAsync(dangerousDbPath, "dummy db contents");
+        // The guard checks the service's ACTIVE data path (_dataPath) for a Velopack
+        // live-payload signature (an ancestor directory literally named "current" with a
+        // sibling Update.exe) -- not AppContext.BaseDirectory, which for this test process
+        // (and for the real Api process in the packaged layout, current\api\) is never the
+        // dangerous path. So this test builds its own UpdateService pointed at a fake nested
+        // path that reproduces that exact signature, reusing this class's already-built
+        // collaborators (they are never touched -- the guard returns before any of them run).
+        var fakeInstallRoot = Path.Combine(Path.GetTempPath(), $"bmb_veloguard_{Guid.NewGuid():N}");
+        var fakeDataPath = Path.Combine(fakeInstallRoot, "current", "vaults", "default");
+        Directory.CreateDirectory(fakeDataPath);
+        File.WriteAllText(Path.Combine(fakeInstallRoot, "Update.exe"), "stub");
 
         try
         {
-            await DriveToReadyToApply(new byte[] { 1, 2, 3 });
-            ClearSideGates();
+            var guardedSvc = new UpdateService(
+                [_releasePublicKey, _rotatedPublicKey],
+                _services.GetRequiredService<SnapshotService>(), _maintenance,
+                ActivatorUtilities.CreateInstance<DekRotationService>(_services, fakeDataPath),
+                ActivatorUtilities.CreateInstance<SnapshotRestoreService>(_services, fakeDataPath),
+                _session,
+                fakeDataPath,
+                _services.GetRequiredService<ILogger<UpdateService>>(),
+                _artifactSource,
+                new AlwaysHealthyHealthCheck());
 
-            await _svc.ApplyAsync();
+            var artifactBytes = new byte[] { 1, 2, 3 };
+            _artifactSource.AddOrUpdate("guard-package.bin", artifactBytes);
+            var (json, sig) = BuildSignedManifest(NewerVersion, "guard-package.bin", Sha256Hex(artifactBytes), artifactBytes.Length);
+            (await guardedSvc.CheckAsync(json, sig)).Should().BeTrue();
+            await guardedSvc.DownloadAsync(JsonSerializer.Deserialize<ReleasesManifest>(json, JsonOpts)!);
+            guardedSvc.GetProgress().CurrentStep.Should().Be(UpdateFlowStep.ReadyToApply);
+            guardedSvc.DekRotationStepProvider = () => DekRotationFlowStep.Idle;
+            guardedSvc.RestoreStepProvider = () => RestoreFlowStep.Idle;
+            guardedSvc.HeavyOperationLockHeldProvider = () => false;
 
-            var p = _svc.GetProgress();
+            await guardedSvc.ApplyAsync();
+
+            var p = guardedSvc.GetProgress();
             p.CurrentStep.Should().Be(UpdateFlowStep.Failed);
-            p.ErrorMessage.Should().Contain("Apply blocked: dangerous legacy database file detected");
+            p.ErrorMessage.Should().Contain("is inside a Velopack-managed 'current' folder");
         }
         finally
         {
-            if (File.Exists(dangerousDbPath))
+            if (Directory.Exists(fakeInstallRoot))
             {
-                try { File.Delete(dangerousDbPath); } catch { }
+                try { Directory.Delete(fakeInstallRoot, recursive: true); } catch { }
             }
         }
+    }
+
+    [Fact]
+    public async Task ApplyAsync_DataPathOutsideVelopackCurrentDir_DoesNotBlockOnGuard()
+    {
+        // _tempDir (this class's normal data path) has no "current" ancestor with a sibling
+        // Update.exe, so the guard must not fire -- confirms the fix doesn't false-positive on
+        // ordinary deployments (Docker/standalone/dev), only on the exact Velopack signature.
+        await DriveToReadyToApply(new byte[] { 4, 5, 6 });
+        ClearSideGates();
+
+        await _svc.ApplyAsync();
+
+        var p = _svc.GetProgress();
+        p.ErrorMessage.Should().NotContain("is inside a Velopack-managed 'current' folder");
     }
 }
 

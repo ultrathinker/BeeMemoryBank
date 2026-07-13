@@ -95,23 +95,22 @@ public class DataPathResolutionTests : IDisposable
         // Arrange
         Environment.SetEnvironmentVariable("BMB_DATA_PATH", null);
 
-        var defaultVaultDir = BmbPaths.DefaultVaultDir;
-        string? backupDir = null;
-        if (Directory.Exists(defaultVaultDir))
-        {
-            backupDir = defaultVaultDir + "_backup_" + Guid.NewGuid().ToString("N");
-            try
-            {
-                Directory.Move(defaultVaultDir, backupDir);
-            }
-            catch
-            {
-                backupDir = null; // If move failed, we won't try to restore
-            }
-        }
+        // Sandbox BmbPaths.Root via a LOCALAPPDATA override instead of moving the real
+        // default vault dir aside: on a machine with a real BeeMemoryBank install, a failed
+        // Directory.Move (e.g. a sharing violation from the real app holding node.lock) used
+        // to leave backupDir null while the test still ran against -- and the finally block
+        // still unconditionally deleted -- the real, un-backed-up vault directory. LOCALAPPDATA
+        // is honored by BmbPaths.Root (see libs/BeeMemoryBank.AppPaths/BmbPaths.cs), so this
+        // is now genuinely isolated rather than relying on a move-and-restore dance.
+        var fakeLocalAppData = GetTempPath("bmb-localappdata");
+        Directory.CreateDirectory(fakeLocalAppData);
+        var originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
 
         try
         {
+            var defaultVaultDir = BmbPaths.DefaultVaultDir;
+
             // Act
             var exitCode = await Program.RunOrchestratorAsync(
                 isAutoMode: true,
@@ -125,22 +124,7 @@ public class DataPathResolutionTests : IDisposable
         }
         finally
         {
-            // Restore backup if one was made
-            try
-            {
-                if (Directory.Exists(defaultVaultDir))
-                {
-                    Directory.Delete(defaultVaultDir, recursive: true);
-                }
-                if (backupDir != null && Directory.Exists(backupDir))
-                {
-                    Directory.Move(backupDir, defaultVaultDir);
-                }
-            }
-            catch
-            {
-                // Ignore restore errors
-            }
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", originalLocalAppData);
         }
     }
 }
