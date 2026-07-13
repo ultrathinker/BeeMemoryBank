@@ -12,10 +12,13 @@ namespace BeeMemoryBank.Desktop;
 public partial class MainWindow : Window
 {
     private readonly Services.NodeLifecycleService _nodeLifecycle = new();
+    private readonly BeeMemoryBank.Profiles.ProfileService _profiles =
+        new(BeeMemoryBank.AppPaths.BmbPaths.ProfilesFile);
     private bool _isRealClose;
     private CancellationTokenSource? _initCts;
     private bool _startMinimized = Program.StartMinimized;
     private string? _frontUrl;
+    private string? _activeProfileId;
     private Services.PowerEventsService? _powerEventsService;
 
     public string? FrontUrl => _frontUrl;
@@ -56,14 +59,23 @@ public partial class MainWindow : Window
         // plain result. Everything below (Dispatcher.UIThread.Post, UpdateStatus, ShowError,
         // WebView wiring, panel switching) stays in MainWindow - the behavior is identical to
         // the inlined implementation that used to live here, only the ownership moved.
+        //
+        // §4.6: which profile to start is autostartMode/lastUsed-driven, not the hardcoded
+        // default vault - a single-profile installation still resolves to "default" via
+        // ProfileService's own first-run fallback, so behavior is unchanged when there is
+        // only one profile.
+        var profile = Services.AutostartProfileResolver.Resolve(_profiles);
         var progress = new Progress<string>(UpdateStatus);
-        var result = await _nodeLifecycle.StartOrAttachAsync(
-            BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir, progress, token);
+        var result = await _nodeLifecycle.StartOrAttachAsync(profile.DataPath, progress, token);
 
         Dispatcher.UIThread.Post(() =>
         {
             if (result.Success)
             {
+                _activeProfileId = profile.Id;
+                try { _profiles.SetLastUsed(profile.Id); }
+                catch (Exception ex) { Debug.WriteLine($"Failed to record last-used profile: {ex.Message}"); }
+
                 var targetUrl = result.FrontUrl;
                 if (!string.IsNullOrEmpty(targetUrl))
                 {
