@@ -16,7 +16,12 @@
       - desktop-settings.json goes to the Root (%LOCALAPPDATA%\BeeMemoryBankData),
         not into the vault.
       - A rescued-from.json marker is written into the destination vault.
-      - A migration log is written to %LOCALAPPDATA%\BeeMemoryBankData\migration\.
+      - A migration log is written to both %LOCALAPPDATA%\BeeMemoryBankData\migration\
+        AND %LOCALAPPDATA%\BeeMemoryBankData\logs\ (Fix #7).
+      - Reparse points / junctions are skipped (Fix #3).
+      - node.lock is held exclusively throughout the entire copy (Fix #2).
+      - Unreadable but existing legacy DB returns a hard error (Fix #1).
+      - Full-file SHA-256 is used for "same database" comparison (Fix #6).
 
 .PARAMETER LegacyDir
     Path to the legacy data directory. Defaults to <script location>\data
@@ -67,26 +72,36 @@ $TransientSuffix    = '.ready'
 # Helper functions
 # ---------------------------------------------------------------------------
 
-function Test-SqliteHeader {
+# Fix #1: Three-way probe -- returns 'FileNotFound', 'Unreadable', 'InvalidHeader', or 'ValidSqlite'
+function Get-SqliteFileStatus {
     param ([string]$Path)
-    if (-not (Test-Path $Path -PathType Leaf)) { return $false }
+    if (-not (Test-Path $Path -PathType Leaf)) { return 'FileNotFound' }
     try {
-        $fs = [System.IO.File]::OpenRead($Path)
+        $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
         try {
-            if ($fs.Length -lt $SqliteMagicBytes.Length) { return $false }
+            if ($fs.Length -lt $SqliteMagicBytes.Length) { return 'InvalidHeader' }
             $buf = New-Object byte[] $SqliteMagicBytes.Length
             $read = $fs.Read($buf, 0, $buf.Length)
-            if ($read -lt $SqliteMagicBytes.Length) { return $false }
+            if ($read -lt $SqliteMagicBytes.Length) { return 'InvalidHeader' }
             for ($i = 0; $i -lt $SqliteMagicBytes.Length; $i++) {
-                if ($buf[$i] -ne $SqliteMagicBytes[$i]) { return $false }
+                if ($buf[$i] -ne $SqliteMagicBytes[$i]) { return 'InvalidHeader' }
             }
-            return $true
+            return 'ValidSqlite'
         } finally {
             $fs.Dispose()
         }
+    } catch [System.IO.IOException] {
+        return 'Unreadable'
+    } catch [System.UnauthorizedAccessException] {
+        return 'Unreadable'
     } catch {
-        return $false
+        return 'Unreadable'
     }
+}
+
+function Test-SqliteHeader {
+    param ([string]$Path)
+    return (Get-SqliteFileStatus -Path $Path) -eq 'ValidSqlite'
 }
 
 function Test-FileLocked {
@@ -103,22 +118,15 @@ function Test-FileLocked {
     }
 }
 
-function Get-FileHash64KB {
+# Fix #6: Hash the ENTIRE file (streaming) instead of just first 64 KB
+function Get-FileHashFull {
     param ([string]$Path)
     try {
-        $fs = [System.IO.File]::OpenRead($Path)
+        $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
         try {
-            $bytesToRead = [Math]::Min($fs.Length, 65536)
-            $buf = New-Object byte[] $bytesToRead
-            $read = 0
-            while ($read -lt $bytesToRead) {
-                $n = $fs.Read($buf, $read, $bytesToRead - $read)
-                if ($n -eq 0) { break }
-                $read += $n
-            }
             $sha = [System.Security.Cryptography.SHA256]::Create()
             try {
-                return $sha.ComputeHash($buf, 0, $read)
+                return $sha.ComputeHash($fs)
             } finally {
                 $sha.Dispose()
             }
@@ -137,8 +145,8 @@ function Compare-Databases {
         $b = Get-Item $PathB
         if ($a.Length -ne $b.Length)                     { return $false }
         if ($a.LastWriteTimeUtc -ne $b.LastWriteTimeUtc) { return $false }
-        $hashA = Get-FileHash64KB -Path $PathA
-        $hashB = Get-FileHash64KB -Path $PathB
+        $hashA = Get-FileHashFull -Path $PathA
+        $hashB = Get-FileHashFull -Path $PathB
         if ($null -eq $hashA -or $null -eq $hashB)       { return $false }
         return [System.Linq.Enumerable]::SequenceEqual($hashA, $hashB)
     } catch {
@@ -153,11 +161,17 @@ function Test-IsTransient {
     return $false
 }
 
+# Fix #3: Skip reparse points (junctions / symlinks) to prevent infinite recursion
 function Copy-DirectoryRecursive {
     param ([string]$Source, [string]$Dest, [ref]$FileCount, [ref]$TotalBytes)
     New-Item -ItemType Directory -Path $Dest -Force | Out-Null
-    foreach ($item in Get-ChildItem -LiteralPath $Source) {
+    foreach ($item in Get-ChildItem -LiteralPath $Source -Force) {
         if ($item.PSIsContainer) {
+            # Fix #3: check for reparse point (junction/symlink) on directories
+            if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                Write-Verbose "  Skipping reparse point/junction: $($item.FullName)"
+                continue
+            }
             Copy-DirectoryRecursive -Source $item.FullName -Dest (Join-Path $Dest $item.Name) `
                 -FileCount $FileCount -TotalBytes $TotalBytes
         } else {
@@ -173,13 +187,11 @@ function Copy-DirectoryRecursive {
     }
 }
 
+# Fix #7: Write log to BOTH migration\ and logs\ directories
 function Write-MigrationLog {
     param ([string]$LegacyDir, [string]$TargetDir, [int]$FileCount, [long]$TotalBytes, [string]$Outcome, [string]$Error)
     try {
-        $migDir = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\migration"
-        New-Item -ItemType Directory -Path $migDir -Force | Out-Null
         $ts = (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
-        $logFile = Join-Path $migDir "rescue-ps-$ts.log"
         $lines = @(
             "[$(Get-Date -Format 'o')] Manual PowerShell Rescue",
             "  Source  : $LegacyDir",
@@ -189,7 +201,16 @@ function Write-MigrationLog {
             "  Outcome : $Outcome"
         )
         if ($Error) { $lines += "  Error   : $Error" }
-        $lines | Set-Content $logFile -Encoding UTF8
+
+        # Primary: migration\
+        $migDir = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\migration"
+        New-Item -ItemType Directory -Path $migDir -Force | Out-Null
+        $lines | Set-Content (Join-Path $migDir "rescue-ps-$ts.log") -Encoding UTF8
+
+        # Secondary: logs\ (Fix #7 / spec section 3.2 point 5)
+        $logsDir = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\logs"
+        New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
+        $lines | Set-Content (Join-Path $logsDir "rescue-ps-$ts.log") -Encoding UTF8
     } catch {
         Write-Warning "Could not write migration log: $_"
     }
@@ -207,7 +228,15 @@ Write-Host ""
 # Step 1 -- Validate source
 $legacyDbPath = Join-Path $LegacyDir "beememorybank.db"
 
-if (-not (Test-SqliteHeader -Path $legacyDbPath)) {
+# Fix #1: tri-state probe
+$legacyStatus = Get-SqliteFileStatus -Path $legacyDbPath
+if ($legacyStatus -eq 'Unreadable') {
+    Write-Error "Legacy database exists but is currently unreadable: '$legacyDbPath'. Check for running processes or security software holding the file, then retry."
+    Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $TargetVaultDir -FileCount 0 -TotalBytes 0 `
+        -Outcome "LegacyFoundButRescueFailed" -Error "Legacy DB unreadable"
+    exit 5
+}
+if ($legacyStatus -ne 'ValidSqlite') {
     Write-Host "No valid legacy database found at '$legacyDbPath'." -ForegroundColor Yellow
     Write-Host "NoLegacyFound -- nothing to do." -ForegroundColor Yellow
     exit 0
@@ -215,112 +244,134 @@ if (-not (Test-SqliteHeader -Path $legacyDbPath)) {
 
 Write-Host "Found valid legacy database: $legacyDbPath" -ForegroundColor Green
 
-# Check node.lock
+# Fix #2: Acquire exclusive hold on node.lock and keep it throughout the entire copy
 $legacyLockPath = Join-Path $LegacyDir "node.lock"
-if (Test-FileLocked -Path $legacyLockPath) {
-    Write-Error "Legacy source is locked (node.lock is held by another process: '$legacyLockPath'). Stop the running node first."
-    Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $TargetVaultDir -FileCount 0 -TotalBytes 0 `
-        -Outcome "LegacyFoundButRescueFailed" -Error "node.lock is locked"
-    exit 5
-}
-
-# Step 2/3/4 -- Determine scenario
-$targetDbPath = Join-Path $TargetVaultDir "beememorybank.db"
-$targetValid  = Test-SqliteHeader -Path $targetDbPath
-
-if (-not $targetValid) {
-    # Case 1: target empty/invalid -> copy to target
-    Write-Host "Target vault has no valid DB. Performing rescue..." -ForegroundColor Cyan
-    $destinationDir = $TargetVaultDir
-    $isRecovery = $false
-} else {
-    $sameDb = Compare-Databases -PathA $legacyDbPath -PathB $targetDbPath
-    if ($sameDb) {
-        # Case 2: both have the same DB -> no-op
-        Write-Host "Target vault already contains the same database as legacy. No-op." -ForegroundColor Green
-        Write-Host "TargetAlreadyValid -- nothing to do."
-        exit 0
+$lockHandle = $null
+if (Test-Path $legacyLockPath -PathType Leaf) {
+    try {
+        $lockHandle = [System.IO.File]::Open($legacyLockPath, 'Open', 'ReadWrite', 'None')
+    } catch [System.IO.IOException] {
+        Write-Error "Legacy source is locked (node.lock is held by another process: '$legacyLockPath'). Stop the running node first."
+        Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $TargetVaultDir -FileCount 0 -TotalBytes 0 `
+            -Outcome "LegacyFoundButRescueFailed" -Error "node.lock is locked"
+        exit 5
+    } catch {
+        Write-Error "Cannot acquire exclusive hold on '$legacyLockPath': $_"
+        exit 5
     }
-    # Case 3: conflict -> copy to recovered-<date>
-    $recoveredName = "recovered-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-    $destinationDir = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\vaults\$recoveredName"
-    $isRecovery = $true
-    Write-Host "Both vaults have different valid databases. Copying legacy to recovery vault: $destinationDir" -ForegroundColor Yellow
 }
-
-# Atomic copy: temp sibling -> rename
-$tempDir   = "$destinationDir.rescue-tmp-$([Guid]::NewGuid().ToString('N'))"
-$fileCount = 0
-$totalBytes = [long]0
-$refFileCount  = [ref]$fileCount
-$refTotalBytes = [ref]$totalBytes
 
 try {
-    if ($PSCmdlet.ShouldProcess($destinationDir, "Copy legacy data")) {
-        Copy-DirectoryRecursive -Source $LegacyDir -Dest $tempDir `
-            -FileCount $refFileCount -TotalBytes $refTotalBytes
+    # Step 2/3/4 -- Determine scenario
+    $targetDbPath = Join-Path $TargetVaultDir "beememorybank.db"
+    $targetValid  = Test-SqliteHeader -Path $targetDbPath
 
-        # Handle desktop-settings.json -> BeeMemoryBankData root
-        $settingsInTemp = Join-Path $tempDir "desktop-settings.json"
-        if (Test-Path $settingsInTemp -PathType Leaf) {
-            $settingsDest = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\desktop-settings.json"
-            if (-not (Test-Path $settingsDest)) {
-                Copy-Item -LiteralPath $settingsInTemp -Destination $settingsDest
-                Write-Verbose "  Moved desktop-settings.json to Root."
+    if (-not $targetValid) {
+        # Case 1: target empty/invalid -> copy to target
+        Write-Host "Target vault has no valid DB. Performing rescue..." -ForegroundColor Cyan
+        $destinationDir = $TargetVaultDir
+        $isRecovery = $false
+    } else {
+        $sameDb = Compare-Databases -PathA $legacyDbPath -PathB $targetDbPath
+        if ($sameDb) {
+            # Case 2: both have the same DB -> no-op
+            Write-Host "Target vault already contains the same database as legacy. No-op." -ForegroundColor Green
+            Write-Host "TargetAlreadyValid -- nothing to do."
+            exit 0
+        }
+        # Case 3: conflict -> copy to recovered-<date>
+        $recoveredName = "recovered-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        $destinationDir = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\vaults\$recoveredName"
+        $isRecovery = $true
+        Write-Host "Both vaults have different valid databases. Copying legacy to recovery vault: $destinationDir" -ForegroundColor Yellow
+    }
+
+    # Atomic copy: temp sibling -> rename
+    $tempDir   = "$destinationDir.rescue-tmp-$([Guid]::NewGuid().ToString('N'))"
+    $fileCount = 0
+    $totalBytes = [long]0
+    $refFileCount  = [ref]$fileCount
+    $refTotalBytes = [ref]$totalBytes
+
+    try {
+        if ($PSCmdlet.ShouldProcess($destinationDir, "Copy legacy data")) {
+            Copy-DirectoryRecursive -Source $LegacyDir -Dest $tempDir `
+                -FileCount $refFileCount -TotalBytes $refTotalBytes
+
+            # Handle desktop-settings.json -> BeeMemoryBankData root
+            $settingsInTemp = Join-Path $tempDir "desktop-settings.json"
+            if (Test-Path $settingsInTemp -PathType Leaf) {
+                $settingsDest = Join-Path $env:LOCALAPPDATA "BeeMemoryBankData\desktop-settings.json"
+                if (-not (Test-Path $settingsDest)) {
+                    Copy-Item -LiteralPath $settingsInTemp -Destination $settingsDest
+                    Write-Verbose "  Moved desktop-settings.json to Root."
+                }
+                Remove-Item $settingsInTemp -Force
             }
-            Remove-Item $settingsInTemp -Force
-        }
 
-        # Write rescued-from.json marker
-        $marker = [ordered]@{
-            sourcePath  = $LegacyDir
-            rescuedAt   = (Get-Date -Format 'o')
-            appVersion  = "manual-ps-rescue"
-            fileCount   = $refFileCount.Value
-            totalBytes  = $refTotalBytes.Value
-        }
-        $markerJson = $marker | ConvertTo-Json
-        Set-Content -Path (Join-Path $tempDir "rescued-from.json") -Value $markerJson -Encoding UTF8
-
-        # Ensure parent directory exists
-        $parentDir = Split-Path $destinationDir -Parent
-        if ($parentDir -and -not (Test-Path $parentDir)) {
-            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
-        }
-
-        # Atomic rename: remove empty target if present, then move
-        if (Test-Path $destinationDir) {
-            $existing = @(Get-ChildItem -LiteralPath $destinationDir -Force)
-            if ($existing.Count -eq 0) {
-                Remove-Item $destinationDir -Force
-            } else {
-                throw "Destination '$destinationDir' is non-empty. Aborting to avoid data loss."
+            # Write rescued-from.json marker
+            $marker = [ordered]@{
+                sourcePath  = $LegacyDir
+                rescuedAt   = (Get-Date -Format 'o')
+                appVersion  = "manual-ps-rescue"
+                fileCount   = $refFileCount.Value
+                totalBytes  = $refTotalBytes.Value
             }
+            $markerJson = $marker | ConvertTo-Json
+            Set-Content -Path (Join-Path $tempDir "rescued-from.json") -Value $markerJson -Encoding UTF8
+
+            # Ensure parent directory exists
+            $parentDir = Split-Path $destinationDir -Parent
+            if ($parentDir -and -not (Test-Path $parentDir)) {
+                New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+            }
+
+            # Atomic rename: remove empty target if present, then move
+            if (Test-Path $destinationDir) {
+                $existing = @(Get-ChildItem -LiteralPath $destinationDir -Force)
+                if ($existing.Count -eq 0) {
+                    Remove-Item $destinationDir -Force
+                } else {
+                    # Fix #5: re-validate before failing -- could be a concurrent rescue that already succeeded
+                    $recheckStatus = Get-SqliteFileStatus -Path (Join-Path $destinationDir "beememorybank.db")
+                    if ($recheckStatus -eq 'ValidSqlite') {
+                        Write-Host "Target vault was populated concurrently by another rescue process. TargetAlreadyValid." -ForegroundColor Green
+                        if (Test-Path $tempDir) { try { Remove-Item $tempDir -Recurse -Force } catch { } }
+                        exit 0
+                    }
+                    throw "Destination '$destinationDir' is non-empty. Aborting to avoid data loss."
+                }
+            }
+
+            Move-Item -LiteralPath $tempDir -Destination $destinationDir
+
+            $outcomeMsg = if ($isRecovery) { "RescuedToRecoveredVault" } else { "RescuedSuccessfully" }
+            Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $destinationDir `
+                -FileCount $refFileCount.Value -TotalBytes $refTotalBytes.Value `
+                -Outcome $outcomeMsg -Error ""
+
+            Write-Host ""
+            Write-Host "Rescue complete! $outcomeMsg" -ForegroundColor Green
+            Write-Host "  Files copied : $($refFileCount.Value)"
+            Write-Host "  Total bytes  : $($refTotalBytes.Value)"
+            Write-Host "  Destination  : $destinationDir"
+            Write-Host ""
+            Write-Host "The source at '$LegacyDir' was NOT deleted (Velopack will handle it on next update/uninstall)." -ForegroundColor Yellow
         }
-
-        Move-Item -LiteralPath $tempDir -Destination $destinationDir
-
-        $outcomeMsg = if ($isRecovery) { "RescuedToRecoveredVault" } else { "RescuedSuccessfully" }
+    } catch {
+        # Clean up temp dir on failure
+        if (Test-Path $tempDir) {
+            try { Remove-Item $tempDir -Recurse -Force } catch { }
+        }
         Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $destinationDir `
             -FileCount $refFileCount.Value -TotalBytes $refTotalBytes.Value `
-            -Outcome $outcomeMsg -Error ""
-
-        Write-Host ""
-        Write-Host "Rescue complete! $outcomeMsg" -ForegroundColor Green
-        Write-Host "  Files copied : $($refFileCount.Value)"
-        Write-Host "  Total bytes  : $($refTotalBytes.Value)"
-        Write-Host "  Destination  : $destinationDir"
-        Write-Host ""
-        Write-Host "The source at '$LegacyDir' was NOT deleted (Velopack will handle it on next update/uninstall)." -ForegroundColor Yellow
+            -Outcome "LegacyFoundButRescueFailed" -Error $_.Exception.Message
+        Write-Error "Rescue failed: $_"
+        exit 5
     }
-} catch {
-    # Clean up temp dir on failure
-    if (Test-Path $tempDir) {
-        try { Remove-Item $tempDir -Recurse -Force } catch { }
+} finally {
+    # Fix #2: release the exclusive lock hold after copy is fully done (or failed)
+    if ($null -ne $lockHandle) {
+        $lockHandle.Dispose()
     }
-    Write-MigrationLog -LegacyDir $LegacyDir -TargetDir $destinationDir `
-        -FileCount $refFileCount.Value -TotalBytes $refTotalBytes.Value `
-        -Outcome "LegacyFoundButRescueFailed" -Error $_.Exception.Message
-    Write-Error "Rescue failed: $_"
-    exit 5
 }
