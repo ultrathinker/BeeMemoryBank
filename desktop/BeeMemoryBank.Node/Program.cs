@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using System.ServiceProcess;
 using System.Text.Json;
 using System.Threading;
@@ -486,15 +487,29 @@ public static class AutoDiscovery
         const int frontHttpsPort = 5311;
         var httpsEnabled = Environment.GetEnvironmentVariable("BMB_HTTPS_ENABLED") == "1";
 
+        // Api's Program.cs fail-fasts in Production if BMB_INTERNAL_KEY is absent (it otherwise
+        // falls back to a dev-only shared file, which is not something we want in a packaged
+        // node). Generate one shared secret per orchestrator run and hand it to both children —
+        // it never touches disk and isn't inherited by anything outside this process tree.
+        var internalKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
         var apiEnv = new Dictionary<string, string>
         {
             ["ASPNETCORE_URLS"] = "http://127.0.0.1:0",
             ["BMB_READY_FILE"] = apiReadyFilePath,
             ["BMB_STDIN_LIFELINE"] = "1",
             ["BMB_BEHIND_LOOPBACK_PROXY"] = "1",
+            // BMB_BEHIND_LOOPBACK_PROXY (above) isn't actually read by anything — the real
+            // opt-in flag ForwardedHeadersExtensions.AddLoopbackForwardedHeaders checks is this
+            // one. Without it, ForwardedHeadersMiddleware never runs, RemoteIpAddress for every
+            // front-proxied request stays 127.0.0.1 (YARP's own loopback hop), and
+            // RateLimitMiddleware's localhost-skip silently exempts every real client from
+            // brute-force protection on /api/session/unlock, /api/session/login, /api/join.
+            ["BMB_TRUST_LOOPBACK_FORWARDED_HEADERS"] = "true",
             ["BMB_DATA_PATH"] = absDataDir,
             ["BMB_MDNS_PORT"] = (httpsEnabled ? frontHttpsPort : frontHttpPort).ToString(),
-            ["BMB_MDNS_HTTPS"] = httpsEnabled ? "true" : "false"
+            ["BMB_MDNS_HTTPS"] = httpsEnabled ? "true" : "false",
+            ["BMB_INTERNAL_KEY"] = internalKey
         };
 
         // NOTE: BMB_API_URL is NOT set here — Api binds to a random port
@@ -508,11 +523,13 @@ public static class AutoDiscovery
             ["BMB_READY_FILE"] = webReadyFilePath,
             ["BMB_STDIN_LIFELINE"] = "1",
             ["BMB_BEHIND_LOOPBACK_PROXY"] = "1",
+            ["BMB_TRUST_LOOPBACK_FORWARDED_HEADERS"] = "true",
             ["BMB_DATA_PATH"] = absDataDir,
             // So Connect.cshtml.cs (Web) can tell whether the front's opt-in HTTPS listener is
             // actually running before showing an https:// QR code that would otherwise silently
             // point at a port nothing is listening on (e.g. the MSI service's default config).
-            ["BMB_HTTPS_ENABLED"] = httpsEnabled ? "1" : "0"
+            ["BMB_HTTPS_ENABLED"] = httpsEnabled ? "1" : "0",
+            ["BMB_INTERNAL_KEY"] = internalKey
         };
 
         var apiConfig = new ChildProcessConfig(

@@ -207,6 +207,29 @@ public class AutoDiscoveryTests : IDisposable
         apiEnv["BMB_STDIN_LIFELINE"].Should().Be("1");
         apiEnv["BMB_BEHIND_LOOPBACK_PROXY"].Should().Be("1");
         apiEnv["BMB_DATA_PATH"].Should().Be(dataDir);
+
+        // Codex-reviewed regression: Api's Program.cs fail-fasts in Production if
+        // BMB_INTERNAL_KEY is absent, and auto-discovery is the only path both the Desktop
+        // tray and the MSI service use — without this, a clean machine (no stray
+        // ASPNETCORE_ENVIRONMENT=Development lying around) crash-loops Api to death.
+        apiEnv.Should().ContainKey("BMB_INTERNAL_KEY");
+        apiEnv["BMB_INTERNAL_KEY"].Should().NotBeNullOrEmpty();
+
+        // Codex-reviewed regression: AddLoopbackForwardedHeaders actually reads
+        // BMB_TRUST_LOOPBACK_FORWARDED_HEADERS, not BMB_BEHIND_LOOPBACK_PROXY (which nothing
+        // consumes). Without it, ForwardedHeadersMiddleware never runs, every front-proxied
+        // request looks like it came from 127.0.0.1, and RateLimitMiddleware's localhost-skip
+        // silently exempts real clients from brute-force protection on unlock/login/join.
+        apiEnv["BMB_TRUST_LOOPBACK_FORWARDED_HEADERS"].Should().Be("true");
+
+        var webConfigForEnv = configs.First(c => c.ApplicationName == "BeeMemoryBank.Web");
+        var webEnvForKey = webConfigForEnv.EnvironmentVariables;
+        webEnvForKey.Should().NotBeNull();
+        webEnvForKey!["BMB_TRUST_LOOPBACK_FORWARDED_HEADERS"].Should().Be("true");
+
+        // Web must receive the SAME internal key as Api — it's the shared secret
+        // InternalKeyHandler attaches to every Web-to-Api request.
+        webEnvForKey["BMB_INTERNAL_KEY"].Should().Be(apiEnv["BMB_INTERNAL_KEY"]);
     }
 
     [Fact]
