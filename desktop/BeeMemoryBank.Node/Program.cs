@@ -3,10 +3,13 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.Versioning;
+using System.ServiceProcess;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Hosting;
 
@@ -65,6 +68,21 @@ public static class Program
             }
         }
 
+        if (OperatingSystem.IsWindows() && WindowsServiceHelpers.IsWindowsService())
+        {
+            ServiceBase.Run(new BmbdWindowsService(isAutoMode, dataDirectory, configPath));
+            return 0;
+        }
+
+        return await RunOrchestratorAsync(isAutoMode, dataDirectory, configPath, CancellationToken.None);
+    }
+
+    internal static async Task<int> RunOrchestratorAsync(
+        bool isAutoMode,
+        string? dataDirectory,
+        string? configPath,
+        CancellationToken stopToken)
+    {
         // Determine if auto-discovery is triggered
         if (!isAutoMode)
         {
@@ -169,6 +187,11 @@ public static class Program
         WebApplication? app = null;
         var tcs = new TaskCompletionSource<int>();
 
+        using var registration = stopToken.Register(() =>
+        {
+            tcs.TrySetResult(0);
+        });
+
         orchestrator.OnAllReady += () =>
         {
             Console.WriteLine("[Node] Orchestrator successfully started all child processes and verified readiness.");
@@ -192,30 +215,33 @@ public static class Program
             tcs.TrySetResult(2);
         };
 
-        Console.CancelKeyPress += async (sender, e) =>
+        if (!stopToken.CanBeCanceled)
         {
-            Console.WriteLine("[Node] Cancel key pressed. Stopping orchestrator...");
-            e.Cancel = true; // Prevent process from immediately terminating
-            if (app != null)
+            Console.CancelKeyPress += async (sender, e) =>
             {
-                try
+                Console.WriteLine("[Node] Cancel key pressed. Stopping orchestrator...");
+                e.Cancel = true; // Prevent process from immediately terminating
+                if (app != null)
                 {
-                    Console.WriteLine("[Node] Stopping front app first...");
-                    await app.StopAsync();
+                    try
+                    {
+                        Console.WriteLine("[Node] Stopping front app first...");
+                        await app.StopAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
-                }
-            }
-            await orchestrator.StopAsync();
-            tcs.TrySetResult(0);
-        };
+                await orchestrator.StopAsync();
+                tcs.TrySetResult(0);
+            };
+        }
 
         try
         {
             Console.WriteLine($"[Node] Launching children with lock on data dir: '{resolvedDataDirectory}'...");
-            await orchestrator.StartAsync(CancellationToken.None);
+            await orchestrator.StartAsync(stopToken);
 
             Console.WriteLine("[Node] Orchestrator started. Building and starting front...");
             // Default to the plan's designated port (127.0.0.1:5310, distinct from
