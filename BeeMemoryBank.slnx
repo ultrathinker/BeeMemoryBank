@@ -9,6 +9,7 @@
     <Project Path="libs/BeeMemoryBank.Crypto/BeeMemoryBank.Crypto.csproj" />
     <Project Path="libs/BeeMemoryBank.Hosting/BeeMemoryBank.Hosting.csproj" />
     <Project Path="libs/BeeMemoryBank.Hosting.AspNetCore/BeeMemoryBank.Hosting.AspNetCore.csproj" />
+    <Project Path="libs/BeeMemoryBank.Profiles/BeeMemoryBank.Profiles.csproj" />
     <Project Path="libs/BeeMemoryBank.Storage/BeeMemoryBank.Storage.csproj" />
     <Project Path="libs/BeeMemoryBank.Sync/BeeMemoryBank.Sync.csproj" />
   </Folder>
@@ -31,6 +32,7 @@
     <Project Path="tests/BeeMemoryBank.Integration.Tests/BeeMemoryBank.Integration.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Node.Tests/BeeMemoryBank.Node.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Node.Tests.StubProcess/BeeMemoryBank.Node.Tests.StubProcess.csproj" />
+    <Project Path="tests/BeeMemoryBank.Profiles.Tests/BeeMemoryBank.Profiles.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Storage.Tests/BeeMemoryBank.Storage.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Sync.Tests/BeeMemoryBank.Sync.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Migrator.Tests/BeeMemoryBank.Migrator.Tests.csproj" />

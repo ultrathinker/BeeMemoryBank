@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.AppPaths\BeeMemoryBank.AppPaths.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Hosting\BeeMemoryBank.Hosting.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Profiles\BeeMemoryBank.Profiles.csproj" />
   </ItemGroup>
 
   <ItemGroup>
