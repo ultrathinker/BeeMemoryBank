@@ -119,19 +119,24 @@ public static class Program
         {
             Console.WriteLine("[Node] Running in Auto-Discovery mode.");
 
-            if (string.IsNullOrWhiteSpace(dataDirectory))
+            // Track whether the path was explicitly provided (--data / BMB_DATA_PATH) or
+            // resolved from the default. Rescue is only applied for the default path.
+            bool dataDirectoryWasExplicit = !string.IsNullOrWhiteSpace(dataDirectory);
+
+            if (!dataDirectoryWasExplicit)
             {
                 var envDataPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH");
                 if (!string.IsNullOrWhiteSpace(envDataPath))
                 {
                     dataDirectory = envDataPath;
+                    dataDirectoryWasExplicit = true;
                 }
                 else
                 {
                     dataDirectory = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
                 }
             }
-            resolvedDataDirectory = Path.GetFullPath(dataDirectory);
+            resolvedDataDirectory = Path.GetFullPath(dataDirectory!);
 
             try
             {
@@ -141,6 +146,28 @@ public static class Program
             {
                 Console.Error.WriteLine($"[Error] Failed to create data directory '{resolvedDataDirectory}': {ex.Message}");
                 return 1;
+            }
+
+            // §79-89: Rescue legacy data STRICTLY before DirectoryLock.Acquire (orchestrator.StartAsync).
+            // Only triggered when the path resolved to DEFAULT — an explicit --data or BMB_DATA_PATH
+            // reflects a deliberate choice by the operator and legacy migration must not apply.
+            if (!dataDirectoryWasExplicit)
+            {
+                var legacyDataDir = Path.Combine(AppContext.BaseDirectory, "data");
+                Console.WriteLine($"[Node] Checking for legacy data to rescue from '{legacyDataDir}'...");
+                var rescueResult = BeeMemoryBank.AppPaths.LegacyDataRescue.TryRescue(legacyDataDir, resolvedDataDirectory);
+                Console.WriteLine($"[Node] Rescue outcome: {rescueResult.Outcome}" +
+                    (rescueResult.Message != null ? $" — {rescueResult.Message}" : string.Empty));
+
+                if (rescueResult.Outcome == BeeMemoryBank.AppPaths.RescueOutcome.LegacyFoundButRescueFailed)
+                {
+                    Console.Error.WriteLine(
+                        $"[Error] Legacy data rescue failed — refusing to start with empty storage.\n" +
+                        $"  Source : {legacyDataDir}\n" +
+                        $"  Reason : {rescueResult.Message}\n" +
+                        "  Action : free the data directory (stop any running bmbd node) and retry.");
+                    return 4; // non-zero; distinct from other bmbd exit codes
+                }
             }
 
             try

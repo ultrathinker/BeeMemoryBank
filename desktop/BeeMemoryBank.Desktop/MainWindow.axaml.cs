@@ -60,8 +60,25 @@ public partial class MainWindow : Window
             var dataDir = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
             Directory.CreateDirectory(dataDir);
 
+            // §73-89: Rescue legacy data (from <AppContext.BaseDirectory>\data) STRICTLY before
+            // any host-or-attach logic. Legacy path = the old pre-Stage-1 default location.
+            UpdateStatus("Checking for legacy data to rescue...");
+            var legacyDataDir = Path.Combine(AppContext.BaseDirectory, "data");
+            var rescueResult = BeeMemoryBank.AppPaths.LegacyDataRescue.TryRescue(legacyDataDir, dataDir);
+            if (rescueResult.Outcome == BeeMemoryBank.AppPaths.RescueOutcome.LegacyFoundButRescueFailed)
+            {
+                var errorMsg =
+                    $"Legacy data rescue failed — cannot start with an empty vault.\n\n" +
+                    $"Source: {legacyDataDir}\n" +
+                    $"Reason: {rescueResult.Message}\n\n" +
+                    "Please free up the data directory (e.g. stop any running BeeMemoryBank node) and retry.";
+                Dispatcher.UIThread.Post(() => ShowError(errorMsg));
+                return;
+            }
+
             UpdateStatus("Probing existing node instance...");
             var runtimeJsonPath = Path.Combine(dataDir, ".runtime.json");
+
             
             bool attached = false;
             string? frontUrl = null;

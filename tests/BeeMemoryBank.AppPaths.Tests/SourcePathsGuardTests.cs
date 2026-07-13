@@ -23,7 +23,19 @@ public class SourcePathsGuardTests
     // feat/1-desktop-paths and feat/1-node-default-path (the four known pre-existing sites) are
     // merged - no allowlist needed anymore. A newly-added entry here should be treated as a real
     // regression, not silenced.
-    private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase);
+    //
+    // EXCEPTION — feat/2-legacy-rescue:
+    // The two entries below are the rescue call sites that intentionally reference
+    // AppContext.BaseDirectory + "data" as the LEGACY SOURCE for a one-time rescue migration.
+    // This is the opposite of the anti-pattern: they read from the old broken location in order
+    // to COPY data away from it, never to write mutable user data there. They are not
+    // regressions and must remain in the allowlist for the lifetime of the rescue feature.
+    private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Stage 2 rescue sources — intentionally reference the legacy Velopack path as read-only source
+        "desktop/BeeMemoryBank.Desktop/MainWindow.axaml.cs:63",
+        "desktop/BeeMemoryBank.Node/Program.cs:156",
+    };
 
     private static string FindRepoRoot()
     {
