@@ -9,6 +9,10 @@ using BeeMemoryBank.Node;
 
 namespace BeeMemoryBank.Node.Tests;
 
+// See NodeProcessEnvCollection (EndToEndIntegrationTests.cs) — this class mutates the process-wide
+// BMB_DATA_PATH environment variable, which must not run concurrently with anything that spawns a
+// real BeeMemoryBank.Node.exe subprocess.
+[Collection("NodeProcessEnv")]
 public class DataPathResolutionTests : IDisposable
 {
     private readonly System.Collections.Generic.List<string> _dirsToDelete = new();

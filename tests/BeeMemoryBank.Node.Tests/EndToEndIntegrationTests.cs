@@ -19,6 +19,21 @@ using BeeMemoryBank.Node;
 
 namespace BeeMemoryBank.Node.Tests;
 
+/// <summary>
+/// Shared xUnit collection for every test that spawns a real BeeMemoryBank.Node.exe subprocess
+/// via Process.Start (which lazily snapshots the FULL current process environment the first time
+/// <see cref="ProcessStartInfo.EnvironmentVariables"/> is touched) alongside anything that mutates
+/// process-wide state via <see cref="Environment.SetEnvironmentVariable(string, string)"/> (e.g.
+/// <see cref="DataPathResolutionTests"/>, which sets/clears BMB_DATA_PATH on the shared test-host
+/// process) — otherwise a concurrently-running mutation can leak into the spawned child's inherited
+/// environment and the child's startup path resolution races unpredictably (observed: the E2E
+/// process failing to exit gracefully / exiting with a stray code when run alongside
+/// DataPathResolutionTests, despite each passing reliably in isolation).
+/// </summary>
+[CollectionDefinition("NodeProcessEnv", DisableParallelization = true)]
+public class NodeProcessEnvCollection { }
+
+[Collection("NodeProcessEnv")]
 public class EndToEndIntegrationTests : IDisposable
 {
     private readonly string _testDataDir;
