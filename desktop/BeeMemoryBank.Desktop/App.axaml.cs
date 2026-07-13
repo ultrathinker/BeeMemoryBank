@@ -183,7 +183,21 @@ public partial class App : Application
                     try
                     {
                         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-                        var dataDir = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
+                        // §4.5: the .internal-key must come from whichever profile's node is
+                        // ACTUALLY being talked to (frontUrl above), not always the default
+                        // vault — after switching to a non-default storage, the default
+                        // vault's key would not authenticate against the active node at all.
+                        string dataDir;
+                        try
+                        {
+                            dataDir = !string.IsNullOrEmpty(mainWindow.ActiveProfileId)
+                                ? mainWindow.Profiles.GetById(mainWindow.ActiveProfileId).DataPath
+                                : BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
+                        }
+                        catch (KeyNotFoundException)
+                        {
+                            dataDir = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
+                        }
                         var keyFile = Path.Combine(dataDir, ".internal-key");
                         var key = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
                         if (string.IsNullOrEmpty(key) && File.Exists(keyFile))

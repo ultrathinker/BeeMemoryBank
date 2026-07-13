@@ -61,7 +61,20 @@ public partial class ManageStoragesWindow : Window
         AutostartFixedRadio.IsCheckedChanged += OnAutostartRadioChanged;
         AutostartProfileCombo.SelectionChanged += OnAutostartProfileChanged;
 
+        // Keep the active-profile badge live if the user switches storages from the TRAY
+        // while this window stays open, rather than only refreshing on this window's own
+        // actions. The safety check in ForgetAsync reads _owner.ActiveProfileId directly (not
+        // a cached copy), so it is correct even without this - this is purely so the
+        // displayed list does not visibly lag behind reality.
+        _owner.ActiveProfileChanged += OnOwnerActiveProfileChanged;
+        Closed += (_, _) => _owner.ActiveProfileChanged -= OnOwnerActiveProfileChanged;
+
         RefreshAll();
+    }
+
+    private void OnOwnerActiveProfileChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.UIThread.Post(RefreshAll);
     }
 
     protected override void OnOpened(EventArgs e)
@@ -259,6 +272,20 @@ public partial class ManageStoragesWindow : Window
         ProfileEntry profile;
         try { profile = _profiles.GetById(id); }
         catch (KeyNotFoundException) { RefreshAll(); return; }
+
+        // Forgetting the ACTIVE profile removes the registry pointer while the node for it
+        // is still running: the next switch would pass a currentProfileId ProfileService can
+        // no longer resolve, and the switch engine would skip StopAsync entirely (nothing to
+        // find A's ownership through) while starting a new node - orphaning the still-running
+        // one. Refuse outright, same defensive stance as ProfileService's own
+        // "cannot forget the last profile" guard.
+        if (!string.IsNullOrEmpty(_owner.ActiveProfileId)
+            && string.Equals(id, _owner.ActiveProfileId, StringComparison.Ordinal))
+        {
+            await ShowMessageAsync("Невозможно забыть хранилище",
+                $"Хранилище «{profile.Name}» сейчас активно. Переключитесь на другое хранилище, затем повторите.");
+            return;
+        }
 
         // The confirmation text is the brief's literal: it explicitly tells the user the
         // data stays on disk and shows the path, because ProfileService.ForgetProfile only

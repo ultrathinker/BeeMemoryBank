@@ -160,6 +160,14 @@ public class ProfileSwitchServiceTests : IDisposable
         result.ErrorMessage.Should().ContainEquivalentOf("revert",
             "error must explain that the app fell back to the previous profile");
 
+        // Even though Success is false, Profile/FrontUrl must reflect the REVERTED node's
+        // actual values (here deliberately different from any "original" url a caller might
+        // still be holding) - bmbd can come back up on a different port than before, and a
+        // caller that ignores these fields would keep pointing its WebView at a dead url.
+        result.Profile.Should().NotBeNull();
+        result.Profile!.Id.Should().Be(a.Id);
+        result.FrontUrl.Should().Be("http://127.0.0.1:5001");
+
         // The engine attempted B first, then reverted to A.
         lifecycle.StartCalls.Should().Be(2);
         lifecycle.StartOrder.Should().Equal(b.DataPath, a.DataPath);

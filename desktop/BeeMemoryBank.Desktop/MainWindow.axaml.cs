@@ -21,7 +21,14 @@ public partial class MainWindow : Window
     private readonly Services.ProfileSwitchService _profileSwitch;
     private bool _isRealClose;
     private CancellationTokenSource? _initCts;
-    private CancellationTokenSource? _switchCts;
+    // Created ONCE and only ever cancelled on window close - NOT recreated per switch call.
+    // ProfileSwitchService already single-flight-rejects a second concurrent SwitchToAsync
+    // call, so a "cancel the previous switch's token" pattern here would actively fight that:
+    // cancelling this shared token from a NEW SwitchProfileAsync call would cancel whatever
+    // an EARLIER, still-in-flight call (e.g. its own revert-to-previous-profile attempt) is
+    // doing with the SAME token, aborting it mid-operation instead of letting the service's
+    // own gate reject the new call cleanly.
+    private readonly CancellationTokenSource _switchLifetimeCts = new();
     private bool _startMinimized = Program.StartMinimized;
     private string? _frontUrl;
     private string? _activeProfileId;
@@ -170,9 +177,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _switchCts?.Cancel();
-        _switchCts = new CancellationTokenSource();
-        var ct = _switchCts.Token;
+        var ct = _switchLifetimeCts.Token;
 
         // Reuse the splash panel as the "switching" view (same visual as a cold start).
         WebPanel.IsVisible = false;
@@ -203,24 +208,26 @@ public partial class MainWindow : Window
         // The switch service already handled revert-to-A on B-start failure, so even on
         // result.Success==false the active profile may have CHANGED (back to A). Always fire
         // the event so the tray menu re-reads _activeProfileId and the title re-formats.
-        if (result.Success && result.Profile != null && !string.IsNullOrEmpty(result.FrontUrl))
+        //
+        // Profile+FrontUrl are populated on BOTH a genuine success AND a successful revert
+        // (SwitchResult.Reverted) - re-wire the WebView in both cases. Using the CALLER's own
+        // stale _frontUrl instead (as this used to) is wrong: bmbd falls back to an
+        // OS-assigned port when its preferred one is taken, so a reverted node may now be
+        // listening somewhere else entirely.
+        if (result.Profile != null && !string.IsNullOrEmpty(result.FrontUrl))
         {
             ApplySuccessfulNodeStart(result.Profile, result.FrontUrl!);
+            if (!result.Success)
+            {
+                // Reverted, not a genuine success - the app is usable again but the
+                // REQUESTED switch did not happen. No dedicated toast UI exists yet
+                // (tracked as Этап 6 polish); log so this is at least diagnosable.
+                Debug.WriteLine($"Profile switch reverted: {result.ErrorMessage}");
+            }
         }
         else
         {
-            // On failure, re-apply the current state if any node is still alive (revert
-            // target may have succeeded), otherwise show the error.
-            if (!string.IsNullOrEmpty(_frontUrl))
-            {
-                SplashPanel.IsVisible = false;
-                WebPanel.IsVisible = true;
-                UpdateShellTitle();
-            }
-            else
-            {
-                ShowError(result.ErrorMessage ?? "Неизвестная ошибка.");
-            }
+            ShowError(result.ErrorMessage ?? "Неизвестная ошибка.");
             ActiveProfileChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -303,7 +310,8 @@ public partial class MainWindow : Window
         // synchronization context.
         try
         {
-            _switchCts?.Cancel();
+            _switchLifetimeCts.Cancel();
+            _switchLifetimeCts.Dispose();
         }
         catch (Exception ex)
         {

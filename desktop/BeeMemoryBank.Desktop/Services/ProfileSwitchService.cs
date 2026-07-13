@@ -12,14 +12,22 @@ namespace BeeMemoryBank.Desktop.Services;
 /// <summary>
 /// Outcome of a profile switch attempt. Carries everything the caller (MainWindow / future
 /// tray UI) needs to render the result: on success the new profile and its front URL, on
-/// failure a human-readable explanation (including the revert-to-A case, which is still a
-/// failure of the *requested* operation even though the app ended up in a working state).
+/// failure a human-readable explanation.
+///
+/// The revert-to-previous-profile case (target failed to start, but the engine successfully
+/// restarted the previous profile) is still <c>Success = false</c> - the caller's REQUESTED
+/// switch did not happen - but ALSO populates <see cref="Profile"/>/<see cref="FrontUrl"/>
+/// with the reverted node's actual values. This matters because bmbd falls back to an
+/// OS-assigned port when its preferred one is taken, so the node that comes back up during a
+/// revert may not be listening on the SAME url the caller was on before the switch attempt
+/// started - a caller that ignores these fields and just keeps using its own stale
+/// pre-switch url would point the WebView at a dead endpoint.
 /// </summary>
 public sealed record SwitchResult
 {
     public bool Success { get; init; }
-    public string? FrontUrl { get; init; }        // front URL of the newly-active profile on success
-    public ProfileEntry? Profile { get; init; }    // the profile switched to (success only)
+    public string? FrontUrl { get; init; }
+    public ProfileEntry? Profile { get; init; }
     public string? ErrorMessage { get; init; }
 
     public static SwitchResult Ok(ProfileEntry profile, string frontUrl)
@@ -27,6 +35,12 @@ public sealed record SwitchResult
 
     public static SwitchResult Error(string message)
         => new() { Success = false, ErrorMessage = message };
+
+    /// <summary>The requested switch failed, but the engine reverted to <paramref name="revertedProfile"/>,
+    /// which is now listening on <paramref name="revertedFrontUrl"/> (possibly a different
+    /// port than before). <see cref="Success"/> is still false.</summary>
+    public static SwitchResult Reverted(ProfileEntry revertedProfile, string revertedFrontUrl, string message)
+        => new() { Success = false, Profile = revertedProfile, FrontUrl = revertedFrontUrl, ErrorMessage = message };
 }
 
 /// <summary>
@@ -302,8 +316,13 @@ public sealed class ProfileSwitchService : IDisposable
         if (revertResult.Success && !string.IsNullOrEmpty(revertResult.FrontUrl))
         {
             // App is back on profile A and usable — but the requested switch did not succeed.
-            // lastUsed is unchanged here (we never set it for B), so it still correctly points at A.
-            return SwitchResult.Error(
+            // lastUsed is unchanged here (we never set it for B), so it still correctly points
+            // at A. Carry the REVERTED node's actual FrontUrl/Profile: bmbd falls back to an
+            // OS-assigned port if its preferred one is taken, so A may now be listening on a
+            // different url than it was before the switch attempt started - the caller must
+            // re-sync to this url, not keep using whatever it had before.
+            return SwitchResult.Reverted(
+                currentProfile, revertResult.FrontUrl!,
                 $"Failed to switch to profile '{targetProfile.Name}': {failureMsg}. " +
                 $"Reverted to previous profile '{currentProfile.Name}'.");
         }
