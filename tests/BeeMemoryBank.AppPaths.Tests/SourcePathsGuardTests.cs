@@ -35,10 +35,15 @@ public class SourcePathsGuardTests
     // the VelopackApp post-update hook re-runs rescue as a belt-and-suspenders safety net,
     // and UpdateService's pre-apply guard reads (never writes) the legacy path to refuse
     // applying an update that would still wipe it.
+    //
+    // EXCEPTION — feat/4-node-lifecycle:
+    // The Stage 2 MainWindow.axaml.cs rescue call site moved verbatim into the new
+    // NodeLifecycleService.cs during the 1:1 lifecycle extraction; same rationale, new
+    // location.
     private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase)
     {
         // Stage 2 rescue sources — intentionally reference the legacy Velopack path as read-only source
-        "desktop/BeeMemoryBank.Desktop/MainWindow.axaml.cs:63",
+        "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:68",
         "desktop/BeeMemoryBank.Node/Program.cs:156",
         // Stage 3 transit guards — same rationale
         "desktop/BeeMemoryBank.Desktop/Program.cs:28",

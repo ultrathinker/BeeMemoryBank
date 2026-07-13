@@ -3,9 +3,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using System;
 using System.Diagnostics;
-using System.IO;
 using System.Net.Http;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -13,7 +11,7 @@ namespace BeeMemoryBank.Desktop;
 
 public partial class MainWindow : Window
 {
-    private Process? _nodeProcess;
+    private readonly Services.NodeLifecycleService _nodeLifecycle = new();
     private bool _isRealClose;
     private CancellationTokenSource? _initCts;
     private bool _startMinimized = Program.StartMinimized;
@@ -54,248 +52,26 @@ public partial class MainWindow : Window
 
     private async Task HostOrAttachAsync(CancellationToken token)
     {
-        try
+        // The lifecycle service is UI-agnostic: it reports textual progress and returns a
+        // plain result. Everything below (Dispatcher.UIThread.Post, UpdateStatus, ShowError,
+        // WebView wiring, panel switching) stays in MainWindow - the behavior is identical to
+        // the inlined implementation that used to live here, only the ownership moved.
+        var progress = new Progress<string>(UpdateStatus);
+        var result = await _nodeLifecycle.StartOrAttachAsync(
+            BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir, progress, token);
+
+        Dispatcher.UIThread.Post(() =>
         {
-            UpdateStatus("Resolving data directory...");
-            var dataDir = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
-            Directory.CreateDirectory(dataDir);
-
-            // §73-89: Rescue legacy data (from <AppContext.BaseDirectory>\data) STRICTLY before
-            // any host-or-attach logic. Legacy path = the old pre-Stage-1 default location.
-            UpdateStatus("Checking for legacy data to rescue...");
-            var legacyDataDir = Path.Combine(AppContext.BaseDirectory, "data");
-            var rescueResult = BeeMemoryBank.AppPaths.LegacyDataRescue.TryRescue(legacyDataDir, dataDir);
-            if (rescueResult.Outcome == BeeMemoryBank.AppPaths.RescueOutcome.LegacyFoundButRescueFailed)
+            if (result.Success)
             {
-                var errorMsg =
-                    $"Legacy data rescue failed — cannot start with an empty vault.\n\n" +
-                    $"Source: {legacyDataDir}\n" +
-                    $"Reason: {rescueResult.Message}\n\n" +
-                    "Please free up the data directory (e.g. stop any running BeeMemoryBank node) and retry.";
-                Dispatcher.UIThread.Post(() => ShowError(errorMsg));
-                return;
-            }
-
-            UpdateStatus("Probing existing node instance...");
-            var runtimeJsonPath = Path.Combine(dataDir, ".runtime.json");
-
-            
-            bool attached = false;
-            string? frontUrl = null;
-
-            if (File.Exists(runtimeJsonPath))
-            {
-                RuntimeDescriptor? descriptor = null;
-                try
-                {
-                    var json = await File.ReadAllTextAsync(runtimeJsonPath, token);
-                    var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-                    descriptor = JsonSerializer.Deserialize<RuntimeDescriptor>(json, options);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Failed to parse existing runtime json: {ex.Message}");
-                }
-
-                if (descriptor != null && descriptor.Pid > 0 && !string.IsNullOrEmpty(descriptor.FrontUrl))
-                {
-                    // Check if PID is running
-                    bool isProcessRunning = false;
-                    try
-                    {
-                        using var proc = Process.GetProcessById(descriptor.Pid);
-                        isProcessRunning = !proc.HasExited;
-                    }
-                    catch (ArgumentException) { }
-
-                    if (isProcessRunning)
-                    {
-                        UpdateStatus("Probing existing node status endpoint...");
-                        bool probeOk = false;
-                        try
-                        {
-                            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-                            var response = await client.GetAsync($"{descriptor.FrontUrl.TrimEnd('/')}/node/status", token);
-                            if (response.IsSuccessStatusCode)
-                            {
-                                probeOk = true;
-                            }
-                        }
-                        catch { }
-
-                        if (probeOk)
-                        {
-                            attached = true;
-                            frontUrl = descriptor.FrontUrl;
-                            UpdateStatus("Attached to running node!");
-                        }
-                    }
-                }
-            }
-
-            if (!attached)
-            {
-                UpdateStatus("Locating BeeMemoryBank.Node executable...");
-                var nodeExePath = ResolveNodeExePath();
-
-                UpdateStatus("Starting background node service...");
-
-                // Clean up any stale runtime.json to avoid parsing old files
-                if (File.Exists(runtimeJsonPath))
-                {
-                    try { File.Delete(runtimeJsonPath); } catch { }
-                }
-
-                // bmbd's own --auto mode discovers the sibling api/ and web/ folders and
-                // wires up ready-files, stdin-lifeline (graceful shutdown + session-lock
-                // hygiene on stop) and forwarded-headers itself - no need to hand-author a
-                // node.config.json here, and no risk of drifting from bmbd's own conventions
-                // (e.g. hardcoding ports that collide with the standalone/Docker defaults).
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = nodeExePath,
-                    Arguments = $"--auto --data \"{dataDir}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardInput = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    WorkingDirectory = Path.GetDirectoryName(nodeExePath)
-                };
-
-                // Simple log rotation: leave at most 10 bmbd-*.log files
-                try
-                {
-                    var logsDir = BeeMemoryBank.AppPaths.BmbPaths.LogsDir;
-                    var existingLogs = Directory.GetFiles(logsDir, "bmbd-*.log")
-                        .Select(f => new FileInfo(f))
-                        .OrderByDescending(f => f.LastWriteTimeUtc)
-                        .ToList();
-
-                    if (existingLogs.Count >= 10)
-                    {
-                        for (int i = 9; i < existingLogs.Count; i++)
-                        {
-                            try
-                            {
-                                existingLogs[i].Delete();
-                            }
-                            catch (Exception ex)
-                            {
-                                Debug.WriteLine($"Failed to delete old bmbd log file: {ex.Message}");
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Failed to rotate logs: {ex.Message}");
-                }
-
-                var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-                var logPath = Path.Combine(BeeMemoryBank.AppPaths.BmbPaths.LogsDir, $"bmbd-{timestamp}.log");
-                var logLock = new object();
-
-                var proc = new Process { StartInfo = startInfo };
-
-                proc.OutputDataReceived += (s, e) =>
-                {
-                    if (e.Data != null)
-                    {
-                        lock (logLock)
-                        {
-                            try
-                            {
-                                File.AppendAllText(logPath, $"[OUT] {e.Data}{Environment.NewLine}");
-                            }
-                            catch { }
-                        }
-                    }
-                };
-
-                proc.ErrorDataReceived += (s, e) =>
-                {
-                    if (e.Data != null)
-                    {
-                        lock (logLock)
-                        {
-                            try
-                            {
-                                File.AppendAllText(logPath, $"[ERR] {e.Data}{Environment.NewLine}");
-                            }
-                            catch { }
-                        }
-                    }
-                };
-
-                if (!proc.Start())
-                {
-                    throw new Exception("Failed to start BeeMemoryBank.Node process.");
-                }
-
-                proc.BeginOutputReadLine();
-                proc.BeginErrorReadLine();
-
-                _nodeProcess = proc;
-                
-                // Start polling for .runtime.json
-                UpdateStatus("Waiting for node services to start (up to 60s)...");
-                var stopwatch = Stopwatch.StartNew();
-                
-                while (stopwatch.Elapsed.TotalSeconds < 60 && !token.IsCancellationRequested)
-                {
-                    if (proc.HasExited)
-                    {
-                        throw new Exception($"Node process exited prematurely with code {proc.ExitCode}. Check bmbd logs.");
-                    }
-
-                    if (File.Exists(runtimeJsonPath))
-                    {
-                        try
-                        {
-                            var json = await File.ReadAllTextAsync(runtimeJsonPath, token);
-                            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-                            var newDescriptor = JsonSerializer.Deserialize<RuntimeDescriptor>(json, options);
-                            
-                            if (newDescriptor != null && !string.IsNullOrEmpty(newDescriptor.FrontUrl))
-                            {
-                                // Verify it is actually responding
-                                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-                                var response = await client.GetAsync($"{newDescriptor.FrontUrl.TrimEnd('/')}/node/status", token);
-                                if (response.IsSuccessStatusCode)
-                                {
-                                    frontUrl = newDescriptor.FrontUrl;
-                                    break;
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            // File might be in the middle of being written, ignore and try again
-                        }
-                    }
-
-                    UpdateStatus($"Waiting for node services to start... ({Math.Round(stopwatch.Elapsed.TotalSeconds)}s)");
-                    await Task.Delay(500, token);
-                }
-
-                if (frontUrl == null)
-                {
-                    throw new TimeoutException("Timed out waiting for BeeMemoryBank.Node services to become ready.");
-                }
-            }
-
-            // Success! Load the URL in WebView
-            var targetUrl = frontUrl;
-            Dispatcher.UIThread.Post(() =>
-            {
+                var targetUrl = result.FrontUrl;
                 if (!string.IsNullOrEmpty(targetUrl))
                 {
-                    _frontUrl = targetUrl;
                     // Subscribe BEFORE assigning Source: the origin-lock handlers must be in
                     // place before the very first navigation happens, otherwise a tampered
                     // .runtime.json that passed the loose /node/status probe could navigate
                     // once, unguarded, before these handlers ever attach.
+                    _frontUrl = targetUrl;
                     BmbWebView.NavigationStarted -= OnWebViewNavigationStarted;
                     BmbWebView.NavigationStarted += OnWebViewNavigationStarted;
                     BmbWebView.NewWindowRequested -= OnWebViewNewWindowRequested;
@@ -305,59 +81,12 @@ public partial class MainWindow : Window
                 }
                 SplashPanel.IsVisible = false;
                 WebPanel.IsVisible = true;
-            });
-        }
-        catch (Exception ex)
-        {
-            Dispatcher.UIThread.Post(() => ShowError(ex.Message));
-        }
-    }
-
-    private string ResolveNodeExePath()
-    {
-        var baseDir = AppContext.BaseDirectory;
-
-        // 1. Production published layout: sibling to desktop
-        var prodPath = Path.GetFullPath(Path.Combine(baseDir, "..", "bmbd", "BeeMemoryBank.Node.exe"));
-        if (File.Exists(prodPath))
-        {
-            return prodPath;
-        }
-
-        // 1b. Packaged (Velopack) layout: vpk requires the main exe at the root of
-        // --packDir, so bmbd/api/web/cli ship as subfolders alongside Desktop.exe
-        // itself rather than as siblings of a desktop/ folder one level up.
-        var packagedPath = Path.GetFullPath(Path.Combine(baseDir, "bmbd", "BeeMemoryBank.Node.exe"));
-        if (File.Exists(packagedPath))
-        {
-            return packagedPath;
-        }
-
-        // 2. Development tree: search up for solution file then down
-        var currentDir = new DirectoryInfo(baseDir);
-        while (currentDir != null)
-        {
-            var slnxFile = Path.Combine(currentDir.FullName, "BeeMemoryBank.slnx");
-            if (File.Exists(slnxFile))
-            {
-                var devPath = Path.Combine(currentDir.FullName, "desktop", "BeeMemoryBank.Node", "bin", "Debug", "net10.0", "BeeMemoryBank.Node.exe");
-                if (File.Exists(devPath))
-                {
-                    return Path.GetFullPath(devPath);
-                }
-                break;
             }
-            currentDir = currentDir.Parent;
-        }
-
-        // 3. Current folder fallback
-        var siblingPath = Path.GetFullPath(Path.Combine(baseDir, "BeeMemoryBank.Node.exe"));
-        if (File.Exists(siblingPath))
-        {
-            return siblingPath;
-        }
-
-        throw new FileNotFoundException($"Could not locate BeeMemoryBank.Node.exe. Looked in:\n- {prodPath}\n- (development layout root)\n- {siblingPath}");
+            else
+            {
+                ShowError(result.ErrorMessage ?? "Unknown error.");
+            }
+        });
     }
 
     private void UpdateStatus(string message)
@@ -409,18 +138,20 @@ public partial class MainWindow : Window
 
     private void StopNodeProcess()
     {
-        if (_nodeProcess != null && !_nodeProcess.HasExited)
+        // StopAsync now does an ownership-aware graceful stop: for the hosted node process it
+        // closes the child's stdin (EOF → bmbd's stdin-lifeline → clean shutdown) and waits up
+        // to the given timeout before falling back to a hard kill; for an attached node it
+        // leaves the foreign process untouched. OnClosing is synchronous, so we block on the
+        // bounded graceful wait (15s ceiling) — safe because the service never touches the UI
+        // synchronization context.
+        try
         {
-            try
-            {
-                _nodeProcess.Kill(entireProcessTree: true);
-                _nodeProcess.Dispose();
-                _nodeProcess = null;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error killing node process: {ex.Message}");
-            }
+            _nodeLifecycle.StopAsync(TimeSpan.FromSeconds(15), CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error stopping node process: {ex.Message}");
         }
 
         try
@@ -525,10 +256,3 @@ public partial class MainWindow : Window
         }
     }
 }
-
-public record RuntimeDescriptor(
-    int Pid,
-    string? FrontUrl,
-    string Version,
-    string Mode
-);
