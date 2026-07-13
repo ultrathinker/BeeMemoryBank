@@ -57,7 +57,7 @@ public partial class MainWindow : Window
         try
         {
             UpdateStatus("Resolving data directory...");
-            var dataDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "data"));
+            var dataDir = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
             Directory.CreateDirectory(dataDir);
 
             UpdateStatus("Probing existing node instance...");

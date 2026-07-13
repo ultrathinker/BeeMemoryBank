@@ -159,7 +159,7 @@ public partial class App : Application
                     try
                     {
                         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-                        var dataDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "data"));
+                        var dataDir = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
                         var keyFile = Path.Combine(dataDir, ".internal-key");
                         var key = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
                         if (string.IsNullOrEmpty(key) && File.Exists(keyFile))

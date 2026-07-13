@@ -20,6 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.AppPaths\BeeMemoryBank.AppPaths.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Hosting\BeeMemoryBank.Hosting.csproj" />
   </ItemGroup>
 
