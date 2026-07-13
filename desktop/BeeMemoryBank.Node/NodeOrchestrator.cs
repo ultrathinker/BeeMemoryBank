@@ -140,6 +140,19 @@ public class NodeOrchestrator : IDisposable
                 {
                     return;
                 }
+                // StopAsync() unconditionally sets AllReady = false as part of shutting down,
+                // and nothing ever sets it back to true once _isStopping is set - if Stop was
+                // triggered concurrently (e.g. stdin EOF arriving essentially simultaneously
+                // with readiness, before this loop's next poll observes AllReady briefly being
+                // true), this loop would otherwise spin forever waiting for a condition that can
+                // structurally never become true again, since `cancellationToken` here is
+                // frequently CancellationToken.None (never itself cancelled) and _isStopping
+                // doesn't set _hasFailed. Observed live: the whole process hanging indefinitely
+                // after StopAsync had already logged "Stopped successfully".
+                if (_isStopping)
+                {
+                    throw new OperationCanceledException("Orchestrator is stopping.");
+                }
             }
             await Task.Delay(100, cancellationToken);
         }

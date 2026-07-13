@@ -75,7 +75,19 @@ public static class Program
             return 0;
         }
 
-        return await RunOrchestratorAsync(isAutoMode, dataDirectory, configPath, CancellationToken.None);
+        var exitCode = await RunOrchestratorAsync(isAutoMode, dataDirectory, configPath, CancellationToken.None);
+
+        // All graceful cleanup (lifeline/app/orchestrator disposal) has already run inside the
+        // awaited call above - this is purely a defensive belt-and-suspenders exit. Observed
+        // live (Этап 1 regression hunt): after a stdin-triggered graceful shutdown completes
+        // (orchestrator logs "Stopped successfully"), the OS process itself sometimes never
+        // actually terminates and `dotnet test`/callers hang waiting on it, even though nothing
+        // further executes or logs. Root cause not fully isolated (thread-pool/native-handle
+        // state at shutdown, not application logic) - Environment.Exit forces real process
+        // termination instead of relying on the runtime's return-from-Main path, which this
+        // process has been observed not to reliably take.
+        Environment.Exit(exitCode);
+        return exitCode; // unreachable; keeps the compiler happy about the return type.
     }
 
     public static async Task<int> RunOrchestratorAsync(
@@ -220,7 +232,18 @@ public static class Program
                         try
                         {
                             Console.WriteLine("[Node] Stopping front app...");
-                            await app.StopAsync();
+                            // Bounded: the outer `finally` also stops/disposes `app` once this
+                            // method's main flow unblocks (tcs.TrySetResult below) - a bare,
+                            // un-timed StopAsync here has no ceiling if that second, overlapping
+                            // stop/dispose ever contends with this one (observed: the whole
+                            // process occasionally failing to exit within a test's patience).
+                            // Racing two IHost lifecycles on the same instance shouldn't be
+                            // necessary at all, but bounding this call keeps a stuck Kestrel
+                            // shutdown from hanging the whole node instead of just skipping ahead
+                            // to the orchestrator/child shutdown, which is the part that actually
+                            // matters for data safety.
+                            using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                            await app.StopAsync(stopCts.Token);
                         }
                         catch (Exception ex)
                         {
@@ -427,6 +450,19 @@ public static class Program
         }
         catch (Exception ex)
         {
+            // A stdin-triggered (or Ctrl+C/stopToken) graceful shutdown racing with startup
+            // itself now surfaces here as an OperationCanceledException from
+            // WaitForAllReadyOrFailureAsync (see NodeOrchestrator's _isStopping check) rather
+            // than hanging forever waiting for a readiness signal that can no longer arrive.
+            // That is a normal shutdown, not a startup failure - defer to the shutdown path's
+            // own exit code (awaiting it if it hasn't resolved yet - it will, shortly, since
+            // the exception firing at all means shutdown was already underway) instead of
+            // reporting 3 for what is not actually a startup error.
+            if (ex is OperationCanceledException)
+            {
+                return await tcs.Task;
+            }
+
             Console.Error.WriteLine($"[Node] Orchestrator failed to start: {ex.Message}");
             return 3;
         }
