@@ -4,6 +4,7 @@
     <Project Path="desktop/BeeMemoryBank.Node/BeeMemoryBank.Node.csproj" />
   </Folder>
   <Folder Name="/libs/">
+    <Project Path="libs/BeeMemoryBank.AppPaths/BeeMemoryBank.AppPaths.csproj" />
     <Project Path="libs/BeeMemoryBank.Core/BeeMemoryBank.Core.csproj" />
     <Project Path="libs/BeeMemoryBank.Crypto/BeeMemoryBank.Crypto.csproj" />
     <Project Path="libs/BeeMemoryBank.Hosting/BeeMemoryBank.Hosting.csproj" />
@@ -20,6 +21,7 @@
     <Project Path="mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/BeeMemoryBank.AppPaths.Tests/BeeMemoryBank.AppPaths.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Cli.Tests/BeeMemoryBank.Cli.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Core.Tests/BeeMemoryBank.Core.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Core.Acme.Tests/BeeMemoryBank.Core.Acme.Tests.csproj" />
