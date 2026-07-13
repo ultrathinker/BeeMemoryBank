@@ -74,6 +74,29 @@ public sealed record RescueResult(
 }
 
 // ---------------------------------------------------------------------------
+// Tri-state for SQLite file validation (Fix #1)
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Three-way result of probing a SQLite file path, distinguishing the "file
+/// exists but is currently unreadable" case from "file absent".
+/// </summary>
+internal enum SqliteFileStatus
+{
+    /// <summary>No file found at the given path.</summary>
+    FileNotFound,
+
+    /// <summary>File exists but cannot be opened or read (ACL, AV lock, sharing violation…).</summary>
+    Unreadable,
+
+    /// <summary>File exists but does not start with the SQLite magic header.</summary>
+    InvalidHeader,
+
+    /// <summary>File exists and has a valid SQLite magic header.</summary>
+    ValidSqlite,
+}
+
+// ---------------------------------------------------------------------------
 // Rescue engine
 // ---------------------------------------------------------------------------
 
@@ -114,9 +137,6 @@ public static class LegacyDataRescue
     // least 16 bytes, which is enough. The spec says "> 4096 bytes as minimum signal,
     // but not hard" — we don't block on size alone, only require valid header.
 
-    // Number of bytes to hash for the "are these the same DB?" check (spec: first 64KB).
-    private const int FingerprintBytes = 64 * 1024;
-
     // -----------------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------------
@@ -139,54 +159,88 @@ public static class LegacyDataRescue
         // ----------------------------------------------------------------
         var legacyDbPath = Path.Combine(legacyDir, "beememorybank.db");
 
-        bool legacyValid = IsSqliteFileValid(legacyDbPath);
+        // Fix #1: tri-state probe — distinguish "file absent" from "file unreadable".
+        var legacyStatus = ProbeSqliteFile(legacyDbPath);
 
-        if (!legacyValid)
+        if (legacyStatus == SqliteFileStatus.Unreadable)
         {
-            // No valid legacy source — check whether target is valid so we can
-            // distinguish NoLegacyFound from TargetAlreadyValid.
+            // File EXISTS but we cannot read it (ACL/AV/sharing). Returning
+            // NoLegacyFound here would silently start with empty storage — refuse instead.
+            return RescueResult.Failed(
+                $"Legacy database exists but is currently unreadable: '{legacyDbPath}'. " +
+                "Check for running processes or security software holding the file, then retry.");
+        }
+
+        if (legacyStatus != SqliteFileStatus.ValidSqlite)
+        {
+            // FileNotFound or InvalidHeader — no valid legacy, check target.
             var targetDbPath2 = Path.Combine(targetVaultDir, "beememorybank.db");
-            if (IsSqliteFileValid(targetDbPath2))
+            var targetStatus2 = ProbeSqliteFile(targetDbPath2);
+            if (targetStatus2 == SqliteFileStatus.ValidSqlite)
             {
                 return RescueResult.AlreadyValid(targetVaultDir);
             }
             return RescueResult.NoLegacy();
         }
 
-        // Check node.lock — if locked, the node is running and we must not copy.
+        // Fix #2: Acquire an exclusive hold on node.lock and keep it open throughout the copy,
+        // preventing the legacy node from starting between the check and the copy completing.
         var legacyLockPath = Path.Combine(legacyDir, "node.lock");
-        if (IsFileLocked(legacyLockPath))
+        FileStream? lockHold = null;
+
+        if (File.Exists(legacyLockPath))
         {
-            return RescueResult.Failed(
-                $"Legacy source is locked (node.lock is held by another process): '{legacyLockPath}'. " +
-                "Stop the running node before migrating.");
+            try
+            {
+                // Open with FileShare.None — if the node is running this will throw IOException.
+                lockHold = new FileStream(legacyLockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException)
+            {
+                return RescueResult.Failed(
+                    $"Legacy source is locked (node.lock is held by another process): '{legacyLockPath}'. " +
+                    "Stop the running node before migrating.");
+            }
+            catch (Exception ex)
+            {
+                return RescueResult.Failed(
+                    $"Cannot acquire exclusive hold on '{legacyLockPath}': {ex.Message}");
+            }
         }
 
-        // ----------------------------------------------------------------
-        // Step 2/3/4 — Determine scenario
-        // ----------------------------------------------------------------
-        var targetDbPath = Path.Combine(targetVaultDir, "beememorybank.db");
-        bool targetValid = IsSqliteFileValid(targetDbPath);
-
-        if (!targetValid)
+        try
         {
-            // Case 1: target empty/invalid, legacy valid — copy to target.
-            return ExecuteRescue(legacyDir, targetVaultDir, isRecovery: false);
-        }
+            // ----------------------------------------------------------------
+            // Step 2/3/4 — Determine scenario
+            // ----------------------------------------------------------------
+            var targetDbPath = Path.Combine(targetVaultDir, "beememorybank.db");
+            var targetStatus = ProbeSqliteFile(targetDbPath);
 
-        // Both valid — are they the same database?
-        bool sameDb = AreSameDatabase(legacyDbPath, targetDbPath);
-        if (sameDb)
+            if (targetStatus != SqliteFileStatus.ValidSqlite)
+            {
+                // Case 1: target empty/invalid, legacy valid — copy to target.
+                return ExecuteRescue(legacyDir, targetVaultDir, isRecovery: false);
+            }
+
+            // Both valid — are they the same database?
+            bool sameDb = AreSameDatabase(legacyDbPath, targetDbPath);
+            if (sameDb)
+            {
+                // Case 2: target already valid and same as legacy — no-op.
+                return RescueResult.AlreadyValid(targetVaultDir);
+            }
+
+            // Case 3: both valid, different databases — copy legacy to recovered vault.
+            var recoveredVaultId = $"recovered-{DateTime.Now:yyyyMMdd-HHmmss}";
+            // BmbPaths.VaultDir will create the directory.
+            var recoveredVaultDir = BmbPaths.VaultDir(recoveredVaultId);
+            return ExecuteRescue(legacyDir, recoveredVaultDir, isRecovery: true);
+        }
+        finally
         {
-            // Case 2: target already valid and same as legacy — no-op.
-            return RescueResult.AlreadyValid(targetVaultDir);
+            // Fix #2: release the lock hold after the copy is fully done (or failed).
+            lockHold?.Dispose();
         }
-
-        // Case 3: both valid, different databases — copy legacy to recovered vault.
-        var recoveredVaultId = $"recovered-{DateTime.Now:yyyyMMdd-HHmmss}";
-        // BmbPaths.VaultDir will create the directory.
-        var recoveredVaultDir = BmbPaths.VaultDir(recoveredVaultId);
-        return ExecuteRescue(legacyDir, recoveredVaultDir, isRecovery: true);
     }
 
     // -----------------------------------------------------------------------
@@ -261,8 +315,29 @@ public static class LegacyDataRescue
                 }
                 else
                 {
-                    // Non-empty target appeared unexpectedly — abort to be safe.
+                    // Fix #5: Non-empty target appeared unexpectedly — could be a concurrent rescue
+                    // that already succeeded. Re-validate before treating as failure.
+                    var targetDbPath = Path.Combine(targetVaultDir, "beememorybank.db");
+                    var recheck = ProbeSqliteFile(targetDbPath);
+                    if (recheck == SqliteFileStatus.ValidSqlite)
+                    {
+                        // Another concurrent rescue already populated the target successfully.
+                        CleanupTemp(tempDir);
+                        return RescueResult.AlreadyValid(targetVaultDir);
+                    }
+
+                    // Target is non-empty but does NOT contain a valid DB — it's a genuine
+                    // unexpected state (partial state from a previous failed attempt, etc.).
+                    // Try recovering to a dated vault rather than failing outright, but only
+                    // when we are not already in a recovery attempt (avoid infinite recursion).
                     CleanupTemp(tempDir);
+                    if (!isRecovery)
+                    {
+                        var recoveredVaultId = $"recovered-{DateTime.Now:yyyyMMdd-HHmmss}";
+                        var recoveredVaultDir = BmbPaths.VaultDir(recoveredVaultId);
+                        return ExecuteRescue(legacyDir, recoveredVaultDir, isRecovery: true);
+                    }
+
                     return RescueResult.Failed(
                         $"Target directory '{targetVaultDir}' was non-empty at the point of atomic rename. " +
                         "Rescue aborted to avoid data loss.");
@@ -293,7 +368,7 @@ public static class LegacyDataRescue
 
     /// <summary>
     /// Recursively copies <paramref name="sourceDir"/> into <paramref name="destDir"/>,
-    /// skipping transient files.
+    /// skipping transient files and reparse points (junctions/symlinks).
     /// </summary>
     private static void CopyDirectoryRecursive(string sourceDir, string destDir, ref int fileCount, ref long totalBytes)
     {
@@ -315,6 +390,20 @@ public static class LegacyDataRescue
 
         foreach (var subDir in Directory.EnumerateDirectories(sourceDir))
         {
+            // Fix #3: Skip reparse points (junctions/symlinks) to prevent infinite
+            // recursion and runaway disk usage from looped or huge external trees.
+            var dirInfo = new DirectoryInfo(subDir);
+            if ((dirInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                // Log to console (best effort); the rescue must not crash on this.
+                try
+                {
+                    Console.WriteLine($"[LegacyDataRescue] Skipping reparse point/junction: '{subDir}'");
+                }
+                catch { }
+                continue;
+            }
+
             var dirName = Path.GetFileName(subDir);
             var destSubDir = Path.Combine(destDir, dirName);
             CopyDirectoryRecursive(subDir, destSubDir, ref fileCount, ref totalBytes);
@@ -338,14 +427,14 @@ public static class LegacyDataRescue
     }
 
     /// <summary>
-    /// Returns true if the file at <paramref name="path"/> exists and starts with the
-    /// SQLite magic header bytes.
+    /// Fix #1: Three-way probe of a SQLite file path.
+    /// Distinguishes "file absent" from "file unreadable" from "file valid/invalid".
     /// </summary>
-    private static bool IsSqliteFileValid(string path)
+    internal static SqliteFileStatus ProbeSqliteFile(string path)
     {
         if (!File.Exists(path))
         {
-            return false;
+            return SqliteFileStatus.FileNotFound;
         }
 
         try
@@ -353,65 +442,45 @@ public static class LegacyDataRescue
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             if (fs.Length < SqliteMagic.Length)
             {
-                return false;
+                return SqliteFileStatus.InvalidHeader;
             }
 
             var header = new byte[SqliteMagic.Length];
             int read = fs.Read(header, 0, header.Length);
             if (read < SqliteMagic.Length)
             {
-                return false;
+                return SqliteFileStatus.InvalidHeader;
             }
 
             for (int i = 0; i < SqliteMagic.Length; i++)
             {
                 if (header[i] != SqliteMagic[i])
                 {
-                    return false;
+                    return SqliteFileStatus.InvalidHeader;
                 }
             }
 
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Tries to open <paramref name="lockPath"/> with exclusive write access.
-    /// Returns true if the file is locked by another process.
-    /// </summary>
-    private static bool IsFileLocked(string lockPath)
-    {
-        if (!File.Exists(lockPath))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var fs = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            // Opened exclusively — not locked.
-            return false;
+            return SqliteFileStatus.ValidSqlite;
         }
         catch (IOException)
         {
-            // Could not open exclusively — file is locked.
-            return true;
+            // File exists but cannot be opened — AV lock, sharing violation, permissions, etc.
+            return SqliteFileStatus.Unreadable;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return SqliteFileStatus.Unreadable;
         }
         catch
         {
-            // Any other error (e.g. permissions) — treat as not locked to avoid blocking rescue
-            // on an inaccessible but uncontended file.
-            return false;
+            // Any other unexpected error — treat as unreadable to be safe.
+            return SqliteFileStatus.Unreadable;
         }
     }
 
     /// <summary>
-    /// Conservative "same database" check. Returns false (different) if ANY of the
-    /// following differ: file size, last-write time, or SHA-256 of the first 64 KB.
+    /// Fix #6: Conservative "same database" check. Returns false (different) if ANY of the
+    /// following differ: file size, last-write time, or full-file SHA-256.
     /// Per spec: when in doubt, treat as different.
     /// </summary>
     private static bool AreSameDatabase(string pathA, string pathB)
@@ -431,9 +500,10 @@ public static class LegacyDataRescue
                 return false;
             }
 
-            // Hash first FingerprintBytes bytes of each file.
-            var hashA = HashFilePrefix(pathA);
-            var hashB = HashFilePrefix(pathB);
+            // Fix #6: Hash the ENTIRE file (streaming, not buffered into memory at once)
+            // to avoid false-positive "same" decisions on files that differ only beyond 64 KB.
+            var hashA = HashFullFile(pathA);
+            var hashB = HashFullFile(pathB);
 
             if (hashA == null || hashB == null)
             {
@@ -450,22 +520,18 @@ public static class LegacyDataRescue
         }
     }
 
-    private static byte[]? HashFilePrefix(string path)
+    /// <summary>
+    /// Fix #6: Computes SHA-256 over the entire file content by streaming it, so that large
+    /// files are never loaded fully into memory.
+    /// </summary>
+    private static byte[]? HashFullFile(string path)
     {
         try
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            var bytesToRead = (int)Math.Min(fs.Length, FingerprintBytes);
-            var buffer = new byte[bytesToRead];
-            int totalRead = 0;
-            while (totalRead < bytesToRead)
-            {
-                int read = fs.Read(buffer, totalRead, bytesToRead - totalRead);
-                if (read == 0) break;
-                totalRead += read;
-            }
-
-            return SHA256.HashData(buffer.AsSpan(0, totalRead));
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
+                bufferSize: 81920, useAsync: false);
+            using var sha = SHA256.Create();
+            return sha.ComputeHash(fs);
         }
         catch
         {
@@ -478,8 +544,8 @@ public static class LegacyDataRescue
         try
         {
             return System.Reflection.Assembly
-                .GetEntryAssembly()?
-                .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .GetEntryAssembly()
+                ?.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
                 is System.Reflection.AssemblyInformationalVersionAttribute[] attrs && attrs.Length > 0
                     ? attrs[0].InformationalVersion
                     : "unknown";
@@ -490,6 +556,10 @@ public static class LegacyDataRescue
         }
     }
 
+    /// <summary>
+    /// Fix #7: Writes the migration log to BOTH <see cref="BmbPaths.MigrationDir"/> and
+    /// <see cref="BmbPaths.LogsDir"/> as required by the spec (§3.2 point 5).
+    /// </summary>
     private static void WriteMigrationLog(
         string legacyDir,
         string targetDir,
@@ -500,9 +570,7 @@ public static class LegacyDataRescue
     {
         try
         {
-            var migrationDir = BmbPaths.MigrationDir;
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
-            var logFile = Path.Combine(migrationDir, $"rescue-{timestamp}.log");
             var sb = new StringBuilder();
             sb.AppendLine($"[{DateTime.UtcNow:O}] Legacy Data Rescue");
             sb.AppendLine($"  Source  : {legacyDir}");
@@ -515,7 +583,15 @@ public static class LegacyDataRescue
                 sb.AppendLine($"  Error   : {error}");
             }
 
-            File.WriteAllText(logFile, sb.ToString());
+            var content = sb.ToString();
+
+            // Primary location: migration\
+            var migrationDir = BmbPaths.MigrationDir;
+            File.WriteAllText(Path.Combine(migrationDir, $"rescue-{timestamp}.log"), content);
+
+            // Secondary location: logs\ (spec §3.2 point 5)
+            var logsDir = BmbPaths.LogsDir;
+            File.WriteAllText(Path.Combine(logsDir, $"rescue-{timestamp}.log"), content);
         }
         catch
         {

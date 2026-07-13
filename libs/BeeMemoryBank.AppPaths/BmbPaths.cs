@@ -26,8 +26,17 @@ public static class BmbPaths
             // Future branch for macOS/Linux:
             // On macOS: Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), "Library", "Application Support", "BeeMemoryBankData")
             // On Linux: Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "BeeMemoryBankData")
-            
-            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BeeMemoryBankData");
+
+            // Prefer the LOCALAPPDATA environment variable over
+            // Environment.GetFolderPath(SpecialFolder.LocalApplicationData): on Windows,
+            // GetFolderPath resolves via the Known Folder API and does NOT observe
+            // Environment.SetEnvironmentVariable("LOCALAPPDATA", ...) overrides, which makes
+            // it impossible to sandbox in-process tests. In a normal user session the two
+            // agree, so this changes nothing for real users.
+            string localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA") is { Length: > 0 } envValue
+                ? envValue
+                : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string path = Path.Combine(localAppData, "BeeMemoryBankData");
             Directory.CreateDirectory(path);
             return path;
         }

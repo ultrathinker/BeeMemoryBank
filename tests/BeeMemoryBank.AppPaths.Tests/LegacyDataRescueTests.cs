@@ -175,6 +175,8 @@ public sealed class LegacyDataRescueTests : IDisposable
 
     // -----------------------------------------------------------------------
     // Test 3: Both valid + different DBs → recovered-<date> vault, both DBs intact
+    // Fix #8: hermetic — uses isolated _testRoot, does NOT call BmbPaths.VaultDir().
+    // We set LOCALAPPDATA to _testRoot for the duration of this test only.
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -190,23 +192,35 @@ public sealed class LegacyDataRescueTests : IDisposable
         var legacyDbBytes = File.ReadAllBytes(Path.Combine(legacy, "beememorybank.db"));
         var targetDbBytesBefore = File.ReadAllBytes(Path.Combine(target, "beememorybank.db"));
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        // Fix #8: redirect LOCALAPPDATA so BmbPaths.VaultDir resolves inside _testRoot
+        var fakeLocalAppData = MakeDir("fakeAppData");
+        var originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        try
+        {
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
 
-        result.Outcome.Should().Be(RescueOutcome.RescuedToRecoveredVault);
-        result.VaultDir.Should().NotBeNullOrEmpty();
-        result.VaultDir.Should().NotBe(target);
-        result.VaultDir!.Should().Contain("recovered-");
+            var result = LegacyDataRescue.TryRescue(legacy, target);
 
-        // recovered vault must exist and contain the legacy DB content
-        Directory.Exists(result.VaultDir!).Should().BeTrue();
-        var recoveredDbPath = Path.Combine(result.VaultDir!, "beememorybank.db");
-        File.Exists(recoveredDbPath).Should().BeTrue();
-        var recoveredDbBytes = File.ReadAllBytes(recoveredDbPath);
-        recoveredDbBytes.Should().Equal(legacyDbBytes, "recovered vault must contain exact legacy DB bytes");
+            result.Outcome.Should().Be(RescueOutcome.RescuedToRecoveredVault);
+            result.VaultDir.Should().NotBeNullOrEmpty();
+            result.VaultDir.Should().NotBe(target);
+            result.VaultDir!.Should().Contain("recovered-");
 
-        // Original target vault must be completely untouched
-        var targetDbBytesAfter = File.ReadAllBytes(Path.Combine(target, "beememorybank.db"));
-        targetDbBytesAfter.Should().Equal(targetDbBytesBefore, "target DB must not be modified in conflict case");
+            // recovered vault must exist and contain the legacy DB content
+            Directory.Exists(result.VaultDir!).Should().BeTrue();
+            var recoveredDbPath = Path.Combine(result.VaultDir!, "beememorybank.db");
+            File.Exists(recoveredDbPath).Should().BeTrue();
+            var recoveredDbBytes = File.ReadAllBytes(recoveredDbPath);
+            recoveredDbBytes.Should().Equal(legacyDbBytes, "recovered vault must contain exact legacy DB bytes");
+
+            // Original target vault must be completely untouched
+            var targetDbBytesAfter = File.ReadAllBytes(Path.Combine(target, "beememorybank.db"));
+            targetDbBytesAfter.Should().Equal(targetDbBytesBefore, "target DB must not be modified in conflict case");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", originalLocalAppData);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -414,6 +428,275 @@ public sealed class LegacyDataRescueTests : IDisposable
 
         var dbBytesAfter = File.ReadAllBytes(Path.Combine(legacy, "beememorybank.db"));
         dbBytesAfter.Should().Equal(dbBytesBefore, "source DB must be byte-identical after rescue");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 11 (Fix #1): Unreadable legacy DB returns Failed, not NoLegacyFound
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public void UnreadableLegacyDb_ReturnsFailed_NotNoLegacyFound()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var legacy = MakeDir("legacy11");
+        var target = MakeDir("target11");
+        Directory.Delete(target);
+
+        var dbPath = Path.Combine(legacy, "beememorybank.db");
+        WriteValidSqliteDb(dbPath);
+
+        // Directly test the tri-state probe: "file exists but can't be opened"
+        // Simulate via holding an exclusive handle on the file.
+        using var hold = new FileStream(dbPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        // ProbeSqliteFile should return Unreadable (not FileNotFound).
+        var status = LegacyDataRescue.ProbeSqliteFile(dbPath);
+        status.Should().Be(SqliteFileStatus.Unreadable,
+            "a file held exclusively should be reported as Unreadable, not FileNotFound");
+
+        var result = LegacyDataRescue.TryRescue(legacy, target);
+        result.Outcome.Should().Be(RescueOutcome.LegacyFoundButRescueFailed,
+            "an unreadable (but existing) legacy DB must not silently return NoLegacyFound");
+        result.Message.Should().Contain("unreadable");
+        Directory.Exists(target).Should().BeFalse("nothing should have been copied");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 12 (Fix #2): node.lock is held exclusively throughout the entire copy
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void NodeLock_IsHeldExclusively_ThroughoutCopy()
+    {
+        // We can't easily observe that the hold happens mid-copy without injecting delays,
+        // but we CAN verify that after TryRescue returns, we can acquire the lock
+        // (i.e. TryRescue released it) and that rescue succeeded even though node.lock
+        // existed but was NOT held by an external process.
+
+        var legacy = MakeDir("legacy12");
+        var target = MakeDir("target12");
+        Directory.Delete(target);
+
+        WriteValidSqliteDb(Path.Combine(legacy, "beememorybank.db"));
+        // node.lock exists but NOT held externally.
+        File.WriteAllText(Path.Combine(legacy, "node.lock"), "");
+
+        var result = LegacyDataRescue.TryRescue(legacy, target);
+
+        // Should succeed — an un-held node.lock must not block rescue.
+        result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully,
+            "a node.lock that is NOT held by another process must not block rescue");
+
+        // After rescue, we should be able to open node.lock in the LEGACY dir exclusively
+        // (confirms our lock hold was released).
+        var lockPath = Path.Combine(legacy, "node.lock");
+        File.Exists(lockPath).Should().BeTrue("node.lock must not be deleted from source");
+        using var check = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        // If we get here without IOException, the hold was properly released.
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 13 (Fix #3): Reparse points / junctions are skipped, not followed
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public void ReparsePoint_IsSkipped_NotFollowed()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var legacy = MakeDir("legacy13");
+        var target = MakeDir("target13");
+        Directory.Delete(target);
+
+        // Real data in legacy
+        WriteValidSqliteDb(Path.Combine(legacy, "beememorybank.db"));
+        WriteFile(Path.Combine(legacy, "data.txt"), "real data");
+
+        // Create a junction inside legacy pointing to a sibling directory
+        // (simulates the media\ junction pointing to huge/external tree).
+        var junctionTarget = MakeDir("junctionTarget13");
+        WriteFile(Path.Combine(junctionTarget, "huge.dat"), "external content that must not be copied");
+        var junctionPath = Path.Combine(legacy, "media");
+
+        // mklink /J creates a junction without elevation on Windows
+        var mklink = new System.Diagnostics.ProcessStartInfo("cmd.exe",
+            $"/c mklink /J \"{junctionPath}\" \"{junctionTarget}\"")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using (var proc = System.Diagnostics.Process.Start(mklink)!)
+        {
+            proc.WaitForExit(5000);
+            if (proc.ExitCode != 0)
+            {
+                // Junction creation failed — skip test gracefully (e.g. CI without privilege)
+                return;
+            }
+        }
+
+        var result = LegacyDataRescue.TryRescue(legacy, target);
+
+        result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
+
+        // The junction itself must NOT have been followed — "huge.dat" must not appear in target
+        File.Exists(Path.Combine(target, "media", "huge.dat")).Should().BeFalse(
+            "reparse point (junction) must be skipped, not followed");
+
+        // But real files must have been copied
+        File.Exists(Path.Combine(target, "beememorybank.db")).Should().BeTrue();
+        File.Exists(Path.Combine(target, "data.txt")).Should().BeTrue();
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 14 (Fix #5): Concurrent rescue — second call sees populated target → TargetAlreadyValid
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void ConcurrentRescue_SecondCallSeesPopulatedTarget_ReturnsTargetAlreadyValid()
+    {
+        // Simulate: first rescue already ran and populated target. A concurrent second
+        // process calls TryRescue and finds a non-empty target. It should re-validate
+        // and return TargetAlreadyValid rather than LegacyFoundButRescueFailed.
+
+        var legacy = MakeDir("legacy14");
+        var target = MakeDir("target14");
+        Directory.Delete(target);
+
+        WriteValidSqliteDb(Path.Combine(legacy, "beememorybank.db"));
+
+        // First rescue
+        var result1 = LegacyDataRescue.TryRescue(legacy, target);
+        result1.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
+
+        // Second rescue (simulates concurrent / immediate retry)
+        var result2 = LegacyDataRescue.TryRescue(legacy, target);
+        result2.Outcome.Should().Be(RescueOutcome.TargetAlreadyValid,
+            "a second rescue on an already-rescued target must not fail — data is safe");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 15 (Fix #6): Full-file hash — two DBs that differ only beyond 64 KB are treated as different
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void FullFileHash_DifferencesBeyond64KB_AreTreatedAsDifferent()
+    {
+        var legacy = MakeDir("legacy15");
+        var target = MakeDir("target15");
+
+        var magic = Encoding.ASCII.GetBytes("SQLite format 3\0");
+        const int totalSize = 80 * 1024; // 80 KB — beyond the old 64 KB prefix
+
+        // Write "legacy" DB: header + 64 KB of zeros + beyond-64KB payload = 0xAA
+        var legacyDb = new byte[totalSize];
+        Array.Copy(magic, legacyDb, magic.Length);
+        for (int i = 65536; i < totalSize; i++) legacyDb[i] = 0xAA;
+        File.WriteAllBytes(Path.Combine(legacy, "beememorybank.db"), legacyDb);
+
+        // Write "target" DB: same header + same first 64 KB, but different beyond 64 KB
+        var targetDb = new byte[totalSize];
+        Array.Copy(legacyDb, targetDb, totalSize);
+        for (int i = 65536; i < totalSize; i++) targetDb[i] = 0xBB; // different payload
+        File.WriteAllBytes(Path.Combine(target, "beememorybank.db"), targetDb);
+
+        // Force same mtime and size (would fool the old 64-KB hash into false "same")
+        var t = DateTime.UtcNow;
+        File.SetLastWriteTimeUtc(Path.Combine(legacy, "beememorybank.db"), t);
+        File.SetLastWriteTimeUtc(Path.Combine(target, "beememorybank.db"), t);
+
+        // TryRescue should see them as DIFFERENT and copy legacy to a recovered vault.
+        var fakeLocalAppData = MakeDir("fakeAppData15");
+        var originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        try
+        {
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
+            var result = LegacyDataRescue.TryRescue(legacy, target);
+            result.Outcome.Should().Be(RescueOutcome.RescuedToRecoveredVault,
+                "full-file hash must detect differences beyond 64 KB");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", originalLocalAppData);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 16 (Fix #7): Migration log is written to both migration\ and logs\
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void MigrationLog_IsWritten_ToBothMigrationAndLogsDir()
+    {
+        // Route BmbPaths to our fake LOCALAPPDATA to intercept log writes.
+        var fakeLocalAppData = MakeDir("fakeAppData16");
+        var originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
+
+            var legacy = MakeDir("legacy16");
+            var target = MakeDir("target16");
+            Directory.Delete(target);
+
+            WriteValidSqliteDb(Path.Combine(legacy, "beememorybank.db"));
+
+            var result = LegacyDataRescue.TryRescue(legacy, target);
+            result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
+
+            // Both log directories should now contain a rescue log file.
+            var migrationDir = Path.Combine(fakeLocalAppData, "BeeMemoryBankData", "migration");
+            var logsDir = Path.Combine(fakeLocalAppData, "BeeMemoryBankData", "logs");
+
+            Directory.Exists(migrationDir).Should().BeTrue("migration dir must be created");
+            Directory.Exists(logsDir).Should().BeTrue("logs dir must be created");
+
+            var migrationLogs = Directory.GetFiles(migrationDir, "rescue-*.log");
+            var logsLogs = Directory.GetFiles(logsDir, "rescue-*.log");
+
+            migrationLogs.Should().NotBeEmpty("at least one rescue log must be in migration\\");
+            logsLogs.Should().NotBeEmpty("at least one rescue log must be in logs\\ (Fix #7 / spec §3.2 pt 5)");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", originalLocalAppData);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 17 (Fix #4): TryRescue — ProbeSqliteFile distinguishes FileNotFound from Unreadable
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void ProbeSqliteFile_AbsentFile_ReturnsFileNotFound()
+    {
+        var path = Path.Combine(_testRoot, "nonexistent.db");
+        var status = LegacyDataRescue.ProbeSqliteFile(path);
+        status.Should().Be(SqliteFileStatus.FileNotFound);
+    }
+
+    [Fact]
+    public void ProbeSqliteFile_InvalidHeader_ReturnsInvalidHeader()
+    {
+        var path = Path.Combine(_testRoot, "badheader.db");
+        File.WriteAllBytes(path, new byte[64]); // all zeros, not SQLite magic
+        var status = LegacyDataRescue.ProbeSqliteFile(path);
+        status.Should().Be(SqliteFileStatus.InvalidHeader);
+    }
+
+    [Fact]
+    public void ProbeSqliteFile_ValidSqlite_ReturnsValidSqlite()
+    {
+        var path = Path.Combine(_testRoot, "valid.db");
+        WriteValidSqliteDb(path);
+        var status = LegacyDataRescue.ProbeSqliteFile(path);
+        status.Should().Be(SqliteFileStatus.ValidSqlite);
     }
 
     // -----------------------------------------------------------------------
