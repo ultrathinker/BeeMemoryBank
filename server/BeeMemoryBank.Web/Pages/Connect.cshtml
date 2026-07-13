@@ -40,7 +40,17 @@
         </h2>
         <p class="connect-subtitle">Scan a code with your phone to open this node over HTTPS.</p>
 
-        @if (Model.HasLanAddress)
+        @if (!Model.HttpsEnabled)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>HTTPS is not enabled on this node.</strong> The opt-in HTTPS listener
+                (port @ConnectModel.HttpsPort) isn't running, so a QR code would point at a
+                connection nothing answers. Enable HTTPS for this node first, then refresh this
+                page.
+            </sl-alert>
+        }
+        else if (Model.HasLanAddress)
         {
             @foreach (var ep in Model.Endpoints)
             {

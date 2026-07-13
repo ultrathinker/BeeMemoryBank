@@ -508,7 +508,11 @@ public static class AutoDiscovery
             ["BMB_READY_FILE"] = webReadyFilePath,
             ["BMB_STDIN_LIFELINE"] = "1",
             ["BMB_BEHIND_LOOPBACK_PROXY"] = "1",
-            ["BMB_DATA_PATH"] = absDataDir
+            ["BMB_DATA_PATH"] = absDataDir,
+            // So Connect.cshtml.cs (Web) can tell whether the front's opt-in HTTPS listener is
+            // actually running before showing an https:// QR code that would otherwise silently
+            // point at a port nothing is listening on (e.g. the MSI service's default config).
+            ["BMB_HTTPS_ENABLED"] = httpsEnabled ? "1" : "0"
         };
 
         var apiConfig = new ChildProcessConfig(

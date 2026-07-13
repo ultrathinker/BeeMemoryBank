@@ -31,8 +31,20 @@ public class ConnectModel : PageModel
     /// <summary>True when at least one LAN IPv4 address could be enumerated.</summary>
     public bool HasLanAddress => Endpoints.Count > 0;
 
+    /// <summary>
+    /// True only when the node process actually enabled the opt-in HTTPS listener
+    /// (Node sets BMB_HTTPS_ENABLED=1/0 on Web's environment — see AutoDiscovery.Discover).
+    /// Defaults to NOT enabled when unset/unknown, rather than assuming it works: showing a QR
+    /// code for a listener that isn't running (e.g. the MSI service's default config, which
+    /// doesn't opt into HTTPS) is worse than an honest "not enabled" message, since a device
+    /// scanning it would just get a silent connection-refused error with no explanation.
+    /// </summary>
+    public bool HttpsEnabled => Environment.GetEnvironmentVariable("BMB_HTTPS_ENABLED") == "1";
+
     public void OnGet()
     {
+        if (!HttpsEnabled) return;
+
         var list = new List<LanEndpoint>();
         foreach (var ip in GetLanIPv4Addresses())
         {
