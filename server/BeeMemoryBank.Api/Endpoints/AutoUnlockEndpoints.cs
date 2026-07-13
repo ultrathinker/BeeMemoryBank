@@ -15,8 +15,19 @@ public static class AutoUnlockEndpoints
             .RequireInternalKey();
 
         // GET /api/keys/auto-unlock/status  — returns whether the feature is enabled
-        group.MapGet("/status", async (OsAutoUnlockService? svc) =>
+        //
+        // OsAutoUnlockService is only registered in DI on Windows (see Program.cs). Declaring it
+        // as a raw nullable handler parameter is fragile: ASP.NET Core's minimal-API parameter
+        // binding infers a complex-type parameter as [FromServices] only when
+        // IServiceProviderIsService reports it as registered — on a platform where it ISN'T
+        // registered (e.g. the Linux/Docker deployment, which this same Api.exe also serves),
+        // the parameter would instead be inferred as [FromBody], breaking these endpoints in a
+        // way that happens to look like it works today only by coincidence of nullable-body
+        // handling. Resolve it explicitly from HttpContext.RequestServices instead, which has no
+        // such ambiguity.
+        group.MapGet("/status", async (HttpContext ctx) =>
         {
+            var svc = ctx.RequestServices.GetService<OsAutoUnlockService>();
             if (svc == null || !OperatingSystem.IsWindows())
                 return Results.Ok(new AutoUnlockStatusResponse(false, false));
 
@@ -25,8 +36,9 @@ public static class AutoUnlockEndpoints
         });
 
         // POST /api/keys/auto-unlock/enable  — creates the os_auto_unlock slot + DPAPI secret
-        group.MapPost("/enable", async (OsAutoUnlockService? svc, SessionService session, HttpContext ctx) =>
+        group.MapPost("/enable", async (HttpContext ctx, SessionService session) =>
         {
+            var svc = ctx.RequestServices.GetService<OsAutoUnlockService>();
             if (!OperatingSystem.IsWindows() || svc == null)
                 return Results.Json(new ErrorResponse("OS auto-unlock is only supported on Windows."), statusCode: 400);
 
@@ -46,8 +58,9 @@ public static class AutoUnlockEndpoints
         }).RequireNonAgent();
 
         // POST /api/keys/auto-unlock/disable  — removes the os_auto_unlock slot + DPAPI secret
-        group.MapPost("/disable", async (OsAutoUnlockService? svc, SessionService session, HttpContext ctx) =>
+        group.MapPost("/disable", async (HttpContext ctx, SessionService session) =>
         {
+            var svc = ctx.RequestServices.GetService<OsAutoUnlockService>();
             if (!OperatingSystem.IsWindows() || svc == null)
                 return Results.Json(new ErrorResponse("OS auto-unlock is only supported on Windows."), statusCode: 400);
 

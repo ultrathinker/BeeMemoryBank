@@ -77,6 +77,17 @@ public class OsAutoUnlockService(
         byte[] secret = SecureRandom.GetBytes(32);
         try
         {
+            // Enforce at most one os_auto_unlock slot: remove any existing one first (matching
+            // DisableAsync's own cleanup) so re-enabling is idempotent rather than accumulating
+            // duplicate slots. Without this, a retried Enable (or a crash between CreateAsync and
+            // the DPAPI file write below) could leave an orphan slot that GetSlotAsync's
+            // FirstOrDefault picks over the real one, permanently breaking auto-unlock.
+            var existing = await GetSlotAsync();
+            if (existing != null)
+            {
+                await keySlotRepo.DeleteAsync(existing.SlotId);
+            }
+
             // Use the secret directly as the KEK: no Argon2 (DPAPI provides the OS-level
             // protection; the secret is high-entropy random, not user-typed low-entropy text).
             var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, secret);
@@ -94,13 +105,24 @@ public class OsAutoUnlockService(
                 ArgonParallelism = null,
                 CreatedAt = DateTime.UtcNow
             };
-            await keySlotRepo.CreateAsync(slot);
+            var slotId = await keySlotRepo.CreateAsync(slot);
 
-            // Protect the raw secret with DPAPI (current-user scope, no optional entropy)
-            // and persist it next to the vault.
-            var dpapi = ProtectedData.Protect(secret, null, DataProtectionScope.CurrentUser);
-            await File.WriteAllBytesAsync(SecretFilePath, dpapi);
-            return dpapi;
+            try
+            {
+                // Protect the raw secret with DPAPI (current-user scope, no optional entropy)
+                // and persist it next to the vault.
+                var dpapi = ProtectedData.Protect(secret, null, DataProtectionScope.CurrentUser);
+                await File.WriteAllBytesAsync(SecretFilePath, dpapi);
+                return dpapi;
+            }
+            catch
+            {
+                // Roll back the slot if the secret file write fails, so we never leave a slot
+                // with no matching on-disk secret (which IsEnabledAsync would otherwise report
+                // as "enabled" while auto-unlock could never actually succeed).
+                await keySlotRepo.DeleteAsync(slotId);
+                throw;
+            }
         }
         finally
         {

@@ -63,13 +63,26 @@ public class PreventSleepService
             {
                 // ES_SYSTEM_REQUIRED: Keeps the system awake
                 // ES_AWAYMODE_REQUIRED: Allows display to sleep while keeping the system running (laptop server mode)
+                // A return value of 0 means the call FAILED (not merely "no prior state") — check
+                // it, since some systems reject ES_AWAYMODE_REQUIRED; fall back to system-required
+                // alone rather than silently leaving the machine free to sleep while the tray
+                // toggle claims sleep prevention is on.
                 var result = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+                if (result == 0)
+                {
+                    Console.Error.WriteLine("[PreventSleepService] SetThreadExecutionState with away mode failed; retrying without it.");
+                    result = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+                    if (result == 0)
+                        Console.Error.WriteLine("[PreventSleepService] SetThreadExecutionState failed entirely — sleep prevention is NOT actually active.");
+                }
                 Console.WriteLine($"[PreventSleepService] Enabled sleep prevention. Result: 0x{result:X}");
             }
             else
             {
                 // Clears prior sleep prevention requirements
                 var result = SetThreadExecutionState(ES_CONTINUOUS);
+                if (result == 0)
+                    Console.Error.WriteLine("[PreventSleepService] SetThreadExecutionState (clear) failed.");
                 Console.WriteLine($"[PreventSleepService] Disabled sleep prevention. Result: 0x{result:X}");
             }
         }

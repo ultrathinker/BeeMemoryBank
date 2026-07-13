@@ -13,7 +13,7 @@ internal sealed class BmbdWindowsService : ServiceBase
     private readonly string? _dataDirectory;
     private readonly string? _configPath;
     private CancellationTokenSource? _cts;
-    private Task? _runTask;
+    private Task<int>? _runTask;
 
     public BmbdWindowsService(bool isAutoMode, string? dataDirectory, string? configPath)
     {
@@ -27,6 +27,18 @@ internal sealed class BmbdWindowsService : ServiceBase
     {
         _cts = new CancellationTokenSource();
         _runTask = Program.RunOrchestratorAsync(_isAutoMode, _dataDirectory, _configPath, _cts.Token);
+
+        // RunOrchestratorAsync is only expected to complete when OnStop cancels it. If it
+        // completes on its own (config error, critical child failure, unhandled exception),
+        // SCM must be told the service actually stopped — otherwise it stays "Running" until
+        // someone notices and stops it manually, and any configured failure-recovery action
+        // (auto-restart) never triggers.
+        _runTask.ContinueWith(t =>
+        {
+            if (_cts is not { IsCancellationRequested: false }) return; // OnStop already handling shutdown
+            ExitCode = t.IsFaulted || t.IsCanceled ? 1 : t.Result;
+            Stop();
+        }, TaskContinuationOptions.ExecuteSynchronously);
     }
 
     protected override void OnStop()
