@@ -1,0 +1,45 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="BeeMemoryBank.Desktop.Views.MessageDialog"
+        Title="BeeMemoryBank"
+        Width="460"
+        Height="220"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="#111119"
+        Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Name="TitleText"
+                   FontSize="18"
+                   FontWeight="SemiBold"
+                   Foreground="#FFFFFF"
+                   Margin="0,0,0,12" />
+
+        <TextBlock Grid.Row="1"
+                   Name="BodyText"
+                   TextWrapping="Wrap"
+                   FontSize="13"
+                   Foreground="#D1D5DB" />
+
+        <StackPanel Grid.Row="2"
+                    HorizontalAlignment="Right"
+                    Margin="0,12,0,0">
+            <Button Content="OK"
+                    Click="OnOkClick"
+                    Padding="20,10"
+                    Background="#F59E0B"
+                    Foreground="#111119"
+                    FontWeight="SemiBold"
+                    CornerRadius="6" />
+        </StackPanel>
+    </Grid>
+</Window>
