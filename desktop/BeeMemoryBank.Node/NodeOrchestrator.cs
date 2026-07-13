@@ -111,7 +111,7 @@ public class NodeOrchestrator : IDisposable
         // Start lifecycle tasks
         foreach (var child in _children)
         {
-            var task = RunChildLifecycleAsync(child, _lifecycleCts.Token);
+            var task = RunChildLifecycleObservedAsync(child, _lifecycleCts.Token);
             lock (_lock)
             {
                 _childTasks.Add(task);
@@ -168,11 +168,36 @@ public class NodeOrchestrator : IDisposable
             token = _lifecycleCts.Token;
         }
 
-        var task = RunChildLifecycleAsync(child, token);
+        var task = RunChildLifecycleObservedAsync(child, token);
 
         lock (_lock)
         {
             _childTasks.Add(task);
+        }
+    }
+
+    /// <summary>
+    /// Wraps <see cref="RunChildLifecycleAsync"/> so an unexpected exception (anything other than
+    /// cancellation) is reported via <see cref="TriggerCriticalFailure"/> instead of silently
+    /// vanishing. Previously this was handled centrally by a single <c>Task.WhenAll</c> wrapper
+    /// around every child's task; that wrapper was removed when children started being added
+    /// individually (StartAdditionalChild), which silently dropped this fault-handling — a fault
+    /// before readiness would leave <see cref="_hasFailed"/> false forever and
+    /// <see cref="WaitForAllReadyOrFailureAsync"/> would poll indefinitely.
+    /// </summary>
+    private async Task RunChildLifecycleObservedAsync(MonitoredChild child, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await RunChildLifecycleAsync(child, stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal shutdown or abort.
+        }
+        catch (Exception ex)
+        {
+            TriggerCriticalFailure($"Child '{child.Config.ApplicationName}' lifecycle task failed unexpectedly: {ex.Message}");
         }
     }
 
@@ -449,7 +474,13 @@ public class NodeOrchestrator : IDisposable
             cts.Cancel();
         }
 
-        var stopTasks = _children.Select(async child =>
+        List<MonitoredChild> childrenSnapshot;
+        lock (_lock)
+        {
+            childrenSnapshot = _children.ToList();
+        }
+
+        var stopTasks = childrenSnapshot.Select(async child =>
         {
             var proc = child.CurrentProcess;
             if (proc == null || proc.HasExited) return;
