@@ -154,75 +154,8 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                     using var scope = scopeFactory.CreateScope();
                     var migration = scope.ServiceProvider.GetRequiredService<LegacyPasswordSlotMigrationService>();
                     LastMigrationResult = await migration.MigrateIfNeededAsync();
-
-                    // Fire-and-forget retries: capture scopeFactory (singleton-stable) and
-                    // resolve services in a FRESH scope inside Task.Run. Resolving from the
-                    // outer scope would risk ObjectDisposedException once `using var scope`
-                    // disposes when UnlockCoreAsync returns. Today the relevant services are
-                    // Singletons so the practical risk is nil, but a future Scoped registration
-                    // would silently break this — defensive resolution stops the trap. (Gemini
-                    // post-brainstorm review MED #4.)
-                    var capturedScopeFactory = scopeFactory;
-
-                    // Retry any deferred auto-accept DEK rotations whose COMMIT arrived while the
-                    // session was locked. (Claude R2 prod review CRIT-1.)
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            using var s = capturedScopeFactory.CreateScope();
-                            var dekApplier = s.ServiceProvider.GetService<IDekRotationApplier>();
-                            if (dekApplier != null) await dekApplier.RetryPendingAutoAcceptsAsync();
-                        }
-                        catch { /* logged inside the applier */ }
-                    });
-
-                    // Same pattern for stuck network-restore events. EventApplier auto-accepts
-                    // restore via fire-and-forget Task.Run — if that Task throws (network blip
-                    // mid-download, locked session at apply time, process crash before startup
-                    // sweep), state stays Pending/Downloading/Applying with no automatic retry.
-                    // Brainstorm consensus (kilo, claude, gemini): bug #5 restore-retry mirrors
-                    // DEK rotation retry. AcceptRestoreAsync is idempotent.
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            using var s = capturedScopeFactory.CreateScope();
-                            var restoreRetrier = s.ServiceProvider.GetService<IRestoreRetrier>();
-                            if (restoreRetrier != null) await restoreRetrier.RetryPendingRestoresAsync();
-                        }
-                        catch { /* logged inside the retrier */ }
-                    });
-
-                    // Lazy migration of legacy v=0 plaintext private key in tbl_node_identity.
-                    // Existing nodes (created before the v=1 flip) have a plaintext seed in
-                    // ed25519_private_key. On first successful unlock we re-encrypt under the
-                    // master DEK and bump v=1. New nodes are already created at v=1 in
-                    // InitializationService / InitEndpoints / JoinCommand. Idempotent: subsequent
-                    // unlocks find v=1 and do nothing. AAD = "bmb-node-pk" || nodeId, matching
-                    // the encrypt-on-init binding.
-                    var migrationDek = (byte[])_masterDek!.Clone();
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            using var s = capturedScopeFactory.CreateScope();
-                            var nodeRepo = s.ServiceProvider.GetService<INodeIdentityRepository>();
-                            if (nodeRepo == null) return;
-                            var current = await nodeRepo.GetAsync();
-                            if (current == null || current.Ed25519PrivateKeyV != 0) return;
-
-                            var (wrapped, iv) = NodeIdentityCrypto.EncryptPrivateKey(
-                                current.Ed25519PrivateKey, migrationDek, current.NodeId);
-                            await nodeRepo.UpgradePrivateKeyToV1Async(current.NodeId, wrapped, iv);
-                        }
-                        catch { /* best-effort — next unlock retries */ }
-                        finally
-                        {
-                            Array.Clear(migrationDek);
-                        }
-                    });
                 }
+                TriggerPostUnlockCatchUp();
 
                 Array.Clear(kek, 0, kek.Length);
                 return true;
@@ -244,6 +177,86 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
             if (_masterDek != null) Array.Clear(_masterDek);
             _masterDek = masterDek;
         }
+        TriggerPostUnlockCatchUp();
+    }
+
+    /// <summary>
+    /// Fires the same catch-up work UnlockCoreAsync always ran after a password unlock, but from
+    /// a single shared place so <see cref="UnlockWithDek"/> callers (OS auto-unlock, agent-token
+    /// unlock) get it too. Without this, a node that ONLY ever unlocks via one of those paths —
+    /// exactly the auto-unlock server-mode use case — would never retry a DEK rotation
+    /// auto-accept or network-restore that was pending while it was locked, and would never
+    /// migrate a legacy v=0 plaintext node identity key. All three are already documented
+    /// idempotent/safe-to-retry, so running them unconditionally on every unlock is safe.
+    /// </summary>
+    private void TriggerPostUnlockCatchUp()
+    {
+        if (scopeFactory == null) return;
+        var capturedScopeFactory = scopeFactory;
+
+        // Retry any deferred auto-accept DEK rotations whose COMMIT arrived while the
+        // session was locked. (Claude R2 prod review CRIT-1.)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var s = capturedScopeFactory.CreateScope();
+                var dekApplier = s.ServiceProvider.GetService<IDekRotationApplier>();
+                if (dekApplier != null) await dekApplier.RetryPendingAutoAcceptsAsync();
+            }
+            catch { /* logged inside the applier */ }
+        });
+
+        // Same pattern for stuck network-restore events. EventApplier auto-accepts
+        // restore via fire-and-forget Task.Run — if that Task throws (network blip
+        // mid-download, locked session at apply time, process crash before startup
+        // sweep), state stays Pending/Downloading/Applying with no automatic retry.
+        // Brainstorm consensus (kilo, claude, gemini): bug #5 restore-retry mirrors
+        // DEK rotation retry. AcceptRestoreAsync is idempotent.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var s = capturedScopeFactory.CreateScope();
+                var restoreRetrier = s.ServiceProvider.GetService<IRestoreRetrier>();
+                if (restoreRetrier != null) await restoreRetrier.RetryPendingRestoresAsync();
+            }
+            catch { /* logged inside the retrier */ }
+        });
+
+        // Lazy migration of legacy v=0 plaintext private key in tbl_node_identity.
+        // Existing nodes (created before the v=1 flip) have a plaintext seed in
+        // ed25519_private_key. On first successful unlock we re-encrypt under the
+        // master DEK and bump v=1. New nodes are already created at v=1 in
+        // InitializationService / InitEndpoints / JoinCommand. Idempotent: subsequent
+        // unlocks find v=1 and do nothing. AAD = "bmb-node-pk" || nodeId, matching
+        // the encrypt-on-init binding.
+        byte[]? migrationDek;
+        lock (_lock)
+        {
+            if (_masterDek == null) return; // shouldn't happen — caller just set it — but be safe
+            migrationDek = (byte[])_masterDek.Clone();
+        }
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var s = capturedScopeFactory.CreateScope();
+                var nodeRepo = s.ServiceProvider.GetService<INodeIdentityRepository>();
+                if (nodeRepo == null) return;
+                var current = await nodeRepo.GetAsync();
+                if (current == null || current.Ed25519PrivateKeyV != 0) return;
+
+                var (wrapped, iv) = NodeIdentityCrypto.EncryptPrivateKey(
+                    current.Ed25519PrivateKey, migrationDek, current.NodeId);
+                await nodeRepo.UpgradePrivateKeyToV1Async(current.NodeId, wrapped, iv);
+            }
+            catch { /* best-effort — next unlock retries */ }
+            finally
+            {
+                Array.Clear(migrationDek);
+            }
+        });
     }
 
     public void SwapMasterDek(byte[] newMasterDek)
