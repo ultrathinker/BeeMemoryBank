@@ -1298,6 +1298,45 @@
         </sl-button>
     </div>
 
+    @if (Model.OsAutoUnlockSupported)
+    {
+        <h3 style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> OS Auto-Unlock</h3>
+        <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+            <p class="text-muted text-sm" style="margin-bottom:12px;">
+                Lets this node unlock itself automatically on startup — no password prompt — using a
+                secret protected by Windows DPAPI under this Windows user account. Useful for a
+                server node that runs unattended.
+            </p>
+            <sl-alert variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>Anyone with access to this Windows user account will be able to open the
+                vault without a password</strong> once this is enabled. Only enable it on a machine
+                you trust and control physically.
+            </sl-alert>
+
+            @if (Model.OsAutoUnlockEnabled)
+            {
+                <sl-badge variant="success" pill style="margin-bottom:12px;">enabled</sl-badge>
+                <form method="post" asp-page-handler="DisableAutoUnlock">
+                    <sl-button type="submit" variant="danger" size="small"
+                               onclick="return confirm('Disable OS auto-unlock? The vault will require a password on next unlock.')">
+                        <sl-icon slot="prefix" name="key"></sl-icon> Disable auto-unlock
+                    </sl-button>
+                </form>
+            }
+            else
+            {
+                <sl-badge variant="neutral" pill style="margin-bottom:12px;">not configured</sl-badge>
+                <form method="post" asp-page-handler="EnableAutoUnlock">
+                    <sl-button type="submit" variant="primary" size="small"
+                               onclick="return confirm('Enable OS auto-unlock? Anyone with access to this Windows account will be able to open the vault without a password.')">
+                        <sl-icon slot="prefix" name="key"></sl-icon> Enable auto-unlock
+                    </sl-button>
+                </form>
+            }
+        </div>
+    }
+
     <!-- DEK Rotation -->
     @{
         var dekActive = Model.DekRotationProgress != null
