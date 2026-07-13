@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using Microsoft.Data.Sqlite;
@@ -350,7 +351,7 @@ public sealed class UpdateService
             // for any process (Desktop/bmbd/Api) whose active data lives inside a Velopack
             // live-payload folder that gets wiped/replaced on every apply, and never fires for
             // Docker/standalone deployments that have no such folder.
-            if (IsInsideVelopackCurrentDir(_dataPath))
+            if (BmbPaths.IsInsideVelopackCurrentDir(_dataPath))
             {
                 SetFailed($"Apply blocked: active data directory '{_dataPath}' is inside a Velopack-managed 'current' folder that gets wiped/replaced on apply. Update cannot be applied to avoid data loss.");
                 return;
@@ -620,34 +621,4 @@ public sealed class UpdateService
 
     private static string SanitizeVersion(string v) =>
         string.Join("", v.Where(c => char.IsAsciiLetterOrDigit(c) || c == '.' || c == '-'));
-
-    /// <summary>
-    /// True if <paramref name="path"/> has an ancestor directory literally named "current"
-    /// that has a sibling Update.exe — the exact, deployment-agnostic signature of a Velopack
-    /// live-payload folder (see docs/adr/0002-stable-data-root.md). Such a folder is entirely
-    /// replaced on every apply, so any data living inside it would be destroyed.
-    /// </summary>
-    private static bool IsInsideVelopackCurrentDir(string path)
-    {
-        try
-        {
-            var dir = new System.IO.DirectoryInfo(System.IO.Path.GetFullPath(path));
-            while (dir != null)
-            {
-                if (string.Equals(dir.Name, "current", StringComparison.OrdinalIgnoreCase)
-                    && dir.Parent != null
-                    && System.IO.File.Exists(System.IO.Path.Combine(dir.Parent.FullName, "Update.exe")))
-                {
-                    return true;
-                }
-                dir = dir.Parent;
-            }
-        }
-        catch
-        {
-            // Any path-resolution error is not our concern here — the normal gate checks
-            // (SnapshotService, DB validation, etc.) will surface real problems.
-        }
-        return false;
-    }
 }

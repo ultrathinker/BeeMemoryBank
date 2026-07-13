@@ -111,6 +111,24 @@ public partial class MainWindow : Window
 
         Dispatcher.UIThread.Post(() =>
         {
+            // The rescue found conflicting data and copied it into a fresh, unregistered
+            // recovered-<date> vault instead of the default one. Register a profile for it now
+            // so it shows up in Manage Storages instead of sitting invisible on disk - this can
+            // be set REGARDLESS of whether the node start itself went on to succeed, since the
+            // rescue already physically happened before the start attempt.
+            if (!string.IsNullOrEmpty(result.RecoveredVaultDir))
+            {
+                try
+                {
+                    var recoveredName = $"Восстановлено {DateTime.Now:yyyy-MM-dd HH:mm}";
+                    _profiles.AddProfile(recoveredName, result.RecoveredVaultDir);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Failed to register recovered vault as a profile: {ex.Message}");
+                }
+            }
+
             if (result.Success && !string.IsNullOrEmpty(result.FrontUrl))
             {
                 ApplySuccessfulNodeStart(profile, result.FrontUrl!);

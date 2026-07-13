@@ -606,7 +606,17 @@ public static class AutoDiscovery
         // falls back to a dev-only shared file, which is not something we want in a packaged
         // node). Generate one shared secret per orchestrator run and hand it to both children —
         // it never touches disk and isn't inherited by anything outside this process tree.
-        var internalKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        //
+        // EXCEPT: when a parent process (the Desktop app, hosting this bmbd for a profile) has
+        // ALREADY set BMB_INTERNAL_KEY on our own environment before spawning us, reuse that key
+        // instead of generating a different one. The parent generates it precisely so it can
+        // authenticate its own /node/update/* guard requests against whichever bmbd it hosts;
+        // silently overwriting it here would make that key permanently unguessable to the parent.
+        var internalKey = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
+        if (string.IsNullOrEmpty(internalKey))
+        {
+            internalKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        }
 
         var apiEnv = new Dictionary<string, string>
         {

@@ -177,6 +177,24 @@ public sealed class StorageInputValidatorTests : IDisposable
     }
 
     [Fact]
+    public void Create_DataPathInsideVelopackCurrentDir_IsInvalid()
+    {
+        // A path inside <install>\current\ (identified by a sibling Update.exe) gets wiped and
+        // replaced on every update/repair — the exact data-loss class this feature set exists to
+        // prevent. The dialog must reject it with a friendly message, not let it reach
+        // ProfileService.AddProfile as an unhandled exception.
+        var installRoot = Path.Combine(_tempDir, "install-" + Guid.NewGuid().ToString("N"));
+        var currentDir = Path.Combine(installRoot, "current");
+        var dangerousVaultDir = Path.Combine(currentDir, "some-vault");
+        Directory.CreateDirectory(dangerousVaultDir);
+        File.WriteAllText(Path.Combine(installRoot, "Update.exe"), "dummy");
+
+        var r = StorageInputValidator.ValidateCreate("Foo", dangerousVaultDir);
+        r.IsValid.Should().BeFalse();
+        r.Error.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
     public void Create_AbsoluteDataPath_Normalized()
     {
         var abs = Path.GetFullPath(Path.Combine(_tempDir, "my-vault"));

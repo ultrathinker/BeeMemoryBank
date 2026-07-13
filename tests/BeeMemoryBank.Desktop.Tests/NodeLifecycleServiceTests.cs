@@ -344,4 +344,98 @@ public class NodeLifecycleServiceTests
             }
         }
     }
+
+    // ── Final-review fix — surface a conflict-rescue's recovered vault ─────────
+
+    /// <summary>
+    /// Regression guard for the final-review finding: when the default vault already holds a
+    /// DIFFERENT valid database than the legacy source, <c>LegacyDataRescue.TryRescue</c> copies
+    /// the legacy data into a fresh, UNREGISTERED <c>recovered-&lt;date&gt;</c> vault rather than
+    /// overwriting the existing one. Before this fix, <c>StartOrAttachAsync</c> silently dropped
+    /// that outcome — the data was safe on disk but permanently invisible in Manage Storages.
+    /// This proves the recovered vault's path is now surfaced on the result.
+    /// </summary>
+    [Fact]
+    public async Task StartOrAttachAsync_ConflictingLegacyData_SurfacesRecoveredVaultDir()
+    {
+        if (!File.Exists(StubExePath))
+        {
+            throw new FileNotFoundException($"Stub process exe not found at: {StubExePath}.");
+        }
+
+        var legacyDir = Path.Combine(AppContext.BaseDirectory, "data");
+        string? legacyBackupDir = null;
+        if (Directory.Exists(legacyDir))
+        {
+            legacyBackupDir = legacyDir + ".bak-" + Guid.NewGuid().ToString("N");
+            Directory.Move(legacyDir, legacyBackupDir);
+        }
+        Directory.CreateDirectory(legacyDir);
+        WriteDistinctSqliteDb(Path.Combine(legacyDir, "beememorybank.db"), marker: 0xAA);
+
+        var fakeLocalAppData = Path.Combine(Path.GetTempPath(), "bmb-nls-recovered-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(fakeLocalAppData);
+        var originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
+
+        var svc = new NodeLifecycleService
+        {
+            TestOnly_NodeExePathOverride = StubExePath,
+            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2)
+        };
+        int? spawnedPid = null;
+        svc.TestOnly_OnHostedProcessStarted = pid => spawnedPid = pid;
+
+        try
+        {
+            // The default vault dir gets created empty by CreateDirectory below, THEN pre-seeded
+            // with a DIFFERENT valid DB before StartOrAttachAsync runs, so TryRescue sees "both
+            // valid, different" (RescuedToRecoveredVault), not "target empty" (plain rescue).
+            var defaultVaultDir = BmbPaths.DefaultVaultDir;
+            WriteDistinctSqliteDb(Path.Combine(defaultVaultDir, "beememorybank.db"), marker: 0xBB);
+
+            var result = await svc.StartOrAttachAsync(defaultVaultDir, progress: null, CancellationToken.None);
+            result.Success.Should().BeFalse("the stub never satisfies the readiness probe, so this must time out");
+
+            result.RecoveredVaultDir.Should().NotBeNullOrEmpty(
+                "a conflict rescue must surface the recovered vault's path so it can be registered");
+            result.RecoveredVaultDir!.Should().Contain("recovered-");
+            File.Exists(Path.Combine(result.RecoveredVaultDir!, "beememorybank.db")).Should().BeTrue(
+                "the legacy DB must have actually landed in the recovered vault");
+
+            // The pre-existing default vault DB must be untouched by the conflict.
+            File.Exists(Path.Combine(defaultVaultDir, "beememorybank.db")).Should().BeTrue();
+        }
+        finally
+        {
+            if (spawnedPid.HasValue)
+            {
+                KillPidIfAlive(spawnedPid.Value);
+            }
+            Environment.SetEnvironmentVariable("LOCALAPPDATA", originalLocalAppData);
+            try { Directory.Delete(fakeLocalAppData, recursive: true); } catch { }
+
+            try { if (Directory.Exists(legacyDir)) Directory.Delete(legacyDir, recursive: true); }
+            catch { /* best-effort cleanup */ }
+            if (legacyBackupDir != null)
+            {
+                try { Directory.Move(legacyBackupDir, legacyDir); }
+                catch { /* best-effort restore */ }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes a valid-but-distinguishable SQLite file (magic header + a byte-marker-filled
+    /// payload), mirroring LegacyDataRescueTests' helper of the same name.
+    /// </summary>
+    private static void WriteDistinctSqliteDb(string path, byte marker = 0xAB)
+    {
+        var magic = System.Text.Encoding.ASCII.GetBytes("SQLite format 3\0");
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+        fs.Write(magic, 0, magic.Length);
+        var payload = new byte[4096];
+        for (int i = 0; i < payload.Length; i++) payload[i] = marker;
+        fs.Write(payload, 0, payload.Length);
+    }
 }

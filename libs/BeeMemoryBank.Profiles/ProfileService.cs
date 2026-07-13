@@ -170,6 +170,13 @@ public sealed class ProfileService
             {
                 throw new ArgumentException("Data path must be an absolute path.", nameof(dataPath));
             }
+            if (BmbPaths.IsInsideVelopackCurrentDir(dataPath))
+            {
+                throw new ArgumentException(
+                    "Data path is inside a Velopack-managed 'current' folder, which gets wiped on every " +
+                    "update/repair. Choose a location outside the application's install directory.",
+                    nameof(dataPath));
+            }
         }
 
         lock (_lock)

@@ -50,7 +50,7 @@ public class SourcePathsGuardTests
     private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase)
     {
         // Stage 2 rescue sources — intentionally reference the legacy Velopack path as read-only source
-        "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:123",
+        "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:133",
         "desktop/BeeMemoryBank.Node/Program.cs:156",
         // Stage 3 transit guards — same rationale
         "desktop/BeeMemoryBank.Desktop/Program.cs:28",

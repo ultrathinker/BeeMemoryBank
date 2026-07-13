@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,11 +34,19 @@ public sealed record NodeLifecycleResult
     public string? FrontUrl { get; init; }
     public string? ErrorMessage { get; init; }
 
-    public static NodeLifecycleResult Ok(string frontUrl)
-        => new() { Success = true, FrontUrl = frontUrl };
+    /// <summary>
+    /// Set when this start rescued conflicting legacy data into a fresh, UNREGISTERED
+    /// <c>recovered-&lt;date&gt;</c> vault directory rather than the target vault (see
+    /// <see cref="BeeMemoryBank.AppPaths.RescueOutcome.RescuedToRecoveredVault"/>). The caller
+    /// should register a profile for this path so the data isn't silently invisible.
+    /// </summary>
+    public string? RecoveredVaultDir { get; init; }
 
-    public static NodeLifecycleResult Error(string message)
-        => new() { Success = false, ErrorMessage = message };
+    public static NodeLifecycleResult Ok(string frontUrl, string? recoveredVaultDir = null)
+        => new() { Success = true, FrontUrl = frontUrl, RecoveredVaultDir = recoveredVaultDir };
+
+    public static NodeLifecycleResult Error(string message, string? recoveredVaultDir = null)
+        => new() { Success = false, ErrorMessage = message, RecoveredVaultDir = recoveredVaultDir };
 }
 
 /// <summary>
@@ -101,6 +110,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
         // premature exit) can kill/dispose it instead of leaving it running but no longer
         // reachable from any future StopAsync call - see the catch block.
         Process? hostedProc = null;
+        string? recoveredVaultDir = null;
         try
         {
             progress?.Report("Resolving data directory...");
@@ -129,6 +139,16 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                         $"Source: {legacyDataDir}\n" +
                         $"Reason: {rescueResult.Message}\n\n" +
                         "Please free up the data directory (e.g. stop any running BeeMemoryBank node) and retry.");
+                }
+
+                // The default vault already held a DIFFERENT valid database, so the legacy data
+                // was copied into a fresh recovered-<date> vault instead of overwriting it. That
+                // vault is NOT registered in profiles.json — surface its path so the caller (which
+                // owns ProfileService) can register a profile for it; otherwise the rescued data
+                // sits on disk safely but permanently invisible in Manage Storages.
+                if (rescueResult.Outcome == RescueOutcome.RescuedToRecoveredVault)
+                {
+                    recoveredVaultDir = rescueResult.VaultDir;
                 }
             }
 
@@ -225,6 +245,21 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                     WorkingDirectory = Path.GetDirectoryName(nodeExePath)
                 };
                 startInfo.EnvironmentVariables["BMB_STDIN_LIFELINE"] = "1";
+
+                // Generate the shared internal-key secret HERE (Desktop is the parent process
+                // spawning bmbd) rather than letting bmbd invent its own: bmbd/Program.cs never
+                // persists this key to disk by design (see its own comment), so if bmbd picked a
+                // key Desktop never learned, ProfileSwitchService's/App.axaml.cs's update-status
+                // guard requests would have no way to authenticate and would always fail open.
+                // Passing it down via the CHILD's env (inherited by bmbd -> Api/Web) and ALSO
+                // setting it on THIS process's own environment - still never touching disk - lets
+                // those existing BMB_INTERNAL_KEY env-var lookups find the right value with no
+                // further changes on their end. Re-generated (and the process-wide var
+                // overwritten) every time a NEW bmbd is hosted, so it always tracks whichever
+                // hosted node is currently active.
+                var internalKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+                startInfo.EnvironmentVariables["BMB_INTERNAL_KEY"] = internalKey;
+                Environment.SetEnvironmentVariable("BMB_INTERNAL_KEY", internalKey);
 
                 // Simple log rotation: leave at most 10 bmbd-*.log files
                 try
@@ -352,7 +387,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                 }
             }
 
-            return NodeLifecycleResult.Ok(frontUrl!);
+            return NodeLifecycleResult.Ok(frontUrl!, recoveredVaultDir);
         }
         catch (Exception ex)
         {
@@ -392,7 +427,11 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                     _hostedStdin = null;
                 }
             }
-            return NodeLifecycleResult.Error(ex.Message);
+            // Even though the overall start failed (timeout/premature exit/cancellation), a
+            // rescue that already landed in a recovered-<date> vault genuinely happened and
+            // that data is on disk right now - surface it so the caller can still register a
+            // profile for it instead of losing track of it because the start itself failed.
+            return NodeLifecycleResult.Error(ex.Message, recoveredVaultDir);
         }
     }
 

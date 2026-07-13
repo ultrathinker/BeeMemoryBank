@@ -212,6 +212,33 @@ public sealed class ProfileServiceTests : IDisposable
     }
 
     [Fact]
+    public void AddProfile_ThrowsOnDataPathInsideVelopackCurrentDir()
+    {
+        // Arrange — build a fake <install>\current\ with a sibling Update.exe: the exact,
+        // deployment-agnostic signature BmbPaths.IsInsideVelopackCurrentDir looks for.
+        var installRoot = Path.Combine(Path.GetTempPath(), "bmb-profilesvc-velopack-" + Guid.NewGuid().ToString("N"));
+        var currentDir = Path.Combine(installRoot, "current");
+        var dangerousVaultDir = Path.Combine(currentDir, "some-vault");
+        Directory.CreateDirectory(dangerousVaultDir);
+        File.WriteAllText(Path.Combine(installRoot, "Update.exe"), "dummy");
+
+        try
+        {
+            var service = new ProfileService(_profilesFilePath, _defaultVaultDir, _vaultsParentDir);
+
+            // Act & Assert — a profile whose data path lives inside the live Velopack payload
+            // folder must be rejected: the folder gets wiped and replaced on every update/repair,
+            // exactly the data-loss class this whole feature set exists to prevent.
+            Action act = () => service.AddProfile("Doomed Vault", dangerousVaultDir);
+            act.Should().Throw<ArgumentException>().WithMessage("*Velopack*");
+        }
+        finally
+        {
+            try { Directory.Delete(installRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void AddProfile_ThrowsOnDataPathCollisionWithExistingProfile()
     {
         // Arrange

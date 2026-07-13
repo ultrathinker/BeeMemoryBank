@@ -272,6 +272,25 @@ public sealed class ProfileSwitchService : IDisposable
         progress?.Report($"Starting node for profile '{targetProfile.Name}'...");
         var startResult = await _nodeLifecycle.StartOrAttachAsync(targetProfile.DataPath, progress, ct).ConfigureAwait(false);
 
+        // The rescue found conflicting data at the target vault and copied it into a fresh,
+        // unregistered recovered-<date> vault instead. Register a profile for it now so it shows
+        // up in Manage Storages instead of sitting invisible on disk (same as the equivalent
+        // handling in MainWindow.HostOrAttachAsync for the first-launch path) - this can be set
+        // REGARDLESS of whether the start itself went on to succeed, since the rescue already
+        // physically happened before the start attempt.
+        if (!string.IsNullOrEmpty(startResult.RecoveredVaultDir))
+        {
+            try
+            {
+                var recoveredName = $"Восстановлено {DateTime.Now:yyyy-MM-dd HH:mm}";
+                _profiles.AddProfile(recoveredName, startResult.RecoveredVaultDir);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ProfileSwitchService: failed to register recovered vault as a profile: {ex.Message}");
+            }
+        }
+
         // ── Step 6: Success — record last-used STRICTLY after a successful start.
         if (startResult.Success && !string.IsNullOrEmpty(startResult.FrontUrl))
         {
@@ -285,6 +304,7 @@ public sealed class ProfileSwitchService : IDisposable
                 // failure just because the registry write hiccupped.
                 Debug.WriteLine($"ProfileSwitchService: SetLastUsed failed after successful start: {ex.Message}");
             }
+
             progress?.Report($"Switched to profile '{targetProfile.Name}'.");
             return SwitchResult.Ok(targetProfile, startResult.FrontUrl!);
         }
@@ -339,6 +359,13 @@ public sealed class ProfileSwitchService : IDisposable
     /// an update is currently <c>Applying</c> (the only state where interrupting a switch
     /// could corrupt the install). Every other outcome — other states, non-2xx, timeout,
     /// parse error, missing internal key — fails OPEN (returns <c>false</c>).
+    ///
+    /// <para>For a node THIS Desktop process hosted (spawned via <see cref="INodeLifecycleService"/>),
+    /// <see cref="ResolveInternalKey"/> resolves the real key — <see cref="NodeLifecycleService"/>
+    /// generates it and threads it through to bmbd/Api via env vars (see its own comment), so the
+    /// request actually authenticates and this guard functions. For a node this process merely
+    /// ATTACHED to (already running, spawned by some other process) there is no way to learn its
+    /// key — that case, and only that case, always fails open by design.</para>
     /// </summary>
     private async Task<(bool blocked, string? reason)> IsUpdateApplyingAsync(
         string activeFrontUrl,

@@ -9,6 +9,11 @@ using BeeMemoryBank.Hosting;
 
 namespace BeeMemoryBank.Node.Tests;
 
+// See NodeProcessEnvCollection (EndToEndIntegrationTests.cs) — Discover_ReusesInheritedInternalKey
+// below mutates the process-wide BMB_INTERNAL_KEY environment variable, which must not run
+// concurrently with anything that spawns a real BeeMemoryBank.Node.exe subprocess and cares about
+// its own BMB_INTERNAL_KEY state (e.g. EndToEndIntegrationTests's stdin-lifeline E2E test).
+[Collection("NodeProcessEnv")]
 public class AutoDiscoveryTests : IDisposable
 {
     private readonly string _tempTestDir;
@@ -230,6 +235,53 @@ public class AutoDiscoveryTests : IDisposable
         // Web must receive the SAME internal key as Api — it's the shared secret
         // InternalKeyHandler attaches to every Web-to-Api request.
         webEnvForKey["BMB_INTERNAL_KEY"].Should().Be(apiEnv["BMB_INTERNAL_KEY"]);
+    }
+
+    // ── Этап 6 final-review fix — reuse an inherited BMB_INTERNAL_KEY ──────────
+
+    /// <summary>
+    /// Regression guard for the final-review finding: when bmbd itself was spawned by a parent
+    /// (Desktop's <c>NodeLifecycleService</c>) that already set <c>BMB_INTERNAL_KEY</c> on bmbd's
+    /// own environment, <c>Discover</c> must REUSE that value for Api/Web rather than generating
+    /// a different one. Desktop authenticates its own <c>/node/update/*</c> guard requests with
+    /// the key IT generated; if bmbd silently overwrote it here, Desktop's key would never match
+    /// Api's, and every such request would 401 — the guard would always fail open.
+    /// </summary>
+    [Fact]
+    public void Discover_ReusesInheritedInternalKey_InsteadOfGeneratingANewOne()
+    {
+        // Arrange
+        var baseDir = Path.Combine(_tempTestDir, "bmbd");
+        var apiDir = Path.Combine(_tempTestDir, "api");
+        var webDir = Path.Combine(_tempTestDir, "web");
+        var dataDir = Path.Combine(_tempTestDir, "data");
+
+        Directory.CreateDirectory(baseDir);
+        Directory.CreateDirectory(apiDir);
+        Directory.CreateDirectory(webDir);
+
+        File.WriteAllText(Path.Combine(apiDir, "BeeMemoryBank.Api.exe"), "dummy");
+        File.WriteAllText(Path.Combine(webDir, "BeeMemoryBank.Web.exe"), "dummy");
+
+        var inheritedKey = "inherited-test-key-" + Guid.NewGuid().ToString("N");
+        var originalKey = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
+        Environment.SetEnvironmentVariable("BMB_INTERNAL_KEY", inheritedKey);
+
+        try
+        {
+            // Act
+            var configs = AutoDiscovery.Discover(baseDir, dataDir);
+
+            // Assert — both children get the INHERITED key verbatim, not a freshly generated one.
+            var apiEnv = configs.First(c => c.ApplicationName == "BeeMemoryBank.Api").EnvironmentVariables;
+            var webEnv = configs.First(c => c.ApplicationName == "BeeMemoryBank.Web").EnvironmentVariables;
+            apiEnv!["BMB_INTERNAL_KEY"].Should().Be(inheritedKey);
+            webEnv!["BMB_INTERNAL_KEY"].Should().Be(inheritedKey);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("BMB_INTERNAL_KEY", originalKey);
+        }
     }
 
     [Fact]

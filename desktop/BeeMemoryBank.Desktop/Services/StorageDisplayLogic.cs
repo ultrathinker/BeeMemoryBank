@@ -83,7 +83,10 @@ public sealed record StorageNameValidation
 /// MessageBox"). Does NOT touch the filesystem or the registry — duplicate-dataPath
 /// detection stays in <see cref="ProfileService"/> (which holds the lock and knows the
 /// on-disk truth), so a race between two create dialogs can still surface as an exception
-/// from <c>AddProfile</c> that the dialog must handle separately.
+/// from <c>AddProfile</c> that the dialog must handle separately. The one exception is
+/// <see cref="BmbPaths.IsInsideVelopackCurrentDir"/>: a cheap, non-racy, side-effect-free
+/// read of the install topology (not the registry), so it is safe to check here too for a
+/// friendly inline message instead of only surfacing as an <c>AddProfile</c> exception.
 /// </summary>
 public static class StorageInputValidator
 {
@@ -111,6 +114,12 @@ public static class StorageInputValidator
             if (!System.IO.Path.IsPathRooted(rawPath))
             {
                 return StorageNameValidation.Fail("Каталог данных должен быть абсолютным путём.");
+            }
+            if (BeeMemoryBank.AppPaths.BmbPaths.IsInsideVelopackCurrentDir(rawPath))
+            {
+                return StorageNameValidation.Fail(
+                    "Этот каталог находится внутри папки приложения, которая полностью заменяется " +
+                    "при каждом обновлении. Выберите каталог за пределами папки установки.");
             }
             explicitPath = rawPath;
         }

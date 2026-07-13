@@ -197,6 +197,18 @@ public class NodeFront
             },
             new RouteConfig
             {
+                // Api owns the /node/update/* update-choreography state machine (see
+                // BeeMemoryBank.Api/Endpoints/UpdateEndpoints.cs). Without this route, any
+                // request to a path under /node/update/ falls through past the direct /node/*
+                // endpoints below (which only match the literal /status, /lock, /sync-now) to
+                // the web-catchall route and hits BeeMemoryBank.Web instead — a 404, never Api.
+                RouteId = "api-node-update",
+                ClusterId = "Api",
+                Match = new RouteMatch { Path = "/node/update/{**rest}" },
+                Order = 1
+            },
+            new RouteConfig
+            {
                 RouteId = "web-catchall",
                 ClusterId = "Web",
                 Match = new RouteMatch { Path = "{**catchall}" },

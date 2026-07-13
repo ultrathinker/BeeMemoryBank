@@ -166,4 +166,40 @@ public static class BmbPaths
         Directory.CreateDirectory(fullVaultDir);
         return fullVaultDir;
     }
+
+    /// <summary>
+    /// True if <paramref name="path"/> has an ancestor directory literally named "current" that
+    /// has a sibling Update.exe — the exact, deployment-agnostic signature of a Velopack
+    /// live-payload folder. Such a folder is entirely wiped and replaced on every apply, so any
+    /// data living inside it would be destroyed on the next update.
+    /// </summary>
+    /// <remarks>
+    /// Shared by <see cref="ProfileService.AddProfile"/> (or equivalent) callers that accept a
+    /// user-supplied explicit vault path, and by <c>UpdateService</c>'s own pre-apply guard —
+    /// both need the SAME answer to "would this path get destroyed by an update", so this lives
+    /// in one place instead of two copies silently drifting apart.
+    /// </remarks>
+    public static bool IsInsideVelopackCurrentDir(string path)
+    {
+        try
+        {
+            var dir = new DirectoryInfo(Path.GetFullPath(path));
+            while (dir != null)
+            {
+                if (string.Equals(dir.Name, "current", StringComparison.OrdinalIgnoreCase)
+                    && dir.Parent != null
+                    && File.Exists(Path.Combine(dir.Parent.FullName, "Update.exe")))
+                {
+                    return true;
+                }
+                dir = dir.Parent;
+            }
+        }
+        catch
+        {
+            // Any path-resolution error is not our concern here — callers' own checks
+            // (SnapshotService, DB validation, etc.) will surface real problems.
+        }
+        return false;
+    }
 }
