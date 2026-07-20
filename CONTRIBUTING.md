@@ -19,6 +19,11 @@ dotnet build BeeMemoryBank.slnx
 
 ### Run Tests
 
+> **Prerequisite:** the ONNX embedding model is gitignored (~87 MB) and must be present for the
+> test suite to run — startup constructs the embedding generator. Download it into
+> `libs/BeeMemoryBank.Core/Embeddings/Models/model.onnx` (the CI workflow `build.yml` does this
+> automatically before testing). Without it, a fresh-clone `dotnet test` fails on the embedding path.
+
 ```bash
 dotnet test
 ```
