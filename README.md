@@ -81,7 +81,7 @@ The fix isn't another notes app. It's a memory the agent can read **and write to
 - **Your data, your server.** Self-hosted on your laptop, your VPS, your home NAS. End-to-end encrypted with **per-article keys** — the encryption happens on your device, the server holds ciphertext. No vendor lock-in, no telemetry, no "we updated our terms of service".
 - **Syncs everywhere automatically.** Three nodes on three continents stay in sync via Ed25519-signed events with Lamport-clock conflict resolution. Push-on-save means your phone sees the article seconds after your laptop saves it. Works behind NAT.
 - **Team-ready when you need it.** Per-folder ACLs, per-user key slots, per-agent isolation. Each teammate connects their own AI agent; the agent can only see folders the user can see.
-- **Production-grade.** Survived 7 sequential security audit waves (crypto, sync, auth, input, admin, hygiene, mobile) — every finding either fixed or explicitly documented as accepted-risk. **349 tests pass on every build.** Online DEK rotation, snapshot/restore, hard-delete propagation, encrypted version history, audit log. Code is open under AGPL-3.0; nothing hidden.
+- **Production-grade.** Survived 7 sequential security audit waves (crypto, sync, auth, input, admin, hygiene, mobile) — every finding either fixed or explicitly documented as accepted-risk. **359 tests pass on every build.** Online DEK rotation, snapshot/restore, hard-delete propagation, encrypted version history, audit log. Code is open under AGPL-3.0; nothing hidden.
 
 If you've ever wished your AI assistant could remember the work it did with you yesterday — this is the answer.
 
