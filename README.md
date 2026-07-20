@@ -10,7 +10,9 @@
 ![MCP](https://img.shields.io/badge/MCP-native-orange)
 ![Encryption](https://img.shields.io/badge/E2E-AES--256--GCM-green)
 ![SQLite](https://img.shields.io/badge/DB-SQLite-lightgrey)
-![Tests](https://img.shields.io/badge/tests-349%2F349-brightgreen)
+![Build & Test](https://github.com/ultrathinker/BeeMemoryBank/actions/workflows/build.yml/badge.svg)
+![Build Mobile](https://github.com/ultrathinker/BeeMemoryBank/actions/workflows/build-mobile.yml/badge.svg)
+![Tests](https://img.shields.io/badge/tests-359%2F359-brightgreen)
 ![Security audit](https://img.shields.io/badge/security_audit-7_waves_clean-brightgreen)
 
 ### Demo
@@ -75,7 +77,7 @@ You've been talking to AI agents for months. Every conversation produces useful 
 
 The fix isn't another notes app. It's a memory the agent can read **and write to** itself, that you actually control:
 
-- **The agent saves and retrieves on its own.** No copy-paste. No "let me put that in Notion later." Native [MCP](https://modelcontextprotocol.io/) support — the agent treats your knowledge base like its own working memory. 36 tools across 7 categories. Token-aware truncation so a 50KB article doesn't blow your context window.
+- **The agent saves and retrieves on its own.** No copy-paste. No "let me put that in Notion later." Native [MCP](https://modelcontextprotocol.io/) support — the agent treats your knowledge base like its own working memory. 30 tools across 7 categories. Token-aware truncation so a 50KB article doesn't blow your context window.
 - **Your data, your server.** Self-hosted on your laptop, your VPS, your home NAS. End-to-end encrypted with **per-article keys** — the encryption happens on your device, the server holds ciphertext. No vendor lock-in, no telemetry, no "we updated our terms of service".
 - **Syncs everywhere automatically.** Three nodes on three continents stay in sync via Ed25519-signed events with Lamport-clock conflict resolution. Push-on-save means your phone sees the article seconds after your laptop saves it. Works behind NAT.
 - **Team-ready when you need it.** Per-folder ACLs, per-user key slots, per-agent isolation. Each teammate connects their own AI agent; the agent can only see folders the user can see.
@@ -89,7 +91,7 @@ If you've ever wished your AI assistant could remember the work it did with you 
 
 | | Feature | Details |
 |---|---|---|
-| :robot: | **Native MCP for AI Agents** | 36 tools across 7 categories, **per-agent DEK isolation**, **token-aware truncation with `bee_continue` pagination**, **zero-context file uploads** (bypass the LLM context window), `append`/`prepend` operations for incremental edits without re-reading articles |
+| :robot: | **Native MCP for AI Agents** | 30 tools across 7 categories, **per-agent DEK isolation**, **token-aware truncation with `bee_continue` pagination**, **zero-context file uploads** (bypass the LLM context window), `append`/`prepend` operations for incremental edits without re-reading articles |
 | :inbox_tray: | **Obsidian Vault Import** | One-click migration: upload an Obsidian vault as a ZIP — Markdown files become articles, folders map directly, Obsidian `![[image.png]]` embeds are rewritten to encrypted media |
 | :dna: | **Emergent Semantic Graph** | Concept tags create automatic bidirectional links **through shared characteristics, not article-to-article pairs** — one tag connects a note to every article that shares it (topic, project, tech, status, year — any dimension you pick). No manual `[[wiki-links]]` to maintain, no dead-end pairs; add a tag and the graph rewires itself. D3.js force-directed graph with depth-controlled exploration; related articles ranked by shared-tag strength; semantic tag search via **ONNX all-MiniLM-L6-v2** (384-dim real ML embeddings, self-hosted) |
 | :lock: | **E2E Encryption** | AES-256-GCM with per-article and per-image keys, Argon2id KDF (64 MB, 3 iterations), envelope encryption with 3-level key hierarchy |
@@ -142,8 +144,8 @@ The bearer token is created in the Web UI under **Admin > Agents** and is shown 
 | Category | Tools | Description |
 |---|---|---|
 | **Search** | `bee_search`, `bee_search_content` | Fast metadata search (title/tags) + opt-in full-text body search (decrypts in batches) |
-| **Read** | `bee_list_articles`, `bee_get_article`, `bee_get_tree`, `bee_get_image` | Browse folders, read article content, and view embedded images (auto-decrypted) |
-| **Write** | `bee_save_article`, `bee_update_article`, `bee_delete_article`, `bee_append_to_article`, `bee_prepend_to_article`, `bee_move_folder`, `bee_delete_folder` | Full CRUD with soft-delete and folder management |
+| **Read** | `bee_list_articles`, `bee_get_article`, `bee_get_tree`, `bee_get_image`, `bee_get_article_version`, `bee_get_article_versions` | Browse folders, read article content, and view embedded images (auto-decrypted) |
+| **Write** | `bee_save_article`, `bee_update_article`, `bee_delete_article`, `bee_append_to_article`, `bee_prepend_to_article`, `bee_move_folder`, `bee_delete_folder`, `bee_copy_to`, `bee_rename_folder`, `bee_replace_in_article` | Full CRUD with soft-delete and folder management |
 | **Tags** | `bee_get_related`, `bee_search_by_tag`, `bee_list_tags`, `bee_add_tags`, `bee_remove_tag`, `bee_rename_tag`, `bee_merge_tags`, `bee_delete_tag` | Categorization via tags, semantic search, and global tag management |
 | **Session** | `bee_set_max_tokens`, `bee_continue` | Control response size, paginate large responses |
 | **Upload** | `bee_get_upload_script` | Get a Python script for zero-context file uploads (bypasses LLM context window) |
@@ -628,7 +630,7 @@ Plaintext
 | **E2E Encryption** | :white_check_mark: AES-256-GCM | :x: (plugin) | :x: | :x: | :white_check_mark: | :white_check_mark: |
 | **Per-Article Keys** | :white_check_mark: | :x: | :x: | :x: | :x: | :x: |
 | **Self-Hosted Sync** | :white_check_mark: Built-in | :x: (paid) | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| **Native MCP** | :white_check_mark: 36 tools | :x: | :x: | :x: | :x: | :x: |
+| **Native MCP** | :white_check_mark: 30 tools | :x: | :x: | :x: | :x: | :x: |
 | **AI Agent Ready** | :white_check_mark: | :x: (plugin) | :x: | :x: | :x: | :x: |
 | **Auto-Backlinks** | :white_check_mark: via tag graph | :white_check_mark: manual `[[links]]` | :white_check_mark: manual | :white_check_mark: manual | :x: | :x: |
 | **Mobile App** | :white_check_mark: Android | :white_check_mark: | :white_check_mark: | :x: (PWA) | :white_check_mark: | :white_check_mark: |
@@ -658,7 +660,7 @@ If these are dealbreakers, Obsidian / Logseq / AnyType / Notion may suit you bet
 
 - [x] E2E encryption with per-article keys
 - [x] Multi-node sync with event sourcing and near-realtime push-on-save
-- [x] Native MCP server (36 tools)
+- [x] Native MCP server (30 tools)
 - [x] Web UI with Markdown editor
 - [x] CLI tool (`bmb`)
 - [x] Android app (.NET MAUI)
@@ -677,7 +679,7 @@ If these are dealbreakers, Obsidian / Logseq / AnyType / Notion may suit you bet
 - [x] Hard delete with cross-node propagation (Superadmin)
 - [x] Emergent concept-tag knowledge graph (D3.js force-directed, automatic bidirectional connections, no manual wiki-links)
 - [x] Semantic search powered by ONNX all-MiniLM-L6-v2 (384-dim real ML embeddings, self-hosted)
-- [ ] CI/CD pipeline (GitHub Actions)
+- [x] CI/CD pipeline (GitHub Actions)
 - [ ] iOS app (coming)
 
 ---

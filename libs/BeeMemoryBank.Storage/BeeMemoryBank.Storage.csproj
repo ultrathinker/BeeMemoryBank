@@ -8,6 +8,13 @@
     <PackageReference Include="Dapper" Version="2.1.66" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
+    <!-- Pin the native SQLite build above the vulnerable 2.1.11 (GHSA-2m69-gcr7-jv3q,
+         CVE-2025-6965: memory corruption in SQLite versions prior to 3.50.2).
+         Microsoft.Data.Sqlite 10.0.3 transitively pulls SQLitePCLRaw.lib.e_sqlite3 2.1.11;
+         this direct reference forces 2.1.12 (which bundles a fixed SQLite) for this project
+         and every project that references Storage. Verified via the dotnet vulnerable
+         package audit (NU1903 warning clears after this pin). -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
   </ItemGroup>
 
   <ItemGroup>
