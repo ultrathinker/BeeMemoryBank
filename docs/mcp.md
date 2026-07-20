@@ -85,7 +85,7 @@ server/BeeMemoryBank.Api/McpTools/
 └── TokenEstimator.cs    — token estimation for truncation
 ```
 
-## 36 MCP Tools
+## 30 MCP Tools
 
 | Group | Tools |
 |---|---|
