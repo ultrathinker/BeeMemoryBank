@@ -25,7 +25,7 @@ Search by title, folder names, and optionally full article body content. Does no
 - `bee_get_article_version` — get decrypted content of a specific version (`id: Guid`, `versionNumber: int`). Requires unlocked session. Returns version metadata + decrypted `content`
 - `bee_get_image` — get an image from an article (`id: Guid`, `maxSizeKb: int?`). Decrypts on the fly and resizes to fit within token limits. Returns image as an inline content block.
 
-### bee_save_article, bee_update_article, bee_delete_article, bee_append_to_article, bee_prepend_to_article, bee_move_folder, bee_delete_folder (BeeWriteTools.cs)
+### bee_save_article, bee_update_article, bee_delete_article, bee_append_to_article, bee_prepend_to_article, bee_move_folder, bee_delete_folder, bee_rename_folder, bee_copy_to, bee_replace_in_article (BeeWriteTools.cs)
 - `bee_save_article` — create (`title`, `treePath`, `content`, `tags?`). Auto-creates missing folders in `treePath`. Warns when content exceeds 5000 characters.
 - `bee_update_article` — update (`id`, optionally `title`, `treePath`, `content`, `tags`). Omitted fields remain unchanged. Creates a version snapshot of the previous content on every save.
 - `bee_delete_article` — soft delete (`id`, `confirm: bool`)
@@ -33,6 +33,9 @@ Search by title, folder names, and optionally full article body content. Does no
 - `bee_append_to_article` — append text to the end of an article without reading the full content. Saves tokens.
 - `bee_prepend_to_article` — prepend text to the beginning of an article without reading the full content. Saves tokens.
 - `bee_move_folder` — move a folder (`path`, `newParentPath`)
+- `bee_rename_folder` — rename a folder in place (`path`, `newName`)
+- `bee_copy_to` — copy an article (or a whole folder) to another location (`sourceId`, `targetPath`); returns the new id
+- `bee_replace_in_article` — find/replace exact text within one article (`id`, `search`, `replace`) without resending the whole body
 
 ### bee_set_max_tokens, bee_continue (BeeSessionTools.cs)
 - `bee_set_max_tokens` — set token limit for MCP responses (min 1000, default 10000, max 20000)
@@ -74,7 +77,7 @@ server/BeeMemoryBank.Api/McpTools/
 │                          bee_get_article_versions, bee_get_article_version, bee_get_image
 ├── BeeWriteTools.cs     — bee_save_article, bee_update_article, bee_delete_article,
 │                          bee_delete_folder, bee_append_to_article, bee_prepend_to_article,
-│                          bee_move_folder
+│                          bee_move_folder, bee_rename_folder, bee_copy_to, bee_replace_in_article
 ├── BeeSessionTools.cs   — bee_set_max_tokens, bee_continue
 ├── BeeUploadTools.cs    — bee_get_upload_script
 ├── BeeAuditTools.cs     — bee_get_log
@@ -85,17 +88,17 @@ server/BeeMemoryBank.Api/McpTools/
 └── TokenEstimator.cs    — token estimation for truncation
 ```
 
-## 36 MCP Tools
+## 30 MCP Tools
 
 | Group | Tools |
 |---|---|
-| **Search** (3) | `bee_search`, `bee_search_content`, `bee_search_by_tag` |
-| **Read** (7) | `bee_list_articles`, `bee_get_article`, `bee_get_tree`, `bee_get_article_versions`, `bee_get_article_version`, `bee_get_image`, `bee_get_related` |
-| **Write** (10) | `bee_save_article`, `bee_update_article`, `bee_delete_article`, `bee_delete_folder`, `bee_append_to_article`, `bee_prepend_to_article`, `bee_replace_in_article`, `bee_move_folder`, `bee_rename_folder`, _(and folder-level helpers)_ |
-| **Tags** (9) | `bee_list_tags`, `bee_add_tags`, `bee_remove_tag`, `bee_rename_tag`, `bee_merge_tags`, `bee_delete_tag`, and concept-tag graph helpers |
-| **Session** (3) | `bee_set_max_tokens`, `bee_continue`, and session helpers |
-| **Upload** (2) | `bee_get_upload_script` and upload helpers |
-| **Audit** (2) | `bee_get_log` and audit helpers |
+| **Search** (2) | `bee_search`, `bee_search_content` |
+| **Read** (6) | `bee_list_articles`, `bee_get_article`, `bee_get_tree`, `bee_get_image`, `bee_get_article_version`, `bee_get_article_versions` |
+| **Write** (10) | `bee_save_article`, `bee_update_article`, `bee_delete_article`, `bee_append_to_article`, `bee_prepend_to_article`, `bee_move_folder`, `bee_delete_folder`, `bee_copy_to`, `bee_rename_folder`, `bee_replace_in_article` |
+| **Tags** (8) | `bee_get_related`, `bee_search_by_tag`, `bee_list_tags`, `bee_add_tags`, `bee_remove_tag`, `bee_rename_tag`, `bee_merge_tags`, `bee_delete_tag` |
+| **Session** (2) | `bee_set_max_tokens`, `bee_continue` |
+| **Upload** (1) | `bee_get_upload_script` |
+| **Audit** (1) | `bee_get_log` |
 
 ## Configuration Examples
 

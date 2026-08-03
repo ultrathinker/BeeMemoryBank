@@ -18,7 +18,10 @@
   <ItemGroup>
     <MauiIcon Include="Resources\AppIcon\appicon.svg" />
     <MauiImage Include="Resources\Images\*.svg" />
-    <MauiAsset Include="Resources\Raw\model.onnx" LogicalName="model.onnx" />
+    <!-- The ONNX model (~87 MB) is gitignored and fetched at build time (see CI / docs).
+         Keep this asset conditional so a clean clone without the model still builds;
+         the app falls back to downloading it at runtime when it is absent. -->
+    <MauiAsset Include="Resources\Raw\model.onnx" LogicalName="model.onnx" Condition="Exists('Resources\Raw\model.onnx')" />
   </ItemGroup>
 
   <ItemGroup Condition="$(TargetFramework.Contains('-android'))">
