@@ -259,10 +259,13 @@
                     <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
                 </sl-button>
                 <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'all'})">
-                    <sl-icon slot="prefix" name="download"></sl-icon> Export All
+                    <sl-icon slot="prefix" name="upload"></sl-icon> Export All
                 </sl-button>
                 <sl-button size="small" variant="default" onclick="document.getElementById('dlg-import-obsidian').show()">
-                    <sl-icon slot="prefix" name="upload"></sl-icon> Import from Obsidian
+                    <sl-icon slot="prefix" name="download"></sl-icon> Import from Obsidian
+                </sl-button>
+                <sl-button size="small" variant="default" onclick="document.getElementById('dlg-import-bee').show()">
+                    <sl-icon slot="prefix" name="download"></sl-icon> Bee-Import
                 </sl-button>
             </div>
             <p class="text-muted welcome-chat-hint">
@@ -389,6 +392,30 @@
     <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-import-obsidian').hide()">Cancel</sl-button>
 </sl-dialog>
 
+<sl-dialog id="dlg-import-bee" label="Bee-Import" class="bmb-fp-host">
+    <sl-alert id="import-bee-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        <span id="import-bee-error-msg"></span>
+    </sl-alert>
+    <p>Upload a ZIP exported from another BeeMemoryBank (Export All / Export Folder). Folder
+       name, structure — including empty folders — titles and tags are restored exactly.</p>
+    <input type="file" id="import-bee-file" accept=".zip" style="margin-bottom:16px;" />
+    <p style="margin-bottom:4px;">Import into:</p>
+    <div id="import-bee-path-selector" class="bmb-path-selector" style="margin-bottom:16px;">
+        <div class="bmb-path-display">
+            <sl-icon class="bmb-path-icon" name="folder2"></sl-icon>
+            <span class="bmb-path-text">/</span>
+            <sl-icon-button class="bmb-path-edit-btn" name="pencil-square" label="Change location"></sl-icon-button>
+        </div>
+        <div class="bmb-path-picker bmb-folder-picker" hidden>
+            <sl-input class="bmb-fp-input" placeholder="Type to search folders, or pick / for root" autocomplete="off" size="small"></sl-input>
+            <div class="bmb-fp-dropdown" hidden></div>
+        </div>
+    </div>
+    <sl-button id="btn-import-bee" slot="footer" variant="primary">Import</sl-button>
+    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-import-bee').hide()">Cancel</sl-button>
+</sl-dialog>
+
 <script>
 (function() {
     var btn = document.getElementById('btn-import-obsidian');
@@ -420,6 +447,8 @@
                 return;
             }
             btn.loading = true;
+            dlg.hide();
+            window.bmbShowBusyModal('Importing…', "This can take a while for large vaults — please don't close this window.");
             try {
                 var formData = new FormData();
                 formData.append('file', file);
@@ -429,8 +458,8 @@
                 });
                 var d = null;
                 try { d = await r.json(); } catch (_) {}
+                window.bmbHideBusyModal();
                 if (r.ok && d) {
-                    dlg.hide();
                     var msg = 'Imported ' + (d.articlesCreated || 0) + ' articles, '
                         + (d.imagesImported || 0) + ' images, '
                         + (d.filesSkipped || 0) + ' files skipped.';
@@ -438,8 +467,82 @@
                     window.location.reload();
                     return;
                 }
+                dlg.show();
                 showError((d && d.error) || 'Import failed');
             } catch (_) {
+                window.bmbHideBusyModal();
+                dlg.show();
+                showError('Network error. Please try again.');
+            } finally {
+                btn.loading = false;
+            }
+        });
+    }
+})();
+</script>
+
+<script>
+(function() {
+    var btn = document.getElementById('btn-import-bee');
+    var dlg = document.getElementById('dlg-import-bee');
+    var errBox = document.getElementById('import-bee-error');
+    var errMsg = document.getElementById('import-bee-error-msg');
+    var fileInput = document.getElementById('import-bee-file');
+    var pathSelectorRoot = document.getElementById('import-bee-path-selector');
+    var pathSelector = null;
+
+    function showError(msg) {
+        errMsg.textContent = msg || 'Import failed';
+        errBox.style.display = 'block';
+        errBox.open = true;
+    }
+    function clearError() {
+        errBox.style.display = 'none';
+        errMsg.textContent = '';
+    }
+    if (dlg) dlg.addEventListener('sl-show', function() {
+        clearError();
+        fileInput.value = '';
+        pathSelector = window.bmbInitPathSelector({ rootEl: pathSelectorRoot, basePath: '/' });
+    });
+
+    if (btn) {
+        btn.addEventListener('click', async function() {
+            clearError();
+            var file = fileInput.files[0];
+            if (!file) {
+                showError('Please select a ZIP file.');
+                return;
+            }
+            btn.loading = true;
+            dlg.hide();
+            window.bmbShowBusyModal('Importing…', "This can take a while for large vaults — please don't close this window.");
+            try {
+                var formData = new FormData();
+                formData.append('file', file);
+                formData.append('destinationPath', pathSelector ? pathSelector.getEffectivePath() : '/');
+                var r = await fetch('/api-proxy/import/bee', {
+                    method: 'POST',
+                    body: formData
+                });
+                var d = null;
+                try { d = await r.json(); } catch (_) {}
+                window.bmbHideBusyModal();
+                if (r.ok && d) {
+                    var msg = 'Imported into ' + (d.rootFolderPath || '/') + ': '
+                        + (d.foldersCreated || 0) + ' folders, '
+                        + (d.articlesCreated || 0) + ' articles, '
+                        + (d.imagesImported || 0) + ' images.'
+                        + (d.articlesSkippedProtected ? ' ' + d.articlesSkippedProtected + ' password-protected article(s) skipped.' : '');
+                    alert(msg);
+                    window.location.reload();
+                    return;
+                }
+                dlg.show();
+                showError((d && d.error) || 'Import failed');
+            } catch (_) {
+                window.bmbHideBusyModal();
+                dlg.show();
                 showError('Network error. Please try again.');
             } finally {
                 btn.loading = false;

@@ -184,6 +184,31 @@ public partial class ApiClient
         return await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
     }
 
+    public async Task<JsonElement?> ImportBeeAsync(IFormFile file, string destinationPath)
+    {
+        using var content = new MultipartFormDataContent();
+        using var fileStream = file.OpenReadStream();
+        var streamContent = new StreamContent(fileStream);
+        streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType ?? "application/zip");
+        content.Add(streamContent, "file", file.FileName);
+        content.Add(new StringContent(destinationPath), "destinationPath");
+
+        var resp = await http.PostAsync("/api/import/bee", content);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync();
+            try
+            {
+                var doc = JsonDocument.Parse(errBody);
+                if (doc.RootElement.TryGetProperty("error", out var e))
+                    throw new InvalidOperationException(e.GetString() ?? "Import failed");
+            }
+            catch (InvalidOperationException) { throw; }
+            catch { throw new InvalidOperationException("Import failed"); }
+        }
+        return await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+    }
+
     public async Task<PagedList<HardDeleteListItem>?> HardDeleteListAsync(int page, int pageSize, string? filter, HardDeleteStatusFilter status)
     {
         var url = $"/api/hard-delete/list?page={page}&pageSize={pageSize}";

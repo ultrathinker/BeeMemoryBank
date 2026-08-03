@@ -214,6 +214,23 @@ public static class ArticleProxyEndpoints
             }
         }).RequireAuthorization().DisableAntiforgery();
 
+        app.MapPost("/api-proxy/import/bee", async (HttpRequest req, ApiClient api) =>
+        {
+            var form = await req.ReadFormAsync();
+            var file = form.Files.GetFile("file");
+            if (file == null) return Results.BadRequest(new { error = "No file provided" });
+            var destinationPath = form["destinationPath"].FirstOrDefault() ?? "/";
+            try
+            {
+                var result = await api.ImportBeeAsync(file, destinationPath);
+                return Results.Ok(result);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        }).RequireAuthorization().DisableAntiforgery();
+
         app.MapGet("/api-proxy/media/{id:guid}", async (Guid id, ApiClient api, HttpContext ctx) =>
         {
             var result = await api.DownloadMediaAsync(id);

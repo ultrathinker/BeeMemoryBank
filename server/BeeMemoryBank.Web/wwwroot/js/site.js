@@ -1,19 +1,37 @@
-window.bmbDownload = async function(payload) {
-    var modal = document.getElementById('bmb-download-modal');
+// Shared non-closable "please wait" modal for every export AND import action in the app
+// (Export All / Export Folder / Export Article / Import from Obsidian / Bee-Import). These can
+// run for a while on large vaults, so the caller must show this BEFORE starting the request and
+// hide it in both the success and error path — never leave the user without feedback, and never
+// let them dismiss it mid-operation (ESC/backdrop-click are blocked via sl-request-close).
+window.bmbShowBusyModal = function(title, message) {
+    var modal = document.getElementById('bmb-busy-modal');
     if (!modal) {
         modal = document.createElement('sl-dialog');
-        modal.id = 'bmb-download-modal';
-        modal.label = 'Preparing archive';
+        modal.id = 'bmb-busy-modal';
         modal.setAttribute('no-header', '');
         modal.innerHTML =
             '<div style="display:flex;align-items:center;gap:12px;padding:8px 0;">' +
-            '<sl-spinner style="font-size:1.5rem;"></sl-spinner>' +
-            '<span id="bmb-download-modal-text">Preparing archive...</span>' +
+            '<sl-spinner style="font-size:1.75rem;flex-shrink:0;"></sl-spinner>' +
+            '<div>' +
+            '<div id="bmb-busy-modal-title" style="font-weight:600;"></div>' +
+            '<div id="bmb-busy-modal-msg" class="text-muted text-sm" style="margin-top:2px;"></div>' +
+            '</div>' +
             '</div>';
-        modal.addEventListener('sl-request-close', function(e){ e.preventDefault(); });
+        modal.addEventListener('sl-request-close', function (e) { e.preventDefault(); });
         document.body.appendChild(modal);
     }
+    modal.querySelector('#bmb-busy-modal-title').textContent = title || 'Working…';
+    modal.querySelector('#bmb-busy-modal-msg').textContent = message ||
+        "This can take a while for large vaults — please don't close this window.";
     modal.show();
+};
+window.bmbHideBusyModal = function () {
+    var modal = document.getElementById('bmb-busy-modal');
+    if (modal) modal.hide();
+};
+
+window.bmbDownload = async function(payload) {
+    window.bmbShowBusyModal('Preparing archive…', "This can take a while for large exports — please don't close this window.");
     try {
         var r = await fetch('/api-proxy/downloads/prepare', {
             method: 'POST',
@@ -26,7 +44,7 @@ window.bmbDownload = async function(payload) {
             throw new Error(err);
         }
         var data = await r.json();
-        modal.hide();
+        window.bmbHideBusyModal();
         var a = document.createElement('a');
         a.href = '/api-proxy/downloads/' + encodeURIComponent(data.token);
         a.download = data.fileName;
@@ -34,7 +52,7 @@ window.bmbDownload = async function(payload) {
         a.click();
         a.remove();
     } catch (e) {
-        modal.hide();
+        window.bmbHideBusyModal();
         alert(e.message || 'Download failed');
     }
 };

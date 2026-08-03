@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -11,9 +12,24 @@ namespace BeeMemoryBank.Api.Services;
 public partial class ZipExportService(
     ArticleService articleService,
     MediaService mediaService,
+    ConceptTagService conceptTagService,
+    IFolderRepository folderRepo,
     CallerScopeHolder scopeHolder)
 {
     private ICallerScope Scope => scopeHolder.Scope;
+
+    private static readonly JsonSerializerOptions ManifestJsonOpts = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    /// <summary>Marker file dropped into a folder that has no articles anywhere in its subtree,
+    /// so the folder still physically exists in the ZIP (a flat file listing can't otherwise
+    /// represent an empty directory) and survives a plain extract-and-browse too.</summary>
+    private const string EmptyFolderMarkerName = ".bmb-keep";
+
+    private const string ManifestEntryName = ".bmb-manifest.json";
 
     // Plaintext markdown export can't include a password-protected body (no passphrase here, and the
     // raw BMBENC1 ciphertext would just be confusing base64). Write a placeholder instead.
@@ -88,13 +104,17 @@ public partial class ZipExportService(
         var allArticles = await articleService.ListAsync(path);
         var filtered = Scope.FilterArticles(allArticles);
 
-        if (filtered.Count == 0)
+        // Folders (including empty ones) are exported independently of whether the folder has
+        // any articles - a folder with zero articles anywhere in its subtree is still a valid,
+        // non-empty export target as long as IT ITSELF is a real folder.
+        var folders = await GetFoldersInScopeAsync(path);
+        if (filtered.Count == 0 && folders.Count == 0)
             throw new ArgumentException("Folder is empty");
 
         var folderName = path.Split('/').LastOrDefault("folder");
         var zipPath = NewTempPath();
 
-        await BuildZipAsync(zipPath, filtered, withImages, path, ct);
+        await BuildZipAsync(zipPath, filtered, folders, withImages, path, folderName, ct);
 
         return (zipPath, $"{FileNameHelper.SanitizeFileName(folderName)}.zip");
     }
@@ -103,35 +123,55 @@ public partial class ZipExportService(
     {
         var allArticles = await articleService.ListAsync();
         var filtered = Scope.FilterArticles(allArticles);
+        var folders = await GetFoldersInScopeAsync("");
 
-        if (filtered.Count == 0)
+        if (filtered.Count == 0 && folders.Count == 0)
             throw new ArgumentException("Nothing to export");
 
         var zipPath = NewTempPath();
         var dateStamp = DateTime.UtcNow.ToString("yyyy-MM-dd");
 
-        await BuildZipAsync(zipPath, filtered, withImages, "", ct);
+        // No single folder identity to preserve for a root/"export all" export.
+        await BuildZipAsync(zipPath, filtered, folders, withImages, "", sourceFolderName: null, ct);
 
         return (zipPath, $"BeeMemoryBank-{dateStamp}.zip");
     }
 
-    private async Task BuildZipAsync(string zipPath, List<Article> articles, bool withImages, string rootPath, CancellationToken ct)
+    /// <summary>All active, ACL-visible folders at <paramref name="rootPath"/> or nested under it.</summary>
+    private async Task<List<Folder>> GetFoldersInScopeAsync(string rootPath)
+    {
+        var all = Scope.FilterFolders(await folderRepo.GetAllActiveAsync());
+        if (rootPath.Length == 0) return all;
+        return all.Where(f => f.Path == rootPath || f.Path.StartsWith(rootPath + "/", StringComparison.Ordinal)).ToList();
+    }
+
+    private async Task BuildZipAsync(
+        string zipPath, List<Article> articles, List<Folder> folders, bool withImages,
+        string rootPath, string? sourceFolderName, CancellationToken ct)
     {
         var slugTracker = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var mdEntryUsed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        
+
         var usedAttachmentNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var globalMediaMap = new Dictionary<Guid, string>(); // MediaId -> finalFilename
         var writtenMediaIds = new HashSet<Guid>();
+
+        var manifestArticles = new List<BeeExportManifestArticle>();
+        // Relative dir of every article that actually landed in the zip - used below to tell
+        // which manifested folders are genuinely empty (no article anywhere in their subtree)
+        // and therefore need an explicit marker to survive the round trip.
+        var articleDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create, Encoding.UTF8);
         foreach (var article in articles)
         {
             ct.ThrowIfCancellationRequested();
             var (_, mdFileName) = GetUniqueSlug(slugTracker, mdEntryUsed, article.Title, article.TreePath, rootPath);
+            articleDirs.Add(GetDirOf(mdFileName));
 
             var content = await articleService.GetContentAsync(article.Id);
-            if (BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(content))
+            var isProtected = BeeMemoryBank.Crypto.ProtectedContentCodec.IsProtected(content);
+            if (isProtected)
                 content = ProtectedExportNotice;
             var mediaList = withImages ? await mediaService.GetByArticleIdAsync(article.Id) : [];
 
@@ -168,7 +208,53 @@ public partial class ZipExportService(
             var mdEntry = zip.CreateEntry(mdFileName, CompressionLevel.Optimal);
             using var writer = new StreamWriter(mdEntry.Open(), Encoding.UTF8);
             await writer.WriteAsync(rewritten.AsMemory(), ct);
+
+            var tags = await conceptTagService.GetByArticleIdAsync(article.Id);
+            manifestArticles.Add(new BeeExportManifestArticle
+            {
+                File = mdFileName,
+                Title = article.Title,
+                Tags = tags,
+                CreatedAt = article.CreatedAt,
+                UpdatedAt = article.UpdatedAt,
+                Protected = isProtected
+            });
         }
+
+        var manifestFolders = new List<string>();
+        foreach (var folder in folders)
+        {
+            var relPath = rootPath.Length > 0 ? folder.Path[rootPath.Length..].TrimStart('/') : folder.Path.TrimStart('/');
+            manifestFolders.Add(relPath);
+
+            // Empty iff no article's directory equals this folder or descends from it.
+            var isEmpty = !articleDirs.Any(dir =>
+                string.Equals(dir, relPath, StringComparison.OrdinalIgnoreCase) ||
+                dir.StartsWith(relPath + "/", StringComparison.OrdinalIgnoreCase));
+            if (isEmpty)
+            {
+                var markerPath = relPath.Length > 0 ? $"{relPath}/{EmptyFolderMarkerName}" : EmptyFolderMarkerName;
+                zip.CreateEntry(markerPath, CompressionLevel.NoCompression);
+            }
+        }
+
+        var manifest = new BeeExportManifest
+        {
+            ExportedAt = DateTime.UtcNow,
+            SourceFolderName = sourceFolderName,
+            Folders = manifestFolders,
+            Articles = manifestArticles
+        };
+        var manifestEntry = zip.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
+        using (var manifestWriter = new StreamWriter(manifestEntry.Open(), Encoding.UTF8))
+            await manifestWriter.WriteAsync(JsonSerializer.Serialize(manifest, ManifestJsonOpts).AsMemory(), ct);
+    }
+
+    /// <summary>Directory portion of a zip-relative file path ("" if the file sits at the root).</summary>
+    private static string GetDirOf(string zipRelativePath)
+    {
+        var lastSlash = zipRelativePath.LastIndexOf('/');
+        return lastSlash > 0 ? zipRelativePath[..lastSlash] : "";
     }
 
     private static (string slug, string mdFileName) GetUniqueSlug(

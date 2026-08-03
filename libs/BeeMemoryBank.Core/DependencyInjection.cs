@@ -33,6 +33,7 @@ public static class DependencyInjection
         services.AddScoped<FolderAccessService>();
         services.AddScoped<ConceptTagService>();
         services.AddScoped<ObsidianImportService>();
+        services.AddScoped<BeeImportService>();
         services.AddScoped<RestoreService>();
         services.AddScoped<LegacyPasswordSlotMigrationService>();
         services.AddScoped<RemoteAccountService>();

@@ -519,6 +519,7 @@ app.MapDownloadEndpoints();
     app.MapMediaEndpoints();
     app.MapVersionEndpoints();
     app.MapObsidianImportEndpoints();
+    app.MapBeeImportEndpoints();
     app.MapHardDeleteEndpoints();
     app.MapCompactionEndpoints();
     app.MapAdminEndpoints();
