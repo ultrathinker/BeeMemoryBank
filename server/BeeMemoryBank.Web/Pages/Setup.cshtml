@@ -106,62 +106,22 @@
             </div>
         }
 
-        <!-- ═══ STEP 0: Legacy Migration ═══ -->
+        <!-- ═══ Restore from a previous installation (opt-in only — reached solely via the
+             "Restore from a previous installation" link on step 1; never shown automatically) ═══ -->
         <div class="wizard-panel @(step == "legacy" ? "active" : "")" id="panel-legacy">
-            <h3 style="margin-top:0; font-size:1.15rem; margin-bottom:12px; text-align:center;">Legacy Data Detected</h3>
-            <p class="text-muted" style="font-size:0.85rem; margin-bottom:20px; line-height:1.4; text-align:center;">
-                We found existing data from a previous installation of BeeMemoryBank. You can copy its database and media files to this new node.
-            </p>
-
-            @if (Model.Candidates.Any())
-            {
-                <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:20px;">
-                    @foreach (var candidate in Model.Candidates)
-                    {
-                        <div style="border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: var(--bg-app); display:flex; flex-direction:column; gap:8px;">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <strong style="font-size:0.9rem; color: var(--sl-color-primary-400);">@candidate.DisplayName</strong>
-                                <small class="text-muted" style="font-size:0.75rem;">Node: @candidate.NodeId.Substring(0, Math.Min(candidate.NodeId.Length, 8))</small>
-                            </div>
-                            <div class="text-muted" style="font-size:0.8rem; word-break:break-all;">
-                                Path: <code>@candidate.Path</code>
-                            </div>
-                            <form method="post" asp-page-handler="Migrate" style="margin-top:8px;">
-                                @Html.AntiForgeryToken()
-                                <input type="hidden" name="sourcePath" value="@candidate.Path" />
-                                <sl-button type="submit" variant="primary" size="medium" style="width:100%;">
-                                    <sl-icon slot="prefix" name="download"></sl-icon> Copy & Migrate Database
-                                </sl-button>
-                            </form>
-                        </div>
-                    }
+            <a href="javascript:void(0)" class="back-link" id="link-legacy-back">
+                <sl-icon name="arrow-left"></sl-icon> Back
+            </a>
+            <form method="post" asp-page-handler="Migrate" class="tab-panel-form" style="margin-top:12px;">
+                @Html.AntiForgeryToken()
+                <sl-input name="sourcePath" label="Legacy Data Folder" required autofocus
+                          placeholder="e.g. C:\bee\data" help-text="Enter the folder path containing beememorybank.db"></sl-input>
+                <div class="form-actions" style="margin-top:4px;">
+                    <sl-button type="submit" variant="primary" style="width:100%;">
+                        <sl-icon slot="prefix" name="search"></sl-icon> Validate & Copy Database
+                    </sl-button>
                 </div>
-            }
-            else
-            {
-                <p class="text-muted" style="font-size:0.85rem; margin-bottom:20px; font-style:italic; text-align:center;">
-                    No automatically detected databases were readable or valid.
-                </p>
-            }
-
-            <div style="border-top:1px solid var(--border); padding-top:16px; margin-top:16px;">
-                <form method="post" asp-page-handler="Migrate" class="tab-panel-form">
-                    @Html.AntiForgeryToken()
-                    <sl-input name="sourcePath" label="Custom Legacy Path" required
-                              placeholder="e.g. C:\bee\data" help-text="Enter the folder path containing beememorybank.db"></sl-input>
-                    <div class="form-actions" style="margin-top:12px;">
-                        <sl-button type="submit" variant="default" style="width:100%;">
-                            <sl-icon slot="prefix" name="search"></sl-icon> Validate & Copy Database
-                        </sl-button>
-                    </div>
-                </form>
-            </div>
-
-            <div style="text-align:center; margin-top:24px;">
-                <a href="/Setup?step=" class="back-link" style="margin-bottom:0; display:inline-flex; align-items:center; gap:6px;">
-                    Skip migration and start fresh <sl-icon name="arrow-right"></sl-icon>
-                </a>
-            </div>
+            </form>
         </div>
 
         <!-- ═══ STEP 1: Mode selection ═══ -->
@@ -181,6 +141,11 @@
                         <small>Connect this node to a network that's already running elsewhere.</small>
                     </div>
                 </button>
+            </div>
+            <div style="text-align:center; margin-top:20px;">
+                <a href="javascript:void(0)" class="back-link" id="link-restore-legacy" style="display:inline-flex; margin-bottom:0;">
+                    Restore from a previous installation
+                </a>
             </div>
         </div>
 
@@ -323,6 +288,18 @@
                     line.classList.toggle('done', i + 1 < activeStep);
                 });
             }
+
+            // ── Opt-in "Restore from a previous installation" reveal (step 1 only) ───
+            var linkRestoreLegacy = document.getElementById('link-restore-legacy');
+            var linkLegacyBack = document.getElementById('link-legacy-back');
+            if (linkRestoreLegacy) linkRestoreLegacy.addEventListener('click', function () {
+                document.getElementById('panel-mode').classList.remove('active');
+                document.getElementById('panel-legacy').classList.add('active');
+            });
+            if (linkLegacyBack) linkLegacyBack.addEventListener('click', function () {
+                document.getElementById('panel-legacy').classList.remove('active');
+                document.getElementById('panel-mode').classList.add('active');
+            });
 
             var btnStandalone = document.getElementById('btn-mode-standalone');
             var btnJoin = document.getElementById('btn-mode-join');

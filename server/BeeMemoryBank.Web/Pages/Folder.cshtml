@@ -53,7 +53,7 @@
             <sl-button size="small" variant="default" onclick="document.getElementById('dlg-copy-folder').show()">
                 <sl-icon slot="prefix" name="copy"></sl-icon> Copy To
             </sl-button>
-            <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'folder',path:currentPath})">
+            <sl-button id="btn-export-folder" size="small" variant="default">
                 <sl-icon slot="prefix" name="download"></sl-icon> Export
             </sl-button>
             @if (!isReadOnly && !isSystemFolder)
@@ -259,6 +259,13 @@
         var d = document.createElement('div');
         d.textContent = text;
         return d.innerHTML;
+    }
+
+    var exportFolderBtn = document.getElementById('btn-export-folder');
+    if (exportFolderBtn) {
+        exportFolderBtn.addEventListener('click', function() {
+            openDownloadDialog({ kind: 'folder', path: currentPath });
+        });
     }
 
     // New-article toolbar button: NEVER show a popup. Jump straight to the

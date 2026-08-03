@@ -9,46 +9,18 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
 {
     public string? ErrorMessage { get; set; }
 
-    /// <summary>"legacy" = migration wizard (step 0), "" = mode-select (step 1), "form" = show form (step 2), "done" = completion (step 3)</summary>
+    /// <summary>"legacy" = restore-from-previous-installation panel (opt-in, reached only via the
+    /// "Restore from a previous installation" link — never shown automatically), "" = mode-select
+    /// (step 1), "form" = show form (step 2), "done" = completion (step 3)</summary>
     public string Step { get; set; } = "";
 
     /// <summary>"standalone" or "join" — tracks which path the user took, shown in step 3</summary>
     public string Mode { get; set; } = "standalone";
 
-    public List<LegacyCandidate> Candidates { get; set; } = new();
-
     public void OnGet(string? step, string? mode)
     {
         Mode = mode ?? "standalone";
-
-        if (step == null)
-        {
-            bool hasLegacyDirs = false;
-            var paths = new[]
-            {
-                @"C:\bee\data",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bmb", "data")
-            };
-            foreach (var path in paths)
-            {
-                if (Directory.Exists(Environment.ExpandEnvironmentVariables(path)))
-                {
-                    hasLegacyDirs = true;
-                    break;
-                }
-            }
-
-            Step = hasLegacyDirs ? "legacy" : "";
-        }
-        else
-        {
-            Step = step;
-        }
-
-        if (Step == "legacy")
-        {
-            Candidates = LegacyMigrationService.GetCandidates();
-        }
+        Step = step ?? "";
     }
 
     public async Task<IActionResult> OnPostMigrateAsync(string sourcePath)
@@ -57,7 +29,6 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
         {
             ErrorMessage = "Please specify a directory path.";
             Step = "legacy";
-            Candidates = LegacyMigrationService.GetCandidates();
             return Page();
         }
 
@@ -66,7 +37,6 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
         {
             ErrorMessage = "The specified directory is not a valid legacy BeeMemoryBank data directory.";
             Step = "legacy";
-            Candidates = LegacyMigrationService.GetCandidates();
             return Page();
         }
 
@@ -89,7 +59,6 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
                 "then reopen it and perform the migration immediately — before Api's own " +
                 "auto-created empty database has any account data in it.";
             Step = "legacy";
-            Candidates = LegacyMigrationService.GetCandidates();
             return Page();
         }
 
@@ -106,7 +75,6 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
         {
             ErrorMessage = $"Failed to copy database: {ex.Message}";
             Step = "legacy";
-            Candidates = LegacyMigrationService.GetCandidates();
             return Page();
         }
     }
