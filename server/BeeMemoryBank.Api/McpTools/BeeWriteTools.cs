@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using Microsoft.Extensions.Logging;
@@ -48,13 +49,12 @@ public class BeeWriteTools(
             }
             return $"Error: no article or folder found with ID {sourceId}";
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: target folder '{ex.Path}' is read-only for your user.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: target folder is restricted for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: target folder '{path}' is read-only for your user."
+                : "Access denied: target folder is restricted for this agent.";
         }
         catch (InvalidOperationException ex)
         {
@@ -88,13 +88,12 @@ public class BeeWriteTools(
                           "use bee_get_upload_script next time for zero-context uploads.";
             return result;
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: target folder is restricted for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: target folder is restricted for this agent.";
         }
         catch (InvalidOperationException ex)
         {
@@ -132,13 +131,12 @@ public class BeeWriteTools(
             }
             return $"Updated article {id}";
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: article is in a restricted folder for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: article is in a restricted folder for this agent.";
         }
         catch (KeyNotFoundException)
         {
@@ -171,13 +169,12 @@ public class BeeWriteTools(
             await folderSvc.MoveAsync(folder.Id, newParentPath);
             return $"Moved folder '{path}' → '{newPath}'";
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: source or destination folder is restricted for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var deniedPath);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{deniedPath}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: source or destination folder is restricted for this agent.";
         }
         catch (ArgumentException ex)
         {
@@ -206,13 +203,12 @@ public class BeeWriteTools(
             await folderSvc.RenameAsync(folder.Id, newName);
             return $"Renamed folder '{path}' → '{resolvedNewPath}'";
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: folder is restricted for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var deniedPath);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{deniedPath}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: folder is restricted for this agent.";
         }
         catch (ArgumentException ex)
         {
@@ -243,13 +239,12 @@ public class BeeWriteTools(
             await articleService.DeleteAsync(id);
             return $"Deleted article {id}";
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: article is in a restricted folder for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: article is in a restricted folder for this agent.";
         }
         catch (KeyNotFoundException)
         {
@@ -292,13 +287,12 @@ public class BeeWriteTools(
             await folderRepo.SoftDeleteAsync(folder.Id, DateTime.UtcNow);
             return $"Deleted folder '{path}'";
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: folder is restricted for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var deniedPath);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{deniedPath}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: folder is restricted for this agent.";
         }
         catch (Exception ex)
         {
@@ -343,13 +337,12 @@ public class BeeWriteTools(
             await articleService.UpdateAsync(id, null, null, null, newContent);
             return $"Replaced {count} occurrence(s) of \"{Truncate(search, 50)}\" → \"{Truncate(replace, 50)}\" in article {id} ({article.Title}).";
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: article is in a restricted folder for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: article is in a restricted folder for this agent.";
         }
         catch (KeyNotFoundException) { return $"Error: article {id} not found"; }
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
@@ -394,13 +387,12 @@ public class BeeWriteTools(
             await articleService.UpdateAsync(id, null, null, null, newContent);
             return responseManager.ProcessResponse($"Appended to article {id}. New size: {newContent.Length} chars.");
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: article is in a restricted folder for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: article is in a restricted folder for this agent.";
         }
         catch (KeyNotFoundException) { return $"Error: article {id} not found"; }
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
@@ -431,13 +423,12 @@ public class BeeWriteTools(
             await articleService.UpdateAsync(id, null, null, null, newContent);
             return responseManager.ProcessResponse($"Prepended to article {id}. New size: {newContent.Length} chars.");
         }
-        catch (ReadOnlyAccessException ex)
+        catch (UnauthorizedAccessException ex)
         {
-            return $"Access denied: folder '{ex.Path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder.";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return "Access denied: article is in a restricted folder for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: article is in a restricted folder for this agent.";
         }
         catch (KeyNotFoundException) { return $"Error: article {id} not found"; }
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }

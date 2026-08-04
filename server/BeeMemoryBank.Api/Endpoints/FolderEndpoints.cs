@@ -40,9 +40,13 @@ public static class FolderEndpoints
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
-                return Results.Json(new ErrorResponse($"You don't have permission to create a folder at {PathHelper.Display(req.Path)}."), statusCode: 403);
+                WriteAclDenial.TryClassify(ex, out var kind, out var path);
+                var message = kind == WriteAclDenialKind.ReadOnly
+                    ? $"Folder {PathHelper.Display(path)} is read-only for your user."
+                    : $"You don't have permission to create a folder at {PathHelper.Display(req.Path)}.";
+                return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
         });
 
@@ -124,9 +128,13 @@ public static class FolderEndpoints
             {
                 await folderSvc.RenameAsync(folder.Id, newName);
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
-                return Results.Json(new ErrorResponse("Permission denied for this rename operation."), statusCode: 403);
+                WriteAclDenial.TryClassify(ex, out var kind, out var deniedPath);
+                var message = kind == WriteAclDenialKind.ReadOnly
+                    ? $"Folder {PathHelper.Display(deniedPath)} is read-only for your user."
+                    : "Permission denied for this rename operation.";
+                return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
             catch (InvalidOperationException ex)
             {

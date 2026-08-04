@@ -47,13 +47,13 @@ public static class CopyEndpoints
             {
                 return Results.NotFound(new ErrorResponse(ex.Message));
             }
-            catch (ReadOnlyAccessException ex)
+            catch (UnauthorizedAccessException ex)
             {
-                return Results.Json(new ErrorResponse($"Target folder '{ex.Path}' is read-only for your user."), statusCode: 403);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return Results.Json(new ErrorResponse("Permission denied for this copy."), statusCode: 403);
+                WriteAclDenial.TryClassify(ex, out var kind, out var path);
+                var message = kind == WriteAclDenialKind.ReadOnly
+                    ? $"Target folder '{path}' is read-only for your user."
+                    : "Permission denied for this copy.";
+                return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
             catch (InvalidOperationException ex)
             {
@@ -96,13 +96,13 @@ public static class CopyEndpoints
             {
                 return Results.NotFound(new ErrorResponse(ex.Message));
             }
-            catch (ReadOnlyAccessException ex)
+            catch (UnauthorizedAccessException ex)
             {
-                return Results.Json(new ErrorResponse($"Target folder '{ex.Path}' is read-only for your user."), statusCode: 403);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return Results.Json(new ErrorResponse("Permission denied for this copy."), statusCode: 403);
+                WriteAclDenial.TryClassify(ex, out var kind, out var path);
+                var message = kind == WriteAclDenialKind.ReadOnly
+                    ? $"Target folder '{path}' is read-only for your user."
+                    : "Permission denied for this copy.";
+                return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
             catch (InvalidOperationException ex)
             {

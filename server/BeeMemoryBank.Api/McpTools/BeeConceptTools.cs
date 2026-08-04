@@ -122,9 +122,12 @@ public class BeeConceptTools(
             await conceptTagService.AddToArticleAsync(id, tags);
             return $"Added {newCount} tag(s) to article '{article.Title}'.";
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            return "Access denied: article is in a restricted folder for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: article is in a restricted folder for this agent.";
         }
         catch (Exception ex)
         {
@@ -158,9 +161,12 @@ public class BeeConceptTools(
                 ? $"Removed tag '{tag}' from article '{article.Title}'."
                 : $"Tag '{tag}' was not on article '{article.Title}' (no-op).";
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            return "Access denied: article is in a restricted folder for this agent.";
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
+                : "Access denied: article is in a restricted folder for this agent.";
         }
         catch (Exception ex)
         {

@@ -455,8 +455,13 @@ public sealed class ChatToolDispatcher(
             var article = await articleService.CreateAsync(title!, treePath!, tags, content);
             return OkJson($"Created article '{article.Title}' in {article.TreePath}.", article.Id);
         }
-        catch (ReadOnlyAccessException ex) { return ErrorJson($"Access denied: folder '{ex.Path}' is read-only for your user."); }
-        catch (UnauthorizedAccessException) { return ErrorJson("Access denied: target folder is restricted."); }
+        catch (UnauthorizedAccessException ex)
+        {
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? ErrorJson($"Access denied: folder '{path}' is read-only for your user.")
+                : ErrorJson("Access denied: target folder is restricted.");
+        }
         catch (ArgumentException ex) { return ErrorJson(ex.Message); }
         catch (InvalidOperationException ex) { return ErrorJson(ex.Message); }
     }
@@ -486,8 +491,13 @@ public sealed class ChatToolDispatcher(
             await articleService.UpdateAsync(id, title, treePath, tags, content);
             return OkJson($"Updated article {id} ({article.Title}).", id);
         }
-        catch (ReadOnlyAccessException ex) { return ErrorJson($"Access denied: folder '{ex.Path}' is read-only for your user."); }
-        catch (UnauthorizedAccessException) { return ErrorJson("Access denied: article is in a restricted folder."); }
+        catch (UnauthorizedAccessException ex)
+        {
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? ErrorJson($"Access denied: folder '{path}' is read-only for your user.")
+                : ErrorJson("Access denied: article is in a restricted folder.");
+        }
         catch (KeyNotFoundException) { return ErrorJson($"article {id} not found"); }
         catch (ArgumentException ex) { return ErrorJson(ex.Message); }
         catch (InvalidOperationException ex) { return ErrorJson(ex.Message); }
@@ -513,8 +523,13 @@ public sealed class ChatToolDispatcher(
             await articleService.UpdateAsync(id, null, null, null, newContent);
             return OkJson($"Appended to article {id} ({article.Title}). New size: {newContent.Length} chars.", id);
         }
-        catch (ReadOnlyAccessException ex) { return ErrorJson($"Access denied: folder '{ex.Path}' is read-only for your user."); }
-        catch (UnauthorizedAccessException) { return ErrorJson("Access denied: article is in a restricted folder."); }
+        catch (UnauthorizedAccessException ex)
+        {
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? ErrorJson($"Access denied: folder '{path}' is read-only for your user.")
+                : ErrorJson("Access denied: article is in a restricted folder.");
+        }
         catch (KeyNotFoundException) { return ErrorJson($"article {id} not found"); }
         catch (InvalidOperationException ex) { return ErrorJson(ex.Message); }
     }
@@ -545,8 +560,13 @@ public sealed class ChatToolDispatcher(
             await articleService.UpdateAsync(id, null, null, null, newContent);
             return JsonSerializer.Serialize(new { ok = true, occurrences = count, message = $"Replaced {count} occurrence(s) of \"{Truncate(search, 50)}\" → \"{Truncate(replace, 50)}\" in article {id} ({article.Title}).", id }, JsonOpts);
         }
-        catch (ReadOnlyAccessException ex) { return ErrorJson($"Access denied: folder '{ex.Path}' is read-only for your user."); }
-        catch (UnauthorizedAccessException) { return ErrorJson("Access denied: article is in a restricted folder."); }
+        catch (UnauthorizedAccessException ex)
+        {
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? ErrorJson($"Access denied: folder '{path}' is read-only for your user.")
+                : ErrorJson("Access denied: article is in a restricted folder.");
+        }
         catch (KeyNotFoundException) { return ErrorJson($"article {id} not found"); }
         catch (InvalidOperationException ex) { return ErrorJson(ex.Message); }
     }
@@ -571,8 +591,13 @@ public sealed class ChatToolDispatcher(
             await articleService.DeleteAsync(id);
             return OkJson($"Deleted article {id} ({article.Title}). It is hidden from search/lists and can be restored from the web UI.", id);
         }
-        catch (ReadOnlyAccessException ex) { return ErrorJson($"Access denied: folder '{ex.Path}' is read-only for your user."); }
-        catch (UnauthorizedAccessException) { return ErrorJson("Access denied: article is in a restricted folder."); }
+        catch (UnauthorizedAccessException ex)
+        {
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? ErrorJson($"Access denied: folder '{path}' is read-only for your user.")
+                : ErrorJson("Access denied: article is in a restricted folder.");
+        }
         catch (KeyNotFoundException) { return ErrorJson($"article {id} not found"); }
     }
 
@@ -663,8 +688,13 @@ public sealed class ChatToolDispatcher(
                 mediaUrl = $"/api/media/{existingMedia.Id}"
             }, JsonOpts);
         }
-        catch (ReadOnlyAccessException ex) { return ErrorJson($"Access denied: folder '{ex.Path}' is read-only for your user."); }
-        catch (UnauthorizedAccessException) { return ErrorJson("Access denied: target folder is restricted."); }
+        catch (UnauthorizedAccessException ex)
+        {
+            WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == WriteAclDenialKind.ReadOnly
+                ? ErrorJson($"Access denied: folder '{path}' is read-only for your user.")
+                : ErrorJson("Access denied: target folder is restricted.");
+        }
         catch (KeyNotFoundException) { return ErrorJson($"article {articleId} not found"); }
         catch (ArgumentException ex) { return ErrorJson(ex.Message); }        // MediaService size/type limits
         catch (InvalidOperationException ex) { return ErrorJson(ex.Message); }

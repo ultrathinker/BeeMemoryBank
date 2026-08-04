@@ -102,9 +102,13 @@ public static class ArticleEndpoints
                     await conceptTagSvc.SetForArticleAsync(article.Id, req.ConceptTags);
                 return Results.Created($"/api/articles/{article.Id}", ArticleResponse.From(article, req.ConceptTags ?? []));
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
-                return Results.Json(new ErrorResponse($"You don't have permission to create an article in {PathHelper.Display(req.TreePath)}."), statusCode: 403);
+                WriteAclDenial.TryClassify(ex, out var kind, out var path);
+                var message = kind == WriteAclDenialKind.ReadOnly
+                    ? $"Folder {PathHelper.Display(path)} is read-only for your user."
+                    : $"You don't have permission to create an article in {PathHelper.Display(req.TreePath)}.";
+                return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
         });
 
