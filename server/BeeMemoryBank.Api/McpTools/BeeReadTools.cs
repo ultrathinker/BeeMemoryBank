@@ -245,6 +245,7 @@ public class BeeReadTools(
         "returns \"Error: version N not found\". Requires an unlocked session; returns an error message " +
         "if locked.\n" +
         "Returns JSON: { id, versionNumber, title, treePath, content, createdAt, updatedBy }.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> GetArticleVersion(
         [Description("Article ID (GUID).")] Guid id,
         [Description("Version number, as returned by bee_get_article_versions. Starts at 1.")] int versionNumber)
@@ -311,6 +312,7 @@ public class BeeReadTools(
         "history (snapshot-before-write: the baseline is the earliest version created after baselineAt). Returns " +
         "markdown-block-level changes ready for bee_replace_in_article, plus a similarity score; unchanged=true " +
         "when nothing changed after baselineAt.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> GetArticleDiff(
         [Description("Article ID (GUID).")] Guid id,
         [Description("ISO-8601 timestamp. The comparison baseline is the article's state as of this moment (see the earliest-version-after-this-time rule in the tool description).")] string baselineAt)
@@ -393,6 +395,7 @@ public class BeeReadTools(
         "Get an image from an article. Returns the image as an inline image content block.\n" +
         "Images are automatically resized to fit within the size limit.\n" +
         "Use this to view images referenced in article content (markdown image links like ![](/api/media/{id})).")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<IEnumerable<ContentBlock>> GetImage(
         [Description("Media ID (GUID) — extract from image URLs in article content, e.g. /api/media/{id}")] Guid id,
         [Description("Maximum image size in KB (100-1024). Default: 500. Lower values save context tokens.")] int maxSizeKb = 500)

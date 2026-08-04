@@ -453,7 +453,13 @@ app.UseMiddleware<BeeMemoryBank.Api.Middleware.CallerScopeMiddleware>();
 // schema-bearing error before the SDK sees the request.
 app.UseWhen(
     ctx => ctx.Request.Path.StartsWithSegments("/mcp"),
-    branch => branch.UseMiddleware<BeeMemoryBank.Api.Middleware.McpParameterValidationMiddleware>());
+    branch =>
+    {
+        // Session/identity guard runs first — "can this call even proceed" is a more
+        // fundamental gate than "are the argument names spelled right."
+        branch.UseMiddleware<BeeMemoryBank.Api.Middleware.McpSessionGuardMiddleware>();
+        branch.UseMiddleware<BeeMemoryBank.Api.Middleware.McpParameterValidationMiddleware>();
+    });
 
 // Error handling
 app.UseExceptionHandler(errorApp =>

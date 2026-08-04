@@ -15,7 +15,7 @@ public class McpToolRegistry
 {
     public record ParamInfo(string Name, string TypeLabel, bool Required, string? Default, string Description);
 
-    public record ToolInfo(string Name, IReadOnlyList<ParamInfo> Parameters);
+    public record ToolInfo(string Name, IReadOnlyList<ParamInfo> Parameters, bool RequiresUnlockedSession);
 
     private readonly Dictionary<string, ToolInfo> _tools;
 
@@ -37,6 +37,7 @@ public class McpToolRegistry
             if (toolAttr == null) continue;
 
             var name = !string.IsNullOrWhiteSpace(toolAttr.Name) ? toolAttr.Name! : method.Name;
+            var requiresUnlocked = method.GetCustomAttribute<RequiresUnlockedSessionAttribute>() != null;
 
             var parameters = new List<ParamInfo>();
             foreach (var p in method.GetParameters())
@@ -55,7 +56,7 @@ public class McpToolRegistry
                 ));
             }
 
-            _tools[name] = new ToolInfo(name, parameters);
+            _tools[name] = new ToolInfo(name, parameters, requiresUnlocked);
         }
     }
 

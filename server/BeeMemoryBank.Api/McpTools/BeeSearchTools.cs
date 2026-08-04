@@ -9,7 +9,8 @@ namespace BeeMemoryBank.Api.McpTools;
 [McpServerToolType]
 public class BeeSearchTools(
     SearchService searchService,
-    McpResponseManager responseManager)
+    McpResponseManager responseManager,
+    SessionService session)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -48,7 +49,7 @@ public class BeeSearchTools(
         "Full-text search inside encrypted article BODIES (not just titles). SLOW — decrypts and scans all " +
         "articles in batches. Use only when bee_search by title didn't find what you need.\n" +
         "Requires an unlocked session. If the session is locked, silently degrades to title-only search " +
-        "(returns fewer results — not an error).\n" +
+        "(returns fewer results — not an error; a 'notice' field in the response makes this visible).\n" +
         "Returns JSON with the same shape as bee_search: { folders: [{ path, name }], articles: [{ id, title, treePath }] }.")]
     public async Task<string> SearchContent(
         [Description("Search keywords to find in article body text, case-insensitive.")] string keywords)
@@ -66,7 +67,8 @@ public class BeeSearchTools(
                 id = a.Id,
                 title = a.Title,
                 treePath = a.TreePath
-            })
+            }),
+            notice = session.IsUnlocked ? null : "Vault is locked — searched titles/metadata only (body search skipped)."
         }, JsonOpts);
         return responseManager.ProcessResponse(json);
     }

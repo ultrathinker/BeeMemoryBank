@@ -42,6 +42,7 @@ public class BeeUploadTools(
         "24 hours if never referenced in a saved article body.\n" +
         "For large images or when avoiding base64 in your own context matters, prefer the script from " +
         "bee_get_upload_script instead (its upload-media command does the base64 encoding locally, outside your context).")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> SaveMedia(
         [Description("File name, used only to determine the image type by extension (.png/.jpg/.jpeg/.gif/.webp/.svg). Not used as a display name.")] string fileName,
         [Description("Base64-encoded file content. A \"data:image/...;base64,\" prefix is tolerated and stripped automatically. Max 20 MB decoded.")] string contentBase64,

@@ -69,6 +69,7 @@ public class BeeWriteTools(
         "as needed. Returns plain-text confirmation with the new article id (not JSON).\n" +
         "IMPORTANT: if content comes from an existing file on disk, DO NOT read it into context. " +
         "Call bee_get_upload_script to get a script that uploads directly from disk (zero context tokens).")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> SaveArticle(
         [Description("Article title — short and descriptive.")] string title,
         [Description("Tree path where the article belongs, e.g. '/Work/Dev' or '/Personal'. Missing folders are auto-created.")] string treePath,
@@ -313,6 +314,7 @@ public class BeeWriteTools(
         "When N=0 the article is NOT modified (no version created, no updatedAt change).\n" +
         "To undo: call again with search and replace swapped.\n" +
         "For bulk edits across many articles: use bee_search_content to find candidates, then call this for each.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> ReplaceInArticle(
         [Description("Article ID (GUID).")] Guid id,
         [Description("Exact text to find (case-sensitive).")] string search,
@@ -374,6 +376,7 @@ public class BeeWriteTools(
         "text use bee_replace_in_article or bee_update_article.\n" +
         "Side effect: creates a new version snapshotting the PRIOR content.\n" +
         "Returns plain-text confirmation with the new article size.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> AppendToArticle(
         [Description("Article ID (GUID).")] Guid id,
         [Description("Text to append at the end. A blank line is inserted between existing content and this text.")] string text)
@@ -410,6 +413,7 @@ public class BeeWriteTools(
         "text use bee_replace_in_article or bee_update_article.\n" +
         "Side effect: creates a new version snapshotting the PRIOR content.\n" +
         "Returns plain-text confirmation with the new article size.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> PrependToArticle(
         [Description("Article ID (GUID).")] Guid id,
         [Description("Text to insert at the beginning. A blank line is inserted between this text and the existing content.")] string text)

@@ -73,7 +73,7 @@ public class McpToolsTests : IAsyncLifetime
             .AddScoped<IFolderAclRepository>(_ => new BeeMemoryBank.Storage.Sqlite.FolderAclRepository(_factory))
             .AddScoped<IFolderRepository>(_ => folderRepo)
             .BuildServiceProvider());
-        _searchTools = new BeeSearchTools(_searchService, responseManager);
+        _searchTools = new BeeSearchTools(_searchService, responseManager, _session);
         var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccessService);
         _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService());
         var copySvc = new CopyService(_articleService, folderSvc, _mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
@@ -119,6 +119,34 @@ public class McpToolsTests : IAsyncLifetime
         var obj = JsonDocument.Parse(result).RootElement;
         obj.ValueKind.Should().Be(JsonValueKind.Object);
         obj.GetProperty("articles").GetArrayLength().Should().Be(0);
+    }
+
+    // ───── bee_search_content notice ──────────────────────────────────────────
+
+    [Fact]
+    public async Task BeeSearchContent_WhenLocked_ReturnsNoticeAboutDegradedSearch()
+    {
+        await _articleService.CreateAsync("Content Search Test", "/Test", [], "some body text");
+        _session.Lock();
+
+        var result = await _searchTools.SearchContent("body");
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        var notice = obj.GetProperty("notice");
+        notice.ValueKind.Should().Be(JsonValueKind.String);
+        notice.GetString().Should().Contain("locked");
+    }
+
+    [Fact]
+    public async Task BeeSearchContent_WhenUnlocked_NoticeIsNull()
+    {
+        await _articleService.CreateAsync("Content Search Test 2", "/Test", [], "some body text");
+
+        var result = await _searchTools.SearchContent("body");
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        var notice = obj.GetProperty("notice");
+        notice.ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     // ───── bee_list_articles ─────────────────────────────────────────────────
