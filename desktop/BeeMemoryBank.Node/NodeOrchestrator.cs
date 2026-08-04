@@ -509,6 +509,12 @@ public class NodeOrchestrator : IDisposable
                 try
                 {
                     proc.Kill(entireProcessTree: true);
+                    // Kill() signals but doesn't wait for it to take effect - see the matching
+                    // comment in BeeMemoryBank.Desktop's NodeLifecycleService.StopCoreAsync for
+                    // why this matters on Unix (async SIGKILL delivery/reaping) even though it's
+                    // a no-op window on Windows.
+                    await proc.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token)
+                        .ConfigureAwait(false);
                 }
                 catch { }
             }
