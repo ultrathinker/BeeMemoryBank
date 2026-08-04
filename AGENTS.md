@@ -17,8 +17,32 @@ dotnet run --project server/BeeMemoryBank.Api    # port 5300
 dotnet run --project server/BeeMemoryBank.Web    # port 5301, proxies to Api
 ```
 
+A stuck test hangs `dotnet test` indefinitely — use `dotnet test --blame-hang-timeout 30s` to fail
+fast with a diagnosis dump instead of guessing with a shell-level timeout wrapper.
+
 Full setup, project structure, code style, and PR process: see `CONTRIBUTING.md`. This file only
 covers what that one doesn't.
+
+## Architecture at a glance
+
+- **Encryption.** Content is encrypted with a per-vault master DEK (AES-256-GCM); the DEK itself
+  is wrapped by an Argon2id-derived KEK from the unlock password (`MasterKeyManager`,
+  `KeyDerivation`). "Unlocking" means deriving the KEK and caching the unwrapped DEK in memory —
+  the password and DEK are never written to disk.
+- **Desktop vs. Node.** `BeeMemoryBank.Node` is the actual background server process; the API and
+  Web projects under `server/` run inside it. `BeeMemoryBank.Desktop` is the Windows tray app that
+  starts/stops/monitors that process (`NodeLifecycleService`) and handles autostart/power events —
+  it has no business logic of its own.
+- **Sync.** Multi-node sync orders writes with a Lamport clock plus `SourceNodeId`, not wall-clock
+  time (`libs/BeeMemoryBank.Sync/`) — don't reintroduce wall-clock-based conflict resolution.
+- **Adding an MCP tool.** The method needs `[McpServerTool(Name = "bee_xxx")]`; every parameter
+  needs a `[Description]` attribute, or `McpToolRegistry` silently skips it when it builds the
+  parameter schema — which quietly defeats the "reject unknown parameter name" check that
+  `McpParameterValidationMiddleware` depends on.
+- **Access is folder-scoped, not all-or-nothing.** An agent key can be restricted to a folder
+  subtree and/or marked read-only; violating that throws `ReadOnlyAccessException` /
+  `UnauthorizedAccessException`. Any new write path needs to catch and translate those the same
+  way the existing tools do — don't let them surface as a generic 500.
 
 ## Non-obvious invariants (found the hard way — don't rediscover these)
 
@@ -42,6 +66,23 @@ covers what that one doesn't.
   e.g. `docker run --rm -v ${PWD}:/src -w /src mcr.microsoft.com/dotnet/sdk:10.0 ...` matches the
   GitHub Actions `ubuntu-latest` runner closely enough to catch platform-only bugs (apphost
   naming, kill-signal timing) before they ever reach real CI.
+- **Article version history is capped and can be suppressed.** Only the last 50 versions are
+  kept (`DeleteOldVersionsAsync(id, 50)`); `Protect`/`ChangePassphrase` pass a `suppressVersion`
+  flag to skip snapshotting the pre-protection plaintext into history — those callers purge
+  history first. Don't add a new snapshotting path without checking why that flag exists.
+- **Migrations can be squashed, not just appended.** `MigrationRunner` tracks applied migrations
+  by the `(version, filename)` pair, not version number alone — a "ghost" row (same version,
+  different filename) gets dropped and the current file re-applied. A maintainer occasionally
+  renumbers/squashes old migration files, so file N doesn't always mean the same schema change it
+  did last time you looked.
+
+## Where to tread carefully
+
+These carry a bigger correctness/security blast radius than average — extra scrutiny (and
+ideally a test) is worth it:
+- `libs/BeeMemoryBank.Crypto/` — encryption primitives and key wrapping
+- `libs/BeeMemoryBank.Storage/Migrations/` — applied schema changes, see squashing note above
+- `server/BeeMemoryBank.Api/Middleware/` — auth, session-lock, and parameter-validation gates
 
 ## Git remotes
 
