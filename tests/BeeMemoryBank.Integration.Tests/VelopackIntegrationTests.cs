@@ -77,7 +77,7 @@ public class VelopackIntegrationTests : IAsyncLifetime
 
         var snapshotService = _services.GetRequiredService<SnapshotService>();
         var dekRotation = ActivatorUtilities.CreateInstance<DekRotationService>(_services, _tempDir);
-        var snapshotRestore = ActivatorUtilities.CreateInstance<SnapshotRestoreService>(_services, _tempDir);
+        var snapshotRestore = ActivatorUtilities.CreateInstance<RestoreInitiatorService>(_services, _tempDir);
 
         (_releasePublicKey, _releasePrivateKey) = Ed25519Signer.GenerateKeyPair();
 

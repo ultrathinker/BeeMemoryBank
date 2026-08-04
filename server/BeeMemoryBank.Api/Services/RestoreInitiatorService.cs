@@ -30,7 +30,7 @@ public class NeedsAdminDecisionException : Exception
     }
 }
 
-public class SnapshotRestoreService : IRestoreInitiator
+public class RestoreInitiatorService : IRestoreInitiator
 {
     private readonly SnapshotService _snapshotService;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -38,7 +38,7 @@ public class SnapshotRestoreService : IRestoreInitiator
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly DbConnectionFactory _connFactory;
     private readonly MaintenanceModeService _maintenance;
-    private readonly ILogger<SnapshotRestoreService> _logger;
+    private readonly ILogger<RestoreInitiatorService> _logger;
     private readonly string _dataPath;
 
     private volatile RestoreFlowStep _currentStep = RestoreFlowStep.Idle;
@@ -55,14 +55,14 @@ public class SnapshotRestoreService : IRestoreInitiator
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    public SnapshotRestoreService(
+    public RestoreInitiatorService(
         SnapshotService snapshotService,
         IServiceScopeFactory scopeFactory,
         SessionService sessionService,
         IHttpClientFactory httpClientFactory,
         DbConnectionFactory connFactory,
         MaintenanceModeService maintenance,
-        ILogger<SnapshotRestoreService> logger,
+        ILogger<RestoreInitiatorService> logger,
         string dataPath)
     {
         _snapshotService = snapshotService;

@@ -51,7 +51,7 @@ public sealed class UpdateService
     private readonly SnapshotService _snapshotService;
     private readonly MaintenanceModeService _maintenance;
     private readonly DekRotationService _dekRotation;
-    private readonly SnapshotRestoreService _snapshotRestore;
+    private readonly RestoreInitiatorService _snapshotRestore;
     private readonly SessionService _sessionService;
     private readonly string _dataPath;
     private readonly ILogger<UpdateService> _logger;
@@ -61,7 +61,7 @@ public sealed class UpdateService
     private IUpdateHealthCheck _healthCheck;
 
     // ── Gate-check seams (public; defaults read the real collaborators) ────────
-    // DekRotationService / SnapshotRestoreService hold private state with no
+    // DekRotationService / RestoreInitiatorService hold private state with no
     // test-facing setter and a non-virtual GetProgress(), and HeavyOperationLock is
     // process-internal — so gates 2/3/4 cannot be driven through the real services
     // from a test. These providers default to the real reads (production behaviour is
@@ -103,7 +103,7 @@ public sealed class UpdateService
         SnapshotService snapshotService,
         MaintenanceModeService maintenance,
         DekRotationService dekRotation,
-        SnapshotRestoreService snapshotRestore,
+        RestoreInitiatorService snapshotRestore,
         SessionService sessionService,
         string dataPath,
         ILogger<UpdateService> logger,
@@ -124,7 +124,7 @@ public sealed class UpdateService
         SnapshotService snapshotService,
         MaintenanceModeService maintenance,
         DekRotationService dekRotation,
-        SnapshotRestoreService snapshotRestore,
+        RestoreInitiatorService snapshotRestore,
         SessionService sessionService,
         string dataPath,
         ILogger<UpdateService> logger,
@@ -321,7 +321,7 @@ public sealed class UpdateService
     /// Gates checked (all must pass):
     ///   1. MaintenanceModeService.IsInMaintenance == false
     ///   2. DekRotationService.GetProgress().CurrentStep == Idle
-    ///   3. SnapshotRestoreService.GetProgress().CurrentStep == Idle
+    ///   3. RestoreInitiatorService.GetProgress().CurrentStep == Idle
     ///   4. HeavyOperationLock is currently acquirable (check-then-release)
     ///
     /// Pre-update backup strategy:

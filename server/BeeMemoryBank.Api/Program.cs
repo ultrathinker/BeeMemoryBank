@@ -113,11 +113,11 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<IRestoreReplayShieldRepository>(),
         sp.GetRequiredService<IWhitelistRepository>(),
         sp.GetService<BeeMemoryBank.Core.Services.SessionService>()));
-// Singleton: SnapshotRestoreService holds in-memory progress state for /restore/progress polling.
+// Singleton: RestoreInitiatorService holds in-memory progress state for /restore/progress polling.
 // Task.Run flows in EventApplier and SnapshotEndpoints fire-and-forget, so the service must outlive
 // the request scope. Scoped dependencies (repositories) are resolved via IServiceScopeFactory per
 // operation to avoid capturing a single scope at construction time.
-builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<SnapshotRestoreService>(sp, dataPath));
+builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<RestoreInitiatorService>(sp, dataPath));
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<DekRotationService>(sp, dataPath));
 builder.Services.AddSingleton<IDekRotationApplier>(sp => sp.GetRequiredService<DekRotationService>());
 // Singleton: UpdateService holds in-memory state-machine state for /node/update/status polling.
@@ -125,10 +125,10 @@ builder.Services.AddSingleton<IDekRotationApplier>(sp => sp.GetRequiredService<D
 // singletons resolved from the container; dataPath is the explicit ActivatorUtilities arg.
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<UpdateService>(sp, dataPath));
 // LazySlotRewrapService is registered by AddSync() in Sync DI now (so CLI/mobile get it too).
-builder.Services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.GetRequiredService<SnapshotRestoreService>());
+builder.Services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.GetRequiredService<RestoreInitiatorService>());
 // Core-side retry contract: SessionService.UnlockCoreAsync resolves IRestoreRetrier to sweep
 // stuck restore events on every unlock (mirrors the DEK-rotation retry pattern).
-builder.Services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<SnapshotRestoreService>());
+builder.Services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<RestoreInitiatorService>());
 builder.Services.AddSingleton(new McpResponseManager(dataPath));
 builder.Services.AddSingleton<DownloadTokenService>();
 builder.Services.AddSingleton<BeeMemoryBank.Api.Services.ProtectedUnlockCache>();

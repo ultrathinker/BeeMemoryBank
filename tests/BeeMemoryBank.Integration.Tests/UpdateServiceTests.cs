@@ -23,7 +23,7 @@ namespace BeeMemoryBank.Integration.Tests;
 //   (c) a wrong-SHA256 artifact is rejected before Apply,
 //   (d) 3 failed health checks -> Failed, with the pre-update backup present & restorable.
 //
-// The collaborators DekRotationService / SnapshotRestoreService hold private state with no
+// The collaborators DekRotationService / RestoreInitiatorService hold private state with no
 // test-facing setter and a non-virtual GetProgress(), and HeavyOperationLock is process-
 // internal, so gates 2/3/4 are exercised via the internal seam providers on UpdateService
 // (each defaults to the real read — production behaviour is unchanged). Gate 1 (maintenance)
@@ -53,7 +53,7 @@ public class UpdateServiceTests : IAsyncLifetime
         Directory.CreateDirectory(_tempDir);
 
         // Build a minimal real ServiceProvider so the heavy collaborators
-        // (DekRotationService / SnapshotRestoreService / SnapshotService / SessionService)
+        // (DekRotationService / RestoreInitiatorService / SnapshotService / SessionService)
         // are genuine, idle instances — matching how Program.cs wires them.
         var services = new ServiceCollection();
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
@@ -73,7 +73,7 @@ public class UpdateServiceTests : IAsyncLifetime
 
         var snapshotService = _services.GetRequiredService<SnapshotService>();
         var dekRotation = ActivatorUtilities.CreateInstance<DekRotationService>(_services, _tempDir);
-        var snapshotRestore = ActivatorUtilities.CreateInstance<SnapshotRestoreService>(_services, _tempDir);
+        var snapshotRestore = ActivatorUtilities.CreateInstance<RestoreInitiatorService>(_services, _tempDir);
 
         // Two release keypairs: the primary signer + a rotation key (either verifies = valid).
         (_releasePublicKey, _releasePrivateKey) = Ed25519Signer.GenerateKeyPair();
@@ -385,7 +385,7 @@ public class UpdateServiceTests : IAsyncLifetime
                 [_releasePublicKey, _rotatedPublicKey],
                 _services.GetRequiredService<SnapshotService>(), _maintenance,
                 ActivatorUtilities.CreateInstance<DekRotationService>(_services, fakeDataPath),
-                ActivatorUtilities.CreateInstance<SnapshotRestoreService>(_services, fakeDataPath),
+                ActivatorUtilities.CreateInstance<RestoreInitiatorService>(_services, fakeDataPath),
                 _session,
                 fakeDataPath,
                 _services.GetRequiredService<ILogger<UpdateService>>(),

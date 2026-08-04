@@ -12,7 +12,7 @@ namespace BeeMemoryBank.Api.Services;
 /// <c>Core.Interfaces.IDbConnectionFactory</c> and is registered by its concrete type only.
 ///
 /// The chat DB is node-local only: never touched by <c>MigrationRunner</c>,
-/// <c>EventLogger</c>/<c>EventApplier</c>, <c>SnapshotService</c>/<c>SnapshotRestoreService</c>,
+/// <c>EventLogger</c>/<c>EventApplier</c>, <c>SnapshotService</c>/<c>RestoreInitiatorService</c>,
 /// or <c>SyncClient</c>. See <c>docs/ai-chat-implementation-plan.md</c> §1 ("Chat DB").
 /// </summary>
 public sealed class ChatDbConnectionFactory : IDisposable

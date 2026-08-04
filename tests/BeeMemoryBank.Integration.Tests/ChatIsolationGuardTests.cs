@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Integration.Tests;
 ///
 /// This is a SOURCE-SCAN test: it asserts the tokens <c>chat</c> / <c>ChatDb</c> / <c>chat.db</c>
 /// do not appear in any <c>*.cs</c> under <c>libs/BeeMemoryBank.Sync/</c> nor in
-/// <c>SnapshotService.cs</c> / <c>SnapshotRestoreService.cs</c>, and that no <c>chat_*.sql</c>
+/// <c>SnapshotService.cs</c> / <c>RestoreInitiatorService.cs</c>, and that no <c>chat_*.sql</c>
 /// file lands under <c>libs/BeeMemoryBank.Storage/Migrations/</c>.
 /// </summary>
 public class ChatIsolationGuardTests
@@ -50,7 +50,7 @@ public class ChatIsolationGuardTests
             }
         }
 
-        foreach (var name in new[] { "SnapshotService.cs", "SnapshotRestoreService.cs" })
+        foreach (var name in new[] { "SnapshotService.cs", "RestoreInitiatorService.cs" })
         {
             var path = Path.Combine(RepoRoot, "server", "BeeMemoryBank.Api", "Services", name);
             if (File.Exists(path))

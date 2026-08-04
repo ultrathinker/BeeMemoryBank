@@ -4,7 +4,7 @@ namespace BeeMemoryBank.Core.Interfaces;
 /// Minimal Core-visible surface for retrying stuck network-restore events. Lives here
 /// (not in Sync) so SessionService can call it from UnlockCoreAsync without Core
 /// taking a Sync dependency. The full IRestoreInitiator in Sync extends this — server
-/// implementation (SnapshotRestoreService) implements both.
+/// implementation (RestoreInitiatorService) implements both.
 /// </summary>
 public interface IRestoreRetrier
 {

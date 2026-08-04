@@ -184,7 +184,7 @@ public static class SnapshotEndpoints
         group.MapPost("/restore-network", async (
             RestoreInitiationRequest req,
             SnapshotService snapshotSvc,
-            SnapshotRestoreService restoreSvc,
+            RestoreInitiatorService restoreSvc,
             SessionService session,
             INodeIdentityRepository nodeRepo,
             ILamportClock clock,
@@ -322,7 +322,7 @@ public static class SnapshotEndpoints
         .WithName("ServeRestoreFile")
         .WithMetadata(new SkipInternalKey());
 
-        group.MapGet("/restore/progress", (SnapshotRestoreService restoreSvc, HttpContext ctx) =>
+        group.MapGet("/restore/progress", (RestoreInitiatorService restoreSvc, HttpContext ctx) =>
         {
             // This endpoint is intentionally reachable from the locked Login screen, so it cannot
             // require InternalKey (Web proxy adds the header, but we want to support direct calls
@@ -354,7 +354,7 @@ public static class SnapshotEndpoints
 
         group.MapPost("/restore/continue-without-backup", async (
             RestoreContinueWithoutBackupRequest req,
-            SnapshotRestoreService restoreSvc,
+            RestoreInitiatorService restoreSvc,
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
@@ -379,14 +379,14 @@ public static class SnapshotEndpoints
 
         group.MapPost("/restore/cancel", async (
             [FromQuery] string eventId,
-            SnapshotRestoreService restoreSvc,
+            RestoreInitiatorService restoreSvc,
             SessionService session,
             HttpContext ctx) =>
         {
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             // Note: do NOT require session.IsUnlocked here — sessions are intentionally locked
-            // throughout maintenance/restoration mode (see SnapshotRestoreService.AcceptRestoreAsync),
+            // throughout maintenance/restoration mode (see RestoreInitiatorService.AcceptRestoreAsync),
             // so the cancel endpoint must remain reachable from the locked Login screen.
             if (!Guid.TryParse(eventId, out _))
                 return Results.BadRequest(new ErrorResponse("eventId must be a valid GUID"));

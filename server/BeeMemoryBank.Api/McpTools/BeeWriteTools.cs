@@ -26,7 +26,7 @@ public class BeeWriteTools(
         "or a folder ID with targetParentPath. Result: brand-new article/folder (new GUID, re-encrypted " +
         "with current user's master key, no metadata link to the source). Title/name collisions in target " +
         "are auto-resolved with a ' (N)' suffix. Returns the new ID.")]
-    public async Task<string> CopyToAsync(
+    public async Task<string> CopyTo(
         [Description("ID of the article or folder to copy (GUID).")] Guid sourceId,
         [Description("For articles: target folder path. For folders: target parent path. Use '/' for root.")] string targetPath)
     {
