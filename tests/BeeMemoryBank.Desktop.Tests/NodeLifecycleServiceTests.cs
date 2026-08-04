@@ -29,9 +29,12 @@ public class NodeLifecycleServiceTests
         AppContext.BaseDirectory, "BeeMemoryBank.Node.Tests.StubProcess.dll");
 
     // Native apphost - StartOrAttachAsync sets ProcessStartInfo.FileName directly (no "dotnet"
-    // prefix), so TestOnly_NodeExePathOverride needs a directly-executable path.
+    // prefix), so TestOnly_NodeExePathOverride needs a directly-executable path. The apphost
+    // build output only carries a ".exe" suffix on Windows - on Linux/macOS it's the bare
+    // assembly name with the executable bit set.
     private static readonly string StubExePath = Path.Combine(
-        AppContext.BaseDirectory, "BeeMemoryBank.Node.Tests.StubProcess.exe");
+        AppContext.BaseDirectory,
+        OperatingSystem.IsWindows() ? "BeeMemoryBank.Node.Tests.StubProcess.exe" : "BeeMemoryBank.Node.Tests.StubProcess");
 
     /// <summary>
     /// Launches the stub via `dotnet stub.dll [extraArgs]` with a redirected stdin, and

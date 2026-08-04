@@ -508,6 +508,15 @@ public sealed class NodeLifecycleService : INodeLifecycleService
             try
             {
                 proc.Kill(entireProcessTree: true);
+                // Kill() sends the signal and returns without waiting for it to take effect.
+                // On Windows (TerminateProcess) that's effectively synchronous already; on
+                // Unix, SIGKILL delivery/reaping is asynchronous, so a caller checking
+                // liveness immediately after Kill() returns can observe the process as still
+                // alive for a few milliseconds. Wait (briefly, bounded) for the actual exit so
+                // StopAsync's contract - "the process is gone when this returns" - holds on
+                // every platform.
+                await proc.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
