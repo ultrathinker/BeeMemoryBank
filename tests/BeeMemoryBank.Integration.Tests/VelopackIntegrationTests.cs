@@ -40,6 +40,16 @@ public class VelopackIntegrationTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        // These scenarios build and pack a real win-x64 Velopack release and drive Update.exe
+        // apply/rollback - Windows installer/executable-stub mechanics, not something a Linux/macOS
+        // CI runner can meaningfully exercise (vpk's own pack command resolves to a different,
+        // non-Windows option set on those platforms, and there is no Update.exe to run anyway).
+        // See the matching guard in each [Fact] below.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         _tempDir = Path.Combine(Path.GetTempPath(), $"bmb_velo_integration_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
 
@@ -127,6 +137,11 @@ public class VelopackIntegrationTests : IAsyncLifetime
 
     public Task DisposeAsync()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return Task.CompletedTask;
+        }
+
         _services.Dispose();
         if (Directory.Exists(_tempDir))
         {
@@ -166,6 +181,11 @@ public class VelopackIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Scenario1_UpdateWorksEndToEnd()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         // 1. Get the package info of the produced package TestApp-1.1.0-full.nupkg
         var packagePath = Path.Combine(_releasesDir, "TestApp-1.1.0-full.nupkg");
         File.Exists(packagePath).Should().BeTrue();
@@ -213,6 +233,11 @@ public class VelopackIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Scenario2_CorruptedPackageRejected()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         // 1. Get the package info of the produced package TestApp-1.1.0-full.nupkg
         var packagePath = Path.Combine(_releasesDir, "TestApp-1.1.0-full.nupkg");
         var packageBytes = await File.ReadAllBytesAsync(packagePath);
@@ -242,6 +267,11 @@ public class VelopackIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Scenario3_KillMidApplyRollback()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         // We simulate a crash-recovery startup where:
         // 1. `update.inprogress` is found in the updates directory.
         // 2. A backup of the database is present in the updates directory.
