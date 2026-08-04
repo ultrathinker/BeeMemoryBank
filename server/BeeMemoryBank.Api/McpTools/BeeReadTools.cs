@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using BeeMemoryBank.Core.Interfaces;
@@ -21,7 +22,8 @@ public class BeeReadTools(
     McpResponseManager responseManager,
     MediaService mediaService,
     IMediaRepository mediaRepo,
-    IConceptTagRepository conceptTagRepo)
+    IConceptTagRepository conceptTagRepo,
+    ArticleDiffService articleDiffService)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -29,16 +31,45 @@ public class BeeReadTools(
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
+    // Shared by bee_list_articles' updatedAfter and bee_get_article_diff's baselineAt. RoundtripKind
+    // preserves whatever Kind the input string implies (Z-suffixed -> Utc, bare -> Unspecified) so the
+    // resulting DateTime re-serializes via the global Dapper DateTimeTypeHandler ("o" format) back into
+    // byte-identical text against tbl_article.updated_at, which itself is a mix of Utc (app writes) and
+    // Unspecified (imported rows without a zone marker) strings. An explicit-offset input parses as Local
+    // and must be normalized to Utc or it would compare against the server machine's local timezone.
+    private static DateTime ParseTimestamp(string input)
+    {
+        var parsed = DateTime.Parse(input, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        if (parsed.Kind == DateTimeKind.Local) parsed = parsed.ToUniversalTime();
+        return parsed;
+    }
+
     [McpServerTool(Name = "bee_list_articles")]
     [Description(
         "List articles, optionally filtered by tree path. Soft-deleted articles are not included.\n" +
         "Returns JSON array: [{ id, title, treePath, status, createdAt, updatedAt }]. " +
         "The treePath filter matches articles whose TreePath equals (or is a descendant of) the given path. " +
-        "Omit treePath to list everything. For a tree-structured view with empty folders, use bee_get_tree.")]
+        "Omit treePath to list everything. For a tree-structured view with empty folders, use bee_get_tree. " +
+        "Optional updatedAfter (ISO-8601) restricts results to articles whose updatedAt is strictly greater — " +
+        "pass the max updatedAt from your previous call to get just the delta.")]
     public async Task<string> ListArticles(
-        [Description("Tree path filter, e.g. '/Work' or '/Work/Dev'. Omit to list all articles.")] string? treePath = null)
+        [Description("Tree path filter, e.g. '/Work' or '/Work/Dev'. Omit to list all articles.")] string? treePath = null,
+        [Description("ISO-8601 timestamp. Return only articles whose updatedAt is strictly greater (>) than this. Pass the max updatedAt from your previous bee_list_articles call to get just the delta since then.")] string? updatedAfter = null)
     {
-        var articles = await articleService.ListAsync(treePath);
+        DateTime? parsedUpdatedAfter = null;
+        if (updatedAfter != null)
+        {
+            try
+            {
+                parsedUpdatedAfter = ParseTimestamp(updatedAfter);
+            }
+            catch (Exception ex) when (ex is FormatException or ArgumentException)
+            {
+                return $"Error: invalid updatedAfter timestamp: {ex.Message}";
+            }
+        }
+
+        var articles = await articleService.ListAsync(treePath, parsedUpdatedAfter);
 
         var json = JsonSerializer.Serialize(articles.Select(a => new
         {
@@ -234,12 +265,7 @@ public class BeeReadTools(
         var masterDek = session.GetMasterDek();
         try
         {
-            var isV1 = version.EncryptedDek.Length > 48 && version.EncryptedDek[0] == 0x01;
-            var dekAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(id.ToByteArray()).ToArray() : null;
-            var bodyAad = isV1 ? "bmb-art-body"u8.ToArray().Concat(id.ToByteArray()).ToArray() : null;
-            var articleDek = DekManager.UnwrapDek(version.EncryptedDek, version.DekIV, masterDek, dekAad);
-            var content = ArticleEncryptor.Decrypt(version.Ciphertext, version.IV, articleDek, bodyAad);
-            Array.Clear(articleDek);
+            var content = DecryptVersionContent(version, masterDek);
 
             var json = JsonSerializer.Serialize(new
             {
@@ -261,6 +287,105 @@ public class BeeReadTools(
         {
             Array.Clear(masterDek);
         }
+    }
+
+    private static string DecryptVersionContent(BeeMemoryBank.Core.Models.ArticleVersion version, byte[] masterDek)
+    {
+        var isV1 = version.EncryptedDek.Length > 48 && version.EncryptedDek[0] == 0x01;
+        var dekAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(version.ArticleId.ToByteArray()).ToArray() : null;
+        var bodyAad = isV1 ? "bmb-art-body"u8.ToArray().Concat(version.ArticleId.ToByteArray()).ToArray() : null;
+        var articleDek = DekManager.UnwrapDek(version.EncryptedDek, version.DekIV, masterDek, dekAad);
+        try
+        {
+            return ArticleEncryptor.Decrypt(version.Ciphertext, version.IV, articleDek, bodyAad);
+        }
+        finally
+        {
+            Array.Clear(articleDek);
+        }
+    }
+
+    [McpServerTool(Name = "bee_get_article_diff")]
+    [Description(
+        "Return what changed in the article since a point in time. baselineAt is compared against the version " +
+        "history (snapshot-before-write: the baseline is the earliest version created after baselineAt). Returns " +
+        "markdown-block-level changes ready for bee_replace_in_article, plus a similarity score; unchanged=true " +
+        "when nothing changed after baselineAt.")]
+    public async Task<string> GetArticleDiff(
+        [Description("Article ID (GUID).")] Guid id,
+        [Description("ISO-8601 timestamp. The comparison baseline is the article's state as of this moment (see the earliest-version-after-this-time rule in the tool description).")] string baselineAt)
+    {
+        var article = await articleService.GetMetadataAsync(id);
+        if (article == null)
+            return $"Error: article {id} not found";
+        if (article.Protected)
+            return "Error: this article is password-protected (second-layer encryption); version content is locked and cannot be read by agents.";
+        if (!session.IsUnlocked)
+            return "Error: session is locked. Unlock first.";
+
+        DateTime baselineAtParsed;
+        try
+        {
+            baselineAtParsed = ParseTimestamp(baselineAt);
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
+        {
+            return $"Error: invalid baselineAt timestamp: {ex.Message}";
+        }
+
+        string BuildResponse(object? baseline, bool unchanged, double similarity, bool tooLarge, IEnumerable<object> blocks) =>
+            responseManager.ProcessResponse(JsonSerializer.Serialize(new
+            {
+                id,
+                baseline,
+                current = new { updatedAt = article.UpdatedAt },
+                unchanged,
+                similarity,
+                tooLarge,
+                blocks
+            }, JsonOpts));
+
+        var baselineVersion = await versionRepo.GetEarliestAfterAsync(id, baselineAtParsed);
+        if (baselineVersion == null)
+        {
+            return article.UpdatedAt <= baselineAtParsed
+                ? BuildResponse(null, unchanged: true, similarity: 1.0, tooLarge: false, blocks: [])
+                : BuildResponse(null, unchanged: false, similarity: 0.0, tooLarge: false, blocks: []);
+        }
+
+        string baselineContent;
+        var masterDek = session.GetMasterDek();
+        try
+        {
+            baselineContent = DecryptVersionContent(baselineVersion, masterDek);
+        }
+        catch (Exception ex)
+        {
+            return $"Error: {ex.Message}";
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+
+        string currentContent;
+        try
+        {
+            currentContent = await articleService.GetContentAsync(id);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"Error: {ex.Message}";
+        }
+
+        var diffResult = articleDiffService.Diff(baselineContent, currentContent);
+
+        return BuildResponse(
+            baseline: new { versionNumber = baselineVersion.VersionNumber, createdAt = baselineVersion.CreatedAt },
+            unchanged: diffResult.Unchanged,
+            similarity: diffResult.Similarity,
+            tooLarge: diffResult.TooLarge,
+            blocks: diffResult.Blocks.Select(b => new { op = b.Op, heading = b.Heading, old = b.Old, @new = b.New }));
     }
 
     [McpServerTool(Name = "bee_get_image")]

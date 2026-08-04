@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="Certes" Version="3.0.4" />
+    <PackageReference Include="DiffPlex" Version="1.9.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
     <!-- Hosting + Logging abstractions are needed by MdnsAnnouncer (BackgroundService) and the
          mDNS services' ILogger usage. The same versions are used by BeeMemoryBank.Sync. -->

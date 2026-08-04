@@ -264,8 +264,8 @@ public partial class ArticleService(
         await eventLogger.LogDeleteAsync(id);
     }
 
-    /// <summary>List of article metadata, optionally filtered by tree path.</summary>
-    public Task<List<Article>> ListAsync(string? treePath = null) => articleRepo.ListAsync(treePath);
+    /// <summary>List of article metadata, optionally filtered by tree path and/or a strict updatedAfter cutoff.</summary>
+    public Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null) => articleRepo.ListAsync(treePath, updatedAfter);
 
     /// <summary>Moves an article to another folder (tree_path only, no content re-signing).</summary>
     public Task MoveAsync(Guid id, string newPath) => UpdateAsync(id, treePath: newPath);

@@ -21,6 +21,7 @@ public static class DependencyInjection
 
         services.AddScoped<InitializationService>();
         services.AddScoped<ArticleService>();
+        services.AddScoped<ArticleDiffService>();
         services.AddScoped<KeyManagementService>();
         services.AddScoped<TreeService>();
         services.AddScoped<SearchService>();

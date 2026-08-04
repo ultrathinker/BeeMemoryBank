@@ -49,27 +49,28 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         return await conn.QuerySingleOrDefaultAsync<Article>(sql, new { id });
     }
 
-    public async Task<List<Article>> ListAsync(string? treePath = null)
+    public async Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null)
     {
         using var conn = OpenConnection();
         string sql;
         object? param;
+        var updatedAfterClause = updatedAfter.HasValue ? "AND a.updated_at > @updatedAfter " : "";
 
         if (treePath == null)
         {
-            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' ORDER BY f.path, (substr(a.title,1,1)='_') DESC, a.title";
-            param = null;
+            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' {updatedAfterClause}ORDER BY f.path, (substr(a.title,1,1)='_') DESC, a.title";
+            param = new { updatedAfter };
         }
         else if (treePath == "/")
         {
-            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND (f.path = '/' OR a.folder_id IS NULL) ORDER BY (substr(a.title,1,1)='_') DESC, a.title";
-            param = null;
+            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND (f.path = '/' OR a.folder_id IS NULL) {updatedAfterClause}ORDER BY (substr(a.title,1,1)='_') DESC, a.title";
+            param = new { updatedAfter };
         }
         else
         {
-            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND (f.path = @treePath OR f.path LIKE @prefix ESCAPE '\\') ORDER BY f.path, (substr(a.title,1,1)='_') DESC, a.title";
+            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND (f.path = @treePath OR f.path LIKE @prefix ESCAPE '\\') {updatedAfterClause}ORDER BY f.path, (substr(a.title,1,1)='_') DESC, a.title";
             var escapedPrefix = treePath.TrimEnd('/').Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "/%";
-            param = new { treePath, prefix = escapedPrefix };
+            param = new { treePath, prefix = escapedPrefix, updatedAfter };
         }
 
         var articles = (await conn.QueryAsync<Article>(sql, param)).ToList();

@@ -80,6 +80,41 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
         };
     }
 
+    public async Task<ArticleVersion?> GetEarliestAfterAsync(Guid articleId, DateTime baselineAt)
+    {
+        using var conn = OpenConnection();
+
+        if (!await IsArticleAccessibleAsync(conn, articleId))
+            return null;
+
+        var row = await conn.QuerySingleOrDefaultAsync(
+            @"SELECT id AS Id, article_id AS ArticleId, version_number AS VersionNumber,
+                     title AS Title, tree_path AS TreePath,
+                     ciphertext AS Ciphertext, iv AS IV, encrypted_dek AS EncryptedDek, dek_iv AS DekIV,
+                     updated_by AS UpdatedBy, created_at AS CreatedAt
+              FROM tbl_article_version
+              WHERE article_id = @articleId AND created_at > @baselineAt
+              ORDER BY created_at ASC LIMIT 1",
+            new { articleId, baselineAt });
+
+        if (row == null) return null;
+
+        return new ArticleVersion
+        {
+            Id = Guid.Parse((string)row.Id),
+            ArticleId = Guid.Parse((string)row.ArticleId),
+            VersionNumber = (int)(long)row.VersionNumber,
+            Title = (string)row.Title,
+            TreePath = (string)row.TreePath,
+            Ciphertext = (byte[])row.Ciphertext,
+            IV = (byte[])row.IV,
+            EncryptedDek = (byte[])row.EncryptedDek,
+            DekIV = (byte[])row.DekIV,
+            UpdatedBy = (string?)row.UpdatedBy,
+            CreatedAt = DateTime.Parse((string)row.CreatedAt)
+        };
+    }
+
     public async Task<int> GetMaxVersionNumberAsync(Guid articleId)
     {
         using var conn = OpenConnection();

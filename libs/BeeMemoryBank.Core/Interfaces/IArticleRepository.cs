@@ -13,7 +13,7 @@ public interface IArticleRepository
     /// UnauthorizedAccessException on deny). Do NOT expose to HTTP endpoints.
     /// </summary>
     Task<Article?> GetByIdUnfilteredAsync(Guid id, bool includeDeleted = false);
-    Task<List<Article>> ListAsync(string? treePath = null);
+    Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null);
     Task CreateAsync(Article article);
     Task UpdateAsync(Article article);
     Task SoftDeleteAsync(Guid id);

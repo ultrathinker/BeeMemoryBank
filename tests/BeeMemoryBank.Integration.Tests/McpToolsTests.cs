@@ -67,7 +67,7 @@ public class McpToolsTests : IAsyncLifetime
             .BuildServiceProvider());
         _searchTools = new BeeSearchTools(_searchService, responseManager);
         var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccessService);
-        _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo);
+        _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService());
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
     }
@@ -139,6 +139,46 @@ public class McpToolsTests : IAsyncLifetime
             el.GetProperty("treePath").GetString()!.StartsWith("/Work"));
     }
 
+    [Fact]
+    public async Task BeeListArticles_UpdatedAfter_NoChanges_ReturnsEmpty()
+    {
+        await _articleService.CreateAsync("Delta Base", "/DeltaTest", [], "original");
+        await Task.Delay(20);
+        var checkpoint = DateTime.UtcNow;
+        await Task.Delay(20);
+
+        var result = await _readTools.ListArticles("/DeltaTest", checkpoint.ToString("o"));
+
+        var arr = JsonDocument.Parse(result).RootElement;
+        arr.GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BeeListArticles_UpdatedAfter_ReturnsOnlyDeltaSinceCheckpoint()
+    {
+        var article = await _articleService.CreateAsync("Delta Article", "/DeltaTest", [], "original");
+        await Task.Delay(20);
+        var checkpoint = DateTime.UtcNow;
+        await Task.Delay(20);
+
+        var emptyResult = await _readTools.ListArticles("/DeltaTest", checkpoint.ToString("o"));
+        JsonDocument.Parse(emptyResult).RootElement.GetArrayLength().Should().Be(0);
+
+        await _articleService.UpdateAsync(article.Id, null, null, null, "changed");
+
+        var deltaResult = await _readTools.ListArticles("/DeltaTest", checkpoint.ToString("o"));
+        var arr = JsonDocument.Parse(deltaResult).RootElement;
+        arr.GetArrayLength().Should().Be(1);
+        arr[0].GetProperty("id").GetString().Should().Be(article.Id.ToString());
+    }
+
+    [Fact]
+    public async Task BeeListArticles_InvalidUpdatedAfter_ReturnsError()
+    {
+        var result = await _readTools.ListArticles(updatedAfter: "not-a-timestamp");
+        result.Should().StartWith("Error:");
+    }
+
     // ───── bee_get_article ───────────────────────────────────────────────────
 
     [Fact]
@@ -196,6 +236,144 @@ public class McpToolsTests : IAsyncLifetime
         obj.GetProperty("paths").ValueKind.Should().Be(JsonValueKind.Array);
         obj.GetProperty("paths").EnumerateArray()
             .Should().Contain(el => el.GetProperty("path").GetString() == "/TreeTest/Sub");
+    }
+
+    // ───── bee_get_article_diff ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task BeeGetArticleDiff_NotFound_ReturnsError()
+    {
+        var result = await _readTools.GetArticleDiff(Guid.NewGuid(), DateTime.UtcNow.ToString("o"));
+        result.Should().StartWith("Error:");
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_InvalidBaselineAt_ReturnsError()
+    {
+        var article = await _articleService.CreateAsync("Diff Bad Baseline", "/DiffTest", [], "text");
+
+        var result = await _readTools.GetArticleDiff(article.Id, "not-a-timestamp");
+        result.Should().StartWith("Error:");
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_SingleEdit_ReturnsOneModifyBlock()
+    {
+        // Enough surrounding unchanged paragraphs that a single-paragraph edit doesn't itself
+        // drag similarity below the tooLarge threshold — this test is about op classification
+        // for a single edit, not the size-gating behavior (covered by CompleteRewrite below).
+        var oldBody = "Intro paragraph stays the same.\n\nOriginal content.\n\nClosing paragraph stays the same.";
+        var article = await _articleService.CreateAsync("Diff Single Edit", "/DiffTest", [], oldBody);
+        await Task.Delay(20);
+        var baselineAt = DateTime.UtcNow;
+        await Task.Delay(20);
+
+        var newBody = "Intro paragraph stays the same.\n\nChanged content.\n\nClosing paragraph stays the same.";
+        await _articleService.UpdateAsync(article.Id, null, null, null, newBody);
+
+        var result = await _readTools.GetArticleDiff(article.Id, baselineAt.ToString("o"));
+        var obj = JsonDocument.Parse(result).RootElement;
+
+        obj.GetProperty("unchanged").GetBoolean().Should().BeFalse();
+        obj.GetProperty("tooLarge").GetBoolean().Should().BeFalse();
+        obj.GetProperty("baseline").ValueKind.Should().NotBe(JsonValueKind.Null);
+        var blocks = obj.GetProperty("blocks").EnumerateArray().ToList();
+        blocks.Should().HaveCount(1);
+        blocks[0].GetProperty("op").GetString().Should().Be("modify");
+        blocks[0].GetProperty("old").GetString().Should().Be("Original content.");
+        blocks[0].GetProperty("new").GetString().Should().Be("Changed content.");
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_BaselineAfterEdit_ReturnsUnchanged()
+    {
+        var article = await _articleService.CreateAsync("Diff Baseline After", "/DiffTest", [], "Original content.");
+        await _articleService.UpdateAsync(article.Id, null, null, null, "Changed content.");
+        await Task.Delay(20);
+        var baselineAt = DateTime.UtcNow;
+
+        var result = await _readTools.GetArticleDiff(article.Id, baselineAt.ToString("o"));
+        var obj = JsonDocument.Parse(result).RootElement;
+
+        obj.GetProperty("unchanged").GetBoolean().Should().BeTrue();
+        obj.GetProperty("blocks").GetArrayLength().Should().Be(0);
+        obj.GetProperty("baseline").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_NeverEdited_BaselineBeforeCreation_ReturnsNullBaseline()
+    {
+        var baselineAt = DateTime.UtcNow;
+        await Task.Delay(20);
+        var article = await _articleService.CreateAsync("Diff Never Edited", "/DiffTest", [], "Just created.");
+
+        var result = await _readTools.GetArticleDiff(article.Id, baselineAt.ToString("o"));
+        var obj = JsonDocument.Parse(result).RootElement;
+
+        obj.GetProperty("unchanged").GetBoolean().Should().BeFalse();
+        obj.GetProperty("blocks").GetArrayLength().Should().Be(0);
+        obj.GetProperty("baseline").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_TableCellEdit_ReturnsOneBlock()
+    {
+        var rows = Enumerable.Range(1, 12).Select(i => $"| Row {i} | Value {i} |").ToList();
+        var body = "| Col A | Col B |\n|---|---|\n" + string.Join("\n", rows);
+        var article = await _articleService.CreateAsync("Diff Table", "/DiffTest", [], body);
+        await Task.Delay(20);
+        var baselineAt = DateTime.UtcNow;
+        await Task.Delay(20);
+
+        var newRows = rows.Select((r, idx) => idx == 5 ? "| Row 6 | CHANGED |" : r);
+        var newBody = "| Col A | Col B |\n|---|---|\n" + string.Join("\n", newRows);
+        await _articleService.UpdateAsync(article.Id, null, null, null, newBody);
+
+        var result = await _readTools.GetArticleDiff(article.Id, baselineAt.ToString("o"));
+        var obj = JsonDocument.Parse(result).RootElement;
+        var blocks = obj.GetProperty("blocks").EnumerateArray().ToList();
+        blocks.Should().HaveCount(1);
+        blocks[0].GetProperty("new").GetString().Should().Be("| Row 6 | CHANGED |");
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_FencedCodeEdit_ReturnsWholeBlockVerbatim()
+    {
+        var oldBody = "Intro text.\n\n```csharp\nvar x = 1;\nConsole.WriteLine(x);\n```\n\nOutro text.";
+        var article = await _articleService.CreateAsync("Diff Code", "/DiffTest", [], oldBody);
+        await Task.Delay(20);
+        var baselineAt = DateTime.UtcNow;
+        await Task.Delay(20);
+
+        var newBody = "Intro text.\n\n```csharp\nvar x = 2;\nConsole.WriteLine(x);\n```\n\nOutro text.";
+        await _articleService.UpdateAsync(article.Id, null, null, null, newBody);
+
+        var result = await _readTools.GetArticleDiff(article.Id, baselineAt.ToString("o"));
+        var obj = JsonDocument.Parse(result).RootElement;
+        var blocks = obj.GetProperty("blocks").EnumerateArray().ToList();
+        blocks.Should().HaveCount(1);
+        blocks[0].GetProperty("old").GetString().Should().Be("```csharp\nvar x = 1;\nConsole.WriteLine(x);\n```");
+        blocks[0].GetProperty("new").GetString().Should().Be("```csharp\nvar x = 2;\nConsole.WriteLine(x);\n```");
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_CompleteRewrite_ReturnsTooLarge()
+    {
+        var oldBody = string.Join("\n\n", Enumerable.Range(1, 20).Select(i => $"Old paragraph number {i} with filler text here."));
+        var article = await _articleService.CreateAsync("Diff Rewrite", "/DiffTest", [], oldBody);
+        await Task.Delay(20);
+        var baselineAt = DateTime.UtcNow;
+        await Task.Delay(20);
+
+        var newBody = string.Join("\n\n", Enumerable.Range(1, 20).Select(i => $"Completely different paragraph {i} unrelated content."));
+        await _articleService.UpdateAsync(article.Id, null, null, null, newBody);
+
+        var result = await _readTools.GetArticleDiff(article.Id, baselineAt.ToString("o"));
+        var obj = JsonDocument.Parse(result).RootElement;
+
+        obj.GetProperty("tooLarge").GetBoolean().Should().BeTrue();
+        obj.GetProperty("blocks").GetArrayLength().Should().Be(0);
+        obj.GetProperty("similarity").GetDouble().Should().BeLessThan(0.6);
     }
 
     // ───── bee_save_article ──────────────────────────────────────────────────

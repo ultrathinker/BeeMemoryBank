@@ -93,7 +93,7 @@ public class McpAclTests : IAsyncLifetime
         var responseManager = new McpResponseManager(Path.GetTempPath());
 
         _searchTools = new BeeSearchTools(searchService, responseManager);
-        _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo);
+        _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService());
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
         _conceptTools = new BeeConceptTools(_conceptTagService, _articleService, _httpContextAccessor, responseManager);
@@ -279,6 +279,21 @@ public class McpAclTests : IAsyncLifetime
 
         await SetRestrictedCaller();
         var result = await _readTools.GetArticleVersion(secret.Id, 1);
+
+        result.Should().Be("Error: article " + secret.Id + " not found");
+        result.Should().NotContain("v1");
+        ClearCaller();
+    }
+
+    [Fact]
+    public async Task Acl_BeeGetArticleDiff_DeniesSecretFolder()
+    {
+        var secret = await _articleService.CreateAsync("Secret Diff", "/Secret", [], "v1");
+        var baselineAt = DateTime.UtcNow;
+        await _articleService.UpdateAsync(secret.Id, null, null, null, "v2");
+
+        await SetRestrictedCaller();
+        var result = await _readTools.GetArticleDiff(secret.Id, baselineAt.ToString("o"));
 
         result.Should().Be("Error: article " + secret.Id + " not found");
         result.Should().NotContain("v1");

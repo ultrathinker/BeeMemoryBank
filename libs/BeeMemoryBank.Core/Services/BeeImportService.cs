@@ -83,6 +83,14 @@ public partial class BeeImportService(
         var rootPath = !string.IsNullOrEmpty(manifest.SourceFolderName)
             ? JoinPath(destinationPath, await ResolveFolderNameCollision(manifest.SourceFolderName, destinationPath))
             : destinationPath;
+        // ArticleService.CreateAsync canonicalizes its own treePath, so article-derived paths
+        // below are already protected. Folder.EnsureExistsAsync does NOT - it bypasses the
+        // repo-level write guard to auto-vivify ancestors (see its own comments), trusting the
+        // caller already validated the leaf. A tampered/corrupted manifest's folder name or
+        // Folders list is untrusted input, so it must be canonicalized here or "../"/control-char
+        // segments would be persisted verbatim (see TreePathCanonicalizer for why that's unwanted
+        // even without a real filesystem to traverse).
+        rootPath = TreePathCanonicalizer.Canonicalize(rootPath);
         report.RootFolderPath = rootPath;
 
         var identity = await nodeRepo.GetAsync();
@@ -95,7 +103,13 @@ public partial class BeeImportService(
         foreach (var relFolder in manifest.Folders.OrderBy(f => f.Length))
         {
             ct.ThrowIfCancellationRequested();
-            var folderPath = relFolder.Length > 0 ? JoinPath(rootPath, relFolder) : rootPath;
+            var rawPath = relFolder.Length > 0 ? JoinPath(rootPath, relFolder) : rootPath;
+            var folderPath = TreePathCanonicalizer.TryCanonicalize(rawPath);
+            if (folderPath == null)
+            {
+                report.Warnings.Add($"Skipped malformed folder entry in manifest: '{relFolder}'.");
+                continue;
+            }
             var existedBefore = await folderRepo.GetByPathAsync(folderPath) != null;
             await folderRepo.EnsureExistsAsync(folderPath, identity?.NodeId);
             if (!existedBefore) report.FoldersCreated++;
