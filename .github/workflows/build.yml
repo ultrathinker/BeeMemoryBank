@@ -27,6 +27,13 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # VelopackIntegrationTests shells out to the vpk packaging CLI (not the Velopack
+      # NuGet library referenced by the test project - that's the update-client API, this
+      # is the separate global tool that builds release packages). Version pinned to match
+      # the Velopack PackageReference in BeeMemoryBank.Integration.Tests.csproj.
+      - name: Install vpk (Velopack CLI)
+        run: dotnet tool install --global vpk --version 1.2.0
+
       # Cache the 87 MB ONNX model so we do not re-download it on every push.
       - name: Cache ONNX model
         id: onnx-cache
