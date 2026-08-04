@@ -405,6 +405,11 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                     if (!hostedProc.HasExited)
                     {
                         hostedProc.Kill(entireProcessTree: true);
+                        // See the matching comment in StopCoreAsync: Kill() doesn't wait for the
+                        // signal to actually take effect, which is a no-op window on Windows but
+                        // a real race on Unix (async SIGKILL delivery/reaping).
+                        await hostedProc.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token)
+                            .ConfigureAwait(false);
                     }
                 }
                 catch (Exception killEx)
