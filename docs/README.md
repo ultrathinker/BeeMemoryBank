@@ -9,7 +9,7 @@ This folder contains technical documentation for the BeeMemoryBank project.
 | [architecture.md](architecture.md) | Project overview, technology stack, module structure, dependency graph, and key architectural decisions |
 | [sync.md](sync.md) | Multi-node synchronization protocol, event sourcing, Lamport clocks, conflict resolution, push-on-save, Invisible Mode |
 | [encryption.md](encryption.md) | Encryption system: 3-level key hierarchy, per-article/media DEKs, session management, media encryption |
-| [mcp.md](mcp.md) | MCP server for AI agent integration: 30 tools in 7 groups, transport, truncation, configuration examples |
+| [mcp.md](mcp.md) | MCP server for AI agent integration: 32 tools in 7 groups, transport, truncation, configuration examples |
 | [compaction.md](compaction.md) | Event log compaction and snapshot lifecycle |
 | [deployment.md](deployment.md) | Deployment guide: environment variables, systemd, Docker, reverse proxy, maintenance page, new node setup, audit log retention |
 

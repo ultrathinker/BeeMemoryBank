@@ -55,9 +55,9 @@ BMB_API_URL=http://localhost:5300 ASPNETCORE_URLS=http://localhost:5301 ./BeeMem
 
 ```
 server/
-├── BeeMemoryBank.Api/       — REST API (24 endpoint groups) + MCP server
-│   ├── Endpoints/           — 24 files: Activity, Admin, Agent, Article, Comment, ConceptTag, DekRotation, Download, Folder, HardDelete, Init, Join, Key, Media, ObsidianImport, Restriction, Search, Session, Snapshot, Sync, Tree, User, Version, Whitelist
-│   ├── McpTools/            — 7 tool groups: Search (3 tools), Read (7), Write (10), Session (3), Upload (2), Audit (2), Concept (9) — 36 tools total
+├── BeeMemoryBank.Api/       — REST API (33 endpoint groups) + MCP server
+│   ├── Endpoints/           — 39 files, 33 groups: Activity, Admin, Agent, Article, AutoUnlock, BeeImport, Chat (split across 7 files), Comment, Compaction, ConceptTag, Copy, DekRotation, Download, Folder, HardDelete, Init, InternetAccess, Join, Key, Media, ObsidianImport, RemoteAccount, RemoteAuth, Restriction, Search, Session, Snapshot, Sync, Tree, Update, User, Version, Whitelist
+│   ├── McpTools/            — 7 tool groups: Search (2 tools), Read (7), Write (10), Session (2), Upload (2), Audit (1), Concept (8) — 32 tools total
 │   ├── Middleware/           — AgentAuthMiddleware (bearer → auto-unlock)
 │   ├── Services/            — SyncTokenStore, SnapshotService, HttpActorProvider, DekRotationService, LazySlotRewrapService
 │   └── Models/              — DTOs for endpoints
@@ -75,7 +75,7 @@ libs/
 │   ├── Models/              — Article, Comment, Agent, Folder, FolderInfo, Media, NodeIdentity, AuditLog,
 │   │                          ArticleVersion, FolderAclEntry...
 │   │                          (models in BeeMemoryBank.Core/Models/)
-│   ├── Interfaces/          — 29 interfaces (incl. IMediaRepository, IFolderRepository, IArticleVersionRepository, IFolderAclRepository, IActorProvider, IEmbeddingGenerator, ISyncTrigger, ISyncPushPositionRepository, IDekRotationApplier, IDekRotationStateRepository, ILazySlotRewrapService, IAuditLogRepository)
+│   ├── Interfaces/          — 39 interfaces (incl. IMediaRepository, IFolderRepository, IArticleVersionRepository, IFolderAclRepository, IActorProvider, IEmbeddingGenerator, ISyncTrigger, ISyncPushPositionRepository, IDekRotationApplier, IDekRotationStateRepository, ILazySlotRewrapService, IAuditLogRepository)
 │   └── Embeddings/          — HashBasedEmbeddingGenerator, ProjectionMatrix
 │
 ├── BeeMemoryBank.Crypto/    — Cryptographic primitives (~450 LOC)
@@ -83,8 +83,8 @@ libs/
 │       MediaEncryptor, AgentKeyHelper, SecureRandom, CryptoConstants
 │
 ├── BeeMemoryBank.Storage/   — SQLite + Dapper
-│   ├── Sqlite/              — 22 repositories (incl. MediaRepository, FolderRepository, FolderBootstrapper, ArticleVersionRepository, FolderAclRepository, SyncPushPositionRepository, DekRotationStateRepository, AuditLogRepository) + MigrationRunner
-│   └── Migrations/          — `001_initial_schema.sql` (consolidated, 23 CREATE TABLE)
+│   ├── Sqlite/              — 25 repositories (incl. MediaRepository, FolderRepository, FolderBootstrapper, ArticleVersionRepository, FolderAclRepository, SyncPushPositionRepository, DekRotationStateRepository, AuditLogRepository) + MigrationRunner
+│   └── Migrations/          — `001_initial_schema.sql` (consolidated, 31 CREATE TABLE) + `002_session_settings.sql`
 │
 └── BeeMemoryBank.Sync/      — Distributed synchronization
     └── SyncScheduler, SyncTrigger, SyncClient, EventLogger, EventApplier, LamportClock,
