@@ -20,6 +20,7 @@ public class McpToolsTests : IAsyncLifetime
     private SessionService _session = null!;
     private ArticleService _articleService = null!;
     private SearchService _searchService = null!;
+    private IArticleVersionRepository _versionRepo = null!;
 
     private BeeSearchTools _searchTools = null!;
     private BeeReadTools _readTools = null!;
@@ -49,6 +50,7 @@ public class McpToolsTests : IAsyncLifetime
         var mediaRepo = new MediaRepository(_factory, scopeHolder);
         var folderRepo = new BeeMemoryBank.Storage.Sqlite.FolderRepository(_factory, scopeHolder);
         var versionRepo = new ArticleVersionRepository(_factory, scopeHolder);
+        _versionRepo = versionRepo;
         var conceptTagRepo = new ConceptTagRepository(_factory, scopeHolder);
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
@@ -374,6 +376,67 @@ public class McpToolsTests : IAsyncLifetime
         obj.GetProperty("tooLarge").GetBoolean().Should().BeTrue();
         obj.GetProperty("blocks").GetArrayLength().Should().Be(0);
         obj.GetProperty("similarity").GetDouble().Should().BeLessThan(0.6);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_VersionCreatedAt_ExactlyEqualsArticleUpdatedAt()
+    {
+        // Regression test: article.UpdatedAt and the version snapshot's CreatedAt used to come from
+        // two separate DateTime.UtcNow reads straddling several DB round-trips in UpdateAsync,
+        // reliably drifting by ~1ms (version.CreatedAt landing AFTER article.UpdatedAt). That broke
+        // bee_get_article_diff's baseline rule for the exact case a real caller hits: baselineAt ==
+        // the updatedAt it read back from its own previous call.
+        var article = await _articleService.CreateAsync("Clock Invariant", "/DiffTest", [], "Original content.");
+        await _articleService.UpdateAsync(article.Id, null, null, null, "Changed content.");
+
+        var updated = await _articleService.GetMetadataAsync(article.Id);
+        var version = await _versionRepo.GetAsync(article.Id, 1);
+
+        version.Should().NotBeNull();
+        version!.CreatedAt.Should().Be(updated!.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_BaselineEqualsArticlesOwnUpdatedAt_ReturnsUnchanged()
+    {
+        // The exact scenario from the bug report: a caller stores article.updatedAt from a previous
+        // response and later passes that same value back as baselineAt (no artificial padding).
+        var article = await _articleService.CreateAsync("Diff Own Timestamp", "/DiffTest", [], "Original content.");
+        await _articleService.UpdateAsync(article.Id, null, null, null, "Changed content.");
+        var updated = await _articleService.GetMetadataAsync(article.Id);
+
+        var result = await _readTools.GetArticleDiff(article.Id, updated!.UpdatedAt.ToString("o"));
+        var obj = JsonDocument.Parse(result).RootElement;
+
+        obj.GetProperty("unchanged").GetBoolean().Should().BeTrue();
+        obj.GetProperty("blocks").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BeeGetArticleDiff_TwoEditsBaselineAfterFirst_ShowsOnlySecondEdit()
+    {
+        // Padded with stable paragraphs (same reasoning as SingleEdit above) so a one-paragraph
+        // change doesn't itself push similarity below the tooLarge threshold.
+        const string intro = "Intro paragraph stays the same.";
+        const string outro = "Closing paragraph stays the same.";
+        var article = await _articleService.CreateAsync("Diff Two Edits", "/DiffTest", [], $"{intro}\n\nVersion one content.\n\n{outro}");
+        await _articleService.UpdateAsync(article.Id, null, null, null, $"{intro}\n\nVersion two content.\n\n{outro}");
+        var afterFirstEdit = await _articleService.GetMetadataAsync(article.Id);
+
+        // Two in-memory edits back-to-back can otherwise land in the same DateTime.UtcNow tick,
+        // which is a real clock-resolution limit unrelated to the bug this test targets.
+        await Task.Delay(20);
+        await _articleService.UpdateAsync(article.Id, null, null, null, $"{intro}\n\nVersion three content.\n\n{outro}");
+
+        var result = await _readTools.GetArticleDiff(article.Id, afterFirstEdit!.UpdatedAt.ToString("o"));
+        var obj = JsonDocument.Parse(result).RootElement;
+
+        obj.GetProperty("unchanged").GetBoolean().Should().BeFalse();
+        obj.GetProperty("tooLarge").GetBoolean().Should().BeFalse();
+        var blocks = obj.GetProperty("blocks").EnumerateArray().ToList();
+        blocks.Should().HaveCount(1);
+        blocks[0].GetProperty("old").GetString().Should().Be("Version two content.");
+        blocks[0].GetProperty("new").GetString().Should().Be("Version three content.");
     }
 
     // ───── bee_save_article ──────────────────────────────────────────────────

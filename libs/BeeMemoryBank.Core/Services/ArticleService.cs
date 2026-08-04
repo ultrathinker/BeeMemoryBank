@@ -165,7 +165,15 @@ public partial class ArticleService(
         var identity = await nodeRepo.GetAsync();
         article.LamportTs = clock.Tick();
         article.SourceNodeId = identity?.NodeId;
-        article.UpdatedAt = DateTime.UtcNow;
+        // Single clock read shared with the version snapshot below (if any) - bee_get_article_diff's
+        // baseline rule ("earliest version with CreatedAt > baselineAt") depends on version.CreatedAt
+        // never being later than the article.UpdatedAt from the SAME write. Two separate
+        // DateTime.UtcNow calls straddling the DB round-trips in between (folder lookup, article
+        // update, tag set, body fetch) reliably drift by ~1ms, which made a diff called with
+        // baselineAt == that exact updatedAt see the version as "created after" and re-report the
+        // edit that produced it as pending.
+        var now = DateTime.UtcNow;
+        article.UpdatedAt = now;
 
         // Keep the protected flag in lock-step with the body content (the body is the source of
         // truth). Only touch it when the body is actually being rewritten.
@@ -211,7 +219,7 @@ public partial class ArticleService(
                     EncryptedDek = body.EncryptedDek,
                     DekIV = body.DekIV,
                     UpdatedBy = updatedBy,
-                    CreatedAt = DateTime.UtcNow
+                    CreatedAt = now
                 });
                 await versionRepo.DeleteOldVersionsAsync(id, 50);
             }
