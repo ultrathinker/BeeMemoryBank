@@ -25,8 +25,14 @@ public class McpToolsTests : IAsyncLifetime
     private BeeSearchTools _searchTools = null!;
     private BeeReadTools _readTools = null!;
     private BeeWriteTools _writeTools = null!;
+    private BeeUploadTools _uploadTools = null!;
+    private MediaService _mediaService = null!;
 
     private const string Password = "mcpTestPassword";
+
+    // A well-known 1x1 transparent PNG, base64-encoded.
+    private const string MinimalPngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
     public async Task InitializeAsync()
     {
@@ -54,7 +60,7 @@ public class McpToolsTests : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(_factory, scopeHolder);
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
-        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
+        _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
         _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session);
@@ -69,9 +75,10 @@ public class McpToolsTests : IAsyncLifetime
             .BuildServiceProvider());
         _searchTools = new BeeSearchTools(_searchService, responseManager);
         var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccessService);
-        _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService());
-        var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
+        _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService());
+        var copySvc = new CopyService(_articleService, folderSvc, _mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
+        _uploadTools = new BeeUploadTools(_articleService, _mediaService, _session, responseManager);
     }
 
     public Task DisposeAsync()
@@ -512,6 +519,95 @@ public class McpToolsTests : IAsyncLifetime
 
         var check = await _readTools.GetArticle(article.Id);
         check.Should().StartWith("Error:");
+    }
+
+    // ───── bee_save_media ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task BeeSaveMedia_ValidPng_ReturnsMediaId()
+    {
+        var result = await _uploadTools.SaveMedia("test.png", MinimalPngBase64);
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        Guid.TryParse(obj.GetProperty("mediaId").GetString(), out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task BeeSaveMedia_DataUriPrefix_StrippedAndAccepted()
+    {
+        var result = await _uploadTools.SaveMedia("test.png", "data:image/png;base64," + MinimalPngBase64);
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        Guid.TryParse(obj.GetProperty("mediaId").GetString(), out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task BeeSaveMedia_InvalidBase64_ReturnsError()
+    {
+        var result = await _uploadTools.SaveMedia("test.png", "not-valid-base64!!!");
+        result.Should().StartWith("Error:");
+    }
+
+    [Fact]
+    public async Task BeeSaveMedia_UnsupportedExtension_ReturnsError()
+    {
+        var result = await _uploadTools.SaveMedia("file.txt", MinimalPngBase64);
+        result.Should().StartWith("Error:");
+        result.Should().Contain(".txt");
+    }
+
+    [Fact]
+    public async Task BeeSaveMedia_OversizedInput_ReturnsError()
+    {
+        var oversized = Convert.ToBase64String(new byte[21 * 1024 * 1024]);
+        var result = await _uploadTools.SaveMedia("big.png", oversized);
+        result.Should().StartWith("Error:");
+        result.Should().Contain("MB");
+    }
+
+    [Fact]
+    public async Task BeeSaveMedia_LinkedToArticle_ArticleIdSet()
+    {
+        var article = await _articleService.CreateAsync("Media Host", "/Media", [], "text");
+
+        var result = await _uploadTools.SaveMedia("test.png", MinimalPngBase64, article.Id);
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        var mediaId = Guid.Parse(obj.GetProperty("mediaId").GetString()!);
+
+        var linked = await _mediaService.GetByArticleIdAsync(article.Id);
+        linked.Should().ContainSingle(m => m.Id == mediaId);
+    }
+
+    [Fact]
+    public async Task BeeSaveMedia_NonexistentArticleId_ReturnsError()
+    {
+        var result = await _uploadTools.SaveMedia("test.png", MinimalPngBase64, Guid.NewGuid());
+        result.Should().StartWith("Error:");
+        result.Should().Contain("not found");
+    }
+
+    [Fact]
+    public async Task BeeSaveMedia_ProtectedArticle_ReturnsError()
+    {
+        var article = await _articleService.CreateAsync("Protected Host", "/Media", [], "secret text");
+        await _articleService.ProtectAsync(article.Id, "protectPass", null);
+
+        var result = await _uploadTools.SaveMedia("test.png", MinimalPngBase64, article.Id);
+
+        result.Should().StartWith("Error:");
+        result.Should().Contain("password-protected");
+    }
+
+    // ───── bee_get_upload_script ─────────────────────────────────────────────
+
+    [Fact]
+    public void BeeGetUploadScript_ContainsUploadMediaCommand()
+    {
+        var result = _uploadTools.GetUploadScript();
+
+        result.Should().Contain("upload-media");
+        result.Should().Contain("bee_save_media");
     }
 
 }
