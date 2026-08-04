@@ -51,7 +51,7 @@ public static class DependencyInjection
         // after the first run). Only a Valid resolution hands the real path to OnnxEmbeddingGenerator;
         // Corrupt and NotFound both yield a non-existent sentinel path so the generator degrades to
         // ModelUnavailableException exactly as it already does for a missing model, and a corrupt file
-        // is never loaded into the ONNX runtime. See EmbeddingModelWiring for the placeholder hash.
+        // is never loaded into the ONNX runtime. See EmbeddingModelWiring for the expected hash.
         var manager = new ModelManager(EmbeddingModelWiring.DefaultManifest, dataDirectory);
         var generatorPath =
             EmbeddingModelWiring.ResolveGeneratorPathAsync(manager).GetAwaiter().GetResult();

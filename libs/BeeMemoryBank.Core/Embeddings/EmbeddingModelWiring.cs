@@ -4,31 +4,24 @@ namespace BeeMemoryBank.Core.Embeddings;
 /// Bridges <see cref="ModelManager"/> resolution and <see cref="OnnxEmbeddingGenerator"/>
 /// construction for the DI wiring in
 /// <see cref="DependencyInjection.AddOnnxEmbeddings(Microsoft.Extensions.DependencyInjection.IServiceCollection, string)"/>.
-/// It owns the bundled <see cref="ModelManifest"/> (with a placeholder expected hash) and decides
-/// which path to hand to the generator so that a corrupt model degrades exactly like a missing one.
+/// It owns the bundled <see cref="ModelManifest"/> and decides which path to hand to the generator
+/// so that a corrupt model degrades exactly like a missing one.
 /// </summary>
 internal static class EmbeddingModelWiring
 {
     /// <summary>
-    /// PLACEHOLDER &mdash; expected SHA-256 (lowercase hex) of the bundled
-    /// <c>all-MiniLM-L6-v2</c> <c>model.onnx</c>. No real model is shipped in this environment yet,
-    /// so this value deliberately cannot be mistaken for a genuine digest: it contains the literal
-    /// token "PLACEHOLDER" and is not a valid 64-char hex string. Resolution will therefore never
-    /// report <see cref="ModelStatus.Valid"/> until this is replaced with the real digest computed
-    /// from the actual bundled <c>model.onnx</c>.
+    /// Expected SHA-256 (lowercase hex) of the bundled <c>all-MiniLM-L6-v2</c> <c>model.onnx</c>,
+    /// as published by sentence-transformers/all-MiniLM-L6-v2 on HuggingFace
+    /// (onnx/model.onnx, 90,405,214 bytes).
     /// </summary>
-    public const string BundledModelSha256Placeholder =
-        "PLACEHOLDER-REPLACE-WITH-REAL-all-MiniLM-L6-v2-model-onnx-SHA256";
+    public const string BundledModelSha256 =
+        "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452";
 
-    /// <summary>
-    /// Default manifest describing the bundled <c>all-MiniLM-L6-v2</c> model. The
-    /// <see cref="ModelManifest.Sha256"/> is a <see cref="BundledModelSha256Placeholder">placeholder</see>
-    /// until the real model is shipped.
-    /// </summary>
+    /// <summary>Default manifest describing the bundled <c>all-MiniLM-L6-v2</c> model.</summary>
     public static readonly ModelManifest DefaultManifest = new(
         Id: "all-MiniLM-L6-v2",
         File: "model.onnx",
-        Sha256: BundledModelSha256Placeholder,
+        Sha256: BundledModelSha256,
         Dimension: 384,
         SchemaVersion: 1);
 

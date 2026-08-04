@@ -57,12 +57,23 @@ public class EmbeddingDependencyInjectionTests
             .BuildServiceProvider()
             .GetRequiredService<IEmbeddingGenerator>();
 
+    // ---- bundled manifest sanity --------------------------------------------
+
+    [Fact]
+    public void DefaultManifest_Sha256_IsAWellFormedDigest()
+    {
+        // Regression guard for the bug where this constant was left as a literal
+        // "PLACEHOLDER-..." string: that would fail this exact check (wrong length, non-hex
+        // characters), so a future accidental revert can't silently ship again.
+        EmbeddingModelWiring.DefaultManifest.Sha256.Should().MatchRegex("^[0-9a-f]{64}$");
+    }
+
     // ---- resolution without throwing ---------------------------------------
 
     [Fact]
     public void AddOnnxEmbeddings_WhenNoModelFileExists_ResolvesGeneratorWithoutThrowing()
     {
-        // This environment has no real model.onnx anywhere; the placeholder hash can never match.
+        // This test environment has no real model.onnx anywhere, so resolution can only be NotFound.
         var dataDir = NewTempDir();
         using (WithEnvVar(null))
         {
@@ -99,8 +110,8 @@ public class EmbeddingDependencyInjectionTests
     [Fact]
     public void AddOnnxEmbeddings_WhenModelFileIsCorrupt_GenerateThrowsSameAsMissing()
     {
-        // A file exists but its hash cannot match the placeholder manifest hash => ModelManager reports
-        // Corrupt. The generator must end up in the SAME degraded state as no file at all.
+        // A file exists but its (random) content can't match the real manifest hash => ModelManager
+        // reports Corrupt. The generator must end up in the SAME degraded state as no file at all.
         var dataDir = NewTempDir();
         WriteFile(dataDir, "model.onnx", RandomBytes(2048));
         using (WithEnvVar(null))
