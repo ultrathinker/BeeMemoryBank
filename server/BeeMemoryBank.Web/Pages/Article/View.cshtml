@@ -183,6 +183,44 @@
         </div>
     }
 
+    <!-- Attachments -->
+    @if (!Model.Article.Protected)
+    {
+        <div class="card mt-md">
+            <h4 style="font-size:0.95rem;margin-bottom:14px;">
+                <sl-icon name="paperclip"></sl-icon> Attachments (<span id="attachments-count">@Model.Attachments.Count</span>)
+            </h4>
+
+            <div id="attachments-list">
+                @foreach (var att in Model.Attachments)
+                {
+                    <div class="attachment-item" id="attachment-@att.Id" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">
+                        <a href="/api-proxy/media/@att.Id" download="@att.FileName" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+                            <sl-icon name="file-earmark"></sl-icon>
+                            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@att.FileName</span>
+                            <span style="font-size:0.78rem;color:var(--sl-color-neutral-500);flex-shrink:0;">(@ViewModel.FormatFileSize(att.FileSize))</span>
+                        </a>
+                        @if (!Model.IsReadOnly)
+                        {
+                            <sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;flex-shrink:0;"
+                                onclick="deleteAttachment('@att.Id')"></sl-icon-button>
+                        }
+                    </div>
+                }
+            </div>
+
+            @if (!Model.IsReadOnly)
+            {
+                <div style="margin-top:14px;">
+                    <input type="file" id="attachment-file-input" style="display:none;" />
+                    <sl-button id="btn-add-attachment" size="small" variant="default">
+                        <sl-icon slot="prefix" name="paperclip"></sl-icon> Add File
+                    </sl-button>
+                </div>
+            }
+        </div>
+    }
+
     <!-- Comments -->
     <div class="card mt-md">
         <h4 style="font-size:0.95rem;margin-bottom:14px;">
@@ -666,6 +704,77 @@ else
                         var cnt = list.querySelectorAll('.comment-item').length;
                         h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
                     }
+                } else { alert('Delete failed'); }
+            });
+    };
+
+    // ─── Attachments ───
+    function formatFileSize(bytes) {
+        var units = ['B', 'KB', 'MB', 'GB'];
+        var size = bytes, i = 0;
+        while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+        return (i === 0 ? size.toFixed(0) : size.toFixed(1)) + ' ' + units[i];
+    }
+
+    function attachmentsListEl() { return document.getElementById('attachments-list'); }
+
+    function updateAttachmentsCount() {
+        var list = attachmentsListEl();
+        if (!list) return;
+        var countEl = document.getElementById('attachments-count');
+        if (countEl) countEl.textContent = list.querySelectorAll('.attachment-item').length;
+    }
+
+    function appendAttachmentRow(att) {
+        var list = attachmentsListEl();
+        if (!list) return;
+        var div = document.createElement('div');
+        div.className = 'attachment-item';
+        div.id = 'attachment-' + att.id;
+        div.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);';
+        div.innerHTML =
+            '<a href="/api-proxy/media/' + att.id + '" download="' + escHtml(att.fileName) + '" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">' +
+            '<sl-icon name="file-earmark"></sl-icon>' +
+            '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(att.fileName) + '</span>' +
+            '<span style="font-size:0.78rem;color:var(--sl-color-neutral-500);flex-shrink:0;">(' + formatFileSize(att.fileSize) + ')</span>' +
+            '</a>' +
+            '<sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;flex-shrink:0;" onclick="deleteAttachment(\'' + att.id + '\')"></sl-icon-button>';
+        list.appendChild(div);
+        updateAttachmentsCount();
+    }
+
+    var attachmentFileInput = document.getElementById('attachment-file-input');
+    var addAttachmentBtn = document.getElementById('btn-add-attachment');
+    if (addAttachmentBtn && attachmentFileInput) {
+        addAttachmentBtn.addEventListener('click', function() { attachmentFileInput.click(); });
+        attachmentFileInput.addEventListener('change', function() {
+            var file = attachmentFileInput.files[0];
+            attachmentFileInput.value = '';
+            if (!file) return;
+            addAttachmentBtn.loading = true;
+            var formData = new FormData();
+            formData.append('file', file);
+            formData.append('attachment', 'true');
+            if (articleId) formData.append('articleId', articleId);
+            fetch('/api-proxy/media/upload', { method: 'POST', body: formData })
+                .then(function(r) {
+                    if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || 'Upload failed'); });
+                    return r.json();
+                })
+                .then(function(media) { appendAttachmentRow(media); })
+                .catch(function(e) { alert(e.message || 'Upload failed'); })
+                .finally(function() { addAttachmentBtn.loading = false; });
+        });
+    }
+
+    window.deleteAttachment = function(id) {
+        if (!confirm('Delete this attachment?')) return;
+        fetch('/api-proxy/media/' + id, { method: 'DELETE' })
+            .then(function(r) {
+                if (r.ok || r.status === 204) {
+                    var el = document.getElementById('attachment-' + id);
+                    if (el) el.remove();
+                    updateAttachmentsCount();
                 } else { alert('Delete failed'); }
             });
     };

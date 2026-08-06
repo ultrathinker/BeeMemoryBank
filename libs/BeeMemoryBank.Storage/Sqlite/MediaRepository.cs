@@ -21,7 +21,8 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         m.lamport_ts      AS LamportTs,
         m.source_node_id  AS SourceNodeId,
         m.created_at      AS CreatedAt,
-        m.deleted_at      AS DeletedAt";
+        m.deleted_at      AS DeletedAt,
+        m.kind            AS Kind";
 
     public async Task<Media?> GetByIdAsync(Guid id, bool includeDeleted = false)
     {
@@ -85,9 +86,9 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_media
               (id, article_id, file_name, content_type, file_size,
-               encrypted_dek, dek_iv, iv, status, lamport_ts, source_node_id, created_at)
+               encrypted_dek, dek_iv, iv, status, lamport_ts, source_node_id, created_at, kind)
               VALUES (@Id, @ArticleId, @FileName, @ContentType, @FileSize,
-                      @EncryptedDek, @DekIV, @IV, @Status, @LamportTs, @SourceNodeId, @CreatedAt)",
+                      @EncryptedDek, @DekIV, @IV, @Status, @LamportTs, @SourceNodeId, @CreatedAt, @Kind)",
             media);
     }
 

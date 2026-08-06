@@ -7,6 +7,9 @@ public class Media
     public string FileName { get; set; } = "";
     public string ContentType { get; set; } = "";
     public long FileSize { get; set; }
+    // "image" = inline, referenced in the article's markdown body. "attachment" = shown in a
+    // separate list below the article, never inlined. Existing rows default to "image".
+    public string Kind { get; set; } = "image";
     public byte[] EncryptedDek { get; set; } = [];
     public byte[] DekIV { get; set; } = [];
     public byte[] IV { get; set; } = [];

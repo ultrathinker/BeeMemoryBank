@@ -127,7 +127,7 @@ public record ArticleVersionContentDto(
     string Content,
     DateTime CreatedAt);
 
-public record MediaDto(Guid Id, string FileName, string ContentType, long FileSize);
+public record MediaDto(Guid Id, string FileName, string ContentType, long FileSize, string Kind = "image", DateTime? CreatedAt = null);
 
 public record MediaDownloadResult { public byte[] Data { get; init; } = []; public string ContentType { get; init; } = "application/octet-stream"; public string FileName { get; init; } = ""; }
 

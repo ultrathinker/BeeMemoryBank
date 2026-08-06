@@ -192,11 +192,24 @@ public static class ArticleProxyEndpoints
             var file = form.Files.GetFile("file");
             if (file == null) return Results.BadRequest(new { error = "No file provided" });
             var articleId = form["articleId"].FirstOrDefault();
-            var result = await api.UploadMediaAsync(file, articleId);
+            var isAttachment = form["attachment"].FirstOrDefault() == "true";
+            var (result, error) = await api.UploadMediaAsync(file, articleId, isAttachment);
             return result != null
-                ? Results.Ok(new { id = result.Id, fileName = result.FileName, contentType = result.ContentType, fileSize = result.FileSize })
-                : Results.StatusCode(502);
+                ? Results.Ok(new { id = result.Id, fileName = result.FileName, contentType = result.ContentType, fileSize = result.FileSize, kind = result.Kind })
+                : Results.Json(new { error = error ?? "Upload failed" }, statusCode: 502);
         }).RequireAuthorization().DisableAntiforgery();
+
+        app.MapGet("/api-proxy/articles/{id:guid}/media", async (Guid id, ApiClient api) =>
+        {
+            var media = await api.ListMediaAsync(id);
+            return media != null ? Results.Ok(media) : Results.StatusCode(502);
+        }).RequireAuthorization();
+
+        app.MapDelete("/api-proxy/media/{id:guid}", async (Guid id, ApiClient api) =>
+        {
+            var ok = await api.DeleteMediaAsync(id);
+            return ok ? Results.NoContent() : Results.StatusCode(502);
+        }).RequireAuthorization();
 
         app.MapPost("/api-proxy/import/obsidian", async (HttpRequest req, ApiClient api) =>
         {

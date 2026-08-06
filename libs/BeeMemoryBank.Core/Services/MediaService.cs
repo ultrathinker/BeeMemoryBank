@@ -24,42 +24,74 @@ public class MediaService(
     };
     private const long MaxInputSize = 50 * 1024 * 1024;
     private const long MaxFileSize = 20 * 1024 * 1024;
+    private const long MaxAttachmentFileSize = 20 * 1024 * 1024;
     private const int MaxImageDimension = 4096;
     private const int JpegQuality = 90;
     private const int JpegQualityDownscale = 85;
 
-    public async Task<Media> CreateAsync(string fileName, string contentType, byte[] plaintext, Guid? articleId)
+    /// <param name="isAttachment">False (default) = inline image: restricted to
+    /// <see cref="AllowedContentTypes"/>, re-encoded/downscaled to fit <see cref="MaxFileSize"/>.
+    /// True = generic file attachment shown below the article, never inlined: any content type,
+    /// stored as-is (no image processing), capped at <see cref="MaxAttachmentFileSize"/>.</param>
+    public async Task<Media> CreateAsync(string fileName, string contentType, byte[] plaintext, Guid? articleId, bool isAttachment = false)
     {
         if (plaintext.Length > MaxInputSize)
             throw new ArgumentException($"Input size exceeds {MaxInputSize / (1024 * 1024)} MB limit.");
-        if (!AllowedContentTypes.Contains(contentType))
-            throw new ArgumentException($"Content type '{contentType}' is not allowed.");
 
-        // Convert raster images to JPEG (except SVG and animated GIF). Downscale if still oversized.
-        if (contentType != "image/svg+xml" && !IsAnimatedGif(plaintext, contentType))
+        // A nonexistent (or ACL-hidden) articleId must be rejected here: MediaRepository's write
+        // check skips its FK-existence lookup for superadmin scope, so without this the INSERT
+        // below fails with a raw SQLite FK-constraint exception instead of a clean error.
+        //
+        // Protected (second-layer passphrase) articles keep their body opaque to everyone but a
+        // human with the passphrase. Media is wrapped by the MASTER DEK, not the article's
+        // passphrase, so anything attached here would be readable without it — silently
+        // undermining that guarantee. Simplest correct answer for now: disallow entirely.
+        if (articleId.HasValue)
         {
-            var (jpegBytes, converted) = ConvertToJpeg(plaintext, contentType);
-            if (converted)
+            var article = await articleRepo.GetByIdAsync(articleId.Value);
+            if (article == null)
+                throw new ArgumentException($"Article {articleId} not found.");
+            if (article.Protected)
+                throw new InvalidOperationException(
+                    "This article is password-protected (second-layer encryption); it cannot have attached media.");
+        }
+
+        if (isAttachment)
+        {
+            if (plaintext.Length > MaxAttachmentFileSize)
+                throw new ArgumentException($"File size exceeds {MaxAttachmentFileSize / (1024 * 1024)} MB limit.");
+        }
+        else
+        {
+            if (!AllowedContentTypes.Contains(contentType))
+                throw new ArgumentException($"Content type '{contentType}' is not allowed.");
+
+            // Convert raster images to JPEG (except SVG and animated GIF). Downscale if still oversized.
+            if (contentType != "image/svg+xml" && !IsAnimatedGif(plaintext, contentType))
             {
-                plaintext = jpegBytes;
-                contentType = "image/jpeg";
-                fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
+                var (jpegBytes, converted) = ConvertToJpeg(plaintext, contentType);
+                if (converted)
+                {
+                    plaintext = jpegBytes;
+                    contentType = "image/jpeg";
+                    fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
+                }
+
+                if (plaintext.Length > MaxFileSize)
+                {
+                    plaintext = DownscaleJpeg(plaintext);
+                    contentType = "image/jpeg";
+                    fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
+                }
             }
 
             if (plaintext.Length > MaxFileSize)
-            {
-                plaintext = DownscaleJpeg(plaintext);
-                contentType = "image/jpeg";
-                fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
-            }
+                throw new ArgumentException($"File size exceeds {MaxFileSize / (1024 * 1024)} MB limit.");
         }
-
-        if (plaintext.Length > MaxFileSize)
-            throw new ArgumentException($"File size exceeds {MaxFileSize / (1024 * 1024)} MB limit.");
 
         var safeFileName = Path.GetFileName(fileName);
         if (string.IsNullOrEmpty(safeFileName))
-            safeFileName = "image";
+            safeFileName = isAttachment ? "file" : "image";
 
         var masterDek = session.GetMasterDek();
         Guid mediaId = Guid.NewGuid();
@@ -101,7 +133,8 @@ public class MediaService(
             Status = "A",
             LamportTs = lamportTs,
             SourceNodeId = identity?.NodeId,
-            CreatedAt = now
+            CreatedAt = now,
+            Kind = isAttachment ? "attachment" : "image"
         };
 
         Directory.CreateDirectory(options.MediaDir);

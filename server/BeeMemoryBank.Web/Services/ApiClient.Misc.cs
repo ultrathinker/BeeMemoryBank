@@ -135,7 +135,7 @@ public partial class ApiClient
         catch { return null; }
     }
 
-    public async Task<MediaDto?> UploadMediaAsync(IFormFile file, string? articleId)
+    public async Task<(MediaDto? Media, string? Error)> UploadMediaAsync(IFormFile file, string? articleId, bool isAttachment = false)
     {
         using var content = new MultipartFormDataContent();
         using var fileStream = file.OpenReadStream();
@@ -145,9 +145,34 @@ public partial class ApiClient
         if (!string.IsNullOrEmpty(articleId))
             content.Add(new StringContent(articleId), "articleId");
 
-        var resp = await http.PostAsync("/api/media", content);
+        var url = isAttachment ? "/api/media?attachment=true" : "/api/media";
+        var resp = await http.PostAsync(url, content);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync();
+            try
+            {
+                var doc = JsonDocument.Parse(errBody);
+                if (doc.RootElement.TryGetProperty("error", out var e))
+                    return (null, e.GetString() ?? "Upload failed");
+            }
+            catch { }
+            return (null, "Upload failed");
+        }
+        return (await resp.Content.ReadFromJsonAsync<MediaDto>(JsonOpts), null);
+    }
+
+    public async Task<List<MediaDto>?> ListMediaAsync(Guid articleId)
+    {
+        var resp = await http.GetAsync($"/api/articles/{articleId}/media");
         if (!resp.IsSuccessStatusCode) return null;
-        return await resp.Content.ReadFromJsonAsync<MediaDto>(JsonOpts);
+        return await resp.Content.ReadFromJsonAsync<List<MediaDto>>(JsonOpts);
+    }
+
+    public async Task<bool> DeleteMediaAsync(Guid id)
+    {
+        var resp = await http.DeleteAsync($"/api/media/{id}");
+        return resp.IsSuccessStatusCode;
     }
 
     public async Task<MediaDownloadResult?> DownloadMediaAsync(Guid id)

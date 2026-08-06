@@ -20,6 +20,23 @@ public class BeeUploadTools(
         [".gif"] = "image/gif", [".webp"] = "image/webp", [".svg"] = "image/svg+xml"
     };
 
+    // Attachment mode (isAttachment: true) is deliberately NOT restricted to this list — an
+    // unrecognized extension falls back to application/octet-stream rather than being rejected,
+    // since attachments are arbitrary files, not inline images the app needs to render. This
+    // dict only improves the download Content-Type for common cases.
+    private static readonly Dictionary<string, string> AttachmentExtensionToContentType = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".pdf"] = "application/pdf", [".txt"] = "text/plain", [".md"] = "text/markdown",
+        [".csv"] = "text/csv", [".json"] = "application/json", [".xml"] = "application/xml",
+        [".zip"] = "application/zip", [".7z"] = "application/x-7z-compressed",
+        [".doc"] = "application/msword",
+        [".docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        [".xls"] = "application/vnd.ms-excel",
+        [".xlsx"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        [".ppt"] = "application/vnd.ms-powerpoint",
+        [".pptx"] = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    };
+
     [McpServerTool(Name = "bee_get_upload_script")]
     [Description(
         "Get a Python script for uploading files from disk to BeeMemoryBank without reading them into context.\n" +
@@ -34,19 +51,25 @@ public class BeeUploadTools(
 
     [McpServerTool(Name = "bee_save_media")]
     [Description(
-        "Upload a new image into the vault from base64-encoded bytes. Supported types: PNG, JPEG, GIF, " +
-        "WEBP, SVG (by file extension in fileName). Max 20 MB decoded size.\n" +
-        "Returns JSON: { mediaId }. Paste \"![](/api/media/{mediaId})\" into an article's markdown to embed it.\n" +
+        "Upload a new file into the vault from base64-encoded bytes.\n" +
+        "Default (isAttachment=false): inline IMAGE. Supported types: PNG, JPEG, GIF, WEBP, SVG (by file " +
+        "extension in fileName). Max 20 MB decoded size. Paste \"![](/api/media/{mediaId})\" into an " +
+        "article's markdown to embed it.\n" +
+        "isAttachment=true: generic FILE ATTACHMENT shown in a separate list below the article, never " +
+        "inlined. Any file extension is accepted (unrecognized ones just get a generic download content " +
+        "type). Max 20 MB decoded size.\n" +
         "Optional articleId links the upload to that article immediately (subject to the same access " +
         "rules as other tools); omit it to create an unlinked upload that is deleted automatically after " +
-        "24 hours if never referenced in a saved article body.\n" +
-        "For large images or when avoiding base64 in your own context matters, prefer the script from " +
+        "24 hours if never referenced in a saved article body. Password-protected (second-layer encrypted) " +
+        "articles cannot have media attached at all — the article's passphrase would not cover it.\n" +
+        "For large files or when avoiding base64 in your own context matters, prefer the script from " +
         "bee_get_upload_script instead (its upload-media command does the base64 encoding locally, outside your context).")]
     [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> SaveMedia(
-        [Description("File name, used only to determine the image type by extension (.png/.jpg/.jpeg/.gif/.webp/.svg). Not used as a display name.")] string fileName,
-        [Description("Base64-encoded file content. A \"data:image/...;base64,\" prefix is tolerated and stripped automatically. Max 20 MB decoded.")] string contentBase64,
-        [Description("Optional article ID (GUID) to link this upload to immediately. Omit to upload unlinked; it will be auto-deleted after 24h if never referenced by a saved article.")] Guid? articleId = null)
+        [Description("File name. For images (isAttachment=false) this determines the type by extension (.png/.jpg/.jpeg/.gif/.webp/.svg) and is not used as a display name. For attachments (isAttachment=true) it IS the display/download name shown to users, so use a real name.")] string fileName,
+        [Description("Base64-encoded file content. A \"data:...;base64,\" prefix is tolerated and stripped automatically. Max 20 MB decoded.")] string contentBase64,
+        [Description("Optional article ID (GUID) to link this upload to immediately. Omit to upload unlinked; it will be auto-deleted after 24h if never referenced by a saved article.")] Guid? articleId = null,
+        [Description("False (default) = inline image, restricted to PNG/JPEG/GIF/WEBP/SVG. True = generic file attachment, any file type, shown in a separate list below the article rather than embedded.")] bool isAttachment = false)
     {
         if (!session.IsUnlocked)
             return "Error: session is locked. Unlock first.";
@@ -77,25 +100,31 @@ public class BeeUploadTools(
             return $"Error: file exceeds 20 MB limit (decoded size {bytes.Length} bytes).";
 
         var ext = Path.GetExtension(fileName);
-        if (!ExtensionToContentType.TryGetValue(ext, out var contentType))
-            return $"Error: unsupported file extension '{ext}'. Supported: .png, .jpg, .jpeg, .gif, .webp, .svg";
-
-        if (articleId.HasValue)
+        string contentType;
+        if (isAttachment)
         {
-            var article = await articleService.GetMetadataAsync(articleId.Value);
-            if (article == null)
-                return $"Error: article {articleId} not found";
-            if (article.Protected)
-                return "Error: this article is password-protected (second-layer encryption); agents cannot attach media to it.";
+            // Unlike the image path, an unrecognized extension is NOT an error here — attachments
+            // are arbitrary files, not something the app needs to render.
+            contentType = AttachmentExtensionToContentType.TryGetValue(ext, out var attCt) ? attCt : "application/octet-stream";
+        }
+        else
+        {
+            if (!ExtensionToContentType.TryGetValue(ext, out var imgCt))
+                return $"Error: unsupported file extension '{ext}'. Supported: .png, .jpg, .jpeg, .gif, .webp, .svg";
+            contentType = imgCt;
         }
 
         try
         {
-            var media = await mediaService.CreateAsync(fileName, contentType, bytes, articleId);
+            var media = await mediaService.CreateAsync(fileName, contentType, bytes, articleId, isAttachment);
             var json = JsonSerializer.Serialize(new { mediaId = media.Id });
             return responseManager.ProcessResponse(json);
         }
         catch (ArgumentException ex)
+        {
+            return $"Error: {ex.Message}";
+        }
+        catch (InvalidOperationException ex)
         {
             return $"Error: {ex.Message}";
         }
@@ -111,7 +140,7 @@ public class BeeUploadTools(
 #   python bmb-upload.py --url https://bmb.example.com/mcp --bearer bee_xxx \
 #       update <file> <articleId> [--tags tag1,tag2]
 #   python bmb-upload.py --url https://bmb.example.com/mcp --bearer bee_xxx \
-#       upload-media <imageFile> [--article-id <articleId>]
+#       upload-media <file> [--article-id <articleId>] [--attachment]
 #
 # --url: the MCP endpoint URL (same one you use in your MCP client config).
 # The file content goes straight from disk to the server — never through your context window.
@@ -243,9 +272,10 @@ def main():
     up.add_argument("--tags", default=None, dest="tags",
                     help="Replaces all tags. Omit to keep current. Use '' to clear.")
 
-    md = sub.add_parser("upload-media", help="Upload an image file (base64-encoded locally, never sent through the LLM's context)")
+    md = sub.add_parser("upload-media", help="Upload a file (base64-encoded locally, never sent through the LLM's context)")
     md.add_argument("file")
     md.add_argument("--article-id", default=None, dest="article_id", help="Optional article ID to link the upload to immediately.")
+    md.add_argument("--attachment", action="store_true", help="Upload as a generic file attachment (any file type) instead of an inline image.")
 
     args = parser.parse_args()
     if not args.action:
@@ -263,6 +293,8 @@ def main():
         arguments = {"fileName": os.path.basename(args.file), "contentBase64": encoded}
         if args.article_id:
             arguments["articleId"] = args.article_id
+        if args.attachment:
+            arguments["isAttachment"] = True
         print_mcp_result(mcp_tool_call(mcp_url, args.bearer, "bee_save_media", arguments))
         return
 

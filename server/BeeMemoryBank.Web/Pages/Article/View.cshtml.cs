@@ -15,6 +15,7 @@ public class ViewModel(ApiClient api) : PageModel
     public List<CommentDto> Comments { get; private set; } = [];
     public List<RelatedArticleDto> RelatedArticles { get; private set; } = [];
     public List<string> ConceptTags { get; private set; } = [];
+    public List<MediaDto> Attachments { get; private set; } = [];
     public bool IsReadOnly { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(Guid id)
@@ -52,10 +53,28 @@ public class ViewModel(ApiClient api) : PageModel
             Comments = await api.GetCommentsAsync(id) ?? [];
             ConceptTags = await api.GetArticleConceptTagsAsync(id) ?? [];
             RelatedArticles = await api.GetRelatedArticlesAsync(id) ?? [];
+            if (!Article.Protected)
+            {
+                var media = await api.ListMediaAsync(id) ?? [];
+                Attachments = media.Where(m => m.Kind == "attachment").ToList();
+            }
 
             var perms = await api.GetFolderPermissionsAsync(Article.TreePath);
             IsReadOnly = perms?.IsReadOnly == true;
         }
         return Page();
+    }
+
+    public static string FormatFileSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        double size = bytes;
+        var unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.Length - 1)
+        {
+            size /= 1024;
+            unitIndex++;
+        }
+        return unitIndex == 0 ? $"{size:0} {units[unitIndex]}" : $"{size:0.#} {units[unitIndex]}";
     }
 }

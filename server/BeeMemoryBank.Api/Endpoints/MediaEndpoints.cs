@@ -14,7 +14,7 @@ public static class MediaEndpoints
         group.MapPost("/", async (
             IFormFile file, SessionService session, MediaService mediaService,
             ArticleService articleSvc, FolderAccessService folderAccess,
-            HttpContext ctx, string? articleId) =>
+            HttpContext ctx, string? articleId, bool attachment = false) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -55,18 +55,23 @@ public static class MediaEndpoints
 
             try
             {
-                var media = await mediaService.CreateAsync(file.FileName, file.ContentType, plaintext, artId);
+                var media = await mediaService.CreateAsync(file.FileName, file.ContentType, plaintext, artId, isAttachment: attachment);
                 return Results.Created($"/api/media/{media.Id}", new
                 {
                     id = media.Id,
                     fileName = media.FileName,
                     contentType = media.ContentType,
-                    fileSize = media.FileSize
+                    fileSize = media.FileSize,
+                    kind = media.Kind
                 });
             }
             catch (ArgumentException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
         }).DisableAntiforgery();
 
@@ -124,7 +129,8 @@ public static class MediaEndpoints
                 fileName = m.FileName,
                 contentType = m.ContentType,
                 fileSize = m.FileSize,
-                createdAt = m.CreatedAt
+                createdAt = m.CreatedAt,
+                kind = m.Kind
             }));
         }).RequireInternalKey().WithTags("Media");
     }
