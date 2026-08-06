@@ -135,7 +135,7 @@ public partial class ApiClient
         catch { return null; }
     }
 
-    public async Task<(MediaDto? Media, string? Error)> UploadMediaAsync(IFormFile file, string? articleId, bool isAttachment = false)
+    public async Task<(MediaDto? Media, int Status, string? Error)> UploadMediaAsync(IFormFile file, string? articleId, bool isAttachment = false)
     {
         using var content = new MultipartFormDataContent();
         using var fileStream = file.OpenReadStream();
@@ -149,17 +149,18 @@ public partial class ApiClient
         var resp = await http.PostAsync(url, content);
         if (!resp.IsSuccessStatusCode)
         {
+            var status = (int)resp.StatusCode;
             var errBody = await resp.Content.ReadAsStringAsync();
             try
             {
                 var doc = JsonDocument.Parse(errBody);
                 if (doc.RootElement.TryGetProperty("error", out var e))
-                    return (null, e.GetString() ?? "Upload failed");
+                    return (null, status, e.GetString() ?? "Upload failed");
             }
             catch { }
-            return (null, "Upload failed");
+            return (null, status, "Upload failed");
         }
-        return (await resp.Content.ReadFromJsonAsync<MediaDto>(JsonOpts), null);
+        return (await resp.Content.ReadFromJsonAsync<MediaDto>(JsonOpts), (int)resp.StatusCode, null);
     }
 
     public async Task<List<MediaDto>?> ListMediaAsync(Guid articleId)

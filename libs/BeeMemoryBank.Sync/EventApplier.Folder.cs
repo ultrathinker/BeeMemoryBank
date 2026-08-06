@@ -129,7 +129,8 @@ public partial class EventApplier
             Status = "A",
             LamportTs = evt.LamportTs,
             SourceNodeId = evt.NodeId,
-            CreatedAt = p.CreatedAt
+            CreatedAt = p.CreatedAt,
+            Kind = p.Kind
         };
         if (mediaOptions != null)
         {

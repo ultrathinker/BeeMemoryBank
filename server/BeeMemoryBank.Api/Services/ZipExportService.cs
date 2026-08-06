@@ -210,6 +210,13 @@ public partial class ZipExportService(
             await writer.WriteAsync(rewritten.AsMemory(), ct);
 
             var tags = await conceptTagService.GetByArticleIdAsync(article.Id);
+            // Attachments are never referenced from the markdown body (unlike inline images, which
+            // RewriteMediaRefs already rewrote above), so the manifest is the only way for
+            // BeeImportService to know they exist and re-link them to the imported article.
+            var attachmentNames = mediaList
+                .Where(m => m.Kind == "attachment")
+                .Select(m => globalMediaMap[m.Id])
+                .ToList();
             manifestArticles.Add(new BeeExportManifestArticle
             {
                 File = mdFileName,
@@ -217,7 +224,8 @@ public partial class ZipExportService(
                 Tags = tags,
                 CreatedAt = article.CreatedAt,
                 UpdatedAt = article.UpdatedAt,
-                Protected = isProtected
+                Protected = isProtected,
+                Attachments = attachmentNames
             });
         }
 

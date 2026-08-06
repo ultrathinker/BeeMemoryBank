@@ -221,7 +221,8 @@ public class EventLogger(
             IvB64: Convert.ToBase64String(media.IV),
             EncryptedDekB64: Convert.ToBase64String(media.EncryptedDek),
             DekIvB64: Convert.ToBase64String(media.DekIV),
-            CreatedAt: media.CreatedAt);
+            CreatedAt: media.CreatedAt,
+            Kind: media.Kind);
 
         await AppendEventAsync(identity, EventTypes.MediaCreate, null, lamportTs,
             JsonSerializer.Serialize(payload));

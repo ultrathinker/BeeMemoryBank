@@ -187,6 +187,9 @@ public record MediaEventPayload(
     [property: JsonPropertyName("encrypted_dek")]   string EncryptedDekB64,
     [property: JsonPropertyName("dek_iv")]          string DekIvB64,
     [property: JsonPropertyName("created_at")]      DateTime CreatedAt,
+    // Defaults to "image" so events serialized before this field existed still deserialize
+    // correctly — all of them predate the "attachment" kind, so the default is also the truth.
+    [property: JsonPropertyName("kind")]            string Kind = "image",
     [property: JsonPropertyName("dek_epoch")]       int DekEpoch = 1);
 
 public record MediaDeletePayload(

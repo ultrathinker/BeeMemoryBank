@@ -49,4 +49,9 @@ public sealed class BeeExportManifestArticle
     /// content is a placeholder notice, not the real body — BeeImportService skips these and
     /// reports them as warnings instead of creating a fake article.</summary>
     public bool Protected { get; set; }
+
+    /// <summary>Filenames (relative to "attachments/" in the ZIP) of this article's generic file
+    /// attachments. Unlike inline images, attachments are never referenced from the markdown body,
+    /// so BeeImportService has no other way to discover and re-link them.</summary>
+    public List<string> Attachments { get; set; } = [];
 }

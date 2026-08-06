@@ -21,6 +21,15 @@ public partial class ArticleService
         if (meta.Protected)
             throw new InvalidOperationException("Article is already protected. Use change-passphrase instead.");
 
+        // Media (images or attachments) is wrapped by the master DEK, not the article's passphrase
+        // (see MediaService.CreateAsync's own guard, which blocks the reverse direction — attaching
+        // to an already-protected article). Without this check, protecting an article that already
+        // has media would leave that media fully readable, silently defeating the passphrase.
+        var existingMedia = await mediaRepo.GetByArticleIdAsync(id);
+        if (existingMedia.Count > 0)
+            throw new InvalidOperationException(
+                "This article has attached media (images or files); remove it before adding password protection.");
+
         var current = await GetContentAsync(id);
         if (ProtectedContentCodec.IsProtected(current))
             throw new InvalidOperationException("Article body is already protected.");

@@ -123,7 +123,8 @@ public class CopyService(
                     $"Cannot copy: media {oldMedia.Id} on source article {sourceArticleId} could not be read (decryption or orphan).");
             }
             var newMedia = await mediaService.CreateAsync(
-                fetched.Value.fileName, fetched.Value.contentType, fetched.Value.data, created.Id);
+                fetched.Value.fileName, fetched.Value.contentType, fetched.Value.data, created.Id,
+                isAttachment: oldMedia.Kind == "attachment");
             createdMedia.Add(newMedia.Id);
             idMap[oldMedia.Id.ToString("D")] = newMedia.Id.ToString("D");
         }

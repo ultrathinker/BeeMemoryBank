@@ -193,10 +193,10 @@ public static class ArticleProxyEndpoints
             if (file == null) return Results.BadRequest(new { error = "No file provided" });
             var articleId = form["articleId"].FirstOrDefault();
             var isAttachment = form["attachment"].FirstOrDefault() == "true";
-            var (result, error) = await api.UploadMediaAsync(file, articleId, isAttachment);
+            var (result, status, error) = await api.UploadMediaAsync(file, articleId, isAttachment);
             return result != null
                 ? Results.Ok(new { id = result.Id, fileName = result.FileName, contentType = result.ContentType, fileSize = result.FileSize, kind = result.Kind })
-                : Results.Json(new { error = error ?? "Upload failed" }, statusCode: 502);
+                : Results.Json(new { error = error ?? "Upload failed" }, statusCode: status);
         }).RequireAuthorization().DisableAntiforgery();
 
         app.MapGet("/api-proxy/articles/{id:guid}/media", async (Guid id, ApiClient api) =>

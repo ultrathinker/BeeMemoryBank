@@ -152,8 +152,9 @@ public partial class BeeImportService(
 
             try
             {
-                await articleService.CreateAsync(manifestArticle.Title, treePath, manifestArticle.Tags, rewritten);
+                var created = await articleService.CreateAsync(manifestArticle.Title, treePath, manifestArticle.Tags, rewritten);
                 report.ArticlesCreated++;
+                await ImportAttachmentsAsync(archive, manifestArticle, created.Id, report, ct);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -287,5 +288,48 @@ public partial class BeeImportService(
         }
 
         return $"![{alt}](/api/media/{mediaId})";
+    }
+
+    /// <summary>
+    /// Restores generic file attachments. Unlike inline images, these aren't discovered by
+    /// scanning the article body — the manifest's per-article Attachments list is the only record
+    /// of which "attachments/" ZIP entries belong to this article, so they're linked directly by
+    /// the newly-created article's ID rather than via the orphan-then-scan-body flow images use.
+    /// </summary>
+    private async Task ImportAttachmentsAsync(
+        ZipArchive archive, BeeExportManifestArticle manifestArticle, Guid articleId, BeeImportReport report, CancellationToken ct)
+    {
+        foreach (var name in manifestArticle.Attachments)
+        {
+            ct.ThrowIfCancellationRequested();
+            var entry = archive.GetEntry($"attachments/{name}");
+            if (entry == null)
+            {
+                report.Warnings.Add($"Attachment '{name}' referenced in manifest but missing from ZIP for article '{manifestArticle.Title}'.");
+                continue;
+            }
+
+            byte[] bytes;
+            using (var stream = entry.Open())
+            using (var ms = new MemoryStream())
+            {
+                await stream.CopyToAsync(ms, ct);
+                bytes = ms.ToArray();
+            }
+
+            var ext = Path.GetExtension(name);
+            var contentType = ExtensionToContentType.GetValueOrDefault(ext, "application/octet-stream");
+
+            try
+            {
+                await mediaService.CreateAsync(name, contentType, bytes, articleId, isAttachment: true);
+                report.AttachmentsImported++;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                report.Warnings.Add($"Attachment rejected ({name}) for article '{manifestArticle.Title}': {ex.Message}");
+            }
+        }
     }
 }
