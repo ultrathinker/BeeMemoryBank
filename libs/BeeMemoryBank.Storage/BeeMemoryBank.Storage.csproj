@@ -7,7 +7,7 @@
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.66" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
     <!-- Pin the native SQLite build above the vulnerable 2.1.11 (GHSA-2m69-gcr7-jv3q,
          CVE-2025-6965: memory corruption in SQLite versions prior to 3.50.2).
          Microsoft.Data.Sqlite 10.0.3 transitively pulls SQLitePCLRaw.lib.e_sqlite3 2.1.11;
