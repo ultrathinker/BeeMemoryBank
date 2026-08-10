@@ -326,7 +326,7 @@
                 }
                 return origImage(token);
             };
-            return DOMPurify.sanitize(marked.parse(md, { breaks: true, renderer: renderer }));
+            return window.bmbRenderMarkdown(md, { renderer: renderer });
         }
         return '<pre>' + escHtml(md) + '</pre>';
     }

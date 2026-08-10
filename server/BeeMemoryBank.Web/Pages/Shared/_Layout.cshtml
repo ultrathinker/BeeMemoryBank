@@ -15,6 +15,27 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <script src="/lib/marked/marked.umd.js"></script>
     <script src="/lib/dompurify/purify.min.js"></script>
+    <script>
+        // marked (like all CommonMark-based renderers) collapses any run of blank lines down to a
+        // single paragraph break - typing 3 blank lines looks identical to typing 1. Users expect
+        // extra blank lines to add extra vertical space, so before handing text to marked, every
+        // run of 2+ blank lines beyond the first (which is the normal paragraph break) is expanded
+        // into its own near-empty paragraph ("&nbsp;") to make that space show up.
+        window.bmbPreserveBlankLines = function (md) {
+            return (md || '').replace(/\n{3,}/g, function (run) {
+                return '\n\n' + '&nbsp;\n\n'.repeat(run.length - 2);
+            });
+        };
+        // Shared entry point for rendering article/comment markdown to sanitized HTML. `opts.renderer`
+        // is passed straight through to marked (used by pages that rewrite inline /api/media/ image
+        // URLs to /api-proxy/media/ for the proxy's auth cookie).
+        window.bmbRenderMarkdown = function (md, opts) {
+            opts = opts || {};
+            var parseOpts = { breaks: true };
+            if (opts.renderer) parseOpts.renderer = opts.renderer;
+            return DOMPurify.sanitize(marked.parse(window.bmbPreserveBlankLines(md), parseOpts));
+        };
+    </script>
 </head>
 @{var themeUser = User.Identity?.Name ?? "";}
 <script>

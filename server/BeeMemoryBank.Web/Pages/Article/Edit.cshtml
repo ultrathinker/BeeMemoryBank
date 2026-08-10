@@ -293,7 +293,7 @@
         ],
         previewRender: function(text) {
             // Rewrite /api/media/ to /api-proxy/media/ for preview
-            var html = DOMPurify.sanitize(marked.parse(text, { breaks: true }));
+            var html = window.bmbRenderMarkdown(text);
             return html.replace(/src="\/api\/media\//g, 'src="/api-proxy/media/');
         }
     });
@@ -467,8 +467,8 @@
 
         btn.addEventListener('click', function() {
             var curContent = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content));
-            document.getElementById('draft-current-panel').innerHTML = DOMPurify.sanitize(marked.parse(curContent, { breaks: true }));
-            document.getElementById('draft-saved-panel').innerHTML = DOMPurify.sanitize(marked.parse(draft.content || '', { breaks: true }));
+            document.getElementById('draft-current-panel').innerHTML = window.bmbRenderMarkdown(curContent);
+            document.getElementById('draft-saved-panel').innerHTML = window.bmbRenderMarkdown(draft.content || '');
             document.getElementById('draft-saved-label').textContent = 'Draft from ' + new Date(draft.savedAt).toLocaleString();
         });
 

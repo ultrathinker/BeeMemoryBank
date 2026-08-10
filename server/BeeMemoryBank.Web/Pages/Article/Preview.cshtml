@@ -19,6 +19,22 @@
     <link href="/css/site.css" rel="stylesheet" />
     <script src="/lib/marked/marked.umd.js"></script>
     <script src="/lib/dompurify/purify.min.js"></script>
+    <script>
+        // Kept in sync with the copy in Pages/Shared/_Layout.cshtml - this page opts out of the
+        // shared layout (Layout = null) so it can't reuse that one. See its comment for why this
+        // preprocessing exists: marked collapses any run of blank lines to a single paragraph break.
+        window.bmbPreserveBlankLines = function (md) {
+            return (md || '').replace(/\n{3,}/g, function (run) {
+                return '\n\n' + '&nbsp;\n\n'.repeat(run.length - 2);
+            });
+        };
+        window.bmbRenderMarkdown = function (md, opts) {
+            opts = opts || {};
+            var parseOpts = { breaks: true };
+            if (opts.renderer) parseOpts.renderer = opts.renderer;
+            return DOMPurify.sanitize(marked.parse(window.bmbPreserveBlankLines(md), parseOpts));
+        };
+    </script>
     @{var previewUser = User.Identity?.Name ?? "";}
     <script>
         (function(){
@@ -140,7 +156,7 @@
                     }
                     return origImage(token);
                 };
-                body.innerHTML = DOMPurify.sanitize(marked.parse(content, { breaks: true, renderer: renderer }));
+                body.innerHTML = window.bmbRenderMarkdown(content, { renderer: renderer });
             }
         })();
     </script>
