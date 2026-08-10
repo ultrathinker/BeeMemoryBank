@@ -88,7 +88,7 @@
 
     @if (Model.Article.Protected)
     {
-        <div class="card" id="lock-card" style="text-align:center;padding:40px 20px;">
+        <div class="card" id="lock-card" style="text-align:center;padding:40px 20px;@(Model.IsUnlockedFromCache ? "display:none;" : "")">
             <sl-icon name="shield-lock" style="font-size:3rem;color:var(--sl-color-warning-600);"></sl-icon>
             <h3 style="margin:14px 0 4px;">This article is password-protected</h3>
             <p style="color:var(--sl-color-neutral-500);margin:0;font-size:0.9rem;">Enter its password to view the content.</p>
@@ -117,7 +117,7 @@
                 }
             </div>
         </div>
-        <div class="card" id="unlocked-card" style="display:none;">
+        <div class="card" id="unlocked-card" style="@(Model.IsUnlockedFromCache ? "" : "display:none;")">
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px;">
                 @if (!Model.IsReadOnly)
                 {
@@ -424,6 +424,7 @@ else
     var content = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""));
     var treePath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"));
     var isProtected = @(Model.Article?.Protected == true ? "true" : "false");
+    var isUnlockedFromCache = @(Model.IsUnlockedFromCache ? "true" : "false");
 
     function renderMarkdown(md) {
         var body = document.getElementById('article-body');
@@ -436,14 +437,14 @@ else
             }
             return origImage(token);
         };
-        body.innerHTML = DOMPurify.sanitize(marked.parse(md, { breaks: true, renderer: renderer }));
+        body.innerHTML = window.bmbRenderMarkdown(md, { renderer: renderer });
     }
 
-    if (content && !isProtected) {
+    if (content && (!isProtected || isUnlockedFromCache)) {
         renderMarkdown(content);
     }
 
-    // ── Protected article: unlock / re-lock (variant 2 — stateless, re-locks on reload) ──
+    // ── Protected article: unlock / re-lock (re-locks once the server-side unlock cache expires) ──
     if (isProtected) {
         var lockCard = document.getElementById('lock-card');
         var unlockedCard = document.getElementById('unlocked-card');
@@ -485,7 +486,10 @@ else
             if (e.key === 'Enter') { e.preventDefault(); doUnlock(); }
         });
         if (btnRelock) btnRelock.addEventListener('click', function() {
-            // Clear the decrypted DOM and show the lock card again. No server state to clear.
+            // Clear the decrypted DOM and show the lock card again. Also drop the server-side
+            // unlock-cache entry - otherwise the next reload (within its TTL) would show the
+            // article unlocked again, silently undoing this button.
+            fetch('/api-proxy/article/' + articleId + '/relock', { method: 'POST' });
             var body = document.getElementById('article-body');
             if (body) body.innerHTML = '';
             unlockedCard.style.display = 'none';

@@ -17,6 +17,10 @@ public class ViewModel(ApiClient api) : PageModel
     public List<string> ConceptTags { get; private set; } = [];
     public List<MediaDto> Attachments { get; private set; } = [];
     public bool IsReadOnly { get; private set; }
+    // True when a protected article's content below came from the recent-unlock cache rather than
+    // a passphrase the user just typed on this page load — lets the page open straight to the
+    // unlocked view instead of the passphrase gate.
+    public bool IsUnlockedFromCache { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(Guid id)
     {
@@ -33,10 +37,20 @@ public class ViewModel(ApiClient api) : PageModel
         {
             if (Article.Protected)
             {
-                // Protected article: never fetch the body server-side. The page renders a lock card
-                // and the body is fetched only after the user enters the passphrase (stateless —
-                // re-locks on every reload/navigation).
-                Content = null;
+                // Protected article: same cache-aware helper the Edit page uses. If this caller
+                // verified the passphrase recently (within ProtectedUnlockCache.Ttl), the page opens
+                // straight to the unlocked view instead of the passphrase gate. On a cache miss it
+                // falls back to the gate, same as before.
+                var ec = await api.GetEditContentAsync(id);
+                if (ec is { Unlocked: true })
+                {
+                    Content = ec.Content;
+                    IsUnlockedFromCache = true;
+                }
+                else
+                {
+                    Content = null;
+                }
             }
             else
             {

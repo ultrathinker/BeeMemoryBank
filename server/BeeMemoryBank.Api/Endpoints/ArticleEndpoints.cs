@@ -349,8 +349,8 @@ public static class ArticleEndpoints
             try
             {
                 var content = await svc.UnlockContentAsync(id, req.Passphrase);
-                // Remember the verified passphrase server-side (60s) so the Edit page can open without
-                // re-prompting. Never returned to the browser. View page load does NOT read this.
+                // Remember the verified passphrase server-side (see ProtectedUnlockCache.Ttl) so the
+                // View and Edit pages can both open without re-prompting. Never returned to the browser.
                 if (meta.Protected)
                     unlockCache.Remember(CallerKey(ctx), id, req.Passphrase);
                 return Results.Ok(new ArticleContentResponse(id, content));
@@ -361,9 +361,22 @@ public static class ArticleEndpoints
             }
         });
 
-        // Edit-load helper: tells the Edit page whether the article is protected and, if it was
-        // unlocked in the last 60s by this caller, returns the decrypted body so the editor opens
-        // without a re-prompt. On a cache miss it returns unlocked=false (the Edit page shows the gate).
+        // Explicit re-lock: drops this caller's unlock-cache entry early, before its TTL would
+        // otherwise expire it on its own. Needed because View/edit-content now trust that cache —
+        // without this, clicking "Re-lock" would only hide the content client-side, and the very
+        // next reload would show it unlocked again for the rest of the TTL.
+        group.MapPost("/{id:guid}/relock", (Guid id, HttpContext ctx, SessionService session, ProtectedUnlockCache unlockCache) =>
+        {
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+            unlockCache.Forget(CallerKey(ctx), id);
+            return Results.Ok(new { relocked = true });
+        });
+
+        // Cache-aware content load: tells the caller whether the article is protected and, if it was
+        // unlocked recently by this caller (within ProtectedUnlockCache.Ttl), returns the decrypted
+        // body so the View/Edit pages open without a re-prompt. Used by both. On a cache miss it
+        // returns unlocked=false (the page shows the passphrase gate).
         group.MapGet("/{id:guid}/edit-content", async (Guid id, HttpContext ctx, ArticleService svc, SessionService session, FolderAccessService folderAccess, ProtectedUnlockCache unlockCache) =>
         {
             if (!session.IsUnlocked)

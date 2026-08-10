@@ -34,7 +34,7 @@ public class EditModel(ApiClient api) : PageModel
                 IsProtected = article.Protected;
 
                 // edit-content returns plaintext for a non-protected article OR for a protected one
-                // that was unlocked in the last ~60s by this user (server-side cache → no re-prompt).
+                // that was unlocked recently by this user (server-side cache → no re-prompt).
                 var ec = await api.GetEditContentAsync(id.Value);
                 if (ec is { Unlocked: true })
                     Content = ec.Content ?? "";

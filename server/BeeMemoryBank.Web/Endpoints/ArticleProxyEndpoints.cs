@@ -54,6 +54,12 @@ public static class ArticleProxyEndpoints
             return ok ? Results.Ok(new { content }) : Results.Json(new { error = error ?? "Unlock failed" }, statusCode: status);
         }).RequireAuthorization();
 
+        app.MapPost("/api-proxy/article/{id:guid}/relock", async (Guid id, ApiClient api) =>
+        {
+            var ok = await api.RelockArticleAsync(id);
+            return ok ? Results.Ok(new { ok = true }) : Results.StatusCode(502);
+        }).RequireAuthorization();
+
         app.MapPost("/api-proxy/article/{id:guid}/protect", async (Guid id, HttpContext ctx, ApiClient api) =>
         {
             var req = await ctx.Request.ReadFromJsonAsync<ProtectArticleProxyRequest>();

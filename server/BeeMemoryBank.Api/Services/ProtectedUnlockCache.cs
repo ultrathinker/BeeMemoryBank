@@ -3,22 +3,24 @@ using System.Collections.Concurrent;
 namespace BeeMemoryBank.Api.Services;
 
 /// <summary>
-/// Short-lived in-memory store of recently-verified per-article passphrases. Its ONLY purpose is to
-/// make the read→edit handoff seamless: after a user unlocks a protected article, the Edit page can
-/// open (and save) for ~60s without re-prompting for the passphrase.
+/// Short-lived in-memory store of recently-verified per-article passphrases. Its purpose is to make
+/// the read→edit handoff seamless: after a user unlocks a protected article, both the View and Edit
+/// pages can show its content for the rest of the TTL without re-prompting for the passphrase.
 ///
 /// Security rationale:
 ///  - The passphrase NEVER leaves the server (it is not returned to the browser, not stored in
 ///    sessionStorage/localStorage). This is consistent with the API session already holding the
 ///    master DEK in memory.
-///  - Deliberately NOT consulted on the View page load — viewing stays stateless, so a reload or
-///    re-navigation re-locks ("walk away and someone reloads" remains safe). Only the Edit flow reads it.
+///  - View DOES consult this cache (unlike the original stateless-only design) — a fresh unlock
+///    now survives a reload/re-navigation for the TTL, trading "walk away and someone reloads stays
+///    locked" for "don't re-prompt every few minutes while actively editing." The underlying content
+///    is still only ever as exposed as the already-unlocked API session itself.
 ///  - Keyed by caller identity + article, so one user's unlock cannot unlock another caller's session.
 ///  - Entries auto-expire after the TTL and are dropped on explicit re-lock / unprotect / passphrase change.
 /// </summary>
 public sealed class ProtectedUnlockCache
 {
-    private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(20);
     private readonly ConcurrentDictionary<string, (string passphrase, DateTime expiresUtc)> _entries = new();
 
     public void Remember(string callerKey, Guid articleId, string passphrase)

@@ -161,6 +161,12 @@ public partial class ApiClient
         return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
     }
 
+    public async Task<bool> RelockArticleAsync(Guid id)
+    {
+        var resp = await http.PostAsync($"/api/articles/{id}/relock", Body(new { }));
+        return resp.IsSuccessStatusCode;
+    }
+
     public async Task<(bool ok, int status, string? error)> ChangeArticlePassphraseAsync(Guid id, string oldPassphrase, string newPassphrase, string? hint)
     {
         var resp = await http.PostAsync($"/api/articles/{id}/change-passphrase", Body(new { oldPassphrase, newPassphrase, hint }));
