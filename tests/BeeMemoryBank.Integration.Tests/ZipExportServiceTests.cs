@@ -24,6 +24,7 @@ public class ZipExportServiceTests : IAsyncLifetime
     private IFolderRepository _folderRepo = null!;
     private ConceptTagService _conceptTagService = null!;
     private ZipExportService _exportService = null!;
+    private MediaService _mediaService = null!;
 
     public async Task InitializeAsync()
     {
@@ -47,14 +48,14 @@ public class ZipExportServiceTests : IAsyncLifetime
 
         _session = new SessionService(keySlotRepo);
         var initService = new InitializationService(nodeRepo, keySlotRepo, userRepo, _factory);
-        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo,
+        _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(), new MediaStorageOptions(Path.GetTempPath()));
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(), mediaRepo, _folderRepo,
             versionRepo, new NullActorProvider(), _conceptTagService);
 
-        _exportService = new ZipExportService(_articleService, mediaService, _conceptTagService, _folderRepo, scopeHolder);
+        _exportService = new ZipExportService(_articleService, _mediaService, _conceptTagService, _folderRepo, scopeHolder);
 
         await initService.InitializeAsync("admin", "TestNode", "password");
         await _session.UnlockAsync("password");
@@ -190,6 +191,78 @@ public class ZipExportServiceTests : IAsyncLifetime
             tags.Should().Contain(["личное", "важное"]);
 
             (await otherFolderRepo.GetByPathAsync("/Work/Мой гитхаб/Пустая")).Should().NotBeNull();
+        }
+        finally
+        {
+            File.Delete(zipPath);
+        }
+    }
+
+    [Fact]
+    public async Task RoundTrip_ArticleWithAttachment_ExportFromOneVault_ImportIntoAnother_AttachmentSurvives()
+    {
+        // Simulate the real scenario: two SEPARATE BeeMemoryBank vaults (two in-memory DBs).
+        using var otherVaultFactory = DbConnectionFactory.CreateInMemory($"bmb_zipexport_other_{Guid.NewGuid():N}");
+        await new MigrationRunner(otherVaultFactory).RunMigrationsAsync();
+
+        var otherScopeHolder = new CallerScopeHolder();
+        var otherArticleRepo = new ArticleRepository(otherVaultFactory, otherScopeHolder);
+        var otherBodyRepo = new ArticleBodyRepository(otherVaultFactory);
+        var otherKeySlotRepo = new KeySlotRepository(otherVaultFactory);
+        var otherNodeRepo = new NodeIdentityRepository(otherVaultFactory);
+        var otherUserRepo = new UserRepository(otherVaultFactory);
+        var otherMediaRepo = new MediaRepository(otherVaultFactory, otherScopeHolder);
+        var otherFolderRepo = new FolderRepository(otherVaultFactory, otherScopeHolder);
+        var otherVersionRepo = new ArticleVersionRepository(otherVaultFactory, otherScopeHolder);
+        var otherConceptTagRepo = new ConceptTagRepository(otherVaultFactory, otherScopeHolder);
+        var otherConceptTagService = new ConceptTagService(otherConceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
+        var otherSession = new SessionService(otherKeySlotRepo);
+        var otherInit = new InitializationService(otherNodeRepo, otherKeySlotRepo, otherUserRepo, otherVaultFactory);
+        var otherMediaService = new MediaService(otherMediaRepo, otherArticleRepo, otherSession, otherNodeRepo,
+            new NullLamportClock(), new NullEventLogger(), new MediaStorageOptions(Path.GetTempPath()));
+        var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
+            new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
+            otherVersionRepo, new NullActorProvider(), otherConceptTagService);
+        await otherInit.InitializeAsync("admin", "OtherNode", "password2");
+        await otherSession.UnlockAsync("password2");
+        var importService = new BeeImportService(otherArticleService, otherMediaService, otherFolderRepo, otherNodeRepo);
+
+        // --- Build the source vault's content: an article with one inline image AND one
+        // generic file attachment. Unlike the image, the attachment is never referenced from the
+        // body - this is exactly the case BeeImportService used to silently drop.
+        var article = await _articleService.CreateAsync("С файлом", "/Мой гитхаб", [], "Текст статьи.");
+        var pngBytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        var image = await _mediaService.CreateAsync("pic.png", "image/png", pngBytes, article.Id);
+        await _articleService.UpdateAsync(article.Id, plaintext: $"Текст статьи. ![pic](/api/media/{image.Id})");
+        var attachmentBytes = System.Text.Encoding.UTF8.GetBytes("hello attachment");
+        var attachment = await _mediaService.CreateAsync("notes.txt", "text/plain", attachmentBytes, article.Id, isAttachment: true);
+
+        var (zipPath, _) = await _exportService.ExportFolderAsync("/Мой гитхаб", withImages: true, CancellationToken.None);
+        try
+        {
+            using var zipStream = File.OpenRead(zipPath);
+            var report = await importService.ImportAsync(zipStream, "/Work", CancellationToken.None);
+
+            report.ArticlesCreated.Should().Be(1);
+            report.ImagesImported.Should().Be(1);
+            report.AttachmentsImported.Should().Be(1);
+            report.Warnings.Should().BeEmpty();
+
+            var imported = (await otherArticleService.ListAsync("/Work/Мой гитхаб"))
+                .Single(a => a.Title == "С файлом");
+
+            var importedMedia = await otherMediaService.GetByArticleIdAsync(imported.Id);
+            importedMedia.Should().HaveCount(2);
+
+            var importedAttachment = importedMedia.Should().ContainSingle(m => m.Kind == "attachment").Which;
+            importedAttachment.FileName.Should().Be(attachment.FileName);
+            var attachmentContent = await otherMediaService.GetContentAsync(importedAttachment.Id);
+            attachmentContent.Should().NotBeNull();
+            attachmentContent!.Value.data.Should().Equal(attachmentBytes);
+
+            var importedImage = importedMedia.Should().ContainSingle(m => m.Kind == "image").Which;
+            importedImage.FileName.Should().Be(image.FileName);
         }
         finally
         {
