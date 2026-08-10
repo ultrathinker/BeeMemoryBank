@@ -896,6 +896,13 @@ a.search-result-title:hover {
     font-size: 0.95rem;
 }
 
+/* The global `* { margin: 0 }` reset zeroes this out otherwise, making every paragraph break
+   (including the extra blank-line paragraphs bmbRenderMarkdown inserts) invisible - adjacent <p>
+   margins collapse per normal CSS rules, so this is one visible gap between paragraphs, not two. */
+.article-content p {
+    margin: 0 0 12px;
+}
+
 .article-content h1, .article-content h2, .article-content h3 {
     margin-top: 1.4em;
     margin-bottom: 0.5em;
