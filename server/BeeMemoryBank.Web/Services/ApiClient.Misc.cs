@@ -144,9 +144,14 @@ public partial class ApiClient
         content.Add(streamContent, "file", file.FileName);
         if (!string.IsNullOrEmpty(articleId))
             content.Add(new StringContent(articleId), "articleId");
+        if (isAttachment)
+            // Must be a form field, not a query-string param: the API endpoint has an IFormFile
+            // parameter, which makes ASP.NET Core infer [FromForm] for every other simple-type
+            // parameter (including this one) — a query string value would be silently ignored,
+            // and the upload would always fall through to the stricter image-only path.
+            content.Add(new StringContent("true"), "attachment");
 
-        var url = isAttachment ? "/api/media?attachment=true" : "/api/media";
-        var resp = await http.PostAsync(url, content);
+        var resp = await http.PostAsync("/api/media", content);
         if (!resp.IsSuccessStatusCode)
         {
             var status = (int)resp.StatusCode;
