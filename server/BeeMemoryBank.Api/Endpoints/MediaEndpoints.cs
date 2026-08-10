@@ -2,6 +2,7 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using Microsoft.AspNetCore.Mvc;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -14,7 +15,7 @@ public static class MediaEndpoints
         group.MapPost("/", async (
             IFormFile file, SessionService session, MediaService mediaService,
             ArticleService articleSvc, FolderAccessService folderAccess,
-            HttpContext ctx, string? articleId, bool attachment = false) =>
+            HttpContext ctx, [FromForm] string? articleId, [FromForm] bool attachment = false) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);

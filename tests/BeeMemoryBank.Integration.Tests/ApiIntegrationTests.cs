@@ -117,6 +117,50 @@ public class ApiIntegrationTests : IAsyncLifetime
         await LockSessionAsync();
     }
 
+    // Exercises the actual HTTP multipart binding for POST /api/media, not just the service layer:
+    // articleId and attachment are plain (unattributed) string/bool parameters on a handler that
+    // also takes an IFormFile. Minimal APIs bind un-attributed simple parameters from the query
+    // string by default even when a sibling IFormFile is present - they need an explicit
+    // [FromForm] to read them from the multipart body the way the client actually sends them.
+    // A service-level test bypasses ASP.NET's model binding entirely and can't catch this class of
+    // bug; this one goes through the real endpoint.
+    [Fact]
+    public async Task UploadMedia_MultipartFormFields_BindAndLinkToArticle()
+    {
+        var unlock = await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password });
+        unlock.EnsureSuccessStatusCode();
+
+        var create = await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Article With Attachment",
+            treePath = "/Tests",
+            content = "Body text"
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var article = await create.Content.ReadFromJsonAsync<ArticleResponse>();
+
+        using var form = new MultipartFormDataContent();
+        var fileContent = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes("hello attachment"));
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain");
+        form.Add(fileContent, "file", "notes.txt");
+        form.Add(new StringContent(article!.Id.ToString()), "articleId");
+        form.Add(new StringContent("true"), "attachment");
+
+        var upload = await _client.PostAsync("/api/media", form);
+        upload.StatusCode.Should().Be(HttpStatusCode.Created);
+        var uploaded = await upload.Content.ReadFromJsonAsync<JsonElement>();
+        uploaded.GetProperty("kind").GetString().Should().Be("attachment");
+
+        var media = await _client.GetAsync($"/api/articles/{article.Id}/media");
+        media.EnsureSuccessStatusCode();
+        var mediaList = await media.Content.ReadFromJsonAsync<JsonElement>();
+        mediaList.GetArrayLength().Should().Be(1);
+        mediaList[0].GetProperty("id").GetString().Should().Be(uploaded.GetProperty("id").GetString());
+        mediaList[0].GetProperty("fileName").GetString().Should().Be("notes.txt");
+
+        await LockSessionAsync();
+    }
+
     [Fact]
     public async Task GetContent_WhenLocked_Returns403()
     {
