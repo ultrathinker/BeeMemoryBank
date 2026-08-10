@@ -22,8 +22,11 @@
         // run of 2+ blank lines beyond the first (which is the normal paragraph break) is expanded
         // into its own near-empty paragraph ("&nbsp;") to make that space show up.
         window.bmbPreserveBlankLines = function (md) {
-            return (md || '').replace(/\n{3,}/g, function (run) {
-                return '\n\n' + '&nbsp;\n\n'.repeat(run.length - 2);
+            // Line endings may be "\n" or "\r\n" (textareas on Windows submit CRLF) - count actual
+            // line-break units, not raw characters, or a CRLF body never matches at all.
+            return (md || '').replace(/(?:\r\n|\n){3,}/g, function (run) {
+                var units = run.match(/\r\n|\n/g).length;
+                return '\n\n' + '&nbsp;\n\n'.repeat(units - 2);
             });
         };
         // Shared entry point for rendering article/comment markdown to sanitized HTML. `opts.renderer`
