@@ -766,6 +766,11 @@ a.search-result-title:hover {
     font-size: 0.95rem;
     font-weight: 500;
 }
+/* The folder icon and the label text are sibling flex items inside .tree-node-link, so
+   without this the flex algorithm shrinks the icon along with the label whenever the name
+   is too long for the sidebar width — the icon visibly collapses toward zero. Icons keep
+   their intrinsic size; only the label may shrink. */
+.tree-node-row sl-icon { flex-shrink: 0; }
 .tree-article-row { padding-top: 2px; padding-bottom: 2px; }
 .tree-article-dash {
     color: var(--text-secondary);
