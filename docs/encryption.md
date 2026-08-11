@@ -351,16 +351,16 @@ Media sync events carry Base64-encoded ciphertext in the JSON payload. A 5 MB im
 - **Soft-deleted media** (article cascade delete): purged after 30 days by CleanupService
 - **Orphaned media** (uploaded but never linked to an article): purged after 24 hours
 
-## Full-Text Content Search (Batched Decryption)
+## Full-Text Content Search (Streaming Decryption)
 
-When the session is unlocked and a user opts into content search, SearchService decrypts article bodies to search plaintext. To avoid loading all encrypted bodies into memory at once:
+When the session is unlocked and a user opts into content search, SearchService decrypts article bodies to search plaintext. The active-body set is scanned with a **single, streaming read** over one long-lived SQLite connection rather than windowed batches:
 
-1. Get total count of active article bodies
-2. Fetch in batches of 50 (`GetActiveBatchAsync(limit, offset)`)
-3. For each body in the batch: unwrap article DEK → decrypt → search → clear DEK
-4. Master DEK is obtained once before the loop and cleared in `finally`
+1. A single producer iterates `StreamActiveAsync()` — an unbuffered `DbDataReader` over the whole active-body set on one connection. SQLite in WAL mode pins a consistent snapshot for the life of that one statement/connection, so concurrent creates/soft-deletes on other connections can't shift a row out of the read (the failure mode the former `LIMIT`/`OFFSET` batches over fresh connections had).
+2. Rows are pushed onto a bounded `Channel<EncryptedArticleBody>` (backpressure so the full ciphertext set is never materialized in memory ahead of decryption).
+3. `ProcessorCount - 1` (min 1) worker tasks pull from the channel and do, per item: unwrap article DEK → decrypt → skip protected bodies → substring match. A per-item try/catch isolates corrupt/incompatible bodies — one bad body can't break the scan.
+4. The master DEK is obtained once before the producer/workers start and cleared in `finally` after `Task.WhenAll(workers)` so it's wiped exactly once, only after every worker is done with it.
 
-This keeps memory usage proportional to batch size, not total article count.
+This keeps memory usage proportional to the channel capacity, not total article count.
 
 ## Cryptographic Files (BeeMemoryBank.Crypto, ~450 LOC)
 
