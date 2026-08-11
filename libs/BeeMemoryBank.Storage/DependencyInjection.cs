@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Search;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -16,6 +17,20 @@ public static class DependencyInjection
         services.AddSingleton(factory);
         services.AddSingleton<Core.Interfaces.IDbConnectionFactory>(factory);
         services.AddSingleton<MigrationRunner>();
+
+        // WP-09: encrypted-at-rest search index segments. Files live in a sibling directory next
+        // to the sqlite DB (dataPath may itself be a directory or a ".db" file path -- mirror
+        // DbConnectionFactory's own handling of both shapes rather than duplicating its logic).
+        var segmentsDirectory = Path.Combine(
+            Path.GetExtension(dataPath)?.Equals(".db", StringComparison.OrdinalIgnoreCase) == true
+                ? Path.GetDirectoryName(dataPath) ?? dataPath
+                : dataPath,
+            "search-index-segments");
+        services.AddScoped<SegmentManifestRepository>();
+        services.AddScoped(sp => new EncryptedSegmentStore(
+            sp.GetRequiredService<SegmentManifestRepository>(),
+            sp.GetRequiredService<SessionService>(),
+            segmentsDirectory));
 
         services.AddScoped<IArticleRepository, ArticleRepository>();
         services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
