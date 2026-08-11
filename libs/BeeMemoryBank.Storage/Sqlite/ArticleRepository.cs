@@ -81,12 +81,21 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
     {
         using var conn = OpenConnection();
 
+        // The tag match runs as an `id IN (subquery)` rather than a JOIN + DISTINCT on the
+        // outer query: joining tbl_article_concept_tag/tbl_concept_tag directly here would
+        // multiply each article into one row per matching tag, and DISTINCT would then have to
+        // byte-compare full rows (including the embedding_projection BLOB) to dedupe. Filtering
+        // by id membership instead means the outer SELECT touches each matching article exactly
+        // once, with no BLOB comparison involved.
         var byTitle = (await conn.QueryAsync<Article>(
-            $@"SELECT DISTINCT {SelectCols} {FromClause}
-               LEFT JOIN tbl_article_concept_tag act ON act.article_id = a.id
-               LEFT JOIN tbl_concept_tag ct ON ct.id = act.concept_tag_id
+            $@"SELECT {SelectCols} {FromClause}
                WHERE a.status = 'A'
-                 AND (unicode_contains(a.title, @query) OR unicode_contains(ct.name, @query))
+                 AND a.id IN (
+                   SELECT a2.id FROM tbl_article a2
+                   LEFT JOIN tbl_article_concept_tag act ON act.article_id = a2.id
+                   LEFT JOIN tbl_concept_tag ct ON ct.id = act.concept_tag_id
+                   WHERE a2.status = 'A' AND (unicode_contains(a2.title, @query) OR unicode_contains(ct.name, @query))
+                 )
                ORDER BY (substr(a.title,1,1)='_') DESC, a.title",
             new { query })).ToList();
 
@@ -270,22 +279,34 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
             new { id, projection, modelVersion });
     }
 
+    // Narrow projection used only to rank candidates by cosine similarity. Deliberately not
+    // the full Article model: SearchByEmbeddingAsync used to hydrate every column (including
+    // embedding_projection's BLOB sibling columns and all remote-sync metadata) for every
+    // article with an embedding, just to throw away all but `topK` of them.
+    private sealed class EmbeddingCandidate
+    {
+        public Guid Id { get; set; }
+        public byte[] EmbeddingProjection { get; set; } = null!;
+    }
+
     public async Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10)
     {
-        // Load all articles with embeddings and compute cosine similarity in memory
         using var conn = OpenConnection();
-        var articles = (await conn.QueryAsync<Article>(
-            $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND a.embedding_projection IS NOT NULL",
+
+        // Pass 1: only id + embedding bytes for every active article with an embedding —
+        // enough to score, without hydrating the rest of the row.
+        var candidates = (await conn.QueryAsync<EmbeddingCandidate>(
+            "SELECT a.id AS Id, a.embedding_projection AS EmbeddingProjection FROM tbl_article a WHERE a.status = 'A' AND a.embedding_projection IS NOT NULL",
             null)).ToList();
 
-        if (articles.Count == 0) return [];
+        if (candidates.Count == 0) return [];
 
         var dim = queryProjection.Length;
-        var scored = articles
-            .Select(a =>
+        var topIds = candidates
+            .Select(c =>
             {
-                var proj = MemoryMarshal.Cast<byte, float>(a.EmbeddingProjection.AsSpan());
-                if (proj.Length != dim) return (article: a, score: 0f);
+                var proj = MemoryMarshal.Cast<byte, float>(c.EmbeddingProjection.AsSpan());
+                if (proj.Length != dim) return (id: c.Id, score: 0f);
                 float dot = 0f, normA = 0f;
                 for (int i = 0; i < dim; i++)
                 {
@@ -295,12 +316,27 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
                 float normQ = 0f;
                 for (int i = 0; i < dim; i++) normQ += queryProjection[i] * queryProjection[i];
                 var denom = MathF.Sqrt(normA * normQ);
-                return (article: a, score: denom > 0 ? dot / denom : 0f);
+                return (id: c.Id, score: denom > 0 ? dot / denom : 0f);
             })
             .OrderByDescending(x => x.score)
             .Take(topK)
-            .Select(x => x.article)
+            .Select(x => x.id)
             .ToList();
+
+        if (topIds.Count == 0) return [];
+
+        // Pass 2: hydrate the full Article rows for just the surviving top-K ids.
+        var fullArticles = (await conn.QueryAsync<Article>(
+            $"SELECT {SelectCols} {FromClause} WHERE a.id IN @ids AND a.status = 'A'",
+            new { ids = topIds })).ToList();
+
+        // `IN` does not preserve order, so re-assemble the ranked order from topIds. This also
+        // preserves the pre-existing quirk: _holder.Scope.FilterArticles runs AFTER Take(topK)
+        // (below), same as before this change, so an ACL-restricted caller can still get back
+        // fewer than topK (or zero) visible results if invisible articles ranked highest. That
+        // is not fixed here — it's a separate, bigger decision outside this perf-only WP.
+        var byId = fullArticles.ToDictionary(a => a.Id);
+        var scored = topIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
 
         return _holder.Scope.FilterArticles(scored);
     }
