@@ -75,6 +75,17 @@ internal sealed class XlmRobertaTokenizer
     private int CountPieces(string word) =>
         _sp.EncodeToIds(word, addBeginningOfSentence: false, addEndOfSentence: false).Count;
 
+    /// <summary>
+    /// Real SentencePiece token count for an arbitrary substring. Used by
+    /// <see cref="ArticleChunker"/> to binary-search a safe split point inside a single
+    /// "word" too large to fit a whole chunk on its own (e.g. an unbroken run of base64/JWT/hash
+    /// text with no whitespace or punctuation) -- the old WordPiece tokenizer had an implicit cap
+    /// (words over 100 chars collapsed to a single [UNK]) that made this impossible; SentencePiece
+    /// has no equivalent cap, so a run long enough can otherwise tokenize past the whole chunk
+    /// budget by itself and get silently truncated by <see cref="Encode"/>.
+    /// </summary>
+    internal int CountTokens(string text) => CountPieces(text);
+
     private static int ToVocabId(int rawSentencePieceId) =>
         rawSentencePieceId == 0 ? UnknownId : rawSentencePieceId + FairseqOffset;
 

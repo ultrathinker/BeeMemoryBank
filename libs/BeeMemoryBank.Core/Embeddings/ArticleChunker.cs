@@ -74,13 +74,21 @@ public sealed class ArticleChunker
                 tokenSum += words[end].TokenCount;
                 end++;
             }
-            // Pathological case: a single word alone exceeds the budget (e.g. it collapsed to
-            // [UNK]-length pieces beyond the budget cannot happen since WordPiece Count is at most
-            // 1 for [UNK], but a legitimately long word could still exceed the budget on its own).
-            // Always include at least one word so the outer loop makes forward progress.
+            // Pathological case: a single word alone exceeds the budget -- e.g. an unbroken run of
+            // base64/JWT/hash text with no whitespace or punctuation for SplitWords to break on.
+            // Unlike the old WordPiece tokenizer (words over 100 chars collapsed to one [UNK]
+            // token), SentencePiece has no such cap, so this word must be split further here rather
+            // than emitted whole -- otherwise Encode() would silently truncate away the vast
+            // majority of it, exactly the "content past the truncation point is invisible" gap
+            // WP-15 chunking exists to close.
             if (end == start)
             {
-                end = start + 1;
+                foreach (var piece in SplitOversizedWord(words[start].Word))
+                {
+                    chunks.Add(piece);
+                }
+                start++;
+                continue;
             }
 
             chunks.Add(string.Join(' ', Enumerable.Range(start, end - start).Select(i => words[i].Word)));
@@ -104,5 +112,41 @@ public sealed class ArticleChunker
         }
 
         return chunks;
+    }
+
+    // Splits a single word too large to fit ChunkTokenBudget on its own into safe slices, each
+    // binary-searched to the largest prefix that still fits the budget. Only reached for
+    // pathological input (see the "end == start" branch above); normal text never hits this.
+    private List<string> SplitOversizedWord(string word)
+    {
+        var pieces = new List<string>();
+        int pos = 0;
+        while (pos < word.Length)
+        {
+            int len = FindSafeSliceLength(word, pos);
+            pieces.Add(word.Substring(pos, len));
+            pos += len;
+        }
+        return pieces;
+    }
+
+    private int FindSafeSliceLength(string word, int start)
+    {
+        int lo = 1, hi = word.Length - start;
+        int best = 1; // always make forward progress even if a single character alone were somehow over budget
+        while (lo <= hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (_tokenizer.CountTokens(word.Substring(start, mid)) <= ChunkTokenBudget)
+            {
+                best = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+        return best;
     }
 }
