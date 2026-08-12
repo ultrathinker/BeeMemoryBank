@@ -46,6 +46,7 @@
   <Folder Name="/tools/">
     <Project Path="tools/BeeMemoryBank.Migrator/BeeMemoryBank.Migrator.csproj" />
     <Project Path="tools/BeeMemoryBank.SeedGen/BeeMemoryBank.SeedGen.csproj" />
+    <Project Path="tools/BeeMemoryBank.SearchBench/BeeMemoryBank.SearchBench.csproj" />
     <Project Path="tools/BeeMemoryBank.ReleaseTool/BeeMemoryBank.ReleaseTool.csproj" />
     <Project Path="tools/BeeMemoryBank.Updater/BeeMemoryBank.Updater.csproj" />
   </Folder>

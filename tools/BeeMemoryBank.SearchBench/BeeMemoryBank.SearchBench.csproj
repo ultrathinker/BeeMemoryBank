@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>bmb-searchbench</AssemblyName>
+    <!-- The harness drives a real Api as a black-box HTTP client and shells out to bmb-seedgen;
+         it has no compile-time dependency on any BeeMemoryBank project. TFM/Nullable/ImplicitUsings
+         come from Directory.Build.props. -->
+  </PropertyGroup>
+
+</Project>
