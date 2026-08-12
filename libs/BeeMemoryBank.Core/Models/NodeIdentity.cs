@@ -19,7 +19,14 @@ public class NodeIdentity
     /// <summary>0 = legacy plaintext, 1 = master-DEK-wrapped (AAD = "bmb-node-pk" || node_id bytes).</summary>
     public int Ed25519PrivateKeyV { get; set; }
 
-    public bool CanGenerateEmbeddings { get; set; }
+    // Defaults true: the ONNX model ships with every build/Docker image, so semantic search
+    // should work out of the box. Every call site that constructs a NodeIdentity without
+    // explicitly setting this (e.g. JoinCommand.cs, InitEndpoints.cs's web join handler) picks
+    // up this default -- historically every one of them ended up false because bool's own
+    // implicit default is false and nothing here overrode it, silently disabling semantic
+    // search on every node ever created with no way to turn it back on (see
+    // InitializationService.InitializeAsync for the explicit-init path's own default).
+    public bool CanGenerateEmbeddings { get; set; } = true;
     public bool InitialSyncCompleted { get; set; } = true;
     public DateTime CreatedAt { get; set; }
 }

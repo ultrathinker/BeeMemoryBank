@@ -22,4 +22,11 @@ public interface INodeIdentityRepository
     /// </summary>
     Task<(int ExpireHours, bool SlidingExpiration)> GetSessionSettingsAsync();
     Task SetSessionSettingsAsync(int expireHours, bool slidingExpiration);
+
+    /// <summary>
+    /// Admin-configurable toggle for whether THIS node generates its own embeddings
+    /// (gates <see cref="BeeMemoryBank.Sync.PendingEmbeddingProcessor"/>). There was previously no
+    /// way to change this after node init -- see <see cref="Models.NodeIdentity.CanGenerateEmbeddings"/>.
+    /// </summary>
+    Task SetCanGenerateEmbeddingsAsync(bool enabled);
 }

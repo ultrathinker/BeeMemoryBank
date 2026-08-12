@@ -21,4 +21,29 @@ public partial class ApiClient
             return null;
         }
     }
+
+    // ─── Embeddings self-toggle (2026-08-12 fix) ────────────────────────────────
+    // Whether THIS node generates its own embeddings (tbl_node_identity.can_generate_embeddings).
+    // Previously had no toggle at all after node init -- see SearchMetricsEndpoints.cs.
+
+    public async Task<bool?> GetEmbeddingsEnabledAsync()
+    {
+        try
+        {
+            var result = await http.GetFromJsonAsync<EmbeddingsEnabledDto>("/api/admin/search/embeddings-enabled", JsonOpts);
+            return result?.Enabled;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<bool> SetEmbeddingsEnabledAsync(bool enabled)
+    {
+        var resp = await http.PutAsJsonAsync("/api/admin/search/embeddings-enabled", new { enabled }, JsonOpts);
+        return resp.IsSuccessStatusCode;
+    }
 }
+
+public sealed record EmbeddingsEnabledDto(bool Enabled);

@@ -1168,6 +1168,29 @@
         }
         loadChatEnabled();
 
+        // "Generate embeddings on this node" toggle (tbl_node_identity.can_generate_embeddings).
+        var embeddingsToggle = document.getElementById('embeddings-enabled-toggle');
+        function loadEmbeddingsEnabled() {
+            if (!embeddingsToggle) return;
+            fetch('/api-proxy/admin/search/embeddings-enabled', { headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.ok ? r.json() : { enabled: false }; })
+                .then(function (data) { embeddingsToggle.checked = !!data.enabled; })
+                .catch(function () {});
+        }
+        if (embeddingsToggle) {
+            embeddingsToggle.addEventListener('sl-change', function () {
+                var enabled = embeddingsToggle.checked;
+                fetch('/api-proxy/admin/search/embeddings-enabled', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: enabled })
+                }).then(function (r) {
+                    if (!r.ok) embeddingsToggle.checked = !enabled;
+                }).catch(function () { embeddingsToggle.checked = !enabled; });
+            });
+        }
+        loadEmbeddingsEnabled();
+
         // Web session (cookie) settings: duration + sliding-expiration toggle.
         var sessionHoursInput = document.getElementById('session-expire-hours');
         var sessionSlidingToggle = document.getElementById('session-sliding-toggle');
@@ -1526,6 +1549,18 @@
                 plus the encrypted search-index health signals. Counts and timings only — no query
                 text, titles, or article content is ever recorded or shown here.
             </p>
+
+            <div class="card" style="padding:12px 16px;margin-bottom:20px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <sl-switch id="embeddings-enabled-toggle" size="small">Generate embeddings on this node</sl-switch>
+                </div>
+                <p class="text-muted text-sm" style="margin:8px 0 0;">
+                    Controls whether this node computes its own semantic embeddings (needed for meaning-based
+                    and hybrid search). Embeddings never sync between nodes — each node that wants semantic
+                    search must generate its own. Turning this off saves CPU but semantic/hybrid search will
+                    silently fall back to exact-match only on this node.
+                </p>
+            </div>
 
             @if (Model.SearchMetrics is { } searchMetricsEl)
             {

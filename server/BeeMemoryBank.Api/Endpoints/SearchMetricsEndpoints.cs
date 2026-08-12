@@ -1,5 +1,6 @@
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Sync.Search;
@@ -64,6 +65,29 @@ public static class SearchMetricsEndpoints
 
             return Results.Ok(new SearchMetricsResponse(latency, indexHealth));
         });
+
+        // GET/PUT /api/admin/search/embeddings-enabled -- the missing self-toggle for
+        // tbl_node_identity.can_generate_embeddings. Found 2026-08-12: this flag could previously
+        // only be flipped by hand-editing the database directly -- no CLI command, Admin UI control,
+        // or REST endpoint touched it after node init (PUT /api/whitelist/{nodeId} looks similar but
+        // edits tbl_whitelist, i.e. what this node believes about OTHER nodes, never its own row).
+        group.MapGet("/embeddings-enabled", async (HttpContext ctx, SessionService session, INodeIdentityRepository nodeRepo) =>
+        {
+            var gate = RequireSuperadmin(ctx, session);
+            if (gate != null) return gate;
+
+            var identity = await nodeRepo.GetAsync();
+            return Results.Ok(new EmbeddingsEnabledResponse(identity?.CanGenerateEmbeddings ?? false));
+        });
+
+        group.MapPut("/embeddings-enabled", async (EmbeddingsEnabledRequest req, HttpContext ctx, SessionService session, INodeIdentityRepository nodeRepo) =>
+        {
+            var gate = RequireSuperadmin(ctx, session);
+            if (gate != null) return gate;
+
+            await nodeRepo.SetCanGenerateEmbeddingsAsync(req.Enabled);
+            return Results.Ok(new EmbeddingsEnabledResponse(req.Enabled));
+        });
     }
 
     // 3-gate admin check shared by the admin endpoints; returns null when authorized. Kept as a
@@ -116,3 +140,6 @@ public sealed record SearchIndexHealthDto(
     int SealedSegmentCount,
     int HotBufferCount,
     bool WarmStartAttempted);
+
+public sealed record EmbeddingsEnabledRequest(bool Enabled);
+public sealed record EmbeddingsEnabledResponse(bool Enabled);

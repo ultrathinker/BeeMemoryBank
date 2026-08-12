@@ -108,6 +108,21 @@ public static class SnapshotProxyEndpoints
             return Results.Ok(new { expireHours = body.ExpireHours, slidingExpiration = body.SlidingExpiration });
         }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
+        app.MapGet("/api-proxy/admin/search/embeddings-enabled", async (ApiClient api) =>
+        {
+            var enabled = await api.GetEmbeddingsEnabledAsync();
+            return enabled.HasValue ? Results.Ok(new { enabled = enabled.Value }) : Results.StatusCode(502);
+        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
+        app.MapPut("/api-proxy/admin/search/embeddings-enabled", async (HttpContext ctx, ApiClient api) =>
+        {
+            var body = await ctx.Request.ReadFromJsonAsync<EmbeddingsEnabledDto>();
+            if (body == null) return Results.BadRequest();
+
+            var ok = await api.SetEmbeddingsEnabledAsync(body.Enabled);
+            return ok ? Results.Ok(new { enabled = body.Enabled }) : Results.StatusCode(502);
+        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
         app.MapGet("/api-proxy/sync/status", async (ApiClient api) =>
         {
             // W2: pass upstream status + body through verbatim (was: null → 502, hiding real errors).

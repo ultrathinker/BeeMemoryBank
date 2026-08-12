@@ -103,6 +103,14 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
             new { expireHours, slidingExpiration });
     }
 
+    public async Task SetCanGenerateEmbeddingsAsync(bool enabled)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_node_identity SET can_generate_embeddings = @enabled WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+            new { enabled });
+    }
+
     private sealed class SessionSettingsRow
     {
         public int ExpireHours { get; set; }

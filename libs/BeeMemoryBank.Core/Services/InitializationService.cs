@@ -16,7 +16,7 @@ public class InitializationService(
     public async Task<bool> IsInitializedAsync()
         => await nodeRepo.GetAsync() != null;
 
-    public async Task InitializeAsync(string adminUsername, string nodeDisplayName, string password, bool canGenerateEmbeddings = false)
+    public async Task InitializeAsync(string adminUsername, string nodeDisplayName, string password, bool canGenerateEmbeddings = true)
     {
         if (await IsInitializedAsync())
             throw new InvalidOperationException("Node is already initialized.");
