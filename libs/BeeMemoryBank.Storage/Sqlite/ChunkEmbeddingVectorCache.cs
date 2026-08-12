@@ -70,8 +70,9 @@ public sealed class ChunkEmbeddingVectorCache
             if (current == null || IsNewer(snapshot, current))
             {
                 _current = snapshot;
+                return snapshot;
             }
-            return _current;
+            return current;
         }
     }
 

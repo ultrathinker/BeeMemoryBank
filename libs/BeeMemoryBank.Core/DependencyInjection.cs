@@ -42,6 +42,11 @@ public static class DependencyInjection
         services.AddScoped<TreeService>();
         services.AddScoped<SearchService>();
         services.AddScoped<EmbeddingProjectionService>();
+        // WP-16: only actually resolvable once AddOnnxEmbeddings has also registered
+        // IEmbeddingGenerator (same conditional-availability posture EmbeddingProjectionService
+        // itself already has) -- kept as its own service rather than folded into SearchService so
+        // plain keyword-only callers never need that dependency to resolve.
+        services.AddScoped<HybridSearchService>();
         services.AddScoped<FolderService>();
         services.AddScoped<CopyService>();
         services.AddScoped<CommentService>();

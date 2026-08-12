@@ -46,11 +46,15 @@ public class BeeSearchTools(
 
     [McpServerTool(Name = "bee_search_content")]
     [Description(
-        "Full-text search inside encrypted article BODIES (not just titles). SLOW — decrypts and scans all " +
-        "articles in batches. Use only when bee_search by title didn't find what you need.\n" +
+        "Full-text search inside encrypted article BODIES (not just titles). This is a literal keyword scan " +
+        "(exact/case-insensitive substring matching), not a ranked or semantic search — SLOW, decrypts and " +
+        "scans all articles in batches. Use only when bee_search by title didn't find what you need.\n" +
         "Requires an unlocked session. If the session is locked, silently degrades to title-only search " +
         "(returns fewer results — not an error; a 'notice' field in the response makes this visible).\n" +
-        "Returns JSON with the same shape as bee_search: { folders: [{ path, name }], articles: [{ id, title, treePath }] }.")]
+        "Returns JSON with the same shape as bee_search: { folders: [{ path, name }], articles: [{ id, title, treePath }] }.\n" +
+        "Note: the web UI's Search page now uses ranked BM25 + semantic hybrid search internally " +
+        "(POST /api/search/hybrid) for faster, better-ranked content search — that endpoint is not yet " +
+        "exposed as its own MCP tool, so this remains the content-search entry point for agents.")]
     public async Task<string> SearchContent(
         [Description("Search keywords to find in article body text, case-insensitive.")] string keywords)
     {
