@@ -1,6 +1,8 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Search;
+using BeeMemoryBank.Search.Indexing;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 
@@ -14,8 +16,17 @@ public class SearchService(
     IArticleRepository articleRepo,
     IArticleBodyRepository bodyRepo,
     IFolderRepository folderRepo,
-    SessionService session)
+    SessionService session,
+    IndexBuilder indexBuilder,
+    CallerScopeHolder scopeHolder)
 {
+    // WP-12: the same tokenizer/stemmer pipeline IndexBuilder uses at ingestion (see
+    // IndexBuilder.TokenizeAndStem) -- a query must go through the identical pipeline so its stems
+    // exactly match the stemmed dictionary IndexBuilder.SearchRanked looks up against. Stateless and
+    // thread-safe, so one shared instance per pipeline stage is fine to reuse across calls.
+    private static readonly ITokenizer IndexedSearchTokenizer = new DefaultTokenizer();
+    private static readonly IStemmer IndexedSearchStemmer = new DefaultStemmer();
+
     public async Task<SearchResults> SearchAsync(string query)
     {
         var foldersTask = folderRepo.SearchAsync(query);
@@ -143,5 +154,85 @@ public class SearchService(
         }
 
         return new SearchResults(folderResults, metadataResults);
+    }
+
+    /// <summary>
+    /// WP-12: ranked full-text search over <see cref="BeeMemoryBank.Search.Indexing.IndexBuilder"/>'s
+    /// in-memory inverted index -- a new, additive search capability, independent of
+    /// <see cref="SearchWithContentAsync"/>'s existing linear body scan above, which this method does
+    /// NOT replace, wire into, or otherwise change the behavior of.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this is not wired into <see cref="SearchWithContentAsync"/> yet.</b>
+    /// <c>PendingIndexProcessor</c> (WP-11) indexes articles into <paramref name="indexBuilder"/>'s
+    /// backing <c>IndexBuilder</c> progressively in the background (<c>index_pending</c>), so at any
+    /// given moment some articles may not yet be reflected in it. Silently making this the primary
+    /// search path today could make search return *fewer* correct results than the existing
+    /// always-complete-but-slower linear scan -- a regression a user might not notice until they go
+    /// looking for something specific that just has not been indexed yet. Deciding when/how to cut
+    /// over (e.g. only once a completeness signal says the index is fully caught up) is a follow-up
+    /// decision for the maintainer, out of this WP's scope -- mirroring how WP-07 built FTS wiring
+    /// for metadata search without touching the separate body-scan path either. This method exists so
+    /// a future work package or the maintainer can wire it in once ready.
+    /// </para>
+    /// <para>
+    /// <b>Pipeline.</b> Tokenizes+stems <paramref name="query"/> with the exact same
+    /// <see cref="ITokenizer"/>/<see cref="IStemmer"/> pipeline <c>IndexBuilder</c> uses at ingestion
+    /// (required -- this index stores stemmed terms and matches by exact stem, no prefix/wildcard),
+    /// asks <c>IndexBuilder.SearchRanked</c> for a BM25-ranked candidate list, hydrates full
+    /// <see cref="Article"/> rows for those ids, then applies <see cref="ICallerScope.FilterArticles"/>
+    /// -- the same, already-audited folder-scope ACL enforcement every other read in this codebase
+    /// uses, not a bespoke check reimplemented inside the index engine. Results are returned in
+    /// descending-score order (re-sorted after ACL filtering, since neither <c>GetByIdsAsync</c> nor
+    /// <c>FilterArticles</c> is required to preserve input order).
+    /// </para>
+    /// <para>
+    /// <b>No snippets.</b> This WP's optional snippet extension (decrypting just the top results to
+    /// show a matched-text preview) was not implemented -- a correct ranked-id-list is a complete,
+    /// acceptable deliverable per the brief, and it kept the scope focused on the load-bearing
+    /// ranking correctness tests. See the WP-12 report for the full reasoning.
+    /// </para>
+    /// </remarks>
+    public async Task<List<Article>> SearchIndexedContentAsync(string query, int topK = 20)
+    {
+        List<string> stemmedTerms = TokenizeAndStemQuery(query);
+        if (stemmedTerms.Count == 0)
+        {
+            return [];
+        }
+
+        IReadOnlyList<(Guid ArticleId, float Score)> ranked = indexBuilder.SearchRanked(stemmedTerms, topK);
+        if (ranked.Count == 0)
+        {
+            return [];
+        }
+
+        List<Article> articles = await articleRepo.GetByIdsAsync(ranked.Select(r => r.ArticleId).ToList());
+        List<Article> filtered = scopeHolder.Scope.FilterArticles(articles);
+
+        // Preserve SearchRanked's descending-score order across the GetByIdsAsync/FilterArticles
+        // round-trip, neither of which is documented to preserve input order.
+        Dictionary<Guid, int> rankByArticleId = ranked
+            .Select((result, index) => (result.ArticleId, index))
+            .ToDictionary(x => x.ArticleId, x => x.index);
+        filtered.Sort((a, b) => rankByArticleId[a.Id].CompareTo(rankByArticleId[b.Id]));
+
+        return filtered;
+    }
+
+    private static List<string> TokenizeAndStemQuery(string? query)
+    {
+        var terms = new List<string>();
+        foreach (string token in IndexedSearchTokenizer.Tokenize(query))
+        {
+            string stem = IndexedSearchStemmer.Stem(token);
+            if (stem.Length > 0)
+            {
+                terms.Add(stem);
+            }
+        }
+
+        return terms;
     }
 }

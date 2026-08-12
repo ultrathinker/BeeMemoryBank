@@ -3,6 +3,7 @@ using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -70,7 +71,7 @@ public class McpAclTests : IAsyncLifetime
         var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), _conceptTagService);
-        var searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session);
+        var searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, new IndexBuilder(), _scopeHolder);
 
         await initService.InitializeAsync("admin", "AclTestNode", Password);
         await _session.UnlockAsync(Password);

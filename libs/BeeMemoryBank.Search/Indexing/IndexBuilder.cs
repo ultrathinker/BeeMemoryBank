@@ -292,6 +292,290 @@ public sealed class IndexBuilder
     }
 
     /// <summary>
+    /// WP-12: BM25 term-frequency saturation parameter. 1.2 is the classic default from Robertson &amp;
+    /// Zaragoza, "The Probabilistic Relevance Framework: BM25 and Beyond" (2009) -- the standard
+    /// reference for BM25 defaults, also used unchanged by Lucene/Elasticsearch's BM25Similarity.
+    /// Controls how quickly additional occurrences of a term stop adding to its score (higher = more
+    /// linear, lower = saturates faster).
+    /// </summary>
+    private const double Bm25K1 = 1.2;
+
+    /// <summary>
+    /// WP-12: BM25 document-length normalization parameter. 0.75 is the same source's classic
+    /// default. 0 disables length normalization entirely; 1 fully normalizes by document length.
+    /// </summary>
+    private const double Bm25B = 0.75;
+
+    // WP-12: running total of term occurrences (with duplicates -- i.e. summed document lengths)
+    // across every document ever folded into a currently-live sealed segment, maintained
+    // incrementally by SealLocked/MergeLocked at essentially zero extra cost (both already hold
+    // every sealed document's full term list in hand at the moment they compute this). This is the
+    // numerator SearchRanked uses to approximate the corpus's average document length -- see that
+    // method's doc comment for exactly how precise this is and where it goes stale between merges
+    // (a tombstoned sealed document's length is not subtracted here until the next merge recomputes
+    // this field exactly from the surviving population).
+    private long _sealedTotalTermOccurrencesApprox;
+
+    /// <summary>
+    /// WP-12: ranks documents matching every one of <paramref name="stemmedTerms"/> (implicit AND --
+    /// see remarks) by BM25 score, across both the hot buffer and every sealed segment, and returns
+    /// the top <paramref name="topK"/> by descending score. <paramref name="stemmedTerms"/> must
+    /// already be tokenized+stemmed by the caller exactly like <see cref="Lookup"/> requires -- this
+    /// does not tokenize or stem its input. Never throws for a query that matches nothing; returns
+    /// an empty list instead.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Multi-term semantics: implicit AND.</b> A document is only a candidate at all if it
+    /// contains every distinct term in <paramref name="stemmedTerms"/> -- matching WP-07's identical
+    /// choice for FTS metadata search (see <c>FtsQueryBuilder</c>), for consistency across
+    /// BeeMemoryBank's two independent search subsystems. Duplicate terms in the input are
+    /// deduplicated before matching; a repeated query word does not change which documents qualify
+    /// or get scored twice for the same term.
+    /// </para>
+    /// <para>
+    /// <b>BM25 formula.</b> For each candidate document D and query term q:
+    /// <code>
+    /// score(D) = Σ_q  idf(q) * tf(q,D) * (k1+1) / (tf(q,D) + k1 * (1 - b + b * |D| / avgdl))
+    /// idf(q)   = ln(1 + (N - df(q) + 0.5) / (df(q) + 0.5))
+    /// </code>
+    /// with <c>k1 = <see cref="Bm25K1"/></c>, <c>b = <see cref="Bm25B"/></c> (both cited above).
+    /// The <c>+1</c> inside <c>idf</c> is the widely-used Lucene/Elasticsearch variant of the
+    /// classic Robertson-Sparck-Jones IDF, which guarantees <c>idf(q) &gt;= 0</c> for every term
+    /// (the un-smoothed classic formula can go negative for a term present in more than half the
+    /// corpus, which would make a document score *worse* for containing a query term -- undesirable
+    /// here since every query term is already mandatory under implicit AND).
+    /// </para>
+    /// <para>
+    /// <b>N (corpus size): exact.</b> Computed as hot-buffer count + Σ over sealed segments of
+    /// (<c>DocumentCount - TombstoneCount</c>). This is exact, not approximate: <see cref="AddOrUpdateDocument"/>/
+    /// <see cref="RemoveDocument"/> always tombstone (or remove from the hot buffer) any prior
+    /// occurrence of an articleId before publishing a new one, so a live document exists in exactly
+    /// one place (the hot buffer, or exactly one sealed segment) at any given time -- summing this
+    /// way counts every live document exactly once, never double-counting or missing one.
+    /// </para>
+    /// <para>
+    /// <b>df(q) (document frequency): exact.</b> Computed by actually walking q's postings in the
+    /// hot buffer and every sealed segment and counting only non-tombstoned matches (the same
+    /// tombstone-filtering <see cref="Lookup"/> does) -- not read from <see cref="Segment.SegmentReader.GetDocumentFrequency"/>,
+    /// which reflects the document count at the segment's seal/merge time and can overcount
+    /// since-tombstoned documents. Since this data is already walked to build the AND-candidate set
+    /// and per-document term frequencies, tallying live matches costs nothing extra.
+    /// </para>
+    /// <para>
+    /// <b>avgdl (average document length) and |D| (this document's length): approximate.</b> This is
+    /// the one genuinely approximate input, and deliberately so -- computing it exactly for
+    /// sealed-segment documents would mean walking every term in every sealed segment's vocabulary
+    /// (the same cost as a full merge) on every single query, which would make this method's cost
+    /// scale with total corpus size instead of with the query terms' own postings, defeating the
+    /// point of a segment-based query engine at 100k-article scale. Instead:
+    /// <list type="bullet">
+    /// <item><description>
+    /// For a hot-buffer document, <c>|D|</c> is exact (<see cref="HotBufferEntry.Terms"/>'s count is
+    /// already in memory).
+    /// </description></item>
+    /// <item><description>
+    /// For a sealed-segment document, <c>|D|</c> is not retrievable at all without that full scan
+    /// (the segment format stores postings, not per-document lengths -- and this WP does not modify
+    /// that fixed format). This method assumes such a document has exactly the corpus's average
+    /// length, i.e. <c>|D| = avgdl</c>, which makes its length-normalization factor
+    /// <c>(1 - b + b*|D|/avgdl)</c> collapse to exactly <c>1</c> -- equivalent to scoring it with
+    /// length normalization turned off. This under-rewards long-but-genuinely-more-relevant sealed
+    /// documents and under-penalizes short ones relative to true BM25, but per the brief's own
+    /// framing, BM25 rankings are usually reasonably robust to this kind of length-normalization
+    /// slack, and it is far better than paying an O(corpus) cost per query.
+    /// </description></item>
+    /// <item><description>
+    /// <c>avgdl</c> itself is the corpus's total approximate length divided by its document count,
+    /// where the hot-buffer contribution is exact and the sealed-segment contribution
+    /// (<see cref="_sealedTotalTermOccurrencesApprox"/>) is exact immediately after every seal or
+    /// merge but goes slightly stale (an overestimate of the true average) between merges: a
+    /// document tombstoned out of a sealed segment keeps contributing its old length to this running
+    /// total until the next merge recomputes it exactly from the surviving population. The
+    /// denominator used alongside it is deliberately the *raw* sealed document count (including
+    /// still-physically-present tombstoned entries), not the tombstone-adjusted live count used for
+    /// <c>N</c> above -- dividing the (also stale) numerator by the exact live-only count would bias
+    /// <c>avgdl</c> upward whenever tombstones have piled up, which is worse than the small, bounded
+    /// staleness this way produces.
+    /// </description></item>
+    /// </list>
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<(Guid ArticleId, float Score)> SearchRanked(IEnumerable<string> stemmedTerms, int topK)
+    {
+        ArgumentNullException.ThrowIfNull(stemmedTerms);
+
+        if (topK <= 0)
+        {
+            return [];
+        }
+
+        List<string> queryTerms = DistinctNonEmptyTerms(stemmedTerms);
+        if (queryTerms.Count == 0)
+        {
+            return [];
+        }
+
+        Dictionary<Guid, HotBufferEntry> hotBufferSnapshot;
+        long sealedTotalTermOccurrences;
+        lock (_writeLock)
+        {
+            hotBufferSnapshot = new Dictionary<Guid, HotBufferEntry>(_hotBuffer);
+            sealedTotalTermOccurrences = _sealedTotalTermOccurrencesApprox;
+        }
+
+        // Single volatile read, same reasoning as Lookup: a stable snapshot even if a concurrent
+        // merge swaps `_sealedSegments` out underneath this method while it runs.
+        IReadOnlyList<SealedSegment> segments = _sealedSegments;
+
+        // --- N: exact corpus size (see remarks above) ---
+        int corpusSize = hotBufferSnapshot.Count;
+        int sealedRawDocCount = 0;
+        foreach (SealedSegment segment in segments)
+        {
+            corpusSize += segment.DocumentCount - segment.TombstoneCount;
+            sealedRawDocCount += segment.DocumentCount;
+        }
+
+        if (corpusSize == 0)
+        {
+            return [];
+        }
+
+        // --- avgdl: approximate (see remarks above) ---
+        long hotBufferTotalLength = 0;
+        foreach (HotBufferEntry entry in hotBufferSnapshot.Values)
+        {
+            hotBufferTotalLength += entry.Terms.Count;
+        }
+
+        int lengthTrackingDocCount = hotBufferSnapshot.Count + sealedRawDocCount;
+        double avgDocLength = lengthTrackingDocCount > 0
+            ? (hotBufferTotalLength + sealedTotalTermOccurrences) / (double)lengthTrackingDocCount
+            : 0.0;
+        if (avgDocLength <= 0)
+        {
+            // Only reachable if every known document is empty (zero terms) -- guards the division
+            // below from ever seeing a zero denominator. Such documents can never actually match a
+            // non-empty query (they contain no terms at all), so this value is never exercised by
+            // real scoring in that case; it exists purely so the arithmetic never NaNs/throws.
+            avgDocLength = 1.0;
+        }
+
+        // --- Per-term postings walk: builds per-document term frequencies and exact per-term
+        // document frequency, from both the hot buffer and every sealed segment, tombstone-filtered
+        // exactly like Lookup. ---
+        var termFrequenciesByArticle = new Dictionary<Guid, Dictionary<string, int>>();
+        var hotBufferMatches = new HashSet<Guid>();
+        var documentFrequencyByTerm = new Dictionary<string, int>(queryTerms.Count);
+
+        foreach (string term in queryTerms)
+        {
+            int documentFrequency = 0;
+
+            foreach ((Guid articleId, HotBufferEntry entry) in hotBufferSnapshot)
+            {
+                if (!entry.DistinctTerms.Contains(term))
+                {
+                    continue;
+                }
+
+                int termFrequency = 0;
+                foreach (string candidate in entry.Terms)
+                {
+                    if (candidate == term)
+                    {
+                        termFrequency++;
+                    }
+                }
+
+                documentFrequency++;
+                hotBufferMatches.Add(articleId);
+                GetOrAddFrequencyMap(termFrequenciesByArticle, articleId)[term] = termFrequency;
+            }
+
+            foreach (SealedSegment segment in segments)
+            {
+                if (!segment.Vocabulary.Contains(term))
+                {
+                    continue;
+                }
+
+                foreach ((int docId, int termFrequency) in segment.Reader.GetPostings(term))
+                {
+                    Guid articleId = segment.Reader.GetDocument(docId).ArticleId;
+                    if (segment.Tombstones.Contains(articleId))
+                    {
+                        continue;
+                    }
+
+                    documentFrequency++;
+                    GetOrAddFrequencyMap(termFrequenciesByArticle, articleId)[term] = termFrequency;
+                }
+            }
+
+            documentFrequencyByTerm[term] = documentFrequency;
+        }
+
+        // --- Score every AND-candidate (a document that matched every distinct query term) ---
+        var scored = new List<(Guid ArticleId, float Score)>();
+        foreach ((Guid articleId, Dictionary<string, int> frequencies) in termFrequenciesByArticle)
+        {
+            if (frequencies.Count != queryTerms.Count)
+            {
+                continue;
+            }
+
+            // See remarks: hot-buffer documents get their exact length; sealed-segment documents are
+            // assumed to have exactly average length, collapsing their normalization factor to 1.
+            double lengthRatio = hotBufferMatches.Contains(articleId)
+                ? hotBufferSnapshot[articleId].Terms.Count / avgDocLength
+                : 1.0;
+
+            double score = 0.0;
+            foreach (string term in queryTerms)
+            {
+                int termFrequency = frequencies[term];
+                int documentFrequency = documentFrequencyByTerm[term];
+                double idf = Math.Log(1.0 + (corpusSize - documentFrequency + 0.5) / (documentFrequency + 0.5));
+                double denominator = termFrequency + Bm25K1 * (1 - Bm25B + Bm25B * lengthRatio);
+                score += idf * (termFrequency * (Bm25K1 + 1)) / denominator;
+            }
+
+            scored.Add((articleId, (float)score));
+        }
+
+        scored.Sort((a, b) => b.Score.CompareTo(a.Score));
+        return topK >= scored.Count ? scored : scored.GetRange(0, topK);
+    }
+
+    private static Dictionary<string, int> GetOrAddFrequencyMap(Dictionary<Guid, Dictionary<string, int>> byArticle, Guid articleId)
+    {
+        if (!byArticle.TryGetValue(articleId, out Dictionary<string, int>? frequencies))
+        {
+            frequencies = new Dictionary<string, int>();
+            byArticle[articleId] = frequencies;
+        }
+
+        return frequencies;
+    }
+
+    private static List<string> DistinctNonEmptyTerms(IEnumerable<string> terms)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string term in terms)
+        {
+            if (!string.IsNullOrEmpty(term) && seen.Add(term))
+            {
+                result.Add(term);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Returns a stable, point-in-time snapshot of the currently-live sealed segments. Safe to call,
     /// and to fully enumerate afterward, concurrently with writes on another thread (including
     /// merges): the returned list and its entries never change underneath the caller, because a
@@ -381,6 +665,10 @@ public sealed class IndexBuilder
         var vocabulary = new HashSet<string>();
         var articleToDocId = new Dictionary<Guid, int>(_hotBuffer.Count);
 
+        // WP-12: accumulated alongside the existing per-document work above at essentially zero
+        // extra cost -- see SearchRanked's remarks for how this feeds the avgdl approximation.
+        long sealedLength = 0;
+
         int docId = 0;
         foreach ((Guid articleId, HotBufferEntry entry) in _hotBuffer)
         {
@@ -391,8 +679,11 @@ public sealed class IndexBuilder
             }
 
             articleToDocId[articleId] = docId;
+            sealedLength += entry.Terms.Count;
             docId++;
         }
+
+        _sealedTotalTermOccurrencesApprox += sealedLength;
 
         byte[] bytes = SegmentWriter.Build(docs);
         var segment = new SealedSegment(_nextSegmentId++, new SegmentReader(bytes), vocabulary, articleToDocId, new HashSet<Guid>());
@@ -581,6 +872,7 @@ public sealed class IndexBuilder
         if (termFrequenciesByArticle.Count == 0)
         {
             _sealedSegments = [];
+            _sealedTotalTermOccurrencesApprox = 0;
             MergeCount++;
             return;
         }
@@ -588,6 +880,12 @@ public sealed class IndexBuilder
         var mergedDocs = new List<SegmentDocument>(termFrequenciesByArticle.Count);
         var mergedVocabulary = new HashSet<string>();
         var mergedArticleToDocId = new Dictionary<Guid, int>(termFrequenciesByArticle.Count);
+
+        // WP-12: recomputed exactly from the surviving (live) population -- this is the point where
+        // any staleness accumulated since the last seal/merge (from documents tombstoned out of a
+        // sealed segment without yet being physically removed) is corrected back to exact. See
+        // SearchRanked's remarks.
+        long mergedLength = 0;
 
         int mergedDocId = 0;
         foreach ((Guid articleId, Dictionary<string, int> frequencies) in termFrequenciesByArticle)
@@ -599,8 +897,15 @@ public sealed class IndexBuilder
             }
 
             mergedArticleToDocId[articleId] = mergedDocId;
+            foreach (int frequency in frequencies.Values)
+            {
+                mergedLength += frequency;
+            }
+
             mergedDocId++;
         }
+
+        _sealedTotalTermOccurrencesApprox = mergedLength;
 
         byte[] mergedBytes = SegmentWriter.Build(mergedDocs);
         var mergedSegment = new SealedSegment(
