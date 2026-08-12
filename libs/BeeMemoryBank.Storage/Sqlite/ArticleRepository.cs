@@ -10,7 +10,8 @@ public class ArticleRepository(
     DbConnectionFactory factory,
     CallerScopeHolder scopeHolder,
     EmbeddingVectorCache? vectorCache = null,
-    SearchMetrics? searchMetrics = null) : BaseRepository(factory), IArticleRepository
+    SearchMetrics? searchMetrics = null,
+    ChunkEmbeddingVectorCache? chunkCache = null) : BaseRepository(factory), IArticleRepository
 {
     private readonly CallerScopeHolder _holder = scopeHolder;
 
@@ -24,6 +25,9 @@ public class ArticleRepository(
     // otherwise-stateless, scoped repository carries, and it is process-wide by design so an
     // embedding write in one scope invalidates the cache every other scope's next search sees.
     private readonly EmbeddingVectorCache _vectorCache = vectorCache ?? new EmbeddingVectorCache(factory);
+
+    // WP-15: chunk-embedding cache, same optional-DI/per-instance-fallback pattern as _vectorCache.
+    private readonly ChunkEmbeddingVectorCache _chunkCache = chunkCache ?? new ChunkEmbeddingVectorCache(factory);
     private const string SelectCols = @"
         a.id              AS Id,
         a.title           AS Title,
@@ -465,6 +469,65 @@ public class ArticleRepository(
         // still get back fewer than topK (or zero) visible results if invisible articles ranked
         // highest. That is not fixed here — it's a separate, bigger decision outside this
         // perf-only WP.
+        var byId = fullArticles.ToDictionary(a => a.Id);
+        var scored = topIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
+
+        return _holder.Scope.FilterArticles(scored);
+    }
+
+    /// <summary>
+    /// WP-15: semantic search over per-chunk embeddings instead of one embedding per article, so a
+    /// "needle" past <c>OnnxEmbeddingGenerator.MaxSequenceLength</c> tokens into a long article is
+    /// findable via its own chunk. An article's score is the max cosine score over its own chunks
+    /// (<see cref="ChunkEmbeddingVectorCache.Snapshot.ScoreMaxPerArticle"/>). An article that has no
+    /// chunk rows yet (not (re)chunked since WP-15 shipped) falls back to its old full-document
+    /// score from <see cref="EmbeddingVectorCache"/>, so this method never regresses an
+    /// not-yet-backfilled article to "invisible" relative to the pre-WP-15
+    /// <see cref="SearchByEmbeddingAsync"/>.
+    /// </summary>
+    public async Task<List<Article>> SearchByChunkEmbeddingAsync(float[] queryProjection, int topK = 10)
+    {
+        var sw = _searchMetrics is null ? null : Stopwatch.StartNew();
+        var results = await SearchByChunkEmbeddingCoreAsync(queryProjection, topK);
+        if (_searchMetrics is not null)
+        {
+            sw!.Stop();
+            _searchMetrics.Record(SearchMetrics.SemanticSearch, sw.Elapsed, results.Count);
+        }
+        return results;
+    }
+
+    private async Task<List<Article>> SearchByChunkEmbeddingCoreAsync(float[] queryProjection, int topK)
+    {
+        ChunkEmbeddingVectorCache.Snapshot chunkSnapshot = await _chunkCache.GetOrRebuildAsync();
+        Dictionary<Guid, float> scores = chunkSnapshot.ScoreMaxPerArticle(queryProjection);
+
+        // Fallback: any active article with a full-document embedding but NO chunk rows yet keeps
+        // its old score instead of silently dropping out of semantic search until it's (re)chunked.
+        HashSet<Guid> chunkedIds = chunkSnapshot.ChunkedArticleIds;
+        EmbeddingVectorCache.Snapshot fullSnapshot = _vectorCache.GetOrRebuild();
+        foreach ((Guid id, float score) in fullSnapshot.ScoreAll(queryProjection))
+        {
+            if (!chunkedIds.Contains(id))
+            {
+                scores[id] = score;
+            }
+        }
+
+        if (scores.Count == 0) return [];
+
+        var topIds = scores
+            .OrderByDescending(kv => kv.Value)
+            .ThenBy(kv => kv.Key) // deterministic tie-break when scores are equal
+            .Take(topK)
+            .Select(kv => kv.Key)
+            .ToList();
+
+        using var conn = OpenConnection();
+        var fullArticles = (await conn.QueryAsync<Article>(
+            $"SELECT {SelectCols} {FromClause} WHERE a.id IN @ids AND a.status = 'A'",
+            new { ids = topIds })).ToList();
+
         var byId = fullArticles.ToDictionary(a => a.Id);
         var scored = topIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
 

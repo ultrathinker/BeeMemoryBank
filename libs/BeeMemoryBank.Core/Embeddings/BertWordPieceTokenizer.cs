@@ -23,6 +23,23 @@ internal sealed class BertWordPieceTokenizer
         _unkId = vocab["[UNK]"];
     }
 
+    /// <summary>
+    /// WP-15: returns each basic-tokenized word alongside its real WordPiece token count, without
+    /// the [CLS]/[SEP]/max-length truncation <see cref="Encode"/> applies. Used by
+    /// <see cref="ArticleChunker"/> to size chunks in the same units <see cref="Encode"/> counts
+    /// against <c>OnnxEmbeddingGenerator.MaxSequenceLength</c>, so a chunk this method sized to fit
+    /// is never silently re-truncated when it is later embedded.
+    /// </summary>
+    public List<(string Word, int TokenCount)> TokenizeWithCounts(string text)
+    {
+        var result = new List<(string, int)>();
+        foreach (var word in BasicTokenize(text))
+        {
+            result.Add((word, WordPiece(word).Count));
+        }
+        return result;
+    }
+
     /// <summary>Returns (inputIds, attentionMask, tokenTypeIds) as int64 arrays.</summary>
     public (long[] InputIds, long[] AttentionMask, long[] TokenTypeIds) Encode(string text, int maxLength = 512)
     {
@@ -145,6 +162,25 @@ internal sealed class BertWordPieceTokenizer
         (ch >= '\u3400' && ch <= '\u4DBF') ||
         (ch >= '\uF900' && ch <= '\uFAFF') ||
         (ch >= '\u2E80' && ch <= '\u2EFF');
+
+    /// <summary>
+    /// Loads the tokenizer embedded in this assembly (the same vocabulary
+    /// <see cref="OnnxEmbeddingGenerator"/> uses). Shared by <see cref="OnnxEmbeddingGenerator"/>
+    /// and <see cref="ArticleChunker"/> so both count tokens identically -- a chunk
+    /// <see cref="ArticleChunker"/> sizes against this exact tokenizer is guaranteed to round-trip
+    /// through <see cref="OnnxEmbeddingGenerator.Generate"/> without truncation.
+    /// </summary>
+    internal static BertWordPieceTokenizer LoadDefault()
+    {
+        var vocabStream = typeof(BertWordPieceTokenizer).Assembly
+            .GetManifestResourceStream("BeeMemoryBank.Core.Embeddings.Models.vocab.txt")
+            ?? throw new InvalidOperationException("Embedded vocab.txt not found in BeeMemoryBank.Core assembly.");
+
+        using (vocabStream)
+        {
+            return new BertWordPieceTokenizer(LoadVocab(vocabStream));
+        }
+    }
 
     internal static Dictionary<string, int> LoadVocab(Stream stream)
     {
