@@ -36,6 +36,10 @@ public class AdminModel(ApiClient api) : PageModel
     public JsonElement? UpdateCheck { get; set; }
     public string? CheckedManifestJson { get; set; }
 
+    // WP-18: search-subsystem latency + index-health diagnostics. Shapes/counts/timings only --
+    // the API never returns query text or article content here (see SearchMetricsEndpoints).
+    public JsonElement? SearchMetrics { get; set; }
+
     public async Task OnGetAsync(string? msg = null, string? err = null)
     {
         SuccessMessage = msg;
@@ -301,6 +305,7 @@ public class AdminModel(ApiClient api) : PageModel
             api.GetPeerPendingDekRotationsAsync().ContinueWith(t => PeerPendingRotations = t.Result ?? new()),
             api.GetServerVersionAsync().ContinueWith(t => CurrentVersion = t.Result),
             api.GetUpdateStatusAsync().ContinueWith(t => UpdateStatus = t.Result),
+            api.GetSearchMetricsAsync().ContinueWith(t => SearchMetrics = t.Result),
             api.GetAutoUnlockStatusAsync().ContinueWith(t =>
             {
                 OsAutoUnlockEnabled = t.Result.Enabled;

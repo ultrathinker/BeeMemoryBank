@@ -530,6 +530,7 @@ app.MapDownloadEndpoints();
     app.MapHardDeleteEndpoints();
     app.MapCompactionEndpoints();
     app.MapAdminEndpoints();
+    app.MapSearchMetricsEndpoints();
     app.MapInternetAccessEndpoints();
     app.MapAutoUnlockEndpoints();
     app.MapChatEndpoints();

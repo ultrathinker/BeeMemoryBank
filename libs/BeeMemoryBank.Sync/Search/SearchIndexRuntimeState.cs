@@ -47,6 +47,16 @@ public sealed class SearchIndexRuntimeState
     /// </summary>
     public bool TryBeginWarmStart() => Interlocked.CompareExchange(ref _warmStartAttempted, 1, 0) == 0;
 
+    /// <summary>
+    /// WP-18: read-only diagnostic accessor exposing whether the unlock warm-start has already been
+    /// attempted this process lifetime (either it loaded persisted segments, or it fell back to a
+    /// full rebuild). Lets the admin metrics surface distinguish "index not yet warm-started" from
+    /// "warm-started / building from pending" without exposing any of the internal coordination
+    /// state. Narrowly scoped: a boolean view of the same flag <see cref="TryBeginWarmStart"/>
+    /// already guards -- no new mutable state.
+    /// </summary>
+    public bool IsWarmStartAttempted => Volatile.Read(ref _warmStartAttempted) != 0;
+
     public void RegisterPersistedSegment(int internalSegmentId, Guid persistedSegmentId) =>
         _persistedSegmentIds[internalSegmentId] = persistedSegmentId;
 

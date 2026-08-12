@@ -2,12 +2,22 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using Dapper;
+using System.Diagnostics;
 
 namespace BeeMemoryBank.Storage.Sqlite;
 
-public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder scopeHolder, EmbeddingVectorCache? vectorCache = null) : BaseRepository(factory), IArticleRepository
+public class ArticleRepository(
+    DbConnectionFactory factory,
+    CallerScopeHolder scopeHolder,
+    EmbeddingVectorCache? vectorCache = null,
+    SearchMetrics? searchMetrics = null) : BaseRepository(factory), IArticleRepository
 {
     private readonly CallerScopeHolder _holder = scopeHolder;
+
+    // WP-18: optional search-metrics recorder (DI injects the process-wide singleton; direct `new`
+    // callers -- tests -- get null and recording is a no-op). Records only timings + coarse result
+    // counts for semantic search; the query projection vector is never handed to it.
+    private readonly SearchMetrics? _searchMetrics = searchMetrics;
 
     // WP-14: embedding vector cache. DI injects the shared singleton; direct `new` callers (tests)
     // get a per-instance cache when they omit the argument. The cache is the only state this
@@ -412,6 +422,23 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
     }
 
     public async Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10)
+    {
+        // WP-18: timing/counting wrapper around the semantic-search path. Only elapsed time and the
+        // coarse result count are recorded; the query projection vector (and any query text it was
+        // derived from upstream) is never passed to the metrics component. Behavior is unchanged on
+        // every path -- the recording runs only on the success return, and exceptions propagate
+        // exactly as before.
+        var sw = _searchMetrics is null ? null : Stopwatch.StartNew();
+        var results = await SearchByEmbeddingCoreAsync(queryProjection, topK);
+        if (_searchMetrics is not null)
+        {
+            sw!.Stop();
+            _searchMetrics.Record(SearchMetrics.SemanticSearch, sw.Elapsed, results.Count);
+        }
+        return results;
+    }
+
+    private async Task<List<Article>> SearchByEmbeddingCoreAsync(float[] queryProjection, int topK)
     {
         // WP-14: pass 1 (score every active article's projection) now runs out of the in-memory
         // EmbeddingVectorCache instead of a fresh full-table SQL scan on every call. The cache is

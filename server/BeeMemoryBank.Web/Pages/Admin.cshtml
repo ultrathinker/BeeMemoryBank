@@ -1516,6 +1516,137 @@
         </form>
     </sl-dialog>
 
+    <!-- Search diagnostics (WP-18) — latency / volume / index health.
+         Numbers only: timings, request counts, coarse result-count buckets, and the already-public
+         IndexBuilder / SearchIndexRuntimeState diagnostics. No query text or content is ever shown. -->
+    <sl-details summary="Search diagnostics" style="margin-top:32px;margin-bottom:32px;">
+        <div style="max-width:920px;">
+            <p class="text-muted text-sm" style="margin-bottom:16px;">
+                Latency (p50/p95) and request volume per search type over a rolling in-memory window,
+                plus the encrypted search-index health signals. Counts and timings only — no query
+                text, titles, or article content is ever recorded or shown here.
+            </p>
+
+            @if (Model.SearchMetrics is { } searchMetricsEl)
+            {
+                var latency = searchMetricsEl.TryGetProperty("latency", out var latEl) && latEl.ValueKind == JsonValueKind.Array ? latEl.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+
+                <h4 style="margin:8px 0;"><sl-icon name="stopwatch"></sl-icon> Latency &amp; volume</h4>
+                @if (latency.Length == 0)
+                {
+                    <p class="text-muted text-sm" style="margin-bottom:16px;">No searches recorded yet in this process's lifetime.</p>
+                }
+                else
+                {
+                    <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
+                        <table class="version-table">
+                            <thead>
+                                <tr>
+                                    <th>Search type</th>
+                                    <th>Requests</th>
+                                    <th>p50 (ms)</th>
+                                    <th>p95 (ms)</th>
+                                    <th colspan="4" style="text-align:center;">Result counts</th>
+                                </tr>
+                                <tr>
+                                    <th></th><th></th><th></th><th></th>
+                                    <th style="text-align:center;">0</th>
+                                    <th style="text-align:center;">1–10</th>
+                                    <th style="text-align:center;">11–100</th>
+                                    <th style="text-align:center;">100+</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in latency)
+                                {
+                                    var label = row.TryGetProperty("searchType", out var stEl) && stEl.ValueKind == JsonValueKind.String ? stEl.GetString() : "?";
+                                    <tr>
+                                        <td><strong>@label</strong></td>
+                                        <td>@(row.TryGetProperty("count", out var cEl) ? cEl.GetInt64().ToString("N0") : "0")</td>
+                                        <td>@FmtMs(row, "p50Ms")</td>
+                                        <td>@FmtMs(row, "p95Ms")</td>
+                                        <td style="text-align:center;">@BucketVal(row, "bucketZero")</td>
+                                        <td style="text-align:center;">@BucketVal(row, "bucketOneToTen")</td>
+                                        <td style="text-align:center;">@BucketVal(row, "bucketElevenToHundred")</td>
+                                        <td style="text-align:center;">@BucketVal(row, "bucketOverHundred")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                @if (searchMetricsEl.TryGetProperty("indexHealth", out var ihEl) && ihEl.ValueKind == JsonValueKind.Object)
+                {
+                    var warm = ihEl.TryGetProperty("warmStartAttempted", out var wEl) && wEl.ValueKind == JsonValueKind.False;
+                    <h4 style="margin:8px 0;"><sl-icon name="hdd-stack"></sl-icon> Encrypted search index</h4>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px 24px;margin-bottom:8px;">
+                        <div><span class="text-muted text-sm">Sealed segments</span><br><strong>@GetInt(ihEl, "sealedSegmentCount")</strong></div>
+                        <div><span class="text-muted text-sm">Hot buffer docs</span><br><strong>@GetInt(ihEl, "hotBufferCount")</strong></div>
+                        <div><span class="text-muted text-sm">Warm-start run</span><br>
+                            @if (warm)
+                            {
+                                <sl-badge variant="warning" pill>not yet</sl-badge>
+                            }
+                            else
+                            {
+                                <sl-badge variant="success" pill>yes</sl-badge>
+                            }
+                        </div>
+                        <div><span class="text-muted text-sm">Lifetime seals</span><br><strong>@GetInt(ihEl, "sealCount")</strong></div>
+                        <div><span class="text-muted text-sm">Lifetime merges</span><br><strong>@GetInt(ihEl, "mergeCount")</strong></div>
+                    </div>
+                    <p class="text-muted text-sm" style="margin-top:8px;">
+                        @if (warm)
+                        {
+                            <text>The index has not been warm-started from disk yet this session; it builds as pending articles are processed.</text>
+                        }
+                        else
+                        {
+                            <text>The index was warm-started from persisted segments (or a rebuild was triggered) this session.</text>
+                        }
+                    </p>
+                }
+            }
+            else
+            {
+                <sl-alert variant="warning" open>
+                    <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                    Search diagnostics are unavailable (the API returned no data — the session may be locked or the request lacked admin rights).
+                </sl-alert>
+            }
+        </div>
+    </sl-details>
+
+    @{
+        // Local helpers keep the table markup above readable. They read from a JsonElement row/column
+        // defensively (any missing field renders as "—" rather than throwing).
+        static string FmtMs(JsonElement row, string prop)
+        {
+            if (row.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number)
+            {
+                var ms = v.GetDouble();
+                return ms <= 0 ? "—" : ms.ToString("0.###");
+            }
+            return "—";
+        }
+        static string BucketVal(JsonElement row, string prop)
+        {
+            if (row.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number)
+            {
+                var n = v.GetInt64();
+                return n == 0 ? "—" : n.ToString("N0");
+            }
+            return "—";
+        }
+        static string GetInt(JsonElement el, string prop)
+        {
+            if (el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number)
+                return v.GetInt32().ToString("N0");
+            return "—";
+        }
+    }
+
     <!-- Advanced settings — diagnostic / repair tools an admin rarely needs -->
     <sl-details summary="Advanced settings" style="margin-top:32px;margin-bottom:32px;">
         <h4 style="margin-top:8px;margin-bottom:8px;"><sl-icon name="share"></sl-icon> Verify tag graph</h4>
