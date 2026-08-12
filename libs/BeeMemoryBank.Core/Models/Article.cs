@@ -15,6 +15,12 @@ public class Article
     public byte[]? EmbeddingProjection { get; set; }
     public string? EmbeddingModelVersion { get; set; }
     public bool EmbeddingPending { get; set; } = true;
+
+    // WP-11: mirrors EmbeddingPending exactly, but drives the independent search-index
+    // background processor (PendingIndexProcessor) instead of embedding generation. Both flags
+    // mean "this article's derived search artifacts are stale" and are set together wherever
+    // content changes -- they just feed two separate background pipelines.
+    public bool IndexPending { get; set; } = true;
     public string Status { get; set; } = "A";
     public long LamportTs { get; set; }
     public Guid? SourceNodeId { get; set; }

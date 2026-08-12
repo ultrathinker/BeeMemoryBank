@@ -24,6 +24,14 @@ public static class DependencyInjection
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
 
+        // WP-11: the search index lifecycle. IndexBuilder and SearchIndexRuntimeState are process-
+        // lifetime singletons (the in-memory index itself, and the internal-segment-id -> persisted
+        // Guid map / rebuild coordination lock must survive across PendingIndexProcessor's per-cycle
+        // scopes); SearchIndexLifecycleService is scoped like its repository/store dependencies.
+        services.AddSingleton<BeeMemoryBank.Search.Indexing.IndexBuilder>();
+        services.AddSingleton<Search.SearchIndexRuntimeState>();
+        services.AddScoped<Search.SearchIndexLifecycleService>();
+
         // Default sync-auth signer derives the node key via the master DEK. Mobile overrides
         // this with a Keystore-backed signer so background backup-sync works while locked.
         services.TryAddScoped<INodeAuthSigner, SessionNodeAuthSigner>();
@@ -119,6 +127,21 @@ public static class DependencyInjection
             new PendingEmbeddingProcessor(
                 sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PendingEmbeddingProcessor>>(),
+                interval));
+        return services;
+    }
+
+    /// <summary>
+    /// WP-11: adds the background pending search-index processor. Requires AddStorage() (for
+    /// EncryptedSegmentStore/SegmentManifestRepository/SegmentTombstoneRepository) and AddSync()
+    /// (for the IndexBuilder/SearchIndexLifecycleService registrations above) to have already run.
+    /// </summary>
+    public static IServiceCollection AddIndexProcessor(this IServiceCollection services, TimeSpan? interval = null)
+    {
+        services.AddHostedService(sp =>
+            new PendingIndexProcessor(
+                sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PendingIndexProcessor>>(),
                 interval));
         return services;
     }

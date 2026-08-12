@@ -78,6 +78,7 @@ builder.Services.AddSyncScheduler(interval: syncInterval, periodicCleanupFactory
     sp.GetRequiredService<SyncTokenStore>().CleanupExpired);
 builder.Services.AddCleanupService();
 builder.Services.AddEmbeddingProcessor();
+builder.Services.AddIndexProcessor();
 
 // ── mDNS announce: advertise this node on the LAN (_beememorybank._tcp.local) ──
 // Runs in the API because that is where the authoritative InvisibleModeService (registered by

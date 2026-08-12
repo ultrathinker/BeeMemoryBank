@@ -27,6 +27,7 @@ public static class DependencyInjection
                 : dataPath,
             "search-index-segments");
         services.AddScoped<SegmentManifestRepository>();
+        services.AddScoped<SegmentTombstoneRepository>();
         services.AddScoped(sp => new EncryptedSegmentStore(
             sp.GetRequiredService<SegmentManifestRepository>(),
             sp.GetRequiredService<SessionService>(),

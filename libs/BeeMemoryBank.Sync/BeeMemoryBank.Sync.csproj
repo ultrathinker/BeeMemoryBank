@@ -4,6 +4,11 @@
     <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <!-- WP-11: PendingIndexProcessor/SearchIndexLifecycleService drive BeeMemoryBank.Search's
+         IndexBuilder directly (Storage's own reference to Search is transitive, but this is a
+         direct consumer of Search's public API, not just of Storage's, so it gets its own explicit
+         reference, same reasoning Storage's csproj documents for its own Search reference). -->
+    <ProjectReference Include="..\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
   </ItemGroup>
 
   <ItemGroup>

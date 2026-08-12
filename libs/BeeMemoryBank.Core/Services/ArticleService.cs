@@ -178,7 +178,21 @@ public partial class ArticleService(
         // Keep the protected flag in lock-step with the body content (the body is the source of
         // truth). Only touch it when the body is actually being rewritten.
         if (plaintext != null)
+        {
             article.Protected = ProtectedContentCodec.IsProtected(plaintext);
+
+            // Re-flag both derived-search-artifact pending flags together whenever content
+            // actually changes -- EmbeddingPending/IndexPending both mean "stale, needs
+            // reprocessing," they just drive two independent background processors
+            // (PendingEmbeddingProcessor / PendingIndexProcessor). Note: prior to WP-11, nothing
+            // in this method re-set EmbeddingPending on an edit either (only the Article model's
+            // constructor default covered brand-new articles) -- a pre-existing gap that meant an
+            // edited article's embedding silently went stale after its first successful
+            // generation. Fixed here alongside adding IndexPending, since the correct shared
+            // behavior for "content changed" is the same for both flags.
+            article.EmbeddingPending = true;
+            article.IndexPending = true;
+        }
         if (updateHint)
             article.ProtectionHint = protectionHint;
 
