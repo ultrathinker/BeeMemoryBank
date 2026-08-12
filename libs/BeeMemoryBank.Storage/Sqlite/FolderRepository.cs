@@ -332,6 +332,40 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
 
     public async Task<List<Folder>> SearchAsync(string query)
     {
+        // WP-07: FTS5-backed search over fts_folder (name + path), mirroring ArticleRepository.
+        // Same tokenize→stem→quoted-prefix MATCH build; same empty-query short-circuit; same
+        // status = 'A' re-filter at the join (soft-deleted folders linger in the FTS index).
+        // bm25 weights name above path; the underscore-prefix-sorts-first quirk stays primary.
+        var matchExpr = FtsQueryBuilder.BuildMatchExpression(query);
+        if (matchExpr == null)
+        {
+            return [];
+        }
+
+        using var conn = OpenConnection();
+        var sql = $@"WITH folder_hits AS (
+                       SELECT fld.id AS id, bm25(fts_folder, 10.0, 2.0) AS score
+                       FROM fts_folder
+                       JOIN tbl_folder fld ON fld.rowid = fts_folder.rowid
+                       WHERE fts_folder MATCH @matchExpr AND fld.status = 'A'
+                     )
+                     SELECT {SelectCols}
+                     FROM tbl_folder f
+                     JOIN folder_hits fh ON fh.id = f.id
+                     WHERE f.status = 'A'
+                     ORDER BY (substr(f.name,1,1)='_') DESC, fh.score ASC, f.name";
+        var folders = (await conn.QueryAsync<Folder>(sql, new { matchExpr })).ToList();
+        return _holder.Scope.FilterFolders(folders);
+    }
+
+    /// <summary>
+    /// The pre-WP-07 <see cref="SearchAsync"/> implementation: a per-row managed-code
+    /// <c>unicode_contains</c> substring scan over name and path, no morphology. Kept available
+    /// (currently unused by <c>SearchService</c>) for a possible future "exact substring" search
+    /// mode. Wiring a UI/API toggle for it is out of WP-07's scope.
+    /// </summary>
+    public async Task<List<Folder>> SearchByExactSubstringAsync(string query)
+    {
         using var conn = OpenConnection();
         var sql = $"SELECT {SelectCols} FROM tbl_folder f WHERE f.status = 'A' AND (unicode_contains(f.name, @query) OR unicode_contains(f.path, @query)) ORDER BY (substr(f.name,1,1)='_') DESC, f.name";
         var folders = (await conn.QueryAsync<Folder>(sql, new { query })).ToList();

@@ -25,4 +25,9 @@
     <EmbeddedResource Include="Migrations\*.sql" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- FtsQueryBuilder (WP-07) is internal; the Storage test project exercises it directly. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Storage.Tests" />
+  </ItemGroup>
+
 </Project>
