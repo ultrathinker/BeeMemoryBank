@@ -44,6 +44,12 @@ public partial class ApiClient
         var resp = await http.PutAsJsonAsync("/api/admin/search/embeddings-enabled", new { enabled }, JsonOpts);
         return resp.IsSuccessStatusCode;
     }
+
+    public async Task<bool> TriggerEmbeddingsBackfillAsync()
+    {
+        var resp = await http.PostAsync("/api/admin/search/embeddings/backfill", null);
+        return resp.IsSuccessStatusCode;
+    }
 }
 
 public sealed record EmbeddingsEnabledDto(bool Enabled);

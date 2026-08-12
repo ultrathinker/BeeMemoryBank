@@ -1191,6 +1191,29 @@
         }
         loadEmbeddingsEnabled();
 
+        // "Backfill pending now" button — triggers a one-shot background drain instead of
+        // waiting out the default 5-minute-tick / 50-item-batch schedule.
+        var embeddingsBackfillBtn = document.getElementById('embeddings-backfill-btn');
+        var embeddingsBackfillStatus = document.getElementById('embeddings-backfill-status');
+        if (embeddingsBackfillBtn) {
+            embeddingsBackfillBtn.addEventListener('click', function () {
+                embeddingsBackfillBtn.loading = true;
+                if (embeddingsBackfillStatus) embeddingsBackfillStatus.textContent = '';
+                fetch('/api-proxy/admin/search/embeddings/backfill', { method: 'POST' })
+                    .then(function (r) {
+                        if (embeddingsBackfillStatus) {
+                            embeddingsBackfillStatus.textContent = r.ok
+                                ? 'Started — check server logs or the metrics below in a bit.'
+                                : 'Failed to start backfill.';
+                        }
+                    })
+                    .catch(function () {
+                        if (embeddingsBackfillStatus) embeddingsBackfillStatus.textContent = 'Failed to start backfill.';
+                    })
+                    .finally(function () { embeddingsBackfillBtn.loading = false; });
+            });
+        }
+
         // Web session (cookie) settings: duration + sliding-expiration toggle.
         var sessionHoursInput = document.getElementById('session-expire-hours');
         var sessionSlidingToggle = document.getElementById('session-sliding-toggle');
@@ -1559,6 +1582,18 @@
                     and hybrid search). Embeddings never sync between nodes — each node that wants semantic
                     search must generate its own. Turning this off saves CPU but semantic/hybrid search will
                     silently fall back to exact-match only on this node.
+                </p>
+                <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+                    <sl-button id="embeddings-backfill-btn" size="small">
+                        <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Backfill pending now
+                    </sl-button>
+                    <span id="embeddings-backfill-status" class="text-muted text-sm"></span>
+                </div>
+                <p class="text-muted text-sm" style="margin:8px 0 0;">
+                    Drains pending embeddings and search-index entries immediately in the background instead
+                    of waiting out the normal drip-fed schedule (default: one batch every 5 minutes). Useful
+                    right after turning the toggle above on, or after a large import. Safe to click more than
+                    once — it's a no-op if nothing is pending.
                 </p>
             </div>
 

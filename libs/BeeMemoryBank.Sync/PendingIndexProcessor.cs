@@ -36,9 +36,11 @@ namespace BeeMemoryBank.Sync;
 public class PendingIndexProcessor(
     IServiceScopeFactory scopeFactory,
     ILogger<PendingIndexProcessor> logger,
-    TimeSpan? interval = null) : BackgroundService
+    TimeSpan? interval = null,
+    int? batchSize = null) : BackgroundService
 {
     private readonly TimeSpan _interval = interval ?? TimeSpan.FromMinutes(5);
+    private readonly int _batchSize = batchSize ?? 50;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -59,7 +61,7 @@ public class PendingIndexProcessor(
         }
     }
 
-    public async Task ProcessPendingAsync(CancellationToken ct)
+    public async Task<int> ProcessPendingAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var session = scope.ServiceProvider.GetRequiredService<SessionService>();
@@ -68,18 +70,19 @@ public class PendingIndexProcessor(
         // embeddings' projection-matrix step. Skip the whole cycle (including warm-start, which
         // itself needs the master DEK to decrypt segments) while locked, same as
         // PendingEmbeddingProcessor does.
-        if (!session.IsUnlocked) return;
+        if (!session.IsUnlocked) return 0;
 
         var lifecycle = scope.ServiceProvider.GetRequiredService<SearchIndexLifecycleService>();
         await lifecycle.EnsureWarmStartedAsync(ct);
 
         var articleRepo = scope.ServiceProvider.GetRequiredService<IArticleRepository>();
-        var pending = await articleRepo.GetIndexPendingAsync(50);
-        if (pending.Count == 0) return;
+        var pending = await articleRepo.GetIndexPendingAsync(_batchSize);
+        if (pending.Count == 0) return 0;
 
         logger.LogInformation("Processing {Count} articles with pending search index updates", pending.Count);
 
         int processed = 0;
+        int resolved = 0;
         foreach (Article article in pending)
         {
             if (ct.IsCancellationRequested) break;
@@ -94,6 +97,7 @@ public class PendingIndexProcessor(
                     // mirroring EmbeddingProjectionService.ProjectArticleAsync's identical
                     // protected-article skip.
                     await articleRepo.ClearIndexPendingAsync(article.Id);
+                    resolved++;
                     continue;
                 }
 
@@ -116,6 +120,7 @@ public class PendingIndexProcessor(
 
                 await articleRepo.ClearIndexPendingAsync(article.Id);
                 processed++;
+                resolved++;
             }
             catch (Exception ex)
             {
@@ -125,5 +130,30 @@ public class PendingIndexProcessor(
 
         if (processed > 0)
             logger.LogInformation("Indexed articles: {Count}", processed);
+
+        // Progress is "pending items resolved", not just "actually indexed" -- a batch made up
+        // entirely of protected articles clears their pending flags without indexing anything,
+        // and DrainAllPendingAsync needs that to still count as progress so it keeps going.
+        return resolved;
+    }
+
+    /// <summary>
+    /// One-shot catch-up: repeatedly runs <see cref="ProcessPendingAsync"/> back-to-back (no
+    /// inter-batch delay) until a batch makes no progress -- either because nothing is left
+    /// pending, or because every remaining item is failing (in which case the periodic
+    /// <see cref="ExecuteAsync"/> loop will keep retrying it on its normal schedule). Bounded by
+    /// <paramref name="maxBatches"/> as a hard safety cap, not a target -- normal drains stop far
+    /// earlier via the zero-progress check.
+    /// </summary>
+    public async Task<int> DrainAllPendingAsync(CancellationToken ct, int maxBatches = 200)
+    {
+        var total = 0;
+        for (var i = 0; i < maxBatches && !ct.IsCancellationRequested; i++)
+        {
+            var resolved = await ProcessPendingAsync(ct);
+            if (resolved == 0) break;
+            total += resolved;
+        }
+        return total;
     }
 }

@@ -3,7 +3,9 @@ using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Search.Indexing;
+using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Search;
+using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -87,6 +89,41 @@ public static class SearchMetricsEndpoints
 
             await nodeRepo.SetCanGenerateEmbeddingsAsync(req.Enabled);
             return Results.Ok(new EmbeddingsEnabledResponse(req.Enabled));
+        });
+
+        // POST /api/admin/search/embeddings/backfill -- one-shot catch-up for nodes that just had
+        // embeddings turned on (or an index rebuild pending) after a mass import: at the default
+        // 5-min tick / 50-item batch, hundreds of pending articles can take hours of wall-clock
+        // time to drain even though the actual compute is a fraction of that. This drains both
+        // queues back-to-back with no inter-batch delay, in the background, and returns
+        // immediately -- a full drain of a large backlog is not something an HTTP request should
+        // block on. Progress isn't polled here; the existing GET /metrics index-health numbers and
+        // server logs ("Processed embeddings:" / "Indexed articles:") are the way to watch it.
+        group.MapPost("/embeddings/backfill", (
+            HttpContext ctx,
+            SessionService session,
+            PendingEmbeddingProcessor embeddingProcessor,
+            PendingIndexProcessor indexProcessor,
+            ILogger<PendingEmbeddingProcessor> logger) =>
+        {
+            var gate = RequireSuperadmin(ctx, session);
+            if (gate != null) return gate;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var embedded = await embeddingProcessor.DrainAllPendingAsync(CancellationToken.None);
+                    var indexed = await indexProcessor.DrainAllPendingAsync(CancellationToken.None);
+                    logger.LogInformation("Manual backfill complete: {Embedded} embeddings, {Indexed} index entries", embedded, indexed);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Manual backfill failed");
+                }
+            });
+
+            return Results.Accepted(value: new { message = "Backfill started in the background; watch server logs or GET /metrics for progress." });
         });
     }
 

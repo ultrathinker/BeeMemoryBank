@@ -77,8 +77,24 @@ TimeSpan? syncInterval = int.TryParse(Environment.GetEnvironmentVariable("BMB_SY
 builder.Services.AddSyncScheduler(interval: syncInterval, periodicCleanupFactory: sp =>
     sp.GetRequiredService<SyncTokenStore>().CleanupExpired);
 builder.Services.AddCleanupService();
-builder.Services.AddEmbeddingProcessor();
-builder.Services.AddIndexProcessor();
+
+// BMB_EMBEDDING_INTERVAL_SECONDS / BMB_EMBEDDING_BATCH_SIZE, BMB_INDEX_INTERVAL_SECONDS /
+// BMB_INDEX_BATCH_SIZE: override the pending-embedding / pending-index processors' tick interval
+// (default 5 min) and per-cycle batch size (default 50). Unset in production; useful for a
+// one-time mass-import catch-up on an existing deployment where waiting out the default drip-feed
+// schedule would take hours. See also POST /api/admin/search/embeddings/backfill for an
+// on-demand full drain that doesn't require restarting the process at all.
+TimeSpan? embeddingInterval = int.TryParse(Environment.GetEnvironmentVariable("BMB_EMBEDDING_INTERVAL_SECONDS"), out var eis) && eis >= 1
+    ? TimeSpan.FromSeconds(eis) : null;
+int? embeddingBatchSize = int.TryParse(Environment.GetEnvironmentVariable("BMB_EMBEDDING_BATCH_SIZE"), out var ebs) && ebs >= 1
+    ? ebs : null;
+builder.Services.AddEmbeddingProcessor(interval: embeddingInterval, batchSize: embeddingBatchSize);
+
+TimeSpan? indexInterval = int.TryParse(Environment.GetEnvironmentVariable("BMB_INDEX_INTERVAL_SECONDS"), out var iis) && iis >= 1
+    ? TimeSpan.FromSeconds(iis) : null;
+int? indexBatchSize = int.TryParse(Environment.GetEnvironmentVariable("BMB_INDEX_BATCH_SIZE"), out var ibs) && ibs >= 1
+    ? ibs : null;
+builder.Services.AddIndexProcessor(interval: indexInterval, batchSize: indexBatchSize);
 
 // ── mDNS announce: advertise this node on the LAN (_beememorybank._tcp.local) ──
 // Runs in the API because that is where the authoritative InvisibleModeService (registered by

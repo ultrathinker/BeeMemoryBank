@@ -123,6 +123,12 @@ public static class SnapshotProxyEndpoints
             return ok ? Results.Ok(new { enabled = body.Enabled }) : Results.StatusCode(502);
         }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
+        app.MapPost("/api-proxy/admin/search/embeddings/backfill", async (ApiClient api) =>
+        {
+            var ok = await api.TriggerEmbeddingsBackfillAsync();
+            return ok ? Results.Accepted() : Results.StatusCode(502);
+        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+
         app.MapGet("/api-proxy/sync/status", async (ApiClient api) =>
         {
             // W2: pass upstream status + body through verbatim (was: null → 502, hiding real errors).

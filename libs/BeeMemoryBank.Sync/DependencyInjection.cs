@@ -119,15 +119,19 @@ public static class DependencyInjection
     }
 
     /// <summary>
-    /// Adds the background pending embeddings processor.
+    /// Adds the background pending embeddings processor. Also registered as itself (not just as
+    /// IHostedService) so the admin one-shot backfill endpoint can inject the same singleton
+    /// instance and call <see cref="PendingEmbeddingProcessor.DrainAllPendingAsync"/> directly.
     /// </summary>
-    public static IServiceCollection AddEmbeddingProcessor(this IServiceCollection services, TimeSpan? interval = null)
+    public static IServiceCollection AddEmbeddingProcessor(this IServiceCollection services, TimeSpan? interval = null, int? batchSize = null)
     {
-        services.AddHostedService(sp =>
+        services.AddSingleton(sp =>
             new PendingEmbeddingProcessor(
                 sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PendingEmbeddingProcessor>>(),
-                interval));
+                interval,
+                batchSize));
+        services.AddHostedService(sp => sp.GetRequiredService<PendingEmbeddingProcessor>());
         return services;
     }
 
@@ -135,14 +139,17 @@ public static class DependencyInjection
     /// WP-11: adds the background pending search-index processor. Requires AddStorage() (for
     /// EncryptedSegmentStore/SegmentManifestRepository/SegmentTombstoneRepository) and AddSync()
     /// (for the IndexBuilder/SearchIndexLifecycleService registrations above) to have already run.
+    /// Also registered as itself, same reason as <see cref="AddEmbeddingProcessor"/> above.
     /// </summary>
-    public static IServiceCollection AddIndexProcessor(this IServiceCollection services, TimeSpan? interval = null)
+    public static IServiceCollection AddIndexProcessor(this IServiceCollection services, TimeSpan? interval = null, int? batchSize = null)
     {
-        services.AddHostedService(sp =>
+        services.AddSingleton(sp =>
             new PendingIndexProcessor(
                 sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PendingIndexProcessor>>(),
-                interval));
+                interval,
+                batchSize));
+        services.AddHostedService(sp => sp.GetRequiredService<PendingIndexProcessor>());
         return services;
     }
 }

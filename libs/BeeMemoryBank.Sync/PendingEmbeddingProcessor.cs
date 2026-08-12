@@ -15,9 +15,11 @@ namespace BeeMemoryBank.Sync;
 public class PendingEmbeddingProcessor(
     IServiceScopeFactory scopeFactory,
     ILogger<PendingEmbeddingProcessor> logger,
-    TimeSpan? interval = null) : BackgroundService
+    TimeSpan? interval = null,
+    int? batchSize = null) : BackgroundService
 {
     private readonly TimeSpan _interval = interval ?? TimeSpan.FromMinutes(5);
+    private readonly int _batchSize = batchSize ?? 50;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -42,21 +44,21 @@ public class PendingEmbeddingProcessor(
         }
     }
 
-    public async Task ProcessPendingAsync(CancellationToken ct)
+    public async Task<int> ProcessPendingAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var session = scope.ServiceProvider.GetRequiredService<SessionService>();
 
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
         var identity = await nodeRepo.GetAsync();
-        if (identity == null || !identity.CanGenerateEmbeddings) return;
+        if (identity == null || !identity.CanGenerateEmbeddings) return 0;
 
         // Concept tag embeddings don't require session unlock — backfill unconditionally
         var conceptTagService = scope.ServiceProvider.GetRequiredService<ConceptTagService>();
         await conceptTagService.BackfillEmbeddingsAsync();
 
         // Article projections require an unlocked session (projection matrix is encrypted)
-        if (!session.IsUnlocked) return;
+        if (!session.IsUnlocked) return 0;
 
         var articleRepo = scope.ServiceProvider.GetRequiredService<IArticleRepository>();
         var bodyRepo = scope.ServiceProvider.GetRequiredService<IArticleBodyRepository>();
@@ -64,8 +66,8 @@ public class PendingEmbeddingProcessor(
 
         await projectionService.EnsureProjectionMatrixAsync();
 
-        var pending = await articleRepo.GetEmbeddingPendingAsync(50);
-        if (pending.Count == 0) return;
+        var pending = await articleRepo.GetEmbeddingPendingAsync(_batchSize);
+        if (pending.Count == 0) return 0;
 
         logger.LogInformation("Processing {Count} articles with pending embeddings", pending.Count);
 
@@ -98,5 +100,27 @@ public class PendingEmbeddingProcessor(
 
         if (processed > 0)
             logger.LogInformation("Processed embeddings: {Count}", processed);
+
+        return processed;
+    }
+
+    /// <summary>
+    /// One-shot catch-up: repeatedly runs <see cref="ProcessPendingAsync"/> back-to-back (no
+    /// inter-batch delay) until a batch makes no progress -- either because nothing is left
+    /// pending, or because every remaining item is failing (in which case the periodic
+    /// <see cref="ExecuteAsync"/> loop will keep retrying it on its normal schedule). Bounded by
+    /// <paramref name="maxBatches"/> as a hard safety cap, not a target -- normal drains stop far
+    /// earlier via the zero-progress check.
+    /// </summary>
+    public async Task<int> DrainAllPendingAsync(CancellationToken ct, int maxBatches = 200)
+    {
+        var total = 0;
+        for (var i = 0; i < maxBatches && !ct.IsCancellationRequested; i++)
+        {
+            var processed = await ProcessPendingAsync(ct);
+            if (processed == 0) break;
+            total += processed;
+        }
+        return total;
     }
 }
