@@ -12,11 +12,11 @@
   <ItemGroup>
     <PackageReference Include="Certes" Version="3.0.4" />
     <PackageReference Include="DiffPlex" Version="1.9.0" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
     <!-- Hosting + Logging abstractions are needed by MdnsAnnouncer (BackgroundService) and the
          mDNS services' ILogger usage. The same versions are used by BeeMemoryBank.Sync. -->
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
     <!-- SentencePieceTokenizer has been part of the STABLE (non-preview) API surface since v1.0.1:
          it loads a raw sentencepiece_model.proto stream directly, which is exactly the format
