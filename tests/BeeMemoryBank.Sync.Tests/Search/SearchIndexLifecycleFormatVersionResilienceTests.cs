@@ -32,39 +32,29 @@ namespace BeeMemoryBank.Sync.Tests.Search;
 /// </para>
 ///
 /// <para>
-/// <b>Finding (real gap, not fixed -- see wp-13-report.md):</b> Storing a segment whose plaintext
-/// bytes have a future <see cref="SegmentLayout.FormatVersion"/> (simulating "a newer node version
-/// wrote this segment, an older version is now warm-starting from it") decrypts successfully --
-/// <see cref="EncryptedSegmentStore.LoadAsync"/> has no way to know the plaintext payload's own
-/// internal format changed, since that is a layer entirely below it. But
-/// <see cref="SearchIndexLifecycleService.EnsureWarmStartedAsync"/> then constructs a
+/// <b>Finding (real gap, fixed during WP-13 review/integration):</b> Storing a segment whose
+/// plaintext bytes have a future <see cref="SegmentLayout.FormatVersion"/> (simulating "a newer
+/// node version wrote this segment, an older version is now warm-starting from it") decrypts
+/// successfully -- <see cref="EncryptedSegmentStore.LoadAsync"/> has no way to know the plaintext
+/// payload's own internal format changed, since that is a layer entirely below it. WP-13 itself
+/// found that <see cref="SearchIndexLifecycleService.EnsureWarmStartedAsync"/> then constructed a
 /// <c>new SegmentReader(bytes)</c> directly over that payload with no try/catch around it -- unlike
 /// every one of the five documented <see cref="SegmentRebuildReason"/> signals, which it catches
-/// and turns into a graceful <see cref="SearchIndexLifecycleService.TriggerFullRebuildAsync"/> call,
-/// this specific failure mode (a <see cref="NotSupportedException"/> from a too-new inner segment
-/// format) propagates straight out of <c>EnsureWarmStartedAsync</c> uncaught. In production that
-/// means the entire <c>PendingIndexProcessor</c> cycle faults every single time it runs (see
-/// <c>PendingIndexProcessor.ExecuteAsync</c>'s outer catch, which only logs and retries next
-/// interval -- the same bad segment is retried and re-throws every cycle forever) instead of
-/// self-healing via a full rebuild the way a corrupted/wrong-container-version segment already
-/// does.
+/// and turns into a graceful <see cref="SearchIndexLifecycleService.TriggerFullRebuildAsync"/> call.
+/// This was outside wp-13.md's enumerated list of files that WP was allowed to modify
+/// (<c>SegmentReader.cs</c>, <c>EncryptedSegmentFormat.cs</c>, <c>EncryptedSegmentStore.cs</c>
+/// only), so WP-13 reported it instead of fixing it. It was then fixed directly in
+/// <see cref="SearchIndexLifecycleService.EnsureWarmStartedAsync"/> as part of merging this WP:
+/// the <c>new SegmentReader(bytes)</c> call is now wrapped in a try/catch for
+/// <see cref="NotSupportedException"/> (and defensively <see cref="ArgumentException"/>, which the
+/// same constructor throws for a too-short/bad-magic buffer) that calls
+/// <see cref="SearchIndexLifecycleService.TriggerFullRebuildAsync"/> the same way a
+/// <see cref="SegmentLoadResult"/> failure already does.
 /// </para>
 ///
 /// <para>
-/// <b>Not fixed here:</b> the fix belongs in <c>SearchIndexLifecycleService.cs</c>
-/// (BeeMemoryBank.Sync), which is outside wp-13.md's enumerated list of files this WP is allowed to
-/// modify (<c>SegmentReader.cs</c>, <c>EncryptedSegmentFormat.cs</c>, <c>EncryptedSegmentStore.cs</c>
-/// only) -- and it is WP-11's design, not this test-writing WP's, to rework. The recommended fix:
-/// wrap the <c>new SegmentReader(bytes)</c> call (and ideally the whole per-manifest reconstruction
-/// loop) in a try/catch for <see cref="NotSupportedException"/> (and defensively
-/// <see cref="ArgumentException"/>, which the same constructor throws for a too-short/bad-magic
-/// buffer) that calls <see cref="SearchIndexLifecycleService.TriggerFullRebuildAsync"/> the same way
-/// an <see cref="SegmentLoadResult"/> failure already does.
-/// </para>
-///
-/// <para>
-/// This test intentionally pins the CURRENT (undesirable) behavior so it stays documented and
-/// green rather than silently regressing further; it is not an endorsement of the crash.
+/// This test now pins the FIXED behavior (graceful full rebuild, matching every other
+/// <see cref="SegmentRebuildReason"/> path) rather than the crash WP-13 originally found.
 /// </para>
 /// </summary>
 public class SearchIndexLifecycleFormatVersionResilienceTests : IAsyncLifetime
@@ -117,7 +107,7 @@ public class SearchIndexLifecycleFormatVersionResilienceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task EnsureWarmStartedAsync_PersistedSegmentWithFutureInnerFormatVersion_CurrentlyThrowsInsteadOfTriggeringRebuild()
+    public async Task EnsureWarmStartedAsync_PersistedSegmentWithFutureInnerFormatVersion_TriggersFullRebuildInsteadOfThrowing()
     {
         // A real, validly-encrypted container whose DECRYPTED payload claims a "BMBI" format
         // version from the future -- exactly what a newer node's real persisted segment would look
@@ -148,18 +138,17 @@ public class SearchIndexLifecycleFormatVersionResilienceTests : IAsyncLifetime
 
         Func<Task> warmStart = () => lifecycle.EnsureWarmStartedAsync(CancellationToken.None);
 
-        // THE FINDING: unlike every documented SegmentRebuildReason (missing/corrupted/wrong
-        // container version/stale epoch), this failure mode is NOT caught -- it propagates as a
-        // raw NotSupportedException instead of resolving to a graceful full rebuild. See this
-        // class's doc comment for the precise gap and why it is reported, not fixed, in this WP.
-        await warmStart.Should().ThrowAsync<NotSupportedException>(
-            "current behavior: SearchIndexLifecycleService.EnsureWarmStartedAsync does not catch SegmentReader's rejection of a future inner format version -- this is WP-13's documented finding, not desired behavior");
+        // FIXED: like every other documented SegmentRebuildReason (missing/corrupted/wrong
+        // container version/stale epoch), a future inner format version is now caught and resolved
+        // to a graceful full rebuild instead of propagating a raw NotSupportedException. See this
+        // class's doc comment for the original finding and the fix applied during WP-13's merge.
+        await warmStart.Should().NotThrowAsync(
+            "SearchIndexLifecycleService.EnsureWarmStartedAsync now catches SegmentReader's rejection of a future inner format version and triggers a full rebuild, matching every other SegmentRebuildReason path");
 
-        // Confirms this really did crash rather than quietly self-heal: the graceful path this WP
-        // compares against always clears the manifest before returning (see
-        // SearchIndexLifecycleIntegrationTests.CorruptedSegmentFile_TriggersFullRebuild...). Here it
-        // does not, because TriggerFullRebuildAsync was never reached.
-        (await _manifestRepo.GetAllManifestsAsync()).Should().NotBeEmpty(
-            "proof the full-rebuild fallback every other failure mode gets was never reached for this one");
+        // Confirms it actually self-healed via TriggerFullRebuildAsync rather than silently doing
+        // nothing: the graceful path always clears the manifest (see
+        // SearchIndexLifecycleIntegrationTests.CorruptedSegmentFile_TriggersFullRebuild...).
+        (await _manifestRepo.GetAllManifestsAsync()).Should().BeEmpty(
+            "TriggerFullRebuildAsync clears the manifest so PendingIndexProcessor reindexes from scratch, same as every other rebuild-triggering failure");
     }
 }
