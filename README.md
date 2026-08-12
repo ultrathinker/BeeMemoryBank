@@ -143,7 +143,7 @@ The bearer token is created in the Web UI under **Admin > Agents** and is shown 
 
 | Category | Tools | Description |
 |---|---|---|
-| **Search** | `bee_search`, `bee_search_content` | Fast metadata search (title/tags) + opt-in full-text body search (decrypts in batches) |
+| **Search** | `bee_search`, `bee_search_content` | Fast metadata search (title/tags) + ranked body search with a `mode` parameter (hybrid/keyword/semantic) |
 | **Read** | `bee_list_articles`, `bee_get_article`, `bee_get_tree`, `bee_get_image`, `bee_get_article_version`, `bee_get_article_versions`, `bee_get_article_diff` | Browse folders, read article content, view embedded images (auto-decrypted), and diff versions |
 | **Write** | `bee_save_article`, `bee_update_article`, `bee_delete_article`, `bee_append_to_article`, `bee_prepend_to_article`, `bee_move_folder`, `bee_delete_folder`, `bee_copy_to`, `bee_rename_folder`, `bee_replace_in_article` | Full CRUD with soft-delete and folder management |
 | **Tags** | `bee_get_related`, `bee_search_by_tag`, `bee_list_tags`, `bee_add_tags`, `bee_remove_tag`, `bee_rename_tag`, `bee_merge_tags`, `bee_delete_tag` | Categorization via tags, semantic search, and global tag management |

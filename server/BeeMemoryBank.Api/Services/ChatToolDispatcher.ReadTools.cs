@@ -1,5 +1,7 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
+using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 
 namespace BeeMemoryBank.Api.Services;
@@ -171,20 +173,56 @@ public sealed partial class ChatToolDispatcher
         }, JsonOpts);
     }
 
-    // Mirrors BeeSearchTools.SearchContent / SearchEndpoints GET /api/search?content=true.
-    // Silently degrades to title-only search when locked (SearchService behavior).
+    // Mirrors BeeSearchTools.SearchContent / POST /api/search/hybrid.
+    // Degrades to title-only search (with a notice) when locked or when ranked/semantic search is
+    // unavailable, rather than failing outright; an unrecognized mode value is a hard error.
     private async Task<string> SearchContentAsync(JsonElement args)
     {
         var keywords = args.TryGetProperty("keywords", out var kw) ? kw.GetString() : null;
         if (string.IsNullOrWhiteSpace(keywords))
             return ErrorJson("keywords is required");
 
-        var results = await searchService.SearchWithContentAsync(keywords!);
+        var modeArg = args.TryGetProperty("mode", out var m) ? m.GetString() : null;
+        var parsedMode = SearchMode.Hybrid;
+        if (!string.IsNullOrEmpty(modeArg) && !Enum.TryParse(modeArg, ignoreCase: true, out parsedMode))
+            return ErrorJson($"invalid mode '{modeArg}'. Valid values: hybrid, keyword, semantic.");
+
+        var titleMatches = await searchService.SearchAsync(keywords!);
+
+        string? notice = null;
+        List<Article> ranked;
+        if (!session.IsUnlocked)
+        {
+            ranked = [];
+            notice = "Vault is locked — searched titles/metadata only (body search skipped).";
+        }
+        else
+        {
+            try
+            {
+                ranked = await hybridSearchService.SearchAsync(keywords!, parsedMode);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ModelUnavailableException)
+            {
+                ranked = [];
+                notice = parsedMode == SearchMode.Semantic
+                    ? "Meaning-based search is unavailable on this node — searched titles/metadata only."
+                    : "Ranked content search is unavailable — searched titles/metadata only.";
+            }
+        }
+
+        var seenIds = new HashSet<Guid>(ranked.Select(a => a.Id));
+        var merged = new List<Article>(ranked);
+        foreach (var a in titleMatches.Articles)
+        {
+            if (seenIds.Add(a.Id)) merged.Add(a);
+        }
+
         return JsonSerializer.Serialize(new
         {
-            folders = results.Folders.Select(f => new { path = f.Path, name = f.Name }),
-            articles = results.Articles.Select(a => new { id = a.Id, title = a.Title, treePath = a.TreePath }),
-            notice = session.IsUnlocked ? null : "Vault is locked — searched titles/metadata only (body search skipped)."
+            folders = titleMatches.Folders.Select(f => new { path = f.Path, name = f.Name }),
+            articles = merged.Select(a => new { id = a.Id, title = a.Title, treePath = a.TreePath }),
+            notice
         }, JsonOpts);
     }
 }

@@ -15,7 +15,7 @@ The MCP (Model Context Protocol) server is built into the API process at the `/m
 ### bee_search, bee_search_content (BeeSearchTools.cs)
 Search by title, folder names, and optionally full article body content. Does not require unlock for basic search.
 - `bee_search` — `keywords: string` — fast metadata search (title, folder names). Returns: `[{id, title, treePath}]`
-- `bee_search_content` — `keywords: string` — **SLOW** — decrypts and scans all article bodies in batches. Only use when `bee_search` didn't find what you need. Requires an unlocked session; if locked, falls back to title only. Returns: `[{id, title, treePath}]`
+- `bee_search_content` — `keywords: string`, `mode: string?` (`hybrid` default / `keyword` / `semantic`, invalid value is an error) — ranked search of article bodies (BM25 + chunk-embedding semantic similarity via RRF), plus title/folder matches merged in. Requires an unlocked session; degrades to title-only search (with a `notice`) when locked or when ranked/semantic search is unavailable on this node. Returns: `[{id, title, treePath}]`
 
 ### bee_list_articles, bee_get_article, bee_get_tree, bee_get_article_versions, bee_get_article_version, bee_get_article_diff, bee_get_image (BeeReadTools.cs)
 - `bee_list_articles` — list articles with optional path filter (`treePath: string?`) and `updatedAfter` filter. Returns: `[{id, title, treePath, status, createdAt, updatedAt}]`

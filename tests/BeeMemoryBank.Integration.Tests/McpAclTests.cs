@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.McpTools;
+using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -34,6 +35,7 @@ public class McpAclTests : IAsyncLifetime
     private BeeWriteTools _writeTools = null!;
     private BeeConceptTools _conceptTools = null!;
     private BeeAuditTools _auditTools = null!;
+    private IndexBuilder _indexBuilder = null!;
 
     private HttpContextAccessor _httpContextAccessor = null!;
     private FolderAccessService _folderAccessService = null!;
@@ -52,7 +54,9 @@ public class McpAclTests : IAsyncLifetime
         await runner.RunMigrationsAsync();
 
         _scopeHolder = new CallerScopeHolder();
-        var articleRepo = new ArticleRepository(_factory, _scopeHolder);
+        var vectorCache = new EmbeddingVectorCache(_factory);
+        var chunkCache = new ChunkEmbeddingVectorCache(_factory);
+        var articleRepo = new ArticleRepository(_factory, _scopeHolder, vectorCache, searchMetrics: null, chunkCache);
         var bodyRepo = new ArticleBodyRepository(_factory);
         var keySlotRepo = new KeySlotRepository(_factory);
         var nodeRepo = new NodeIdentityRepository(_factory);
@@ -71,7 +75,13 @@ public class McpAclTests : IAsyncLifetime
         var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), _conceptTagService);
-        var searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, _scopeHolder, new SearchQueryCache(), new IndexBuilder());
+        _indexBuilder = new IndexBuilder();
+        var searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, _scopeHolder, new SearchQueryCache(), _indexBuilder);
+        var matrixRepo = new ProjectionMatrixRepository(_factory);
+        var chunkRepo = new ArticleChunkEmbeddingRepository(_factory, chunkCache);
+        var chunker = ArticleChunker.CreateDefault();
+        var projectionService = new EmbeddingProjectionService(new FakeEmbeddingGenerator(), matrixRepo, articleRepo, _session, chunker, chunkRepo);
+        var hybridSearchService = new HybridSearchService(searchService, articleRepo, projectionService, _session);
 
         await initService.InitializeAsync("admin", "AclTestNode", Password);
         await _session.UnlockAsync(Password);
@@ -93,7 +103,7 @@ public class McpAclTests : IAsyncLifetime
 
         var responseManager = new McpResponseManager(Path.GetTempPath());
 
-        _searchTools = new BeeSearchTools(searchService, responseManager, _session);
+        _searchTools = new BeeSearchTools(searchService, hybridSearchService, responseManager, _session);
         _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo));
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
@@ -181,8 +191,13 @@ public class McpAclTests : IAsyncLifetime
     [Fact]
     public async Task Acl_BeeSearchContent_DeniesSecretFolder()
     {
-        await _articleService.CreateAsync("Public Content Acl", "/Public", [], "unique public marker acl99");
-        await _articleService.CreateAsync("Secret Content Acl", "/Secret", [], "unique secret marker acl99");
+        var publicArticle = await _articleService.CreateAsync("Public Content Acl", "/Public", [], "unique public marker acl99");
+        var secretArticle = await _articleService.CreateAsync("Secret Content Acl", "/Secret", [], "unique secret marker acl99");
+        // bee_search_content now runs through the BM25 index (HybridSearchService) instead of the old
+        // linear body scan, so the index must be populated directly -- no background indexing
+        // processor runs in this direct-construction test host.
+        _indexBuilder.AddOrUpdateDocument(publicArticle.Id, Guid.Empty, "unique public marker acl99");
+        _indexBuilder.AddOrUpdateDocument(secretArticle.Id, Guid.Empty, "unique secret marker acl99");
 
         await SetRestrictedCaller();
         var result = await _searchTools.SearchContent("acl99");

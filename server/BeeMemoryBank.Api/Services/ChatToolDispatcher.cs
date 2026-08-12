@@ -42,6 +42,7 @@ namespace BeeMemoryBank.Api.Services;
 public sealed partial class ChatToolDispatcher(
     ArticleService articleService,
     SearchService searchService,
+    HybridSearchService hybridSearchService,
     IFolderRepository folderRepo,
     ConceptTagService conceptTagService,
     FolderAccessService folderAccess,

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.McpTools;
+using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Search.Indexing;
@@ -28,6 +29,7 @@ public class McpToolsTests : IAsyncLifetime
     private BeeWriteTools _writeTools = null!;
     private BeeUploadTools _uploadTools = null!;
     private MediaService _mediaService = null!;
+    private IndexBuilder _indexBuilder = null!;
 
     private const string Password = "mcpTestPassword";
 
@@ -44,7 +46,9 @@ public class McpToolsTests : IAsyncLifetime
         await runner.RunMigrationsAsync();
 
         var scopeHolder = new CallerScopeHolder();
-        var articleRepo = new ArticleRepository(_factory, scopeHolder);
+        var vectorCache = new EmbeddingVectorCache(_factory);
+        var chunkCache = new ChunkEmbeddingVectorCache(_factory);
+        var articleRepo = new ArticleRepository(_factory, scopeHolder, vectorCache, searchMetrics: null, chunkCache);
         var bodyRepo = new ArticleBodyRepository(_factory);
         var keySlotRepo = new KeySlotRepository(_factory);
         var nodeRepo = new NodeIdentityRepository(_factory);
@@ -64,7 +68,13 @@ public class McpToolsTests : IAsyncLifetime
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
-        _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, scopeHolder, new SearchQueryCache(), new IndexBuilder());
+        _indexBuilder = new IndexBuilder();
+        _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, scopeHolder, new SearchQueryCache(), _indexBuilder);
+        var matrixRepo = new ProjectionMatrixRepository(_factory);
+        var chunkRepo = new ArticleChunkEmbeddingRepository(_factory, chunkCache);
+        var chunker = ArticleChunker.CreateDefault();
+        var projectionService = new EmbeddingProjectionService(new FakeEmbeddingGenerator(), matrixRepo, articleRepo, _session, chunker, chunkRepo);
+        var hybridSearchService = new HybridSearchService(_searchService, articleRepo, projectionService, _session);
 
         await initService.InitializeAsync("admin", "McpTestNode", Password);
         await _session.UnlockAsync(Password);
@@ -74,7 +84,7 @@ public class McpToolsTests : IAsyncLifetime
             .AddScoped<IFolderAclRepository>(_ => new BeeMemoryBank.Storage.Sqlite.FolderAclRepository(_factory))
             .AddScoped<IFolderRepository>(_ => folderRepo)
             .BuildServiceProvider());
-        _searchTools = new BeeSearchTools(_searchService, responseManager, _session);
+        _searchTools = new BeeSearchTools(_searchService, hybridSearchService, responseManager, _session);
         var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccessService);
         _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo));
         var copySvc = new CopyService(_articleService, folderSvc, _mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
@@ -148,6 +158,65 @@ public class McpToolsTests : IAsyncLifetime
         var obj = JsonDocument.Parse(result).RootElement;
         var notice = obj.GetProperty("notice");
         notice.ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Theory]
+    [InlineData("bogus")]
+    [InlineData("full-text")]
+    public async Task BeeSearchContent_UnrecognizedMode_ReturnsError(string mode)
+    {
+        var result = await _searchTools.SearchContent("anything", mode);
+
+        result.Should().StartWith("Error:").And.Contain("invalid mode");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("hybrid")]
+    [InlineData("keyword")]
+    [InlineData("KEYWORD")]
+    public async Task BeeSearchContent_ValidModes_FindIndexedArticleByBodyOnly(string? mode)
+    {
+        var article = await _articleService.CreateAsync("Findable By Mode Test", "/Test", [], "uniqueModeMarkerXyz");
+        _indexBuilder.AddOrUpdateDocument(article.Id, Guid.Empty, "uniqueModeMarkerXyz");
+
+        var result = await _searchTools.SearchContent("uniqueModeMarkerXyz", mode);
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        obj.GetProperty("notice").ValueKind.Should().Be(JsonValueKind.Null);
+        var titles = obj.GetProperty("articles").EnumerateArray()
+            .Select(a => a.GetProperty("title").GetString());
+        titles.Should().Contain("Findable By Mode Test");
+    }
+
+    [Fact]
+    public async Task BeeSearchContent_SemanticMode_NoProjectionMatrix_DegradesWithNotice()
+    {
+        // EnsureProjectionMatrixAsync was never called in this fixture -- semantic mode has no
+        // keyword fallback of its own (unlike hybrid mode, which absorbs this internally), so the
+        // tool's own outer catch must degrade to title-only search instead of throwing.
+        await _articleService.CreateAsync("Semantic Degrade Test", "/Test", [], "irrelevant body");
+
+        var result = await _searchTools.SearchContent("irrelevant", "semantic");
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        var notice = obj.GetProperty("notice");
+        notice.ValueKind.Should().Be(JsonValueKind.String);
+        notice.GetString().Should().Contain("unavailable");
+    }
+
+    [Fact]
+    public async Task BeeSearchContent_TitleAndBodyBothMatch_ArticleAppearsOnce()
+    {
+        var article = await _articleService.CreateAsync("uniqueDedupMarkerXyz", "/Test", [], "uniqueDedupMarkerXyz body");
+        _indexBuilder.AddOrUpdateDocument(article.Id, Guid.Empty, "uniqueDedupMarkerXyz body");
+
+        var result = await _searchTools.SearchContent("uniqueDedupMarkerXyz", "keyword");
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        var matches = obj.GetProperty("articles").EnumerateArray()
+            .Where(a => a.GetProperty("id").GetGuid() == article.Id);
+        matches.Should().ContainSingle();
     }
 
     // ───── bee_list_articles ─────────────────────────────────────────────────
