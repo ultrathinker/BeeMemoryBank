@@ -309,11 +309,15 @@ public sealed class IndexBuilder
     // WP-12: running total of term occurrences (with duplicates -- i.e. summed document lengths)
     // across every document ever folded into a currently-live sealed segment, maintained
     // incrementally by SealLocked/MergeLocked at essentially zero extra cost (both already hold
-    // every sealed document's full term list in hand at the moment they compute this). This is the
-    // numerator SearchRanked uses to approximate the corpus's average document length -- see that
-    // method's doc comment for exactly how precise this is and where it goes stale between merges
-    // (a tombstoned sealed document's length is not subtracted here until the next merge recomputes
-    // this field exactly from the surviving population).
+    // every sealed document's full term list in hand at the moment they compute this), and by
+    // AdoptPersistedSegment (WP-11's warm-start path -- a one-time O(that segment's postings) walk
+    // paid once at adoption, since a segment reloaded from disk was never sealed/merged in THIS
+    // process's lifetime and would otherwise silently contribute 0 here despite being just as live
+    // as a freshly-sealed one; see that method's own comment for why this matters in practice, not
+    // just in theory). This is the numerator SearchRanked uses to approximate the corpus's average
+    // document length -- see that method's doc comment for exactly how precise this is and where it
+    // goes stale between merges (a tombstoned sealed document's length is not subtracted here until
+    // the next merge recomputes this field exactly from the surviving population).
     private long _sealedTotalTermOccurrencesApprox;
 
     /// <summary>
@@ -751,22 +755,55 @@ public sealed class IndexBuilder
         // into `_sealedSegments` does.
         var vocabulary = new HashSet<string>(reader.EnumerateTerms(), StringComparer.Ordinal);
         var articleToDocId = new Dictionary<Guid, int>(reader.DocumentCount);
+        var articleIdByDocId = new Guid[reader.DocumentCount];
         for (int docId = 0; docId < reader.DocumentCount; docId++)
         {
             (Guid articleId, Guid _) = reader.GetDocument(docId);
             articleToDocId[articleId] = docId;
+            articleIdByDocId[docId] = articleId;
+        }
+
+        // WP-12 fix: SearchRanked's avgdl approximation relies on _sealedTotalTermOccurrencesApprox
+        // covering every currently-live sealed segment, not just ones this process produced itself
+        // via SealLocked/MergeLocked. An adopted segment -- folded in here from persisted disk
+        // content, which is what happens on every normal warm-start after a restart, not just some
+        // edge case -- is exactly as "currently sealed" as a freshly-built one, so it must
+        // contribute its live documents' total length here too. Skipping this would leave
+        // _sealedTotalTermOccurrencesApprox at whatever it was before adoption (typically 0 right
+        // after a fresh process start), making avgdl computed far too low whenever adopted content
+        // dominates the corpus -- which artificially inflates the length-normalization ratio for
+        // hot-buffer documents (whose lengths ARE exact) relative to sealed documents (always scored
+        // at lengthRatio == 1 regardless), skewing rankings between the two tiers. This is a one-time
+        // O(this segment's postings) walk paid once at adoption time -- not per query -- so it does
+        // not violate SearchRanked's own "must not scale with corpus size per query" constraint; it
+        // costs no more than the vocabulary/articleToDocId reconstruction just above, which already
+        // pays a similar one-time price.
+        long adoptedTermOccurrences = 0;
+        foreach (string term in vocabulary)
+        {
+            foreach ((int docId, int termFrequency) in reader.GetPostings(term))
+            {
+                if (!tombstones.Contains(articleIdByDocId[docId]))
+                {
+                    adoptedTermOccurrences += termFrequency;
+                }
+            }
         }
 
         lock (_writeLock)
         {
             var segment = new SealedSegment(_nextSegmentId++, reader, vocabulary, articleToDocId, new HashSet<Guid>(tombstones));
+            _sealedTotalTermOccurrencesApprox += adoptedTermOccurrences;
 
             // Same copy-on-write publish SealLocked/MergeLocked use -- an adopted segment is a
             // first-class citizen of the sealed-segment list from the moment it is published, not
             // a special case bolted on afterward. MaybeMergeLocked runs immediately after for the
             // same reason SealLocked always runs it: if adopting this segment (on top of whatever
             // was already sealed) already crosses a merge threshold, that must be honored right
-            // away rather than waiting for the next unrelated mutation to notice.
+            // away rather than waiting for the next unrelated mutation to notice. If a merge does
+            // trigger here, MergeLocked recomputes _sealedTotalTermOccurrencesApprox exactly from
+            // the merged survivors (which already includes this segment's contribution), so the
+            // increment just above is harmlessly superseded rather than double-counted.
             var updated = new List<SealedSegment>(_sealedSegments) { segment };
             _sealedSegments = updated;
             MaybeMergeLocked();

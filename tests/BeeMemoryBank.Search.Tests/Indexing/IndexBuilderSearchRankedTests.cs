@@ -1,4 +1,5 @@
 using BeeMemoryBank.Search.Indexing;
+using BeeMemoryBank.Search.Segment;
 
 namespace BeeMemoryBank.Search.Tests.Indexing;
 
@@ -201,6 +202,71 @@ public class IndexBuilderSearchRankedTests
         // actually exercises two different code paths, not the same formula twice by coincidence.
         Math.Abs(expectedBefore - expectedAfter).Should().BeGreaterThan(1e-3,
             "the hot-buffer and sealed-segment formulas must genuinely differ in this scenario");
+    }
+
+    [Fact]
+    public void SearchRanked_AfterAdoptingPersistedSegment_AvgDocLengthAccountsForAdoptedContent()
+    {
+        // Regression test for a review finding: AdoptPersistedSegment (WP-11's warm-start path,
+        // which folds a segment reloaded from disk back into a live IndexBuilder) must contribute
+        // its live documents' total length to the same running total SealLocked/MergeLocked
+        // maintain for SearchRanked's avgdl approximation. Without that, avgdl computed right after
+        // a warm-start would reflect only the hot buffer's own (typically much shorter) documents,
+        // ignoring however much real content was just adopted from disk -- which is the NORMAL
+        // state immediately after every process restart with existing indexed content, not an edge
+        // case.
+        //
+        // This is engineered so the bug is not just "a small numeric error" but visibly FLIPS the
+        // ranking order between a hot-buffer document and the adopted sealed document: the adopted
+        // document is long (100 terms) and the hot-buffer document is short (2 terms), both
+        // containing the query term exactly once. Sealed-segment documents are always scored at
+        // lengthRatio == 1 regardless of avgdl (see IndexBuilder's own documented approximation),
+        // so the adopted document's score is identical whether or not the bug is present -- only
+        // the hot-buffer document's score depends on avgdl being correct, via its
+        // lengthRatio = |D| / avgdl. Without the fix, avgdl would be (2 + 0) / 2 = 1.0 (the adopted
+        // document's length silently missing), making the short hot-buffer document's lengthRatio
+        // 2.0 instead of the correct ~0.039 -- inflating its BM25 denominator enough to rank it
+        // BELOW the adopted document instead of above it.
+        string queryTerm = Stem("zzzquery");
+
+        var adoptedArticle = Guid.NewGuid();
+        var adoptedTerms = new List<string> { queryTerm };
+        adoptedTerms.AddRange(Enumerable.Repeat("zzzsealedfiller", 99)); // adopted document length: 100
+        byte[] bytes = SegmentWriter.Build([new SegmentDocument(0, adoptedArticle, Guid.NewGuid(), adoptedTerms)]);
+        var reader = new SegmentReader(bytes);
+
+        var builder = new IndexBuilder(hotBufferSealThreshold: 1000, mergeSegmentCountThreshold: 1000, mergeTombstoneFractionThreshold: 1.0);
+        builder.AdoptPersistedSegment(reader, new HashSet<Guid>());
+        builder.SealedSegmentCount.Should().Be(1);
+
+        var hotArticle = Guid.NewGuid();
+        builder.AddOrUpdateDocument(hotArticle, Guid.NewGuid(), "zzzquery zzzpad"); // hot-buffer document length: 2
+        builder.HotBufferCount.Should().Be(1);
+
+        var results = builder.SearchRanked([queryTerm], topK: 10);
+
+        results.Should().HaveCount(2);
+
+        // Hand-computed with the CORRECT avgdl (which must include the adopted document's length):
+        // N=2, avgdl=(2+100)/2=51, df(queryTerm)=2 (both documents contain it).
+        double idf = ExpectedIdf(corpusSize: 2, documentFrequency: 2);
+        double hotLengthRatio = 2.0 / 51.0;
+        double denomHot = 1 + K1 * (1 - B + B * hotLengthRatio);
+        double expectedHotScore = idf * (1 * (K1 + 1)) / denomHot;
+        double denomSealed = 1 + K1 * (1 - B + B * 1.0); // sealed documents are always scored at lengthRatio == 1
+        double expectedSealedScore = idf * (1 * (K1 + 1)) / denomSealed;
+
+        expectedHotScore.Should().BeGreaterThan(expectedSealedScore,
+            "sanity check on the hand-computed values themselves: this test must actually exercise a "
+                + "case where getting avgdl right changes the ranking, not just its magnitude");
+
+        results[0].ArticleId.Should().Be(hotArticle,
+            "with avgdl correctly including the adopted segment's length, the short hot-buffer "
+                + "document must rank first -- a buggy avgdl missing that contribution would flip this");
+        results[1].ArticleId.Should().Be(adoptedArticle);
+
+        results.Single(r => r.ArticleId == hotArticle).Score.Should().BeApproximately((float)expectedHotScore, 1e-4f);
+        results.Single(r => r.ArticleId == adoptedArticle).Score.Should().BeApproximately((float)expectedSealedScore, 1e-4f);
     }
 
     [Fact]
