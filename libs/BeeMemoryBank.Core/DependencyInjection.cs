@@ -14,6 +14,11 @@ public static class DependencyInjection
         services.AddSingleton<InvisibleModeService>();
         services.AddSingleton<MaintenanceModeService>();
 
+        // Singleton: the query cache is shared across all requests/scopes so concurrent identical
+        // searches coalesce onto one in-flight task and near-repeat hits are served from the TTL
+        // cache (WP-17). ACL safety comes from the scope fingerprint embedded in each cache key.
+        services.AddSingleton<SearchQueryCache>();
+
         // Null implementations are replaced with real ones when BeeMemoryBank.Sync / Api / Cli is registered
         services.TryAddSingleton<ILamportClock, NullLamportClock>();
         services.TryAddScoped<IEventLogger, NullEventLogger>();

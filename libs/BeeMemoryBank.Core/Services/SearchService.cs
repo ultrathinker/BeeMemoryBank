@@ -14,9 +14,28 @@ public class SearchService(
     IArticleRepository articleRepo,
     IArticleBodyRepository bodyRepo,
     IFolderRepository folderRepo,
-    SessionService session)
+    SessionService session,
+    CallerScopeHolder scopeHolder,
+    SearchQueryCache queryCache)
 {
+    // Method discriminators in the cache key: SearchAsync and SearchWithContentAsync return
+    // different result sets for the same query string, so they must occupy disjoint cache slots.
+    private const string MethodSearch = nameof(SearchAsync);
+    private const string MethodSearchWithContent = nameof(SearchWithContentAsync);
+
     public async Task<SearchResults> SearchAsync(string query)
+    {
+        // WP-17: every call goes through the single-flight + TTL cache. The cache key embeds the
+        // caller's read-scope fingerprint so two callers with different folder ACLs can never share
+        // a result (see SearchQueryCache). On a miss the underlying logic below runs unchanged.
+        return await queryCache.ExecuteAsync(
+            MethodSearch,
+            query,
+            scopeHolder.Scope.ReadScopeFingerprint,
+            () => SearchUncachedAsync(query));
+    }
+
+    private async Task<SearchResults> SearchUncachedAsync(string query)
     {
         var foldersTask = folderRepo.SearchAsync(query);
         var articlesTask = articleRepo.SearchAsync(query);
@@ -44,6 +63,18 @@ public class SearchService(
     /// Requires an unlocked session. Results are merged with title/tag matches.
     /// </summary>
     public async Task<SearchResults> SearchWithContentAsync(string query)
+    {
+        // WP-17: same single-flight + TTL cache as SearchAsync. Body-content search is by far the
+        // most expensive query path (it decrypts every active body), so coalescing concurrent
+        // identical calls and caching near-repeat calls is where the cache pays off most.
+        return await queryCache.ExecuteAsync(
+            MethodSearchWithContent,
+            query,
+            scopeHolder.Scope.ReadScopeFingerprint,
+            () => SearchWithContentUncachedAsync(query));
+    }
+
+    private async Task<SearchResults> SearchWithContentUncachedAsync(string query)
     {
         var foldersTask = folderRepo.SearchAsync(query);
         var metadataTask = articleRepo.SearchAsync(query);

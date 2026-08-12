@@ -63,7 +63,7 @@ public class McpToolsTests : IAsyncLifetime
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
-        _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session);
+        _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, scopeHolder, new SearchQueryCache());
 
         await initService.InitializeAsync("admin", "McpTestNode", Password);
         await _session.UnlockAsync(Password);
