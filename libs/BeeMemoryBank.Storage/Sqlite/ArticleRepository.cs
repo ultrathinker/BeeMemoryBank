@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -6,9 +5,15 @@ using Dapper;
 
 namespace BeeMemoryBank.Storage.Sqlite;
 
-public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder scopeHolder) : BaseRepository(factory), IArticleRepository
+public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder scopeHolder, EmbeddingVectorCache? vectorCache = null) : BaseRepository(factory), IArticleRepository
 {
     private readonly CallerScopeHolder _holder = scopeHolder;
+
+    // WP-14: embedding vector cache. DI injects the shared singleton; direct `new` callers (tests)
+    // get a per-instance cache when they omit the argument. The cache is the only state this
+    // otherwise-stateless, scoped repository carries, and it is process-wide by design so an
+    // embedding write in one scope invalidates the cache every other scope's next search sees.
+    private readonly EmbeddingVectorCache _vectorCache = vectorCache ?? new EmbeddingVectorCache(factory);
     private const string SelectCols = @"
         a.id              AS Id,
         a.title           AS Title,
@@ -217,6 +222,10 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
             article, tx);
 
         tx.Commit();
+
+        // WP-14: a brand-new row may carry an embedding_projection (sync create, or a create with
+        // an inline projection), so the cache must be rebuilt on next search to pick it up.
+        _vectorCache.Invalidate();
     }
 
     public async Task UpdateAsync(Article article)
@@ -285,6 +294,13 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
             article, tx);
 
         tx.Commit();
+
+        // WP-14: UpdateAsync rewrites embedding_projection with whatever the Article model carries.
+        // Every current caller load-then-modify-then-save (so the bytes are usually unchanged), but
+        // the column is written unconditionally here and a future caller could change it -- bumping
+        // unconditionally keeps the "cache never silently goes stale" guarantee simple at the cost
+        // of a redundant rebuild on metadata-only edits. See the WP-14 report for the tradeoff.
+        _vectorCache.Invalidate();
     }
 
     public async Task SoftDeleteAsync(Guid id)
@@ -345,6 +361,11 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
                   embedding_pending = 0
               WHERE id = @id",
             new { id, projection, modelVersion });
+
+        // WP-14: this is the one write path that actually changes embedding bytes during normal
+        // operation (the background PendingEmbeddingProcessor). Invalidate so the next search
+        // rebuilds the cache with the fresh projection.
+        _vectorCache.Invalidate();
     }
 
     // WP-11: mirrors GetEmbeddingPendingAsync exactly, for PendingIndexProcessor.
@@ -379,6 +400,11 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
     // the full Article model: SearchByEmbeddingAsync used to hydrate every column (including
     // embedding_projection's BLOB sibling columns and all remote-sync metadata) for every
     // article with an embedding, just to throw away all but `topK` of them.
+    //
+    // WP-14: kept for the independent reference cosine computation in Storage tests (and as
+    // documentation of the pre-WP-14 first-pass shape). SearchByEmbeddingAsync itself no longer
+    // issues this SQL per call -- it scores out of the process-wide EmbeddingVectorCache, which
+    // rebuilds this same id+projection result set only on invalidation.
     private sealed class EmbeddingCandidate
     {
         public Guid Id { get; set; }
@@ -387,50 +413,31 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
 
     public async Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10)
     {
-        using var conn = OpenConnection();
+        // WP-14: pass 1 (score every active article's projection) now runs out of the in-memory
+        // EmbeddingVectorCache instead of a fresh full-table SQL scan on every call. The cache is
+        // rebuilt (from the same `status = 'A' AND embedding_projection IS NOT NULL` query) only
+        // when an embedding write has invalidated it since the last build. Scoring itself moved
+        // into EmbeddingVectorCache.Snapshot.Score, which uses TensorPrimitives (SIMD) for the dot
+        // product and reuses precomputed candidate norms + a once-per-query query norm.
+        EmbeddingVectorCache.Snapshot snapshot = _vectorCache.GetOrRebuild();
 
-        // Pass 1: only id + embedding bytes for every active article with an embedding —
-        // enough to score, without hydrating the rest of the row.
-        var candidates = (await conn.QueryAsync<EmbeddingCandidate>(
-            "SELECT a.id AS Id, a.embedding_projection AS EmbeddingProjection FROM tbl_article a WHERE a.status = 'A' AND a.embedding_projection IS NOT NULL",
-            null)).ToList();
-
-        if (candidates.Count == 0) return [];
-
-        var dim = queryProjection.Length;
-        var topIds = candidates
-            .Select(c =>
-            {
-                var proj = MemoryMarshal.Cast<byte, float>(c.EmbeddingProjection.AsSpan());
-                if (proj.Length != dim) return (id: c.Id, score: 0f);
-                float dot = 0f, normA = 0f;
-                for (int i = 0; i < dim; i++)
-                {
-                    dot += queryProjection[i] * proj[i];
-                    normA += proj[i] * proj[i];
-                }
-                float normQ = 0f;
-                for (int i = 0; i < dim; i++) normQ += queryProjection[i] * queryProjection[i];
-                var denom = MathF.Sqrt(normA * normQ);
-                return (id: c.Id, score: denom > 0 ? dot / denom : 0f);
-            })
-            .OrderByDescending(x => x.score)
-            .Take(topK)
-            .Select(x => x.id)
-            .ToList();
+        var topIds = snapshot.Score(queryProjection, topK);
 
         if (topIds.Count == 0) return [];
 
-        // Pass 2: hydrate the full Article rows for just the surviving top-K ids.
+        // Pass 2: hydrate the full Article rows for just the surviving top-K ids. Unchanged from
+        // pre-WP-14: only the embedding vectors are cached, not full rows.
+        using var conn = OpenConnection();
         var fullArticles = (await conn.QueryAsync<Article>(
             $"SELECT {SelectCols} {FromClause} WHERE a.id IN @ids AND a.status = 'A'",
             new { ids = topIds })).ToList();
 
         // `IN` does not preserve order, so re-assemble the ranked order from topIds. This also
         // preserves the pre-existing quirk: _holder.Scope.FilterArticles runs AFTER Take(topK)
-        // (below), same as before this change, so an ACL-restricted caller can still get back
-        // fewer than topK (or zero) visible results if invisible articles ranked highest. That
-        // is not fixed here — it's a separate, bigger decision outside this perf-only WP.
+        // (inside Snapshot.Score), same as before this change, so an ACL-restricted caller can
+        // still get back fewer than topK (or zero) visible results if invisible articles ranked
+        // highest. That is not fixed here — it's a separate, bigger decision outside this
+        // perf-only WP.
         var byId = fullArticles.ToDictionary(a => a.Id);
         var scored = topIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
 

@@ -33,6 +33,12 @@ public static class DependencyInjection
             sp.GetRequiredService<SessionService>(),
             segmentsDirectory));
 
+        // WP-14: process-wide semantic-search vector cache, shared by every scoped
+        // ArticleRepository instance (see EmbeddingVectorCache's own doc comment for why this
+        // must be a singleton — without this registration, ArticleRepository's optional
+        // constructor parameter would fall back to `new EmbeddingVectorCache(factory)` per
+        // scope, silently defeating cross-request caching entirely).
+        services.AddSingleton<EmbeddingVectorCache>();
         services.AddScoped<IArticleRepository, ArticleRepository>();
         services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
         services.AddSingleton<IKeySlotRepository, KeySlotRepository>();
