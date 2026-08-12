@@ -73,6 +73,19 @@ public sealed class EncryptedSegmentStore(
 
         Directory.CreateDirectory(segmentsDirectory);
 
+        // WP-13 finding: WriteFileAtomicAsync's temp-file-then-rename dance makes a torn write at
+        // the FINAL path structurally impossible (a same-filesystem File.Move is atomic), but it
+        // does NOT protect the intermediate temp file itself -- a real process kill/power loss
+        // between the temp file's write completing and the rename leaves that "*.tmp" file behind
+        // forever, because the process dies before its own `finally` cleanup block ever runs.
+        // Nothing previously swept these up: they are never referenced by any manifest row (so
+        // they can never be loaded/misread -- this is a disk-space leak, not a correctness bug),
+        // but left unbounded they accumulate across repeated crashes. Swept here, best-effort, on
+        // every store rather than only at startup, so the fix does not need its own separate
+        // lifecycle hook. Age-gated (see OrphanedTempFileMinAge) so a temp file genuinely being
+        // written by a concurrent StoreAsync call right now is never mistaken for an orphan.
+        CleanupOrphanedTempFilesBestEffort();
+
         var masterDek = session.GetMasterDek();
         byte[]? indexKey = null;
         try
@@ -351,6 +364,52 @@ public sealed class EncryptedSegmentStore(
             throw new CryptographicException("Decoded length does not match the header's declared original length.");
 
         return plaintext;
+    }
+
+    /// <summary>
+    /// WP-13: minimum age a "*.tmp" file in <see cref="segmentsDirectory"/> must have before it is
+    /// considered an orphan safe to delete. Comfortably longer than any real
+    /// <see cref="WriteFileAtomicAsync"/> call should ever take (writing/renaming one ~64 KiB-block
+    /// segment file), so a temp file actively being written by a concurrent, legitimate
+    /// <see cref="StoreAsync"/> call is never mistaken for a crash leftover.
+    /// </summary>
+    private static readonly TimeSpan OrphanedTempFileMinAge = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Deletes any "*.tmp" file in <see cref="segmentsDirectory"/> old enough to be confidently an
+    /// orphan left behind by a process that was killed between <see cref="WriteFileAtomicAsync"/>'s
+    /// temp-file write and its rename (see <see cref="StoreAsync"/>'s call site for the full
+    /// rationale). Deliberately best-effort and silent: this is opportunistic cleanup of wasted
+    /// disk space, never load-bearing for correctness, so any failure here (permissions, a file
+    /// deleted by a racing cleanup pass, directory not existing) must never fail the real store
+    /// operation it is called from.
+    /// </summary>
+    private void CleanupOrphanedTempFilesBestEffort()
+    {
+        try
+        {
+            DateTime cutoffUtc = DateTime.UtcNow - OrphanedTempFileMinAge;
+            foreach (string tempFile in Directory.EnumerateFiles(segmentsDirectory, "*.tmp"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(tempFile) < cutoffUtc)
+                    {
+                        File.Delete(tempFile);
+                    }
+                }
+                catch
+                {
+                    // Best-effort per-file: a concurrent delete/permission hiccup on one stray file
+                    // must not stop the sweep from considering the rest, or block the real write.
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort overall (e.g. the directory disappeared between CreateDirectory and here
+            // under concurrent access) -- never let cleanup stand in the way of a real write.
+        }
     }
 
     private static async Task WriteFileAtomicAsync(string path, byte[] content)

@@ -104,7 +104,27 @@ public sealed class SearchIndexLifecycleService(
 
         foreach ((SegmentManifestEntry manifest, byte[] bytes) in loaded)
         {
-            var reader = new SegmentReader(bytes);
+            SegmentReader reader;
+            try
+            {
+                reader = new SegmentReader(bytes);
+            }
+            catch (Exception ex) when (ex is NotSupportedException or ArgumentException)
+            {
+                // Same "untrustworthy as a whole" treatment as a SegmentLoadResult failure above --
+                // this is the plaintext payload's OWN inner format (SegmentLayout.FormatVersion)
+                // being unreadable (e.g. written by a newer node version), a failure mode
+                // EncryptedSegmentStore.LoadAsync cannot see since it only validates the outer
+                // encrypted container. See WP-13's
+                // SearchIndexLifecycleFormatVersionResilienceTests for the scenario this closes.
+                logger.LogWarning(
+                    ex,
+                    "Warm-start: segment {SegmentId} has an unreadable inner format; treating the whole persisted search index as untrustworthy and triggering a full rebuild instead of a partial recovery.",
+                    manifest.SegmentId);
+                await TriggerFullRebuildAsync(ct);
+                return;
+            }
+
             HashSet<Guid> tombstones = await tombstoneRepo.GetForSegmentAsync(manifest.SegmentId);
             int internalId = Builder.AdoptPersistedSegment(reader, tombstones);
             runtimeState.RegisterPersistedSegment(internalId, manifest.SegmentId);
