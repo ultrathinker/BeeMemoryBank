@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- The one narrow, justified exception to this library's "no new NuGet" rule: an official
+         Microsoft-maintained package for the 64-bit term hash used by the inverted-index segment
+         format (see Segment/SegmentWriter.cs). Hand-rolling a 64-bit hash correctly would be a
+         worse use of time than using a vetted one; everything else in this library stays
+         dependency-free. -->
+    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

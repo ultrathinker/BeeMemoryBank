@@ -17,13 +17,13 @@ namespace BeeMemoryBank.Api.McpTools;
 public class BeeReadTools(
     ArticleService articleService,
     IArticleVersionRepository versionRepo,
-    BeeMemoryBank.Core.Interfaces.IFolderRepository folderRepo,
     SessionService session,
     McpResponseManager responseManager,
     MediaService mediaService,
     IMediaRepository mediaRepo,
     IConceptTagRepository conceptTagRepo,
-    ArticleDiffService articleDiffService)
+    ArticleDiffService articleDiffService,
+    TreeService treeService)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -166,47 +166,57 @@ public class BeeReadTools(
     [McpServerTool(Name = "bee_get_tree")]
     [Description(
         "Get the folder/article tree. Unlike bee_list_articles, this includes empty folders too.\n" +
-        "Returns JSON: { paths: [{ path, articles: [{ id, title }] }] }, sorted alphabetically by path. " +
-        "Each entry represents one folder and its direct articles (no body/tags — fetch with bee_get_article " +
-        "if needed). Use the 'path' parameter to scope the view to one subtree. Soft-deleted folders/articles " +
-        "are excluded.")]
+        "Returns JSON: { paths: [{ path, isSystem, isRemote, articles: [{ id, title }] }] }, sorted " +
+        "alphabetically by path. Each entry represents one folder and its direct articles (no body/tags " +
+        "— fetch with bee_get_article if needed). Soft-deleted folders/articles are excluded.\n" +
+        "Use 'path' to scope the view to one subtree (e.g. '/Work').\n" +
+        "SCALE: against a large vault this can return tens of thousands of entries. If this call's " +
+        "response looks truncated, or you only need part of the tree, narrow the call rather than " +
+        "re-fetching everything: pass 'path' to scope to a subtree, pass 'depth' to limit how many " +
+        "levels below 'path' are returned, and/or pass 'limit' + 'offset' to page through the entries. " +
+        "When 'depth' or 'limit' is supplied, the response also includes pagination metadata " +
+        "({ depth, limit, offset, total, truncated }) so you can tell whether more entries remain " +
+        "(more remain while offset + paths.length < total, or while truncated=true).\n" +
+        "Omitting depth/limit/offset reproduces the legacy unbounded behavior exactly (the response " +
+        "is then just { paths: [...] } with no extra keys). Results are already scoped to the caller's " +
+        "accessible folders; depth/limit never expose anything outside that scope.")]
     public async Task<string> GetTree(
-        [Description("Path filter, e.g. '/Work'. Shows only that folder and its descendants. Omit for the whole tree.")] string? path = null)
+        [Description("Path filter, e.g. '/Work'. Shows only that folder and its descendants. Omit for the whole tree.")] string? path = null,
+        [Description("Max number of path levels to descend below 'path' (or below root if 'path' is omitted). null = unlimited (legacy behavior). 'path' itself is level 0, its direct children are level 1, etc.")] int? depth = null,
+        [Description("Max number of folder+article entries to return in this call, after depth filtering. null = no pagination (return all matching entries). Use with 'offset' to page through large subtrees.")] int? limit = null,
+        [Description("Number of matching entries to skip before the returned page (for pagination). Only meaningful together with 'limit'. Default 0.")] int offset = 0)
     {
-        var articles = await articleService.ListAsync(path);
-        var folders = await folderRepo.GetAllActiveAsync();
+        var result = await treeService.GetTreePathsAsync(path, depth, limit, offset);
 
-        var articlesByPath = articles
-            .GroupBy(a => a.TreePath)
-            .ToDictionary(g => g.Key, g => g.Select(a => new { id = a.Id, title = a.Title }).ToList());
+        // Build the paths payload with the EXACT same anonymous shape the legacy inline build used,
+        // so omitting depth/limit/offset stays byte-for-byte identical to the pre-WP-19 response.
+        var pathEntries = result.Paths.Select(p => new
+        {
+            path = p.Path,
+            isSystem = p.IsSystem,
+            isRemote = p.IsRemote,
+            articles = p.Articles.Select(a => (object)new { id = a.Id, title = a.Title }).ToList()
+        });
 
-        var folderMeta = folders.ToDictionary(f => f.Path, f => f);
-        var allPaths = new HashSet<string>(folders.Select(f => f.Path));
-        foreach (var a in articles)
-            allPaths.Add(a.TreePath);
-
-        var filteredPaths = path != null
-            ? allPaths.Where(p => p == path || p.StartsWith(path.TrimEnd('/') + "/"))
-            : allPaths;
-
-        var emptyList = new List<object>();
-        var byPath = filteredPaths
-            .OrderBy(p => p)
-            .Select(p =>
+        // Only attach pagination metadata when the caller actually used a limiting parameter —
+        // the no-args call must keep returning exactly { "paths": [...] }.
+        string json;
+        if (depth.HasValue || limit.HasValue || offset != 0)
+        {
+            json = JsonSerializer.Serialize(new
             {
-                folderMeta.TryGetValue(p, out var meta);
-                return new
-                {
-                    path = p,
-                    isSystem = meta?.IsSystem ?? false,
-                    isRemote = meta?.RemoteSubscriptionId.HasValue ?? false,
-                    articles = articlesByPath.TryGetValue(p, out var arts)
-                        ? arts.Select(a => (object)a).ToList()
-                        : emptyList
-                };
-            });
-
-        var json = JsonSerializer.Serialize(new { paths = byPath }, JsonOpts);
+                paths = pathEntries,
+                depth = result.Depth,
+                limit = result.Limit,
+                offset = result.Offset,
+                total = result.Total,
+                truncated = result.Truncated
+            }, JsonOpts);
+        }
+        else
+        {
+            json = JsonSerializer.Serialize(new { paths = pathEntries }, JsonOpts);
+        }
         return responseManager.ProcessResponse(json);
     }
 

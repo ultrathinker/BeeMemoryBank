@@ -12,7 +12,9 @@ public class EmbeddingProjectionService(
     IEmbeddingGenerator generator,
     IProjectionMatrixRepository matrixRepo,
     IArticleRepository articleRepo,
-    SessionService session)
+    SessionService session,
+    ArticleChunker chunker,
+    IArticleChunkEmbeddingRepository chunkRepo)
 {
     private const string ModelVersion = OnnxEmbeddingGenerator.Version;
 
@@ -48,7 +50,12 @@ public class EmbeddingProjectionService(
     }
 
     /// <summary>
-    /// Generates and saves an embedding projection for a single article.
+    /// Generates and saves an embedding projection for a single article: the full-document
+    /// projection (unchanged, pre-WP-15 behavior — <see cref="ProjectQueryAsync"/> and any caller
+    /// still relying on it keep working) plus, since WP-15, one projection per ~256-token chunk
+    /// (<see cref="ArticleChunker"/>), so content past
+    /// <see cref="OnnxEmbeddingGenerator.MaxSequenceLength"/> tokens — silently dropped by the
+    /// single full-document embedding — is still searchable via its own chunk.
     /// </summary>
     public async Task ProjectArticleAsync(Article article, string plaintext)
     {
@@ -61,6 +68,7 @@ public class EmbeddingProjectionService(
         if (Crypto.ProtectedContentCodec.IsProtected(plaintext))
         {
             await articleRepo.UpdateEmbeddingAsync(article.Id, [], ModelVersion);
+            await chunkRepo.ReplaceChunksAsync(article.Id, [], ModelVersion);
             return;
         }
 
@@ -70,6 +78,21 @@ public class EmbeddingProjectionService(
         var projectionBytes = FloatsToBytes(projection);
 
         await articleRepo.UpdateEmbeddingAsync(article.Id, projectionBytes, ModelVersion);
+
+        List<string> chunkTexts = chunker.Chunk(plaintext);
+        var chunkRows = new List<(byte[] Projection, float Scale)>(chunkTexts.Count);
+        for (int i = 0; i < chunkTexts.Count; i++)
+        {
+            // A single-chunk article's one chunk covers exactly the same token range the
+            // full-document embedding above already computed (same token budget boundary) --
+            // reuse that projection instead of re-running inference on effectively the same text.
+            float[] chunkProjection = chunkTexts.Count == 1
+                ? projection
+                : matrix.Project(generator.Generate(chunkTexts[i]));
+            var (quantized, scale, _) = Int8Quantizer.Quantize(chunkProjection);
+            chunkRows.Add((quantized, scale));
+        }
+        await chunkRepo.ReplaceChunksAsync(article.Id, chunkRows, ModelVersion);
     }
 
     /// <summary>

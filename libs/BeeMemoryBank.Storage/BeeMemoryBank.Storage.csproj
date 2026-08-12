@@ -2,6 +2,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <!-- WP-09: EncryptedSegmentStore (Search/ subfolder) decodes/encodes SegmentWriter/SegmentReader
+         byte layouts and reuses EncryptedSegmentFormat's header/AAD helpers. Search stays
+         dependency-free in the other direction: nothing was added to its own csproj. -->
+    <ProjectReference Include="..\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,6 +23,11 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Migrations\*.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- FtsQueryBuilder (WP-07) is internal; the Storage test project exercises it directly. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Storage.Tests" />
   </ItemGroup>
 
 </Project>

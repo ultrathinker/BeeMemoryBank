@@ -2,6 +2,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <!-- WP-12: SearchService.SearchIndexedContentAsync calls IndexBuilder.SearchRanked directly and
+         re-runs the same DefaultTokenizer/DefaultStemmer pipeline IndexBuilder uses at ingestion, so
+         Core needs a direct reference to Search's public API. Search itself has no project
+         references of its own (see its own csproj), so this creates no dependency cycle. -->
+    <ProjectReference Include="..\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
   </ItemGroup>
 
   <ItemGroup>

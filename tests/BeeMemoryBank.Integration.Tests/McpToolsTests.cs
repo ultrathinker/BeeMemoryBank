@@ -2,6 +2,7 @@ using System.Text.Json;
 using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -63,7 +64,7 @@ public class McpToolsTests : IAsyncLifetime
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
-        _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session);
+        _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, scopeHolder, new SearchQueryCache(), new IndexBuilder());
 
         await initService.InitializeAsync("admin", "McpTestNode", Password);
         await _session.UnlockAsync(Password);
@@ -75,7 +76,7 @@ public class McpToolsTests : IAsyncLifetime
             .BuildServiceProvider());
         _searchTools = new BeeSearchTools(_searchService, responseManager, _session);
         var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccessService);
-        _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService());
+        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo));
         var copySvc = new CopyService(_articleService, folderSvc, _mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
         _uploadTools = new BeeUploadTools(_articleService, _mediaService, _session, responseManager);
@@ -273,6 +274,101 @@ public class McpToolsTests : IAsyncLifetime
         obj.GetProperty("paths").ValueKind.Should().Be(JsonValueKind.Array);
         obj.GetProperty("paths").EnumerateArray()
             .Should().Contain(el => el.GetProperty("path").GetString() == "/TreeTest/Sub");
+    }
+
+    [Fact]
+    public async Task BeeGetTree_NoArgs_HasOnlyPathsKey_LegacyShapePreserved()
+    {
+        // Regression guard (WP-19 self-check #4): omitting the new parameters must reproduce the
+        // exact pre-existing response shape — a single top-level "paths" key and NONE of the new
+        // pagination metadata keys.
+        await _articleService.CreateAsync("Legacy node", "/Legacy/Child", [], "text");
+
+        var result = await _readTools.GetTree();
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        var topKeys = obj.EnumerateObject().Select(p => p.Name).ToList();
+        topKeys.Should().ContainSingle().Which.Should().Be("paths");
+
+        var entry = obj.GetProperty("paths").EnumerateArray()
+            .First(el => el.GetProperty("path").GetString() == "/Legacy/Child");
+        // Entry shape from the legacy inline build: exactly path / isSystem / isRemote / articles,
+        // and article refs carry only id + title.
+        var entryKeys = entry.EnumerateObject().Select(p => p.Name).OrderBy(n => n).ToList();
+        entryKeys.Should().Equal(new[] { "articles", "isRemote", "isSystem", "path" });
+        entry.GetProperty("articles").GetArrayLength().Should().Be(1);
+        var art = entry.GetProperty("articles").EnumerateArray().First();
+        var artKeys = art.EnumerateObject().Select(p => p.Name).OrderBy(n => n).ToList();
+        artKeys.Should().Equal(new[] { "id", "title" });
+    }
+
+    [Fact]
+    public async Task BeeGetTree_OmittingNewParams_IsByteForByteIdenticalToExplicitNulls()
+    {
+        // Passing the new parameters as their defaults (null/0) must serialize identically to
+        // omitting them entirely — no metadata leaks in when defaults are explicit.
+        await _articleService.CreateAsync("Compat node", "/Compat/Child", [], "text");
+
+        var implicitCall = await _readTools.GetTree();
+        var explicitCall = await _readTools.GetTree(depth: null, limit: null, offset: 0);
+
+        explicitCall.Should().Be(implicitCall);
+    }
+
+    [Fact]
+    public async Task BeeGetTree_Depth_BoundsDescentOnLargeSubtree()
+    {
+        // Concretely-observed WP-19 pain point: a large subtree must return a bounded response.
+        // Create 300 child folders under /Bounded and confirm depth caps the result.
+        var folderRepo = new BeeMemoryBank.Storage.Sqlite.FolderRepository(_factory, new CallerScopeHolder());
+        for (var i = 0; i < 300; i++)
+            await folderRepo.EnsureExistsAsync($"/Bounded/{i:D3}", sourceNodeId: null);
+
+        // depth 0 → only /Bounded itself, even though 300 children exist.
+        var shallow = JsonDocument.Parse(await _readTools.GetTree(path: "/Bounded", depth: 0)).RootElement;
+        var shallowPaths = shallow.GetProperty("paths").EnumerateArray()
+            .Select(el => el.GetProperty("path").GetString()).ToList();
+        shallowPaths.Should().ContainSingle().Which.Should().Be("/Bounded");
+        shallow.GetProperty("depth").GetInt32().Should().Be(0);
+        shallow.GetProperty("total").GetInt32().Should().Be(1);
+        shallow.GetProperty("truncated").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task BeeGetTree_Limit_PagesAndReportsTruncation()
+    {
+        var folderRepo = new BeeMemoryBank.Storage.Sqlite.FolderRepository(_factory, new CallerScopeHolder());
+        for (var i = 0; i < 120; i++)
+            await folderRepo.EnsureExistsAsync($"/Paged/{i:D3}", sourceNodeId: null);
+
+        var page1 = JsonDocument.Parse(await _readTools.GetTree(path: "/Paged", limit: 50, offset: 0)).RootElement;
+        page1.GetProperty("paths").GetArrayLength().Should().Be(50);
+        page1.GetProperty("total").GetInt32().Should().Be(121); // /Paged + 120 leaves
+        page1.GetProperty("truncated").GetBoolean().Should().BeTrue();
+        page1.GetProperty("limit").GetInt32().Should().Be(50);
+        page1.GetProperty("offset").GetInt32().Should().Be(0);
+
+        // Second page: offset 50 → next 50 entries, still truncated.
+        var page2 = JsonDocument.Parse(await _readTools.GetTree(path: "/Paged", limit: 50, offset: 50)).RootElement;
+        page2.GetProperty("paths").GetArrayLength().Should().Be(50);
+        page2.GetProperty("truncated").GetBoolean().Should().BeTrue();
+
+        // Last page: offset 100 → remaining 21 entries, not truncated.
+        var page3 = JsonDocument.Parse(await _readTools.GetTree(path: "/Paged", limit: 50, offset: 100)).RootElement;
+        page3.GetProperty("paths").GetArrayLength().Should().Be(21);
+        page3.GetProperty("truncated").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task BeeGetTree_ArticlesTravelWithTheirPathEntry()
+    {
+        var article = await _articleService.CreateAsync("Traveling article", "/Travel/Sub", [], "body");
+
+        var withDepth = JsonDocument.Parse(await _readTools.GetTree(path: "/Travel", depth: 1)).RootElement;
+        var entry = withDepth.GetProperty("paths").EnumerateArray()
+            .First(el => el.GetProperty("path").GetString() == "/Travel/Sub");
+        entry.GetProperty("articles").EnumerateArray().First().GetProperty("id").GetString()
+            .Should().Be(article.Id.ToString());
     }
 
     // ───── bee_get_article_diff ──────────────────────────────────────────────

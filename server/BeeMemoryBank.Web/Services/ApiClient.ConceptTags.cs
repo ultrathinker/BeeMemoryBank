@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -24,6 +25,26 @@ public partial class ApiClient
     public async Task<SearchResponseDto?> SearchAsync(string query, bool content = false) =>
         await http.GetFromJsonAsync<SearchResponseDto>(
             $"/api/search?q={Uri.EscapeDataString(query)}&content={content}", JsonOpts);
+
+    /// <summary>
+    /// WP-16: ranked article results from <c>/api/search/hybrid</c> (RRF-combined BM25 keyword +
+    /// chunk-based semantic ranking). Returns null on any transport error or non-2xx (locked
+    /// session, semantic search not yet initialized for this vault, API down) so callers can fall
+    /// back to the older content-search path rather than surfacing a raw failure.
+    /// </summary>
+    public async Task<List<ArticleDto>?> SearchHybridArticlesAsync(string query, string mode = "hybrid", int topK = 20)
+    {
+        try
+        {
+            var response = await http.PostAsJsonAsync("/api/search/hybrid", new { query, mode, topK });
+            if (!response.IsSuccessStatusCode) return null;
+            return await response.Content.ReadFromJsonAsync<List<ArticleDto>>(JsonOpts);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     // ─── Concept Tags ─────────────────────────────────────────────────────────
 

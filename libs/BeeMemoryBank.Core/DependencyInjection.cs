@@ -14,6 +14,22 @@ public static class DependencyInjection
         services.AddSingleton<InvisibleModeService>();
         services.AddSingleton<MaintenanceModeService>();
 
+        // Singleton: the query cache is shared across all requests/scopes so concurrent identical
+        // searches coalesce onto one in-flight task and near-repeat hits are served from the TTL
+        // cache (WP-17). ACL safety comes from the scope fingerprint embedded in each cache key.
+        services.AddSingleton<SearchQueryCache>();
+
+        // WP-18: Singleton so the rolling latency/result-count windows are process-wide and every
+        // request feeds the same admin-visible numbers. Records only timings + coarse result-count
+        // buckets + fixed labels -- never query text or content (see SearchMetrics doc comment).
+        services.AddSingleton<SearchMetrics>();
+
+        // WP-15: singleton so the embedded vocabulary loads once per process, not once per
+        // EmbeddingProjectionService instance (that service is scoped). Stateless and thread-safe.
+        // Factory form (not a pre-built instance) defers loading the vocab until first resolved,
+        // matching IEmbeddingGenerator's own lazy-load-on-first-use posture.
+        services.AddSingleton(_ => ArticleChunker.CreateDefault());
+
         // Null implementations are replaced with real ones when BeeMemoryBank.Sync / Api / Cli is registered
         services.TryAddSingleton<ILamportClock, NullLamportClock>();
         services.TryAddScoped<IEventLogger, NullEventLogger>();
@@ -26,6 +42,11 @@ public static class DependencyInjection
         services.AddScoped<TreeService>();
         services.AddScoped<SearchService>();
         services.AddScoped<EmbeddingProjectionService>();
+        // WP-16: only actually resolvable once AddOnnxEmbeddings has also registered
+        // IEmbeddingGenerator (same conditional-availability posture EmbeddingProjectionService
+        // itself already has) -- kept as its own service rather than folded into SearchService so
+        // plain keyword-only callers never need that dependency to resolve.
+        services.AddScoped<HybridSearchService>();
         services.AddScoped<FolderService>();
         services.AddScoped<CopyService>();
         services.AddScoped<CommentService>();

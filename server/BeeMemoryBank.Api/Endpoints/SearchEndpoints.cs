@@ -80,5 +80,44 @@ public static class SearchEndpoints
                 return Results.Problem(ex.Message, statusCode: 503);
             }
         }).RequireInternalKey().WithTags("Search");
+
+        app.MapPost("/api/search/hybrid", async (
+            HybridSearchRequest req,
+            HybridSearchService hybridSearch,
+            IConceptTagRepository conceptTagRepo,
+            SessionService session) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Query))
+                return Results.BadRequest(new ErrorResponse("Query is required"));
+
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+
+            if (!Enum.TryParse<SearchMode>(req.Mode, ignoreCase: true, out var mode))
+                return Results.BadRequest(new ErrorResponse($"Unknown mode '{req.Mode}'. Expected one of: keyword, semantic, hybrid."));
+
+            try
+            {
+                var results = await hybridSearch.SearchAsync(req.Query, mode, Math.Clamp(req.TopK, 1, 100));
+
+                var articleResponses = new List<ArticleResponse>();
+                var articleIds = results.Select(a => a.Id).ToList();
+                var tagMap = await conceptTagRepo.GetByArticleIdsAsync(articleIds);
+                foreach (var a in results)
+                {
+                    var conceptTags = tagMap.GetValueOrDefault(a.Id, new List<string>());
+                    articleResponses.Add(ArticleResponse.From(a, conceptTags));
+                }
+                return Results.Ok(articleResponses);
+            }
+            catch (ModelUnavailableException ex)
+            {
+                return Results.Problem(ex.Message, statusCode: 503);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Problem(ex.Message, statusCode: 503);
+            }
+        }).RequireInternalKey().WithTags("Search");
     }
 }

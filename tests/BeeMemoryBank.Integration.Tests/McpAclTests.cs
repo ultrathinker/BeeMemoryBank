@@ -3,6 +3,7 @@ using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -70,7 +71,7 @@ public class McpAclTests : IAsyncLifetime
         var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), _conceptTagService);
-        var searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session);
+        var searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, _scopeHolder, new SearchQueryCache(), new IndexBuilder());
 
         await initService.InitializeAsync("admin", "AclTestNode", Password);
         await _session.UnlockAsync(Password);
@@ -93,7 +94,7 @@ public class McpAclTests : IAsyncLifetime
         var responseManager = new McpResponseManager(Path.GetTempPath());
 
         _searchTools = new BeeSearchTools(searchService, responseManager, _session);
-        _readTools = new BeeReadTools(_articleService, versionRepo, folderRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService());
+        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo));
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
         _conceptTools = new BeeConceptTools(_conceptTagService, _articleService, _httpContextAccessor, responseManager);
@@ -254,6 +255,48 @@ public class McpAclTests : IAsyncLifetime
             .ToList();
         paths.Should().NotContain("/Secret");
         paths.Should().Contain("/Public");
+        ClearCaller();
+    }
+
+    [Fact]
+    public async Task Acl_BeeGetTree_DepthAndPagination_ComposeWithScope()
+    {
+        // WP-19 self-check #5: depth/pagination must compose with ACL scope filtering, never bypass
+        // it. A folder-scoped caller (denied /Secret) must not see /Secret at any depth or on any
+        // pagination page, while still seeing everything they're allowed to.
+        await _articleService.CreateAsync("Secret 1", "/Secret/Sub/Deep", [], "t");
+        await _articleService.CreateAsync("Secret 2", "/Secret/Other", [], "t");
+        await _articleService.CreateAsync("Public 1", "/Public/Sub/Deep", [], "t");
+
+        await SetRestrictedCaller();
+
+        // depth large enough to otherwise surface the deep /Secret/Sub/Deep entry.
+        var deep = JsonDocument.Parse(await _readTools.GetTree(depth: 10)).RootElement;
+        var deepPaths = deep.GetProperty("paths").EnumerateArray()
+            .Select(p => p.GetProperty("path").GetString()).ToList();
+        deepPaths.Should().NotContain(p => p == "/Secret" || p.StartsWith("/Secret/"));
+        deepPaths.Should().Contain("/Public/Sub/Deep");
+
+        // Page through EVERY entry with limit 1 and confirm /Secret never appears on any page.
+        var seen = new HashSet<string>();
+        var offset = 0;
+        while (true)
+        {
+            var page = JsonDocument.Parse(await _readTools.GetTree(limit: 1, offset: offset)).RootElement;
+            var pagePaths = page.GetProperty("paths").EnumerateArray()
+                .Select(p => p.GetProperty("path").GetString())
+                .Where(s => s is not null)
+                .Cast<string>()
+                .ToList();
+            if (pagePaths.Count == 0) break;
+            foreach (var p in pagePaths)
+                seen.Add(p);
+            if (!page.GetProperty("truncated").GetBoolean()) break;
+            offset += pagePaths.Count;
+        }
+        seen.Should().NotContain(p => p == "/Secret" || p.StartsWith("/Secret/"));
+        seen.Should().Contain("/Public/Sub/Deep");
+
         ClearCaller();
     }
 

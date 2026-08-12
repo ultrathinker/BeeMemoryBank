@@ -27,4 +27,15 @@ public interface ICallerScope
 
     // Returns readable folders PLUS ancestor stubs so the tree can be rendered.
     List<Folder> FilterFolders(List<Folder> folders);
+
+    // A stable, opaque digest of this scope's READ-visibility rules (the deny/allow rules that
+    // determine what FilterArticles/FilterFolders/IsAccessDenied return for reads). Two scopes
+    // with the same fingerprint are guaranteed to make provably identical read-visibility
+    // decisions, so a cache keyed on (query, fingerprint) can safely share their results; two
+    // scopes with different fingerprints can never collide. Implementations must return a value
+    // that depends ONLY on the read-ACL (not on write/read-only flags, which do not affect which
+    // rows a read returns) and must be constant for the lifetime of the scope object. Read-only
+    // paths are deliberately excluded: they affect write-denial, never the set of rows a search
+    // returns. Used by SearchQueryCache (WP-17) to build an ACL-safe cache key.
+    string ReadScopeFingerprint { get; }
 }

@@ -35,7 +35,9 @@ public class PendingEmbeddingProcessorTests : SyncTestFixture
         services.AddSingleton(BodyRepo);
 
         var projectionMatrixRepo = new BeeMemoryBank.Storage.Sqlite.ProjectionMatrixRepository(Factory);
-        var projectionService = new EmbeddingProjectionService(throwingGenerator, projectionMatrixRepo, ArticleRepo, Session);
+        var chunkRepo = new BeeMemoryBank.Storage.Sqlite.ArticleChunkEmbeddingRepository(Factory);
+        var projectionService = new EmbeddingProjectionService(
+            throwingGenerator, projectionMatrixRepo, ArticleRepo, Session, ArticleChunker.CreateDefault(), chunkRepo);
         services.AddSingleton(projectionService);
 
         services.AddSingleton(ArticleService);

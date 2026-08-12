@@ -25,5 +25,11 @@ public interface IFolderRepository
         long lamportTs, Guid? sourceNodeId, DateTime updatedAt);
     Task EnsureExistsAsync(string path, Guid? sourceNodeId); // creates if missing (for EventApplier)
     Task<List<Folder>> SearchAsync(string query);
+    /// <summary>
+    /// Pre-WP-07 exact-substring search (per-row <c>unicode_contains</c> scan over name and path,
+    /// no morphology). Preserved for a possible future "exact substring" search mode; not used by
+    /// <c>SearchService</c>, which routes through FTS-backed <see cref="SearchAsync"/>.
+    /// </summary>
+    Task<List<Folder>> SearchByExactSubstringAsync(string query);
     Task<List<Guid>> ListIdsByPathPrefixAsync(string pathPrefix);
 }

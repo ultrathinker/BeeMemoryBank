@@ -12,7 +12,10 @@ namespace BeeMemoryBank.Core.Embeddings;
 public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
 {
     public const string Version = "minilm-l6-v2";
-    private const int MaxSequenceLength = 256;
+
+    // WP-15: internal (not private) so ArticleChunker can size chunks to fit within one embedding
+    // call without silent re-truncation by Encode below.
+    internal const int MaxSequenceLength = 256;
 
     public int Dimension => 384;
 
@@ -21,7 +24,7 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
     // worker pulls in EventApplier/ConceptTagService (which inject this) but only computes an embedding
     // for a concept-tag rename, so it almost never pays the load cost. Lazy<> is thread-safe.
     private readonly Lazy<InferenceSession> _session;
-    private readonly Lazy<BertWordPieceTokenizer> _tokenizer = new(LoadTokenizer);
+    private readonly Lazy<BertWordPieceTokenizer> _tokenizer = new(BertWordPieceTokenizer.LoadDefault);
 
     public OnnxEmbeddingGenerator(string? modelPath = null)
     {
@@ -45,19 +48,6 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
     public OnnxEmbeddingGenerator(byte[] modelBytes)
     {
         _session = new Lazy<InferenceSession>(() => new InferenceSession(modelBytes));
-    }
-
-    private static BertWordPieceTokenizer LoadTokenizer()
-    {
-        var vocabStream = typeof(OnnxEmbeddingGenerator).Assembly
-            .GetManifestResourceStream("BeeMemoryBank.Core.Embeddings.Models.vocab.txt")
-            ?? throw new InvalidOperationException("Embedded vocab.txt not found in BeeMemoryBank.Core assembly.");
-
-        using (vocabStream)
-        {
-            var vocab = BertWordPieceTokenizer.LoadVocab(vocabStream);
-            return new BertWordPieceTokenizer(vocab);
-        }
     }
 
     public float[] Generate(string text)

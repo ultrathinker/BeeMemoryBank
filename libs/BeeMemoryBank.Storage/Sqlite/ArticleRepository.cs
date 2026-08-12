@@ -1,14 +1,33 @@
-using System.Runtime.InteropServices;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using Dapper;
+using System.Diagnostics;
 
 namespace BeeMemoryBank.Storage.Sqlite;
 
-public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder scopeHolder) : BaseRepository(factory), IArticleRepository
+public class ArticleRepository(
+    DbConnectionFactory factory,
+    CallerScopeHolder scopeHolder,
+    EmbeddingVectorCache? vectorCache = null,
+    SearchMetrics? searchMetrics = null,
+    ChunkEmbeddingVectorCache? chunkCache = null) : BaseRepository(factory), IArticleRepository
 {
     private readonly CallerScopeHolder _holder = scopeHolder;
+
+    // WP-18: optional search-metrics recorder (DI injects the process-wide singleton; direct `new`
+    // callers -- tests -- get null and recording is a no-op). Records only timings + coarse result
+    // counts for semantic search; the query projection vector is never handed to it.
+    private readonly SearchMetrics? _searchMetrics = searchMetrics;
+
+    // WP-14: embedding vector cache. DI injects the shared singleton; direct `new` callers (tests)
+    // get a per-instance cache when they omit the argument. The cache is the only state this
+    // otherwise-stateless, scoped repository carries, and it is process-wide by design so an
+    // embedding write in one scope invalidates the cache every other scope's next search sees.
+    private readonly EmbeddingVectorCache _vectorCache = vectorCache ?? new EmbeddingVectorCache(factory);
+
+    // WP-15: chunk-embedding cache, same optional-DI/per-instance-fallback pattern as _vectorCache.
+    private readonly ChunkEmbeddingVectorCache _chunkCache = chunkCache ?? new ChunkEmbeddingVectorCache(factory);
     private const string SelectCols = @"
         a.id              AS Id,
         a.title           AS Title,
@@ -17,6 +36,7 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         a.embedding_projection     AS EmbeddingProjection,
         a.embedding_model_version  AS EmbeddingModelVersion,
         a.embedding_pending        AS EmbeddingPending,
+        a.index_pending            AS IndexPending,
         a.status          AS Status,
         a.lamport_ts      AS LamportTs,
         a.source_node_id  AS SourceNodeId,
@@ -79,14 +99,89 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
 
     public async Task<List<Article>> SearchAsync(string query)
     {
+        // WP-07: FTS5-backed search. The query string is run through the same
+        // DefaultTokenizer/DefaultStemmer pipeline the index is designed around, then each stem
+        // is emitted as a quoted prefix token (see FtsQueryBuilder). Empty/whitespace-only input
+        // has no usable terms and returns an empty result — a deliberate change from the old
+        // unicode_contains("") path, which (because "".Contains("") is true) returned the entire
+        // active corpus; an empty search box returning everything is not useful behavior.
+        var matchExpr = FtsQueryBuilder.BuildMatchExpression(query);
+        if (matchExpr == null)
+        {
+            return [];
+        }
+
         using var conn = OpenConnection();
 
-        var byTitle = (await conn.QueryAsync<Article>(
-            $@"SELECT DISTINCT {SelectCols} {FromClause}
-               LEFT JOIN tbl_article_concept_tag act ON act.article_id = a.id
-               LEFT JOIN tbl_concept_tag ct ON ct.id = act.concept_tag_id
+        // Two match sources, UNIONed by article id:
+        //   * fts_article  — title + tree_path hits, ranked by bm25(title weighted above path).
+        //   * fts_tag       — concept-tag hits joined through tbl_article_concept_tag.
+        // Soft-deleted rows stay in the FTS index (the delete trigger only fires on a real
+        // DELETE, not a status-flip UPDATE), so every join back to tbl_article re-applies
+        // status = 'A' — same filter the old non-FTS code applied, now load-bearing here.
+        //
+        // Ranking: title/path hits (tier 0) rank above tag-only hits (tier 1). Within tier 0,
+        // bm25 ASC (more negative = better) orders by relevance. Tag-only hits get a fixed score
+        // (0.0) since bm25(fts_article) is undefined for them — they sort after every title hit
+        // because every real bm25 value is non-positive. The underscore-prefix-sorts-first quirk
+        // stays the PRIMARY key so system/pinned titles (e.g. "_Drafts/...") continue to surface
+        // at the top, matching every other listing query in the codebase.
+        var results = (await conn.QueryAsync<Article>(
+            $@"WITH
+               title_hits AS (
+                 SELECT art.id AS id, bm25(fts_article, 10.0, 2.0) AS score
+                 FROM fts_article
+                 JOIN tbl_article art ON art.rowid = fts_article.rowid
+                 WHERE fts_article MATCH @matchExpr AND art.status = 'A'
+               ),
+               tag_hits AS (
+                 SELECT DISTINCT art.id AS id
+                 FROM fts_tag
+                 JOIN tbl_article_concept_tag act ON act.concept_tag_id = fts_tag.rowid
+                 JOIN tbl_article art ON art.id = act.article_id
+                 WHERE fts_tag MATCH @matchExpr AND art.status = 'A'
+               ),
+               matched AS (
+                 SELECT m.id AS id,
+                        CASE WHEN th.id IS NOT NULL THEN 0 ELSE 1 END AS tier,
+                        COALESCE(th.score, 0.0) AS score
+                 FROM (SELECT id FROM title_hits UNION SELECT id FROM tag_hits) m
+                 LEFT JOIN title_hits th ON th.id = m.id
+               )
+               SELECT {SelectCols} {FromClause}
+               JOIN matched mm ON mm.id = a.id
                WHERE a.status = 'A'
-                 AND (unicode_contains(a.title, @query) OR unicode_contains(ct.name, @query))
+               ORDER BY (substr(a.title,1,1)='_') DESC, mm.tier ASC, mm.score ASC, a.title",
+            new { matchExpr })).ToList();
+
+        return _holder.Scope.FilterArticles(results);
+    }
+
+    /// <summary>
+    /// The pre-WP-07 <see cref="SearchAsync"/> implementation: a per-row managed-code
+    /// <c>unicode_contains</c> substring scan over title and tag name, no morphology. Kept
+    /// available (currently unused by <c>SearchService</c>) for a possible future "exact
+    /// substring" search mode. Wiring a UI/API toggle for it is out of WP-07's scope.
+    /// </summary>
+    public async Task<List<Article>> SearchByExactSubstringAsync(string query)
+    {
+        using var conn = OpenConnection();
+
+        // The tag match runs as an `id IN (subquery)` rather than a JOIN + DISTINCT on the
+        // outer query: joining tbl_article_concept_tag/tbl_concept_tag directly here would
+        // multiply each article into one row per matching tag, and DISTINCT would then have to
+        // byte-compare full rows (including the embedding_projection BLOB) to dedupe. Filtering
+        // by id membership instead means the outer SELECT touches each matching article exactly
+        // once, with no BLOB comparison involved.
+        var byTitle = (await conn.QueryAsync<Article>(
+            $@"SELECT {SelectCols} {FromClause}
+               WHERE a.status = 'A'
+                 AND a.id IN (
+                   SELECT a2.id FROM tbl_article a2
+                   LEFT JOIN tbl_article_concept_tag act ON act.article_id = a2.id
+                   LEFT JOIN tbl_concept_tag ct ON ct.id = act.concept_tag_id
+                   WHERE a2.status = 'A' AND (unicode_contains(a2.title, @query) OR unicode_contains(ct.name, @query))
+                 )
                ORDER BY (substr(a.title,1,1)='_') DESC, a.title",
             new { query })).ToList();
 
@@ -130,17 +225,21 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
 
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_article
-              (id, title, tree_path, folder_id, embedding_projection, embedding_model_version, embedding_pending,
+              (id, title, tree_path, folder_id, embedding_projection, embedding_model_version, embedding_pending, index_pending,
                status, lamport_ts, source_node_id, created_at, updated_at,
                remote_subscription_id, remote_origin_id, remote_version, remote_updated_by,
                protected, protection_hint)
-              VALUES (@Id, @Title, @TreePath, @FolderId, @EmbeddingProjection, @EmbeddingModelVersion, @EmbeddingPending,
+              VALUES (@Id, @Title, @TreePath, @FolderId, @EmbeddingProjection, @EmbeddingModelVersion, @EmbeddingPending, @IndexPending,
                       @Status, @LamportTs, @SourceNodeId, @CreatedAt, @UpdatedAt,
                       @RemoteSubscriptionId, @RemoteOriginId, @RemoteVersion, @RemoteUpdatedBy,
                       @Protected, @ProtectionHint)",
             article, tx);
 
         tx.Commit();
+
+        // WP-14: a brand-new row may carry an embedding_projection (sync create, or a create with
+        // an inline projection), so the cache must be rebuilt on next search to pick it up.
+        _vectorCache.Invalidate();
     }
 
     public async Task UpdateAsync(Article article)
@@ -196,6 +295,7 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
                   embedding_projection = @EmbeddingProjection,
                   embedding_model_version = @EmbeddingModelVersion,
                   embedding_pending = @EmbeddingPending,
+                  index_pending = @IndexPending,
                   lamport_ts = @LamportTs, source_node_id = @SourceNodeId,
                   updated_at = @UpdatedAt,
                   status = @Status,
@@ -208,6 +308,13 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
             article, tx);
 
         tx.Commit();
+
+        // WP-14: UpdateAsync rewrites embedding_projection with whatever the Article model carries.
+        // Every current caller load-then-modify-then-save (so the bytes are usually unchanged), but
+        // the column is written unconditionally here and a future caller could change it -- bumping
+        // unconditionally keeps the "cache never silently goes stale" guarantee simple at the cost
+        // of a redundant rebuild on metadata-only edits. See the WP-14 report for the tradeoff.
+        _vectorCache.Invalidate();
     }
 
     public async Task SoftDeleteAsync(Guid id)
@@ -268,39 +375,172 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
                   embedding_pending = 0
               WHERE id = @id",
             new { id, projection, modelVersion });
+
+        // WP-14: this is the one write path that actually changes embedding bytes during normal
+        // operation (the background PendingEmbeddingProcessor). Invalidate so the next search
+        // rebuilds the cache with the fresh projection.
+        _vectorCache.Invalidate();
+    }
+
+    // WP-11: mirrors GetEmbeddingPendingAsync exactly, for PendingIndexProcessor.
+    public async Task<List<Article>> GetIndexPendingAsync(int limit = 100)
+    {
+        using var conn = OpenConnection();
+        var articles = (await conn.QueryAsync<Article>(
+            $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND a.index_pending = 1 LIMIT @limit",
+            new { limit })).ToList();
+        return _holder.Scope.FilterArticles(articles);
+    }
+
+    // AUDIT: unguarded. Only reachable from PendingIndexProcessor (background worker,
+    // SystemCallerScope), mirroring UpdateEmbeddingAsync's own note above.
+    public async Task ClearIndexPendingAsync(Guid id)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_article SET index_pending = 0 WHERE id = @id",
+            new { id });
+    }
+
+    // AUDIT: unguarded. Only reachable from the search-index full-rebuild path (background
+    // worker, SystemCallerScope) -- see SearchIndexLifecycleService.TriggerFullRebuildAsync.
+    public async Task<int> MarkAllIndexPendingAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteAsync("UPDATE tbl_article SET index_pending = 1 WHERE status = 'A'");
+    }
+
+    // Narrow projection used only to rank candidates by cosine similarity. Deliberately not
+    // the full Article model: SearchByEmbeddingAsync used to hydrate every column (including
+    // embedding_projection's BLOB sibling columns and all remote-sync metadata) for every
+    // article with an embedding, just to throw away all but `topK` of them.
+    //
+    // WP-14: kept for the independent reference cosine computation in Storage tests (and as
+    // documentation of the pre-WP-14 first-pass shape). SearchByEmbeddingAsync itself no longer
+    // issues this SQL per call -- it scores out of the process-wide EmbeddingVectorCache, which
+    // rebuilds this same id+projection result set only on invalidation.
+    private sealed class EmbeddingCandidate
+    {
+        public Guid Id { get; set; }
+        public byte[] EmbeddingProjection { get; set; } = null!;
     }
 
     public async Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10)
     {
-        // Load all articles with embeddings and compute cosine similarity in memory
+        // WP-18: timing/counting wrapper around the semantic-search path. Only elapsed time and the
+        // coarse result count are recorded; the query projection vector (and any query text it was
+        // derived from upstream) is never passed to the metrics component. Behavior is unchanged on
+        // every path -- the recording runs only on the success return, and exceptions propagate
+        // exactly as before.
+        var sw = _searchMetrics is null ? null : Stopwatch.StartNew();
+        var results = await SearchByEmbeddingCoreAsync(queryProjection, topK);
+        if (_searchMetrics is not null)
+        {
+            sw!.Stop();
+            _searchMetrics.Record(SearchMetrics.SemanticSearch, sw.Elapsed, results.Count);
+        }
+        return results;
+    }
+
+    private async Task<List<Article>> SearchByEmbeddingCoreAsync(float[] queryProjection, int topK)
+    {
+        // WP-14: pass 1 (score every active article's projection) now runs out of the in-memory
+        // EmbeddingVectorCache instead of a fresh full-table SQL scan on every call. The cache is
+        // rebuilt (from the same `status = 'A' AND embedding_projection IS NOT NULL` query) only
+        // when an embedding write has invalidated it since the last build. Scoring itself moved
+        // into EmbeddingVectorCache.Snapshot.Score, which uses TensorPrimitives (SIMD) for the dot
+        // product and reuses precomputed candidate norms + a once-per-query query norm.
+        EmbeddingVectorCache.Snapshot snapshot = _vectorCache.GetOrRebuild();
+
+        var topIds = snapshot.Score(queryProjection, topK);
+
+        if (topIds.Count == 0) return [];
+
+        // Pass 2: hydrate the full Article rows for just the surviving top-K ids. Unchanged from
+        // pre-WP-14: only the embedding vectors are cached, not full rows.
         using var conn = OpenConnection();
-        var articles = (await conn.QueryAsync<Article>(
-            $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND a.embedding_projection IS NOT NULL",
-            null)).ToList();
+        var fullArticles = (await conn.QueryAsync<Article>(
+            $"SELECT {SelectCols} {FromClause} WHERE a.id IN @ids AND a.status = 'A'",
+            new { ids = topIds })).ToList();
 
-        if (articles.Count == 0) return [];
+        // `IN` does not preserve order, so re-assemble the ranked order from topIds. This also
+        // preserves the pre-existing quirk: _holder.Scope.FilterArticles runs AFTER Take(topK)
+        // (inside Snapshot.Score), same as before this change, so an ACL-restricted caller can
+        // still get back fewer than topK (or zero) visible results if invisible articles ranked
+        // highest. That is not fixed here — it's a separate, bigger decision outside this
+        // perf-only WP.
+        var byId = fullArticles.ToDictionary(a => a.Id);
+        var scored = topIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
 
-        var dim = queryProjection.Length;
-        var scored = articles
-            .Select(a =>
+        return _holder.Scope.FilterArticles(scored);
+    }
+
+    /// <summary>
+    /// WP-15: semantic search over per-chunk embeddings instead of one embedding per article, so a
+    /// "needle" past <c>OnnxEmbeddingGenerator.MaxSequenceLength</c> tokens into a long article is
+    /// findable via its own chunk. An article's score is the max cosine score over its own chunks
+    /// (<see cref="ChunkEmbeddingVectorCache.Snapshot.ScoreMaxPerArticle"/>). An article that has no
+    /// chunk rows yet (not (re)chunked since WP-15 shipped) falls back to its old full-document
+    /// score from <see cref="EmbeddingVectorCache"/>, so this method never regresses an
+    /// not-yet-backfilled article to "invisible" relative to the pre-WP-15
+    /// <see cref="SearchByEmbeddingAsync"/>.
+    /// </summary>
+    public async Task<List<Article>> SearchByChunkEmbeddingAsync(float[] queryProjection, int topK = 10)
+    {
+        var sw = _searchMetrics is null ? null : Stopwatch.StartNew();
+        var results = await SearchByChunkEmbeddingCoreAsync(queryProjection, topK);
+        if (_searchMetrics is not null)
+        {
+            sw!.Stop();
+            _searchMetrics.Record(SearchMetrics.SemanticSearch, sw.Elapsed, results.Count);
+        }
+        return results;
+    }
+
+    private async Task<List<Article>> SearchByChunkEmbeddingCoreAsync(float[] queryProjection, int topK)
+    {
+        ChunkEmbeddingVectorCache.Snapshot chunkSnapshot = await _chunkCache.GetOrRebuildAsync();
+        Dictionary<Guid, float> scores = chunkSnapshot.ScoreMaxPerArticle(queryProjection);
+
+        // Fallback: any active article with a full-document embedding but NO chunk rows yet keeps
+        // its old score instead of silently dropping out of semantic search until it's (re)chunked.
+        //
+        // Only treat ChunkedArticleIds as authoritative when the query's own projection dimension
+        // actually matches the chunk snapshot's dimension. If it doesn't (e.g. right after a model
+        // version upgrade, before background reprocessing has re-chunked anything), every chunk
+        // score is a meaningless 0 for this query -- treating those articles as "already handled by
+        // chunk scoring" would incorrectly withhold their full-document fallback from every single
+        // one of them, not just the ones that genuinely have no better answer. Found during an
+        // independent adversarial review (2026-08-12); see ChunkEmbeddingVectorCache.Snapshot.
+        // ChunkedArticleIds's own doc comment for the full reasoning.
+        HashSet<Guid> chunkedIds = queryProjection.Length == chunkSnapshot.Dimension
+            ? chunkSnapshot.ChunkedArticleIds
+            : [];
+        EmbeddingVectorCache.Snapshot fullSnapshot = _vectorCache.GetOrRebuild();
+        foreach ((Guid id, float score) in fullSnapshot.ScoreAll(queryProjection))
+        {
+            if (!chunkedIds.Contains(id))
             {
-                var proj = MemoryMarshal.Cast<byte, float>(a.EmbeddingProjection.AsSpan());
-                if (proj.Length != dim) return (article: a, score: 0f);
-                float dot = 0f, normA = 0f;
-                for (int i = 0; i < dim; i++)
-                {
-                    dot += queryProjection[i] * proj[i];
-                    normA += proj[i] * proj[i];
-                }
-                float normQ = 0f;
-                for (int i = 0; i < dim; i++) normQ += queryProjection[i] * queryProjection[i];
-                var denom = MathF.Sqrt(normA * normQ);
-                return (article: a, score: denom > 0 ? dot / denom : 0f);
-            })
-            .OrderByDescending(x => x.score)
+                scores[id] = score;
+            }
+        }
+
+        if (scores.Count == 0) return [];
+
+        var topIds = scores
+            .OrderByDescending(kv => kv.Value)
+            .ThenBy(kv => kv.Key) // deterministic tie-break when scores are equal
             .Take(topK)
-            .Select(x => x.article)
+            .Select(kv => kv.Key)
             .ToList();
+
+        using var conn = OpenConnection();
+        var fullArticles = (await conn.QueryAsync<Article>(
+            $"SELECT {SelectCols} {FromClause} WHERE a.id IN @ids AND a.status = 'A'",
+            new { ids = topIds })).ToList();
+
+        var byId = fullArticles.ToDictionary(a => a.Id);
+        var scored = topIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
 
         return _holder.Scope.FilterArticles(scored);
     }

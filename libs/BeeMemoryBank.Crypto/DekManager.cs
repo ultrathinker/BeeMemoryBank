@@ -37,4 +37,37 @@ public static class DekManager
         throw new CryptographicException(
             $"Invalid wrapped DEK length: {wrapped.Length} (expected {LegacyWrappedDekSize} for v0 or {VersionedWrappedDekSize} for v1).");
     }
+
+    /// <summary>
+    /// Unwraps a <see cref="WrapDek"/>-produced blob whose plaintext is NOT a fixed-size 32-byte
+    /// secret (e.g. <c>BeeMemoryBank.Core.Embeddings.ProjectionMatrix</c>'s serialized matrix,
+    /// hundreds of KB). <see cref="UnwrapDek"/> cannot be reused for this: its dispatch recognizes
+    /// only the two exact byte lengths a wrapped 32-byte DEK can produce (48 for legacy v0, 49 for
+    /// v1) and throws for any other length -- which is every real-size projection matrix, since
+    /// <see cref="WrapDek"/> itself has no such length restriction on write. That length-exact
+    /// dispatch is deliberate hardening for <see cref="UnwrapDek"/>'s actual callers (which all
+    /// exclusively wrap 32-byte DEKs and must keep accepting pre-existing unversioned v0 data), so
+    /// it is not touched here -- this is a separate, additive method for payloads that have never
+    /// had a legacy v0 (unversioned) form and can safely require the v1 version byte unconditionally.
+    /// </summary>
+    /// <remarks>
+    /// There is no v0/legacy fallback here by design: unlike <see cref="UnwrapDek"/>, this method
+    /// only ever accepts the v1 (versioned) framing <see cref="WrapDek"/> produces, so it carries
+    /// none of the v0/v1 format-confusion risk <see cref="UnwrapDek"/>'s comment describes -- a
+    /// payload without the version byte is simply rejected, never silently reinterpreted.
+    /// </remarks>
+    public static byte[] UnwrapVersioned(byte[] wrapped, byte[] iv, byte[] masterDek, byte[]? aad = null)
+    {
+        if (wrapped.Length < 1 + CryptoConstants.TagSize)
+        {
+            throw new CryptographicException(
+                $"Invalid wrapped payload length: {wrapped.Length} (too short to contain a version byte and an AES-GCM tag).");
+        }
+        if (wrapped[0] != Version1)
+        {
+            throw new CryptographicException($"Invalid wrapped payload version byte: {wrapped[0]} (expected {Version1}).");
+        }
+        var stripped = wrapped[1..];
+        return AesGcmHelper.Decrypt(masterDek, stripped, iv, aad);
+    }
 }

@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Search;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -17,7 +18,36 @@ public static class DependencyInjection
         services.AddSingleton<Core.Interfaces.IDbConnectionFactory>(factory);
         services.AddSingleton<MigrationRunner>();
 
+        // WP-09: encrypted-at-rest search index segments. Files live in a sibling directory next
+        // to the sqlite DB (dataPath may itself be a directory or a ".db" file path -- mirror
+        // DbConnectionFactory's own handling of both shapes rather than duplicating its logic).
+        var segmentsDirectory = Path.Combine(
+            Path.GetExtension(dataPath)?.Equals(".db", StringComparison.OrdinalIgnoreCase) == true
+                ? Path.GetDirectoryName(dataPath) ?? dataPath
+                : dataPath,
+            "search-index-segments");
+        services.AddScoped<SegmentManifestRepository>();
+        services.AddScoped<SegmentTombstoneRepository>();
+        services.AddScoped(sp => new EncryptedSegmentStore(
+            sp.GetRequiredService<SegmentManifestRepository>(),
+            sp.GetRequiredService<SessionService>(),
+            segmentsDirectory));
+
+        // WP-14: process-wide semantic-search vector cache, shared by every scoped
+        // ArticleRepository instance (see EmbeddingVectorCache's own doc comment for why this
+        // must be a singleton — without this registration, ArticleRepository's optional
+        // constructor parameter would fall back to `new EmbeddingVectorCache(factory)` per
+        // scope, silently defeating cross-request caching entirely).
+        services.AddSingleton<EmbeddingVectorCache>();
         services.AddScoped<IArticleRepository, ArticleRepository>();
+
+        // WP-15: same reasoning as EmbeddingVectorCache above, for the chunk-embedding cache.
+        // ArticleChunkEmbeddingRepository queries the DB directly (not through
+        // IArticleChunkEmbeddingRepository) rather than depending on the repository interface --
+        // see its own constructor doc comment for why (the repository's write path needs to call
+        // Invalidate() on this cache, and a two-way dependency isn't resolvable by the container).
+        services.AddSingleton<ChunkEmbeddingVectorCache>();
+        services.AddScoped<IArticleChunkEmbeddingRepository, ArticleChunkEmbeddingRepository>();
         services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
         services.AddSingleton<IKeySlotRepository, KeySlotRepository>();
         // Singleton (not Scoped) — these repos are pulled into the singleton SnapshotService
