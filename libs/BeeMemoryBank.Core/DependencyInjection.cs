@@ -24,6 +24,12 @@ public static class DependencyInjection
         // buckets + fixed labels -- never query text or content (see SearchMetrics doc comment).
         services.AddSingleton<SearchMetrics>();
 
+        // WP-15: singleton so the embedded vocabulary loads once per process, not once per
+        // EmbeddingProjectionService instance (that service is scoped). Stateless and thread-safe.
+        // Factory form (not a pre-built instance) defers loading the vocab until first resolved,
+        // matching IEmbeddingGenerator's own lazy-load-on-first-use posture.
+        services.AddSingleton(_ => ArticleChunker.CreateDefault());
+
         // Null implementations are replaced with real ones when BeeMemoryBank.Sync / Api / Cli is registered
         services.TryAddSingleton<ILamportClock, NullLamportClock>();
         services.TryAddScoped<IEventLogger, NullEventLogger>();

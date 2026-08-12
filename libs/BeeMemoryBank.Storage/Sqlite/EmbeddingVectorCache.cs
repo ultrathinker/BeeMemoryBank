@@ -307,5 +307,38 @@ public sealed class EmbeddingVectorCache
 
             return result;
         }
+
+        /// <summary>
+        /// WP-15: cosine score for every candidate in this snapshot, not just the top-K —
+        /// <see cref="Storage.Sqlite.ArticleChunkEmbeddingRepository"/>-backed chunk scoring needs
+        /// the full-document score for every article that has no chunk rows yet (the "old vectors
+        /// remain a fallback until backfill" case), which a top-K cut would silently drop candidates
+        /// from before the fallback merge ever sees them.
+        /// </summary>
+        public Dictionary<Guid, float> ScoreAll(float[] queryProjection)
+        {
+            ArgumentNullException.ThrowIfNull(queryProjection);
+            var result = new Dictionary<Guid, float>(_ids.Length);
+            if (_ids.Length == 0)
+            {
+                return result;
+            }
+
+            float queryNorm = queryProjection.Length == _dimension
+                ? MathF.Sqrt(TensorPrimitives.SumOfSquares(queryProjection))
+                : 0f;
+            bool dimMatches = queryProjection.Length == _dimension;
+
+            for (int i = 0; i < _ids.Length; i++)
+            {
+                float dot = dimMatches
+                    ? TensorPrimitives.Dot(queryProjection, _vectors.AsSpan(i * _dimension, _dimension))
+                    : 0f;
+                float denom = _norms[i] * queryNorm;
+                result[_ids[i]] = denom > 0f ? dot / denom : 0f;
+            }
+
+            return result;
+        }
     }
 }

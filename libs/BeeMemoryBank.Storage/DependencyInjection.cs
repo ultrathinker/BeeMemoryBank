@@ -40,6 +40,14 @@ public static class DependencyInjection
         // scope, silently defeating cross-request caching entirely).
         services.AddSingleton<EmbeddingVectorCache>();
         services.AddScoped<IArticleRepository, ArticleRepository>();
+
+        // WP-15: same reasoning as EmbeddingVectorCache above, for the chunk-embedding cache.
+        // ArticleChunkEmbeddingRepository queries the DB directly (not through
+        // IArticleChunkEmbeddingRepository) rather than depending on the repository interface --
+        // see its own constructor doc comment for why (the repository's write path needs to call
+        // Invalidate() on this cache, and a two-way dependency isn't resolvable by the container).
+        services.AddSingleton<ChunkEmbeddingVectorCache>();
+        services.AddScoped<IArticleChunkEmbeddingRepository, ArticleChunkEmbeddingRepository>();
         services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
         services.AddSingleton<IKeySlotRepository, KeySlotRepository>();
         // Singleton (not Scoped) — these repos are pulled into the singleton SnapshotService

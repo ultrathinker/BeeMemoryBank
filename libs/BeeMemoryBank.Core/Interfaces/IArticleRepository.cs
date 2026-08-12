@@ -42,6 +42,9 @@ public interface IArticleRepository
     /// </summary>
     Task<int> MarkAllIndexPendingAsync();
     Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10);
+
+    /// <summary>WP-15: chunk-based semantic search — see <c>ArticleRepository.SearchByChunkEmbeddingAsync</c>'s doc comment.</summary>
+    Task<List<Article>> SearchByChunkEmbeddingAsync(float[] queryProjection, int topK = 10);
     Task<List<Article>> GetRecentActivityAsync(int limit = 50);
     Task SetFolderIdAsync(Guid articleId, Guid folderId);
     Task ClearFolderIdAsync(Guid folderId);
