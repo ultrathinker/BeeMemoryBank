@@ -12,11 +12,24 @@ public class SearchModel(ApiClient api) : PageModel
 
     public string Query { get; private set; } = "";
     public string Mode { get; private set; } = "hybrid";
+
+    /// <summary>
+    /// True when hybrid/keyword/semantic search was unavailable for this request and the page fell
+    /// back to the old linear content scan instead. The view uses this to disclose the fallback
+    /// rather than silently showing results under a mode label that isn't actually what ran.
+    /// </summary>
+    public bool IsFallback { get; private set; }
+
     public SearchResponseDto? Results { get; private set; }
 
     public async Task OnGetAsync(string? q, string? mode = "hybrid")
     {
-        Mode = mode is not null && ValidModes.Contains(mode) ? mode : "hybrid";
+        // Normalize case: ValidModes matches case-insensitively (so a hand-edited URL like
+        // ?mode=KEYWORD is still accepted), but Mode's value is later used as a dictionary key and
+        // an <sl-option> value match in the view, both of which are case-sensitive against the
+        // lowercase "hybrid"/"keyword"/"semantic" set — an unnormalized "KEYWORD" would silently
+        // mismatch both and the page would show the wrong mode label/selection.
+        Mode = mode is not null && ValidModes.Contains(mode) ? mode.ToLowerInvariant() : "hybrid";
 
         if (string.IsNullOrWhiteSpace(q))
         {
@@ -36,7 +49,12 @@ public class SearchModel(ApiClient api) : PageModel
         {
             // Hybrid/keyword/semantic search unavailable for this vault or session (e.g. locked,
             // or semantic search was never initialized on this node) -- fall back to the old
-            // linear content scan rather than surfacing a broken page.
+            // linear content scan rather than surfacing a broken page. IsFallback lets the view
+            // disclose this: without it, a user who picked "meaning only" and got zero results
+            // would have no way to tell "no conceptual matches exist" apart from "semantic search
+            // never actually ran for this request" -- silently swapping in a plain substring scan
+            // under a mode label that no longer describes what happened is misleading.
+            IsFallback = true;
             Results = await api.SearchAsync(q, content: true);
             return;
         }

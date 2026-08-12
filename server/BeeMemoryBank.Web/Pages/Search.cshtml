@@ -30,7 +30,8 @@
         </div>
 
         <div style="text-align:center;margin-top:8px;">
-            <a href="#" id="searchModeToggle" class="search-mode-link">@currentModeLabel</a>
+            <button type="button" id="searchModeToggle" class="search-mode-link"
+                aria-expanded="false" aria-controls="searchModeDropdown">@currentModeLabel</button>
             <div id="searchModeDropdown" style="display:none;justify-content:center;margin-top:8px;">
                 <sl-select name="mode" id="searchModeSelect" value="@Model.Mode" style="max-width:320px;width:100%;">
                     <sl-option value="hybrid">Search by meaning and exact match</sl-option>
@@ -43,6 +44,10 @@
 
     <style>
         .search-mode-link {
+            background: none;
+            border: none;
+            padding: 0;
+            font: inherit;
             color: var(--accent);
             font-size: 0.85rem;
             text-decoration: none;
@@ -57,9 +62,10 @@
     var dropdown = document.getElementById('searchModeDropdown');
     var select = document.getElementById('searchModeSelect');
 
-    toggle.addEventListener('click', function(e) {
-        e.preventDefault();
-        dropdown.style.display = dropdown.style.display === 'none' ? 'flex' : 'none';
+    toggle.addEventListener('click', function() {
+        var isOpen = dropdown.style.display !== 'none';
+        dropdown.style.display = isOpen ? 'none' : 'flex';
+        toggle.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
     });
 
     select.addEventListener('sl-change', function() {
@@ -67,6 +73,15 @@
     });
 })();
     </script>
+
+    @if (Model.IsFallback)
+    {
+        <div class="text-muted text-sm" style="margin-bottom:16px;padding:8px 12px;border-left:3px solid var(--accent);">
+            @(Model.Mode == "semantic"
+                ? "Meaning-based search is unavailable right now — showing exact text matches instead."
+                : "Ranked search is unavailable right now — showing exact text matches instead.")
+        </div>
+    }
 
     @if (Model.Results != null)
     {
