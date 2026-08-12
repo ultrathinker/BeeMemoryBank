@@ -42,13 +42,20 @@ public class SearchQueryCacheTests
         // had a chance to register on it. This shapes genuine concurrency — the assertion itself
         // (factoryCalls == 1) is timing-independent under the cache's unified design, so this gate
         // is not the thing being asserted, just what makes the run meaningfully concurrent.
+        //
+        // releaseFactory is a TaskCompletionSource (awaited), NOT a ManualResetEventSlim (blocked
+        // on) -- a blocking .Wait() inside Factory would occupy a real thread-pool thread for the
+        // whole gated window, starving the pool of the threads needed to actually schedule the other
+        // ConcurrentCallers-1 Task.Run callers on a CPU-constrained CI runner (observed on GitHub
+        // Actions' 2-vCPU ubuntu-latest: callersStarted.Wait(10s) itself timed out with only a
+        // handful of the 20 callers ever having run). Awaiting a Task holds no thread while gated.
         var callersStarted = new CountdownEvent(ConcurrentCallers);
-        var releaseFactory = new ManualResetEventSlim(false);
+        var releaseFactory = new TaskCompletionSource();
 
         async Task<SearchResults> Factory()
         {
             Interlocked.Increment(ref factoryCalls);
-            releaseFactory.Wait(TimeSpan.FromSeconds(10));
+            await releaseFactory.Task.WaitAsync(TimeSpan.FromSeconds(10));
             return MakeResult((Alpha, "alpha"));
         }
 
@@ -66,7 +73,7 @@ public class SearchQueryCacheTests
         // delay here only widens the concurrency window — it is not an assertion.
         callersStarted.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue("all callers must start");
         await Task.Delay(50);
-        releaseFactory.Set();
+        releaseFactory.SetResult();
 
         var results = await Task.WhenAll(tasks);
 

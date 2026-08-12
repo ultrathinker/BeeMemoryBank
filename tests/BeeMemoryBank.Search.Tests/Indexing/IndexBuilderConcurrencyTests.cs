@@ -38,9 +38,22 @@ public class IndexBuilderConcurrencyTests
         var readerExceptions = new ConcurrentBag<Exception>();
         var readerIterations = new long[1]; // boxed shared counter, bumped via Interlocked from any reader thread.
 
+        // RunWriterChurn below is a tight synchronous loop with no await -- on a CPU-starved runner
+        // (e.g. GitHub Actions' 2-vCPU ubuntu-latest), the thread pool can fail to schedule any of
+        // the ReaderThreadCount reader tasks before the writer loop finishes and cancels them,
+        // making "readerIterations > 0" fail for a thread-pool-scheduling reason that has nothing to
+        // do with the product code under test. Block here until every reader has actually completed
+        // at least one iteration, so the writer churn only starts once real concurrency exists.
+        using var readersStarted = new CountdownEvent(ReaderThreadCount);
+
         Task[] readers = Enumerable.Range(0, ReaderThreadCount)
-            .Select(_ => Task.Run(() => ReaderLoop(builder, stop.Token, readerExceptions, readerIterations)))
+            .Select(_ => Task.Run(() => ReaderLoop(builder, stop.Token, readerExceptions, readerIterations, readersStarted)))
             .ToArray();
+
+        if (!readersStarted.Wait(TimeSpan.FromSeconds(30)))
+        {
+            throw new TimeoutException("Reader threads never completed a first iteration within 30s -- thread pool starvation?");
+        }
 
         Exception? writerException = null;
         try
@@ -103,8 +116,9 @@ public class IndexBuilderConcurrencyTests
         }
     }
 
-    private static void ReaderLoop(IndexBuilder builder, CancellationToken token, ConcurrentBag<Exception> exceptions, long[] iterations)
+    private static void ReaderLoop(IndexBuilder builder, CancellationToken token, ConcurrentBag<Exception> exceptions, long[] iterations, CountdownEvent readersStarted)
     {
+        bool signaled = false;
         try
         {
             while (!token.IsCancellationRequested)
@@ -129,11 +143,23 @@ public class IndexBuilderConcurrencyTests
                 }
 
                 Interlocked.Increment(ref iterations[0]);
+                if (!signaled)
+                {
+                    signaled = true;
+                    readersStarted.Signal();
+                }
             }
         }
         catch (Exception ex)
         {
             exceptions.Add(ex);
+            if (!signaled)
+            {
+                // Still unblock the main thread's Wait() even on a first-iteration failure -- the
+                // exception itself will fail the test via readerExceptions, not a hung Wait().
+                signaled = true;
+                readersStarted.Signal();
+            }
         }
     }
 }

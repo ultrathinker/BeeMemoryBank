@@ -190,8 +190,16 @@ public class EmbeddingVectorCacheTests : IAsyncLifetime
         var readerExceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
         long readerIterations = 0;
 
+        // On a CPU-starved CI runner (e.g. GitHub Actions' 2-vCPU ubuntu-latest), the thread pool
+        // can fail to actually schedule any of the 4 reader tasks before the writer loop below races
+        // ahead and finishes, making "readerIterations > 0" fail for a thread-pool-scheduling reason
+        // unrelated to the cache code under test. Block until every reader has completed a first
+        // iteration before letting the writer churn start.
+        using var readersStarted = new CountdownEvent(4);
+
         var readers = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
         {
+            bool signaled = false;
             try
             {
                 while (!stop.Token.IsCancellationRequested)
@@ -205,13 +213,28 @@ public class EmbeddingVectorCacheTests : IAsyncLifetime
                         throw new InvalidOperationException($"Got {result.Count} results for topK=5 — torn snapshot.");
                     }
                     Interlocked.Increment(ref readerIterations);
+                    if (!signaled)
+                    {
+                        signaled = true;
+                        readersStarted.Signal();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 readerExceptions.Add(ex);
+                if (!signaled)
+                {
+                    signaled = true;
+                    readersStarted.Signal();
+                }
             }
         })).ToArray();
+
+        if (!readersStarted.Wait(TimeSpan.FromSeconds(30)))
+        {
+            throw new TimeoutException("Reader threads never completed a first iteration within 30s -- thread pool starvation?");
+        }
 
         // Writer: repeatedly insert new embedded articles and invalidate, forcing many concurrent
         // rebuilds while the readers above are hammering the cache. InsertArticleAsync writes via
