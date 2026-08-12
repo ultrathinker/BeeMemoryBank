@@ -154,6 +154,60 @@ public class HybridSearchServiceTests : IAsyncLifetime
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
+    // Regression coverage for a finding from live production verification (2026-08-12): a
+    // multi-node deployment where this node's tbl_node_identity.can_generate_embeddings = 0 never
+    // gets a projection matrix initialized locally (EnsureProjectionMatrixAsync is only ever called
+    // from the embedding-generation background cycle). Before this fix, HybridSearchService.
+    // HybridAsync let ProjectQueryAsync's InvalidOperationException propagate, failing the ENTIRE
+    // hybrid request -- including the keyword/BM25 half, which has nothing to do with embeddings
+    // and works fine on its own. Self-contained (a fresh DB/session, not the shared fixture above)
+    // specifically so the projection matrix is genuinely never initialized, unlike every other test
+    // in this class whose shared InitializeAsync already calls EnsureProjectionMatrixAsync once.
+    [Fact]
+    public async Task SearchAsync_HybridMode_ProjectionMatrixNeverInitialized_DegradesToKeywordOnlyInsteadOfThrowing()
+    {
+        DapperConfig.Configure();
+        using var factory = DbConnectionFactory.CreateInMemory($"bmb_hybrid_no_matrix_{Guid.NewGuid():N}");
+        await new MigrationRunner(factory).RunMigrationsAsync();
+
+        var session = new SessionService(new KeySlotRepository(factory));
+        session.UnlockWithDek(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+
+        var scopeHolder = new CallerScopeHolder();
+        var articleRepo = new ArticleRepository(factory, scopeHolder, new EmbeddingVectorCache(factory),
+            searchMetrics: null, new ChunkEmbeddingVectorCache(factory));
+        var indexBuilder = new IndexBuilder();
+        var searchService = new SearchService(articleRepo, new ArticleBodyRepository(factory),
+            new FolderRepository(factory, scopeHolder), session, scopeHolder, new SearchQueryCache(), indexBuilder);
+
+        // Deliberately NEVER call EnsureProjectionMatrixAsync -- reproduces "this node doesn't
+        // generate embeddings" exactly.
+        var projectionService = new EmbeddingProjectionService(
+            new SynonymAwareEmbeddingGenerator(),
+            new ProjectionMatrixRepository(factory),
+            articleRepo, session, ArticleChunker.CreateDefault(),
+            new ArticleChunkEmbeddingRepository(factory));
+
+        var articleId = Guid.NewGuid();
+        var now = DateTime.UtcNow.ToString("o");
+        using (var conn = factory.CreateConnection())
+        {
+            await conn.ExecuteAsync(
+                "INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) VALUES (@articleId, 'x', '/', 'A', @now, @now)",
+                new { articleId, now });
+        }
+        indexBuilder.AddOrUpdateDocument(articleId, Guid.Empty, $"{KeywordTerm} {KeywordTerm} filler");
+
+        var hybridSearch = new HybridSearchService(searchService, articleRepo, projectionService, session);
+
+        var results = await hybridSearch.SearchAsync(KeywordTerm, SearchMode.Hybrid, topK: 10);
+
+        results.Should().ContainSingle().Which.Id.Should().Be(articleId,
+            "the keyword/BM25 half of hybrid search must still work when the semantic half is unavailable, not fail the whole request");
+
+        session.Lock();
+    }
+
     // Treats the literal keyword and its "synonym" as embedding to the same direction -- a crude,
     // deterministic stand-in for the synonym/paraphrase understanding a real embedding model
     // provides, which this codebase's literal/stemmed BM25 search cannot do at all. Neither word

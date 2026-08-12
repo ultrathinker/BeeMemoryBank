@@ -66,8 +66,26 @@ public class HybridSearchService(
         int fetchWidth = Math.Max(topK * 4, MinFetchWidth);
 
         Task<List<Article>> keywordTask = searchService.SearchIndexedContentAsync(query, fetchWidth);
-        float[] projection = await embeddingProjection.ProjectQueryAsync(query);
-        List<Article> semanticResults = await articleRepo.SearchByChunkEmbeddingAsync(projection, fetchWidth);
+
+        List<Article> semanticResults;
+        try
+        {
+            float[] projection = await embeddingProjection.ProjectQueryAsync(query);
+            semanticResults = await articleRepo.SearchByChunkEmbeddingAsync(projection, fetchWidth);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ModelUnavailableException)
+        {
+            // Semantic search isn't available for this call -- e.g. this node never generates
+            // embeddings (tbl_node_identity.can_generate_embeddings = 0 in a multi-node sync setup)
+            // so the projection matrix was never initialized here, or the ONNX model itself is
+            // unavailable. Degrade to keyword-only ranking rather than failing the entire hybrid
+            // request: BM25 search works independently of embeddings and should not be held hostage
+            // by a missing semantic component. Found in production (2026-08-12): a node without
+            // embedding generation got zero hybrid results (not even its keyword-only results)
+            // before this fix, silently falling all the way back to the pre-WP-16 linear body scan.
+            semanticResults = [];
+        }
+
         List<Article> keywordResults = await keywordTask;
 
         var byId = new Dictionary<Guid, Article>();
