@@ -8,50 +8,49 @@ namespace BeeMemoryBank.Web.Pages;
 [Authorize]
 public class SearchModel(ApiClient api) : PageModel
 {
+    private static readonly HashSet<string> ValidModes = new(StringComparer.OrdinalIgnoreCase) { "hybrid", "keyword", "semantic" };
+
     public string Query { get; private set; } = "";
-    public bool ContentSearch { get; private set; }
+    public string Mode { get; private set; } = "hybrid";
     public SearchResponseDto? Results { get; private set; }
 
-    public async Task OnGetAsync(string? q, bool content = false)
+    public async Task OnGetAsync(string? q, string? mode = "hybrid")
     {
+        Mode = mode is not null && ValidModes.Contains(mode) ? mode : "hybrid";
+
         if (string.IsNullOrWhiteSpace(q))
         {
             return;
         }
 
         Query = q;
-        ContentSearch = content;
 
-        if (!content)
-        {
-            Results = await api.SearchAsync(q, content: false);
-            return;
-        }
-
-        // WP-16: content search now runs through hybrid (BM25 keyword + chunk-based semantic)
-        // ranking by default instead of the older linear body scan. Folders still come from the
-        // plain endpoint (hybrid search only ranks articles). Falls back to the pre-WP-16 content
-        // search if hybrid search is unavailable for this vault (e.g. semantic search was never
-        // initialized) rather than surfacing a broken page.
+        // Article body content is always searched now -- the mode selector controls HOW (exact
+        // match, meaning, or both via RRF), not WHETHER. This search is fast enough (BM25 + the
+        // in-memory chunk cache) that there is no longer a reason to make it opt-in the way the
+        // old linear body scan was.
         var folderResults = await api.SearchAsync(q, content: false);
-        var hybridArticles = await api.SearchHybridArticlesAsync(q, mode: "hybrid");
+        var articles = await api.SearchHybridArticlesAsync(q, mode: Mode);
 
-        if (hybridArticles is null)
+        if (articles is null)
         {
+            // Hybrid/keyword/semantic search unavailable for this vault or session (e.g. locked,
+            // or semantic search was never initialized on this node) -- fall back to the old
+            // linear content scan rather than surfacing a broken page.
             Results = await api.SearchAsync(q, content: true);
             return;
         }
 
-        var articles = new List<ArticleDto>(hybridArticles);
-        var seenIds = new HashSet<Guid>(articles.Select(a => a.Id));
+        var merged = new List<ArticleDto>(articles);
+        var seenIds = new HashSet<Guid>(merged.Select(a => a.Id));
         foreach (var a in folderResults?.Articles ?? [])
         {
             if (seenIds.Add(a.Id))
             {
-                articles.Add(a);
+                merged.Add(a);
             }
         }
 
-        Results = new SearchResponseDto(folderResults?.Folders ?? [], articles);
+        Results = new SearchResponseDto(folderResults?.Folders ?? [], merged);
     }
 }

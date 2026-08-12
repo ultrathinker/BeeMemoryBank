@@ -2,42 +2,70 @@
 @model BeeMemoryBank.Web.Pages.SearchModel
 @{
     ViewData["Title"] = "Search";
+    var modeLabels = new Dictionary<string, string>
+    {
+        ["hybrid"] = "Searching by meaning and exact match",
+        ["keyword"] = "Searching by exact match only",
+        ["semantic"] = "Searching by meaning only",
+    };
+    var currentModeLabel = modeLabels.TryGetValue(Model.Mode, out var label) ? label : modeLabels["hybrid"];
 }
 
 <partial name="_Sidebar" />
 
 <div id="page-content">
 <div class="main-content">
-    <h2 style="margin-bottom:20px;"><sl-icon name="search"></sl-icon> Search</h2>
+    <h2 style="margin-bottom:8px;"><sl-icon name="search"></sl-icon> Search</h2>
+    <p class="text-muted text-sm" style="margin-bottom:20px;">
+        Searches article titles, tags, and folder names, plus the full text and meaning of every article's content.
+    </p>
 
-    <form method="get" class="sl-form" style="margin-bottom:24px;">
+    <form method="get" class="sl-form" id="searchForm" style="margin-bottom:24px;">
         <div style="display:flex;gap:8px;">
-            <sl-input name="q" placeholder="Search by title..." value="@Model.Query"
+            <sl-input name="q" placeholder="Search by title, content, or meaning..." value="@Model.Query"
                 autofocus style="flex:1;--sl-input-spacing-medium: 1rem;" size="medium">
                 <sl-icon name="search" slot="prefix" style="margin-left:8px;"></sl-icon>
             </sl-input>
             <sl-button type="submit" variant="primary">Search</sl-button>
         </div>
-        <div style="margin-top:8px;">
-            <sl-checkbox name="content" value="true"
-                @(Model.ContentSearch ? "checked" : "")>
-                Search in article content (slower)
-            </sl-checkbox>
+
+        <div style="text-align:center;margin-top:8px;">
+            <a href="#" id="searchModeToggle" class="search-mode-link">@currentModeLabel</a>
+            <div id="searchModeDropdown" style="display:none;justify-content:center;margin-top:8px;">
+                <sl-select name="mode" id="searchModeSelect" value="@Model.Mode" style="max-width:320px;width:100%;">
+                    <sl-option value="hybrid">Search by meaning and exact match</sl-option>
+                    <sl-option value="keyword">Search by exact match only</sl-option>
+                    <sl-option value="semantic">Search by meaning only</sl-option>
+                </sl-select>
+            </div>
         </div>
     </form>
 
-    <div id="contentSearchNotice" style="display:none;align-items:center;gap:8px;margin-bottom:16px;">
-        <sl-spinner style="font-size:1rem;"></sl-spinner>
-        <span class="text-muted">Searching article content, this may take a while...</span>
-    </div>
+    <style>
+        .search-mode-link {
+            color: var(--accent);
+            font-size: 0.85rem;
+            text-decoration: none;
+            border-bottom: 1px dashed var(--accent);
+            cursor: pointer;
+        }
+    </style>
 
     <script>
-document.querySelector('.sl-form').addEventListener('submit', function() {
-    const cb = document.querySelector('sl-checkbox[name="content"]');
-    if (cb && cb.checked) {
-        document.getElementById('contentSearchNotice').style.display = 'flex';
-    }
-});
+(function() {
+    var toggle = document.getElementById('searchModeToggle');
+    var dropdown = document.getElementById('searchModeDropdown');
+    var select = document.getElementById('searchModeSelect');
+
+    toggle.addEventListener('click', function(e) {
+        e.preventDefault();
+        dropdown.style.display = dropdown.style.display === 'none' ? 'flex' : 'none';
+    });
+
+    select.addEventListener('sl-change', function() {
+        document.getElementById('searchForm').submit();
+    });
+})();
     </script>
 
     @if (Model.Results != null)
