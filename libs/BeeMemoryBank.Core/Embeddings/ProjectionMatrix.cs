@@ -90,10 +90,17 @@ public class ProjectionMatrix
         return DekManager.WrapDek(bytes, masterDek);
     }
 
-    /// <summary>Decrypts and restores the matrix.</summary>
+    /// <summary>
+    /// Decrypts and restores the matrix. Uses <see cref="DekManager.UnwrapVersioned"/>, not
+    /// <see cref="DekManager.UnwrapDek"/>: the matrix is hundreds of KB, not the fixed 32-byte
+    /// secret <c>UnwrapDek</c>'s length-based dispatch expects -- see
+    /// <see cref="DekManager.UnwrapVersioned"/>'s doc comment for why reusing <c>UnwrapDek</c>
+    /// here previously made this method throw <see cref="System.Security.Cryptography.CryptographicException"/>
+    /// for any real-size matrix.
+    /// </summary>
     public static ProjectionMatrix Unwrap(byte[] encryptedMatrix, byte[] iv, byte[] masterDek)
     {
-        var bytes = DekManager.UnwrapDek(encryptedMatrix, iv, masterDek);
+        var bytes = DekManager.UnwrapVersioned(encryptedMatrix, iv, masterDek);
         if (bytes.Length % 4 != 0)
             throw new InvalidDataException("Corrupted projection matrix: length is not a multiple of 4.");
 
