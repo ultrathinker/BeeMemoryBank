@@ -104,30 +104,43 @@ public sealed class SearchIndexLifecycleService(
 
         foreach ((SegmentManifestEntry manifest, byte[] bytes) in loaded)
         {
-            SegmentReader reader;
             try
             {
-                reader = new SegmentReader(bytes);
+                // SegmentReader's constructor only validates the fixed-size header (magic, format
+                // version, declared doc/term counts) -- it does not touch the doc table or term
+                // dictionary. Actual payload parsing is deferred and lazy: AdoptPersistedSegment
+                // (via EnumerateTerms/GetPostings/GetDocument) is what walks the real byte offsets,
+                // so a segment with a valid header but corrupted body (truncated postings, an
+                // out-of-bounds text/postings offset, a doc count that no longer matches the real
+                // table) only throws once THAT runs -- an independent finding from an adversarial
+                // review (2026-08-12) of this same fix, confirmed by reading SegmentReader.cs: those
+                // methods raise plain framework exceptions (ArgumentOutOfRangeException from
+                // Span.Slice, etc.), not a specific, easily-filtered type. Both steps must therefore
+                // share one try/catch and one broad `catch (Exception)` -- this is a trust boundary
+                // for externally-persisted, potentially-corrupted binary data (the same "any load
+                // failure means the whole persisted index is untrustworthy" reasoning the
+                // SegmentLoadResult check above already applies), not a place where narrowing the
+                // catch would protect against masking a real programming bug.
+                var reader = new SegmentReader(bytes);
+                HashSet<Guid> tombstones = await tombstoneRepo.GetForSegmentAsync(manifest.SegmentId);
+                int internalId = Builder.AdoptPersistedSegment(reader, tombstones);
+                runtimeState.RegisterPersistedSegment(internalId, manifest.SegmentId);
             }
-            catch (Exception ex) when (ex is NotSupportedException or ArgumentException)
+            catch (Exception ex)
             {
                 // Same "untrustworthy as a whole" treatment as a SegmentLoadResult failure above --
-                // this is the plaintext payload's OWN inner format (SegmentLayout.FormatVersion)
-                // being unreadable (e.g. written by a newer node version), a failure mode
+                // this is the plaintext payload's OWN inner format being unreadable or corrupted
+                // (e.g. written by a newer node version, or damaged on disk), a failure mode
                 // EncryptedSegmentStore.LoadAsync cannot see since it only validates the outer
-                // encrypted container. See WP-13's
-                // SearchIndexLifecycleFormatVersionResilienceTests for the scenario this closes.
+                // encrypted container. See WP-13's SearchIndexLifecycleFormatVersionResilienceTests
+                // for the format-version scenario this originally closed.
                 logger.LogWarning(
                     ex,
-                    "Warm-start: segment {SegmentId} has an unreadable inner format; treating the whole persisted search index as untrustworthy and triggering a full rebuild instead of a partial recovery.",
+                    "Warm-start: segment {SegmentId} could not be read or adopted; treating the whole persisted search index as untrustworthy and triggering a full rebuild instead of a partial recovery.",
                     manifest.SegmentId);
                 await TriggerFullRebuildAsync(ct);
                 return;
             }
-
-            HashSet<Guid> tombstones = await tombstoneRepo.GetForSegmentAsync(manifest.SegmentId);
-            int internalId = Builder.AdoptPersistedSegment(reader, tombstones);
-            runtimeState.RegisterPersistedSegment(internalId, manifest.SegmentId);
         }
 
         logger.LogInformation("Search index warm-started from {Count} persisted segment(s).", loaded.Count);
