@@ -2,6 +2,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading.Channels;
 
 namespace BeeMemoryBank.Core.Services;
@@ -16,7 +17,8 @@ public class SearchService(
     IFolderRepository folderRepo,
     SessionService session,
     CallerScopeHolder scopeHolder,
-    SearchQueryCache queryCache)
+    SearchQueryCache queryCache,
+    SearchMetrics? metrics = null)
 {
     // Method discriminators in the cache key: SearchAsync and SearchWithContentAsync return
     // different result sets for the same query string, so they must occupy disjoint cache slots.
@@ -28,11 +30,24 @@ public class SearchService(
         // WP-17: every call goes through the single-flight + TTL cache. The cache key embeds the
         // caller's read-scope fingerprint so two callers with different folder ACLs can never share
         // a result (see SearchQueryCache). On a miss the underlying logic below runs unchanged.
-        return await queryCache.ExecuteAsync(
+        //
+        // WP-18: wrap the call (cache included -- this is what the caller experiences) with a timing
+        // measurement. The query string is NEVER passed to the metrics component; only the elapsed
+        // time and the coarse result count leave this method. `metrics` is null only in direct-`new`
+        // test construction (DI always injects the singleton).
+        var sw = metrics is null ? null : Stopwatch.StartNew();
+        var result = await queryCache.ExecuteAsync(
             MethodSearch,
             query,
             scopeHolder.Scope.ReadScopeFingerprint,
             () => SearchUncachedAsync(query));
+        if (metrics is not null)
+        {
+            sw!.Stop();
+            metrics.Record(SearchMetrics.MetadataSearch, sw.Elapsed,
+                result.Folders.Count + result.Articles.Count);
+        }
+        return result;
     }
 
     private async Task<SearchResults> SearchUncachedAsync(string query)
@@ -67,11 +82,22 @@ public class SearchService(
         // WP-17: same single-flight + TTL cache as SearchAsync. Body-content search is by far the
         // most expensive query path (it decrypts every active body), so coalescing concurrent
         // identical calls and caching near-repeat calls is where the cache pays off most.
-        return await queryCache.ExecuteAsync(
+        //
+        // WP-18: timing/counting wrapper, identical contract to SearchAsync -- only elapsed time and
+        // the coarse result count are recorded; the query string stays local to this method.
+        var sw = metrics is null ? null : Stopwatch.StartNew();
+        var result = await queryCache.ExecuteAsync(
             MethodSearchWithContent,
             query,
             scopeHolder.Scope.ReadScopeFingerprint,
             () => SearchWithContentUncachedAsync(query));
+        if (metrics is not null)
+        {
+            sw!.Stop();
+            metrics.Record(SearchMetrics.ContentSearch, sw.Elapsed,
+                result.Folders.Count + result.Articles.Count);
+        }
+        return result;
     }
 
     private async Task<SearchResults> SearchWithContentUncachedAsync(string query)

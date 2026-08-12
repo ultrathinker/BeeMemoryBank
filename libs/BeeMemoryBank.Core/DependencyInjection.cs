@@ -19,6 +19,11 @@ public static class DependencyInjection
         // cache (WP-17). ACL safety comes from the scope fingerprint embedded in each cache key.
         services.AddSingleton<SearchQueryCache>();
 
+        // WP-18: Singleton so the rolling latency/result-count windows are process-wide and every
+        // request feeds the same admin-visible numbers. Records only timings + coarse result-count
+        // buckets + fixed labels -- never query text or content (see SearchMetrics doc comment).
+        services.AddSingleton<SearchMetrics>();
+
         // Null implementations are replaced with real ones when BeeMemoryBank.Sync / Api / Cli is registered
         services.TryAddSingleton<ILamportClock, NullLamportClock>();
         services.TryAddScoped<IEventLogger, NullEventLogger>();
