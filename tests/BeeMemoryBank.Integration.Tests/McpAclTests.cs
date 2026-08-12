@@ -36,6 +36,7 @@ public class McpAclTests : IAsyncLifetime
     private BeeConceptTools _conceptTools = null!;
     private BeeAuditTools _auditTools = null!;
     private IndexBuilder _indexBuilder = null!;
+    private EmbeddingProjectionService _projectionService = null!;
 
     private HttpContextAccessor _httpContextAccessor = null!;
     private FolderAccessService _folderAccessService = null!;
@@ -80,11 +81,15 @@ public class McpAclTests : IAsyncLifetime
         var matrixRepo = new ProjectionMatrixRepository(_factory);
         var chunkRepo = new ArticleChunkEmbeddingRepository(_factory, chunkCache);
         var chunker = ArticleChunker.CreateDefault();
-        var projectionService = new EmbeddingProjectionService(new FakeEmbeddingGenerator(), matrixRepo, articleRepo, _session, chunker, chunkRepo);
-        var hybridSearchService = new HybridSearchService(searchService, articleRepo, projectionService, _session);
+        // A non-degenerate (non-zero) fake generator, unlike the plain zero-vector FakeEmbeddingGenerator
+        // used for _conceptTagService above -- a real chunk-embedding round trip (quantize/store/compare)
+        // needs a computable magnitude, which an all-zero vector doesn't reliably provide.
+        _projectionService = new EmbeddingProjectionService(new ConstantEmbeddingGenerator(), matrixRepo, articleRepo, _session, chunker, chunkRepo);
+        var hybridSearchService = new HybridSearchService(searchService, articleRepo, _projectionService, _session);
 
         await initService.InitializeAsync("admin", "AclTestNode", Password);
         await _session.UnlockAsync(Password);
+        await _projectionService.EnsureProjectionMatrixAsync();
 
         var restrictionRepo = new FolderAclRepository(_factory);
         var eventLogRepo = new EventLogRepository(_factory);
@@ -188,19 +193,28 @@ public class McpAclTests : IAsyncLifetime
         ClearCaller();
     }
 
-    [Fact]
-    public async Task Acl_BeeSearchContent_DeniesSecretFolder()
+    [Theory]
+    [InlineData("keyword")]
+    [InlineData("semantic")]
+    [InlineData("hybrid")]
+    public async Task Acl_BeeSearchContent_DeniesSecretFolder(string mode)
     {
         var publicArticle = await _articleService.CreateAsync("Public Content Acl", "/Public", [], "unique public marker acl99");
         var secretArticle = await _articleService.CreateAsync("Secret Content Acl", "/Secret", [], "unique secret marker acl99");
-        // bee_search_content now runs through the BM25 index (HybridSearchService) instead of the old
-        // linear body scan, so the index must be populated directly -- no background indexing
-        // processor runs in this direct-construction test host.
+        // bee_search_content now runs through the BM25 index and chunk-embedding semantic search
+        // (HybridSearchService) instead of the old linear body scan, so both must be populated
+        // directly -- no background indexing/embedding processor runs in this direct-construction
+        // test host. Exercising all three modes (not just the default) matters here: mode="hybrid"
+        // alone would silently degrade to keyword-only (the projection matrix path swallows a
+        // failure internally), never actually exercising SearchByChunkEmbeddingAsync's own ACL
+        // filtering -- a regression there would go undetected without the explicit "semantic" case.
         _indexBuilder.AddOrUpdateDocument(publicArticle.Id, Guid.Empty, "unique public marker acl99");
         _indexBuilder.AddOrUpdateDocument(secretArticle.Id, Guid.Empty, "unique secret marker acl99");
+        await _projectionService.ProjectArticleAsync(publicArticle, "unique public marker acl99");
+        await _projectionService.ProjectArticleAsync(secretArticle, "unique secret marker acl99");
 
         await SetRestrictedCaller();
-        var result = await _searchTools.SearchContent("acl99");
+        var result = await _searchTools.SearchContent("acl99", mode);
 
         var obj = JsonDocument.Parse(result).RootElement;
         var titles = obj.GetProperty("articles").EnumerateArray()
@@ -756,5 +770,16 @@ public class McpAclTests : IAsyncLifetime
         names.Should().NotContain("orphan-candidate",
             "tag whose only articles are soft-deleted or denied must not be visible to a non-superadmin");
         ClearCaller();
+    }
+
+    // Unlike the plain zero-vector FakeEmbeddingGenerator (fine for _conceptTagService, which never
+    // compares magnitudes), a real chunk-embedding round trip through Int8Quantizer needs a non-zero
+    // magnitude to quantize -- this fake returns a fixed non-zero vector for any input so
+    // Acl_BeeSearchContent_DeniesSecretFolder's semantic-mode case has a genuine, comparable
+    // embedding to search against instead of a degenerate all-zero one.
+    private sealed class ConstantEmbeddingGenerator : IEmbeddingGenerator
+    {
+        public int Dimension => 384;
+        public float[] Generate(string text) => Enumerable.Repeat(1f, Dimension).ToArray();
     }
 }
