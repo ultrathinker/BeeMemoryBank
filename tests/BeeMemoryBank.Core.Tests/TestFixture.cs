@@ -55,7 +55,7 @@ public abstract class TestFixture : IAsyncLifetime
         KeyManagement = new KeyManagementService(keySlotRepo, Session, userRepoForKeyMgmt);
         FolderRepo = folderRepo;
         TreeService = new TreeService(articleRepo, folderRepo);
-        SearchService = new SearchService(articleRepo, bodyRepo, folderRepo, Session);
+        SearchService = new SearchService(articleRepo, bodyRepo, folderRepo, Session, ScopeHolder, new SearchQueryCache());
     }
 
     public virtual Task DisposeAsync()

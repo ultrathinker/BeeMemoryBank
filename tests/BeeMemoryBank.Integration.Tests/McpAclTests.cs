@@ -70,7 +70,7 @@ public class McpAclTests : IAsyncLifetime
         var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), _conceptTagService);
-        var searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session);
+        var searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, _scopeHolder, new SearchQueryCache());
 
         await initService.InitializeAsync("admin", "AclTestNode", Password);
         await _session.UnlockAsync(Password);
