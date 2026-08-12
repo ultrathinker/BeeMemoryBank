@@ -60,6 +60,121 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
         return tree;
     }
 
+    /// <summary>
+    /// Depth-bounded, optionally paginated tree view used by the <c>bee_get_tree</c> MCP tool.
+    ///
+    /// Reproduces the legacy <c>BeeReadTools.GetTree</c> inline build byte-for-byte when
+    /// <paramref name="depth"/> and <paramref name="limit"/> are both null: folders ∪ article
+    /// paths, optional <paramref name="path"/> subtree filter, alphabetical (default string)
+    /// ordering, and <c>isSystem</c>/<c>isRemote</c> flags. It then layers on:
+    ///  - <paramref name="depth"/>: caps how many path segments below the (optional) path filter
+    ///    the response descends (null = unlimited). <paramref name="path"/> itself is always
+    ///    level 0; its direct children are level 1, etc.
+    ///  - <paramref name="limit"/> + <paramref name="offset"/>: bounds how many folder+article
+    ///    entries a single call returns after depth filtering (null <paramref name="limit"/> = no
+    ///    pagination, matching the pre-existing unbounded contract).
+    ///
+    /// ACL/scope filtering is unchanged: the article and folder repositories apply
+    /// <c>CallerScopeHolder</c> ambiently, so every collection this method iterates is already
+    /// scoped to the caller's navigable set. Depth/pagination compose with that filtering rather
+    /// than bypassing or duplicating it.
+    /// </summary>
+    public async Task<TreePathsResult> GetTreePathsAsync(
+        string? path = null,
+        int? depth = null,
+        int? limit = null,
+        int offset = 0)
+    {
+        // Same fetch + scope semantics as the legacy BeeReadTools.GetTree inline implementation:
+        // articles are path-filtered at the repo, folders come back as the full active set. Both
+        // repos apply CallerScopeHolder filtering ambiently — do not re-filter here.
+        var articles = await articleRepo.ListAsync(path);
+        var folders = await folderRepo.GetAllActiveAsync();
+
+        var articlesByPath = articles
+            .GroupBy(a => a.TreePath)
+            .ToDictionary(g => g.Key, g => g.Select(a => new TreePathArticleRef { Id = a.Id, Title = a.Title }).ToList());
+
+        var folderMeta = folders.ToDictionary(f => f.Path, f => f);
+        var allPaths = new HashSet<string>(folders.Select(f => f.Path));
+        foreach (var a in articles)
+            allPaths.Add(a.TreePath);
+
+        // Legacy path subtree filter, preserved exactly (default/culture-sensitive StartsWith and
+        // equality, mirroring the original BeeReadTools.GetTree). path == null => whole tree.
+        string? pathPrefix = path != null ? path.TrimEnd('/') + "/" : null;
+        bool PathFilterMatches(string p) =>
+            pathPrefix == null || p == path || p.StartsWith(pathPrefix);
+
+        IEnumerable<string> filtered = allPaths.Where(PathFilterMatches);
+
+        if (depth.HasValue)
+        {
+            var maxDepth = depth.Value;
+            var baseLevel = SegmentCount(path);
+            // Keep the scoped path itself (level 0 relative to itself) plus `maxDepth` levels below.
+            filtered = filtered.Where(p => SegmentCount(p) - baseLevel <= maxDepth);
+        }
+
+        // OrderBy(p => p) deliberately uses Comparer<string>.Default to match the legacy ordering
+        // byte-for-byte — switching to an explicit comparer would reorder entries for non-ASCII paths.
+        var ordered = filtered.OrderBy(p => p).ToList();
+        var total = ordered.Count;
+
+        var appliedOffset = Math.Max(0, offset);
+        int? appliedLimit = limit.HasValue ? Math.Max(1, limit.Value) : null;
+
+        List<string> pagePaths;
+        bool truncated;
+        if (appliedLimit.HasValue)
+        {
+            pagePaths = ordered.Skip(appliedOffset).Take(appliedLimit.Value).ToList();
+            truncated = appliedOffset + pagePaths.Count < total;
+        }
+        else
+        {
+            // No pagination: return everything after depth filtering. We still honor a non-zero
+            // offset (skip) for completeness, but a caller passing offset without limit never gets
+            // an empty page — the unbounded contract is preserved.
+            pagePaths = appliedOffset > 0 ? ordered.Skip(appliedOffset).ToList() : ordered;
+            truncated = false;
+        }
+
+        var entries = pagePaths.Select(p =>
+        {
+            folderMeta.TryGetValue(p, out var meta);
+            return new TreePathEntry
+            {
+                Path = p,
+                IsSystem = meta?.IsSystem ?? false,
+                IsRemote = meta?.RemoteSubscriptionId.HasValue ?? false,
+                Articles = articlesByPath.TryGetValue(p, out var arts) ? arts : []
+            };
+        }).ToList();
+
+        return new TreePathsResult
+        {
+            Paths = entries,
+            Depth = depth,
+            Limit = appliedLimit,
+            Offset = appliedOffset,
+            Total = total,
+            Truncated = truncated
+        };
+    }
+
+    /// <summary>Number of non-empty path segments ("/" → 0, "/Work" → 1, "/Work/Infra" → 2).</summary>
+    private static int SegmentCount(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || path == "/") return 0;
+        var trimmed = path.Trim('/');
+        if (trimmed.Length == 0) return 0;
+        var count = 0;
+        foreach (var c in trimmed)
+            if (c == '/') count++;
+        return count + 1;
+    }
+
     public async Task<TreeChildrenResult> GetChildrenAsync(string path)
     {
         path = NormalizePath(path);

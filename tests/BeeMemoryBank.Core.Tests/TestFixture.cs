@@ -19,6 +19,7 @@ public abstract class TestFixture : IAsyncLifetime
     protected ArticleService ArticleService { get; private set; } = null!;
     protected KeyManagementService KeyManagement { get; private set; } = null!;
     protected TreeService TreeService { get; private set; } = null!;
+    protected IFolderRepository FolderRepo { get; private set; } = null!;
     protected SearchService SearchService { get; private set; } = null!;
     protected CallerScopeHolder ScopeHolder { get; private set; } = null!;
 
@@ -52,6 +53,7 @@ public abstract class TestFixture : IAsyncLifetime
         ArticleService = new ArticleService(articleRepo, bodyRepo, Session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
         var userRepoForKeyMgmt = new BeeMemoryBank.Storage.Sqlite.UserRepository(Factory);
         KeyManagement = new KeyManagementService(keySlotRepo, Session, userRepoForKeyMgmt);
+        FolderRepo = folderRepo;
         TreeService = new TreeService(articleRepo, folderRepo);
         SearchService = new SearchService(articleRepo, bodyRepo, folderRepo, Session);
     }
