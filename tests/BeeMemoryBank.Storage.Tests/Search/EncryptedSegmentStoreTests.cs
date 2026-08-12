@@ -363,4 +363,43 @@ public class EncryptedSegmentStoreTests : IAsyncLifetime
         aad0.Should().NotEqual(aad1);
         aad0.Should().NotEqual(aadOtherSegment);
     }
+
+    // ── WP-11: SegmentManifestRepository.GetAllManifestsAsync/DeleteAllManifestsAsync ──
+
+    [Fact]
+    public async Task GetAllManifestsAsync_NoSegmentsStored_ReturnsEmpty()
+    {
+        (await _manifestRepo.GetAllManifestsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAllManifestsAsync_ReturnsEveryStoredSegmentsManifest()
+    {
+        var segmentId1 = Guid.NewGuid();
+        var segmentId2 = Guid.NewGuid();
+        await _store.StoreAsync(segmentId1, BuildRealSegment(), docCount: 5);
+        await _store.StoreAsync(segmentId2, BuildRealSegment(), docCount: 5);
+
+        var manifests = await _manifestRepo.GetAllManifestsAsync();
+
+        manifests.Select(m => m.SegmentId).Should().BeEquivalentTo([segmentId1, segmentId2]);
+    }
+
+    [Fact]
+    public async Task DeleteAllManifestsAsync_ClearsEveryRow_ButLeavesSegmentFilesOnDisk()
+    {
+        var segmentId = Guid.NewGuid();
+        await _store.StoreAsync(segmentId, BuildRealSegment(), docCount: 5);
+        var manifestBefore = await _manifestRepo.GetManifestAsync(segmentId);
+        File.Exists(manifestBefore!.FilePath).Should().BeTrue();
+
+        await _manifestRepo.DeleteAllManifestsAsync();
+
+        (await _manifestRepo.GetAllManifestsAsync()).Should().BeEmpty();
+        (await _manifestRepo.GetManifestAsync(segmentId)).Should().BeNull();
+        // The full-rebuild path deliberately leaves orphaned segment files on disk (see
+        // SegmentManifestRepository.DeleteAllManifestsAsync's doc comment) -- wasted space, not a
+        // correctness problem, and simpler than adding file-cleanup I/O to an already-degraded path.
+        File.Exists(manifestBefore.FilePath).Should().BeTrue();
+    }
 }

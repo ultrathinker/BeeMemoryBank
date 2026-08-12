@@ -118,6 +118,28 @@ public sealed class SegmentReader
     }
 
     /// <summary>
+    /// Enumerates every distinct term in this segment's dictionary, in on-disk dictionary order
+    /// (sorted by hash, not alphabetically -- the point of this method is completeness, not any
+    /// particular order). Added for WP-11: a segment reloaded from disk otherwise has no way to
+    /// tell a caller what terms it contains (this class only supports point lookups by exact term
+    /// text, by design -- see this class's own header doc), which blocks folding a reloaded
+    /// segment back into <see cref="Indexing.IndexBuilder"/>'s sealed-segment list (it needs a
+    /// <c>Vocabulary</c> set to know what terms to consider a segment for during a merge). No
+    /// format change was needed: every term's UTF-8 text is already stored in the term text block
+    /// for hash-collision disambiguation (see <see cref="SegmentWriter"/>'s doc comment) --
+    /// this method only exposes what <see cref="FindTermRecordIndex"/> already reads internally.
+    /// </summary>
+    public IEnumerable<string> EnumerateTerms()
+    {
+        for (int i = 0; i < TermCount; i++)
+        {
+            int textOffset = ReadRecordInt32(i, SegmentLayout.TermRecordTermTextOffsetOffset);
+            int textLength = ReadRecordInt32(i, SegmentLayout.TermRecordTermTextLengthOffset);
+            yield return Encoding.UTF8.GetString(_segment.Span.Slice(textOffset, textLength));
+        }
+    }
+
+    /// <summary>
     /// Finds the term dictionary index for <paramref name="term"/>, or -1 if it is not present.
     /// Binary-searches for the term's hash (the dictionary is sorted by hash ascending), then
     /// linear-scans the (normally single-entry, occasionally larger on a hash collision) run of

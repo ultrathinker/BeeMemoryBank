@@ -195,4 +195,62 @@ public class SegmentRoundtripTests
         reader.GetPostings("café").Should().Equal((0, 1));
         reader.GetPostings("日本語").Should().Equal((0, 1));
     }
+
+    // ── WP-11 Gap 1: EnumerateTerms ─────────────────────────────────────────────────
+
+    [Fact]
+    public void EnumerateTerms_EmptySegment_ReturnsEmpty()
+    {
+        byte[] segment = SegmentWriter.Build([]);
+        var reader = new SegmentReader(segment);
+
+        reader.EnumerateTerms().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void EnumerateTerms_ReturnsExactlyTheDistinctTermsUsedToBuildTheSegment()
+    {
+        var docs = new[]
+        {
+            new SegmentDocument(0, Guid.NewGuid(), Guid.NewGuid(), ["alpha", "beta", "alpha"]),
+            new SegmentDocument(1, Guid.NewGuid(), Guid.NewGuid(), ["gamma", "beta", "delta"]),
+        };
+        byte[] segment = SegmentWriter.Build(docs);
+        var reader = new SegmentReader(segment);
+
+        var expected = new HashSet<string> { "alpha", "beta", "gamma", "delta" };
+        reader.EnumerateTerms().ToHashSet().Should().BeEquivalentTo(expected);
+        reader.EnumerateTerms().Should().HaveCount(reader.TermCount);
+    }
+
+    [Fact]
+    public void EnumerateTerms_EveryEnumeratedTermHasNonEmptyPostings()
+    {
+        // Self-check #3 from wp-11.md: EnumerateTerms() must round-trip correctly against the
+        // segment's own postings -- every enumerated term must resolve to at least one posting via
+        // GetPostings, since a term only ever ends up in the dictionary because some document
+        // contained it.
+        var docs = Enumerable.Range(0, 25)
+            .Select(i => new SegmentDocument(i, Guid.NewGuid(), Guid.NewGuid(), [$"term{i % 7}", "shared"]))
+            .ToList();
+        byte[] segment = SegmentWriter.Build(docs);
+        var reader = new SegmentReader(segment);
+
+        foreach (string term in reader.EnumerateTerms())
+        {
+            reader.GetPostings(term).Should().NotBeEmpty($"term '{term}' is in the dictionary, so it must have at least one posting");
+        }
+    }
+
+    [Fact]
+    public void EnumerateTerms_UnicodeTerms_RoundtripExactly()
+    {
+        byte[] segment = SegmentWriter.Build(
+        [
+            new SegmentDocument(0, Guid.NewGuid(), Guid.NewGuid(), ["кириллица", "café", "日本語"]),
+        ]);
+        var reader = new SegmentReader(segment);
+
+        reader.EnumerateTerms().ToHashSet().Should().BeEquivalentTo(new HashSet<string> { "кириллица", "café", "日本語" });
+    }
 }

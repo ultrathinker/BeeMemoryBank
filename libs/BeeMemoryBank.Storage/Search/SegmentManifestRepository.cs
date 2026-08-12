@@ -59,6 +59,38 @@ public sealed class SegmentManifestRepository(DbConnectionFactory factory) : Bas
             new { segmentId = segmentId.ToString() });
     }
 
+    /// <summary>
+    /// WP-11: every currently-recorded segment manifest row, for the unlock warm-start path to
+    /// enumerate and attempt to load each one back via <c>EncryptedSegmentStore.LoadAsync</c>.
+    /// </summary>
+    public async Task<List<SegmentManifestEntry>> GetAllManifestsAsync()
+    {
+        using var conn = OpenConnection();
+        var rows = await conn.QueryAsync<SegmentManifestEntry>(
+            @"SELECT
+                segment_id     AS SegmentId,
+                file_path      AS FilePath,
+                doc_count      AS DocCount,
+                dek_epoch      AS DekEpoch,
+                format_version AS FormatVersion,
+                created_at     AS CreatedAt
+              FROM tbl_search_index_manifest");
+        return rows.ToList();
+    }
+
+    /// <summary>
+    /// WP-11: clears every manifest row. Used only by the search-index full-rebuild path (see
+    /// <c>SearchIndexLifecycleService.TriggerFullRebuildAsync</c>) -- the segment FILES themselves
+    /// are deliberately left on disk (an orphaned .bmesg file is just wasted space, not a
+    /// correctness problem, and deleting them here would add I/O to an already-degraded path
+    /// without changing behavior).
+    /// </summary>
+    public async Task DeleteAllManifestsAsync()
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync("DELETE FROM tbl_search_index_manifest");
+    }
+
     public async Task<IndexKeyRow?> GetIndexKeyRowAsync()
     {
         using var conn = OpenConnection();

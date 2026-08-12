@@ -17,6 +17,7 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
         a.embedding_projection     AS EmbeddingProjection,
         a.embedding_model_version  AS EmbeddingModelVersion,
         a.embedding_pending        AS EmbeddingPending,
+        a.index_pending            AS IndexPending,
         a.status          AS Status,
         a.lamport_ts      AS LamportTs,
         a.source_node_id  AS SourceNodeId,
@@ -205,11 +206,11 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
 
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_article
-              (id, title, tree_path, folder_id, embedding_projection, embedding_model_version, embedding_pending,
+              (id, title, tree_path, folder_id, embedding_projection, embedding_model_version, embedding_pending, index_pending,
                status, lamport_ts, source_node_id, created_at, updated_at,
                remote_subscription_id, remote_origin_id, remote_version, remote_updated_by,
                protected, protection_hint)
-              VALUES (@Id, @Title, @TreePath, @FolderId, @EmbeddingProjection, @EmbeddingModelVersion, @EmbeddingPending,
+              VALUES (@Id, @Title, @TreePath, @FolderId, @EmbeddingProjection, @EmbeddingModelVersion, @EmbeddingPending, @IndexPending,
                       @Status, @LamportTs, @SourceNodeId, @CreatedAt, @UpdatedAt,
                       @RemoteSubscriptionId, @RemoteOriginId, @RemoteVersion, @RemoteUpdatedBy,
                       @Protected, @ProtectionHint)",
@@ -271,6 +272,7 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
                   embedding_projection = @EmbeddingProjection,
                   embedding_model_version = @EmbeddingModelVersion,
                   embedding_pending = @EmbeddingPending,
+                  index_pending = @IndexPending,
                   lamport_ts = @LamportTs, source_node_id = @SourceNodeId,
                   updated_at = @UpdatedAt,
                   status = @Status,
@@ -343,6 +345,34 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
                   embedding_pending = 0
               WHERE id = @id",
             new { id, projection, modelVersion });
+    }
+
+    // WP-11: mirrors GetEmbeddingPendingAsync exactly, for PendingIndexProcessor.
+    public async Task<List<Article>> GetIndexPendingAsync(int limit = 100)
+    {
+        using var conn = OpenConnection();
+        var articles = (await conn.QueryAsync<Article>(
+            $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND a.index_pending = 1 LIMIT @limit",
+            new { limit })).ToList();
+        return _holder.Scope.FilterArticles(articles);
+    }
+
+    // AUDIT: unguarded. Only reachable from PendingIndexProcessor (background worker,
+    // SystemCallerScope), mirroring UpdateEmbeddingAsync's own note above.
+    public async Task ClearIndexPendingAsync(Guid id)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_article SET index_pending = 0 WHERE id = @id",
+            new { id });
+    }
+
+    // AUDIT: unguarded. Only reachable from the search-index full-rebuild path (background
+    // worker, SystemCallerScope) -- see SearchIndexLifecycleService.TriggerFullRebuildAsync.
+    public async Task<int> MarkAllIndexPendingAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteAsync("UPDATE tbl_article SET index_pending = 1 WHERE status = 'A'");
     }
 
     // Narrow projection used only to rank candidates by cosine similarity. Deliberately not
