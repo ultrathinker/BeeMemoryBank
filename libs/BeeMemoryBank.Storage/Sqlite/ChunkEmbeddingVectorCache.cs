@@ -98,23 +98,29 @@ public sealed class ChunkEmbeddingVectorCache
 
         int dim = raw.Count > 0 ? raw[0].Projection.Length : 0;
 
-        var articleIds = new Guid[raw.Count];
-        var vectors = new byte[raw.Count * dim];
-        var scales = new float[raw.Count];
-        var norms = new float[raw.Count];
+        // Rows whose stored dimension doesn't match (e.g. a stale row left behind by a retired
+        // model version -- tbl_article_chunk_embedding.model_version exists precisely so this can
+        // eventually be detected/cleaned up) are EXCLUDED here entirely, not zero-filled. Unlike
+        // EmbeddingVectorCache (which has no fallback concept -- a zero-filled "scores 0" candidate
+        // there is harmless), ChunkedArticleIds below drives whether ArticleRepository.
+        // SearchByChunkEmbeddingCoreAsync uses this article's chunk score OR falls back to its
+        // full-document score. A dimension-mismatched row that instead got zero-filled and counted
+        // as "chunked" would score exactly 0 forever and never fall back to its (dimension-correct)
+        // full-document embedding -- a real, if currently unreachable, gap since this codebase ships
+        // only one model version today: found during an independent adversarial review (2026-08-12).
+        var matching = raw.Where(r => dim > 0 && r.Projection.Length == dim).ToList();
 
-        for (int i = 0; i < raw.Count; i++)
+        var articleIds = new Guid[matching.Count];
+        var vectors = new byte[matching.Count * dim];
+        var scales = new float[matching.Count];
+        var norms = new float[matching.Count];
+
+        for (int i = 0; i < matching.Count; i++)
         {
-            articleIds[i] = raw[i].ArticleId;
-            scales[i] = raw[i].Scale;
-            if (dim > 0 && raw[i].Projection.Length == dim)
-            {
-                raw[i].Projection.CopyTo(vectors.AsSpan(i * dim));
-                norms[i] = Int8Quantizer.ComputeNorm(raw[i].Projection, raw[i].Scale);
-            }
-            // else: a row whose stored dimension doesn't match (e.g. a stale row from a retired
-            // model version) is zero-filled and scores 0, the same mismatched-dimension handling
-            // EmbeddingVectorCache uses.
+            articleIds[i] = matching[i].ArticleId;
+            scales[i] = matching[i].Scale;
+            matching[i].Projection.CopyTo(vectors.AsSpan(i * dim));
+            norms[i] = Int8Quantizer.ComputeNorm(matching[i].Projection, matching[i].Scale);
         }
 
         return new Snapshot(generation, articleIds, vectors, scales, norms, dim);
@@ -155,7 +161,26 @@ public sealed class ChunkEmbeddingVectorCache
         /// <summary>Total chunk rows in this snapshot (not distinct articles).</summary>
         public int ChunkCount => _articleIds.Length;
 
-        /// <summary>Every distinct article id that has at least one chunk row in this snapshot.</summary>
+        /// <summary>
+        /// The single dimension every vector in this snapshot is packed at (0 if the snapshot is
+        /// empty). Callers deciding whether <see cref="ChunkedArticleIds"/> is trustworthy for a
+        /// particular query MUST first compare it against that query's own projection length -- see
+        /// <see cref="ChunkedArticleIds"/>'s own doc comment for why.
+        /// </summary>
+        public int Dimension => _dimension;
+
+        /// <summary>
+        /// Every distinct article id that has at least one chunk row in this snapshot, REGARDLESS of
+        /// whether that dimension matches any particular query. A caller using this set to decide
+        /// "does this article need the full-document fallback" must first check
+        /// <see cref="Dimension"/> against the query projection's own length: if they don't match,
+        /// <see cref="ScoreMaxPerArticle"/> would score every one of these ids 0 (the snapshot has
+        /// nothing usable for a query of a different dimension), which would incorrectly withhold
+        /// the full-document fallback from every chunked article for that query rather than just
+        /// the ones that genuinely have no better answer. Found during an independent adversarial
+        /// review (2026-08-12): see <c>ArticleRepository.SearchByChunkEmbeddingCoreAsync</c> for the
+        /// caller-side fix.
+        /// </summary>
         public HashSet<Guid> ChunkedArticleIds => new(_articleIds);
 
         /// <summary>

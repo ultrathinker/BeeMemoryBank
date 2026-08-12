@@ -504,7 +504,18 @@ public class ArticleRepository(
 
         // Fallback: any active article with a full-document embedding but NO chunk rows yet keeps
         // its old score instead of silently dropping out of semantic search until it's (re)chunked.
-        HashSet<Guid> chunkedIds = chunkSnapshot.ChunkedArticleIds;
+        //
+        // Only treat ChunkedArticleIds as authoritative when the query's own projection dimension
+        // actually matches the chunk snapshot's dimension. If it doesn't (e.g. right after a model
+        // version upgrade, before background reprocessing has re-chunked anything), every chunk
+        // score is a meaningless 0 for this query -- treating those articles as "already handled by
+        // chunk scoring" would incorrectly withhold their full-document fallback from every single
+        // one of them, not just the ones that genuinely have no better answer. Found during an
+        // independent adversarial review (2026-08-12); see ChunkEmbeddingVectorCache.Snapshot.
+        // ChunkedArticleIds's own doc comment for the full reasoning.
+        HashSet<Guid> chunkedIds = queryProjection.Length == chunkSnapshot.Dimension
+            ? chunkSnapshot.ChunkedArticleIds
+            : [];
         EmbeddingVectorCache.Snapshot fullSnapshot = _vectorCache.GetOrRebuild();
         foreach ((Guid id, float score) in fullSnapshot.ScoreAll(queryProjection))
         {

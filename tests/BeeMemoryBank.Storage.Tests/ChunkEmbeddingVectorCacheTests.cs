@@ -150,4 +150,39 @@ public class ChunkEmbeddingVectorCacheTests : IAsyncLifetime
 
         (await _cache.GetOrRebuildAsync()).ChunkCount.Should().Be(1);
     }
+
+    // Regression coverage for a finding from an independent adversarial review (2026-08-12): a
+    // chunk row whose stored dimension doesn't match the snapshot's dimension (e.g. a stale row
+    // left behind by a retired model version) must be excluded from the snapshot entirely -- not
+    // zero-filled and still counted in ChunkedArticleIds, which would incorrectly block that
+    // article's full-document fallback in ArticleRepository.SearchByChunkEmbeddingCoreAsync forever.
+
+    [Fact]
+    public async Task RebuildFromDb_MismatchedDimensionRow_ExcludedFromChunkedArticleIds()
+    {
+        var normalArticle = await InsertArticleAsync();
+        var (normalBytes, normalScale, _) = Int8Quantizer.Quantize(RandomUnitVector(new Random(10), Dim));
+        await _repo.ReplaceChunksAsync(normalArticle, [(normalBytes, normalScale)], "test-model");
+
+        // A row whose projection is a DIFFERENT length than the snapshot's dimension (Dim=8) --
+        // simulating a leftover chunk from a retired model version with a different embedding size.
+        var mismatchedArticle = await InsertArticleAsync();
+        var (mismatchedBytes, mismatchedScale, _) = Int8Quantizer.Quantize(RandomUnitVector(new Random(11), Dim * 2));
+        await _repo.ReplaceChunksAsync(mismatchedArticle, [(mismatchedBytes, mismatchedScale)], "old-model");
+
+        var snapshot = await _cache.GetOrRebuildAsync();
+
+        // The snapshot's "official" dimension comes from whichever row happens to sort first by
+        // article_id (an implementation detail this test doesn't control, since article ids are
+        // random Guids) -- so assert the property this fix actually guarantees generically: whichever
+        // article's row matches the resulting dimension is included, and the OTHER one (whichever it
+        // turns out to be) is excluded, never both.
+        snapshot.Dimension.Should().BeOneOf(Dim, Dim * 2);
+        Guid expectedIncluded = snapshot.Dimension == Dim ? normalArticle : mismatchedArticle;
+        Guid expectedExcluded = snapshot.Dimension == Dim ? mismatchedArticle : normalArticle;
+
+        snapshot.ChunkedArticleIds.Should().ContainSingle().Which.Should().Be(expectedIncluded);
+        snapshot.ChunkedArticleIds.Should().NotContain(expectedExcluded,
+            "a dimension-mismatched row must not count as \"this article has a usable chunk\" -- it would otherwise score 0 forever and never fall back to its full-document embedding");
+    }
 }
