@@ -79,6 +79,72 @@ public class ArticleRepository(DbConnectionFactory factory, CallerScopeHolder sc
 
     public async Task<List<Article>> SearchAsync(string query)
     {
+        // WP-07: FTS5-backed search. The query string is run through the same
+        // DefaultTokenizer/DefaultStemmer pipeline the index is designed around, then each stem
+        // is emitted as a quoted prefix token (see FtsQueryBuilder). Empty/whitespace-only input
+        // has no usable terms and returns an empty result — a deliberate change from the old
+        // unicode_contains("") path, which (because "".Contains("") is true) returned the entire
+        // active corpus; an empty search box returning everything is not useful behavior.
+        var matchExpr = FtsQueryBuilder.BuildMatchExpression(query);
+        if (matchExpr == null)
+        {
+            return [];
+        }
+
+        using var conn = OpenConnection();
+
+        // Two match sources, UNIONed by article id:
+        //   * fts_article  — title + tree_path hits, ranked by bm25(title weighted above path).
+        //   * fts_tag       — concept-tag hits joined through tbl_article_concept_tag.
+        // Soft-deleted rows stay in the FTS index (the delete trigger only fires on a real
+        // DELETE, not a status-flip UPDATE), so every join back to tbl_article re-applies
+        // status = 'A' — same filter the old non-FTS code applied, now load-bearing here.
+        //
+        // Ranking: title/path hits (tier 0) rank above tag-only hits (tier 1). Within tier 0,
+        // bm25 ASC (more negative = better) orders by relevance. Tag-only hits get a fixed score
+        // (0.0) since bm25(fts_article) is undefined for them — they sort after every title hit
+        // because every real bm25 value is non-positive. The underscore-prefix-sorts-first quirk
+        // stays the PRIMARY key so system/pinned titles (e.g. "_Drafts/...") continue to surface
+        // at the top, matching every other listing query in the codebase.
+        var results = (await conn.QueryAsync<Article>(
+            $@"WITH
+               title_hits AS (
+                 SELECT art.id AS id, bm25(fts_article, 10.0, 2.0) AS score
+                 FROM fts_article
+                 JOIN tbl_article art ON art.rowid = fts_article.rowid
+                 WHERE fts_article MATCH @matchExpr AND art.status = 'A'
+               ),
+               tag_hits AS (
+                 SELECT DISTINCT art.id AS id
+                 FROM fts_tag
+                 JOIN tbl_article_concept_tag act ON act.concept_tag_id = fts_tag.rowid
+                 JOIN tbl_article art ON art.id = act.article_id
+                 WHERE fts_tag MATCH @matchExpr AND art.status = 'A'
+               ),
+               matched AS (
+                 SELECT m.id AS id,
+                        CASE WHEN th.id IS NOT NULL THEN 0 ELSE 1 END AS tier,
+                        COALESCE(th.score, 0.0) AS score
+                 FROM (SELECT id FROM title_hits UNION SELECT id FROM tag_hits) m
+                 LEFT JOIN title_hits th ON th.id = m.id
+               )
+               SELECT {SelectCols} {FromClause}
+               JOIN matched mm ON mm.id = a.id
+               WHERE a.status = 'A'
+               ORDER BY (substr(a.title,1,1)='_') DESC, mm.tier ASC, mm.score ASC, a.title",
+            new { matchExpr })).ToList();
+
+        return _holder.Scope.FilterArticles(results);
+    }
+
+    /// <summary>
+    /// The pre-WP-07 <see cref="SearchAsync"/> implementation: a per-row managed-code
+    /// <c>unicode_contains</c> substring scan over title and tag name, no morphology. Kept
+    /// available (currently unused by <c>SearchService</c>) for a possible future "exact
+    /// substring" search mode. Wiring a UI/API toggle for it is out of WP-07's scope.
+    /// </summary>
+    public async Task<List<Article>> SearchByExactSubstringAsync(string query)
+    {
         using var conn = OpenConnection();
 
         // The tag match runs as an `id IN (subquery)` rather than a JOIN + DISTINCT on the

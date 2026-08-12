@@ -18,6 +18,12 @@ public interface IArticleRepository
     Task UpdateAsync(Article article);
     Task SoftDeleteAsync(Guid id);
     Task<List<Article>> SearchAsync(string query);
+    /// <summary>
+    /// Pre-WP-07 exact-substring search (per-row <c>unicode_contains</c> scan over title and tag
+    /// name, no morphology). Preserved for a possible future "exact substring" search mode; not
+    /// used by <c>SearchService</c>, which routes through FTS-backed <see cref="SearchAsync"/>.
+    /// </summary>
+    Task<List<Article>> SearchByExactSubstringAsync(string query);
     Task<List<Article>> SearchByIdPartialAsync(string partial, int limit = 20);
     Task<List<Article>> GetByIdsAsync(List<Guid> ids);
     Task<List<Article>> GetEmbeddingPendingAsync(int limit = 100);
