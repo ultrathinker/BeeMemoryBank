@@ -42,6 +42,14 @@ public class PendingIndexProcessor(
     private readonly TimeSpan _interval = interval ?? TimeSpan.FromMinutes(5);
     private readonly int _batchSize = batchSize ?? 50;
 
+    // Guards against the periodic tick and a manual DrainAllPendingAsync (or two concurrent
+    // manual drains) running ProcessPendingCoreAsync at the same time. AGY review 2026-08-12:
+    // two concurrent runs pull the same pending batch, both seal+persist the same hot-buffer
+    // contents as separate segments with distinct GUIDs, and the next merge finds the same
+    // article live in two sealed segments and throws (tombstoning invariant violation) --
+    // permanently wedging the indexer until the duplicate manifest rows are pruned by hand.
+    private readonly SemaphoreSlim _runLock = new(1, 1);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
@@ -61,7 +69,26 @@ public class PendingIndexProcessor(
         }
     }
 
+    /// <summary>
+    /// Runs one batch. Returns the number of pending items resolved, 0 if there was nothing to
+    /// do, or -1 if another run (the periodic tick or a concurrent drain) is already in flight --
+    /// callers that care about the difference (see <see cref="DrainAllPendingAsync"/>) should
+    /// back off and retry rather than treating -1 the same as "nothing pending".
+    /// </summary>
     public async Task<int> ProcessPendingAsync(CancellationToken ct)
+    {
+        if (!await _runLock.WaitAsync(0, ct)) return -1;
+        try
+        {
+            return await ProcessPendingCoreAsync(ct);
+        }
+        finally
+        {
+            _runLock.Release();
+        }
+    }
+
+    private async Task<int> ProcessPendingCoreAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var session = scope.ServiceProvider.GetRequiredService<SessionService>();
@@ -151,6 +178,14 @@ public class PendingIndexProcessor(
         for (var i = 0; i < maxBatches && !ct.IsCancellationRequested; i++)
         {
             var resolved = await ProcessPendingAsync(ct);
+            if (resolved == -1)
+            {
+                // Lock held by the periodic tick or a concurrent drain -- that's still making
+                // progress, just not on this thread. Back off briefly and try again rather than
+                // giving up as if there were nothing left pending.
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                continue;
+            }
             if (resolved == 0) break;
             total += resolved;
         }

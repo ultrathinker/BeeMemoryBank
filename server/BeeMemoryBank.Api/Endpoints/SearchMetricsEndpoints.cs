@@ -5,6 +5,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Search;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Endpoints;
@@ -104,17 +105,22 @@ public static class SearchMetricsEndpoints
             SessionService session,
             PendingEmbeddingProcessor embeddingProcessor,
             PendingIndexProcessor indexProcessor,
+            IHostApplicationLifetime lifetime,
             ILogger<PendingEmbeddingProcessor> logger) =>
         {
             var gate = RequireSuperadmin(ctx, session);
             if (gate != null) return gate;
 
+            // Use the host's own shutdown token, not CancellationToken.None -- otherwise this
+            // background drain ignores app shutdown entirely, delaying it and risking
+            // ObjectDisposedException from DB pools torn down mid-batch.
+            var shutdownToken = lifetime.ApplicationStopping;
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    var embedded = await embeddingProcessor.DrainAllPendingAsync(CancellationToken.None);
-                    var indexed = await indexProcessor.DrainAllPendingAsync(CancellationToken.None);
+                    var embedded = await embeddingProcessor.DrainAllPendingAsync(shutdownToken);
+                    var indexed = await indexProcessor.DrainAllPendingAsync(shutdownToken);
                     logger.LogInformation("Manual backfill complete: {Embedded} embeddings, {Indexed} index entries", embedded, indexed);
                 }
                 catch (Exception ex)
