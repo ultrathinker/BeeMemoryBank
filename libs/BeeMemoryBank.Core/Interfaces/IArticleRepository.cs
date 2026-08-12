@@ -29,6 +29,18 @@ public interface IArticleRepository
     Task<List<Article>> GetEmbeddingPendingAsync(int limit = 100);
     Task UpdateEmbeddingAsync(Guid id, byte[] projection, string modelVersion);
 
+    /// <summary>
+    /// Re-flags every active article whose stored <c>embedding_model_version</c> is present but
+    /// does not match <paramref name="currentModelVersion"/> as embedding_pending = 1, so a model
+    /// swap (e.g. MiniLM to multilingual-e5-small) gets picked up by
+    /// <c>PendingEmbeddingProcessor</c> automatically instead of silently leaving stale-model
+    /// vectors mixed in with new ones. Dimension-based staleness checks elsewhere don't catch this
+    /// when the old and new models happen to share a dimension. Rows with no stored version at all
+    /// are left alone -- they're already pending for the ordinary "never embedded yet" reason.
+    /// Returns the number of rows re-flagged, for logging.
+    /// </summary>
+    Task<int> MarkStaleEmbeddingsPendingAsync(string currentModelVersion);
+
     /// <summary>WP-11: mirrors GetEmbeddingPendingAsync exactly, for the search-index background processor.</summary>
     Task<List<Article>> GetIndexPendingAsync(int limit = 100);
 

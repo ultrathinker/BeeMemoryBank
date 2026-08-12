@@ -101,7 +101,7 @@ public class EmbeddingProjectionService(
     public async Task<float[]> ProjectQueryAsync(string query)
     {
         var matrix = await LoadMatrixAsync();
-        var embedding = generator.Generate(query);
+        var embedding = generator.GenerateQuery(query);
         return matrix.Project(embedding);
     }
 

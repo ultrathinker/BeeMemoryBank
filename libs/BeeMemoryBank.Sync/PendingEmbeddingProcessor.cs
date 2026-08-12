@@ -94,6 +94,13 @@ public class PendingEmbeddingProcessor(
 
         await projectionService.EnsureProjectionMatrixAsync();
 
+        // Idempotent no-op after the model version last changed: re-flags any article embedded by
+        // a since-replaced model version so it gets picked up below instead of silently staying on
+        // stale vectors (dimension-based staleness checks elsewhere don't catch a same-dimension
+        // model swap). ConceptTagService.BackfillEmbeddingsAsync does the equivalent check for
+        // concept tags on its own call a few lines up.
+        await articleRepo.MarkStaleEmbeddingsPendingAsync(OnnxEmbeddingGenerator.Version);
+
         var pending = await articleRepo.GetEmbeddingPendingAsync(_batchSize);
         if (pending.Count == 0) return 0;
 

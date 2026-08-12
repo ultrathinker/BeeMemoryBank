@@ -10,16 +10,16 @@ namespace BeeMemoryBank.Core.Embeddings;
 internal static class EmbeddingModelWiring
 {
     /// <summary>
-    /// Expected SHA-256 (lowercase hex) of the bundled <c>all-MiniLM-L6-v2</c> <c>model.onnx</c>,
-    /// as published by sentence-transformers/all-MiniLM-L6-v2 on HuggingFace
-    /// (onnx/model.onnx, 90,405,214 bytes).
+    /// Expected SHA-256 (lowercase hex) of the bundled <c>multilingual-e5-small</c> <c>model.onnx</c>
+    /// (dynamic int8-quantized), as published by Xenova/multilingual-e5-small on HuggingFace
+    /// (onnx/model_quantized.onnx, 118,308,185 bytes).
     /// </summary>
     public const string BundledModelSha256 =
-        "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452";
+        "f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193";
 
-    /// <summary>Default manifest describing the bundled <c>all-MiniLM-L6-v2</c> model.</summary>
+    /// <summary>Default manifest describing the bundled <c>multilingual-e5-small</c> model.</summary>
     public static readonly ModelManifest DefaultManifest = new(
-        Id: "all-MiniLM-L6-v2",
+        Id: "multilingual-e5-small",
         File: "model.onnx",
         Sha256: BundledModelSha256,
         Dimension: 384,

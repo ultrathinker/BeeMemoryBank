@@ -22,12 +22,12 @@
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
   </ItemGroup>
 
-  <!-- The BERT WordPiece vocabulary is the deterministic English word source for body generation.
-       Embedded so the tool is self-contained and does not depend on a build-output copy of the file. -->
+  <!-- A BERT WordPiece vocabulary is the deterministic English word source for body generation,
+       unrelated to the real embedding model (which moved to a multilingual SentencePiece
+       tokenizer; see EmbeddingModelWiring). This is SeedGen's own bundled copy, kept solely as a
+       large curated English word list, embedded so the tool is self-contained. -->
   <ItemGroup>
-    <EmbeddedResource Include="..\..\libs\BeeMemoryBank.Core\Embeddings\Models\vocab.txt">
-      <Link>Resources\vocab.txt</Link>
-    </EmbeddedResource>
+    <EmbeddedResource Include="Resources\vocab.txt" />
   </ItemGroup>
 
   <!-- model.onnx is NOT required by the generator itself (it never produces embeddings), but

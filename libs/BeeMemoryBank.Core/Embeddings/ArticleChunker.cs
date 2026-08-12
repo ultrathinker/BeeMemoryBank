@@ -1,9 +1,9 @@
 namespace BeeMemoryBank.Core.Embeddings;
 
 /// <summary>
-/// WP-15: splits article plaintext into overlapping chunks sized in real BERT WordPiece tokens (via
-/// <see cref="BertWordPieceTokenizer.TokenizeWithCounts"/>), so each chunk fits within one
-/// <see cref="OnnxEmbeddingGenerator.Generate"/> call without <see cref="BertWordPieceTokenizer.Encode"/>
+/// WP-15: splits article plaintext into overlapping chunks sized in real SentencePiece tokens (via
+/// <see cref="XlmRobertaTokenizer.TokenizeWithCounts"/>), so each chunk fits within one
+/// <see cref="OnnxEmbeddingGenerator.Generate"/> call without <see cref="XlmRobertaTokenizer.Encode"/>
 /// silently re-truncating it.
 ///
 /// <para>
@@ -19,7 +19,7 @@ public sealed class ArticleChunker
 {
     /// <summary>
     /// Content-token budget per chunk: <see cref="OnnxEmbeddingGenerator.MaxSequenceLength"/> minus
-    /// the [CLS]/[SEP] tokens <see cref="BertWordPieceTokenizer.Encode"/> always adds, so a chunk
+    /// the [BOS]/[EOS] tokens <see cref="XlmRobertaTokenizer.Encode"/> always adds, so a chunk
     /// built to this budget round-trips through <c>Generate</c> without truncation.
     /// </summary>
     public const int ChunkTokenBudget = OnnxEmbeddingGenerator.MaxSequenceLength - 2;
@@ -27,15 +27,15 @@ public sealed class ArticleChunker
     /// <summary>Target token overlap between consecutive chunks, per the search-100k plan (WP-15).</summary>
     public const int ChunkOverlapTokens = 32;
 
-    private readonly BertWordPieceTokenizer _tokenizer;
+    private readonly XlmRobertaTokenizer _tokenizer;
 
-    internal ArticleChunker(BertWordPieceTokenizer tokenizer)
+    internal ArticleChunker(XlmRobertaTokenizer tokenizer)
     {
         _tokenizer = tokenizer;
     }
 
-    /// <summary>Constructs a chunker over the same embedded vocabulary <see cref="OnnxEmbeddingGenerator"/> uses.</summary>
-    public static ArticleChunker CreateDefault() => new(BertWordPieceTokenizer.LoadDefault());
+    /// <summary>Constructs a chunker over the same embedded tokenizer <see cref="OnnxEmbeddingGenerator"/> uses.</summary>
+    public static ArticleChunker CreateDefault() => new(XlmRobertaTokenizer.LoadDefault());
 
     /// <summary>
     /// Splits <paramref name="text"/> into chunk strings, each reconstructed by joining the

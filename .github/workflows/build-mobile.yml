@@ -69,14 +69,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx
-          key: onnx-all-MiniLM-L6-v2-v1
+          key: onnx-multilingual-e5-small-v1
 
       - name: Download ONNX model (cache miss only)
         if: steps.onnx-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p mobile/BeeMemoryBank.Mobile/Resources/Raw
           curl -L -o mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx \
-            https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+            https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx
 
       - name: Restore mobile dependencies
         run: dotnet restore mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj

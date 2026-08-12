@@ -93,7 +93,7 @@ If you've ever wished your AI assistant could remember the work it did with you 
 |---|---|---|
 | :robot: | **Native MCP for AI Agents** | 32 tools across 7 categories, **per-agent DEK isolation**, **token-aware truncation with `bee_continue` pagination**, **zero-context file uploads** (bypass the LLM context window), `append`/`prepend` operations for incremental edits without re-reading articles |
 | :inbox_tray: | **Obsidian Vault Import** | One-click migration: upload an Obsidian vault as a ZIP — Markdown files become articles, folders map directly, Obsidian `![[image.png]]` embeds are rewritten to encrypted media |
-| :dna: | **Emergent Semantic Graph** | Concept tags create automatic bidirectional links **through shared characteristics, not article-to-article pairs** — one tag connects a note to every article that shares it (topic, project, tech, status, year — any dimension you pick). No manual `[[wiki-links]]` to maintain, no dead-end pairs; add a tag and the graph rewires itself. D3.js force-directed graph with depth-controlled exploration; related articles ranked by shared-tag strength; semantic tag search via **ONNX all-MiniLM-L6-v2** (384-dim real ML embeddings, self-hosted) |
+| :dna: | **Emergent Semantic Graph** | Concept tags create automatic bidirectional links **through shared characteristics, not article-to-article pairs** — one tag connects a note to every article that shares it (topic, project, tech, status, year — any dimension you pick). No manual `[[wiki-links]]` to maintain, no dead-end pairs; add a tag and the graph rewires itself. D3.js force-directed graph with depth-controlled exploration; related articles ranked by shared-tag strength; semantic tag search via **ONNX multilingual-e5-small** (384-dim real ML embeddings, self-hosted, multilingual) |
 | :lock: | **E2E Encryption** | AES-256-GCM with per-article and per-image keys, Argon2id KDF (64 MB, 3 iterations), envelope encryption with 3-level key hierarchy |
 | :rotating_light: | **Online DEK Rotation** | Rotate the master encryption key without exporting/re-importing your vault. Single-transaction re-wrap of all article keys, automatic pre-rotation snapshot, peer-acceptance protocol so multi-node networks roll over together (auto-accept toggle per peer). Lazy slot rewrap migrates each user's password slot transparently on next login |
 | :floppy_disk: | **Snapshot & Restore** | One-click encrypted snapshots (full DB + media), upload to restore on any node, network-wide restore propagates via signed sync event with per-peer auto-accept toggle. Pre-rotation backups created automatically before destructive operations |
@@ -222,9 +222,9 @@ BeeMemoryBank supports running multiple isolated data stores (storages or vaults
 git clone https://github.com/ultrathinker/BeeMemoryBank.git
 cd BeeMemoryBank
 
-# 2. Download the ONNX model for semantic search (87 MB, required)
+# 2. Download the ONNX model for semantic search (113 MB, required)
 mkdir -p data
-curl -L -o data/model.onnx "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
+curl -L -o data/model.onnx "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx"
 
 # 3. Build and start (API on :5300, Web UI on :5301)
 docker compose up -d --build
@@ -306,7 +306,7 @@ sudo -u bmb dotnet publish server/BeeMemoryBank.Web/ -c Release -o /opt/beememor
 sudo -u bmb dotnet publish server/BeeMemoryBank.Cli/ -c Release -o /opt/beememorybank/cli
 sudo -u bmb mkdir -p /opt/beememorybank/data
 sudo -u bmb curl -L -o /opt/beememorybank/data/model.onnx \
-  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+  https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx
 
 # Master password — read from stdin so it never enters bash history or `ps aux`
 read -s -p "Master password: " BMB_PASSWORD; echo
@@ -396,7 +396,7 @@ dotnet publish server/BeeMemoryBank.Web/ -c Release -o ~/bmb/web
 dotnet publish server/BeeMemoryBank.Cli/ -c Release -o ~/bmb/cli
 mkdir -p ~/bmb/data
 curl -L -o ~/bmb/data/model.onnx \
-  https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+  https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx
 
 read -s -p "Master password: " PWD; echo
 ~/bmb/cli/bmb init --data ~/bmb/data --name "MyMac" --password "$PWD"; unset PWD
@@ -485,7 +485,7 @@ dotnet publish server\BeeMemoryBank.Cli\ -c Release -o C:\bee\cli
 
 New-Item -ItemType Directory -Force C:\bee\data
 curl.exe -L -o C:\bee\data\model.onnx `
-  "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
+  "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx"
 
 # Master password without persisting it to history.
 # (We use $securePwd to avoid clashing with PowerShell's automatic $PWD = current directory.)
@@ -732,7 +732,7 @@ If these are dealbreakers, Obsidian / Logseq / AnyType / Notion may suit you bet
 - [x] Obsidian vault import (ZIP upload with images)
 - [x] Hard delete with cross-node propagation (Superadmin)
 - [x] Emergent concept-tag knowledge graph (D3.js force-directed, automatic bidirectional connections, no manual wiki-links)
-- [x] Semantic search powered by ONNX all-MiniLM-L6-v2 (384-dim real ML embeddings, self-hosted)
+- [x] Semantic search powered by ONNX multilingual-e5-small (384-dim real ML embeddings, self-hosted, multilingual)
 - [x] CI/CD pipeline (GitHub Actions)
 - [ ] iOS app (coming)
 
@@ -828,7 +828,8 @@ Built with these excellent open-source projects:
 - [Konscious.Security.Cryptography](https://github.com/kmaragon/Konscious.Security.Cryptography) for Argon2id
 - [ModelContextProtocol SDK](https://github.com/modelcontextprotocol/csharp-sdk) for MCP server
 - [Microsoft.ML.OnnxRuntime](https://github.com/microsoft/onnxruntime) for local ONNX inference
-- [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) by sentence-transformers (Apache 2.0) for semantic embeddings
+- [Microsoft.ML.Tokenizers](https://github.com/dotnet/machinelearning) for SentencePiece tokenization
+- [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small) by intfloat (MIT) for semantic embeddings, quantized ONNX export via [Xenova](https://huggingface.co/Xenova/multilingual-e5-small)
 - [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) Markdown editor
 - [Shoelace](https://shoelace.style/) web components
 - [Tagify](https://github.com/yairEO/tagify) tag input

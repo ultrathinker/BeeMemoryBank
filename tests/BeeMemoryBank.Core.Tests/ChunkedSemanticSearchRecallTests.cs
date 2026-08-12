@@ -19,11 +19,11 @@ namespace BeeMemoryBank.Core.Tests;
 /// Uses a small fake <see cref="IEmbeddingGenerator"/> instead of the real ONNX model — consistent
 /// with every other embedding-related test in this codebase (no test here runs real ONNX
 /// inference; see <c>OnnxEmbeddingGeneratorTests</c>). The fake still reuses the REAL
-/// <see cref="BertWordPieceTokenizer"/> (via <c>InternalsVisibleTo</c>) with the exact same
+/// <see cref="XlmRobertaTokenizer"/> (via <c>InternalsVisibleTo</c>) with the exact same
 /// <see cref="OnnxEmbeddingGenerator.MaxSequenceLength"/> truncation the real model applies, so the
 /// truncation behavior this test proves chunking fixes is the genuine article, not a simplified
 /// stand-in for it. It reports "found the needle" (embedding [1,0]) vs "did not" ([0,1]) based on
-/// whether the needle's own WordPiece token ids survived that truncation — a deterministic,
+/// whether the needle's own SentencePiece token ids survived that truncation — a deterministic,
 /// instant proxy for "a real embedding model would have picked up this content," which is exactly
 /// the property truncation removes and chunking restores.
 /// </para>
@@ -150,12 +150,12 @@ public class ChunkedSemanticSearchRecallTests : IAsyncLifetime
             "an article with no chunk rows yet must still be findable via its full-document embedding fallback");
     }
 
-    // Reuses the REAL BertWordPieceTokenizer (internal, visible via InternalsVisibleTo) so the
+    // Reuses the REAL XlmRobertaTokenizer (internal, visible via InternalsVisibleTo) so the
     // truncation this fake simulates is byte-for-byte the same truncation OnnxEmbeddingGenerator
     // itself applies -- only the final "which direction does this embedding point" step is faked.
     private sealed class TruncationAwareFakeGenerator : IEmbeddingGenerator
     {
-        private static readonly BertWordPieceTokenizer Tokenizer = BertWordPieceTokenizer.LoadDefault();
+        private static readonly XlmRobertaTokenizer Tokenizer = XlmRobertaTokenizer.LoadDefault();
 
         public int Dimension => 2;
 
@@ -164,11 +164,11 @@ public class ChunkedSemanticSearchRecallTests : IAsyncLifetime
             var (inputIds, _, _) = Tokenizer.Encode(text, OnnxEmbeddingGenerator.MaxSequenceLength);
             var (needleIds, _, _) = Tokenizer.Encode(NeedleMarker, OnnxEmbeddingGenerator.MaxSequenceLength);
 
-            // Strip [CLS]/[SEP] to get just the needle's own content token ids, in order.
+            // Strip [BOS]/[EOS] to get just the needle's own content token ids, in order.
             var needleContentIds = needleIds.Skip(1).Take(needleIds.Length - 2).ToArray();
 
             // Exact contiguous subsequence match, not "all these ids appear somewhere" -- the
-            // needle's own WordPiece breakdown can include common single-character/digit pieces
+            // needle's own SentencePiece breakdown can include common single-character/digit pieces
             // (e.g. a piece shared with "filler123"-style filler words), which a scattered-membership
             // check would false-positive on long filler text. A contiguous run is what "the needle
             // text actually appears here" really means.

@@ -410,6 +410,21 @@ public class ArticleRepository(
         return await conn.ExecuteAsync("UPDATE tbl_article SET index_pending = 1 WHERE status = 'A'");
     }
 
+    // AUDIT: unguarded. Only reachable from PendingEmbeddingProcessor (background worker,
+    // SystemCallerScope), mirroring UpdateEmbeddingAsync's own note above.
+    public async Task<int> MarkStaleEmbeddingsPendingAsync(string currentModelVersion)
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteAsync(
+            @"UPDATE tbl_article
+              SET embedding_pending = 1
+              WHERE status = 'A'
+                AND embedding_pending = 0
+                AND embedding_model_version IS NOT NULL
+                AND embedding_model_version <> @currentModelVersion",
+            new { currentModelVersion });
+    }
+
     // Narrow projection used only to rank candidates by cosine similarity. Deliberately not
     // the full Article model: SearchByEmbeddingAsync used to hydrate every column (including
     // embedding_projection's BLOB sibling columns and all remote-sync metadata) for every
