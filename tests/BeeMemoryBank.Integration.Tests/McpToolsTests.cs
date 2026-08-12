@@ -2,6 +2,7 @@ using System.Text.Json;
 using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -63,7 +64,7 @@ public class McpToolsTests : IAsyncLifetime
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
-        _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, scopeHolder, new SearchQueryCache());
+        _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, scopeHolder, new SearchQueryCache(), new IndexBuilder());
 
         await initService.InitializeAsync("admin", "McpTestNode", Password);
         await _session.UnlockAsync(Password);

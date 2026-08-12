@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 
@@ -22,6 +23,11 @@ public abstract class TestFixture : IAsyncLifetime
     protected IFolderRepository FolderRepo { get; private set; } = null!;
     protected SearchService SearchService { get; private set; } = null!;
     protected CallerScopeHolder ScopeHolder { get; private set; } = null!;
+
+    // WP-12: the exact IndexBuilder instance SearchService.SearchIndexedContentAsync queries.
+    // Exposed so tests can feed it content directly (bypassing PendingIndexProcessor, which this
+    // fixture does not run) to exercise the ranked-search integration end to end.
+    protected IndexBuilder IndexBuilder { get; private set; } = null!;
 
     public virtual async Task InitializeAsync()
     {
@@ -55,7 +61,8 @@ public abstract class TestFixture : IAsyncLifetime
         KeyManagement = new KeyManagementService(keySlotRepo, Session, userRepoForKeyMgmt);
         FolderRepo = folderRepo;
         TreeService = new TreeService(articleRepo, folderRepo);
-        SearchService = new SearchService(articleRepo, bodyRepo, folderRepo, Session, ScopeHolder, new SearchQueryCache());
+        IndexBuilder = new IndexBuilder();
+        SearchService = new SearchService(articleRepo, bodyRepo, folderRepo, Session, ScopeHolder, new SearchQueryCache(), IndexBuilder);
     }
 
     public virtual Task DisposeAsync()
