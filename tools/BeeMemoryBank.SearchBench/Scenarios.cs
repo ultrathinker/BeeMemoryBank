@@ -73,23 +73,45 @@ internal static class Scenarios
 
     /// <summary>Runs the semantic search scenario (<c>POST /api/search/semantic</c>), after waiting for embeddings.</summary>
     public static async Task<ScenarioResult> SemanticAsync(BenchClient client, Options opt, string corpusLabel,
-        Func<TextWriter, CancellationToken, Task> awaitEmbeddings, TextWriter progress, CancellationToken ct)
+        bool ready, long probeCount, TextWriter progress, CancellationToken ct)
     {
         var started = DateTime.UtcNow;
-        await progress.WriteLineAsync("  semantic: waiting for embedding backfill to settle...");
-        await awaitEmbeddings(progress, ct);
+
+        // If the projection/index never became ready (every probe 503'd — e.g. the node has
+        // can_generate_embeddings=0 so no projection matrix is ever built, or the backfill hasn't
+        // populated anything within the wait), do NOT measure 503 latencies and present them as
+        // "semantic search performance". Record an explicit skip with the reason so the baseline
+        // stays honest. See the WP-03 report for the can_generate_embeddings finding.
+        if (!ready || probeCount <= 0)
+        {
+            await progress.WriteLineAsync(
+                $"  semantic: embeddings not available (ready={ready}, probeCount={probeCount}); SKIPPING measurement.");
+            return new ScenarioResult
+            {
+                Scenario = "semantic",
+                CorpusSizeLabel = corpusLabel,
+                StartedAtUtc = started,
+                EndedAtUtc = DateTime.UtcNow,
+                DurationSeconds = (DateTime.UtcNow - started).TotalSeconds,
+                Note = $"skipped: embeddings not available (projection matrix not initialized / no articles indexed within the wait). " +
+                       "On a freshly-seeded corpus the node has can_generate_embeddings=0, so the embedding processor never builds the projection matrix " +
+                       "and semantic search 503s indefinitely. See wp-03-report.md."
+            };
+        }
 
         return await ClosedLoopAsync(client, opt, corpusLabel, "semantic", SemanticQueries,
             content: false, ct, semantic: true, startedAt: started);
     }
 
     /// <summary>Runs the mixed concurrent-load scenario (N clients, fixed duration, random query mix).</summary>
-    public static async Task<ScenarioResult> MixedAsync(BenchClient client, Options opt, string corpusLabel, TextWriter progress, CancellationToken ct)
+    public static async Task<ScenarioResult> MixedAsync(BenchClient client, Options opt, string corpusLabel,
+        bool includeSemantic, TextWriter progress, CancellationToken ct)
     {
         var started = DateTime.UtcNow;
         var duration = TimeSpan.FromSeconds(opt.MixedDurationSeconds);
         var clients = opt.MixedClients;
-        await progress.WriteLineAsync($"  mixed: {clients} concurrent clients for {duration.TotalSeconds:0}s");
+        await progress.WriteLineAsync($"  mixed: {clients} concurrent clients for {duration.TotalSeconds:0}s" +
+            (includeSemantic ? "" : " (semantic excluded — embeddings unavailable)"));
 
         using var mixedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         mixedCts.CancelAfter(duration);
@@ -97,8 +119,9 @@ internal static class Scenarios
         var allLatencies = new List<double>();
         var allLock = new object();
         long total = 0, errors = 0, success = 0;
-        // Weighted mix: title 50%, content 30%, semantic 20%.
-        var plan = BuildMixedPlan();
+        // Weighted mix. With semantic: title 50%, content 30%, semantic 20%.
+        // Without semantic: title 62.5%, content 37.5% (preserves the 50:30 title:content ratio).
+        var plan = BuildMixedPlan(includeSemantic);
         var rng = new Random(opt.Seed);
 
         var workers = new Task[clients];
@@ -140,6 +163,12 @@ internal static class Scenarios
         double measuredSecs = sw.Elapsed.TotalSeconds;
         double throughput = measuredSecs > 0 ? total / measuredSecs : 0;
 
+        string? note = null;
+        if (errors > 0)
+            note = $"{errors} non-2xx responses (timeouts/5xx under load)";
+        if (!includeSemantic)
+            note = (note == null ? "" : note + "; ") + "semantic excluded from mix (embeddings unavailable on seeded corpus)";
+
         return new ScenarioResult
         {
             Scenario = "mixed",
@@ -158,7 +187,7 @@ internal static class Scenarios
             LatencyMinMs = min,
             LatencyMaxMs = max,
             ThroughputReqPerSec = throughput,
-            Note = errors > 0 ? $"{errors} non-2xx responses (timeouts/5xx under load)" : null
+            Note = note
         };
     }
 
@@ -243,15 +272,22 @@ internal static class Scenarios
 
     private sealed record MixedBucket(QuerySpec Spec, bool Content, bool Semantic, double Weight);
 
-    private static List<MixedBucket> BuildMixedPlan()
+    private static List<MixedBucket> BuildMixedPlan(bool includeSemantic)
     {
         var plan = new List<MixedBucket>();
-        // title 50%
-        foreach (var q in TitleQueries) plan.Add(new MixedBucket(q, false, false, 50.0 / TitleQueries.Count));
-        // content 30%
-        foreach (var q in ContentQueries) plan.Add(new MixedBucket(q, true, false, 30.0 / ContentQueries.Count));
-        // semantic 20%
-        foreach (var q in SemanticQueries) plan.Add(new MixedBucket(q, false, true, 20.0 / SemanticQueries.Count));
+        if (includeSemantic)
+        {
+            // title 50% / content 30% / semantic 20%
+            foreach (var q in TitleQueries) plan.Add(new MixedBucket(q, false, false, 50.0 / TitleQueries.Count));
+            foreach (var q in ContentQueries) plan.Add(new MixedBucket(q, true, false, 30.0 / ContentQueries.Count));
+            foreach (var q in SemanticQueries) plan.Add(new MixedBucket(q, false, true, 20.0 / SemanticQueries.Count));
+        }
+        else
+        {
+            // semantic unavailable: title 62.5% / content 37.5% (preserves the 50:30 title:content ratio)
+            foreach (var q in TitleQueries) plan.Add(new MixedBucket(q, false, false, 62.5 / TitleQueries.Count));
+            foreach (var q in ContentQueries) plan.Add(new MixedBucket(q, true, false, 37.5 / ContentQueries.Count));
+        }
         return plan;
     }
 

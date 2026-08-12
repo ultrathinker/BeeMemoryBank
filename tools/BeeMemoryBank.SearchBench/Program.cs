@@ -142,15 +142,27 @@ internal static class Program
             }
         }
 
+        // Determine embedding readiness ONCE (probing is the slow part). The semantic scenario
+        // measures only if the index is ready, and the mixed scenario includes semantic queries
+        // only if ready — otherwise every semantic request in the mix 503s and inflates the error
+        // count with noise that isn't representative of real concurrent load.
+        bool semanticReady = false;
+        long semanticProbeCount = 0;
+        if (scenarioSet.Contains("semantic") || scenarioSet.Contains("mixed"))
+        {
+            await progress.WriteLineAsync("\nProbing semantic index readiness...");
+            (semanticReady, semanticProbeCount) = await AwaitEmbeddingsAsync(client, opt.SemanticWaitSeconds, progress, runCts.Token);
+        }
+
         if (scenarioSet.Contains("title"))
             await RunAndStore("title", () => Scenarios.TitleAsync(client, opt, corpusLabel, runCts.Token));
         if (scenarioSet.Contains("content"))
             await RunAndStore("content", () => Scenarios.ContentAsync(client, opt, corpusLabel, runCts.Token));
         if (scenarioSet.Contains("semantic"))
             await RunAndStore("semantic", () => Scenarios.SemanticAsync(client, opt, corpusLabel,
-                (p, c) => AwaitEmbeddingsAsync(client, opt.SemanticWaitSeconds, p, c), progress, runCts.Token));
+                semanticReady, semanticProbeCount, progress, runCts.Token));
         if (scenarioSet.Contains("mixed"))
-            await RunAndStore("mixed", () => Scenarios.MixedAsync(client, opt, corpusLabel, progress, runCts.Token));
+            await RunAndStore("mixed", () => Scenarios.MixedAsync(client, opt, corpusLabel, semanticReady, progress, runCts.Token));
 
         // ── 6. Tear down the Api cleanly ──────────────────────────────────────────
         await progress.WriteLineAsync("\nStopping Api...");
@@ -231,11 +243,13 @@ internal static class Program
     }
 
     /// <summary>
-    /// Polls a fixed frequent semantic query until its result count stabilizes (3 consecutive polls
-    /// with no growth) or <paramref name="maxWaitSeconds"/> elapses. Reports the wait and final count
-    /// so the report can honestly state whether embeddings were ready.
+    /// Polls a fixed frequent semantic query until its result count stabilizes (2 consecutive polls
+    /// with no growth) or <paramref name="maxWaitSeconds"/> elapses. Returns whether the index is
+    /// ready (at least one successful non-empty probe) plus the final probe result count, so the
+    /// semantic scenario can skip honestly instead of measuring 503 latencies when embeddings are
+    /// never populated (the seeded-node can_generate_embeddings=0 case).
     /// </summary>
-    private static async Task AwaitEmbeddingsAsync(BenchClient client, int maxWaitSeconds, TextWriter progress, CancellationToken ct)
+    private static async Task<(bool ready, long finalCount)> AwaitEmbeddingsAsync(BenchClient client, int maxWaitSeconds, TextWriter progress, CancellationToken ct)
     {
         var probe = "incident response runbook";
         var deadline = DateTime.UtcNow.AddSeconds(maxWaitSeconds);
@@ -243,6 +257,7 @@ internal static class Program
         int stableHits = 0;
         var sw = Stopwatch.StartNew();
         long finalCount = 0;
+        bool everSucceeded = false;
         while (DateTime.UtcNow < deadline && !ct.IsCancellationRequested)
         {
             try
@@ -250,11 +265,12 @@ internal static class Program
                 var (ok, status, _, count, err) = await client.SendSemanticAsync(probe, topK: 50, ct);
                 if (!ok)
                 {
-                    // 503 = model unavailable; 5xx = projection not ready. Keep waiting.
+                    // 503 = projection matrix not initialized / model unavailable. Keep waiting.
                     await progress.WriteLineAsync($"  semantic probe: HTTP {status} ({err}) — embeddings not ready yet, retrying...");
                 }
                 else
                 {
+                    everSucceeded = true;
                     finalCount = count ?? 0;
                     await progress.WriteLineAsync($"  semantic probe: {finalCount} results in {sw.Elapsed.TotalSeconds:0.0}s");
                     if (finalCount == prev)
@@ -263,7 +279,7 @@ internal static class Program
                         if (stableHits >= 2 && finalCount > 0)
                         {
                             await progress.WriteLineAsync($"  semantic probe: result count stabilized at {finalCount} (>=2 stable polls). Proceeding.");
-                            return;
+                            return (true, finalCount);
                         }
                     }
                     else
@@ -279,8 +295,11 @@ internal static class Program
             }
             try { await Task.Delay(5000, ct); } catch { break; }
         }
-        await progress.WriteLineAsync($"  semantic wait finished after {sw.Elapsed.TotalSeconds:0.0}s (final probe count: {finalCount}). " +
-            (finalCount == 0 ? "WARNING: no embeddings found — semantic results will be empty/unreliable." : "Proceeding with benchmark."));
+        await progress.WriteLineAsync($"  semantic wait finished after {sw.Elapsed.TotalSeconds:0.0}s (everSucceeded={everSucceeded}, final probe count: {finalCount}). " +
+            (!everSucceeded || finalCount == 0
+                ? "WARNING: embeddings not available — semantic measurement will be skipped."
+                : "Proceeding with benchmark."));
+        return (everSucceeded && finalCount > 0, finalCount);
     }
 
     private static void PrintSummary(List<ScenarioResult> results, TextWriter progress)
