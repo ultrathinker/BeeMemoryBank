@@ -1,4 +1,6 @@
--- 004_fts5_metadata_index.sql
+-- 005_fts5_metadata_index.sql
+-- (renumbered from 004 during integration: migration 004 was already taken by a
+-- sibling work package, WP-09's tbl_search_index_manifest, merged first.)
 --
 -- FTS5 inverted index over plaintext metadata so search can stop doing per-row
 -- unicode_contains full scans (see WP-06 brief). Indexed columns are plaintext BY

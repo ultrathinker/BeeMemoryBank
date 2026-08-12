@@ -5,7 +5,9 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
-/// Tests for migration 004 (FTS5 metadata index). Verifies, at the SQL layer:
+/// Tests for migration 005 (FTS5 metadata index; renumbered from 004 during
+/// integration to avoid a collision with a sibling work package's migration).
+/// Verifies, at the SQL layer:
 ///   - trigger sync on INSERT/UPDATE/DELETE for fts_article / fts_folder / fts_tag,
 ///     including a raw-SQL write path that bypasses every service (the path
 ///     RemoteEventApplier ultimately takes during sync);
@@ -17,8 +19,8 @@ namespace BeeMemoryBank.Storage.Tests;
 /// </summary>
 public class Fts5MetadataIndexTests
 {
-    private const string Migration004Resource =
-        "BeeMemoryBank.Storage.Migrations.004_fts5_metadata_index.sql";
+    private const string Migration005Resource =
+        "BeeMemoryBank.Storage.Migrations.005_fts5_metadata_index.sql";
 
     private static DbConnectionFactory NewFactory(string label) =>
         DbConnectionFactory.CreateInMemory($"bmb_fts5_{label}_{Guid.NewGuid():N}");
@@ -286,14 +288,15 @@ public class Fts5MetadataIndexTests
     public async Task Backfill_OnUpgrade_PopulatesIndexFromExistingRows()
     {
         using var factory = NewFactory("backfill");
-        // First pass: pretend migration 004 is already applied so the runner only
-        // applies 001..003 — this gives us a genuine pre-004 schema to populate.
+        // First pass: pretend migration 005 is already applied so the runner only
+        // applies 001..003 — this gives us a genuine pre-005 schema to populate.
         await PreCreateMigrationTable(factory);
         await MigrateAsync(factory);
 
         using (var conn = factory.CreateConnection())
         {
             // Sanity: FTS tables must NOT exist yet (we're at schema v3).
+            // Sanity: FTS tables must NOT exist yet (we're at schema v3, pre-005).
             AssertFtsAbsent(conn, "fts_article");
             AssertFtsAbsent(conn, "fts_folder");
             AssertFtsAbsent(conn, "fts_tag");
@@ -315,10 +318,10 @@ public class Fts5MetadataIndexTests
                 "INSERT INTO tbl_concept_tag (name) VALUES ('caching')");
         }
 
-        // Now drop the v4 marker so the runner applies 004 (the upgrade).
+        // Now drop the v5 marker so the runner applies 005 (the upgrade).
         using (var conn = factory.CreateConnection())
         {
-            await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 4");
+            await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 5");
         }
         await MigrateAsync(factory);
 
@@ -336,7 +339,7 @@ public class Fts5MetadataIndexTests
             (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_tag WHERE fts_tag MATCH 'caching'"))
                 .Should().Be(1);
 
-            // Triggers added by 004 are live for future writes.
+            // Triggers added by 005 are live for future writes.
             var now = IsoNow();
             await conn.ExecuteAsync(
                 "INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) " +
@@ -346,7 +349,7 @@ public class Fts5MetadataIndexTests
         }
     }
 
-    // ---- Idempotency: re-applying 004 does not error or duplicate -----------
+    // ---- Idempotency: re-applying 005 does not error or duplicate -----------
 
     [Fact]
     public async Task Migration_Reapply_IsIdempotent()
@@ -360,8 +363,8 @@ public class Fts5MetadataIndexTests
             "INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) " +
             "VALUES ('x', 'idempotency runbook', '/Work', 'A', @now, @now)", new { now });
 
-        // Simulate a ghost-hunter reset: drop the v4 marker so the runner re-runs 004.
-        await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 4");
+        // Simulate a ghost-hunter reset: drop the v5 marker so the runner re-runs 005.
+        await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 5");
         await MigrateAsync(factory); // must not throw, must not duplicate.
 
         using var conn2 = factory.CreateConnection();
@@ -378,9 +381,9 @@ public class Fts5MetadataIndexTests
     // ---- Helpers ------------------------------------------------------------
 
     /// <summary>
-    /// Creates tbl_migration and marks 004 as already applied (correct resource
+    /// Creates tbl_migration and marks 005 as already applied (correct resource
     /// name) so the first MigrationRunner pass applies only 001..003 — giving the
-    /// backfill test a real pre-004 schema.
+    /// backfill test a real pre-005 schema.
     /// </summary>
     private static async Task PreCreateMigrationTable(DbConnectionFactory factory)
     {
@@ -396,8 +399,8 @@ public class Fts5MetadataIndexTests
         var now = IsoNow();
         await conn.ExecuteAsync(
             "INSERT INTO tbl_migration (version, filename, applied_at, updated_at) " +
-            "VALUES (4, @fn, @now, @now)",
-            new { fn = Migration004Resource, now });
+            "VALUES (5, @fn, @now, @now)",
+            new { fn = Migration005Resource, now });
     }
 
     private static async Task<int> RowCountAsync(IDbConnection conn, string sql, object? param = null)
@@ -408,6 +411,6 @@ public class Fts5MetadataIndexTests
         var exists = conn.QuerySingle<int>(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = @n",
             new { n = table });
-        exists.Should().Be(0, "{0} must not exist before migration 004", table);
+        exists.Should().Be(0, "{0} must not exist before migration 005", table);
     }
 }
