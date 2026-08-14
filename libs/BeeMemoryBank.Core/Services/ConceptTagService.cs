@@ -117,7 +117,18 @@ public class ConceptTagService(
     {
         var all = await repo.GetAllAsync();
         var withEmbeddings = await repo.GetWithEmbeddingsAsync();
-        var currentVersions = withEmbeddings.ToDictionary(c => c.Name, c => c.EmbeddingModelVersion, StringComparer.OrdinalIgnoreCase);
+
+        // Built with a loop (not ToDictionary) because tbl_concept_tag.name is UNIQUE but not
+        // COLLATE NOCASE at the DB level -- every current write path enforces case-insensitive
+        // uniqueness before insert, but older rows predating that enforcement can still collide
+        // under OrdinalIgnoreCase, which made ToDictionary throw in production. Last one wins,
+        // which is fine here: this is only a "do I already have a current version?" lookup, not
+        // the source of truth.
+        var currentVersions = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in withEmbeddings)
+        {
+            currentVersions[c.Name] = c.EmbeddingModelVersion;
+        }
 
         foreach (var concept in all)
         {

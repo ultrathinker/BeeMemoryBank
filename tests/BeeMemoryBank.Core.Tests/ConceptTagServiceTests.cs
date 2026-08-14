@@ -6,6 +6,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
+using Dapper;
 using FluentAssertions;
 using Xunit;
 
@@ -75,6 +76,33 @@ public class ConceptTagServiceTests : TestFixture
         // Assert
         var tags = await _conceptTagRepo.GetByArticleIdAsync(article.Id);
         tags.Should().BeEquivalentTo("Fig", "Grape");
+    }
+
+    [Fact]
+    public async Task BackfillEmbeddings_CaseOnlyDuplicateTagNames_DoesNotThrow()
+    {
+        // tbl_concept_tag.name is UNIQUE but not COLLATE NOCASE at the DB level -- every current
+        // write path (AddToArticleAsync etc.) enforces case-insensitive uniqueness before insert,
+        // but rows from before that enforcement existed (or any other path that bypasses it) can
+        // still collide under OrdinalIgnoreCase. This broke in production: BackfillEmbeddingsAsync
+        // built its "already embedded" lookup with ToDictionary(..., OrdinalIgnoreCase), which
+        // throws ArgumentException on the first such collision instead of the intended
+        // last-one-wins behavior, wedging the whole embedding pending-processor.
+        using (var conn = Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync(
+                "INSERT INTO tbl_concept_tag (name, embedding, embedding_model_version) VALUES (@name, @embedding, @version)",
+                new[]
+                {
+                    new { name = "БД", embedding = new byte[4], version = "stale-model-v0" },
+                    new { name = "бд", embedding = new byte[4], version = "stale-model-v0" },
+                });
+        }
+
+        var service = new ConceptTagService(_conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
+        var act = () => service.BackfillEmbeddingsAsync();
+
+        await act.Should().NotThrowAsync();
     }
 
     [Fact]
