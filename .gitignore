@@ -5,6 +5,7 @@ publish/
 *.user
 *.suo
 *.DotSettings.user
+TestResults/
 
 ## IDE
 .vs/
