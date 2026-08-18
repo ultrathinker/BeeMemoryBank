@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using BeeMemoryBank.Api.Helpers;
 
 namespace BeeMemoryBank.Api.Middleware;
@@ -15,6 +16,26 @@ namespace BeeMemoryBank.Api.Middleware;
 public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegistry registry, ILogger<McpParameterValidationMiddleware> logger)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
+
+    private sealed record ToolParamAliasRule(
+        IReadOnlyDictionary<string, string> Rename,
+        IReadOnlySet<string> Drop);
+
+    // Coding-agent file-edit tools (Claude Code, opencode, etc.) use old_string/new_string or
+    // oldString/newString for "find and replace" — models reflexively reach for those names here
+    // too. Silently accept them instead of forcing a wasted round-trip through the error message.
+    private static readonly Dictionary<string, ToolParamAliasRule> AliasRules = new(StringComparer.Ordinal)
+    {
+        ["bee_replace_in_article"] = new ToolParamAliasRule(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["old_string"] = "search",
+                ["oldString"] = "search",
+                ["new_string"] = "replace",
+                ["newString"] = "replace",
+            },
+            new HashSet<string>(StringComparer.Ordinal) { "filePath", "file_path" })
+    };
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -52,7 +73,10 @@ public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegis
             return;
         }
 
-        using (doc)
+        // Not `using (doc)`: that form disposes whichever JsonDocument `doc` held at block
+        // entry, not whatever it holds at block exit -- and the alias-rewrite block below
+        // reassigns `doc` to a freshly-parsed document. `finally` reads the current value.
+        try
         {
             // Only validate single requests; batches are rare in MCP and we let the SDK
             // handle them as-is rather than partially short-circuit.
@@ -91,6 +115,43 @@ public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegis
             {
                 await next(context);
                 return;
+            }
+
+            if (AliasRules.TryGetValue(toolName, out var rule))
+            {
+                var needsRewrite = argsEl.EnumerateObject()
+                    .Any(p => rule.Drop.Contains(p.Name) || rule.Rename.ContainsKey(p.Name));
+                if (needsRewrite)
+                {
+                    var rootNode = JsonNode.Parse(body)!;
+                    var argsNode = rootNode["params"]!["arguments"]!.AsObject();
+                    foreach (var key in argsNode.Select(kv => kv.Key).ToList())
+                    {
+                        if (rule.Drop.Contains(key))
+                        {
+                            argsNode.Remove(key);
+                        }
+                        else if (rule.Rename.TryGetValue(key, out var canonical) && !argsNode.ContainsKey(canonical))
+                        {
+                            var value = argsNode[key];
+                            argsNode.Remove(key);
+                            argsNode[canonical] = value;
+                        }
+                    }
+
+                    body = rootNode.ToJsonString();
+                    var newBytes = Encoding.UTF8.GetBytes(body);
+                    context.Request.Body = new MemoryStream(newBytes);
+                    context.Request.ContentLength = newBytes.Length;
+
+                    doc.Dispose();
+                    doc = JsonDocument.Parse(body);
+                    root = doc.RootElement;
+                    root.TryGetProperty("params", out paramsEl);
+                    paramsEl.TryGetProperty("arguments", out argsEl);
+
+                    logger.LogInformation("MCP {Tool} rewrote aliased parameter name(s) in request", toolName);
+                }
             }
 
             var validNames = new HashSet<string>(tool.Parameters.Select(p => p.Name), StringComparer.Ordinal);
@@ -136,6 +197,10 @@ public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegis
             context.Response.StatusCode = 200;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync(JsonSerializer.Serialize(response, JsonOpts));
+        }
+        finally
+        {
+            doc.Dispose();
         }
     }
 }

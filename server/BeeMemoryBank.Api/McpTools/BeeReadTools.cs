@@ -90,15 +90,24 @@ public class BeeReadTools(
         "[, content] }. 'tags' is a string array of tag names on the article. 'relatedCount' = how many " +
         "other articles share at least one tag with this one; 'relatedStrength' = total sum of shared-tag " +
         "counts across all related articles.\n" +
-        "Soft-deleted articles return \"Error: article {id} not found\" — there is no way via MCP to tell " +
-        "\"was deleted\" apart from \"never existed\".")]
+        "Soft-deleted articles return \"Error: article {id} was deleted\" (distinct from " +
+        "\"not found\" for a nonexistent id), for callers with access to the article's folder.")]
     public async Task<string> GetArticle(
         [Description("Article ID (GUID).")] Guid id,
         [Description("Include the decrypted article body as 'content' in the response. Default: true. Pass false for metadata only.")] bool content = true)
     {
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)
+        {
+            // Distinguish "soft-deleted" from "never existed" for callers with access to the
+            // article's folder; GetMetadataAsync(includeDeleted:true) still enforces folder-scope
+            // access inside ArticleRepository.GetByIdAsync, so this cannot leak existence across
+            // an access boundary -- a caller without access sees "not found" either way.
+            var deleted = await articleService.GetMetadataAsync(id, includeDeleted: true);
+            if (deleted != null && deleted.Status != "A")
+                return $"Error: article {id} was deleted (deletedAt: {deleted.DeletedAt:o}).";
             return $"Error: article {id} not found";
+        }
 
         var tags = await conceptTagRepo.GetByArticleIdAsync(id);
         var related = await conceptTagRepo.GetRelatedArticlesAsync(id);

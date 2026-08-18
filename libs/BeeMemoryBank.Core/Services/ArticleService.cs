@@ -107,8 +107,9 @@ public partial class ArticleService(
         return article;
     }
 
-    /// <summary>Returns metadata without decrypting the body.</summary>
-    public Task<Article?> GetMetadataAsync(Guid id) => articleRepo.GetByIdAsync(id);
+    /// <summary>Returns metadata without decrypting the body. Pass includeDeleted:true to also
+    /// return soft-deleted articles (still subject to folder-scope access checks).</summary>
+    public Task<Article?> GetMetadataAsync(Guid id, bool includeDeleted = false) => articleRepo.GetByIdAsync(id, includeDeleted);
 
     /// <summary>Decrypts and returns the article body. Requires an unlocked session.</summary>
     public async Task<string> GetContentAsync(Guid id)

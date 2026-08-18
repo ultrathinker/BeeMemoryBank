@@ -81,10 +81,12 @@ public class BeeConceptTools(
         "articles — usually all tagged articles were soft-deleted.")]
     public async Task<string> ListTags(
         [Description("Optional filter. Plain text = case-insensitive substring match. '~word' = semantic search.")] string? filter = null,
-        [Description("Max results to return. Range 1–500. Default: 100.")] int limit = 100)
+        [Description("Max results to return. Range 1–500. Default: 100.")] int limit = 100,
+        [Description("Number of matching tags to skip before the returned page (for pagination). Default: 0.")] int offset = 0)
     {
         limit = Math.Clamp(limit, 1, 500);
-        var concepts = await conceptTagService.ListAsync(filter, limit);
+        offset = Math.Max(0, offset);
+        var concepts = await conceptTagService.ListAsync(filter, limit, offset);
         var json = JsonSerializer.Serialize(concepts.Select(c => new
         {
             name = c.Name,

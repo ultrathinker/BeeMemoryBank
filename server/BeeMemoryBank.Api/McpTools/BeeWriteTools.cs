@@ -74,7 +74,7 @@ public class BeeWriteTools(
         [Description("Article title — short and descriptive.")] string title,
         [Description("Tree path where the article belongs, e.g. '/Work/Dev' or '/Personal'. Missing folders are auto-created.")] string treePath,
         [Description("Article content in Markdown format. Stored encrypted.")] string content,
-        [Description("Tags for categorization. Pass as a JSON array of strings: [\"tag1\", \"tag2\"]. NOT a comma-separated string. Optional, omit or pass null if not needed. Duplicates are ignored.")] List<string>? tags = null)
+        [Description("Tags for categorization. Pass as a JSON array of strings: [\"tag1\", \"tag2\"]. NOT a comma-separated string. Optional, omit if not needed. Duplicates are ignored.")] List<string> tags = null!)
     {
         try
         {
@@ -114,7 +114,7 @@ public class BeeWriteTools(
         [Description("New title. Omit (null) to keep current.")] string? title = null,
         [Description("New tree path. Missing folders are auto-created. Omit (null) to keep current.")] string? treePath = null,
         [Description("New full content in Markdown. Replaces the entire previous body. Omit (null) to keep current.")] string? content = null,
-        [Description("New tag list. Replaces ALL current tags. Pass as a JSON array of strings: [\"tag1\", \"tag2\"]. NOT a comma-separated string. Omit (null) to keep current tags. Pass empty array [] to clear every tag.")] List<string>? tags = null)
+        [Description("New tag list. Replaces ALL current tags. Pass as a JSON array of strings: [\"tag1\", \"tag2\"]. NOT a comma-separated string. Omit to keep current tags. Pass empty array [] to clear every tag.")] List<string> tags = null!)
     {
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)
@@ -304,6 +304,8 @@ public class BeeWriteTools(
     [Description(
         "Find and replace exact text in a single article, without needing to read its full body first. " +
         "Matching is case-sensitive and substring-based (NOT regex).\n" +
+        "Parameter names are 'search' and 'replace' — NOT old_string/new_string or oldString/newString " +
+        "(those are local file-editing tool conventions, not this API).\n" +
         "Always returns \"Replaced N occurrence(s) ...\" where N ≥ 0; parse by looking for the leading number. " +
         "When N=0 the article is NOT modified (no version created, no updatedAt change).\n" +
         "To undo: call again with search and replace swapped.\n" +

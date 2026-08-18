@@ -147,7 +147,7 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
             .ToList();
     }
 
-    public async Task<List<ConceptTagInfo>> ListAsync(string? filter, int limit)
+    public async Task<List<ConceptTagInfo>> ListAsync(string? filter, int limit, int offset = 0)
     {
         using var conn = OpenConnection();
         List<ConceptTagRow> rows;
@@ -175,7 +175,7 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
                 new { pattern })).ToList();
         }
 
-        return AggregateByScope(rows).Take(limit).ToList();
+        return AggregateByScope(rows).Skip(offset).Take(limit).ToList();
     }
 
     public async Task<List<ConceptTagWithEmbedding>> GetWithEmbeddingsAsync()

@@ -46,7 +46,13 @@ public static class DapperConfig
             => parameter.Value = value.ToString("o");
 
         public override DateTime Parse(object value)
-            => DateTime.Parse((string)value, null, DateTimeStyles.RoundtripKind);
+        {
+            var dt = DateTime.Parse((string)value, null, DateTimeStyles.RoundtripKind);
+            // Legacy/imported rows can lack a zone marker ("Unspecified" kind); every value this
+            // app ever writes is UTC, so treat an unmarked value as UTC rather than leaving it
+            // ambiguous -- otherwise JSON serialization silently omits the offset/'Z' suffix.
+            return dt.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dt, DateTimeKind.Utc) : dt;
+        }
     }
 
     private sealed class NullableDateTimeTypeHandler : SqlMapper.TypeHandler<DateTime?>
@@ -55,7 +61,10 @@ public static class DapperConfig
             => parameter.Value = value?.ToString("o") ?? (object)DBNull.Value;
 
         public override DateTime? Parse(object value)
-            => value is null or DBNull ? null
-                : DateTime.Parse((string)value, null, DateTimeStyles.RoundtripKind);
+        {
+            if (value is null or DBNull) return null;
+            var dt = DateTime.Parse((string)value, null, DateTimeStyles.RoundtripKind);
+            return dt.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dt, DateTimeKind.Utc) : dt;
+        }
     }
 }

@@ -11,19 +11,19 @@ public class ConceptTagService(
 {
     private const string ModelVersion = OnnxEmbeddingGenerator.Version;
 
-    public async Task<List<ConceptTagInfo>> ListAsync(string? filter, int limit = 100)
+    public async Task<List<ConceptTagInfo>> ListAsync(string? filter, int limit = 100, int offset = 0)
     {
         if (!string.IsNullOrEmpty(filter) && filter.StartsWith('~'))
         {
             var query = filter[1..].Trim();
             if (string.IsNullOrEmpty(query))
-                return await repo.ListAsync(null, limit);
-            return await SemanticSearchAsync(query, limit);
+                return await repo.ListAsync(null, limit, offset);
+            return await SemanticSearchAsync(query, limit, offset);
         }
-        return await repo.ListAsync(filter, limit);
+        return await repo.ListAsync(filter, limit, offset);
     }
 
-    private async Task<List<ConceptTagInfo>> SemanticSearchAsync(string query, int limit)
+    private async Task<List<ConceptTagInfo>> SemanticSearchAsync(string query, int limit, int offset = 0)
     {
         float[] queryEmbedding;
         try
@@ -35,17 +35,26 @@ public class ConceptTagService(
         }
         catch (ModelUnavailableException)
         {
-            return await repo.ListAsync(query, limit);
+            return await repo.ListAsync(query, limit, offset);
         }
         var allWithEmbeddings = await repo.GetWithEmbeddingsAsync();
 
         if (allWithEmbeddings.Count == 0)
-            return await repo.ListAsync(query, limit);
+            return await repo.ListAsync(query, limit, offset);
+
+        // GetWithEmbeddingsAsync is vault-wide (no scope filter); GetAllAsync is scope-filtered.
+        // Restrict to visible names BEFORE ranking/windowing, not after -- otherwise Skip(offset)
+        // advances over the global rank instead of the caller's visible rank, and a tag the
+        // caller can see but that ranks just outside the global top `limit` becomes permanently
+        // unreachable through any page.
+        var all = await repo.GetAllAsync();
+        var visibleNames = new HashSet<string>(all.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
 
         var scored = new List<(string Name, float Score)>();
         foreach (var ct in allWithEmbeddings)
         {
             if (ct.Embedding == null) continue;
+            if (!visibleNames.Contains(ct.Name)) continue;
             var ctEmbedding = BytesToFloats(ct.Embedding);
             var score = CosineSimilarity(queryEmbedding, ctEmbedding);
             scored.Add((ct.Name, score));
@@ -53,11 +62,11 @@ public class ConceptTagService(
 
         var topNames = scored
             .OrderByDescending(x => x.Score)
+            .Skip(offset)
             .Take(limit)
             .Select(x => x.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var all = await repo.GetAllAsync();
         return all
             .Where(c => topNames.Contains(c.Name))
             .OrderByDescending(c => scored.First(s => s.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)).Score)

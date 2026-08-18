@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
 using ModelContextProtocol.Server;
 
 namespace BeeMemoryBank.Api.McpTools;
@@ -15,6 +16,7 @@ public class BeeAuditTools(
     IWhitelistRepository whitelistRepo,
     INodeIdentityRepository nodeRepo,
     IHttpContextAccessor httpContextAccessor,
+    CallerScopeHolder scopeHolder,
     McpResponseManager responseManager)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -34,8 +36,9 @@ public class BeeAuditTools(
         "Query the activity log. Returns recent operations with actor and node info.\n" +
         "All parameters are optional filters. eventType filter is applied at the SQL level, " +
         "so limit counts only matching rows (not 'first N rows then filter').\n" +
-        "By default only article-tied events are returned (article_create/update/delete, " +
-        "comment_*, media_*). Pass includeAdminEvents=true to also see whitelist_*, " +
+        "By default only article-tied events plus folder_create/folder_rename/folder_delete are " +
+        "returned (article_create/update/delete, comment_*, media_*, folder_*). Pass " +
+        "includeAdminEvents=true to also see whitelist_*, " +
         "hard_delete, dek_rotation_*, restore_network, snapshot_checkpoint, etc. " +
         "includeAdminEvents requires superadmin scope; non-superadmin callers receive " +
         "the article-only view regardless of the parameter.")]
@@ -90,11 +93,17 @@ public class BeeAuditTools(
         var items = events
             .Where(e =>
             {
-                // Always show events tied to an article whose metadata we
-                // could resolve. For superadmin + includeAdminEvents=true,
-                // also include events without an articleId (whitelist,
-                // hard_delete, dek_rotation_*, restore_network, snapshot_*).
+                // Always show events tied to an article whose metadata we could resolve.
+                // Folder events (folder_create/rename/delete) carry no ArticleId but are not
+                // admin-sensitive -- show them in the default view like article_* events,
+                // subject to the same folder-scope ACL as everything else (EntityId is the
+                // folder path for these event types -- see EventLogger.LogFolder*Async).
+                // For superadmin + includeAdminEvents=true, also include the remaining
+                // non-article events (whitelist, hard_delete, dek_rotation_*, restore_network,
+                // snapshot_*).
                 if (e.ArticleId.HasValue) return articleMeta.ContainsKey(e.ArticleId.Value);
+                if (e.EventType.StartsWith("folder_", StringComparison.Ordinal))
+                    return !scopeHolder.Scope.IsAccessDenied(e.EntityId);
                 return includeAdmin;
             })
             .Select(e =>

@@ -113,7 +113,7 @@ public class McpAclTests : IAsyncLifetime
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
         _conceptTools = new BeeConceptTools(_conceptTagService, _articleService, _httpContextAccessor, responseManager);
-        _auditTools = new BeeAuditTools(eventLogRepo, articleRepo, whitelistRepo, nodeRepo, _httpContextAccessor, responseManager);
+        _auditTools = new BeeAuditTools(eventLogRepo, articleRepo, whitelistRepo, nodeRepo, _httpContextAccessor, _scopeHolder, responseManager);
 
         // Create /Secret and /Public folders
         _scopeHolder.Scope = SystemCallerScope.Instance;
@@ -687,6 +687,63 @@ public class McpAclTests : IAsyncLifetime
         var defaultEntries = JsonDocument.Parse(defaultResult).RootElement.GetProperty("entries").EnumerateArray().ToList();
         HasDekRotation(defaultEntries).Should().BeFalse(
             "default (false) must keep admin events hidden even for superadmin");
+
+        ClearCaller();
+    }
+
+    [Fact]
+    public async Task Acl_BeeGetLog_FolderDeleteEvents_DeniesSecretFolder()
+    {
+        // folder_create/rename/delete events carry no ArticleId -- EntityId is the folder path
+        // instead (see EventLogger.LogFolder*Async). They are shown in the DEFAULT (non-admin)
+        // view, so the only gate against leaking them across a scope boundary is the
+        // IsAccessDenied(EntityId) check added alongside this test. Insert two synthetic events
+        // directly (mirrors Acl_BeeGetLog_includeAdminEvents_requires_superadmin above) since this
+        // fixture wires FolderService with NullEventLogger and never persists real folder events.
+        var eventLogRepo = new BeeMemoryBank.Storage.Sqlite.EventLogRepository(_factory);
+        var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(_factory);
+        var nodeId = (await nodeRepo.GetAsync())!.NodeId;
+
+        await eventLogRepo.AppendAsync(new BeeMemoryBank.Core.Models.SyncEvent
+        {
+            EventId = Guid.NewGuid(),
+            EventType = "folder_delete",
+            ArticleId = null,
+            EntityId = "/Secret",
+            NodeId = nodeId,
+            LamportTs = 1,
+            Payload = "{}",
+            Signature = new byte[64],
+            CreatedAt = DateTime.UtcNow,
+            ActorType = "user",
+            ActorName = "secret-folder-delete-marker"
+        });
+        await eventLogRepo.AppendAsync(new BeeMemoryBank.Core.Models.SyncEvent
+        {
+            EventId = Guid.NewGuid(),
+            EventType = "folder_delete",
+            ArticleId = null,
+            EntityId = "/Public",
+            NodeId = nodeId,
+            LamportTs = 2,
+            Payload = "{}",
+            Signature = new byte[64],
+            CreatedAt = DateTime.UtcNow,
+            ActorType = "user",
+            ActorName = "public-folder-delete-marker"
+        });
+
+        await SetRestrictedCaller();
+        var result = await _auditTools.GetLog();
+
+        var actorNames = JsonDocument.Parse(result).RootElement.GetProperty("entries").EnumerateArray()
+            .Where(e => e.TryGetProperty("eventType", out var t) && t.GetString() == "folder_delete")
+            .Select(e => e.TryGetProperty("actorName", out var a) ? a.GetString() : null)
+            .ToList();
+        actorNames.Should().Contain("public-folder-delete-marker",
+            "a folder_delete event for an accessible path must appear in the default (non-admin) log view");
+        actorNames.Should().NotContain("secret-folder-delete-marker",
+            "a folder_delete event for a denied path must not leak through the default log view even though it carries no ArticleId");
 
         ClearCaller();
     }
