@@ -96,6 +96,39 @@ names always tripped the old "Unknown parameter(s)" error, which happened to lis
   parameter, the exact aliased-call-without-`id` regression, omitted/null `arguments`, unknown-parameter-only,
   a fully valid call, and a zero-parameter tool. No prior test coverage existed for this middleware at all.
 
+#### MCP follow-up (2026-08-19): invalid GUID parameter values
+
+A second, distinct blind spot reported against the same tool surface: every article/media `id` parameter
+across ~15 MCP tool methods is typed as `Guid`/`Guid?` directly in the C# method signature. A value that
+isn't a valid GUID — most commonly a tree path (e.g. `/Projects/_Sync/_README`) passed by an agent that only
+knows the article by the path named in its own instructions, not its GUID — was never caught by the
+name-based checks above: the SDK's own JSON argument binder throws while coercing the value into
+`System.Guid`, *after* the middleware's `next(context)` call, producing the same opaque
+`"An error occurred invoking {tool}"` failure the missing-parameter fix closed for names but not values.
+
+- **`McpToolRegistry.ParamInfo`** gained an `IsGuid` flag (`Nullable.GetUnderlyingType(type) ?? type ==
+  typeof(Guid)`), so the middleware can identify which parameters need value-shape validation without
+  re-deriving CLR type info itself.
+- **`McpParameterValidationMiddleware`** now validates every `IsGuid` parameter's provided value with
+  `Guid.TryParse` before invocation. A non-GUID string, or any non-string JSON value (number/array/object),
+  is reported as `"Invalid parameter value(s): 'id' must be a GUID, got \"/Projects/_Sync/_README\""`, with a
+  trailing hint: *"GUID parameters take article/media IDs only, never tree paths. Resolve a path to its GUID
+  first via bee_get_tree or bee_search, then pass that GUID here."* JSON `null` is accepted as "no value" for
+  optional `Guid?` parameters (their default), but reported as invalid for a *required* Guid parameter — a
+  non-nullable `Guid` can never legitimately bind from `null`, so explicit `null` there is unparseable like
+  any other bad value, not silently equivalent to omitting the field entirely (missed by the first draft;
+  caught in an Antigravity review pass and fixed before shipping). Oversized values (e.g. an entire article
+  body mistakenly passed as `id`) are truncated to 80 chars in the error text and the log line.
+- **Tests:** Two new cases (non-GUID string value, explicit `null` on a required GUID) plus one confirming
+  `null` still passes through cleanly for an optional `Guid?` parameter; test tool registry extended to cover
+  `BeeReadTools`/`BeeSearchTools`/`BeeSessionTools`/`BeeAuditTools`/`BeeConceptTools` in addition to the two
+  already covered, for full parity with the tools actually registered in `Program.cs`.
+- **Known follow-up, not fixed here:** the same class of bug likely affects other non-string MCP parameter
+  types bound directly by the SDK (`List<string> tags`, `bool`, `int`/`int?`) if a client sends a
+  differently-shaped JSON value (e.g. a comma-separated string instead of an array). Flagged by the
+  Antigravity review pass; deliberately out of scope for this change pending a separate decision on whether
+  to generalize `McpParameterValidationMiddleware` to arbitrary JSON-Schema-shape checks.
+
 ### Added
 
 - **Multiple Storages & Data Isolation (Windows Desktop):**

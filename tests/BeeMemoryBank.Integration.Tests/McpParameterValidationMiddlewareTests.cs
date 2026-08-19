@@ -15,7 +15,10 @@ namespace BeeMemoryBank.Integration.Tests;
 /// </summary>
 public class McpParameterValidationMiddlewareTests
 {
-    private readonly McpToolRegistry _registry = new([typeof(BeeWriteTools), typeof(BeeUploadTools)]);
+    private readonly McpToolRegistry _registry = new([
+        typeof(BeeWriteTools), typeof(BeeUploadTools), typeof(BeeReadTools),
+        typeof(BeeSearchTools), typeof(BeeSessionTools), typeof(BeeAuditTools), typeof(BeeConceptTools)
+    ]);
 
     private (HttpContext ctx, bool nextCalled) Invoke(string jsonBody)
     {
@@ -106,6 +109,47 @@ public class McpParameterValidationMiddlewareTests
         var (_, nextCalled) = Invoke(
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"bee_replace_in_article\",\"arguments\":{\"id\":\"" +
             articleId + "\",\"search\":\"a\",\"replace\":\"b\"}}}");
+
+        nextCalled.Should().BeTrue();
+    }
+
+    [Fact]
+    public void NonGuidStringId_ReportsInvalidValue_NotOpaqueBindingFailure()
+    {
+        // The regression MiniMax hit: passing a tree path where the SDK expects a GUID throws
+        // deep inside its own JSON binder before our tool method body ever runs.
+        var (ctx, nextCalled) = Invoke("""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bee_get_article_versions","arguments":{"id":"/Projects/_Sync/_README"}}}
+            """);
+
+        nextCalled.Should().BeFalse();
+        var text = ReadErrorText(ctx);
+        text.Should().Contain("Invalid parameter value(s): 'id' must be a GUID, got \"/Projects/_Sync/_README\"");
+        text.Should().Contain("never tree paths");
+    }
+
+    [Fact]
+    public void ExplicitNullOnRequiredGuid_ReportsInvalidValue_NotOpaqueBindingFailure()
+    {
+        // A required Guid can never legitimately be JSON null (non-nullable value type) --
+        // this must not slip past both the `missing` check (the key IS present) and a naive
+        // "null means absent" `invalid` check.
+        var (ctx, nextCalled) = Invoke("""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bee_get_article_versions","arguments":{"id":null}}}
+            """);
+
+        nextCalled.Should().BeFalse();
+        ReadErrorText(ctx).Should().Contain("Invalid parameter value(s): 'id' must be a GUID, got null");
+    }
+
+    [Fact]
+    public void NullOptionalGuid_TreatedAsAbsent_PassesThrough()
+    {
+        // bee_save_media's articleId is an optional Guid? whose default is null -- an explicit
+        // JSON null must be accepted the same as omitting the field entirely.
+        var (_, nextCalled) = Invoke("""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bee_save_media","arguments":{"fileName":"a.png","contentBase64":"AA==","articleId":null}}}
+            """);
 
         nextCalled.Should().BeTrue();
     }

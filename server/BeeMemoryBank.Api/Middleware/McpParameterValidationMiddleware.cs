@@ -37,6 +37,11 @@ public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegis
             new HashSet<string>(StringComparer.Ordinal) { "filePath", "file_path" })
     };
 
+    // Bounds how much of an oversized/wrong-shaped argument value (e.g. a whole article body
+    // or base64 payload mistakenly passed as an 'id') gets echoed back into the error message
+    // and the log -- both of which a model or operator will read in full.
+    private static string Truncate(string s) => s.Length > 80 ? s[..80] + "...(truncated)" : s;
+
     public async Task InvokeAsync(HttpContext context)
     {
         // Only POSTs with JSON bodies carry tools/call requests. SSE GETs and other
@@ -182,26 +187,68 @@ public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegis
                 .Select(p => p.Name)
                 .ToList();
 
-            if (unknown.Count == 0 && missing.Count == 0)
+            // Guid-typed parameters (every article/media 'id') are bound directly to
+            // System.Guid by the SDK's own JSON argument binder -- unlike our string-typed
+            // params (e.g. timestamps), there's no method-body try/catch standing between a
+            // malformed value and the SDK. A non-GUID string (a tree path is the common case:
+            // agents that only know an article by its path in the tree, not its GUID) throws
+            // deep inside the SDK's binder with the same opaque "An error occurred invoking
+            // {tool}" message that missing/unknown params used to produce, so it needs the
+            // same up-front check.
+            var invalid = new List<string>();
+            if (argsIsObject)
+            {
+                foreach (var param in tool.Parameters.Where(p => p.IsGuid))
+                {
+                    if (!argsEl.TryGetProperty(param.Name, out var valueEl))
+                        continue; // absent entirely -- already covered by `missing` if required
+
+                    if (valueEl.ValueKind == JsonValueKind.Null)
+                    {
+                        // Optional 'Guid?' params default to null -- a legitimate "no value".
+                        // A required param is never 'Guid?' (it would have a default, making it
+                        // optional), so an explicit null there can't bind to non-nullable Guid
+                        // either -- treat it exactly like any other unparseable value.
+                        if (param.Required)
+                            invalid.Add($"'{param.Name}' must be a GUID, got null");
+                        continue;
+                    }
+
+                    var raw = valueEl.ValueKind == JsonValueKind.String ? valueEl.GetString() : null;
+                    if (raw == null || !Guid.TryParse(raw, out _))
+                    {
+                        var shown = valueEl.ValueKind == JsonValueKind.String ? Truncate($"\"{raw}\"") : Truncate(valueEl.GetRawText());
+                        invalid.Add($"'{param.Name}' must be a GUID, got {shown}");
+                    }
+                }
+            }
+
+            if (unknown.Count == 0 && missing.Count == 0 && invalid.Count == 0)
             {
                 await next(context);
                 return;
             }
 
             logger.LogInformation(
-                "MCP {Tool} called with unknown params: {Unknown}, missing required params: {Missing}",
-                toolName, string.Join(", ", unknown), string.Join(", ", missing));
+                "MCP {Tool} called with unknown params: {Unknown}, missing required params: {Missing}, invalid values: {Invalid}",
+                toolName, string.Join(", ", unknown), string.Join(", ", missing), string.Join(", ", invalid));
 
             var problems = new List<string>();
             if (unknown.Count > 0)
                 problems.Add($"Unknown parameter(s): {string.Join(", ", unknown.Select(u => $"'{u}'"))}");
             if (missing.Count > 0)
                 problems.Add($"Missing required parameter(s): {string.Join(", ", missing.Select(m => $"'{m}'"))}");
+            if (invalid.Count > 0)
+                problems.Add($"Invalid parameter value(s): {string.Join(", ", invalid)}");
 
             var paramSection = McpToolRegistry.FormatParameters(tool);
             var message =
                 $"Error: {string.Join("; ", problems)} for {toolName}.\n\n" +
-                $"Valid parameters for {toolName}:\n{paramSection}";
+                $"Valid parameters for {toolName}:\n{paramSection}" +
+                (invalid.Count > 0
+                    ? "\n\nNote: GUID parameters take article/media IDs only, never tree paths. " +
+                      "Resolve a path to its GUID first via bee_get_tree or bee_search, then pass that GUID here."
+                    : "");
 
             object? requestId = root.TryGetProperty("id", out var idEl)
                 ? JsonSerializer.Deserialize<JsonElement>(idEl.GetRawText())

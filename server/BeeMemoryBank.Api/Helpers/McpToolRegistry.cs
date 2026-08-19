@@ -13,7 +13,7 @@ namespace BeeMemoryBank.Api.Helpers;
 /// </summary>
 public class McpToolRegistry
 {
-    public record ParamInfo(string Name, string TypeLabel, bool Required, string? Default, string Description);
+    public record ParamInfo(string Name, string TypeLabel, bool Required, string? Default, string Description, bool IsGuid);
 
     public record ToolInfo(string Name, IReadOnlyList<ParamInfo> Parameters, bool RequiresUnlockedSession);
 
@@ -47,12 +47,15 @@ public class McpToolRegistry
                 var desc = p.GetCustomAttribute<DescriptionAttribute>();
                 if (desc == null) continue;
 
+                var underlyingType = Nullable.GetUnderlyingType(p.ParameterType) ?? p.ParameterType;
+
                 parameters.Add(new ParamInfo(
                     Name: p.Name ?? "?",
                     TypeLabel: FormatType(p.ParameterType),
                     Required: !p.HasDefaultValue,
                     Default: p.HasDefaultValue ? FormatDefault(p.DefaultValue) : null,
-                    Description: desc.Description
+                    Description: desc.Description,
+                    IsGuid: underlyingType == typeof(Guid)
                 ));
             }
 
