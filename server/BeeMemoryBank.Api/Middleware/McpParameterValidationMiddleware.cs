@@ -111,13 +111,24 @@ public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegis
                 return;
             }
 
-            if (!paramsEl.TryGetProperty("arguments", out var argsEl) || argsEl.ValueKind != JsonValueKind.Object)
+            var hasArgsProperty = paramsEl.TryGetProperty("arguments", out var argsEl);
+            var argsIsObject = hasArgsProperty && argsEl.ValueKind == JsonValueKind.Object;
+            var argsIsAbsentOrNull = !hasArgsProperty || argsEl.ValueKind == JsonValueKind.Null;
+
+            if (!argsIsObject && !argsIsAbsentOrNull)
             {
+                // 'arguments' present but not an object (e.g. array/string/number) -- a malformed
+                // shape we don't specifically handle; let the SDK reject it in its own standard way.
                 await next(context);
                 return;
             }
 
-            if (AliasRules.TryGetValue(toolName, out var rule))
+            // Omitted/null 'arguments' still needs the missing-required-parameter check below (a
+            // tool with any required parameter called with no arguments at all must not silently
+            // reach the SDK's own opaque invocation failure) -- so this does NOT early-return the
+            // way it used to; it just means there's nothing to alias-rewrite or enumerate names from.
+
+            if (argsIsObject && AliasRules.TryGetValue(toolName, out var rule))
             {
                 var needsRewrite = argsEl.EnumerateObject()
                     .Any(p => rule.Drop.Contains(p.Name) || rule.Rename.ContainsKey(p.Name));
@@ -155,25 +166,41 @@ public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegis
             }
 
             var validNames = new HashSet<string>(tool.Parameters.Select(p => p.Name), StringComparer.Ordinal);
-            var unknown = new List<string>();
-            foreach (var prop in argsEl.EnumerateObject())
-            {
-                if (!validNames.Contains(prop.Name))
-                    unknown.Add(prop.Name);
-            }
+            var providedNames = argsIsObject
+                ? new HashSet<string>(argsEl.EnumerateObject().Select(p => p.Name), StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
 
-            if (unknown.Count == 0)
+            var unknown = providedNames.Where(n => !validNames.Contains(n)).ToList();
+            // Symmetric to the unknown-name check above: a required parameter can go missing
+            // entirely (not just supplied under a wrong name) -- e.g. a coding-agent's file-edit
+            // tool habit supplies search/replace-equivalent values but has no concept of 'id' at
+            // all. Without this check, such a call sails past the check above (nothing
+            // "unknown") and fails deep in the SDK's own parameter binder with an opaque "An
+            // error occurred invoking {tool}" instead of a message naming the missing parameter.
+            var missing = tool.Parameters
+                .Where(p => p.Required && !providedNames.Contains(p.Name))
+                .Select(p => p.Name)
+                .ToList();
+
+            if (unknown.Count == 0 && missing.Count == 0)
             {
                 await next(context);
                 return;
             }
 
-            logger.LogInformation("MCP {Tool} called with unknown params: {Unknown}", toolName, string.Join(", ", unknown));
+            logger.LogInformation(
+                "MCP {Tool} called with unknown params: {Unknown}, missing required params: {Missing}",
+                toolName, string.Join(", ", unknown), string.Join(", ", missing));
 
-            var unknownList = string.Join(", ", unknown.Select(u => $"'{u}'"));
+            var problems = new List<string>();
+            if (unknown.Count > 0)
+                problems.Add($"Unknown parameter(s): {string.Join(", ", unknown.Select(u => $"'{u}'"))}");
+            if (missing.Count > 0)
+                problems.Add($"Missing required parameter(s): {string.Join(", ", missing.Select(m => $"'{m}'"))}");
+
             var paramSection = McpToolRegistry.FormatParameters(tool);
             var message =
-                $"Error: Unknown parameter(s) for {toolName}: {unknownList}.\n\n" +
+                $"Error: {string.Join("; ", problems)} for {toolName}.\n\n" +
                 $"Valid parameters for {toolName}:\n{paramSection}";
 
             object? requestId = root.TryGetProperty("id", out var idEl)

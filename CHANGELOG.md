@@ -68,6 +68,34 @@ Filed by an external MCP client agent after real-world use against a populated v
 - **`bee_replace_in_article` parameter-alias tolerance:** Coding-agent MCP clients (Claude Code, opencode, etc.) reflexively reach for their own file-edit tool's parameter names — `old_string`/`new_string`, `oldString`/`newString`, plus an incidental `filePath` — instead of this tool's `search`/`replace`. `McpParameterValidationMiddleware` now transparently rewrites those aliases (and drops the incidental extra parameter) before the unknown-parameter check runs, in addition to a description hint naming the real parameters.
 - **Tests:** Added `Acl_BeeGetLog_FolderDeleteEvents_DeniesSecretFolder` (the folder-event scope leak above had zero prior coverage — the ACL test fixture wires `FolderService` with a `NullEventLogger`, so no existing test ever persisted a real folder event; verified this test fails against the pre-fix behavior and passes against the fix). Full-suite run: all previously-green tests remain green; pre-existing failures in `SnapshotService`/CLI snapshot tests (`IOException: file in use`, Windows temp-file locking) reproduce identically on the pre-fix code and are unrelated to this change.
 
+#### MCP follow-up (2026-08-19): missing-required-parameter validation
+
+The alias tolerance above had a blind spot: a call that supplies *only* aliased/dropped names and never
+supplies a genuinely required parameter (e.g. `bee_replace_in_article` called with `filePath`/`oldString`/
+`newString` and no `id` at all — an agent that fully confused this tool with its own local file-edit tool)
+passed the "no unknown parameter names" check cleanly after alias rewriting, then failed deep inside the
+MCP SDK's own parameter binder with an opaque `"An error occurred invoking {tool}"` instead of a message
+naming the missing parameter. Before the alias feature existed this was caught by accident (the extra wrong
+names always tripped the old "Unknown parameter(s)" error, which happened to list `id` as a side effect).
+
+- **`McpParameterValidationMiddleware`** now also checks for missing *required* parameters — symmetric to
+  the existing unknown-parameter check, using the same `McpToolRegistry.ParamInfo.Required` flag — for
+  every registered tool, not just `bee_replace_in_article`. The error now names the missing parameter
+  directly: `"Error: Missing required parameter(s): 'id' for bee_replace_in_article. ..."` (unknown and
+  missing problems are combined into one message when both occur).
+- **Omitted/null `arguments`:** a `tools/call` request with no `arguments` property at all, or an explicit
+  `"arguments": null`, used to skip parameter validation entirely (early-return). It's now treated as "no
+  parameters supplied" for the missing-required check instead of silently reaching the SDK's own opaque
+  failure. A malformed `arguments` (present but not an object, e.g. an array or string) still falls through
+  to the SDK untouched.
+- **Audited every `[McpServerTool]` method** across all 7 `server/BeeMemoryBank.Api/McpTools/*.cs` files
+  (32 tools, 69 parameters) for a required parameter missing `[Description]` (which would make it invisible
+  to `McpToolRegistry` and thus to this check too) — none found; independently re-verified.
+- **Tests:** New `McpParameterValidationMiddlewareTests` (7 cases) — constructs the middleware directly
+  (its dependencies are plain constructor parameters, no DI host needed) and covers: missing required
+  parameter, the exact aliased-call-without-`id` regression, omitted/null `arguments`, unknown-parameter-only,
+  a fully valid call, and a zero-parameter tool. No prior test coverage existed for this middleware at all.
+
 ### Added
 
 - **Multiple Storages & Data Isolation (Windows Desktop):**
