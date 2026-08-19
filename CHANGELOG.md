@@ -129,6 +129,50 @@ name-based checks above: the SDK's own JSON argument binder throws while coercin
   Antigravity review pass; deliberately out of scope for this change pending a separate decision on whether
   to generalize `McpParameterValidationMiddleware` to arbitrary JSON-Schema-shape checks.
 
+#### MCP follow-up (2026-08-19): per-agent response limits, `ignoreLimit`, and a JSON truncation data-loss bug
+
+A fourth report against the same tool surface, this time about `bee_set_max_tokens`: values above 20,000
+were silently clamped to 20,000 (`Math.Clamp`, no error), while the tool's own description read as advice
+("may cause issues with smaller models") rather than a hard wall. Separately, `McpResponseManager` — which
+backs both `bee_set_max_tokens` and the truncation/`bee_continue` machinery — is a **process-wide
+singleton**, so the old single `_maxTokens` field was shared by every connected agent: one agent raising
+its limit silently changed what every other concurrently connected agent's calls returned too. Confirmed
+via `Program.cs` DI registration; not just a surprising default, a real correctness bug.
+
+- **`bee_set_max_tokens` range is now 1,000–100,000, enforced with an explicit error, never a silent
+  clamp.** `McpResponseManager.TrySetMaxTokens(int, out string? error)` replaces the old always-succeeding
+  `SetMaxTokens` — an out-of-range value leaves the caller's limit untouched and returns
+  `"Error: maxTokens must be between 1000 and 100000 (got ...)."`.
+- **The limit is now per-agent, not global.** `McpResponseManager` keys it off
+  `HttpContext.Items["AuthAgent"]` (the same per-request agent identity `AgentAuthMiddleware` already sets)
+  via a `ConcurrentDictionary<string, int>`, instead of one shared `int` field. Requests that never resolve
+  to an agent share one fallback bucket. The service stays a singleton — it still owns the on-disk
+  continuation store `bee_continue` reads across separate requests — only the limit itself became
+  per-caller state inside it.
+- **`bee_continue` gained `ignoreLimit: bool = false`.** Set it to fetch all remaining content in a single
+  call instead of the next chunk, bypassing the caller's own limit for that one call — capped at the same
+  100,000-token hard ceiling as `bee_set_max_tokens`, never higher. Exists so an agent never has to touch
+  its own persistent limit (which then stays raised for all its future calls too) just to read one large
+  document once. The truncation hint on every truncated response now states the caller's exact remaining
+  token count and, when it would fit, the literal `bee_continue(...)` call to make — a number-driven
+  suggestion instead of a menu of APIs with no criterion for picking between them.
+- **Fixed a real, pre-existing data-loss bug found by an Antigravity review pass, not introduced by the
+  above:** for JSON tool responses, the truncation envelope reported `offset: charPos` while only ever
+  delivering a 500-char `preview` — never the actual `charPos`-length prefix. An agent that followed the
+  hint (`bee_continue(guid, offset: charPos)`) silently lost everything between character 500 and `charPos`
+  forever; the gap was neither in the initial response nor in the continuation. JSON responses now always
+  report `offset: 0`, so continuation reads from the true start of the saved document with no gap.
+  `bee_continue`'s negative-offset case was also hardened: it used to throw an unhandled
+  `ArgumentOutOfRangeException` instead of returning a structured error.
+- **Tests:** `McpResponseManagerTests` rewritten (18 cases), including
+  `MaxTokens_IsIsolatedPerAgent_RaisingOneAgentsLimitDoesNotAffectAnother` (the core regression this whole
+  fix targets) and two cases proving the JSON offset-zero fix delivers gapless content end-to-end. Three
+  other test files that constructed `McpResponseManager` directly were updated for the new constructor
+  parameter. Full-suite run: same pre-existing `SnapshotService`/CLI snapshot family of failures (Windows
+  temp-file locking) reproduce identically in isolation, confirmed unrelated to this change.
+- **Docs:** `docs/mcp.md`'s `bee_set_max_tokens`/`bee_continue`/truncation sections were out of date (still
+  said "max 20000", didn't mention `ignoreLimit` or the JSON preview behavior) — updated to match.
+
 ### Added
 
 - **Multiple Storages & Data Isolation (Windows Desktop):**

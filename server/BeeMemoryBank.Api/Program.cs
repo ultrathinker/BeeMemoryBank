@@ -146,7 +146,7 @@ builder.Services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.Get
 // Core-side retry contract: SessionService.UnlockCoreAsync resolves IRestoreRetrier to sweep
 // stuck restore events on every unlock (mirrors the DEK-rotation retry pattern).
 builder.Services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<RestoreInitiatorService>());
-builder.Services.AddSingleton(new McpResponseManager(dataPath));
+builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<McpResponseManager>(sp, dataPath));
 builder.Services.AddSingleton<DownloadTokenService>();
 builder.Services.AddSingleton<BeeMemoryBank.Api.Services.ProtectedUnlockCache>();
 // OsAutoUnlockService is Windows-only; registered as a conditional singleton so other code can

@@ -39,8 +39,8 @@ Search by title, folder names, and optionally full article body content. Does no
 - `bee_replace_in_article` — find/replace exact text within one article (`id`, `search`, `replace`) without resending the whole body
 
 ### bee_set_max_tokens, bee_continue (BeeSessionTools.cs)
-- `bee_set_max_tokens` — set token limit for MCP responses (min 1000, default 10000, max 20000)
-- `bee_continue` — read the continuation of a truncated response (`guid`, `offset`). Responses are stored for 24 hours.
+- `bee_set_max_tokens` — set your own default token limit for MCP responses (min 1,000, default 10,000, max 100,000). A value outside that range is rejected with an error, never silently clamped. The limit is per-caller (keyed off the agent's bearer token), so raising it never affects other agents.
+- `bee_continue` — read the continuation of a truncated response (`guid`, `offset`). Pass `ignoreLimit: true` to fetch all remaining content in one call instead of the next chunk, bypassing your own limit for that call only (still capped at the same hard 100,000-token ceiling). Responses are stored for 24 hours.
 
 ### bee_get_upload_script, bee_save_media (BeeUploadTools.cs)
 - `bee_get_upload_script` — returns a self-contained Python script for uploading files from disk to BeeMemoryBank **without** passing content through the LLM context. Supports `create`, `update`, and `upload-media` subcommands. Uses only stdlib (no pip install required).
@@ -64,9 +64,10 @@ Search by title, folder names, and optionally full article body content. Does no
 ## Truncation (McpResponseManager)
 
 Large responses are automatically truncated:
-- If a response exceeds the token limit → full content is saved to a temp file
-- The first ~90% is returned + a warning with `guid` and `offset`
-- The AI agent calls `bee_continue(guid, offset)` to read the next part
+- If a response exceeds the caller's token limit → full content is saved to a temp file
+- Plain-text responses: the first ~90% of budget is returned inline + a warning with `guid` and `offset`
+- JSON responses: only a short preview is returned (truncating mid-structure would break parsing) + an envelope with `guid` and `offset: 0` — the caller must always continue from the start
+- The AI agent calls `bee_continue(guid, offset)` to read the next part, or `bee_continue(guid, offset, ignoreLimit: true)` to get everything remaining in one call (capped at 100,000 tokens)
 - Temp files are automatically deleted after 24 hours
 - Token estimation: `ceil(UTF8ByteCount / 3.0)` — conservative estimate
 

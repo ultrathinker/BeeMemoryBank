@@ -79,7 +79,7 @@ public class McpToolsTests : IAsyncLifetime
         await initService.InitializeAsync("admin", "McpTestNode", Password);
         await _session.UnlockAsync(Password);
 
-        var responseManager = new BeeMemoryBank.Api.McpTools.McpResponseManager(Path.GetTempPath());
+        var responseManager = new BeeMemoryBank.Api.McpTools.McpResponseManager(Path.GetTempPath(), new HttpContextAccessor());
         var folderAccessService = new FolderAccessService(new ServiceCollection()
             .AddScoped<IFolderAclRepository>(_ => new BeeMemoryBank.Storage.Sqlite.FolderAclRepository(_factory))
             .AddScoped<IFolderRepository>(_ => folderRepo)
