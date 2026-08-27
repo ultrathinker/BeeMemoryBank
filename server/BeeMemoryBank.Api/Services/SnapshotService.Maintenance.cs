@@ -92,6 +92,21 @@ public partial class SnapshotService
         delCmd.CommandText = "DELETE FROM tbl_whitelist WHERE status != 'A'";
         delCmd.ExecuteNonQuery();
 
+        // Roles and their folder rules are node-local like tbl_user, so they must not travel to a
+        // peer either. They are cleared rather than added to SecretTables because that list DROPS
+        // its tables: tbl_migration is not stripped, so a node restored from such an archive would
+        // believe migration 009 had run while the tables were gone, and nothing recreates schema
+        // after a restore. Emptying keeps the schema intact and still strips the data.
+        // The two seeded system roles are kept — every user row references one by name, and
+        // FolderAccessService fails closed on a role it cannot resolve.
+        using var roleAclCmd = conn.CreateCommand();
+        roleAclCmd.CommandText = "DELETE FROM tbl_role_folder_acl_entry";
+        try { roleAclCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-009 archive */ }
+
+        using var roleCmd = conn.CreateCommand();
+        roleCmd.CommandText = "DELETE FROM tbl_role WHERE is_system = 0";
+        try { roleCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-009 archive */ }
+
         using var vacuumCmd = conn.CreateCommand();
         vacuumCmd.CommandText = "VACUUM";
         vacuumCmd.ExecuteNonQuery();

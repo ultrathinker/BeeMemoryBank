@@ -70,6 +70,8 @@ public static class DependencyInjection
         services.AddScoped<IFolderRepository, FolderRepository>();
         services.AddScoped<IMediaRepository, MediaRepository>();
         services.AddScoped<IFolderAclRepository, FolderAclRepository>();
+        services.AddScoped<IRoleRepository, RoleRepository>();
+        services.AddScoped<IRoleAclRepository, RoleAclRepository>();
         services.AddScoped<IArticleVersionRepository, ArticleVersionRepository>();
         services.AddScoped<IConceptTagRepository, ConceptTagRepository>();
         services.AddSingleton<IRestoreReplayShieldRepository, RestoreReplayShieldRepository>();  // see comment near INodeIdentityRepository — same reason

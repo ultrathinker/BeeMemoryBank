@@ -538,6 +538,7 @@ app.MapSnapshotEndpoints();
 app.MapActivityEndpoints();
 app.MapCommentEndpoints();
 app.MapRestrictionEndpoints();
+app.MapRoleEndpoints();
 app.MapDownloadEndpoints();
     app.MapMediaEndpoints();
     app.MapVersionEndpoints();

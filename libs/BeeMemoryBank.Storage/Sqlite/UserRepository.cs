@@ -119,6 +119,24 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
             new { slotId });
     }
 
+    public async Task<List<int>> GetUserIdsByRoleAsync(string role)
+    {
+        using var conn = OpenConnection();
+        // COLLATE NOCASE matches tbl_role.name's own collation — a role stored as "user" and a
+        // tbl_user.role of "User" are the same role everywhere else, so they must be here too.
+        return (await conn.QueryAsync<int>(
+            "SELECT id FROM tbl_user WHERE role = @role COLLATE NOCASE AND is_active = 1",
+            new { role })).ToList();
+    }
+
+    public async Task<Dictionary<string, int>> CountActiveUsersPerRoleAsync()
+    {
+        using var conn = OpenConnection();
+        var rows = await conn.QueryAsync<(string Role, int Count)>(
+            "SELECT role AS Role, COUNT(*) AS Count FROM tbl_user WHERE is_active = 1 GROUP BY role COLLATE NOCASE");
+        return rows.ToDictionary(r => r.Role, r => r.Count, StringComparer.OrdinalIgnoreCase);
+    }
+
     // NOTE: no is_active filter — deletion bumps the stamp, so a pre-deletion cookie must
     // still resolve here to be rejected on mismatch. Only a truly absent row returns null.
     public async Task<string?> GetSecurityStampAsync(int id)

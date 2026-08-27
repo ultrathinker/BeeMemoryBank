@@ -66,6 +66,9 @@ public class AclPathChangeTests : IAsyncLifetime
 
         _folderAccessService = new FolderAccessService(new ServiceCollection()
             .AddScoped<IFolderAclRepository>(_ => restrictionRepo)
+            .AddSingleton<IDbConnectionFactory>(_ => _factory)
+            .AddScoped<IRoleRepository>(_ => new RoleRepository(_factory))
+            .AddScoped<IRoleAclRepository>(_ => new RoleAclRepository(_factory))
             .AddScoped<IFolderRepository>(_ => _folderRepo)
             .AddScoped<IUserRepository>(_ => userRepo)
             .AddScoped<CallerScopeHolder>(_ => _scopeHolder)

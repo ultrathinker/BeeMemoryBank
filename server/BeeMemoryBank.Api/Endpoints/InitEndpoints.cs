@@ -442,7 +442,12 @@ public static class InitEndpoints
                         "tbl_event", "tbl_compaction_log",
                         "tbl_audit_log", "tbl_hard_delete_audit",
                         "tbl_projection_matrix",
-                        "tbl_user", "tbl_folder_acl_entry"
+                        "tbl_user", "tbl_folder_acl_entry",
+                        // Role folder rules go with the users that held them. tbl_role itself is
+                        // NOT in this list: DELETE FROM would take the two seeded system roles
+                        // with it, and nothing re-seeds them (migrations only run once). Custom
+                        // roles are removed by the targeted statement after this loop.
+                        "tbl_role_folder_acl_entry"
                     };
                     foreach (var table in tablesToWipe)
                     {
@@ -450,6 +455,13 @@ public static class InitEndpoints
                         delCmd.Transaction = tx;
                         delCmd.CommandText = $"DELETE FROM [{table}]";
                         try { delCmd.ExecuteNonQuery(); } catch { }
+                    }
+
+                    using (var roleCmd = conn.CreateCommand())
+                    {
+                        roleCmd.Transaction = tx;
+                        roleCmd.CommandText = "DELETE FROM tbl_role WHERE is_system = 0";
+                        try { roleCmd.ExecuteNonQuery(); } catch { }
                     }
                     tx.Commit();
                 }
@@ -470,6 +482,12 @@ public static class InitEndpoints
                     vacuumCmd.CommandText = "VACUUM";
                     vacuumCmd.ExecuteNonQuery();
                 }
+
+                // The folder-ACL cache is process-wide and keyed by (database, user id). The
+                // database path does not change across a reset but the user ids do — they restart
+                // at 1 — so a node re-initialized inside the cache TTL would hand the new account
+                // the wiped account's permissions.
+                FolderAccessService.InvalidateAll();
 
                 maintenance.Exit();
                 return Results.Ok(new { success = true, message = "Node reset — go to /Setup to rejoin" });

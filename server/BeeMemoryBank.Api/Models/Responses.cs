@@ -110,6 +110,15 @@ public record LoginResponse(int UserId, string Username, string DisplayName, str
 
 public record UserListItemResponse(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt, bool ChatAccess);
 
+/// <param name="BasePolicy">What "this role has no allow rows" means — "open" (whole vault minus
+/// deny rows) or "closed" (nothing). See BeeMemoryBank.Core.Models.RoleBasePolicy.</param>
+/// <param name="UserCount">Active users holding this role. 0 on single-role reads, which do not
+/// run the count query.</param>
+/// <param name="RuleCount">Folder rules attached to this role. 0 on single-role reads.</param>
+public record RoleResponse(
+    string Name, string DisplayName, string? Description, bool IsSystem, string BasePolicy,
+    int UserCount, int RuleCount, DateTime CreatedAt, DateTime UpdatedAt);
+
 public record WhitelistEntryResponse(
     Guid NodeId,
     string DisplayName,

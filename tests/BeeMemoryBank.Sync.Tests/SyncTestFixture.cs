@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage;
@@ -74,11 +75,24 @@ public abstract class SyncTestFixture : IAsyncLifetime
         var replayShieldRepo = new BeeMemoryBank.Storage.Sqlite.RestoreReplayShieldRepository(Factory);
         var restoreEventStateRepo = new BeeMemoryBank.Storage.Sqlite.RestoreEventStateRepository(Factory);
         var dekRotationStateRepo = new BeeMemoryBank.Storage.Sqlite.DekRotationStateRepository(Factory);
+        // EventApplier invalidates the folder-ACL cache when a folder rename or delete arrives
+        // over sync — the cache stores resolved paths, so a remote rename would otherwise leave
+        // rules pointing at a path that no longer exists.
+        var aclScopeHolder = new CallerScopeHolder();
+        var folderAccess = new FolderAccessService(new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton<BeeMemoryBank.Core.Interfaces.IDbConnectionFactory>(_ => Factory)
+            .AddScoped<IFolderAclRepository>(_ => new BeeMemoryBank.Storage.Sqlite.FolderAclRepository(Factory))
+            .AddScoped<IRoleRepository>(_ => new BeeMemoryBank.Storage.Sqlite.RoleRepository(Factory))
+            .AddScoped<IRoleAclRepository>(_ => new BeeMemoryBank.Storage.Sqlite.RoleAclRepository(Factory))
+            .AddScoped<IUserRepository>(_ => userRepo)
+            .AddScoped<IFolderRepository>(_ => folderRepo)
+            .AddScoped(_ => aclScopeHolder)
+            .BuildServiceProvider());
         EventApplier = new EventApplier(ArticleRepo, BodyRepo, EventLogRepo, WhitelistRepo,
             ConflictRepo, TombstoneRepo, WhitelistRepo, commentRepo, folderRepo, Clock, mediaRepo, NodeRepo, conceptTagService, conceptTagRepo,
             new FakeEmbeddingGenerator(), HardDeleteService, null,
             replayShieldRepo, restoreEventStateRepo, new NullRestoreInitiator(),
-            dekRotationStateRepo, new NullDekRotationApplier(),
+            dekRotationStateRepo, new NullDekRotationApplier(), folderAccess,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance);
     }
 

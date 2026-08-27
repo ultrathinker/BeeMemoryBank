@@ -82,6 +82,11 @@ public class McpToolsTests : IAsyncLifetime
         var responseManager = new BeeMemoryBank.Api.McpTools.McpResponseManager(Path.GetTempPath(), new HttpContextAccessor());
         var folderAccessService = new FolderAccessService(new ServiceCollection()
             .AddScoped<IFolderAclRepository>(_ => new BeeMemoryBank.Storage.Sqlite.FolderAclRepository(_factory))
+            .AddSingleton<IDbConnectionFactory>(_ => _factory)
+            .AddScoped<IRoleRepository>(_ => new BeeMemoryBank.Storage.Sqlite.RoleRepository(_factory))
+            .AddScoped<IRoleAclRepository>(_ => new BeeMemoryBank.Storage.Sqlite.RoleAclRepository(_factory))
+            .AddScoped<IUserRepository>(_ => new BeeMemoryBank.Storage.Sqlite.UserRepository(_factory))
+            .AddScoped<CallerScopeHolder>(_ => scopeHolder)
             .AddScoped<IFolderRepository>(_ => folderRepo)
             .BuildServiceProvider());
         _searchTools = new BeeSearchTools(_searchService, hybridSearchService, responseManager, _session);

@@ -70,6 +70,14 @@ public partial class EventApplier
             return; // local wins, skip
 
         await folderRepo.RenamePathAsync(p.OldPath, p.NewPath, p.FolderId, evt.LamportTs, evt.NodeId, p.UpdatedAt);
+
+        // The folder-ACL cache stores resolved PATHS, not folder ids. FolderService does this for
+        // local renames; a rename arriving over sync has to as well, or a rule on the old path
+        // keeps being enforced against a path that no longer exists — permissive-stale, since the
+        // folder is now reachable under its new name by someone the rule was meant to exclude.
+        // RenamePathAsync moves the whole subtree, so descendants' rules go stale too; clearing
+        // every entry is cheaper to get right than enumerating them.
+        FolderAccessService.InvalidateAll();
     }
 
     private async Task ApplyFolderDeleteAsync(SyncEvent evt)
@@ -98,6 +106,7 @@ public partial class EventApplier
 
         await folderRepo.SoftDeleteAsync(p.FolderId, p.DeletedAt);
         await articleRepo.ClearFolderIdAsync(p.FolderId);
+        await folderAccess.InvalidateCacheForFolderAsync(p.FolderId);
     }
 
     private async Task ApplyMediaCreateAsync(SyncEvent evt)

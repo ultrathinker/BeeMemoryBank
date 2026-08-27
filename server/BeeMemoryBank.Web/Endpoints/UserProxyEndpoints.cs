@@ -68,8 +68,8 @@ public static class UserProxyEndpoints
         {
             var req = await ctx.Request.ReadFromJsonAsync<AddAclEntryProxyRequest>();
             if (req == null) return Results.BadRequest();
-            var result = await api.AddUserRestrictionAsync(userId, req.FolderId, req.Effect, req.IsReadOnly);
-            return result != null ? Results.Ok(result) : Results.StatusCode(502);
+            var (entry, error, status) = await api.AddUserRestrictionAsync(userId, req.FolderId, req.Effect, req.IsReadOnly);
+            return entry != null ? Results.Ok(entry) : Results.Json(new { error }, statusCode: status);
         }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
         app.MapMethods("/api-proxy/restrictions/user/{userId:int}/{folderId:guid}", new[] { "PATCH" },
@@ -77,14 +77,14 @@ public static class UserProxyEndpoints
         {
             var req = await ctx.Request.ReadFromJsonAsync<UpdateAclReadOnlyProxyRequest>();
             if (req == null) return Results.BadRequest();
-            var ok = await api.SetUserRestrictionReadOnlyAsync(userId, folderId, req.IsReadOnly);
-            return ok ? Results.NoContent() : Results.StatusCode(502);
+            var (ok, error, status) = await api.SetUserRestrictionReadOnlyAsync(userId, folderId, req.IsReadOnly);
+            return ok ? Results.NoContent() : Results.Json(new { error }, statusCode: status);
         }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
         app.MapDelete("/api-proxy/restrictions/user/{userId:int}/{folderId:guid}", async (int userId, Guid folderId, ApiClient api) =>
         {
-            var ok = await api.RemoveUserRestrictionAsync(userId, folderId);
-            return ok ? Results.NoContent() : Results.StatusCode(502);
+            var (ok, error, status) = await api.RemoveUserRestrictionAsync(userId, folderId);
+            return ok ? Results.NoContent() : Results.Json(new { error }, statusCode: status);
         }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
         // ─── Hard Delete ────────────────────────────────────────────────────────────

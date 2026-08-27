@@ -111,6 +111,18 @@ public record UserDto(int Id, string Username, string DisplayName, string Role, 
 
 public record AclEntryDto(int Id, Guid FolderId, string FolderPath, string Effect, DateTime CreatedAt, bool IsReadOnly = false);
 
+public record RoleDto(
+    string Name, string DisplayName, string? Description, bool IsSystem, string BasePolicy,
+    int UserCount, int RuleCount, DateTime CreatedAt, DateTime UpdatedAt);
+
+// No Id: role rules are keyed by (role, folder, effect), not a surrogate row id.
+public record RoleAclEntryDto(
+    string RoleName, Guid FolderId, string FolderPath, string Effect, bool IsReadOnly, DateTime CreatedAt);
+
+public record CreateRoleProxyRequest(string Name, string DisplayName, string? Description, string BasePolicy);
+
+public record UpdateRoleProxyRequest(string DisplayName, string? Description, string BasePolicy);
+
 public record ArticleVersionDto(
     Guid Id,
     int VersionNumber,

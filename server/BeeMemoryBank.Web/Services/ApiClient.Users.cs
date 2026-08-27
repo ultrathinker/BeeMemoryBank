@@ -194,38 +194,33 @@ public partial class ApiClient
         catch { return null; }
     }
 
-    public async Task<AclEntryDto?> AddUserRestrictionAsync(int userId, Guid folderId, string effect, bool isReadOnly = false)
+    // Returns the API's own message and status: adding a per-user rule is refused with a 409 for
+    // a user managed by a custom role, and that reason has to reach the operator.
+    public async Task<(AclEntryDto? Entry, string? Error, int StatusCode)> AddUserRestrictionAsync(
+        int userId, Guid folderId, string effect, bool isReadOnly = false)
     {
-        try
-        {
-            var resp = await http.PostAsync($"/api/restrictions/user/{userId}", Body(new { folderId, effect, isReadOnly }));
-            if (!resp.IsSuccessStatusCode) return null;
-            return await resp.Content.ReadFromJsonAsync<AclEntryDto>(JsonOpts);
-        }
-        catch { return null; }
+        var resp = await http.PostAsync($"/api/restrictions/user/{userId}", Body(new { folderId, effect, isReadOnly }));
+        if (resp.IsSuccessStatusCode)
+            return (await resp.Content.ReadFromJsonAsync<AclEntryDto>(JsonOpts), null, (int)resp.StatusCode);
+        return (null, await ReadErrorAsync(resp, "Failed to add rule"), (int)resp.StatusCode);
     }
 
-    public async Task<bool> SetUserRestrictionReadOnlyAsync(int userId, Guid folderId, bool isReadOnly)
+    public async Task<(bool Ok, string? Error, int StatusCode)> SetUserRestrictionReadOnlyAsync(
+        int userId, Guid folderId, bool isReadOnly)
     {
-        try
+        var req = new HttpRequestMessage(HttpMethod.Patch, $"/api/restrictions/user/{userId}/{folderId}")
         {
-            var req = new HttpRequestMessage(HttpMethod.Patch, $"/api/restrictions/user/{userId}/{folderId}")
-            {
-                Content = Body(new { isReadOnly })
-            };
-            var resp = await http.SendAsync(req);
-            return resp.IsSuccessStatusCode;
-        }
-        catch { return false; }
+            Content = Body(new { isReadOnly })
+        };
+        var resp = await http.SendAsync(req);
+        if (resp.IsSuccessStatusCode) return (true, null, (int)resp.StatusCode);
+        return (false, await ReadErrorAsync(resp, "Failed to update rule"), (int)resp.StatusCode);
     }
 
-    public async Task<bool> RemoveUserRestrictionAsync(int userId, Guid folderId)
+    public async Task<(bool Ok, string? Error, int StatusCode)> RemoveUserRestrictionAsync(int userId, Guid folderId)
     {
-        try
-        {
-            var resp = await http.DeleteAsync($"/api/restrictions/user/{userId}/{folderId}");
-            return resp.IsSuccessStatusCode;
-        }
-        catch { return false; }
+        var resp = await http.DeleteAsync($"/api/restrictions/user/{userId}/{folderId}");
+        if (resp.IsSuccessStatusCode) return (true, null, (int)resp.StatusCode);
+        return (false, await ReadErrorAsync(resp, "Failed to remove rule"), (int)resp.StatusCode);
     }
 }

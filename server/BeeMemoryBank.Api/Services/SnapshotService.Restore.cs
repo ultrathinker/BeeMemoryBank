@@ -219,6 +219,12 @@ public partial class SnapshotService
                 cmd.CommandText = "DELETE FROM tbl_sync_push_position";
                 cmd.ExecuteNonQuery();
             }
+
+            // The database was replaced under an unchanged path, so the folder-ACL cache is now
+            // describing users that no longer exist — and user ids restart at 1, so the entries
+            // would be handed to whoever occupies those ids in the restored data. No restart
+            // follows a restore, so nothing else clears it.
+            BeeMemoryBank.Core.Services.FolderAccessService.InvalidateAll();
         }
         finally
         {

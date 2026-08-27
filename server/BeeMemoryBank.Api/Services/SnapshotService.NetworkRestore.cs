@@ -492,6 +492,12 @@ public partial class SnapshotService
         }
         finally
         {
+            // Same reason as SnapshotService.RestoreAsync: the database was replaced under an
+            // unchanged path, so the process-wide folder-ACL cache now describes users from the
+            // previous data set, and user ids restart at 1 in the restored one. In the finally
+            // block on purpose — the rollback path above also leaves the database in a state the
+            // cache was not built from.
+            BeeMemoryBank.Core.Services.FolderAccessService.InvalidateAll();
             HeavyOperationLock.Instance.Release();
         }
     }

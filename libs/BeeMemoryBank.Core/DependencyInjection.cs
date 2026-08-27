@@ -53,6 +53,7 @@ public static class DependencyInjection
         services.AddScoped<MediaService>();
         services.AddScoped<UserService>();
         services.AddScoped<FolderAccessService>();
+        services.AddScoped<RoleService>();
         services.AddScoped<ConceptTagService>();
         services.AddScoped<ObsidianImportService>();
         services.AddScoped<BeeImportService>();

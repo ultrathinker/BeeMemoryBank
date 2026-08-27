@@ -10,8 +10,27 @@ public class UserService(
     IUserRepository userRepo,
     IKeySlotRepository keySlotRepo,
     SessionService session,
+    IRoleRepository roleRepo,
+    FolderAccessService folderAccess,
     IRemoteApiTokenRepository? remoteTokenRepo = null)
 {
+    // Roles are rows now, not a hard-coded pair. The only role this service still special-cases
+    // is "superadmin", because that is the one that owns a key slot; every other role is just a
+    // string that decides which folder rules apply.
+    //
+    // Returns the CANONICAL name from tbl_role, which is what must be stored. The lookup is
+    // case-insensitive (COLLATE NOCASE), but almost every consumer of tbl_user.role compares it
+    // with an ordinal == : CallerIdentity's X-User-Role check, the key-slot branches below,
+    // FolderAccessService's superadmin bypass. Storing "Superadmin" verbatim would pass
+    // validation and then fail every one of those — an account that is a superadmin in the
+    // table, has no key slot, and is treated as an ordinary user by the middleware.
+    private async Task<string> CanonicalRoleNameAsync(string role)
+    {
+        var existing = await roleRepo.GetByNameAsync(role)
+            ?? throw new ArgumentException($"Invalid role '{role}'. No such role exists.");
+        return existing.Name;
+    }
+
     // Invalidate any remote API tokens the user owns whenever their password
     // changes (Claude round-3 finding). Without this, an attacker who captured
     // a remote token before the password rotation keeps full read access for
@@ -156,9 +175,7 @@ public class UserService(
             throw new ArgumentException("Username is required");
         ValidatePassword(password);
 
-        var validRoles = new[] { UserRoles.Superadmin, UserRoles.User };
-        if (!validRoles.Contains(role))
-            throw new ArgumentException($"Invalid role. Must be one of: {string.Join(", ", validRoles)}");
+        role = await CanonicalRoleNameAsync(role);
 
         var existing = await userRepo.GetByUsernameAsync(username);
         if (existing != null)
@@ -243,6 +260,10 @@ public class UserService(
         // revalidation. Done before the soft-delete so it lands even though DeleteAsync only
         // flips is_active (the stamp lookup ignores is_active, so the bumped value still resolves).
         await userRepo.BumpSecurityStampAsync(userId);
+        // Drop their cached folder rules too. Nothing should be able to authenticate as them
+        // afterwards, but leaving a permissive entry behind for the cache TTL is not a bet worth
+        // taking for one dictionary removal.
+        folderAccess.InvalidateCache(userId);
 
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         for (int attempt = 0; attempt < 3; attempt++)
@@ -278,17 +299,21 @@ public class UserService(
         if (chatAccess.HasValue)
             user.ChatAccess = chatAccess.Value;
 
+        // Canonicalize before anything compares against it: "User" and "user" name the same role,
+        // and treating that as a change would bump the security stamp and re-run the key-slot
+        // logic for a no-op edit. An unknown role throws here, before any state is touched.
+        if (role != null)
+            role = await CanonicalRoleNameAsync(role);
+
         bool roleChanged = false;
         bool passwordChanged = false;
         if (role != null && role != user.Role)
         {
-            var validRoles = new[] { UserRoles.Superadmin, UserRoles.User };
-            if (!validRoles.Contains(role))
-                throw new ArgumentException($"Invalid role. Must be one of: {string.Join(", ", validRoles)}");
-
             var oldRole = user.Role;
 
-            if (oldRole == UserRoles.Superadmin && role == UserRoles.User)
+            // Any move off superadmin is a demotion — not just a move to the built-in 'user'
+            // role. Before custom roles existed those were the same thing.
+            if (oldRole == UserRoles.Superadmin && role != UserRoles.Superadmin)
             {
                 var allActiveUsers = await userRepo.ListActiveAsync();
                 var remainingSuperadmins = allActiveUsers.Count(u =>
@@ -338,7 +363,14 @@ public class UserService(
         // A role change (promote/demote) is identity-affecting: bump the stamp so the
         // user's existing cookie is revalidated against the new role promptly.
         if (roleChanged)
+        {
             await userRepo.BumpSecurityStampAsync(userId);
+            // The folder-ACL cache is keyed per user and holds the rules resolved through the
+            // PREVIOUS role. Without this the user keeps their old role's folder access for up
+            // to the cache TTL — permissive-stale, i.e. a security bug, whenever the new role is
+            // the more restricted one.
+            folderAccess.InvalidateCache(userId);
+        }
 
         // Promoting with an explicit password also reset the login password, so treat it like
         // any other admin reset: outstanding remote API tokens must not survive it.

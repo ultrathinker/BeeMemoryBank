@@ -79,6 +79,13 @@ public record AddAclEntryRequest(Guid FolderId, string Effect, bool IsReadOnly =
 
 public record UpdateAclReadOnlyRequest(bool IsReadOnly);
 
+// BasePolicy has no default on purpose. It decides what "this role has no allow rows" means, so
+// a caller that omits it would silently pick a visibility policy — an absent value must fail
+// validation loudly instead.
+public record CreateRoleRequest(string Name, string DisplayName, string? Description, string BasePolicy);
+
+public record UpdateRoleRequest(string DisplayName, string? Description, string BasePolicy);
+
 public record CopyArticleRequest(string TargetFolderPath);
 
 public record CopyFolderRequest(string TargetParentPath);

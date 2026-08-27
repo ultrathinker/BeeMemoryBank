@@ -338,6 +338,7 @@ app.MapArticleProxyEndpoints();
 app.MapFolderProxyEndpoints();
 app.MapSnapshotProxyEndpoints();
 app.MapUserProxyEndpoints();
+app.MapRoleProxyEndpoints();
 app.MapChatProxyEndpoints();
 // ca.crt download for the "Connect a device" page — anonymous, no proxy/auth.
 app.MapConnectEndpoints();

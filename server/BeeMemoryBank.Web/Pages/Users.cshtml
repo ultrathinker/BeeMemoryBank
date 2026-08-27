@@ -10,9 +10,14 @@
 <div class="main-content">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
         <h2 style="margin:0;"><sl-icon name="people"></sl-icon> Users</h2>
-        <sl-button size="small" variant="success" onclick="openAddUser()">
-            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add User
-        </sl-button>
+        <div style="display:flex;gap:8px;">
+            <sl-button size="small" variant="default" href="/Roles">
+                <sl-icon slot="prefix" name="shield-lock"></sl-icon> Roles
+            </sl-button>
+            <sl-button size="small" variant="success" onclick="openAddUser()">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add User
+            </sl-button>
+        </div>
     </div>
 
     @if (!string.IsNullOrEmpty(Model.SuccessMessage))
@@ -52,7 +57,7 @@
                             <td><strong>@user.Username</strong></td>
                             <td>@user.DisplayName</td>
                             <td>
-                                <sl-badge variant="@(user.Role == "superadmin" ? "warning" : "neutral")" pill>
+                                <sl-badge variant="@(user.Role == "superadmin" ? "warning" : user.Role == "user" ? "neutral" : "primary")" pill>
                                     @user.Role
                                 </sl-badge>
                             </td>
@@ -66,9 +71,9 @@
                             <td style="text-align:right;">
                                 @if (user.Role != "superadmin")
                                 {
-                                    <sl-icon-button name="shield-lock" label="Folder Restrictions"
-                                        data-uid="@user.Id" data-name="@user.Username"
-                                        onclick="openRestrictions(this.dataset.uid, this.dataset.name)">
+                                    <sl-icon-button name="shield-lock" label="Folder access"
+                                        data-uid="@user.Id" data-name="@user.Username" data-role="@user.Role"
+                                        onclick="openUserFolderAccess(this.dataset.uid, this.dataset.name, this.dataset.role)">
                                     </sl-icon-button>
                                 }
                                 <sl-icon-button name="key" label="Change Password"
@@ -126,7 +131,8 @@
                     help-text="At least 8 characters, with an uppercase letter, a lowercase letter, and a digit."></sl-input>
             </div>
             <div style="margin-bottom:16px;">
-                <sl-select id="add-role" name="role" label="Role" value="user">
+                <sl-select id="add-role" name="role" label="Role" value="user"
+                    help-text="Custom roles carry their own folder rules — manage them on the Roles page.">
                     <sl-option value="superadmin">Superadmin</sl-option>
                     <sl-option value="user">User</sl-option>
                 </sl-select>
@@ -168,6 +174,7 @@
                     <sl-option value="superadmin">Superadmin</sl-option>
                     <sl-option value="user">User</sl-option>
                 </sl-select>
+                <p id="edit-role-hint" class="text-muted text-sm" style="margin:6px 0 0 0;display:none;"></p>
                 <p id="edit-promote-hint" class="text-muted text-sm" style="margin:6px 0 0 0;display:none;">
                     They keep their current password. The key that lets them unlock this server is
                     created the next time they log in — until then they can work as usual, but
@@ -185,75 +192,7 @@
         <sl-button id="btn-edit-user-submit" slot="footer" variant="primary" onclick="submitEditUser()">Save</sl-button>
     </sl-dialog>
 
-    <!-- Folder Restrictions Dialog -->
-    <sl-dialog id="dlg-restrictions" label="Folder Access" style="--width:620px;">
-        <style>
-            #dlg-restrictions::part(panel) { overflow: visible; }
-            #dlg-restrictions::part(body) { overflow: visible; }
-            .acl-effect-option { display:flex; gap:10px; padding:12px; border:1px solid var(--sl-color-neutral-200); border-radius:8px; cursor:pointer; transition:all 0.15s; }
-            .acl-effect-option:hover { border-color:var(--sl-color-primary-300); background:var(--sl-color-primary-50); }
-            .acl-effect-option.selected { border-color:var(--sl-color-primary-500); background:var(--sl-color-primary-50); box-shadow:0 0 0 1px var(--sl-color-primary-500); }
-            .acl-effect-option sl-icon { font-size:1.3rem; margin-top:2px; flex-shrink:0; }
-            .acl-effect-option .effect-title { font-weight:600; font-size:0.92rem; }
-            .acl-effect-option .effect-desc { font-size:0.82rem; color:var(--sl-color-neutral-600); margin-top:2px; line-height:1.4; }
-        </style>
-        <div id="restriction-user-name" style="margin-bottom:12px;font-weight:600;"></div>
-
-        <div class="acl-help" style="background:var(--sl-color-neutral-50);border:1px solid var(--sl-color-neutral-200);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:0.85rem;line-height:1.5;">
-            <div>
-                <strong>How access works.</strong>
-                No rules &rarr; user sees <strong>everything</strong>.
-                <strong>Deny</strong> rules hide specific folders.
-                <strong>Allow</strong> rules restrict the user to <em>only</em> those folders.
-                Deny always wins over Allow.
-            </div>
-            <sl-details summary="Show examples" style="margin-top:8px;">
-                <div style="font-size:0.85rem;line-height:1.55;">
-                    <p style="margin:0 0 10px;"><strong>1. Allow everything, hide a couple of folders.</strong><br>
-                    Add <em>only</em> Deny rules for the folders you want to hide. No Allow rules.<br>
-                    <span style="color:var(--sl-color-neutral-600);">Example: Deny <code>/HR/Salaries</code>, Deny <code>/Private</code>. User sees the rest of the tree.</span></p>
-
-                    <p style="margin:0 0 10px;"><strong>2. Restrict user to a few folders, hide everything else.</strong><br>
-                    Add <em>only</em> Allow rules for the folders you want them to see. Any folder outside becomes invisible automatically.<br>
-                    <span style="color:var(--sl-color-neutral-600);">Example: Allow <code>/Team/Marketing</code>. User sees only that folder and its subfolders.</span></p>
-
-                    <p style="margin:0;"><strong>3. Mix: allow a big branch but carve out exceptions.</strong><br>
-                    Add Allow for the branch, then Deny for the subfolders inside it that should stay hidden.<br>
-                    <span style="color:var(--sl-color-neutral-600);">Example: Allow <code>/Team</code>, Deny <code>/Team/Leadership</code>. User sees all of /Team except /Team/Leadership.</span></p>
-                </div>
-            </sl-details>
-        </div>
-
-        <!-- Folder list -->
-        <div style="margin-bottom:8px;">
-            <label id="folder-list-label" style="font-size:0.85rem;color:var(--sl-color-neutral-500);margin-bottom:4px;display:block;">Access Rules</label>
-        </div>
-        <div id="restriction-list" style="margin-bottom:16px;max-height:240px;overflow-y:auto;border:1px solid var(--sl-color-neutral-200);border-radius:4px;padding:4px 8px;">
-        </div>
-
-        <sl-alert id="restriction-error" variant="danger" closable style="display:none;margin-bottom:12px;">
-            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-            <span class="msg"></span>
-        </sl-alert>
-
-        <!-- Add new folder -->
-        <div style="position:relative;">
-            <div style="display:flex;gap:8px;align-items:flex-end;">
-                <sl-input id="restriction-folder-search" label="Add folder" placeholder="Type to search folders..." style="flex:1;" autocomplete="off"></sl-input>
-                <sl-select id="restriction-effect" label="Effect" value="deny" style="width:120px;">
-                    <sl-option value="deny">Deny</sl-option>
-                    <sl-option value="allow">Allow</sl-option>
-                </sl-select>
-                <sl-button id="btn-add-restriction" variant="primary" size="small">
-                    <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add
-                </sl-button>
-            </div>
-            <div id="restriction-readonly-row" style="margin-top:8px;display:none;">
-                <sl-switch id="restriction-readonly" size="small">Read-only (allow read, deny write)</sl-switch>
-            </div>
-            <div id="restriction-folder-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:56px;max-height:240px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
-        </div>
-    </sl-dialog>
+    <partial name="_FolderAccessDialog" />
 
 </div>
 </div>
@@ -268,29 +207,6 @@ fetch('/api-proxy/chat/settings/chat-enabled').then(function (r) { return r.ok ?
         if (cb) cb.disabled = !chatGloballyEnabled;
         if (hint) hint.style.display = chatGloballyEnabled ? 'none' : '';
     }).catch(function () {});
-
-var currentRestrictionUserId = null;
-var currentRestrictionType = 'user';
-var selectedFolderId = null;
-var searchTimer = null;
-
-function escapeHtml(text) {
-    var d = document.createElement('div');
-    d.textContent = text;
-    return d.innerHTML;
-}
-
-function showDlgError(alertId, message) {
-    var el = document.getElementById(alertId);
-    el.querySelector('.msg').textContent = message;
-    el.style.display = '';
-    el.open = true;
-}
-function hideDlgError(alertId) {
-    var el = document.getElementById(alertId);
-    el.open = false;
-    el.style.display = 'none';
-}
 
 function validatePasswordClient(pwd) {
     if (!pwd || pwd.length < 8) return 'Password must be at least 8 characters long.';
@@ -379,6 +295,9 @@ async function submitChangePassword() {
 // would actually promote someone. A user who is already a superadmin has their key slot.
 var editUserOriginalRole = null;
 
+// name -> RoleDto, filled from the API. Empty until the fetch lands; every reader tolerates that.
+var rolesByName = {};
+
 function updatePromoteHint() {
     var hint = document.getElementById('edit-promote-hint');
     if (!hint) return;
@@ -387,7 +306,67 @@ function updatePromoteHint() {
     hint.style.display = promoting ? '' : 'none';
 }
 
-document.getElementById('edit-role').addEventListener('sl-change', updatePromoteHint);
+// Says where the user's folder rules will come from after the change. Without it, assigning a
+// custom role looks like it does nothing — its rules live on the Roles page, not here.
+function updateRoleHint() {
+    var hint = document.getElementById('edit-role-hint');
+    if (!hint) return;
+    var name = document.getElementById('edit-role').value;
+    var role = rolesByName[name];
+    if (!role || role.isSystem) { hint.style.display = 'none'; return; }
+    hint.textContent = "Folder access comes from the '" + role.displayName + "' role (" +
+        role.ruleCount + (role.ruleCount === 1 ? ' rule' : ' rules') +
+        (role.basePolicy === 'closed' ? ', hidden by default' : '') +
+        '). Edit it on the Roles page.';
+    hint.style.display = '';
+}
+
+document.getElementById('edit-role').addEventListener('sl-change', function () {
+    updatePromoteHint();
+    updateRoleHint();
+});
+
+function optionsHtmlFor(roles) {
+    return roles.map(function (r) {
+        var label = escapeHtml(r.displayName || r.name);
+        if (!r.isSystem) label += ' <small style="opacity:.65;">(' + escapeHtml(r.name) + ')</small>';
+        return '<sl-option value="' + escapeHtml(r.name) + '">' + label + '</sl-option>';
+    }).join('');
+}
+
+// Populate both role dropdowns from the API. The hard-coded superadmin/user options in the
+// markup are the fallback: if this fetch fails the dialogs still work for the built-in roles
+// rather than offering an empty list.
+fetch('/api-proxy/roles').then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (roles) {
+        if (!roles || roles.length === 0) return;
+        roles.forEach(function (r) { rolesByName[r.name] = r; });
+        var html = optionsHtmlFor(roles);
+        ['add-role', 'edit-role'].forEach(function (id) {
+            var sel = document.getElementById(id);
+            if (!sel) return;
+            // Re-applying `value` after swapping the options matters: sl-select clears its value
+            // when the matching option disappears mid-swap.
+            var keep = sel.value;
+            sel.innerHTML = html;
+            sel.value = keep && rolesByName[keep] ? keep : 'user';
+        });
+        updateRoleHint();
+    }).catch(function () {});
+
+// Always the USER's dialog, whichever role they hold — their role's rules appear greyed out
+// alongside their own. For a custom-role user the API refuses to create new per-user rules, so
+// the add row is hidden; existing ones stay listed and removable. Routing those users straight
+// to the role editor instead would hide a rule that is still being enforced: rules created
+// while they were on the built-in role keep applying after a reassignment.
+function openUserFolderAccess(userId, username, roleName) {
+    var managedByRole = roleName && roleName !== 'user' && roleName !== 'superadmin';
+    folderAccess.open('user', userId,
+        managedByRole
+            ? 'User: ' + username + '  —  folder access comes from the ' + roleName + ' role'
+            : 'User: ' + username,
+        { inheritedRole: roleName || 'user', readOnly: managedByRole });
+}
 
 function openEditUser(userId, displayName, role, chatAccess) {
     hideDlgError('edit-user-error');
@@ -396,6 +375,7 @@ function openEditUser(userId, displayName, role, chatAccess) {
     document.getElementById('edit-role').value = role;
     editUserOriginalRole = role;
     updatePromoteHint();
+    updateRoleHint();
     var cb = document.getElementById('edit-chat-access');
     var hint = document.getElementById('edit-chat-access-hint');
     if (cb) {
@@ -438,217 +418,4 @@ async function submitEditUser() {
 });
 
 
-function openRestrictions(userId, userName) {
-    currentRestrictionUserId = userId;
-    currentRestrictionType = 'user';
-    document.getElementById('restriction-user-name').textContent = 'User: ' + userName;
-    loadRestrictions();
-    selectedFolderId = null;
-    document.getElementById('restriction-folder-search').value = '';
-    document.getElementById('restriction-folder-dropdown').style.display = 'none';
-    document.getElementById('restriction-effect').value = 'deny';
-    hideDlgError('restriction-error');
-    document.getElementById('dlg-restrictions').show();
-}
-
-function loadRestrictions() {
-    var url = '/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId;
-    fetch(url).then(function(r) { return r.json(); }).then(function(list) {
-        var container = document.getElementById('restriction-list');
-        if (!list || list.length === 0) {
-            container.innerHTML = '<div style="color:var(--sl-color-neutral-500);font-size:0.9rem;">No access rules — user can see everything</div>';
-            return;
-        }
-        container.innerHTML = list.map(function(r) {
-            var effectLabel = r.effect === 'allow' ? 'Allow' : 'Deny';
-            var roBadge = (r.effect === 'allow' && r.isReadOnly)
-                ? ' <sl-badge variant="warning" pill style="margin-left:4px;" title="Read-only"><sl-icon slot=\"prefix\" name=\"lock-fill\"></sl-icon>RO</sl-badge>'
-                : '';
-            var toggleBtn = r.effect === 'allow'
-                ? '<sl-icon-button name="lock' + (r.isReadOnly ? '-fill' : '') + '" label="Toggle read-only" onclick="toggleReadOnly(\'' + r.folderId + '\', ' + (r.isReadOnly ? 'false' : 'true') + ')"></sl-icon-button>'
-                : '';
-            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--sl-color-neutral-200);">' +
-                '<span><sl-icon name="folder2"></sl-icon> ' + escapeHtml(r.folderPath) +
-                ' <sl-badge variant="' + (r.effect === 'allow' ? 'success' : 'danger') + '" pill style="margin-left:8px;">' + effectLabel + '</sl-badge>' + roBadge + '</span>' +
-                '<span>' + toggleBtn +
-                '<sl-icon-button name="trash" label="Remove" onclick="removeRestriction(\'' + r.folderId + '\')"></sl-icon-button>' +
-                '</span></div>';
-        }).join('');
-    }).catch(function() {
-        document.getElementById('restriction-list').innerHTML = '<div style="color:var(--sl-color-danger);font-size:0.9rem;">Failed to load restrictions</div>';
-    });
-}
-
-var folderSearchInput = document.getElementById('restriction-folder-search');
-var folderDropdown = document.getElementById('restriction-folder-dropdown');
-var addBtn = document.getElementById('btn-add-restriction');
-
-folderSearchInput.addEventListener('sl-input', function() {
-    selectedFolderId = null;
-    hideDlgError('restriction-error');
-    clearTimeout(searchTimer);
-    var q = folderSearchInput.value.trim();
-    if (q.length < 1) { folderDropdown.style.display = 'none'; return; }
-    searchTimer = setTimeout(function() { searchFolders(q); }, 250);
-});
-
-async function searchFolders(q) {
-    try {
-        var resp = await fetch('/api-proxy/folders/search?q=' + encodeURIComponent(q) + '&limit=50');
-        var data = await resp.json();
-        var currentRestrictions = await fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId).then(function(r) { return r.json(); });
-        var restrictedIds = new Set(currentRestrictions.map(function(r) { return r.folderId; }));
-        var folders = (data.folders || []).filter(function(f) { return !restrictedIds.has(f.id); });
-        folders.sort(function(a, b) {
-            return a.path.length - b.path.length || a.path.localeCompare(b.path);
-        });
-
-        if (folders.length === 0) {
-            folderDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-neutral-500);font-size:0.9rem;">No matching folders</div>';
-        } else {
-            folderDropdown.innerHTML = folders.map(function(f) {
-                return '<div class="folder-search-item" data-id="' + f.id + '" data-path="' + escapeHtml(f.path) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);">' +
-                    '<sl-icon name="folder2" style="margin-right:6px;"></sl-icon>' + escapeHtml(f.path) + '</div>';
-            }).join('');
-            if (data.hasMore) {
-                folderDropdown.innerHTML += '<div style="padding:6px 12px;color:var(--sl-color-neutral-400);font-size:0.8rem;text-align:center;">Type more to narrow results...</div>';
-            }
-        }
-        folderDropdown.style.display = 'block';
-    } catch (e) {
-        folderDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-danger-600);">Search failed</div>';
-        folderDropdown.style.display = 'block';
-    }
-}
-
-folderDropdown.addEventListener('click', function(e) {
-    var item = e.target.closest('.folder-search-item');
-    if (!item) return;
-    selectedFolderId = item.dataset.id;
-    folderSearchInput.value = item.dataset.path;
-    folderDropdown.style.display = 'none';
-    hideDlgError('restriction-error');
-});
-
-folderDropdown.addEventListener('mouseover', function(e) {
-    var item = e.target.closest('.folder-search-item');
-    if (item) item.style.background = 'var(--sl-color-primary-50)';
-});
-folderDropdown.addEventListener('mouseout', function(e) {
-    var item = e.target.closest('.folder-search-item');
-    if (item) item.style.background = '';
-});
-
-document.addEventListener('click', function(e) {
-    if (!e.target.closest('#restriction-folder-search') && !e.target.closest('#restriction-folder-dropdown')) {
-        folderDropdown.style.display = 'none';
-    }
-});
-
-async function resolveFolderByPath(path) {
-    var resp = await fetch('/api-proxy/folders/search?q=' + encodeURIComponent(path) + '&limit=100');
-    if (!resp.ok) return null;
-    var data = await resp.json();
-    var folders = data.folders || [];
-    if (folders.length === 0) return null;
-
-    // Normalize: strip trailing slash(es), lower-case, ensure leading slash.
-    var needle = path.replace(/\/+$/, '').toLowerCase();
-    if (!needle.startsWith('/')) needle = '/' + needle;
-
-    // Server already sorted shortest-path-first, so the first match wins
-    // when multiple folders share the same last segment.
-
-    // 1. Exact full-path match.
-    for (var i = 0; i < folders.length; i++) {
-        var p = folders[i].path.replace(/\/+$/, '').toLowerCase();
-        if (p === needle) return folders[i];
-    }
-
-    // 2. Fallback: last-segment match (user typed a folder name like "uManage").
-    var segment = needle.split('/').pop();
-    if (segment) {
-        for (var j = 0; j < folders.length; j++) {
-            var lastSeg = folders[j].path.replace(/\/+$/, '').split('/').pop().toLowerCase();
-            if (lastSeg === segment) return folders[j];
-        }
-    }
-    return null;
-}
-
-async function addRestriction() {
-    hideDlgError('restriction-error');
-    var typed = folderSearchInput.value.trim();
-    if (!typed) {
-        showDlgError('restriction-error', 'Enter a folder path or pick one from the list.');
-        return;
-    }
-
-    var folderId = selectedFolderId;
-    if (!folderId) {
-        addBtn.loading = true;
-        var match = await resolveFolderByPath(typed);
-        addBtn.loading = false;
-        if (!match) {
-            showDlgError('restriction-error', "Folder '" + typed + "' not found.");
-            return;
-        }
-        folderId = match.id;
-    }
-
-    addBtn.loading = true;
-    var effect = document.getElementById('restriction-effect').value || 'deny';
-    var isReadOnly = effect === 'allow' && document.getElementById('restriction-readonly').checked;
-    var resp = await fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderId: folderId, effect: effect, isReadOnly: isReadOnly })
-    });
-    addBtn.loading = false;
-    if (resp.ok) {
-        selectedFolderId = null;
-        folderSearchInput.value = '';
-        folderDropdown.style.display = 'none';
-        loadRestrictions();
-    } else {
-        var msg = 'Failed to add restriction';
-        try { var data = await resp.json(); if (data && data.error) msg = data.error; } catch (e) {}
-        showDlgError('restriction-error', msg);
-    }
-}
-
-function removeRestriction(folderId) {
-    fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId + '/' + folderId, {
-        method: 'DELETE'
-    }).then(function(r) {
-        if (r.ok) {
-            loadRestrictions();
-        } else {
-            showDlgError('restriction-error', 'Failed to remove restriction');
-        }
-    });
-}
-
-function toggleReadOnly(folderId, newValue) {
-    fetch('/api-proxy/restrictions/' + currentRestrictionType + '/' + currentRestrictionUserId + '/' + folderId, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isReadOnly: newValue })
-    }).then(function(r) {
-        if (r.ok) {
-            loadRestrictions();
-        } else {
-            showDlgError('restriction-error', 'Failed to toggle read-only flag');
-        }
-    });
-}
-
-// Show/hide the read-only switch based on selected effect.
-document.getElementById('restriction-effect').addEventListener('sl-change', function() {
-    var sel = document.getElementById('restriction-effect').value;
-    document.getElementById('restriction-readonly-row').style.display = sel === 'allow' ? '' : 'none';
-    if (sel !== 'allow') document.getElementById('restriction-readonly').checked = false;
-});
-
-addBtn.addEventListener('click', addRestriction);
 </script>

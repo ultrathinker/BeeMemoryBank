@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Custom roles with role-level folder permissions (2026-08-27)
+
+Folder permissions were per-user only. On a vault with ~20 users, hiding one folder from everyone
+meant opening all 20 users and adding the same deny rule to each — and remembering to repeat it for
+every new account, or the folder leaked to the next hire.
+
+Roles now carry folder rules of their own.
+
+- **`tbl_role`** — seeded with the two system roles (`superadmin`, `user`, `is_system = 1`) plus any
+  number of custom roles a superadmin creates. Custom roles sit at exactly the same privilege tier
+  as `user`: every authorization check in the codebase tests for the literal `"superadmin"`, so a
+  new role can never grant an administrative capability — it only changes which folders its holders
+  see.
+- **`tbl_role_folder_acl_entry`** — the same rule shape as the per-user ACL table, keyed by role.
+- **Effective rules = union** of the holder's role rules and their own per-user rules; the existing
+  deny-wins prefix matcher then runs unchanged over the merged sets. A per-user allow cannot reopen
+  a role deny, and a read-only marking sticks whichever side sets it.
+- **The headline case needs no custom role at all:** rules can be attached to the built-in `user`
+  role, so "hide `/HR` from every regular user" is one rule and zero per-user edits.
+- **`base_policy` (`open` | `closed`)** makes "this role has no allow rows" explicit instead of
+  implicit. New custom roles default to `closed`, so a role assigned before its rules are finished
+  cannot expose the vault; the built-ins stay `open`, which is exactly their historical behaviour.
+- **Roles do not inherit from one another** and **`Role.Name` is immutable** — a rename would need
+  one transaction spanning two repositories that each open their own connection, and a half-applied
+  rename leaves users pointing at a role that no longer exists, which resolves fail-closed.
+- Agents inherit their owner's role rules for free: `AgentAuthMiddleware` already resolves the
+  owner's user id, and every ACL consumer funnels through the same resolver.
+- New superadmin UI: a **Roles** page (create/edit/delete, folder rules per role) and role-aware
+  dropdowns on **Users**. The folder-access dialog moved to a shared partial so the two pages
+  cannot drift.
+
+Guards, each with a regression test: reserved and malformed role names refused (a role differing
+from `superadmin` only in case would be unprivileged to `CallerIdentity`'s ordinal check and
+privileged to the Web layer's case-insensitive one); system roles cannot be deleted; a role users
+still hold cannot be deleted; folder rules are refused on the `superadmin` role and on superadmin
+users, because superadmins bypass them and the rule would be silently inert; role names are stored
+canonically, since a mis-cased `tbl_user.role` would pass a NOCASE lookup and then fail every
+ordinal comparison downstream.
+
+### Fixed
+
+- **Folder ACLs resolved for an unidentified caller granted full access.** `GetFullAccessInfoAsync`
+  returned empty sets for a null user id, which `IsAccessDenied` reads as "no restrictions". The
+  endpoints that consume those sets directly (`ArticleEndpoints`, `TreeEndpoints`, `CopyEndpoints`,
+  …) bypass `CallerScopeMiddleware`'s own fail-closed default, so an agent whose owner could not be
+  resolved saw the whole vault. Now deny-all, matching the middleware. A user id that no longer
+  resolves (deactivated, deleted) fails closed the same way.
+- **A folder rename arriving over sync left stale ACL paths.** The cache stores resolved paths, not
+  folder ids; `FolderService` invalidated on local renames but `EventApplier` did not, so a rule on
+  the old path kept being enforced against a path that no longer existed while the folder became
+  reachable under its new name.
+- **The folder-ACL cache was keyed by user id alone.** User ids restart at 1 in every database, so
+  two vaults open in one process answered for each other's users. Keys are now namespaced by
+  database (`IDbConnectionFactory.DatabaseId`).
+- **A user's cached folder rules survived their own role change** for up to the 60-second TTL —
+  permissive-stale whenever the new role was the more restricted one.
+- **`RemoveSlotAsync`-style dangling reference, for roles:** deleting a role out from under its
+  holders is refused rather than silently stranding them on a role that resolves to no access.
+- **The folder-ACL cache survived a node reset and a snapshot restore.** Both replace the database
+  under an unchanged path while user ids restart at 1, so the per-database key namespacing does not
+  help — a node re-initialized inside the 60-second TTL handed the new account the wiped account's
+  permissions. Cleared explicitly in the reset handler and in both restore paths.
+- Role and role-rule rows are stripped from filtered snapshot variants and from a node wipe, like
+  users and per-user ACLs. They are cleared rather than dropped: `SecretTables` DROPs its tables and
+  `tbl_migration` is not stripped, so a restored node would believe migration 009 had run while the
+  tables were gone.
+
 ### Security Hardening (Pre-GitHub Audit, 6 waves + mobile)
 
 #### Crypto / Key Management

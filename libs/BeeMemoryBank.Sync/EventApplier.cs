@@ -37,6 +37,7 @@ public partial class EventApplier(
     IRestoreInitiator restoreInitiator,
     IDekRotationStateRepository dekRotationStateRepo,
     IDekRotationApplier dekRotationApplier,
+    FolderAccessService folderAccess,
     ILogger<EventApplier> logger)
 {
     // whitelistRepoWrite is the same whitelist, just separated for read/write intent clarity

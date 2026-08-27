@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Core.Tests;
 
@@ -14,6 +15,8 @@ public class UserServiceTests : TestFixture
     private UserService Users = null!;
     private UserRepository UserRepo = null!;
     private KeySlotRepository KeySlots = null!;
+    private RoleRepository Roles = null!;
+    private FolderAccessService FolderAccess = null!;
 
     public override async Task InitializeAsync()
     {
@@ -23,7 +26,17 @@ public class UserServiceTests : TestFixture
 
         UserRepo = new UserRepository(Factory);
         KeySlots = new KeySlotRepository(Factory);
-        Users = new UserService(UserRepo, KeySlots, Session);
+        Roles = new RoleRepository(Factory);
+        FolderAccess = new FolderAccessService(new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton<Core.Interfaces.IDbConnectionFactory>(_ => Factory)
+            .AddScoped<Core.Interfaces.IUserRepository>(_ => UserRepo)
+            .AddScoped<Core.Interfaces.IRoleRepository>(_ => Roles)
+            .AddScoped<Core.Interfaces.IRoleAclRepository>(_ => new RoleAclRepository(Factory))
+            .AddScoped<Core.Interfaces.IFolderAclRepository>(_ => new FolderAclRepository(Factory))
+            .AddScoped<Core.Interfaces.IFolderRepository>(_ => new FolderRepository(Factory, ScopeHolder))
+            .AddScoped(_ => ScopeHolder)
+            .BuildServiceProvider());
+        Users = new UserService(UserRepo, KeySlots, Session, Roles, FolderAccess);
     }
 
     private async Task<User> CreateRegularUserAsync(string username = "bob", string password = "BobPass1")
@@ -352,5 +365,133 @@ public class UserServiceTests : TestFixture
 
         (await UserRepo.GetByIdAsync(carol.Id))!.KeySlotId.Should().Be(stored.KeySlotId);
         (await KeySlots.GetAllAsync()).Should().HaveCount(slotsBefore);
+    }
+
+    // ---- custom roles -----------------------------------------------------------------
+
+    private async Task CreateCustomRoleAsync(string name = "user-developer")
+        => await Roles.CreateAsync(new Role
+        {
+            Name = name, DisplayName = name, IsSystem = false,
+            BasePolicy = RoleBasePolicy.Open, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+
+    [Fact]
+    public async Task Create_AcceptsACustomRole()
+    {
+        await CreateCustomRoleAsync();
+
+        var bob = await Users.CreateUserAsync("bob", "Bob", "BobPass1", "user-developer");
+
+        bob.Role.Should().Be("user-developer");
+        bob.KeySlotId.Should().BeNull("only superadmins hold a key slot");
+    }
+
+    [Fact]
+    public async Task Create_StoresTheCanonicalRoleName_NotTheCallersCasing()
+    {
+        // tbl_role.name is COLLATE NOCASE so "Superadmin" resolves — but almost everything that
+        // reads tbl_user.role compares it with an ordinal ==: CallerIdentity's X-User-Role check,
+        // the key-slot branch here, FolderAccessService's superadmin bypass. Storing the caller's
+        // casing produces a superadmin with no key slot whom the middleware treats as an ordinary
+        // user.
+        var bob = await Users.CreateUserAsync("bob", "Bob", "BobPass1", "SUPERADMIN");
+
+        bob.Role.Should().Be(UserRoles.Superadmin);
+        bob.KeySlotId.Should().NotBeNull("the key-slot branch keys off an ordinal role comparison");
+    }
+
+    [Fact]
+    public async Task Update_TreatsADifferentlyCasedRoleAsNoChange()
+    {
+        var bob = await CreateRegularUserAsync();
+        var stampBefore = await UserRepo.GetSecurityStampAsync(bob.Id);
+
+        await Users.UpdateUserAsync(bob.Id, "Bob", "USER");
+
+        (await UserRepo.GetByIdAsync(bob.Id))!.Role.Should().Be(UserRoles.User);
+        (await UserRepo.GetSecurityStampAsync(bob.Id))
+            .Should().Be(stampBefore, "a no-op role edit must not log everyone's sessions out");
+    }
+
+    [Fact]
+    public async Task Create_RejectsARoleThatDoesNotExist()
+    {
+        // Roles are rows now, so the check is a lookup rather than a hard-coded pair — but an
+        // unknown role must still never reach tbl_user, because it resolves fail-closed.
+        var act = async () => await Users.CreateUserAsync("bob", "Bob", "BobPass1", "user-ghost");
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task Update_RejectsARoleThatDoesNotExist()
+    {
+        var bob = await CreateRegularUserAsync();
+
+        var act = async () => await Users.UpdateUserAsync(bob.Id, "Bob", "user-ghost");
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        (await UserRepo.GetByIdAsync(bob.Id))!.Role.Should().Be(UserRoles.User);
+    }
+
+    [Fact]
+    public async Task DemotingToACustomRole_HitsTheSameLastSuperadminGuard()
+    {
+        // Before custom roles, "demote" and "change to the 'user' role" were the same thing, so
+        // the guard tested for that exact target. Any move off superadmin is a demotion.
+        await CreateCustomRoleAsync();
+        var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
+
+        var act = async () => await Users.UpdateUserAsync(admin.Id, "admin", "user-developer");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*last superadmin*");
+    }
+
+    [Fact]
+    public async Task DemotingToACustomRole_DropsTheKeySlot()
+    {
+        await CreateCustomRoleAsync();
+        var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
+        var slotId = carol.KeySlotId!.Value;
+
+        await Users.UpdateUserAsync(carol.Id, "Carol", "user-developer");
+
+        var updated = (await UserRepo.GetByIdAsync(carol.Id))!;
+        updated.Role.Should().Be("user-developer");
+        updated.KeySlotId.Should().BeNull();
+        (await KeySlots.GetAllAsync()).Should().NotContain(s => s.SlotId == slotId);
+    }
+
+    [Fact]
+    public async Task ChangingRole_DropsTheCachedFolderRulesImmediately()
+    {
+        // The ACL cache is keyed per user and holds rules resolved through the PREVIOUS role.
+        // Keeping the old (more permissive) answer for the cache TTL after a demotion is a
+        // security bug, not a staleness annoyance.
+        await CreateCustomRoleAsync("user-locked");
+        var folderRepo = new FolderRepository(Factory, ScopeHolder);
+        ScopeHolder.Scope = SystemCallerScope.Instance;
+        var folderId = Guid.NewGuid();
+        await folderRepo.CreateAsync(new Folder
+        {
+            Id = folderId, Path = "/HR", Name = "HR", ParentPath = "/",
+            Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        await new RoleAclRepository(Factory).AddAsync(new RoleAclEntry
+        {
+            RoleName = "user-locked", FolderId = folderId,
+            Effect = AclEffect.Deny, CreatedAt = DateTime.UtcNow
+        });
+
+        var bob = await CreateRegularUserAsync();
+        var (deny, allow, _) = await FolderAccess.GetFullAccessInfoAsync(bob.Id);
+        FolderAccessService.IsAccessDenied(deny, allow, "/HR").Should().BeFalse();
+
+        await Users.UpdateUserAsync(bob.Id, "Bob", "user-locked");
+
+        (deny, allow, _) = await FolderAccess.GetFullAccessInfoAsync(bob.Id);
+        FolderAccessService.IsAccessDenied(deny, allow, "/HR").Should().BeTrue();
     }
 }

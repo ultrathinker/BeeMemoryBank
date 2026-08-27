@@ -37,6 +37,21 @@ public interface IUserRepository
     Task ClearKeySlotAsync(int slotId);
 
     /// <summary>
+    /// Ids of the active users holding this role. Used to fan out folder-ACL cache
+    /// invalidation when a role's rules change — the cache is keyed per user, so editing one
+    /// role has to reach every user that role resolves for. Matching is case-insensitive to
+    /// stay consistent with tbl_role.name's COLLATE NOCASE key.
+    /// </summary>
+    Task<List<int>> GetUserIdsByRoleAsync(string role);
+
+    /// <summary>
+    /// Active-user count per role name, for the roles list UI and for the "refuse to delete a
+    /// role someone still holds" guard. Roles nobody holds are absent from the dictionary
+    /// rather than present with a zero.
+    /// </summary>
+    Task<Dictionary<string, int>> CountActiveUsersPerRoleAsync();
+
+    /// <summary>
     /// Reads the node-local security stamp for a user, IGNORING the is_active filter so a
     /// recently-deleted (IsActive=0) user still resolves — deletion bumps the stamp, so a
     /// pre-deletion cookie's stamp will mismatch and be rejected. Returns null if the user

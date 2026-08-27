@@ -1,0 +1,324 @@
+@page
+@model BeeMemoryBank.Web.Pages.RolesModel
+@{
+    ViewData["Title"] = "Roles";
+}
+
+<partial name="_Sidebar" />
+
+<div id="page-content">
+<div class="main-content">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <h2 style="margin:0;"><sl-icon name="shield-lock"></sl-icon> Roles</h2>
+        <div style="display:flex;gap:8px;">
+            <sl-button size="small" variant="default" href="/Users">
+                <sl-icon slot="prefix" name="people"></sl-icon> Users
+            </sl-button>
+            <sl-button size="small" variant="success" onclick="openAddRole()">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Role
+            </sl-button>
+        </div>
+    </div>
+
+    <p class="text-muted text-sm" style="margin:0 0 20px;max-width:70ch;">
+        A role's folder rules apply to every user who holds it — including users added later, so a
+        folder hidden here stays hidden for the next hire without anyone remembering to repeat it.
+        Rules on <strong>User</strong> apply to everyone who has no other role. Superadmins bypass
+        folder rules entirely and cannot be restricted.
+    </p>
+
+    @if (!string.IsNullOrEmpty(Model.SuccessMessage))
+    {
+        <sl-alert variant="success" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="check-circle"></sl-icon>
+            @Model.SuccessMessage
+        </sl-alert>
+    }
+    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+    {
+        <sl-alert variant="danger" open closable style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            @Model.ErrorMessage
+        </sl-alert>
+    }
+
+    @if (Model.Roles != null && Model.Roles.Count > 0)
+    {
+        <div class="card" style="padding:0;overflow:hidden;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>Role</th>
+                        <th>Name</th>
+                        <th>When no Allow rules</th>
+                        <th>Users</th>
+                        <th>Rules</th>
+                        <th style="text-align:right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var role in Model.Roles)
+                    {
+                        var isSuperadmin = role.Name == "superadmin";
+                        <tr>
+                            <td>
+                                <strong>@role.DisplayName</strong>
+                                @if (role.IsSystem)
+                                {
+                                    <sl-badge variant="neutral" pill style="margin-left:6px;">built-in</sl-badge>
+                                }
+                                @if (!string.IsNullOrEmpty(role.Description))
+                                {
+                                    <div class="text-muted text-sm" style="margin-top:2px;">@role.Description</div>
+                                }
+                            </td>
+                            <td><code>@role.Name</code></td>
+                            <td>
+                                @if (isSuperadmin)
+                                {
+                                    <span class="text-muted text-sm">bypasses all rules</span>
+                                }
+                                else if (role.BasePolicy == "open")
+                                {
+                                    <sl-badge variant="success" pill>sees everything</sl-badge>
+                                }
+                                else
+                                {
+                                    <sl-badge variant="warning" pill>sees nothing</sl-badge>
+                                }
+                            </td>
+                            <td>@role.UserCount</td>
+                            <td>@(isSuperadmin ? "—" : role.RuleCount.ToString())</td>
+                            <td style="text-align:right;">
+                                @if (!isSuperadmin)
+                                {
+                                    <sl-icon-button name="shield-lock" label="Folder rules"
+                                        data-name="@role.Name" data-display="@role.DisplayName"
+                                        onclick="openRoleFolderAccess(this.dataset.name, this.dataset.display)">
+                                    </sl-icon-button>
+                                    <sl-icon-button name="pencil" label="Edit"
+                                        data-name="@role.Name" data-display="@role.DisplayName"
+                                        data-description="@role.Description" data-policy="@role.BasePolicy"
+                                        onclick="openEditRole(this.dataset.name, this.dataset.display, this.dataset.description, this.dataset.policy)">
+                                    </sl-icon-button>
+                                }
+                                @if (!role.IsSystem)
+                                {
+                                    <sl-icon-button name="trash" label="Delete"
+                                        data-name="@role.Name" data-users="@role.UserCount"
+                                        onclick="deleteRole(this.dataset.name, this.dataset.users)">
+                                    </sl-icon-button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="text-align:center;padding:40px;">
+            <sl-icon name="shield-lock" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <p class="text-muted">Could not load roles</p>
+        </div>
+    }
+
+    <sl-dialog id="dlg-add-role" label="Add Role">
+        <sl-alert id="add-role-error" variant="danger" closable style="display:none;margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <span class="msg"></span>
+        </sl-alert>
+        <form id="form-add-role" onsubmit="return false;">
+            <div style="margin-bottom:16px;">
+                <sl-input id="add-role-name" label="Name" required autocomplete="off"
+                    help-text="Lower-case letters, digits, '-' and '_'. Permanent — it is stored on every user who holds the role."></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input id="add-role-display" label="Display Name" autocomplete="off"
+                    help-text="Leave blank to use the name."></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input id="add-role-description" label="Description" autocomplete="off"></sl-input>
+            </div>
+            <div style="margin-bottom:8px;">
+                <sl-select id="add-role-policy" label="When the role has no Allow rules" value="closed">
+                    <sl-option value="closed">Sees nothing (recommended)</sl-option>
+                    <sl-option value="open">Sees everything except its Deny rules</sl-option>
+                </sl-select>
+                <p class="text-muted text-sm" style="margin:6px 0 0;">
+                    "Sees nothing" is the safe default: a role assigned before you finish
+                    configuring it cannot expose the vault. Adding any Allow rule makes this
+                    setting irrelevant — an Allow list is always a whitelist.
+                </p>
+            </div>
+        </form>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-role').hide()">Cancel</sl-button>
+        <sl-button id="btn-add-role-submit" slot="footer" variant="primary" onclick="submitAddRole()">Create Role</sl-button>
+    </sl-dialog>
+
+    <sl-dialog id="dlg-edit-role" label="Edit Role">
+        <sl-alert id="edit-role-error" variant="danger" closable style="display:none;margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <span class="msg"></span>
+        </sl-alert>
+        <form id="form-edit-role" onsubmit="return false;">
+            <input type="hidden" id="edit-role-name" />
+            <p id="edit-role-name-label" class="text-muted text-sm" style="margin:0 0 16px;"></p>
+            <div style="margin-bottom:16px;">
+                <sl-input id="edit-role-display" label="Display Name" required autocomplete="off"></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input id="edit-role-description" label="Description" autocomplete="off"></sl-input>
+            </div>
+            <div style="margin-bottom:8px;">
+                <sl-select id="edit-role-policy" label="When the role has no Allow rules">
+                    <sl-option value="closed">Sees nothing</sl-option>
+                    <sl-option value="open">Sees everything except its Deny rules</sl-option>
+                </sl-select>
+                <p id="edit-role-policy-warning" class="text-muted text-sm" style="margin:6px 0 0;display:none;color:var(--sl-color-warning-700);">
+                    This role has no Allow rules, so switching to "sees nothing" hides the entire
+                    vault from everyone who holds it, immediately.
+                </p>
+            </div>
+        </form>
+        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-edit-role').hide()">Cancel</sl-button>
+        <sl-button id="btn-edit-role-submit" slot="footer" variant="primary" onclick="submitEditRole()">Save</sl-button>
+    </sl-dialog>
+
+    <partial name="_FolderAccessDialog" />
+
+</div>
+</div>
+
+<script>
+// Whether the role being edited has any ALLOW rules. base_policy only decides what an EMPTY
+// allow list means, so a role with deny rules but no allow rules still goes dark when switched
+// to "closed" — counting all rules would suppress the warning exactly there. Fetched when the
+// dialog opens rather than embedded from the page model, so it cannot go stale against the
+// rules editor. null = not known yet.
+var editRoleHasAllowRules = null;
+
+async function postJson(url, body, method) {
+    var resp = await fetch(url, {
+        method: method || 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body === null ? undefined : JSON.stringify(body)
+    });
+    if (resp.ok) return { ok: true };
+    var msg = 'Request failed';
+    try {
+        var data = await resp.json();
+        if (data && data.error) msg = data.error;
+    } catch (e) { }
+    return { ok: false, error: msg };
+}
+
+function openAddRole() {
+    hideDlgError('add-role-error');
+    document.getElementById('add-role-name').value = '';
+    document.getElementById('add-role-display').value = '';
+    document.getElementById('add-role-description').value = '';
+    document.getElementById('add-role-policy').value = 'closed';
+    document.getElementById('dlg-add-role').show();
+    setTimeout(function () { document.getElementById('add-role-name').focus(); }, 100);
+}
+
+async function submitAddRole() {
+    hideDlgError('add-role-error');
+    var name = document.getElementById('add-role-name').value.trim();
+    if (!name) { showDlgError('add-role-error', 'Name is required.'); return; }
+
+    var btn = document.getElementById('btn-add-role-submit');
+    btn.loading = true;
+    var result = await postJson('/api-proxy/roles', {
+        name: name,
+        displayName: document.getElementById('add-role-display').value.trim() || name,
+        description: document.getElementById('add-role-description').value.trim() || null,
+        basePolicy: document.getElementById('add-role-policy').value
+    });
+    btn.loading = false;
+    if (result.ok) window.location = '?msg=' + encodeURIComponent("Role '" + name + "' created");
+    else showDlgError('add-role-error', result.error);
+}
+
+function updatePolicyWarning() {
+    var warn = document.getElementById('edit-role-policy-warning');
+    if (!warn) return;
+    var closing = document.getElementById('edit-role-policy').value === 'closed';
+    // Until the fetch lands, stay quiet rather than warn wrongly in either direction.
+    warn.style.display = (closing && editRoleHasAllowRules === false) ? '' : 'none';
+}
+
+document.getElementById('edit-role-policy').addEventListener('sl-change', updatePolicyWarning);
+
+function openEditRole(name, displayName, description, basePolicy) {
+    hideDlgError('edit-role-error');
+    document.getElementById('edit-role-name').value = name;
+    document.getElementById('edit-role-name-label').textContent = 'Name: ' + name + ' (cannot be changed)';
+    document.getElementById('edit-role-display').value = displayName || '';
+    document.getElementById('edit-role-description').value = description || '';
+    document.getElementById('edit-role-policy').value = basePolicy || 'closed';
+    editRoleHasAllowRules = null;
+    updatePolicyWarning();
+    document.getElementById('dlg-edit-role').show();
+
+    fetch('/api-proxy/restrictions/role/' + encodeURIComponent(name))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (rules) {
+            if (!rules) return;
+            editRoleHasAllowRules = rules.some(function (x) { return x.effect === 'allow'; });
+            // Only apply if the dialog is still showing this role.
+            if (document.getElementById('edit-role-name').value === name) updatePolicyWarning();
+        }).catch(function () {});
+}
+
+async function submitEditRole() {
+    hideDlgError('edit-role-error');
+    var name = document.getElementById('edit-role-name').value;
+    var displayName = document.getElementById('edit-role-display').value.trim();
+    if (!displayName) { showDlgError('edit-role-error', 'Display Name is required.'); return; }
+
+    var btn = document.getElementById('btn-edit-role-submit');
+    btn.loading = true;
+    var result = await postJson('/api-proxy/roles/' + encodeURIComponent(name), {
+        displayName: displayName,
+        description: document.getElementById('edit-role-description').value.trim() || null,
+        basePolicy: document.getElementById('edit-role-policy').value
+    }, 'PUT');
+    btn.loading = false;
+    if (result.ok) window.location = '?msg=' + encodeURIComponent('Role updated');
+    else showDlgError('edit-role-error', result.error);
+}
+
+async function deleteRole(name, userCount) {
+    var count = parseInt(userCount, 10) || 0;
+    if (count > 0) {
+        alert("'" + name + "' is still assigned to " + count + " user(s). Reassign them first — " +
+              "a user whose role no longer exists loses access to every folder.");
+        return;
+    }
+    if (!confirm("Delete role '" + name + "' and all of its folder rules?")) return;
+
+    var result = await postJson('/api-proxy/roles/' + encodeURIComponent(name), null, 'DELETE');
+    if (result.ok) window.location = '?msg=' + encodeURIComponent("Role '" + name + "' deleted");
+    else window.location = '?err=' + encodeURIComponent(result.error);
+}
+
+function openRoleFolderAccess(name, displayName) {
+    folderAccess.open('role', name,
+        'Role: ' + displayName + '  —  applies to every user with this role');
+}
+
+['form-add-role', 'form-edit-role'].forEach(function (fid) {
+    var handlers = { 'form-add-role': submitAddRole, 'form-edit-role': submitEditRole };
+    var form = document.getElementById(fid);
+    if (!form) return;
+    form.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && e.target.tagName && e.target.tagName.toLowerCase() !== 'textarea') {
+            e.preventDefault();
+            handlers[fid]();
+        }
+    });
+});
+</script>

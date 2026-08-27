@@ -51,6 +51,10 @@ public class DbConnectionFactory : IDbConnectionFactory, IDisposable
         return factory;
     }
 
+    /// <summary>The connection string is what actually distinguishes one database from
+    /// another here, and it is not a secret (a local file path or a temp path).</summary>
+    public string DatabaseId => _connectionString;
+
     public IDbConnection CreateConnection()
     {
         var connection = new SqliteConnection(_connectionString);
