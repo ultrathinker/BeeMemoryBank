@@ -223,10 +223,18 @@ async function postJson(url, body, method) {
         body: JSON.stringify(body)
     });
     if (resp.ok) return { ok: true };
-    var msg = 'Request failed';
+    // Never a bare "Request failed": if the body is not JSON with an `error`, show the status and
+    // whatever text came back, so an opaque failure is still diagnosable from the dialog.
+    var msg = 'Request failed (HTTP ' + resp.status + ')';
     try {
-        var data = await resp.json();
-        if (data && data.error) msg = data.error;
+        var text = await resp.text();
+        if (text) {
+            try {
+                var data = JSON.parse(text);
+                if (data && data.error) msg = data.error;
+                else msg += ': ' + text.slice(0, 300);
+            } catch (e) { msg += ': ' + text.slice(0, 300); }
+        }
     } catch (e) {}
     return { ok: false, error: msg };
 }

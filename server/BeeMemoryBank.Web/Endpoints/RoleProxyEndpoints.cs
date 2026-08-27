@@ -24,16 +24,38 @@ public static class RoleProxyEndpoints
 
         app.MapPost("/api-proxy/roles", async (HttpContext ctx, ApiClient api) =>
         {
-            var req = await ctx.Request.ReadFromJsonAsync<CreateRoleProxyRequest>();
-            if (req == null) return Results.BadRequest();
+            // ReadFromJsonAsync throws on a malformed body, and on .NET 9+ also when a
+            // non-optional constructor parameter is absent from the JSON. Unhandled, that becomes
+            // a 500 with an EMPTY body — which the browser cannot read an error out of, so the
+            // dialog falls back to a bare "Request failed" and the operator learns nothing.
+            CreateRoleProxyRequest? req;
+            try
+            {
+                req = await ctx.Request.ReadFromJsonAsync<CreateRoleProxyRequest>();
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return Results.Json(new { error = "Malformed request." }, statusCode: 400);
+            }
+            if (req == null) return Results.Json(new { error = "Empty request." }, statusCode: 400);
+
             var (role, error, status) = await api.CreateRoleAsync(req.Name, req.DisplayName, req.Description, req.BasePolicy);
             return role != null ? Results.Ok(role) : Results.Json(new { error }, statusCode: status);
         }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
         app.MapPut("/api-proxy/roles/{name}", async (string name, HttpContext ctx, ApiClient api) =>
         {
-            var req = await ctx.Request.ReadFromJsonAsync<UpdateRoleProxyRequest>();
-            if (req == null) return Results.BadRequest();
+            UpdateRoleProxyRequest? req;
+            try
+            {
+                req = await ctx.Request.ReadFromJsonAsync<UpdateRoleProxyRequest>();
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return Results.Json(new { error = "Malformed request." }, statusCode: 400);
+            }
+            if (req == null) return Results.Json(new { error = "Empty request." }, statusCode: 400);
+
             var (ok, error, status) = await api.UpdateRoleAsync(name, req.DisplayName, req.Description, req.BasePolicy);
             return ok ? Results.NoContent() : Results.Json(new { error }, statusCode: status);
         }).RequireAuthorization(policy => policy.RequireRole("superadmin"));

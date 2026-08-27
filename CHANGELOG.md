@@ -50,6 +50,17 @@ ordinal comparison downstream.
 
 ### Fixed
 
+- **A role name typed with capitals was refused instead of accepted.** The restricted alphabet
+  exists so that no role can differ from a privileged one only by case — storing the name
+  lower-cased delivers exactly that, while rejecting `OneFolder` outright turned an ordinary typo
+  into a dead end. Names are now folded to lower case before validation (the reserved-name list
+  still stops `SuperAdmin`, and characters outside the alphabet are still refused with a message),
+  and the Add Role field normalizes as you type so the stored name is never a surprise.
+- **A failed request in the Users and Roles dialogs could show a bare "Request failed".** When a
+  response body was not JSON with an `error` field — an empty 500 from a deserialization failure,
+  for instance — the message carried no status and no server text. Both dialogs now show the HTTP
+  status and whatever the body contained, and the role proxy routes translate a malformed body
+  into a real message instead of an empty 400.
 - **Folder ACLs resolved for an unidentified caller granted full access.** `GetFullAccessInfoAsync`
   returned empty sets for a null user id, which `IsAccessDenied` reads as "no restrictions". The
   endpoints that consume those sets directly (`ArticleEndpoints`, `TreeEndpoints`, `CopyEndpoints`,

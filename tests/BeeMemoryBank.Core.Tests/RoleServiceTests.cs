@@ -66,7 +66,6 @@ public class RoleServiceTests : TestFixture
     // ---- naming -----------------------------------------------------------------------
 
     [Theory]
-    [InlineData("Dev")]                 // upper case
     [InlineData("-dev")]                // must start alphanumeric
     [InlineData("a")]                   // too short
     [InlineData("dev role")]            // space
@@ -76,6 +75,31 @@ public class RoleServiceTests : TestFixture
     public async Task Create_RejectsMalformedNames(string name)
     {
         var act = async () => await Svc.CreateAsync(name, "X", null, RoleBasePolicy.Closed);
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Theory]
+    [InlineData("OneFolder", "onefolder")]
+    [InlineData("User-Developer", "user-developer")]
+    [InlineData("  Dev  ", "dev")]
+    public async Task Create_LowerCasesTheNameInsteadOfRefusingIt(string typed, string stored)
+    {
+        // The alphabet restriction exists so no role can differ from a privileged one only by
+        // case. Storing it lower-cased achieves exactly that; refusing "OneFolder" achieves
+        // nothing extra and turns an ordinary typo into a dead end.
+        var role = await Svc.CreateAsync(typed, "Display", null, RoleBasePolicy.Closed);
+
+        role.Name.Should().Be(stored);
+        (await Svc.GetAsync(stored)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Create_StillRefusesAReservedNameTypedInMixedCase()
+    {
+        // Lower-casing must not become a way past the reserved list — "SuperAdmin" folds to
+        // "superadmin", which is exactly the name the escalation vector needs.
+        var act = async () => await Svc.CreateAsync("SuperAdmin", "X", null, RoleBasePolicy.Closed);
+
         await act.Should().ThrowAsync<ArgumentException>();
     }
 

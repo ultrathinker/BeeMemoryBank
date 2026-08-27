@@ -132,7 +132,8 @@
         <form id="form-add-role" onsubmit="return false;">
             <div style="margin-bottom:16px;">
                 <sl-input id="add-role-name" label="Name" required autocomplete="off"
-                    help-text="Lower-case letters, digits, '-' and '_'. Permanent — it is stored on every user who holds the role."></sl-input>
+                    help-text="Stored lower-case; spaces become '-'. Permanent — it is written on every user who holds the role."></sl-input>
+                <p id="add-role-name-preview" class="text-muted text-sm" style="margin:6px 0 0;display:none;"></p>
             </div>
             <div style="margin-bottom:16px;">
                 <sl-input id="add-role-display" label="Display Name" autocomplete="off"
@@ -206,13 +207,53 @@ async function postJson(url, body, method) {
         body: body === null ? undefined : JSON.stringify(body)
     });
     if (resp.ok) return { ok: true };
-    var msg = 'Request failed';
+    // Never a bare "Request failed": if the body is not JSON with an `error`, show the status and
+    // whatever text came back, so an opaque failure is still diagnosable from the dialog.
+    var msg = 'Request failed (HTTP ' + resp.status + ')';
     try {
-        var data = await resp.json();
-        if (data && data.error) msg = data.error;
+        var text = await resp.text();
+        if (text) {
+            try {
+                var data = JSON.parse(text);
+                if (data && data.error) msg = data.error;
+                else msg += ': ' + text.slice(0, 300);
+            } catch (e) { msg += ': ' + text.slice(0, 300); }
+        }
     } catch (e) { }
     return { ok: false, error: msg };
 }
+
+// Mirrors RoleService's own rule: lower-case, [a-z0-9_-], starting alphanumeric. Applied to the
+// field as the operator types so the name they see is the name that gets stored — the server
+// lower-cases too, this just removes the surprise.
+function normalizeRoleName(raw) {
+    return (raw || '')
+        .toLowerCase()
+        .replace(/[\s.]+/g, '-')
+        .replace(/[^a-z0-9_-]/g, '')
+        .replace(/^[^a-z0-9]+/, '');
+}
+
+function roleNameProblem(name) {
+    if (name.length < 2) return 'Name must be at least 2 characters.';
+    if (name.length > 32) return 'Name must be at most 32 characters.';
+    return null;
+}
+
+(function () {
+    var input = document.getElementById('add-role-name');
+    var preview = document.getElementById('add-role-name-preview');
+    if (!input) return;
+    input.addEventListener('sl-input', function () {
+        var raw = input.value;
+        var norm = normalizeRoleName(raw);
+        if (norm !== raw) input.value = norm;
+        if (preview) {
+            preview.textContent = norm ? "Will be created as '" + norm + "'." : '';
+            preview.style.display = norm ? '' : 'none';
+        }
+    });
+})();
 
 function openAddRole() {
     hideDlgError('add-role-error');
@@ -220,14 +261,18 @@ function openAddRole() {
     document.getElementById('add-role-display').value = '';
     document.getElementById('add-role-description').value = '';
     document.getElementById('add-role-policy').value = 'closed';
+    var preview = document.getElementById('add-role-name-preview');
+    if (preview) { preview.textContent = ''; preview.style.display = 'none'; }
     document.getElementById('dlg-add-role').show();
     setTimeout(function () { document.getElementById('add-role-name').focus(); }, 100);
 }
 
 async function submitAddRole() {
     hideDlgError('add-role-error');
-    var name = document.getElementById('add-role-name').value.trim();
+    var name = normalizeRoleName(document.getElementById('add-role-name').value.trim());
     if (!name) { showDlgError('add-role-error', 'Name is required.'); return; }
+    var problem = roleNameProblem(name);
+    if (problem) { showDlgError('add-role-error', problem); return; }
 
     var btn = document.getElementById('btn-add-role-submit');
     btn.loading = true;

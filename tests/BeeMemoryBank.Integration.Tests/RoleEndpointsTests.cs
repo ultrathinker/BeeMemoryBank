@@ -80,24 +80,36 @@ public class RoleEndpointsTests : IAsyncLifetime
 
     [Theory]
     [InlineData("superadmin")]
+    [InlineData("SuperAdmin")]
     [InlineData("user")]
     [InlineData("admin")]
     [InlineData("root")]
     public async Task Create_RejectsAReservedName(string name)
     {
-        // Lower-case on purpose: "Superadmin" would be rejected by the name regex before the
-        // reserved list is ever consulted, so the test would still pass with that list deleted.
+        // The mixed-case entry matters: names are folded to lower case before validation, so the
+        // reserved list is what has to stop "SuperAdmin" — the regex no longer does.
         var resp = await CreateRoleAsync(name);
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]
-    public async Task Create_RejectsAnUpperCaseName()
+    public async Task Create_LowerCasesAnUpperCaseName()
     {
         var resp = await CreateRoleAsync("User-Developer");
 
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("name").GetString().Should().Be("user-developer");
+    }
+
+    [Fact]
+    public async Task Create_StillRejectsANameWithIllegalCharacters()
+    {
+        var resp = await CreateRoleAsync("dev role");
+
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("Role name must be");
     }
 
     [Fact]

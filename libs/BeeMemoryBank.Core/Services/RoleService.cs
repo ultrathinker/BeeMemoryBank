@@ -61,12 +61,16 @@ public class RoleService(
 
     public async Task<Role> CreateAsync(string name, string displayName, string? description, string basePolicy)
     {
-        name = (name ?? "").Trim();
+        // Lower-cased rather than rejected. The alphabet restriction exists so that no role can
+        // differ from a privileged one only by case (see NamePattern) — storing it lower-cased
+        // delivers exactly that, while refusing "OneFolder" outright only turns an ordinary typo
+        // into a dead end. Characters outside the alphabet are still refused, with a message.
+        name = (name ?? "").Trim().ToLowerInvariant();
 
         if (!NamePattern.IsMatch(name))
             throw new ArgumentException(
-                "Role name must be 2–32 characters, lower-case, start with a letter or digit, " +
-                "and contain only letters, digits, '-' and '_'.");
+                "Role name must be 2–32 characters and contain only letters, digits, '-' and '_', " +
+                "starting with a letter or digit. Capital letters are converted to lower case.");
 
         if (ReservedNames.Contains(name))
             throw new ArgumentException($"'{name}' is a reserved role name.");
