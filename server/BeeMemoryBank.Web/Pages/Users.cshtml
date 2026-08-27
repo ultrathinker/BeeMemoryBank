@@ -168,6 +168,11 @@
                     <sl-option value="superadmin">Superadmin</sl-option>
                     <sl-option value="user">User</sl-option>
                 </sl-select>
+                <p id="edit-promote-hint" class="text-muted text-sm" style="margin:6px 0 0 0;display:none;">
+                    They keep their current password. The key that lets them unlock this server is
+                    created the next time they log in — until then they can work as usual, but
+                    can't unlock the server if it's locked.
+                </p>
             </div>
             <div style="margin-bottom:8px;">
                 <sl-checkbox id="edit-chat-access">Can use AI chat</sl-checkbox>
@@ -370,11 +375,27 @@ async function submitChangePassword() {
     }
 }
 
+// Role the edit dialog opened with — the promote hint only applies when the pending change
+// would actually promote someone. A user who is already a superadmin has their key slot.
+var editUserOriginalRole = null;
+
+function updatePromoteHint() {
+    var hint = document.getElementById('edit-promote-hint');
+    if (!hint) return;
+    var promoting = document.getElementById('edit-role').value === 'superadmin'
+        && editUserOriginalRole !== 'superadmin';
+    hint.style.display = promoting ? '' : 'none';
+}
+
+document.getElementById('edit-role').addEventListener('sl-change', updatePromoteHint);
+
 function openEditUser(userId, displayName, role, chatAccess) {
     hideDlgError('edit-user-error');
     document.getElementById('edit-user-id').value = userId;
     document.getElementById('edit-display-name').value = displayName;
     document.getElementById('edit-role').value = role;
+    editUserOriginalRole = role;
+    updatePromoteHint();
     var cb = document.getElementById('edit-chat-access');
     var hint = document.getElementById('edit-chat-access-hint');
     if (cb) {

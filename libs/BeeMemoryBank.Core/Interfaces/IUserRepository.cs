@@ -19,6 +19,24 @@ public interface IUserRepository
     Task RepointKeySlotAsync(int oldSlotId, int newSlotId);
 
     /// <summary>
+    /// Assigns a key slot to a user ONLY if they are still an active superadmin with no slot —
+    /// the exact precondition <see cref="Models.User"/>-level provisioning checked before the
+    /// Argon2id derivation started. Returns false if anything changed underneath (a concurrent
+    /// login already provisioned a slot, or an admin demoted/deactivated the user meanwhile),
+    /// in which case the caller must delete the slot it just created. Touches only
+    /// `key_slot_id`, so it cannot clobber a concurrent password reset or profile edit the way
+    /// a whole-row UpdateAsync would.
+    /// </summary>
+    Task<bool> TryAssignKeySlotAsync(int userId, int slotId);
+
+    /// <summary>
+    /// Clears tbl_user.key_slot_id for any user pointing at slotId. Must be called whenever a
+    /// slot row is deleted without a replacement — a dangling key_slot_id makes the user look
+    /// like they still have a slot, which silently suppresses re-provisioning at next login.
+    /// </summary>
+    Task ClearKeySlotAsync(int slotId);
+
+    /// <summary>
     /// Reads the node-local security stamp for a user, IGNORING the is_active filter so a
     /// recently-deleted (IsActive=0) user still resolves — deletion bumps the stamp, so a
     /// pre-deletion cookie's stamp will mismatch and be rejected. Returns null if the user

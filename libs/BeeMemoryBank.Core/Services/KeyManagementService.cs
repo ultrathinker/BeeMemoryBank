@@ -184,5 +184,9 @@ public class KeyManagementService(IKeySlotRepository keySlotRepo, SessionService
             throw new KeyNotFoundException($"Slot {slotId} not found.");
 
         await keySlotRepo.DeleteAsync(slotId);
+        // A user still pointing at the deleted slot would look like they hold one, which
+        // suppresses re-provisioning at their next login (UserService.ProvisionMissingKeySlotAsync)
+        // and leaves them unable to unlock with no way to recover short of an admin password reset.
+        await userRepo.ClearKeySlotAsync(slotId);
     }
 }

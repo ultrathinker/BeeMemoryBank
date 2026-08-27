@@ -154,8 +154,10 @@ public partial class DekRotationService
             {
                 _logger.LogWarning("DEK rotation initiator not specified; falling back to first active superadmin. This is acceptable for CLI/system calls but should not happen from HTTP endpoints.");
                 var users = await userRepo.ListActiveAsync();
-                initiator = users.FirstOrDefault(u => u.Role == UserRoles.Superadmin)
-                    ?? throw new InvalidOperationException("No active superadmin found.");
+                initiator = users.FirstOrDefault(u => u.Role == UserRoles.Superadmin && u.KeySlotId != null)
+                    ?? throw new InvalidOperationException(
+                        "No active superadmin with a key slot found. A superadmin promoted but " +
+                        "not yet logged in has no slot yet — have one log in first.");
             }
 
             if (initiator.KeySlotId == null)

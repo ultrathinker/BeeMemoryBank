@@ -29,6 +29,43 @@ public class UserService(
         catch { /* non-fatal — log via standard logger if it ever matters */ }
     }
 
+    // Wrap the vault's master DEK with a KEK derived from `password` and store it as a new
+    // "user" key slot, returning its id. Every superadmin needs one: UnlockAsync walks every
+    // slot and tries the entered password against each, so a slot's password IS that user's
+    // unlock password. Requires an unlocked session — the master DEK only exists in memory
+    // while the vault is open, and there is no other way to obtain it.
+    private async Task<int> CreateUserKeySlotAsync(string password)
+    {
+        if (!session.IsUnlocked)
+            throw new InvalidOperationException("Session must be unlocked to create a key slot");
+
+        var masterDek = session.GetMasterDek();
+        byte[]? kek = null;
+        try
+        {
+            var salt = KeyDerivation.GenerateSalt();
+            kek = KeyDerivation.DeriveKek(password, salt);
+            var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, kek);
+
+            return await keySlotRepo.CreateAsync(new MasterKeyStore
+            {
+                SlotType = "user",
+                EncryptedMasterDek = encryptedDek,
+                IV = iv,
+                Salt = salt,
+                ArgonMemory = CryptoConstants.DefaultArgonMemory,
+                ArgonIterations = CryptoConstants.DefaultArgonIterations,
+                ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+            Array.Clear(kek);
+        }
+    }
+
     public async Task<User?> AuthenticateAsync(string username, string password)
     {
         var user = await userRepo.GetByUsernameAsync(username);
@@ -38,6 +75,79 @@ public class UserService(
 
         await userRepo.UpdateLastLoginAsync(user.Id);
         return user;
+    }
+
+    /// <summary>
+    /// Throws unless some OTHER active superadmin would still hold a key slot after this user
+    /// loses theirs. Counting rows in tbl_key_slot is not equivalent: a `recovery` slot opens
+    /// only with the recovery key, and an `os_auto_unlock` slot has no KDF params at all so
+    /// UnlockAsync skips it outright — either one inflates a raw count past the guard while
+    /// leaving nobody able to unlock with a password. Since promotion now defers slot creation,
+    /// "another superadmin exists" no longer implies "another superadmin can unlock".
+    /// </summary>
+    private async Task EnsureAnotherSuperadminHoldsAKeySlotAsync(int excludingUserId, string action)
+    {
+        var activeUsers = await userRepo.ListActiveAsync();
+        var covered = activeUsers.Any(u =>
+            u.Id != excludingUserId && u.Role == UserRoles.Superadmin && u.KeySlotId.HasValue);
+
+        if (!covered)
+            throw new InvalidOperationException(
+                $"Cannot {action} this user — their key slot is the only remaining way to unlock " +
+                "the vault. Have another superadmin log in first (that provisions their key slot), " +
+                "then retry.");
+    }
+
+    // Re-point the user's key slot at `newPassword`. An existing slot is rewrapped (the old one
+    // is dropped only once the replacement is safely stored); a superadmin who has no slot yet
+    // gets one provisioned, so an admin password reset grants vault access just like the
+    // promoted user's next login would (see ProvisionMissingKeySlotAsync). A locked session is
+    // only fatal when a real slot has to be rewrapped — provisioning simply waits for the
+    // next opportunity rather than blocking the password change.
+    private async Task RewrapOrProvisionKeySlotAsync(User user, string newPassword)
+    {
+        if (user.KeySlotId.HasValue)
+        {
+            var newSlotId = await CreateUserKeySlotAsync(newPassword);
+            await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
+            user.KeySlotId = newSlotId;
+        }
+        else if (user.Role == UserRoles.Superadmin && session.IsUnlocked)
+        {
+            user.KeySlotId = await CreateUserKeySlotAsync(newPassword);
+        }
+    }
+
+    /// <summary>
+    /// Gives a superadmin who has no key slot one derived from the password they just
+    /// authenticated with. Promoting a user to superadmin cannot build the slot itself — that
+    /// needs the plaintext password, which the promoting admin does not have — so the slot is
+    /// provisioned here, at the promoted user's next successful login. No-op when the user
+    /// already has a slot, isn't a superadmin, or the vault is currently locked (the master DEK
+    /// is unreachable then; the next login retries).
+    /// </summary>
+    /// <returns>true if a slot was created.</returns>
+    public async Task<bool> ProvisionMissingKeySlotAsync(User user, string password)
+    {
+        if (user.Role != UserRoles.Superadmin || user.KeySlotId.HasValue || !session.IsUnlocked)
+            return false;
+
+        var slotId = await CreateUserKeySlotAsync(password);
+
+        // `user` was read before the ~100ms Argon2id derivation above, so it is stale by now.
+        // Commit through a conditional UPDATE of key_slot_id alone rather than a whole-row
+        // UpdateAsync: two concurrent logins would otherwise each create a slot and leave the
+        // loser's orphaned in tbl_key_slot, where UnlockAsync still honours it — an old
+        // password that survives every later rotation. Losing the race means our slot is the
+        // redundant one, so drop it.
+        if (!await userRepo.TryAssignKeySlotAsync(user.Id, slotId))
+        {
+            await keySlotRepo.DeleteAsync(slotId);
+            return false;
+        }
+
+        user.KeySlotId = slotId;
+        return true;
     }
 
     public async Task<User> CreateUserAsync(string username, string displayName, string password, string role, bool chatAccess = true)
@@ -66,38 +176,7 @@ public class UserService(
         };
 
         if (role == UserRoles.Superadmin)
-        {
-            if (!session.IsUnlocked)
-                throw new InvalidOperationException("Session must be unlocked to create a user with key slot");
-
-            var masterDek = session.GetMasterDek();
-            byte[]? kek = null;
-            try
-            {
-                var salt = KeyDerivation.GenerateSalt();
-                kek = KeyDerivation.DeriveKek(password, salt);
-                var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, kek);
-
-                var slot = new MasterKeyStore
-                {
-                    SlotType = "user",
-                    EncryptedMasterDek = encryptedDek,
-                    IV = iv,
-                    Salt = salt,
-                    ArgonMemory = CryptoConstants.DefaultArgonMemory,
-                    ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                    ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
-                    CreatedAt = DateTime.UtcNow
-                };
-                var slotId = await keySlotRepo.CreateAsync(slot);
-                user.KeySlotId = slotId;
-            }
-            finally
-            {
-                Array.Clear(masterDek);
-                Array.Clear(kek);
-            }
-        }
+            user.KeySlotId = await CreateUserKeySlotAsync(password);
 
         user.Id = await userRepo.CreateAsync(user);
         return user;
@@ -114,40 +193,7 @@ public class UserService(
         ValidatePassword(newPassword);
         user.PasswordHash = HashPassword(newPassword);
 
-        if (user.KeySlotId.HasValue)
-        {
-            if (!session.IsUnlocked)
-                throw new InvalidOperationException("Session must be unlocked to change password for user with key slot");
-
-            var masterDek = session.GetMasterDek();
-            byte[]? kek = null;
-            try
-            {
-                var salt = KeyDerivation.GenerateSalt();
-                kek = KeyDerivation.DeriveKek(newPassword, salt);
-                var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, kek);
-
-                var slot = new MasterKeyStore
-                {
-                    SlotType = "user",
-                    EncryptedMasterDek = encryptedDek,
-                    IV = iv,
-                    Salt = salt,
-                    ArgonMemory = CryptoConstants.DefaultArgonMemory,
-                    ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                    ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
-                    CreatedAt = DateTime.UtcNow
-                };
-                var newSlotId = await keySlotRepo.CreateAsync(slot);
-                await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
-                user.KeySlotId = newSlotId;
-            }
-            finally
-            {
-                Array.Clear(masterDek);
-                Array.Clear(kek);
-            }
-        }
+        await RewrapOrProvisionKeySlotAsync(user, newPassword);
 
         await userRepo.UpdateAsync(user);
         // Bump the security stamp: any outstanding Web cookie (this user's other sessions,
@@ -165,40 +211,7 @@ public class UserService(
         ValidatePassword(newPassword);
         user.PasswordHash = HashPassword(newPassword);
 
-        if (user.KeySlotId.HasValue)
-        {
-            if (!session.IsUnlocked)
-                throw new InvalidOperationException("Session must be unlocked to change password for user with key slot");
-
-            var masterDek = session.GetMasterDek();
-            byte[]? kek = null;
-            try
-            {
-                var salt = KeyDerivation.GenerateSalt();
-                kek = KeyDerivation.DeriveKek(newPassword, salt);
-                var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, kek);
-
-                var slot = new MasterKeyStore
-                {
-                    SlotType = "user",
-                    EncryptedMasterDek = encryptedDek,
-                    IV = iv,
-                    Salt = salt,
-                    ArgonMemory = CryptoConstants.DefaultArgonMemory,
-                    ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                    ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
-                    CreatedAt = DateTime.UtcNow
-                };
-                var newSlotId = await keySlotRepo.CreateAsync(slot);
-                await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
-                user.KeySlotId = newSlotId;
-            }
-            finally
-            {
-                Array.Clear(masterDek);
-                Array.Clear(kek);
-            }
-        }
+        await RewrapOrProvisionKeySlotAsync(user, newPassword);
 
         await userRepo.UpdateAsync(user);
         // Admin reset bumps the stamp — logs out every session for this user (intended).
@@ -222,10 +235,7 @@ public class UserService(
 
         if (user.KeySlotId.HasValue)
         {
-            var allSlots = await keySlotRepo.GetAllAsync();
-            if (allSlots.Count <= 1)
-                throw new InvalidOperationException(
-                    "Cannot delete the last user with a key slot — this would permanently lock the vault.");
+            await EnsureAnotherSuperadminHoldsAKeySlotAsync(userId, "delete");
             await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
         }
 
@@ -253,7 +263,12 @@ public class UserService(
         throw new InvalidOperationException("Failed to release username after 3 attempts. Please try again.");
     }
 
-    public async Task UpdateUserAsync(int userId, string displayName, string? role, string? password = null, bool? chatAccess = null)
+    /// <returns>
+    /// true if <paramref name="password"/> was actually applied. It only is when the update
+    /// promotes a slot-less user to superadmin; in every other case it is ignored, and the
+    /// caller (audit log) must not claim a password change that did not happen.
+    /// </returns>
+    public async Task<bool> UpdateUserAsync(int userId, string displayName, string? role, string? password = null, bool? chatAccess = null)
     {
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
@@ -264,6 +279,7 @@ public class UserService(
             user.ChatAccess = chatAccess.Value;
 
         bool roleChanged = false;
+        bool passwordChanged = false;
         if (role != null && role != user.Role)
         {
             var validRoles = new[] { UserRoles.Superadmin, UserRoles.User };
@@ -284,50 +300,35 @@ public class UserService(
             user.Role = role;
             roleChanged = true;
 
-            var hadKeySlot = oldRole == UserRoles.Superadmin;
-            var needsKeySlot = role == UserRoles.Superadmin;
-
-            if (hadKeySlot && !needsKeySlot && user.KeySlotId.HasValue)
+            // Key slots are keyed off the slot the user actually holds, not off the role they
+            // used to have — a demote that failed midway leaves a superadmin's slot behind, and
+            // re-promoting must not orphan it by creating a second one.
+            if (role != UserRoles.Superadmin && user.KeySlotId.HasValue)
             {
+                // "Cannot demote the last superadmin" above is not enough on its own: the
+                // remaining superadmins may all be promoted-but-not-yet-logged-in, and so hold
+                // no slot. Dropping the only slot left would lock the vault permanently.
+                await EnsureAnotherSuperadminHoldsAKeySlotAsync(userId, "demote");
+
                 await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
                 user.KeySlotId = null;
             }
-            else if (!hadKeySlot && needsKeySlot)
+            else if (role == UserRoles.Superadmin && !user.KeySlotId.HasValue)
             {
-                if (string.IsNullOrWhiteSpace(password))
-                    throw new InvalidOperationException(
-                        "Password is required when promoting a user to superadmin. " +
-                        "Use the change-password endpoint after role change, or provide password.");
-
-                if (!session.IsUnlocked)
-                    throw new InvalidOperationException("Session must be unlocked to create a key slot");
-
-                var masterDek = session.GetMasterDek();
-                byte[]? kek = null;
-                try
+                // A key slot wraps the master DEK with a KEK derived from the user's *plaintext*
+                // password, which the promoting admin does not have. So promotion deliberately
+                // leaves the slot unset: the user keeps their own password and the slot is
+                // provisioned at their next login (ProvisionMissingKeySlotAsync) or on an admin
+                // password reset. Until then they hold the role but cannot unlock a locked vault.
+                // A caller that does know the password can hand it over to skip the wait — that
+                // also resets the login password, since the slot's password and the login
+                // password must stay the same secret.
+                if (!string.IsNullOrWhiteSpace(password))
                 {
-                    var salt = KeyDerivation.GenerateSalt();
-                    kek = KeyDerivation.DeriveKek(password, salt);
-                    var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, kek);
-
-                    var slot = new MasterKeyStore
-                    {
-                        SlotType = "user",
-                        EncryptedMasterDek = encryptedDek,
-                        IV = iv,
-                        Salt = salt,
-                        ArgonMemory = CryptoConstants.DefaultArgonMemory,
-                        ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                        ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
-                        CreatedAt = DateTime.UtcNow
-                    };
-                    var slotId = await keySlotRepo.CreateAsync(slot);
-                    user.KeySlotId = slotId;
-                }
-                finally
-                {
-                    Array.Clear(masterDek);
-                    Array.Clear(kek);
+                    ValidatePassword(password);
+                    user.KeySlotId = await CreateUserKeySlotAsync(password);
+                    user.PasswordHash = HashPassword(password);
+                    passwordChanged = true;
                 }
             }
         }
@@ -338,6 +339,13 @@ public class UserService(
         // user's existing cookie is revalidated against the new role promptly.
         if (roleChanged)
             await userRepo.BumpSecurityStampAsync(userId);
+
+        // Promoting with an explicit password also reset the login password, so treat it like
+        // any other admin reset: outstanding remote API tokens must not survive it.
+        if (passwordChanged)
+            await RevokeRemoteTokensAsync(userId);
+
+        return passwordChanged;
     }
 
     public static void ValidatePassword(string password)

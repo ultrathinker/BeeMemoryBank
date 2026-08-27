@@ -68,6 +68,14 @@ public static class SessionEndpoints
                 {
                     isUnlocked = await session.UnlockAsync(req.Password);
                 }
+
+                // A user promoted to superadmin has no key slot yet — building one needs the
+                // plaintext password, which the promoting admin never had. This login is the
+                // first moment it is available, so provision the slot now. No-op once they
+                // have one; skipped while the vault is locked (no master DEK to wrap), in
+                // which case the next login retries.
+                if (isUnlocked)
+                    await userService.ProvisionMissingKeySlotAsync(user, req.Password);
             }
             else
             {

@@ -173,6 +173,73 @@ via `Program.cs` DI registration; not just a surprising default, a real correctn
 - **Docs:** `docs/mcp.md`'s `bee_set_max_tokens`/`bee_continue`/truncation sections were out of date (still
   said "max 20000", didn't mention `ignoreLimit` or the JSON preview behavior) — updated to match.
 
+#### User management (2026-08-27): promoting a user to superadmin was impossible, plus four lockout bugs found reviewing the fix
+
+Changing an existing user's role to superadmin always failed with *"Password is required when promoting a user
+to superadmin. Use the change-password endpoint after role change, or provide password."* The advice in that
+message could not be followed: the role change was rejected **before** anything was saved, so there was no
+"after role change" to reach, and `AdminChangePasswordAsync` only ever re-wrapped an *existing* key slot —
+it never created a missing one. The web UI could not satisfy the requirement either: the Edit-User dialog has
+no password field and the Web proxy DTO (`UpdateUserProxyRequest`) has no `Password` member at all, so the
+password never left the browser. Promotion was unreachable through every path a person actually uses.
+
+The underlying constraint is real: a key slot wraps the master DEK with an Argon2id KEK derived from the
+user's **plaintext** password, which the promoting admin does not have and must not be made to invent.
+
+- **Promotion is now deferred, not refused.** `UpdateUserAsync` changes the role and leaves `key_slot_id`
+  NULL. The slot is provisioned from the plaintext password at the first moment it legitimately exists — the
+  promoted user's next successful login (`UserService.ProvisionMissingKeySlotAsync`, called from
+  `/api/session/login`) — or earlier if an admin resets their password, since `ChangePasswordAsync` /
+  `AdminChangePasswordAsync` now provision a missing superadmin slot instead of skipping it. The user keeps
+  their own password; nothing is silently reset. In the gap they hold the role but cannot unlock a *locked*
+  vault, which the Edit-User dialog now states in a hint shown only when the pending change is a promotion.
+- **Promote/demote now key off the slot the user actually holds** (`user.KeySlotId`) rather than their
+  previous role, so re-promoting someone whose demote half-failed reuses their existing slot instead of
+  orphaning it behind a second one.
+- **Passing a password to `PUT /api/users/{id}` still works** and provisions the slot immediately — but it
+  now also updates `password_hash` and revokes the user's remote API tokens. Previously the slot's password
+  and the login password silently diverged. `UpdateUserAsync` returns whether the password was actually
+  applied, so the audit log stops claiming `password changed=True` for a password it ignored.
+
+Four further bugs were found by an Antigravity review pass over the fix (four models, all four flagged the
+first one independently) — each is a lockout or credential-lifetime bug, not a cosmetic issue:
+
+- **The "last key slot" guard counted slots that cannot unlock with a password.** `DeleteUserAsync` already
+  had an `allSlots.Count <= 1` check and the new demote path copied it. But `tbl_key_slot` also holds
+  `recovery` slots (openable only with the recovery key) and `os_auto_unlock` slots (no KDF parameters at
+  all — `UnlockAsync` filters them out entirely). Either one pads the count past the guard. With deferred
+  provisioning making slot-less superadmins reachable, demoting or deleting the last password-bearing
+  superadmin while a recovery key existed would drop the only slot anyone could unlock with. Replaced by
+  `EnsureAnotherSuperadminHoldsAKeySlotAsync`, which asserts the actual invariant: some *other* active
+  superadmin still holds a slot.
+- **Concurrent logins could leave an orphaned slot that outlives every password change.** Two parallel
+  logins by a freshly promoted user each saw `KeySlotId == null`, each created a slot, and the whole-row
+  `UpdateAsync` left the loser's slot unreferenced in `tbl_key_slot` — where `UnlockAsync` still honours it,
+  so that password would open the vault forever, surviving later rotations. Provisioning now commits via
+  `IUserRepository.TryAssignKeySlotAsync`, a conditional `UPDATE … WHERE key_slot_id IS NULL AND role =
+  'superadmin' AND is_active = 1`, and deletes its own slot when it loses the race. Writing only that one
+  column also closes a lost-update window: the whole-row write could revert a concurrent admin password
+  reset, demotion, or deactivation using data read before the ~100 ms Argon2id derivation began.
+- **`KeyManagementService.RemoveSlotAsync` left `tbl_user.key_slot_id` dangling** (there is no FK on that
+  column). The user then looks provisioned, which silently suppresses re-provisioning at their next login and
+  leaves them unable to unlock. It now clears the reference via `IUserRepository.ClearKeySlotAsync`.
+- **DEK rotation could be blocked outright by a slot-less superadmin.** Both `DekRotationService.Propose`
+  and `.Accept` fall back to `users.FirstOrDefault(u => u.Role == Superadmin)` when no initiator is given
+  (CLI/system calls); `ListActiveAsync` orders by `created_at`, so a promoted-but-not-yet-logged-in user
+  could be picked and the following `KeySlotId == null` check would fail the whole rotation even with
+  another eligible superadmin present. Both fallbacks now require a slot and say so if none exists.
+- **Endpoint status codes:** `PUT /api/users/{id}` returned 500 for every rejected role change; it now maps
+  `ArgumentException` → 400 and `InvalidOperationException` → 409. `DELETE /api/users/{id}` had the same
+  gap ("Cannot delete the last superadmin" surfaced as a 500) and now returns 409 too.
+- **Tests:** new `UserServiceTests` (22 cases) and `SuperadminPromotionTests` (4 HTTP end-to-end cases),
+  including regression cases for each review finding — demote/delete refused with a recovery slot padding
+  the count, the losing side of a provisioning race discarding its own slot, a stale in-flight login not
+  resurrecting a concurrently demoted user, `RemoveSlotAsync` clearing the dangling reference, and both
+  re-wrap paths retiring the old slot. Full-suite run: the same pre-existing `SnapshotService`/`JoinWithSnapshot`
+  family of Windows temp-file-locking failures reproduces identically on a clean `master`, confirmed unrelated.
+- **Docs:** `docs/encryption.md`'s key-slot section now explains why promotion is deferred and what the
+  demote/delete guard actually asserts.
+
 ### Added
 
 - **Multiple Storages & Data Isolation (Windows Desktop):**

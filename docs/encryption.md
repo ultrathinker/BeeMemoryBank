@@ -94,6 +94,10 @@ dek_salt:           BLOB  -- 32 bytes (Argon2id salt)
 
 Each superadmin has their own key slot wrapping the Master DEK with their password. This allows multiple people to unlock the system independently. Users with the "user" role can only log in when the system is already unlocked — they have no key slot.
 
+**Promotion is deferred, not instant.** Building a key slot requires the target user's *plaintext* password, which the admin doing the promoting does not have. So promoting an existing user to superadmin only changes their role: `key_slot_id` stays `NULL`, and the slot is created at the promoted user's next successful login (`UserService.ProvisionMissingKeySlotAsync`, called from `/api/session/login`), or earlier if an admin resets their password. Provisioning commits through a conditional `UPDATE … WHERE key_slot_id IS NULL AND role = 'superadmin' AND is_active = 1`, so two concurrent logins cannot each leave a slot behind — an orphaned slot would keep answering to that password forever, surviving every later rotation.
+
+Because "another superadmin exists" no longer implies "another superadmin can unlock", demoting or deleting a user refuses to drop their slot unless some **other active superadmin still holds one** (`EnsureAnotherSuperadminHoldsAKeySlotAsync`). Counting rows in `tbl_key_slot` is not equivalent and was the earlier, weaker check: a `recovery` slot opens only with the recovery key, and an `os_auto_unlock` slot has no KDF parameters at all so `UnlockAsync` skips it — either one pads the count past the guard while leaving nobody able to unlock with a password. For the same reason, `KeyManagementService.RemoveSlotAsync` clears `tbl_user.key_slot_id` for the slot it deletes: a dangling id makes the user look provisioned and silently suppresses re-provisioning at their next login.
+
 ### Agent (`tbl_agent`)
 
 ```sql
