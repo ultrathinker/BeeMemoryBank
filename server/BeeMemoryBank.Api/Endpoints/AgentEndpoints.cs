@@ -17,8 +17,16 @@ public static class AgentEndpoints
         var group = app.MapGroup("/api/agents").WithTags("Agents").RequireInternalKey();
         group.AddEndpointFilter<RequireNonAgentFilter>();
 
-        // GET /api/agents — list active agents
-        group.MapGet("/", async (HttpContext ctx, IAgentRepository repo, IUserRepository userRepo) =>
+        // GET /api/agents — list active agents.
+        //
+        // Scope defaults to the CALLER'S OWN agents, for every role. `?all=true`
+        // widens it to every agent on the node and is honoured only for a
+        // superadmin; that widened view backs the Admin page's agent table
+        // (which renders an Owner column). The Profile page's "My AI Agents"
+        // list must never pass it — a superadmin was otherwise shown everyone
+        // else's agents there as if they were their own, with a working delete
+        // button and a quota counter that counted other people's keys.
+        group.MapGet("/", async (HttpContext ctx, IAgentRepository repo, IUserRepository userRepo, bool all = false) =>
         {
 
             var callerIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
@@ -28,8 +36,7 @@ public static class AgentEndpoints
 
             var agents = await repo.ListActiveAsync();
 
-            // Filter for non-admins
-            if (callerRole != UserRoles.Superadmin)
+            if (!all || callerRole != UserRoles.Superadmin)
             {
                 agents = agents.Where(a => a.OwnerUserId == callerId).ToList();
             }

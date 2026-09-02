@@ -73,8 +73,13 @@ public partial class ApiClient
 
     // ─── Agents ───────────────────────────────────────────────────────────────
 
-    public async Task<List<AgentDto>?> GetAgentsAsync() =>
-        await http.GetFromJsonAsync<List<AgentDto>>("/api/agents", JsonOpts);
+    /// <param name="all">
+    /// Superadmin-only: include every user's agents (the Admin page's agent
+    /// table). Left false everywhere else so a page only ever shows the signed-in
+    /// user their own agents.
+    /// </param>
+    public async Task<List<AgentDto>?> GetAgentsAsync(bool all = false) =>
+        await http.GetFromJsonAsync<List<AgentDto>>($"/api/agents?all={(all ? "true" : "false")}", JsonOpts);
 
     public async Task<AgentCreatedDto?> CreateAgentAsync(string name, string? description)
     {

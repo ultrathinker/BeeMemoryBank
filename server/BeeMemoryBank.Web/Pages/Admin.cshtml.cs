@@ -296,7 +296,7 @@ public class AdminModel(ApiClient api) : PageModel
             api.GetWhitelistAsync().ContinueWith(t => Whitelist = t.Result),
             api.GetNodeSyncStatusAsync().ContinueWith(t => NodeSyncStatus = t.Result),
             api.GetSnapshotsAsync().ContinueWith(t => Snapshots = t.Result),
-            api.GetAgentsAsync().ContinueWith(t => Agents = t.Result),
+            api.GetAgentsAsync(all: true).ContinueWith(t => Agents = t.Result),
             api.GetUsersAsync().ContinueWith(t => Users = t.Result),
             api.GetConceptTagEdgeStatsAsync().ContinueWith(t => GraphEdgeStats = t.Result),
             api.GetCompactionPreviewAsync().ContinueWith(t => CompactionPreview = t.Result),
