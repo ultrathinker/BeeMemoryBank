@@ -1573,8 +1573,7 @@ sl-input.bmb-secret::part(input) {
     transition: opacity 0.12s;
 }
 
-.fav-row:hover .fav-actions,
-.fav-row.active .fav-actions { opacity: 1; }
+.fav-row:hover .fav-actions { opacity: 1; }
 
 /* Touch devices never hover, so the arrows would be unreachable if they only appeared on it. */
 @media (hover: none) {
