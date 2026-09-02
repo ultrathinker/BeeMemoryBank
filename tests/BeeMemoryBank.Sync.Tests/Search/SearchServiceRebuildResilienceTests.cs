@@ -109,8 +109,17 @@ public class SearchServiceRebuildResilienceTests : IAsyncLifetime
         var searchIterations = 0L;
 
         const int readerCount = 8;
+        // Rendezvous before the rebuild starts. The drain below cancels the readers the moment it
+        // finishes, and on a loaded CI runner the thread pool may not have started them by then --
+        // the loop body would never run, searchIterations would be 0, and the test would fail
+        // claiming the readers never overlapped the rebuild (which is what it actually did on
+        // GitHub Actions, repeatedly, while passing on every developer machine). Waiting until
+        // every reader has completed one real search makes the overlap a fact instead of a hope.
+        using var readersRunning = new CountdownEvent(readerCount);
+
         Task[] readers = Enumerable.Range(0, readerCount).Select(_ => Task.Run(async () =>
         {
+            var signalledRunning = false;
             while (!stop.IsCancellationRequested)
             {
                 try
@@ -136,8 +145,18 @@ public class SearchServiceRebuildResilienceTests : IAsyncLifetime
                 }
 
                 Interlocked.Increment(ref searchIterations);
+                if (!signalledRunning)
+                {
+                    signalledRunning = true;
+                    readersRunning.Signal();
+                }
             }
         })).ToArray();
+
+        readersRunning
+            .Wait(TimeSpan.FromSeconds(60))
+            .Should().BeTrue("every reader must have completed a search before the rebuild is triggered, "
+                             + "otherwise the concurrency this test exists to cover never happens");
 
         // Drive warm-start (discovers corruption -> full rebuild) and the catch-up reindex cycles
         // concurrently with the reader loops above -- this is the actual "search fired while a
@@ -170,6 +189,7 @@ public class SearchServiceRebuildResilienceTests : IAsyncLifetime
         completedInTime.Should().BeTrue("reader loops must observe cancellation and exit promptly, not hang");
         searchExceptions.Should().BeEmpty("no exception of any kind -- including one that only manifests through the full DI-wired SearchService path -- may ever escape a concurrent search call, even mid-rebuild");
         searchIterations.Should().BeGreaterThan(0, "readers must actually have run concurrently with the rebuild, not finish before it started");
+        searchIterations.Should().BeGreaterThan(readerCount - 1, "the rendezvous above guarantees at least one completed search per reader");
 
         // Once everything above has settled, the index must be fully, correctly caught up: every
         // single created article findable by the shared term, none missing, none duplicated.
