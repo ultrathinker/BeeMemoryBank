@@ -297,6 +297,24 @@ public partial class SnapshotService
                         importCmd.ExecuteNonQuery();
                     }
 
+                    // Node-local tables that reference an imported one are NOT in importTables:
+                    // they belong to this node and must survive the restore. But the import above
+                    // wholesale replaced tbl_article, so any of their rows pointing at an article
+                    // that the snapshot does not contain is now dangling — and the
+                    // PRAGMA foreign_key_check below reports violations even with foreign_keys=OFF,
+                    // which would roll the whole restore back on that node. Rolling back to a point
+                    // before some articles existed is precisely what a network restore is for, so
+                    // this is the common case, not an edge case.
+                    foreach (var orphanTable in new[] { "tbl_favorite", "tbl_article_chunk_embedding" })
+                    {
+                        using var orphanCmd = conn.CreateCommand();
+                        orphanCmd.Transaction = tx;
+                        orphanCmd.CommandText =
+                            $"DELETE FROM [{orphanTable}] WHERE article_id NOT IN (SELECT id FROM tbl_article)";
+                        // Older DBs predate these tables; a restore must not fail because one is absent.
+                        try { orphanCmd.ExecuteNonQuery(); } catch (SqliteException) { }
+                    }
+
                     using (var checkEventCmd = conn.CreateCommand())
                     {
                         checkEventCmd.Transaction = tx;
