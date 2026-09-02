@@ -1,9 +1,16 @@
+@inject BeeMemoryBank.Web.Services.BrandingService BrandingSvc
+@{
+    // Admin-configurable product name (Admin -> Branding). Falls back to the built-in
+    // "Bee Memory Bank" when the node has never set one, so an untouched install looks
+    // exactly as it always did. Cached in BrandingService, not fetched per render.
+    var brandName = await BrandingSvc.GetNameAsync();
+}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>@ViewData["Title"] - BeeMemoryBank</title>
+    <title>@ViewData["Title"] - @brandName</title>
     <script type="module">
         import { setBasePath } from '/lib/shoelace/shoelace-bundle.js';
         setBasePath('/lib/shoelace');
@@ -66,7 +73,7 @@
         <div class="header-left">
             <a href="/Tree" class="app-logo">
                 <img src="/images/web-app-manifest-192x192.png" alt="Bee" class="app-logo-img" />
-                <span>Bee Memory Bank</span>
+                <span>@brandName</span>
             </a>
         </div>
         @if (User.Identity?.IsAuthenticated == true)

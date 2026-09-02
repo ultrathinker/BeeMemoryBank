@@ -528,6 +528,8 @@ app.MapSearchEndpoints();
 app.MapKeyEndpoints();
 app.MapWhitelistEndpoints();
 app.MapAgentEndpoints();
+app.MapFavoriteEndpoints();
+app.MapBrandingEndpoints();
 app.MapUserEndpoints();
 app.MapJoinEndpoints();
 app.MapInitEndpoints();

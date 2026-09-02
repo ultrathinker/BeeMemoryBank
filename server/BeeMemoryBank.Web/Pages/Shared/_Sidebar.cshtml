@@ -21,6 +21,23 @@
             <sl-icon-button id="btn-sidebar-collapse" name="chevron-left" label="Collapse panel" title="Collapse panel"></sl-icon-button>
         </div>
     </div>
+    @* Favorites: the caller's starred articles, pinned above the folder tree. Rendered by
+       site.js from /api-proxy/favorites; stays hidden entirely while the user has none, so
+       nobody pays sidebar height for a feature they don't use. *@
+    <div class="sidebar-favorites" id="favorites-block" hidden>
+        <div class="favorites-header">
+            <button type="button" class="favorites-toggle" id="btn-favorites-toggle" aria-expanded="true">
+                <sl-icon class="favorites-chevron" name="chevron-down"></sl-icon>
+                <sl-icon class="favorites-star" name="star-fill"></sl-icon>
+                <span>Favorites</span>
+                <span class="favorites-count" id="favorites-count"></span>
+            </button>
+            <sl-icon-button id="btn-favorites-alpha" name="sort-alpha-down" label="Sort A to Z"
+                            title="Back to alphabetical order" style="display:none;"></sl-icon-button>
+        </div>
+        <div class="favorites-list" id="favorites-list"></div>
+    </div>
+
     <div class="sidebar-tree-wrap">
         <div class="sidebar-tree-top-fade" aria-hidden="true"></div>
         <div class="sidebar-tree" id="tree-container"></div>

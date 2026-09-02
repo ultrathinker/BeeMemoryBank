@@ -1544,3 +1544,197 @@ function updateSyncModal() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', maskSecrets);
     else maskSecrets();
 })();
+
+// ===== Favorites (starred articles, pinned above the folder tree) =====
+// One fetch of /api-proxy/favorites serves both consumers on a page: the sidebar block and
+// the star button on an article page. Rows are built from DOM nodes rather than innerHTML so
+// a title containing markup can never become markup.
+(function () {
+    var block = document.getElementById('favorites-block');
+    var starBtn = document.getElementById('btn-favorite-star');
+    if (!block && !starBtn) return;
+
+    var COLLAPSE_KEY = 'bee-favorites-collapsed';
+    var listEl = document.getElementById('favorites-list');
+    var countEl = document.getElementById('favorites-count');
+    var alphaBtn = document.getElementById('btn-favorites-alpha');
+    var toggleBtn = document.getElementById('btn-favorites-toggle');
+    var currentArticleId = starBtn ? starBtn.getAttribute('data-article-id') : null;
+    var state = { items: [], manualOrder: false };
+    // A move is read-modify-write on the server. Two clicks fired before the first response comes
+    // back would both compute their new order from the same starting list, and the second would
+    // overwrite the first — so the row actions are locked for the duration of one request.
+    var busy = false;
+
+    function isCollapsed() {
+        try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch (e) { return false; }
+    }
+
+    function applyCollapsed() {
+        var collapsed = isCollapsed();
+        if (listEl) listEl.hidden = collapsed;
+        if (toggleBtn) toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        var chevron = block && block.querySelector('.favorites-chevron');
+        if (chevron) chevron.name = collapsed ? 'chevron-right' : 'chevron-down';
+    }
+
+    function setBusy(value) {
+        busy = value;
+        if (listEl) listEl.classList.toggle('fav-busy', value);
+    }
+
+    function send(url, method, body) {
+        var opts = { method: method };
+        if (body) {
+            opts.headers = { 'Content-Type': 'application/json' };
+            opts.body = JSON.stringify(body);
+        }
+        return fetch(url, opts).then(function (r) {
+            if (!r.ok) throw new Error('request failed');
+            return r;
+        });
+    }
+
+    function isStarred(id) {
+        return state.items.some(function (i) { return i.id === id; });
+    }
+
+    function renderStarButton() {
+        if (!starBtn || !currentArticleId) return;
+        var starred = isStarred(currentArticleId);
+        var icon = starBtn.querySelector('sl-icon');
+        var label = starBtn.querySelector('[data-fav-label]');
+        if (icon) icon.name = starred ? 'star-fill' : 'star';
+        if (label) label.textContent = starred ? 'Favorited' : 'Favorite';
+        starBtn.classList.toggle('is-favorited', starred);
+        starBtn.title = starred ? 'Remove from favorites' : 'Add to favorites';
+    }
+
+    function actionButton(icon, label, disabled, onClick, extraClass) {
+        var btn = document.createElement('sl-icon-button');
+        btn.setAttribute('name', icon);
+        btn.setAttribute('label', label);
+        btn.title = label;
+        btn.className = 'fav-action' + (extraClass ? ' ' + extraClass : '');
+        if (disabled) btn.setAttribute('disabled', '');
+        else btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            if (busy) return;
+            onClick();
+        });
+        return btn;
+    }
+
+    function renderList() {
+        if (!block || !listEl) return;
+
+        block.hidden = state.items.length === 0;
+        if (countEl) countEl.textContent = state.items.length ? String(state.items.length) : '';
+        // "Back to A-Z" only means anything once the list has actually been reordered by hand.
+        if (alphaBtn) alphaBtn.style.display = state.manualOrder ? '' : 'none';
+
+        listEl.innerHTML = '';
+        state.items.forEach(function (item, index) {
+            var row = document.createElement('div');
+            row.className = 'fav-row';
+            if (item.id === currentArticleId) row.classList.add('active');
+
+            var link = document.createElement('a');
+            link.className = 'fav-link';
+            link.href = '/Article/View?id=' + encodeURIComponent(item.id);
+            link.title = item.treePath || '';
+            if (item.protected) {
+                var lock = document.createElement('sl-icon');
+                lock.setAttribute('name', 'shield-lock');
+                lock.className = 'fav-lock';
+                link.appendChild(lock);
+            }
+            var titleEl = document.createElement('span');
+            titleEl.className = 'fav-title';
+            titleEl.textContent = item.title || '(untitled)';
+            link.appendChild(titleEl);
+            row.appendChild(link);
+
+            var actions = document.createElement('span');
+            actions.className = 'fav-actions';
+            actions.appendChild(actionButton('chevron-up', 'Move up', index === 0, function () {
+                move(item.id, 'up');
+            }));
+            actions.appendChild(actionButton('chevron-down', 'Move down', index === state.items.length - 1, function () {
+                move(item.id, 'down');
+            }));
+            actions.appendChild(actionButton('star-fill', 'Remove from favorites', false, function () {
+                setBusy(true);
+                send('/api-proxy/favorites/' + encodeURIComponent(item.id), 'DELETE')
+                    .then(refresh)
+                    .catch(resync)
+                    .finally(function () { setBusy(false); });
+            }, 'fav-unstar'));
+            row.appendChild(actions);
+
+            listEl.appendChild(row);
+        });
+    }
+
+    function move(id, direction) {
+        setBusy(true);
+        send('/api-proxy/favorites/' + encodeURIComponent(id) + '/move', 'POST', { direction: direction })
+            .then(refresh)
+            .catch(resync)
+            .finally(function () { setBusy(false); });
+    }
+
+    // A rejected request means the list on screen no longer matches the server (the article was
+    // deleted in another tab, access changed, the API blipped). Re-reading is both the correction
+    // and the feedback: the row or the filled star visibly goes away. refresh() swallows its own
+    // errors, so this cannot loop.
+    function resync() { refresh(); }
+
+    function refresh() {
+        return fetch('/api-proxy/favorites', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : { items: [], manualOrder: false }; })
+            .then(function (data) {
+                state.items = (data && data.items) || [];
+                state.manualOrder = !!(data && data.manualOrder);
+                renderList();
+                renderStarButton();
+            })
+            .catch(function () {
+                // Favorites are an accessory to the page: a failed load leaves the tree and the
+                // article untouched instead of surfacing an error nobody can act on.
+            });
+    }
+
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', function () {
+            try { localStorage.setItem(COLLAPSE_KEY, isCollapsed() ? '0' : '1'); } catch (e) { }
+            applyCollapsed();
+        });
+    }
+
+    if (alphaBtn) {
+        alphaBtn.addEventListener('click', function () {
+            if (busy) return;
+            setBusy(true);
+            send('/api-proxy/favorites/reset-order', 'POST')
+                .then(refresh)
+                .catch(resync)
+                .finally(function () { setBusy(false); });
+        });
+    }
+
+    if (starBtn && currentArticleId) {
+        starBtn.addEventListener('click', function () {
+            var starred = isStarred(currentArticleId);
+            var url = '/api-proxy/favorites/' + encodeURIComponent(currentArticleId);
+            starBtn.loading = true;
+            send(url, starred ? 'DELETE' : 'POST')
+                .then(refresh)
+                .catch(resync)
+                .finally(function () { starBtn.loading = false; });
+        });
+    }
+
+    applyCollapsed();
+    refresh();
+})();

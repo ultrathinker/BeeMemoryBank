@@ -1467,3 +1467,133 @@ sl-input.bmb-secret::part(input) {
     -webkit-text-security: disc;
     text-security: disc;
 }
+
+/* ===== Favorites (pinned block above the folder tree) ===== */
+/* Colors come from the same theme variables the tree uses, so the block follows every
+   theme without needing per-theme rules. The gold star is deliberately literal: it is the
+   one accent that must read as "starred" in all 12 themes. */
+.sidebar-favorites {
+    flex-shrink: 0;
+    padding: 2px 4px 6px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.favorites-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+}
+
+.favorites-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+    padding: 3px 2px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.favorites-toggle:hover { color: var(--accent); }
+.favorites-chevron { font-size: 0.7rem; }
+.favorites-star { color: #f5b301; font-size: 0.8rem; }
+
+.favorites-count {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0;
+    color: var(--text-secondary);
+    background: var(--tree-hover);
+    border-radius: 8px;
+    padding: 0 6px;
+}
+
+/* Capped so a long favorites list scrolls inside its own box instead of pushing the
+   folder tree off the bottom of the sidebar. */
+.favorites-list {
+    max-height: 32vh;
+    overflow-y: auto;
+    margin-top: 2px;
+}
+
+.fav-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 2px 3px 6px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    transition: background 0.12s;
+}
+
+.fav-row:hover { background: var(--tree-hover); }
+.fav-row.active { background: var(--tree-active); }
+
+.fav-link {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    text-decoration: none;
+}
+
+/* The title lives in its own element because text-overflow has no effect on the anonymous
+   text node of a flex container — a long title would be cut mid-letter without an ellipsis. */
+.fav-title {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.fav-link:hover { color: var(--accent); }
+
+.fav-lock {
+    flex-shrink: 0;
+    font-size: 0.78rem;
+    color: var(--sl-color-warning-600);
+}
+
+.fav-actions {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.12s;
+}
+
+.fav-row:hover .fav-actions,
+.fav-row.active .fav-actions { opacity: 1; }
+
+/* Touch devices never hover, so the arrows would be unreachable if they only appeared on it. */
+@media (hover: none) {
+    .fav-actions { opacity: 1; }
+}
+
+.fav-action::part(base) {
+    padding: 1px 2px;
+    font-size: 0.8rem;
+}
+
+.fav-unstar { color: #f5b301; }
+
+#btn-favorite-star.is-favorited sl-icon { color: #f5b301; }
+
+/* While a reorder/unstar request is in flight the row actions are inert — see the busy flag in
+   the favorites module in site.js. */
+.favorites-list.fav-busy .fav-action {
+    pointer-events: none;
+    opacity: 0.45;
+}
+

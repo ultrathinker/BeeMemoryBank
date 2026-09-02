@@ -1,5 +1,6 @@
 using System.Text;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
 
 namespace BeeMemoryBank.Web.Endpoints;
@@ -8,6 +9,26 @@ public static class MiscProxyEndpoints
 {
     public static void MapMiscProxyEndpoints(this WebApplication app)
     {
+        // ── Branding (read: any signed-in user; write: superadmin) ──
+
+        app.MapGet("/api-proxy/branding", async (ApiClient api) =>
+        {
+            var branding = await api.GetBrandingAsync();
+            return Results.Ok(branding ?? new BrandingDto(Branding.DefaultName, false, Branding.DefaultName));
+        }).RequireAuthorization();
+
+        app.MapPut("/api-proxy/branding", async (HttpContext ctx, ApiClient api, BrandingService branding) =>
+        {
+            var req = await ReadBrandingJsonAsync<BrandingProxyRequest>(ctx);
+            var (ok, status, error, result) = await api.SetBrandingAsync(req?.Name);
+            if (!ok) return Results.Json(new { error }, statusCode: status);
+
+            // Push the new value into the header cache immediately — without this the admin saves
+            // and then stares at the old name until the TTL expires, and reports it as a bug.
+            if (result != null) branding.Set(result.Name);
+            return Results.Ok(result);
+        }).RequireAuthorization(policy => policy.RequireRole(UserRoles.Superadmin));
+
         // Remote Accounts proxy ────────────────────────────────────────────────
         app.MapGet("/api-proxy/remote-accounts", async (ApiClient api) =>
         {
@@ -143,4 +164,16 @@ public static class MiscProxyEndpoints
             }
         }).RequireAuthorization();
     }
+
+    /// <summary>
+    /// A malformed body is a client error, not a crash: without this a stray request would throw
+    /// JsonException out of the endpoint and surface as a 500.
+    /// </summary>
+    private static async Task<T?> ReadBrandingJsonAsync<T>(HttpContext ctx) where T : class
+    {
+        try { return await ctx.Request.ReadFromJsonAsync<T>(); }
+        catch { return null; }
+    }
+
+    private sealed record BrandingProxyRequest(string? Name);
 }

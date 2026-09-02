@@ -39,6 +39,13 @@
             </div>
         </div>
         <div class="toolbar compact">
+            @* Favoriting is a personal bookmark, not an edit — deliberately outside the
+               IsReadOnly gate so read-only members can star articles too. State is filled in
+               by site.js from the same /api-proxy/favorites call the sidebar already makes. *@
+            <sl-button size="small" variant="default" id="btn-favorite-star"
+                       data-article-id="@Model.Article.Id" title="Add to favorites">
+                <sl-icon slot="prefix" name="star"></sl-icon> <span data-fav-label>Favorite</span>
+            </sl-button>
             @if (!Model.IsReadOnly)
             {
                 <sl-button size="small" variant="primary" href="/Article/Edit?id=@Model.Article.Id">

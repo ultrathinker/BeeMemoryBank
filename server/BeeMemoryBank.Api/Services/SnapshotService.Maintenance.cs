@@ -107,6 +107,14 @@ public partial class SnapshotService
         roleCmd.CommandText = "DELETE FROM tbl_role WHERE is_system = 0";
         try { roleCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-009 archive */ }
 
+        // Favorites are per-user and node-local, and tbl_user is DROPPED above — leaving the rows
+        // would both ship one node's personal bookmarks to a peer and strand them against user ids
+        // that no longer exist there. Emptied rather than dropped for the same schema reason as the
+        // role tables above.
+        using var favoriteCmd = conn.CreateCommand();
+        favoriteCmd.CommandText = "DELETE FROM tbl_favorite";
+        try { favoriteCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-011 archive */ }
+
         using var vacuumCmd = conn.CreateCommand();
         vacuumCmd.CommandText = "VACUUM";
         vacuumCmd.ExecuteNonQuery();

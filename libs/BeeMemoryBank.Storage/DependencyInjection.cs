@@ -66,6 +66,7 @@ public static class DependencyInjection
         services.AddScoped<IProjectionMatrixRepository, ProjectionMatrixRepository>();
         services.AddScoped<ICommentRepository, CommentRepository>();
         services.AddScoped<IAgentRepository, AgentRepository>();
+        services.AddScoped<IFavoriteRepository, FavoriteRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IFolderRepository, FolderRepository>();
         services.AddScoped<IMediaRepository, MediaRepository>();

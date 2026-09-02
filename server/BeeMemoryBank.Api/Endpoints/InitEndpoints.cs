@@ -443,6 +443,10 @@ public static class InitEndpoints
                         "tbl_audit_log", "tbl_hard_delete_audit",
                         "tbl_projection_matrix",
                         "tbl_user", "tbl_folder_acl_entry",
+                        // Favorites reference both users and articles, all of which this wipe
+                        // removes — left behind they would be dangling rows that a later
+                        // PRAGMA foreign_key_check (join restore) reports as violations.
+                        "tbl_favorite",
                         // Role folder rules go with the users that held them. tbl_role itself is
                         // NOT in this list: DELETE FROM would take the two seeded system roles
                         // with it, and nothing re-seeds them (migrations only run once). Custom

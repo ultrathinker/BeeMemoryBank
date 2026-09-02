@@ -103,6 +103,21 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
             new { expireHours, slidingExpiration });
     }
 
+    public async Task<string?> GetBrandNameAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<string?>(
+            "SELECT brand_name FROM tbl_node_identity LIMIT 1");
+    }
+
+    public async Task SetBrandNameAsync(string? brandName)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_node_identity SET brand_name = @brandName WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+            new { brandName = string.IsNullOrWhiteSpace(brandName) ? null : brandName.Trim() });
+    }
+
     public async Task SetCanGenerateEmbeddingsAsync(bool enabled)
     {
         using var conn = OpenConnection();

@@ -1260,6 +1260,71 @@
         }
         loadSessionSettings();
 
+        // Branding: the product name in the header / tab title.
+        var brandInput = document.getElementById('brand-name-input');
+        var brandPreview = document.getElementById('brand-preview');
+        var brandSaveBtn = document.getElementById('btn-save-branding');
+        var brandResetBtn = document.getElementById('btn-reset-branding');
+        var brandSavedMsg = document.getElementById('branding-saved-msg');
+        var brandDefault = 'Bee Memory Bank';
+
+        function renderBrandPreview() {
+            if (!brandPreview) return;
+            var typed = (brandInput && brandInput.value || '').trim();
+            brandPreview.textContent = typed || brandDefault;
+        }
+        function loadBranding() {
+            if (!brandInput) return;
+            fetch('/api-proxy/branding', { headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (data) {
+                    if (!data) return;
+                    brandDefault = data.defaultName || brandDefault;
+                    brandInput.placeholder = brandDefault;
+                    // Only a real override goes into the box; the default stays a placeholder so
+                    // "empty means default" reads the same way it behaves.
+                    brandInput.value = data.isCustom ? data.name : '';
+                    renderBrandPreview();
+                })
+                .catch(function () {});
+        }
+        function saveBranding(name) {
+            if (brandSavedMsg) brandSavedMsg.style.display = 'none';
+            brandSaveBtn.loading = true;
+            fetch('/api-proxy/branding', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name })
+            })
+                .then(function (r) {
+                    brandSaveBtn.loading = false;
+                    if (!r.ok) {
+                        return r.json().catch(function () { return {}; }).then(function (e) {
+                            alert(e.error || 'Failed to save the product name.');
+                        });
+                    }
+                    return r.json().then(function (data) {
+                        brandInput.value = data.isCustom ? data.name : '';
+                        renderBrandPreview();
+                        // Update the header live so the change is visible without a reload.
+                        var headerSpan = document.querySelector('.app-logo span');
+                        if (headerSpan) headerSpan.textContent = data.name;
+                        if (brandSavedMsg) {
+                            brandSavedMsg.style.display = 'inline';
+                            setTimeout(function () { brandSavedMsg.style.display = 'none'; }, 3000);
+                        }
+                    });
+                })
+                .catch(function () {
+                    brandSaveBtn.loading = false;
+                    alert('Failed to save the product name.');
+                });
+        }
+        if (brandInput) brandInput.addEventListener('sl-input', renderBrandPreview);
+        if (brandSaveBtn) brandSaveBtn.addEventListener('click', function () { saveBranding((brandInput.value || '').trim()); });
+        if (brandResetBtn) brandResetBtn.addEventListener('click', function () { brandInput.value = ''; saveBranding(''); });
+        loadBranding();
+
         loadKeys();
         loadModels();
     })();
@@ -1298,6 +1363,26 @@
             onclick="return confirm('Lock the server? The decryption key will be cleared from memory. All users will need to re-authenticate to access encrypted content.')">
             <sl-icon slot="prefix" name="lock"></sl-icon> Lock Server
         </sl-button>
+    </div>
+
+    <!-- Branding -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="type"></sl-icon> Branding</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            The name shown in the header next to the logo and in the browser tab title. Leave it
+            empty to keep the built-in name. This is a setting of THIS node only — it is never
+            synced, so every installation can carry its own company name.
+        </p>
+        <sl-input id="brand-name-input" size="small" maxlength="40" clearable
+                  label="Product name" style="max-width:320px;"></sl-input>
+        <p class="text-muted text-sm" style="margin:10px 0 16px;">
+            Header preview: <strong id="brand-preview" style="color:var(--text-primary);"></strong>
+        </p>
+        <sl-button id="btn-save-branding" variant="primary" size="small">
+            <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
+        </sl-button>
+        <sl-button id="btn-reset-branding" variant="text" size="small">Reset to default</sl-button>
+        <span id="branding-saved-msg" style="display:none;margin-left:8px;color:var(--sl-color-success-600);font-size:0.85rem;">Saved.</span>
     </div>
 
     <!-- Web Session -->

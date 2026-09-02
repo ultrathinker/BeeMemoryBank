@@ -24,6 +24,16 @@ public interface INodeIdentityRepository
     Task SetSessionSettingsAsync(int expireHours, bool slidingExpiration);
 
     /// <summary>
+    /// Admin-configurable product name for the web header / tab title, or null when the node
+    /// has never set one (the caller then falls back to <see cref="Models.Branding.DefaultName"/>).
+    /// Node-local: never synced, so each installation can brand itself independently.
+    /// </summary>
+    Task<string?> GetBrandNameAsync();
+
+    /// <summary>Stores a custom name; null or blank clears the override and restores the default.</summary>
+    Task SetBrandNameAsync(string? brandName);
+
+    /// <summary>
     /// Admin-configurable toggle for whether THIS node generates its own embeddings
     /// (gates <see cref="BeeMemoryBank.Sync.PendingEmbeddingProcessor"/>). There was previously no
     /// way to change this after node init -- see <see cref="Models.NodeIdentity.CanGenerateEmbeddings"/>.

@@ -163,3 +163,14 @@ public record PeerPendingDekRotationDto(
     string OriginatorNodeId,
     string OriginatorDisplayName,
     string RotationTs);
+
+// ─── Favorites / branding ────────────────────────────────────────────────────
+
+public record FavoriteItemDto(Guid Id, string Title, string TreePath, bool Protected);
+
+/// <summary><c>ManualOrder</c> false means the list is in automatic alphabetical order.</summary>
+public record FavoriteListDto(List<FavoriteItemDto> Items, bool ManualOrder);
+
+/// <summary><c>IsCustom</c> false means <c>Name</c> is the built-in default, not a node override.</summary>
+public record BrandingDto(string Name, bool IsCustom, string DefaultName);
+

@@ -304,3 +304,19 @@ public record SyncProbeRelayResponse(
     int? HttpStatusCode,
     SyncProbeErrorCategory ErrorCategory,
     string? ErrorDetail);
+
+/// <summary>Current product name plus whether it is a node override or the built-in default.</summary>
+public record BrandingResponse(string Name, bool IsCustom, string DefaultName);
+
+/// <summary>
+/// One starred article as the sidebar renders it. Ordered by the endpoint, never by the client:
+/// alphabetical until the user moves something, then by their manual order.
+/// </summary>
+public record FavoriteItem(Guid Id, string Title, string TreePath, bool Protected);
+
+/// <summary>
+/// <paramref name="ManualOrder"/> tells the UI whether a "back to A-Z" action makes sense
+/// (false = already alphabetical).
+/// </summary>
+public record FavoriteListResponse(List<FavoriteItem> Items, bool ManualOrder);
+

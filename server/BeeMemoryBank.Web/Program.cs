@@ -169,6 +169,7 @@ builder.Services.AddAuthentication("BeeWebCookie")
 // invalidation — see the session-settings lazy-load middleware and the
 // /api-proxy/session/settings PUT handler.
 builder.Services.AddSingleton<WebSessionSettingsService>();
+builder.Services.AddSingleton<BrandingService>();
 builder.Services.AddOptions<CookieAuthenticationOptions>("BeeWebCookie")
     .Configure<WebSessionSettingsService>((opts, settings) =>
     {
@@ -339,6 +340,7 @@ app.MapFolderProxyEndpoints();
 app.MapSnapshotProxyEndpoints();
 app.MapUserProxyEndpoints();
 app.MapRoleProxyEndpoints();
+app.MapFavoriteProxyEndpoints();
 app.MapChatProxyEndpoints();
 // ca.crt download for the "Connect a device" page — anonymous, no proxy/auth.
 app.MapConnectEndpoints();

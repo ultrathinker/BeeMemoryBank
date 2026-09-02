@@ -138,3 +138,10 @@ public record DekRotationAcceptRequest(string CommitEventId);
 public record ProposeDekRotationRequest(string MasterPassword);
 
 public record AcceptDekRotationRequest(string CommitEventId, string MasterPassword);
+
+/// <summary>Null or blank clears the override and restores the built-in product name.</summary>
+public record BrandingRequest(string? Name);
+
+/// <summary>Direction for a one-step favorite move: "up" or "down".</summary>
+public record FavoriteMoveRequest(string Direction);
+
