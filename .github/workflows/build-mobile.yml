@@ -1,12 +1,15 @@
 name: Build Mobile (Android)
 
+# Directory.Packages.props is in the path filters because every mobile package version lives
+# there since the move to Central Package Management: a MAUI/AndroidX/Markdig bump no longer
+# touches mobile/ at all, and Android CI must still run for it.
 on:
   push:
     branches: [main, master, develop]
-    paths: ['mobile/**', '.github/workflows/build-mobile.yml']
+    paths: ['mobile/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
   pull_request:
     branches: [main, master, develop]
-    paths: ['mobile/**', '.github/workflows/build-mobile.yml']
+    paths: ['mobile/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
   workflow_dispatch: {}
 
 permissions:

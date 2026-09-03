@@ -47,8 +47,8 @@
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
-    <!-- These five were floating ("10.*", "*", "1.19.*") in the mobile project, i.e. the build was
-         not reproducible — a restore months apart could pull different packages. They are pinned to
+    <!-- These, and Markdig above, were floating ("10.*", "*", "1.19.*", "0.44.*") in the mobile
+         project, i.e. the build was not reproducible — a restore months apart could pull different packages. They are pinned to
          the versions that restore last resolved. Keep Xamarin.AndroidX.Core and Core.Core.Ktx on the
          same train when bumping (see the comment in BeeMemoryBank.Mobile.csproj). -->
     <PackageVersion Include="Microsoft.Maui.Controls" Version="10.0.90" />

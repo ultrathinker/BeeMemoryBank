@@ -3,6 +3,9 @@ WORKDIR /src
 
 COPY BeeMemoryBank.slnx .
 COPY Directory.Build.props .
+# Every NuGet version lives here (Central Package Management) and project files carry none.
+# Without this COPY the restore inside the container fails with NU1010 for every package.
+COPY Directory.Packages.props .
 # VERSION is read by Directory.Build.props at build time to stamp the assembly version.
 # Without this COPY the version property is silently skipped inside the container build.
 COPY VERSION .

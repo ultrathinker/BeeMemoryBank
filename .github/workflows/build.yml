@@ -30,7 +30,8 @@ jobs:
       # VelopackIntegrationTests shells out to the vpk packaging CLI (not the Velopack
       # NuGet library referenced by the test project - that's the update-client API, this
       # is the separate global tool that builds release packages). Version pinned to match
-      # the Velopack PackageReference in BeeMemoryBank.Integration.Tests.csproj.
+      # the Velopack entry in Directory.Packages.props (versions moved there when the repo
+      # switched to Central Package Management).
       - name: Install vpk (Velopack CLI)
         run: dotnet tool install --global vpk --version 1.2.0
 
