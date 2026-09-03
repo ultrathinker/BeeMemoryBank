@@ -18,6 +18,26 @@ public partial class ApiClient
         return resp.IsSuccessStatusCode;
     }
 
+    /// <summary>
+    /// Issues a new recovery key and returns it. The key is shown to the admin exactly once and is
+    /// NOT recoverable afterwards: only an Argon2id-derived wrapping key is stored, over an
+    /// independent random salt (see KeyManagementService.AddRecoveryKeyAsync). Returns the raw
+    /// response body on failure so the caller can surface the API's own message (e.g. a locked
+    /// session).
+    /// </summary>
+    public async Task<(bool ok, string? recoveryKey, string? error)> AddRecoveryKeyAsync()
+    {
+        var resp = await http.PostAsync("/api/keys/add-recovery", null);
+        var body = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode)
+            return (false, null, body);
+
+        var key = JsonNode.Parse(body)?["recoveryKey"]?.GetValue<string>();
+        return string.IsNullOrEmpty(key)
+            ? (false, null, "API returned no recovery key.")
+            : (true, key, null);
+    }
+
     // ─── Whitelist (sync nodes) ───────────────────────────────────────────────
 
     public async Task<List<WhitelistEntryDto>?> GetWhitelistAsync() =>

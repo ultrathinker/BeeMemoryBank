@@ -162,6 +162,11 @@ if (OperatingSystem.IsWindows())
 builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();
 builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler>();
+// Encrypts chat rows written before chat.db content/attachments/tool-calls were encrypted at rest
+// (finding H3a). Needs the master DEK, so it can only run while the vault is unlocked — it polls
+// and no-ops when locked rather than hooking unlock, matching PendingEmbeddingProcessor. On a node
+// with nothing legacy left (and on every fresh node) a tick is one empty partial-index lookup.
+builder.Services.AddHostedService<BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor>();
 builder.Services.AddScoped<ZipExportService>();
 builder.Services.AddScoped<CompactionService>();
 builder.Services.AddSingleton<SnapshotJoinCache>();

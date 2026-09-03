@@ -151,5 +151,18 @@ public static class UserProxyEndpoints
             var ok = await api.DeleteAgentAsync(id);
             return ok ? Results.NoContent() : Results.StatusCode(502);
         }).RequireAuthorization();
+
+        // Issue a new recovery key — superadmin only. Exists so this isn't a shell-only operation:
+        // the API port is not reachable from outside the host (see docs/deployment.md), so without
+        // a UI path an admin had to exec into the container with the internal key to get a recovery
+        // key at all. The response carries the key exactly once — it is never stored in recoverable
+        // form — so the caller must show it and let the admin save it.
+        app.MapPost("/api-proxy/keys/add-recovery", async (ApiClient api) =>
+        {
+            var (ok, recoveryKey, error) = await api.AddRecoveryKeyAsync();
+            return ok
+                ? Results.Ok(new { recoveryKey })
+                : Results.Json(new { error = error ?? "Failed to issue a recovery key." }, statusCode: 400);
+        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
     }
 }

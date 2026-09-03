@@ -54,12 +54,17 @@ public static class ChatProxyEndpoints
             return Results.Content(body ?? "", "application/json", null, statusCode: status);
         }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
-        // Auto-approve-writes setting — superadmin only (get + toggle).
+        // Auto-approve-writes setting — PER USER (get + toggle), so any authenticated user may
+        // read and set their OWN. It was superadmin-only while the setting was a single node-wide
+        // flag; once it became per-user (finding M1) that restriction meant an ordinary user could
+        // never reach their own preference — the row existed but nothing could write it. The API
+        // resolves the target user from the caller's identity and ignores any client-supplied id,
+        // so a user cannot touch anyone else's setting through this route.
         app.MapGet("/api-proxy/chat/settings/auto-approve", async (ApiClient api) =>
         {
             var f = await api.ForwardGetAsync("chat/settings/auto-approve");
             return Results.Content(f.Body, f.ContentType ?? "application/json", Encoding.UTF8, f.Status);
-        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+        }).RequireAuthorization();
 
         app.MapMethods("/api-proxy/chat/settings/auto-approve", new[] { "PATCH" }, async (HttpContext ctx, ApiClient api) =>
         {
@@ -67,7 +72,7 @@ public static class ChatProxyEndpoints
             var json = await sr.ReadToEndAsync();
             var (ok, body, status) = await api.PostRawAsync("chat/settings/auto-approve", json, method: "PATCH");
             return Results.Content(body ?? "", "application/json", null, statusCode: status);
-        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
+        }).RequireAuthorization();
 
         // "Allow AI chat for users" node-wide kill switch — superadmin only (get + toggle).
         app.MapGet("/api-proxy/chat/settings/chat-enabled", async (ApiClient api) =>

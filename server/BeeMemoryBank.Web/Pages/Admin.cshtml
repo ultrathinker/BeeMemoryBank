@@ -718,20 +718,6 @@
         <sl-switch id="chat-globally-enabled-toggle" style="flex-shrink:0;"></sl-switch>
     </div>
 
-    <!-- Auto-approve writes: opt-in, skips the human-in-the-loop Allow/Deny gate for write tools.
-         ACL, the destructive-op cap, and audit tagging still apply in full — only the pause is
-         skipped. Article history/restore is the accepted safety net. -->
-    <div class="card" style="max-width:640px;margin-bottom:24px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
-        <div>
-            <strong>Auto-approve writes</strong>
-            <p class="text-muted text-sm" style="margin:4px 0 0 0;">
-                When on, the AI creates/edits/deletes notes immediately without asking for Allow/Deny.
-                Folder access rules and the destructive-action limit still apply, and every change is
-                still visible in article history / restorable.
-            </p>
-        </div>
-        <sl-switch id="chat-auto-approve-toggle" style="flex-shrink:0;"></sl-switch>
-    </div>
 
     <!-- Keys -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
@@ -1128,27 +1114,6 @@
             if (sel) sel.addEventListener('sl-change', saveDefaults);
         });
 
-        // Auto-approve writes toggle.
-        var autoApproveToggle = document.getElementById('chat-auto-approve-toggle');
-        function loadAutoApprove() {
-            if (!autoApproveToggle) return;
-            fetch('/api-proxy/chat/settings/auto-approve', { headers: { 'Accept': 'application/json' } })
-                .then(function (r) { return r.ok ? r.json() : { autoApproveWrites: false }; })
-                .then(function (data) { autoApproveToggle.checked = !!data.autoApproveWrites; })
-                .catch(function () {});
-        }
-        if (autoApproveToggle) {
-            autoApproveToggle.addEventListener('sl-change', function () {
-                var enabled = autoApproveToggle.checked;
-                fetch('/api-proxy/chat/settings/auto-approve', {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled: enabled })
-                }).catch(function () { autoApproveToggle.checked = !enabled; });
-            });
-        }
-        loadAutoApprove();
-
         // "Allow AI chat for users" node-wide kill switch toggle.
         var chatEnabledToggle = document.getElementById('chat-globally-enabled-toggle');
         function loadChatEnabled() {
@@ -1169,6 +1134,39 @@
             });
         }
         loadChatEnabled();
+
+        // Issue a new recovery key. The key comes back exactly once — nothing stores it in
+        // recoverable form — so it goes straight into a dialog the admin must copy from, never
+        // into a log line or a page the browser might restore later.
+        var issueRecoveryBtn = document.getElementById('issue-recovery-key-btn');
+        if (issueRecoveryBtn) {
+            issueRecoveryBtn.addEventListener('click', function () {
+                if (!confirm('Issue a new recovery key?\n\nIt will be shown once and cannot be retrieved afterwards. Existing passwords keep working.')) return;
+                issueRecoveryBtn.loading = true;
+                fetch('/api-proxy/keys/add-recovery', { method: 'POST', headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+                    .then(function (res) {
+                        if (res.ok && res.body && res.body.recoveryKey) {
+                            document.getElementById('recovery-key-value').value = res.body.recoveryKey;
+                            document.getElementById('recovery-key-dialog').show();
+                        } else {
+                            alert((res.body && res.body.error) ? res.body.error : 'Failed to issue a recovery key (is the vault unlocked?).');
+                        }
+                    })
+                    .catch(function () { alert('Failed to issue a recovery key.'); })
+                    .finally(function () { issueRecoveryBtn.loading = false; });
+            });
+
+            document.getElementById('recovery-key-copy').addEventListener('click', function () {
+                var input = document.getElementById('recovery-key-value');
+                navigator.clipboard.writeText(input.value).catch(function () {});
+            });
+            document.getElementById('recovery-key-close').addEventListener('click', function () {
+                // Clear the field on close so the key doesn't linger in the DOM.
+                document.getElementById('recovery-key-value').value = '';
+                document.getElementById('recovery-key-dialog').hide();
+            });
+        }
 
         // "Generate embeddings on this node" toggle (tbl_node_identity.can_generate_embeddings).
         var embeddingsToggle = document.getElementById('embeddings-enabled-toggle');
@@ -1490,9 +1488,34 @@
             <sl-alert variant="warning" open style="margin-bottom:16px;">
                 <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
                 <strong>Issue a new recovery key!</strong> All previous recovery keys were invalidated by the DEK rotation.
-                Generate a fresh one via the API: <code>POST /api/keys/add-recovery</code>, or from the CLI: <code>bmb keys add-recovery</code>.
+                Use the button below.
             </sl-alert>
         }
+
+        <div style="margin-bottom:16px;">
+            <sl-button id="issue-recovery-key-btn" variant="default" size="small">
+                <sl-icon slot="prefix" name="key"></sl-icon>
+                Issue new recovery key
+            </sl-button>
+            <div class="text-muted text-sm" style="margin-top:6px;">
+                A recovery key unlocks the vault if the master password is lost. It is shown once and cannot be
+                retrieved later — only a key derived from it is stored. Issuing a new one does not invalidate
+                existing passwords.
+            </div>
+        </div>
+
+        <sl-dialog id="recovery-key-dialog" label="Your new recovery key" style="--width:560px;">
+            <sl-alert variant="warning" open style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                Save this now. It is not stored anywhere in recoverable form and will never be shown again.
+            </sl-alert>
+            <sl-input id="recovery-key-value" readonly filled></sl-input>
+            <sl-button slot="footer" id="recovery-key-copy" variant="primary">
+                <sl-icon slot="prefix" name="clipboard"></sl-icon>
+                Copy
+            </sl-button>
+            <sl-button slot="footer" id="recovery-key-close">Done</sl-button>
+        </sl-dialog>
 
         @if (dekActive)
         {
