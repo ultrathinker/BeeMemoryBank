@@ -1,0 +1,23 @@
+-- Security fix (finding C1): every recovery slot created before this migration has its
+-- Argon2id salt column set to the recovery key's own raw bytes — KeyManagementService.
+-- AddRecoveryKeyAsync used to pass `salt: recoveryKeyBytes` to KeyDerivation.DeriveKek, so the
+-- "salt" stored in tbl_key_slot literally WAS the recovery key. Anyone with read access to the
+-- database file (a backup, a stolen disk, any bug that exposes raw rows) could Base64-encode
+-- that salt column, run Argon2id with the stored KDF params, unwrap encrypted_master_dek, and
+-- decrypt the entire vault — without ever having seen the real recovery key.
+--
+-- There is no way to retroactively fix an existing row: the only secret involved (the recovery
+-- key) has already been reduced to something fully reconstructable from the row itself, so
+-- re-deriving a safe salt in place would not undo the exposure — anyone who captured a copy of
+-- the database before this migration ran already has everything they need. The only correct
+-- remedy is to invalidate every such slot outright.
+--
+-- This mirrors an already-established pattern in this codebase: DekRewrapper deletes every
+-- `recovery` (and `os_auto_unlock`) slot on every DEK rotation for the same reason (old slots
+-- wrap a DEK, or were derived under assumptions, that no longer apply) and the Admin UI already
+-- has a "your recovery key was invalidated, issue a new one" reminder plus a one-click
+-- `POST /api/keys/add-recovery` endpoint (KeyManagementService.AddRecoveryKeyAsync, now fixed to
+-- use an independent salt) for exactly this situation. A node with no recovery slot is not
+-- locked out: every "password"/"user" slot is completely unaffected by this migration, so any
+-- superadmin who can still log in normally can generate a fresh, safe recovery key immediately.
+DELETE FROM tbl_key_slot WHERE slot_type = 'recovery';

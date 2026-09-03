@@ -1,5 +1,6 @@
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -10,6 +11,16 @@ public static class SessionEndpoints
 {
     public static void MapSessionEndpoints(this WebApplication app)
     {
+        // Finding M8: clear any cached protected-article passphrases the instant the vault
+        // locks, from ANY call site — not just the /lock handler below. SessionService.Locked
+        // fires for node reset, snapshot/network restore, and the shutdown hook too, and all of
+        // them equally invalidate a cached passphrase (it was only ever "trustworthy" for as
+        // long as the session that verified it stayed unlocked). This runs once at startup,
+        // for the lifetime of the singleton SessionService/ProtectedUnlockCache pair.
+        var lockSubscriptionSession = app.Services.GetRequiredService<SessionService>();
+        var unlockCacheForLockSubscription = app.Services.GetRequiredService<ProtectedUnlockCache>();
+        lockSubscriptionSession.Locked += unlockCacheForLockSubscription.Clear;
+
         var group = app.MapGroup("/api/session").WithTags("Session").RequireInternalKey();
 
         group.MapPost("/unlock", async (UnlockRequest req, SessionService session) =>

@@ -49,5 +49,17 @@ public sealed class ProtectedUnlockCache
 
     public void Forget(string callerKey, Guid articleId) => _entries.TryRemove(Key(callerKey, articleId), out _);
 
+    /// <summary>
+    /// Wipes every cached passphrase, for every caller and every article. Subscribed to
+    /// <see cref="BeeMemoryBank.Core.Services.SessionService.Locked"/> (see
+    /// SessionEndpoints.MapSessionEndpoints) so a vault lock also ends this cache's TTL window
+    /// immediately, instead of letting it keep handing back plaintext for up to
+    /// <see cref="Ttl"/> after the lock (finding M8). SessionService.Lock() is called from
+    /// several places besides the /lock endpoint (node reset, snapshot/network restore, the
+    /// process-shutdown hook) — wiring through the event means all of them are covered by this
+    /// one subscription rather than each caller having to remember to clear this cache too.
+    /// </summary>
+    public void Clear() => _entries.Clear();
+
     private static string Key(string callerKey, Guid articleId) => $"{callerKey}|{articleId}";
 }

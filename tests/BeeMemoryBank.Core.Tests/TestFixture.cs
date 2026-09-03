@@ -60,7 +60,7 @@ public abstract class TestFixture : IAsyncLifetime
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         ArticleService = new ArticleService(articleRepo, bodyRepo, Session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, Factory);
         var userRepoForKeyMgmt = new BeeMemoryBank.Storage.Sqlite.UserRepository(Factory);
-        KeyManagement = new KeyManagementService(keySlotRepo, Session, userRepoForKeyMgmt);
+        KeyManagement = new KeyManagementService(keySlotRepo, Session, userRepoForKeyMgmt, Factory);
         FolderRepo = folderRepo;
 
         var folderAccess = new FolderAccessService(new ServiceCollection()

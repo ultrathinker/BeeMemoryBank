@@ -139,6 +139,28 @@ public static class ProtectedContentCodec
         int iterations = ReadInt32(span, ref pos);
         int parallelism = ReadInt32(span, ref pos);
 
+        // SECURITY (fixed finding M4): these three numbers came from inside the blob, which is
+        // attacker-controlled — anyone with write access to a folder (a restricted agent key
+        // included) can save an article whose body is a hand-crafted "BMBENC1:" blob. Without a
+        // bound, a value like memory = int.MaxValue asks Argon2id to allocate multiple terabytes
+        // the instant a human later enters the correct passphrase — an easy way to OOM-kill the
+        // whole node from a single malicious article, with no attacker-side authentication beyond
+        // whatever wrote the article in the first place. Mirrors the exact bounds
+        // SessionService.UnlockCoreAsync already enforces on key-slot KDF params, so the two
+        // "attacker might control these numbers" call sites in the codebase agree on one policy.
+        const int MinArgonMemory = 32768; // 32 MiB
+        const int MinArgonIterations = 2;
+        if (memory < MinArgonMemory || iterations < MinArgonIterations)
+            throw new CryptographicException(
+                $"Protected blob has weakened KDF params (memory={memory}, iterations={iterations}); refusing to unwrap.");
+
+        const int MaxArgonMemory = 1_048_576;
+        const int MaxArgonIterations = 20;
+        const int MaxArgonParallelism = 16;
+        if (memory > MaxArgonMemory || iterations > MaxArgonIterations || parallelism > MaxArgonParallelism)
+            throw new CryptographicException(
+                $"Protected blob has unreasonable KDF params (memory={memory}, iterations={iterations}, parallelism={parallelism}); refusing to unwrap.");
+
         int saltLen = ReadByte(span, ref pos);
         var salt = ReadBytes(span, ref pos, saltLen);
         int ivLen = ReadByte(span, ref pos);

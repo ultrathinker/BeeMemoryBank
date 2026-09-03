@@ -9,7 +9,11 @@ namespace BeeMemoryBank.Core.Services;
 /// <summary>
 /// Manages access slots for the master DEK: password change, recovery key, slot deletion.
 /// </summary>
-public class KeyManagementService(IKeySlotRepository keySlotRepo, SessionService session, IUserRepository userRepo)
+public class KeyManagementService(
+    IKeySlotRepository keySlotRepo,
+    SessionService session,
+    IUserRepository userRepo,
+    IDbConnectionFactory connFactory)
 {
     /// <summary>
     /// Legacy password-change endpoint (kept for backward compatibility with the unupgraded
@@ -69,13 +73,42 @@ public class KeyManagementService(IKeySlotRepository keySlotRepo, SessionService
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
                 CreatedAt = DateTime.UtcNow
             };
-            var newSlotId = await keySlotRepo.CreateAsync(newSlot);
+            // SECURITY (fixed finding L2): create the new slot and delete the old one as ONE
+            // atomic transaction. The previous code ran these as two independent statements
+            // (each opening and committing its own connection), with a RepointKeySlotAsync call
+            // sandwiched in between. A crash or process kill in that gap left BOTH the old and
+            // the new password permanently able to unlock the vault — a "change your password"
+            // that silently failed to revoke the old one. IKeySlotRepository.CreateAsync/
+            // DeleteAsync now accept an optional transaction (mirroring the IArticleRepository
+            // contract — see its doc comment) so both writes commit or roll back together.
+            int newSlotId;
+            using (var conn = connFactory.CreateConnection())
+            using (var tx = conn.BeginTransaction())
+            {
+                try
+                {
+                    newSlotId = await keySlotRepo.CreateAsync(newSlot, tx);
+                    await keySlotRepo.DeleteAsync(oldSlot.SlotId, tx);
+                    tx.Commit();
+                }
+                catch
+                {
+                    try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back; don't mask the real failure */ }
+                    throw;
+                }
+            }
 
-            // If a tbl_user row pointed at the old slot, repoint it at the new slot before
-            // we delete the old one — otherwise the FK becomes a dangling NULL on next read.
+            // Repoint any tbl_user row that pointed at the old slot. This intentionally runs
+            // AFTER the transaction above commits: IUserRepository doesn't (yet) accept a
+            // transaction parameter, and calling it from inside the still-open transaction above
+            // would contend for SQLite's single writer lock against itself. The residual
+            // non-atomic window here is far less severe than the one just closed — if a crash
+            // lands exactly here, the old slot is already gone (so the old password no longer
+            // works) and the new slot already exists and is fully usable via the normal
+            // UnlockAsync path (which tries every row in tbl_key_slot regardless of user
+            // association); only this user's key_slot_id bookkeeping would be left stale, not
+            // vault access.
             await userRepo.RepointKeySlotAsync(oldSlot.SlotId, newSlotId);
-
-            await keySlotRepo.DeleteAsync(oldSlot.SlotId);
         }
         finally
         {
@@ -91,16 +124,29 @@ public class KeyManagementService(IKeySlotRepository keySlotRepo, SessionService
     {
         var masterDek = session.GetMasterDek();
 
-        // Recovery key = 32 random bytes, represented as Base64
+        // Recovery key = 32 random bytes, represented as Base64. This string is the ONE secret
+        // the user is expected to write down and keep offline — nothing that derives it may be
+        // persisted anywhere in the database.
         var recoveryKeyBytes = SecureRandom.GetBytes(32);
         var recoveryKeyString = Convert.ToBase64String(recoveryKeyBytes);
 
         byte[]? kek = null;
         try
         {
+            // SECURITY (fixed finding C1): the salt MUST be independent random material, exactly
+            // like every other slot type — see UserService.CreateUserKeySlotAsync. The previous
+            // implementation passed recoveryKeyBytes itself as the Argon2id salt, and Salt is a
+            // plaintext column in tbl_key_slot. That meant the stored "salt" WAS the recovery
+            // key: anyone with read access to the database file (backup, stolen disk, a bug
+            // exposing raw rows) could Base64-encode the salt column, run Argon2id with the
+            // stored params, unwrap encrypted_master_dek, and read the entire vault — no
+            // password, no recovery key ever needed to have been seen. Generating a fresh,
+            // unrelated salt here means the salt column reveals nothing about the recovery key;
+            // the KEK cannot be reconstructed from the database alone.
+            var salt = KeyDerivation.GenerateSalt();
             kek = KeyDerivation.DeriveKek(
                 recoveryKeyString,
-                salt: recoveryKeyBytes, // salt = the key bytes themselves (they're random)
+                salt,
                 memory: CryptoConstants.DefaultArgonMemory,
                 iterations: CryptoConstants.DefaultArgonIterations,
                 parallelism: CryptoConstants.DefaultArgonParallelism);
@@ -112,7 +158,7 @@ public class KeyManagementService(IKeySlotRepository keySlotRepo, SessionService
                 SlotType = "recovery",
                 EncryptedMasterDek = encryptedDek,
                 IV = iv,
-                Salt = recoveryKeyBytes,
+                Salt = salt,
                 ArgonMemory = CryptoConstants.DefaultArgonMemory,
                 ArgonIterations = CryptoConstants.DefaultArgonIterations,
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,

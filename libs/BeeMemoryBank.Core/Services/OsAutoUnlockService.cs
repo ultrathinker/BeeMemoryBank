@@ -9,7 +9,16 @@ namespace BeeMemoryBank.Core.Services;
 /// <summary>
 /// Manages the optional DPAPI-based auto-unlock slot (<c>os_auto_unlock</c>) that lets bmbd
 /// unlock the vault on startup without a human password — at the cost of granting access to
-/// anyone logged in under the same Windows user account.
+/// any BeeMemoryBank-aware process running under the same Windows user account. Application-
+/// specific optional entropy (see <see cref="Entropy"/>) means a process must know that exact
+/// byte string, not merely share the OS user, before <c>ProtectedData.Unprotect</c> will even
+/// attempt to decrypt the secret file — this stops the trivially generic attack (some unrelated
+/// program or malware calling <c>ProtectedData.Unprotect(bytes, null, DataProtectionScope.
+/// CurrentUser)</c> against every DPAPI blob it can find under the user's profile). It does NOT
+/// stop a determined attacker who can read this project's shipped binaries or source: the
+/// entropy has to be embedded in code to be usable at all, so it is not a secret from someone
+/// who can decompile bmbd — DPAPI's CurrentUser scope remains fundamentally an OS-user boundary,
+/// not a per-application one, and this feature is opt-in for exactly that reason.
 ///
 /// <para>Design notes:</para>
 /// <list type="bullet">
@@ -43,6 +52,16 @@ public class OsAutoUnlockService(
     SessionService session,
     string dataPath)
 {
+    /// <summary>
+    /// DPAPI optional entropy for the auto-unlock secret file (finding M12b). Fixed and versioned
+    /// rather than random/per-install: DPAPI folds this byte string into the derivation, so it
+    /// must be reproducible at unprotect time without persisting anything extra — a random value
+    /// would have to be stored somewhere, and stored next to the DPAPI blob it would add nothing
+    /// (an attacker who can read one file can read both). The "v1" suffix leaves room for a future
+    /// entropy rotation without ambiguity about which generation a given blob used.
+    /// </summary>
+    private static readonly byte[] Entropy = "BeeMemoryBank.OsAutoUnlock.v1"u8.ToArray();
+
     /// <summary>File that holds the DPAPI-encrypted 32-byte auto-unlock secret.</summary>
     public string SecretFilePath => Path.Combine(dataPath, "os-auto-unlock.dat");
 
@@ -109,9 +128,9 @@ public class OsAutoUnlockService(
 
             try
             {
-                // Protect the raw secret with DPAPI (current-user scope, no optional entropy)
-                // and persist it next to the vault.
-                var dpapi = ProtectedData.Protect(secret, null, DataProtectionScope.CurrentUser);
+                // Protect the raw secret with DPAPI (current-user scope) using application-specific
+                // optional entropy (finding M12b) and persist it next to the vault.
+                var dpapi = ProtectedData.Protect(secret, Entropy, DataProtectionScope.CurrentUser);
                 await File.WriteAllBytesAsync(SecretFilePath, dpapi);
                 return dpapi;
             }
@@ -155,7 +174,7 @@ public class OsAutoUnlockService(
             if (!File.Exists(SecretFilePath)) return false;
 
             var dpapi = await File.ReadAllBytesAsync(SecretFilePath);
-            var secret = ProtectedData.Unprotect(dpapi, null, DataProtectionScope.CurrentUser);
+            var secret = ProtectedData.Unprotect(dpapi, Entropy, DataProtectionScope.CurrentUser);
             try
             {
                 var masterDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, secret);

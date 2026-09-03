@@ -34,6 +34,17 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
 
     public LegacyPasswordSlotMigrationService.MigrationResult? LastMigrationResult { get; private set; }
 
+    /// <summary>
+    /// Raised at the end of <see cref="Lock"/>, after every in-memory key has been wiped.
+    /// Api-layer code subscribes to this (see SessionEndpoints.MapSessionEndpoints) to clear
+    /// state that Core has no business knowing about but that must not outlive a lock either —
+    /// e.g. ProtectedUnlockCache's cached per-article passphrases (finding M8) — without giving
+    /// Core a dependency on Api-layer types. Fires for every caller of Lock(), not just the
+    /// /api/session/lock endpoint: node reset, snapshot/network restore, and the process-shutdown
+    /// hook all call it directly too, and each of those needs the same cleanup.
+    /// </summary>
+    public event Action? Locked;
+
     public bool IsUnlocked
     {
         get { lock (_lock) { return _masterDek != null; } }
@@ -351,6 +362,10 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                 _pendingClearDek = null;
             }
         }
+        // Outside the lock: subscriber code (see Locked's doc comment) shouldn't run while we're
+        // holding our own internal lock — it has no reason to touch _masterDek et al., and
+        // invoking arbitrary handlers from inside a lock risks reentrancy/deadlock for no benefit.
+        Locked?.Invoke();
     }
 
     public byte[] GetMasterDek()
