@@ -3,13 +3,18 @@ name: Build Mobile (Android)
 # Directory.Packages.props is in the path filters because every mobile package version lives
 # there since the move to Central Package Management: a MAUI/AndroidX/Markdig bump no longer
 # touches mobile/ at all, and Android CI must still run for it.
+#
+# libs/** is there because the app is mostly those libraries — it references Core, Storage, Sync,
+# Search and Crypto, and gets its services from their DI extensions. Without this filter a change
+# that alters what mobile resolves at startup ships with Android CI never having run: the DEK
+# rotation applier that mobile now activates was added in exactly such a commit.
 on:
   push:
     branches: [main, master, develop]
-    paths: ['mobile/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
+    paths: ['mobile/**', 'libs/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
   pull_request:
     branches: [main, master, develop]
-    paths: ['mobile/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
+    paths: ['mobile/**', 'libs/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
   workflow_dispatch: {}
 
 permissions:
