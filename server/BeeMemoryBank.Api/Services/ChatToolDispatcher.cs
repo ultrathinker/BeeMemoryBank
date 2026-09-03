@@ -228,17 +228,6 @@ public sealed partial class ChatToolDispatcher(
         return list;
     }
 
-    private static int CountOccurrences(string text, string search)
-    {
-        int count = 0, idx = 0;
-        while ((idx = text.IndexOf(search, idx, StringComparison.Ordinal)) >= 0)
-        {
-            count++;
-            idx += search.Length;
-        }
-        return count;
-    }
-
     private static string Truncate(string s, int maxLen) => s.Length <= maxLen ? s : s[..maxLen] + "...";
 
     private static string OkJson(string message, Guid? id = null)

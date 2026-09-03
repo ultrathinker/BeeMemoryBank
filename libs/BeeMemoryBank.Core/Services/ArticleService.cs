@@ -148,6 +148,26 @@ public partial class ArticleService(
         bool updateHint = false,
         bool suppressVersion = false)
     {
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+        await UpdateCoreAsync(id, title, treePath, tags, plaintext, protectionHint, updateHint, suppressVersion);
+    }
+
+    /// <summary>
+    /// The update itself, assuming the caller already holds this article's write lock. Exists so
+    /// the read-modify-write operations below can hold ONE lock across both the read and the
+    /// write — <see cref="ArticleWriteLock"/> is not reentrant, so they cannot call the public
+    /// <see cref="UpdateAsync"/> from inside their own critical section.
+    /// </summary>
+    private async Task UpdateCoreAsync(
+        Guid id,
+        string? title,
+        string? treePath,
+        List<string>? tags,
+        string? plaintext,
+        string? protectionHint,
+        bool updateHint,
+        bool suppressVersion)
+    {
         var article = await articleRepo.GetByIdAsync(id)
                        ?? throw new KeyNotFoundException($"Article {id} not found.");
 
@@ -277,6 +297,63 @@ public partial class ArticleService(
 
         if (plaintext != null)
             await LinkOrphanMediaAsync(id, plaintext);
+    }
+
+    /// <summary>
+    /// Appends text to the end of an article's body, reading and writing under one lock.
+    ///
+    /// <para>
+    /// Lives here rather than in the calling tool for a reason: a caller that fetched the body
+    /// itself and then called <see cref="UpdateAsync"/> would leave a window between the two in
+    /// which another writer's change lands and is then overwritten wholesale. With ~20 people plus
+    /// agents on one node, two appends arriving together silently dropped one of them — recoverable
+    /// only by digging through version history, if anyone noticed at all.
+    /// </para>
+    /// </summary>
+    /// <returns>The new body length, for the caller's confirmation message.</returns>
+    public async Task<int> AppendAsync(Guid id, string text)
+    {
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+        var content = await GetContentAsync(id);
+        var newContent = content + "\n\n" + text;
+        await UpdateCoreAsync(id, null, null, null, newContent, null, false, false);
+        return newContent.Length;
+    }
+
+    /// <summary>Prepends text to an article's body. See <see cref="AppendAsync"/> for why it locks.</summary>
+    /// <returns>The new body length.</returns>
+    public async Task<int> PrependAsync(Guid id, string text)
+    {
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+        var content = await GetContentAsync(id);
+        var newContent = text + "\n\n" + content;
+        await UpdateCoreAsync(id, null, null, null, newContent, null, false, false);
+        return newContent.Length;
+    }
+
+    /// <summary>
+    /// Replaces every occurrence of <paramref name="search"/> with <paramref name="replace"/>.
+    /// See <see cref="AppendAsync"/> for why it locks.
+    /// </summary>
+    /// <returns>
+    /// Occurrences replaced. Zero means the article was left completely untouched — no version
+    /// snapshot, no updatedAt change, no event.
+    /// </returns>
+    public async Task<int> ReplaceInAsync(Guid id, string search, string replace)
+    {
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+        var content = await GetContentAsync(id);
+
+        int count = 0, idx = 0;
+        while ((idx = content.IndexOf(search, idx, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            idx += search.Length;
+        }
+        if (count == 0) return 0;
+
+        await UpdateCoreAsync(id, null, null, null, content.Replace(search, replace), null, false, false);
+        return count;
     }
 
     /// <summary>Soft-deletes an article.</summary>

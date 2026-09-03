@@ -95,10 +95,9 @@ public sealed partial class ChatToolDispatcher
 
         try
         {
-            var content = await articleService.GetContentAsync(id);
-            var newContent = content + "\n\n" + text;
-            await articleService.UpdateAsync(id, null, null, null, newContent);
-            return OkJson($"Appended to article {id} ({article.Title}). New size: {newContent.Length} chars.", id);
+            // Same per-article lock as the MCP tool — chat writes race agent writes just as easily.
+            var newLength = await articleService.AppendAsync(id, text);
+            return OkJson($"Appended to article {id} ({article.Title}). New size: {newLength} chars.", id);
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -129,12 +128,9 @@ public sealed partial class ChatToolDispatcher
 
         try
         {
-            var content = await articleService.GetContentAsync(id);
-            var count = CountOccurrences(content, search);
+            var count = await articleService.ReplaceInAsync(id, search, replace);
             if (count == 0)
                 return JsonSerializer.Serialize(new { ok = true, occurrences = 0, message = $"Replaced 0 occurrences of \"{Truncate(search, 50)}\" in article {id} ({article.Title}).", id }, JsonOpts);
-            var newContent = content.Replace(search, replace);
-            await articleService.UpdateAsync(id, null, null, null, newContent);
             return JsonSerializer.Serialize(new { ok = true, occurrences = count, message = $"Replaced {count} occurrence(s) of \"{Truncate(search, 50)}\" → \"{Truncate(replace, 50)}\" in article {id} ({article.Title}).", id }, JsonOpts);
         }
         catch (UnauthorizedAccessException ex)
@@ -245,9 +241,13 @@ public sealed partial class ChatToolDispatcher
             var existingFigureMd = $"![{alt}](/api/media/{existingMedia.Id})";
             try
             {
+                // AppendAsync always inserts the blank-line separator; an empty body would gain a
+                // leading one, so that case still goes through UpdateAsync with the exact text.
                 var existing = await articleService.GetContentAsync(article.Id);
-                var newContent = string.IsNullOrEmpty(existing) ? existingFigureMd : existing + "\n\n" + existingFigureMd;
-                await articleService.UpdateAsync(article.Id, null, null, null, newContent);
+                if (string.IsNullOrEmpty(existing))
+                    await articleService.UpdateAsync(article.Id, null, null, null, existingFigureMd);
+                else
+                    await articleService.AppendAsync(article.Id, existingFigureMd);
             }
             catch
             {

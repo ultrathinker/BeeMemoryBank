@@ -261,9 +261,14 @@ public class DekRotationFlowTests : IAsyncLifetime
             new { commitEventId, masterPassword = Password });
         acceptResp.StatusCode.Should().Be(HttpStatusCode.Accepted);
 
+        // 60s, not the 15s the older tests use: these two rotate over a vault that also has
+        // version rows and a projection matrix, and they run while the rest of the suite saturates
+        // the machine. A rotation that actually works finishes in about a second, so the wider
+        // bound only buys tolerance for a loaded runner — it never masks a real failure, which
+        // surfaces as the Failed step rather than as a timeout.
         return await PollProgressAsync(
             step => step == DekRotationFlowStep.Completed,
-            timeout: TimeSpan.FromSeconds(15));
+            timeout: TimeSpan.FromSeconds(60));
     }
 
     [Fact]

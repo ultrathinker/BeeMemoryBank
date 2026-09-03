@@ -329,14 +329,13 @@ public class BeeWriteTools(
 
         try
         {
-            var content = await articleService.GetContentAsync(id);
-            var count = CountOccurrences(content, search);
+            // Read and write happen inside one per-article lock in the service. Fetching the body
+            // here and calling UpdateAsync would reopen the lost-update window this closes.
+            var count = await articleService.ReplaceInAsync(id, search, replace);
             // Unified response: "Replaced N occurrence(s)" for any N >= 0 so MCP clients parse one format.
             if (count == 0)
                 return $"Replaced 0 occurrence(s) of \"{Truncate(search, 50)}\" in article {id} ({article.Title}).";
 
-            var newContent = content.Replace(search, replace);
-            await articleService.UpdateAsync(id, null, null, null, newContent);
             return $"Replaced {count} occurrence(s) of \"{Truncate(search, 50)}\" → \"{Truncate(replace, 50)}\" in article {id} ({article.Title}).";
         }
         catch (UnauthorizedAccessException ex)
@@ -348,17 +347,6 @@ public class BeeWriteTools(
         }
         catch (KeyNotFoundException) { return $"Error: article {id} not found"; }
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
-    }
-
-    private static int CountOccurrences(string text, string search)
-    {
-        int count = 0, idx = 0;
-        while ((idx = text.IndexOf(search, idx, StringComparison.Ordinal)) >= 0)
-        {
-            count++;
-            idx += search.Length;
-        }
-        return count;
     }
 
     private static string Truncate(string s, int maxLen) =>
@@ -384,10 +372,8 @@ public class BeeWriteTools(
 
         try
         {
-            var content = await articleService.GetContentAsync(id);
-            var newContent = content + "\n\n" + text;
-            await articleService.UpdateAsync(id, null, null, null, newContent);
-            return responseManager.ProcessResponse($"Appended to article {id}. New size: {newContent.Length} chars.");
+            var newLength = await articleService.AppendAsync(id, text);
+            return responseManager.ProcessResponse($"Appended to article {id}. New size: {newLength} chars.");
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -420,10 +406,8 @@ public class BeeWriteTools(
 
         try
         {
-            var content = await articleService.GetContentAsync(id);
-            var newContent = text + "\n\n" + content;
-            await articleService.UpdateAsync(id, null, null, null, newContent);
-            return responseManager.ProcessResponse($"Prepended to article {id}. New size: {newContent.Length} chars.");
+            var newLength = await articleService.PrependAsync(id, text);
+            return responseManager.ProcessResponse($"Prepended to article {id}. New size: {newLength} chars.");
         }
         catch (UnauthorizedAccessException ex)
         {
