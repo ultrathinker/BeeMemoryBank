@@ -171,13 +171,15 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                     // unconditionally rather than rely on that invariant never being violated.
                     if (sentinelMatch && slot.SlotType == "user")
                     {
-                        var userRepo = sentinelScope.ServiceProvider.GetService<IUserRepository>();
-                        if (userRepo != null)
-                        {
-                            var owner = (await userRepo.ListActiveAsync())
-                                .FirstOrDefault(u => u.KeySlotId == slot.SlotId);
-                            authorized = owner != null && owner.Role == UserRoles.Superadmin;
-                        }
+                        // GetRequiredService, not GetService: if IUserRepository is somehow not
+                        // registered, this check cannot answer "is this slot's owner a
+                        // superadmin?" — and a security check that cannot answer must not answer
+                        // "yes". Throwing fails the unlock closed rather than silently letting
+                        // every "user" slot through. Every real host registers it via AddStorage().
+                        var userRepo = sentinelScope.ServiceProvider.GetRequiredService<IUserRepository>();
+                        var owner = (await userRepo.ListActiveAsync())
+                            .FirstOrDefault(u => u.KeySlotId == slot.SlotId);
+                        authorized = owner != null && owner.Role == UserRoles.Superadmin;
                     }
                 }
                 else

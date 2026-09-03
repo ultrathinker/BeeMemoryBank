@@ -151,4 +151,90 @@ public class SessionUnlockAuthorizationTests : IAsyncLifetime
         (await status.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("isUnlocked").GetBoolean()
             .Should().BeFalse("Bob's rejected attempt must not have left the vault unlocked");
     }
+
+    [Fact]
+    public async Task Join_WithNonSuperadminsKeySlotPassword_IsRejected()
+    {
+        // /api/join runs its OWN slot loop rather than going through SessionService, so the
+        // restriction had to be applied there separately — and it matters more there: joining
+        // returns a wrapped master DEK and mesh membership (a larger capability than unlocking
+        // this one node), and unlike /api/session/unlock the endpoint deliberately skips the
+        // internal-key gate, so a reverse proxy is expected to forward it from the outside.
+        const string bobPassword = "BobsSecretPassword1";
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var keySlotRepo = scope.ServiceProvider.GetRequiredService<IKeySlotRepository>();
+            var userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+
+            var adminSlot = (await keySlotRepo.GetAllAsync()).Single(s => s.SlotType == "user");
+            var adminKek = KeyDerivation.DeriveKek(
+                AdminPassword, adminSlot.Salt!,
+                adminSlot.ArgonMemory!.Value, adminSlot.ArgonIterations!.Value, adminSlot.ArgonParallelism!.Value);
+            var masterDek = MasterKeyManager.UnwrapMasterDek(adminSlot.EncryptedMasterDek, adminSlot.IV, adminKek);
+
+            var bobSalt = KeyDerivation.GenerateSalt();
+            var bobKek = KeyDerivation.DeriveKek(bobPassword, bobSalt);
+            var (bobEncDek, bobIv) = MasterKeyManager.WrapMasterDek(masterDek, bobKek);
+            Array.Clear(masterDek);
+
+            var bobSlotId = await keySlotRepo.CreateAsync(new MasterKeyStore
+            {
+                SlotType = "user",
+                EncryptedMasterDek = bobEncDek,
+                IV = bobIv,
+                Salt = bobSalt,
+                ArgonMemory = CryptoConstants.DefaultArgonMemory,
+                ArgonIterations = CryptoConstants.DefaultArgonIterations,
+                ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
+                CreatedAt = DateTime.UtcNow
+            });
+
+            await userRepo.CreateAsync(new User
+            {
+                Username = "bob",
+                DisplayName = "Bob",
+                PasswordHash = "",
+                Role = UserRoles.User,
+                KeySlotId = bobSlotId,
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        // /api/join needs the responding node's own session unlocked before it will admit anyone
+        // (it logs a whitelist_add event), so unlock as the superadmin first — otherwise the
+        // admin control below fails for a reason unrelated to what this test is about.
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = AdminPassword }))
+            .EnsureSuccessStatusCode();
+
+        var (publicKey, _) = Ed25519Signer.GenerateKeyPair();
+        var joinBody = new
+        {
+            masterPassword = bobPassword,
+            nodeId = Guid.NewGuid(),
+            displayName = "BobsLaptop",
+            ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
+            apiAddress = (string?)null
+        };
+
+        var resp = await _client.PostAsJsonAsync("/api/join", joinBody);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "an ordinary user's key slot must not be able to join a node to the mesh, which would " +
+            "hand its holder the wrapped master DEK");
+
+        // And the superadmin's own password must still join, so the check did not just break join.
+        var (adminNodePublicKey, _) = Ed25519Signer.GenerateKeyPair();
+        var adminJoin = await _client.PostAsJsonAsync("/api/join", new
+        {
+            masterPassword = AdminPassword,
+            nodeId = Guid.NewGuid(),
+            displayName = "AdminsLaptop",
+            ed25519PublicKeyB64 = Convert.ToBase64String(adminNodePublicKey),
+            apiAddress = (string?)null
+        });
+        adminJoin.StatusCode.Should().Be(HttpStatusCode.OK,
+            "the superadmin must still be able to join new nodes");
+    }
 }

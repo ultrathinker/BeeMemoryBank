@@ -21,6 +21,7 @@ public static class JoinEndpoints
             IKeySlotRepository keySlotRepo,
             INodeIdentityRepository nodeRepo,
             IWhitelistRepository whitelistRepo,
+            IUserRepository userRepo,
             IEventLogger eventLogger) =>
         {
             // 1. Verify that this node is initialized
@@ -64,6 +65,25 @@ public static class JoinEndpoints
                     // Attempt to decrypt — if the password is wrong for THIS slot, an exception is
                     // thrown and we move on to the next candidate rather than failing outright.
                     MasterKeyManager.UnwrapMasterDek(candidate.EncryptedMasterDek, candidate.IV, candidateKek);
+
+                    // SECURITY: joining hands the caller mesh membership and, with it, the master
+                    // DEK — a strictly larger capability than unlocking this node. So it gets the
+                    // same rule /api/session/unlock does (SessionService.UnlockCoreAsync): a
+                    // "user" slot counts only if its owner is a superadmin. Checked here, after
+                    // the unwrap has cryptographically proven which slot this password belongs to,
+                    // rather than from anything the caller says about itself.
+                    //
+                    // This endpoint matters more than the unlock one: /api/join deliberately skips
+                    // the internal-key gate (a joining node has no key yet) and is one of the few
+                    // routes a reverse proxy is expected to forward, so it is reachable from
+                    // outside in a way /api/session/unlock is not.
+                    //
+                    // Legacy "password" slots are exempt for the same reason as in
+                    // UnlockCoreAsync: they predate the user table entirely and ARE the
+                    // superadmin-equivalent credential until the migration converts them.
+                    if (candidate.SlotType == "user" && !await IsSuperadminSlotAsync(userRepo, candidate.SlotId))
+                        continue;
+
                     passwordSlot = candidate;
                     break;
                 }
@@ -153,5 +173,16 @@ public static class JoinEndpoints
                     passwordSlot.ArgonParallelism ?? CryptoConstants.DefaultArgonParallelism),
                 Whitelist: whitelistDto));
         }).WithTags("Join");
+    }
+
+    /// <summary>
+    /// True if <paramref name="slotId"/> belongs to an ACTIVE superadmin. Deactivated accounts
+    /// resolve to false: fail closed, matching SessionService.UnlockCoreAsync, which looks the
+    /// owner up the same way. An orphaned slot — no user row points at it — is likewise false.
+    /// </summary>
+    private static async Task<bool> IsSuperadminSlotAsync(IUserRepository userRepo, int slotId)
+    {
+        var owner = (await userRepo.ListActiveAsync()).FirstOrDefault(u => u.KeySlotId == slotId);
+        return owner != null && owner.Role == UserRoles.Superadmin;
     }
 }
