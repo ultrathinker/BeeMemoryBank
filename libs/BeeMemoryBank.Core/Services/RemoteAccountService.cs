@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -166,9 +166,7 @@ public class RemoteAccountService(
         // is delegated.)
         folderRepo.ThrowIfWriteDenied(mountPath);
 
-        var prevScope = scopeHolder.Scope;
-        scopeHolder.Scope = SystemCallerScope.Instance;
-        try
+        using (scopeHolder.ElevateToSystem())
         {
             var existingLocal = await folderRepo.GetByPathAsync(mountPath);
             if (existingLocal == null)
@@ -205,10 +203,6 @@ public class RemoteAccountService(
                 }
                 await folderRepo.CreateAsync(stakeOut);
             }
-        }
-        finally
-        {
-            scopeHolder.Scope = prevScope;
         }
         return sub;
     }

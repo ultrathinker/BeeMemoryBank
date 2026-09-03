@@ -205,30 +205,23 @@ public class CopyService(
     {
         // Elevate to the system scope so the cleanup is not blocked by ACL
         // (these IDs were created by us in this call, so we own them logically).
-        var previousScope = scopeHolder.Scope;
-        scopeHolder.Scope = SystemCallerScope.Instance;
-        try
+        using var _ = scopeHolder.ElevateToSystem();
+
+        foreach (var mediaId in media)
         {
-            foreach (var mediaId in media)
-            {
-                try { await mediaService.DeleteAsync(mediaId); }
-                catch { /* best effort — already cleaned up, or other failure */ }
-            }
-            foreach (var articleId in articles)
-            {
-                try { await articleService.DeleteAsync(articleId); }
-                catch { }
-            }
-            // Delete folders deepest-first so children clear before parents.
-            foreach (var folderId in folders.AsEnumerable().Reverse())
-            {
-                try { await folderService.DeleteAsync(folderId); }
-                catch { }
-            }
+            try { await mediaService.DeleteAsync(mediaId); }
+            catch { /* best effort — already cleaned up, or other failure */ }
         }
-        finally
+        foreach (var articleId in articles)
         {
-            scopeHolder.Scope = previousScope;
+            try { await articleService.DeleteAsync(articleId); }
+            catch { }
+        }
+        // Delete folders deepest-first so children clear before parents.
+        foreach (var folderId in folders.AsEnumerable().Reverse())
+        {
+            try { await folderService.DeleteAsync(folderId); }
+            catch { }
         }
     }
 

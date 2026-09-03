@@ -1,4 +1,4 @@
-using BeeMemoryBank.Core.Interfaces;
+﻿using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 
@@ -26,16 +26,8 @@ public class RemoteEventApplier(
 {
     public async Task ApplySnapshotAsync(RemoteSubscription sub, RemoteSnapshot snap)
     {
-        var prevScope = scopeHolder.Scope;
-        scopeHolder.Scope = SystemCallerScope.Instance;
-        try
-        {
-            await ApplyInternalAsync(sub, snap);
-        }
-        finally
-        {
-            scopeHolder.Scope = prevScope;
-        }
+        using var _ = scopeHolder.ElevateToSystem();
+        await ApplyInternalAsync(sub, snap);
     }
 
     private async Task ApplyInternalAsync(RemoteSubscription sub, RemoteSnapshot snap)

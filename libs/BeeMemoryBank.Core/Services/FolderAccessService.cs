@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -76,9 +76,7 @@ public class FolderAccessService
         var readOnlyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var holder = _serviceProvider.GetRequiredService<CallerScopeHolder>();
-        var previousScope = holder.Scope;
-        holder.Scope = SystemCallerScope.Instance;
-        try
+        using (holder.ElevateToSystem())
         {
             var user = await userRepo.GetByIdAsync(userId.Value);
 
@@ -125,10 +123,6 @@ public class FolderAccessService
                         denyPaths.Add(DenyEverything);
                 }
             }
-        }
-        finally
-        {
-            holder.Scope = previousScope;
         }
 
         _cache[cacheKey] = (denyPaths, allowPaths, readOnlyPaths, DateTime.UtcNow);

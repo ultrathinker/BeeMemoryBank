@@ -1,4 +1,4 @@
-using BeeMemoryBank.Core;
+﻿using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 
@@ -329,16 +329,10 @@ public class FolderService(
         // reality), not the caller's own read access, so it has to run against the TRUE,
         // unfiltered folder set. Same scope-swap pattern as FolderRepository.EnsureExistsCoreAsync's
         // ancestor-stub lookup.
-        var previousScope = scopeHolder.Scope;
-        scopeHolder.Scope = SystemCallerScope.Instance;
         List<Folder> all;
-        try
+        using (scopeHolder.ElevateToSystem())
         {
             all = await folderRepo.GetAllActiveAsync();
-        }
-        finally
-        {
-            scopeHolder.Scope = previousScope;
         }
 
         var prefix = path.TrimEnd('/') + "/";

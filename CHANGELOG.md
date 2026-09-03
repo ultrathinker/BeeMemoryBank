@@ -48,6 +48,23 @@ users, because superadmins bypass them and the rule would be silently inert; rol
 canonically, since a mis-cased `tbl_user.role` would pass a NOCASE lookup and then fail every
 ordinal comparison downstream.
 
+### Changed
+
+- **Scope elevation is a `using`, not a convention.** Running as `SystemCallerScope` — no folder
+  ACL, no read-only guard — was written out by hand at eight sites: assign the scope, then remember
+  a `try/finally` to put the caller's real one back. Forgetting the restore fails silently, and
+  under the HttpContext-backed scope store it leaks full-vault access to the rest of the HTTP
+  request. `CallerScopeHolder.ElevateToSystem()` now returns a disposable that restores on exit;
+  a test scans `libs/`, `server/`, `desktop/` and `mobile/` and fails if a hand-written
+  `Scope = SystemCallerScope.Instance` reappears. One of the converted sites (the sync push
+  endpoint) had no restore at all.
+- **Every MCP tool must be classified as content-touching or not.** An MCP tool that reads or
+  writes encrypted content without `[RequiresUnlockedSession]` does not error while the vault is
+  locked — it returns *empty results*, which an agent reads as "the vault is empty". The existing
+  tests asserted the classification of tools someone remembered to list, so a new tool was in
+  neither list and passed both. The registry test now requires every registered tool name to
+  appear in one of two curated sets, so adding a tool fails until its side is chosen deliberately.
+
 ### Fixed
 
 - **BREAKING (sync): the unbound V1 challenge signature is gone from both ends.** Peer
@@ -64,6 +81,10 @@ ordinal comparison downstream.
   reverse-matching `remoteApiBase` against `api_address`. The lookup silently resolved to "nothing
   pinned" whenever the address was passed in a different shape, and the only safe response to
   "nothing pinned" is refusal — so a string mismatch would have become a sync outage.
+- **Migration 015 disarms agent keys revoked before that fix.** 014 cleared key material by the
+  owner's *role*, which is the right rule for the hybrid model but says nothing about revocation —
+  so a superadmin's already-revoked agents passed the role test and kept their wrapped DEK.
+  Confirmed on a live node right after 014: four revoked keys still armed.
 - **A revoked agent key stayed a vault key.** Deleting an agent only flipped its status, and
   clearing a demoted superadmin's agents skipped already-revoked rows, and deleting a superadmin
   account cleared nothing at all. In each case the row kept its wrapped master DEK, so the old

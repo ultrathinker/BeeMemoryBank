@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
@@ -375,8 +375,11 @@ public static class SyncEndpoints
                 return Results.BadRequest(new ErrorResponse("Batch too large (max 2000 events)"));
 
             // Sync peers are trusted — bypass per-user ACL guards that CallerScopeMiddleware
-            // sets to an empty AllowList for non-user/non-agent requests.
-            scopeHolder.Scope = SystemCallerScope.Instance;
+            // sets to an empty AllowList for non-user/non-agent requests. Scoped to this handler
+            // rather than left switched on for the rest of the request: nothing user-facing runs
+            // after this today, but an elevation with no matching restore is one refactor away
+            // from being one.
+            using var systemScope = scopeHolder.ElevateToSystem();
 
             var logger = loggerFactory.CreateLogger("SyncEndpoints");
             int applied = 0, skipped = 0, dropped = 0;

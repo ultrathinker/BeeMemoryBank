@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -281,18 +281,12 @@ public class BeeWriteTools(
             // nothing can navigate to it any more). Swap to System scope for JUST this read; the
             // caller's own authorization to perform the delete is still enforced separately, by
             // folderRepo.SoftDeleteAsync's ACL check on `path` itself below.
-            var previousScope = scopeHolder.Scope;
-            scopeHolder.Scope = SystemCallerScope.Instance;
             List<Folder> children;
             List<Article> articles;
-            try
+            using (scopeHolder.ElevateToSystem())
             {
                 children = await folderRepo.GetChildrenAsync(path);
                 articles = await articleService.ListAsync(path);
-            }
-            finally
-            {
-                scopeHolder.Scope = previousScope;
             }
             if (children.Count > 0 || articles.Count > 0)
             {

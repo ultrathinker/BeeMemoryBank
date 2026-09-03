@@ -1,4 +1,4 @@
-using BeeMemoryBank.Core;
+﻿using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -431,8 +431,7 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         // Auto-creating a missing ancestor stub: bypass the repo-level write
         // guard by swapping scope to System for the Create call. The leaf
         // creation has already been authorized at the endpoint level.
-        var previousScope = _holder.Scope;
-        _holder.Scope = SystemCallerScope.Instance;
+        using var _ = _holder.ElevateToSystem();
         var now = DateTime.UtcNow;
         try
         {
@@ -451,10 +450,6 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         }
         catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-        }
-        finally
-        {
-            _holder.Scope = previousScope;
         }
     }
 
