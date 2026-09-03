@@ -74,4 +74,13 @@ public class AgentRepository(DbConnectionFactory factory) : BaseRepository(facto
             new { now = DateTime.UtcNow.ToString("o"), id });
     }
 
+    public async Task<int> ClearWrappedDekForOwnerAsync(int ownerUserId)
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteAsync(
+            @"UPDATE tbl_agent
+              SET encrypted_dek = NULL, dek_iv = NULL, salt = NULL, kdf_version = 0
+              WHERE owner_user_id = @ownerUserId AND status = 'A' AND encrypted_dek IS NOT NULL",
+            new { ownerUserId });
+    }
 }

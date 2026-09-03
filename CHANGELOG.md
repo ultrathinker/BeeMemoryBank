@@ -50,6 +50,26 @@ ordinal comparison downstream.
 
 ### Fixed
 
+- **Finding H6: every agent key was, cryptographically, a key to the entire vault.** Creating an
+  agent wrapped the master DEK with that agent's API key regardless of who owned it, so a
+  self-service agent minted by an ordinary, folder-restricted user (limit 20 per user) unwrapped
+  the SAME master DEK as a superadmin's — the folder ACL and read-only flag are enforced only in
+  software, over already-decrypted content, never by the key material itself. Anyone holding such
+  a key, plus any copy of the database file (a backup, a decommissioned disk), could decrypt every
+  article in the vault, including folders that key's own owner has no web access to.
+  Now only an agent owned by a superadmin gets a wrapped master DEK and can auto-unlock a locked
+  node (`Agent.CanAutoUnlock`) — a superadmin can already unlock the vault through the web UI, so
+  their agent doing it too adds no capability. Every other agent authenticates and works exactly
+  as before whenever the vault is already unlocked by someone else; it just can't unlock it itself,
+  and a stolen database file yields nothing usable from its row alone.
+  Demoting a superadmin now strips the wrapped DEK from every agent they own — a demoted user must
+  not keep a key that can still unlock the vault. Promoting a user does NOT retroactively wrap
+  their pre-existing agents' keys: that would need the plaintext API key, which is shown only once
+  at creation and is not recoverable from `key_hash`; only a newly created agent gets wrapped.
+  Migration `013_agent_dek_optional.sql` clears the wrapped DEK from every existing agent row
+  whose owner isn't a superadmin (irreversible, for the same reason) and relaxes
+  `encrypted_dek`/`dek_iv` to nullable. The Admin and Profile agent tables now show whether each
+  key can wake a locked node.
 - **A role name typed with capitals was refused instead of accepted.** The restricted alphabet
   exists so that no role can differ from a privileged one only by case — storing the name
   lower-cased delivers exactly that, while rejecting `OneFolder` outright turned an ordinary typo

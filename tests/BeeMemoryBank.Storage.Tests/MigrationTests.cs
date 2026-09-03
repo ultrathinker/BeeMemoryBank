@@ -100,4 +100,84 @@ public class MigrationTests : IAsyncLifetime
         slotTypes.Should().NotContain("recovery", "an unsafe pre-fix recovery slot must be removed, not silently kept around");
         slotTypes.Should().Contain("user", "only recovery slots are unsafe — password/user slots must survive untouched");
     }
+
+    // Regression test for finding H6 / migration 013: before this fix, EVERY agent row wrapped
+    // the master DEK regardless of owner, making an ordinary user's self-service agent key
+    // cryptographically a key to the whole vault. This simulates a pre-fix database that already
+    // has agents belonging to both a superadmin and a non-superadmin owner, then re-applies the
+    // migration exactly as an upgrading production node would.
+    [Fact]
+    public async Task Migration013_ClearsWrappedDekForNonSuperadminAgents_ButLeavesSuperadminAgentsAlone()
+    {
+        int superadminId, regularUserId, deactivatedUserId;
+        int superadminAgentId, regularAgentId, deactivatedOwnerAgentId;
+
+        using (var conn = _factory.CreateConnection())
+        {
+            var now = DateTime.UtcNow.ToString("o");
+
+            superadminId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_user (username, display_name, password_hash, role, is_active, created_at)
+                  VALUES ('admin', 'Admin', 'hash', 'superadmin', 1, @now); SELECT last_insert_rowid();",
+                new { now });
+            regularUserId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_user (username, display_name, password_hash, role, is_active, created_at)
+                  VALUES ('bob', 'Bob', 'hash', 'user', 1, @now); SELECT last_insert_rowid();",
+                new { now });
+            // A deactivated (soft-deleted) non-superadmin owner. is_active must not matter to
+            // the migration's decision — only role does — so this agent must be stripped just
+            // like an active regular user's, not treated as some special third case.
+            deactivatedUserId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_user (username, display_name, password_hash, role, is_active, created_at)
+                  VALUES ('exuser_del_abc', 'Ex User', 'hash', 'user', 0, @now); SELECT last_insert_rowid();",
+                new { now });
+
+            // Pre-fix shape: every agent has a fully wrapped DEK, regardless of owner role.
+            superadminAgentId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_agent
+                    (name, key_prefix, key_hash, encrypted_dek, dek_iv, kdf_version, salt, status, created_at, owner_user_id)
+                  VALUES ('admin-agent', 'bee_admin1234', 'hash-admin', @dek, @iv, 1, @salt, 'A', @now, @ownerId);
+                  SELECT last_insert_rowid();",
+                new { dek = new byte[] { 1, 2, 3 }, iv = new byte[] { 4, 5, 6 }, salt = new byte[] { 7, 8, 9 }, now, ownerId = superadminId });
+            regularAgentId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_agent
+                    (name, key_prefix, key_hash, encrypted_dek, dek_iv, kdf_version, salt, status, created_at, owner_user_id)
+                  VALUES ('bob-agent', 'bee_bob123456', 'hash-bob', @dek, @iv, 1, @salt, 'A', @now, @ownerId);
+                  SELECT last_insert_rowid();",
+                new { dek = new byte[] { 10, 11, 12 }, iv = new byte[] { 13, 14, 15 }, salt = new byte[] { 16, 17, 18 }, now, ownerId = regularUserId });
+            deactivatedOwnerAgentId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_agent
+                    (name, key_prefix, key_hash, encrypted_dek, dek_iv, kdf_version, salt, status, created_at, owner_user_id)
+                  VALUES ('exuser-agent', 'bee_exuser123', 'hash-exuser', @dek, @iv, 1, @salt, 'A', @now, @ownerId);
+                  SELECT last_insert_rowid();",
+                new { dek = new byte[] { 19, 20, 21 }, iv = new byte[] { 22, 23, 24 }, salt = new byte[] { 25, 26, 27 }, now, ownerId = deactivatedUserId });
+
+            // Force migration 013 to be re-applied on top of this pre-fix data, simulating an
+            // upgrading production node.
+            await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 13");
+        }
+
+        await _runner.RunMigrationsAsync();
+
+        using var check = _factory.CreateConnection();
+        var repo = new AgentRepository(_factory);
+
+        var superadminAgent = (await repo.GetByIdAsync(superadminAgentId))!;
+        superadminAgent.CanAutoUnlock.Should().BeTrue("a superadmin's pre-existing agent must keep its wrapped DEK");
+        superadminAgent.EncryptedDek.Should().Equal(new byte[] { 1, 2, 3 });
+
+        var regularAgent = (await repo.GetByIdAsync(regularAgentId))!;
+        regularAgent.CanAutoUnlock.Should().BeFalse("an ordinary user's pre-existing agent must lose its wrapped DEK");
+        regularAgent.EncryptedDek.Should().BeNull();
+        regularAgent.DekIV.Should().BeNull();
+        regularAgent.Salt.Should().BeNull();
+        regularAgent.KdfVersion.Should().Be(0);
+        // The key must stay valid for authentication -- only the vault-unlock capability is gone.
+        regularAgent.KeyHash.Should().Be("hash-bob");
+        regularAgent.Status.Should().Be("A");
+
+        var deactivatedOwnerAgent = (await repo.GetByIdAsync(deactivatedOwnerAgentId))!;
+        deactivatedOwnerAgent.CanAutoUnlock.Should().BeFalse(
+            "is_active must not matter to this decision -- only role does");
+    }
 }

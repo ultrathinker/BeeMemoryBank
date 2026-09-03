@@ -27,11 +27,25 @@ namespace BeeMemoryBank.Api.Middleware;
 /// path-filtering reverse proxy — see docs/deployment.md. This is defense-in-depth, not the sole
 /// auth layer.
 ///
-/// AUTO-UNLOCK: Agents are permitted to auto-unlock the session via their encrypted DEK.
-/// This is intentional — it ensures MCP clients can work without manual intervention.
-/// Agents cannot call session/lock or session/unlock endpoints directly (blocked by
+/// AUTO-UNLOCK: an agent whose row carries a wrapped master DEK is permitted to auto-unlock the
+/// session with it. This is intentional — it ensures MCP clients can work without manual
+/// intervention. Agents cannot call session/lock or session/unlock endpoints directly (blocked by
 /// RequireNonAgent endpoint filter added in migration 004). The asymmetry is by design:
 /// auto-unlock serves the owner's session; lock/unlock via API is a human operation.
+///
+/// H6 FIX: NOT every agent carries a wrapped DEK. Only an agent owned by a superadmin gets one
+/// at creation time (AgentEndpoints/AgentCommand) — before this fix, an ordinary, folder-
+/// restricted user could mint a self-service agent key (limit 20 per user) whose row wrapped
+/// the SAME master DEK as everyone else's, making that key a de-facto key to the entire vault
+/// regardless of what its owner's folder ACL allowed in software. A superadmin can already
+/// unlock the vault through the web UI, so their agent doing it too is not a new capability; an
+/// ordinary user cannot (SessionEndpoints' login returns 403 "Server is locked" for them), so
+/// giving their agent that power was a bug, not a feature. See Agent.CanAutoUnlock and migration
+/// 013_agent_dek_optional.sql (which strips wrapped DEKs from every pre-existing non-superadmin
+/// agent). An agent without one simply skips the unlock attempt below — the vault stays exactly
+/// as locked or unlocked as it already was, and a subsequent tool call that needs decrypted
+/// content fails the ordinary "vault is locked" way (McpSessionGuardMiddleware /
+/// RequiresUnlockedSessionAttribute), not silently.
 /// </remarks>
 public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddleware> logger)
 {
@@ -149,7 +163,22 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                         }
                     }
 
-                    if (!session.IsUnlocked)
+                    // H6 hybrid model: only an agent that actually carries wrapped key material
+                    // (owner was a superadmin at creation time — see AgentEndpoints/AgentCommand)
+                    // is even attempted here. An ordinary user's agent has agent.CanAutoUnlock ==
+                    // false (EncryptedDek/DekIV are null — see migration 013 for pre-existing
+                    // rows), so this whole block is skipped for it: the session simply stays
+                    // however it already was. That is not a silent failure — a request that then
+                    // needs decrypted content still hits the same "locked" errors a human's
+                    // locked session already produces elsewhere (McpSessionGuardMiddleware's
+                    // RequiresUnlockedSession check, or a content endpoint's own session.IsUnlocked
+                    // check) — it just never gets a chance to unlock things by itself. Skipping the
+                    // attempt entirely (rather than trying and letting decryption fail) also means
+                    // an ordinary user's agent behaves identically whether or not it happens to
+                    // hold a stale/garbage EncryptedDek from before this fix — no decrypt attempt
+                    // ever leaks, via timing or otherwise, whether such a blob would have been
+                    // valid.
+                    if (!session.IsUnlocked && agent.CanAutoUnlock)
                     {
                         try
                         {
@@ -157,14 +186,14 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                             if (agent.KdfVersion == 1 && agent.Salt != null)
                             {
                                 masterDek = AgentKeyHelper.DecryptDekV1(
-                                    apiKey, agent.EncryptedDek, agent.DekIV, agent.Salt);
+                                    apiKey, agent.EncryptedDek!, agent.DekIV!, agent.Salt);
                             }
                             else
                             {
                                 masterDek = AgentKeyHelper.DecryptDek(
-                                    apiKey, agent.EncryptedDek, agent.DekIV);
+                                    apiKey, agent.EncryptedDek!, agent.DekIV!);
                             }
-                            
+
                             session.UnlockWithDek(masterDek);
                         }
                         catch

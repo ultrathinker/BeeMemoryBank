@@ -78,6 +78,12 @@
                     <tr>
                         <th>Name</th>
                         <th>API Key Prefix</th>
+                        <th>
+                            Auto-unlock
+                            <sl-tooltip content="Whether this key can wake a locked node by itself. Only a superadmin's agent can — an ordinary account's agent only works while the vault is already unlocked by someone else.">
+                                <sl-icon name="info-circle"></sl-icon>
+                            </sl-tooltip>
+                        </th>
                         <th>Created</th>
                         <th>Last Access</th>
                         <th style="text-align:right;">Actions</th>
@@ -113,11 +119,19 @@
     </sl-alert>
     <div style="background:var(--bg-app);padding:16px;border-radius:8px;border:1px solid var(--border);position:relative;margin-bottom:16px;">
         <code id="secret-key-code" style="word-break:break-all;font-family:var(--font-mono);font-size:0.9rem;display:block;padding-right:40px;"></code>
-        <sl-icon-button name="clipboard" label="Copy" 
+        <sl-icon-button name="clipboard" label="Copy"
             style="position:absolute;top:10px;right:10px;font-size:1.2rem;"
             onclick="copySecret()">
         </sl-icon-button>
     </div>
+
+    <!-- Filled in by JS from the create response's canAutoUnlock flag: whether this
+         particular key can wake a locked node by itself (superadmin owner) or only works
+         while the vault is already unlocked (every other owner). -->
+    <sl-alert id="secret-autounlock-note" variant="neutral" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="info-circle"></sl-icon>
+        <span id="secret-autounlock-text"></span>
+    </sl-alert>
 
     <sl-divider></sl-divider>
 
@@ -224,8 +238,12 @@ function loadAgents() {
             tbody.innerHTML = '';
             data.forEach(a => {
                 var tr = document.createElement('tr');
+                var autoUnlockCell = a.canAutoUnlock
+                    ? '<sl-badge variant="warning" pill>Yes</sl-badge>'
+                    : '<span class="text-muted text-sm">No</span>';
                 tr.innerHTML = '<td><strong>' + escapeHtml(a.name) + '</strong><br/><small class="text-muted">' + escapeHtml(a.description || '') + '</small></td>' +
                                '<td><code class="text-sm">' + escapeHtml(a.keyPrefix) + '</code></td>' +
+                               '<td>' + autoUnlockCell + '</td>' +
                                '<td class="text-muted text-sm">' + new Date(a.createdAt).toLocaleDateString() + '</td>' +
                                '<td class="text-muted text-sm">' + (a.lastAccessedAt ? timeAgo(new Date(a.lastAccessedAt)) : 'never') + '</td>' +
                                // Name carried on a data-attribute rather than interpolated into
@@ -288,6 +306,10 @@ document.getElementById('btn-do-create-agent').addEventListener('click', functio
         var mcpUrl = mcpBaseUrl + '/mcp';
 
         document.getElementById('secret-key-code').textContent = key;
+        document.getElementById('secret-autounlock-note').variant = data.canAutoUnlock ? 'warning' : 'neutral';
+        document.getElementById('secret-autounlock-text').textContent = data.canAutoUnlock
+            ? 'This key can wake a locked node by itself, the same as your own login.'
+            : 'This key cannot unlock a locked node by itself — it only works while the vault is already unlocked by someone else.';
         document.getElementById('mcp-cli-code').textContent =
             'claude mcp add --transport http bee-memory-bank ' + mcpUrl + ' --header "Authorization: Bearer ' + key + '"';
         document.getElementById('mcp-cursor-code').textContent =

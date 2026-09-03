@@ -654,6 +654,12 @@
                         <th>Description</th>
                         <th>Owner</th>
                         <th>API Key</th>
+                        <th>
+                            Auto-unlock
+                            <sl-tooltip content="Whether this key can wake a locked node by itself. Only a superadmin's agent can \u2014 an ordinary user's agent only works while the vault is already unlocked by someone else.">
+                                <sl-icon name="info-circle"></sl-icon>
+                            </sl-tooltip>
+                        </th>
                         <th>Created</th>
                         <th>Last Access</th>
                         <th>Requests</th>
@@ -668,6 +674,16 @@
                             <td class="text-muted text-sm">@(agent.Description ?? "\u2014")</td>
                             <td class="text-muted text-sm">@(agent.OwnerName ?? (agent.OwnerUserId > 0 ? $"#{agent.OwnerUserId}" : "\u2014"))</td>
                             <td><code class="text-sm">@agent.KeyPrefix</code></td>
+                            <td>
+                                @if (agent.CanAutoUnlock)
+                                {
+                                    <sl-badge variant="warning" pill>Yes</sl-badge>
+                                }
+                                else
+                                {
+                                    <span class="text-muted text-sm">No</span>
+                                }
+                            </td>
                             <td class="text-muted text-sm">@agent.CreatedAt.ToString("g")</td>
                             <td class="text-muted text-sm">@AdminModel.RelativeTime(agent.LastAccessedAt)</td>
                             <td class="text-muted text-sm">@(agent.RequestCount == 0 ? "\u2014" : agent.RequestCount.ToString("N0"))</td>

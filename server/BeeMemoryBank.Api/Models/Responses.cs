@@ -2,9 +2,15 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Core.Models;
 namespace BeeMemoryBank.Api.Models;
 
-public record AgentListItem(int Id, string Name, string? Description, string KeyPrefix, DateTime CreatedAt, DateTime? LastAccessedAt, long RequestCount, int OwnerUserId = 0, string? OwnerName = null);
+/// <param name="CanAutoUnlock">
+/// True only for an agent owned by a superadmin (see AGENTS.md H6 fix / Agent.CanAutoUnlock).
+/// Such a key can wake a locked node by itself; an ordinary user's agent cannot — it only
+/// ever works while someone else has already unlocked the vault. Surfaced so the agent
+/// list/creation UI can say so plainly instead of leaving it as an invisible difference.
+/// </param>
+public record AgentListItem(int Id, string Name, string? Description, string KeyPrefix, DateTime CreatedAt, DateTime? LastAccessedAt, long RequestCount, int OwnerUserId = 0, string? OwnerName = null, bool CanAutoUnlock = false);
 
-public record AgentCreatedResponse(int Id, string Name, string ApiKey);
+public record AgentCreatedResponse(int Id, string Name, string ApiKey, bool CanAutoUnlock = false);
 
 public record ArticleResponse(
     Guid Id,

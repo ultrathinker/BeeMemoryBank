@@ -27,7 +27,7 @@ Level 3: Master DEK → decrypts → Article DEK (unique per article)
 **Why three levels instead of one?**
 - Password change: re-encrypt a single Master DEK (one AES-GCM operation), articles are untouched
 - Per-article DEK: compromising one article does not expose the rest
-- Agents: store the Master DEK encrypted with their API key — another "entry point" to the same DEK
+- Agents: a **superadmin's** agent stores the Master DEK encrypted with its API key — another "entry point" to the same DEK, no more privileged than that superadmin's own web login. An ordinary user's agent stores no such thing at all (see the Agent section below) — it is not an "entry point" to the vault, only to whatever content the vault already has decrypted for someone else.
 
 ## Database Storage
 
@@ -103,15 +103,35 @@ Because "another superadmin exists" no longer implies "another superadmin can un
 ```sql
 key_prefix:     TEXT  -- "bee_a1b2c3d4" (first 12 characters for UI display)
 key_hash:       TEXT  -- SHA256(full_api_key) — for database lookup
-encrypted_dek:  BLOB  -- AES-256-GCM(master_dek, derived_key)
-dek_iv:         BLOB  -- 12 bytes
-salt:           BLOB  -- 32 bytes (v1 only); NULL for legacy v0 agents
-kdf_version:    INT   -- 0 = legacy SHA256, 1 = HKDF-SHA256
+encrypted_dek:  BLOB  -- AES-256-GCM(master_dek, derived_key); NULL unless owner is a superadmin
+dek_iv:         BLOB  -- 12 bytes; NULL alongside encrypted_dek
+salt:           BLOB  -- 32 bytes (v1 only); NULL for legacy v0 agents, and NULL alongside encrypted_dek
+kdf_version:    INT   -- 0 = legacy SHA256, 1 = HKDF-SHA256, 0 also when there's no wrapped DEK at all
 ```
+
+**H6 fix — wrapping is opt-in by owner role, not universal.** Every agent used to get a wrapped
+Master DEK regardless of who owned it, which made an ordinary, folder-restricted user's
+self-service agent key (limit 20 per user) cryptographically a key to the *entire* vault — the
+folder ACL and read-only flag are enforced only in software over already-decrypted content, not
+by the key material itself. Now `encrypted_dek`/`dek_iv`/`salt` are only populated when the
+agent's owner is a superadmin at creation time (`AgentEndpoints.MapPost "/"`,
+`AgentCommand.HandleCreateAsync`) — a superadmin can already unlock the vault through the web UI,
+so their agent doing it too adds no capability an attacker didn't already have by compromising
+that person. Every other owner gets `NULL` in all three columns: `Agent.CanAutoUnlock` is false,
+`AgentAuthMiddleware` never attempts to decrypt anything for that row, and the key authenticates
+exactly as before — it just can't unlock a locked vault, and a stolen copy of the database file
+yields nothing usable from its row alone. Migration `013_agent_dek_optional.sql` retroactively
+clears these three columns (and resets `kdf_version` to 0) for every pre-existing agent whose
+owner isn't a superadmin; this is irreversible (there is no way to re-wrap without the plaintext
+API key, which is shown only once at creation). Demoting a superadmin
+(`UserService.UpdateUserAsync`) does the same clearing live, for the same reason. **Promoting** a
+user to superadmin does NOT retroactively wrap their existing agents' keys either, for the exact
+same reason (no plaintext API key to derive from) — only a newly created agent, made after the
+promotion, gets wrapped.
 
 **KDF v1 (current):** `derived_key = HKDF-SHA256(api_key, salt=tbl_agent.salt, info="bmb-agent-dek-v1")` with a per-agent random 32-byte salt. The salt prevents pre-computation: an attacker who steals the database AND a leaked api_key from one agent cannot precompute keys for any other agent.
 
-**KDF v0 (legacy):** `derived_key = SHA256(api_key || "bmb-encrypt")`. Still accepted on read for agents created before the migration; new agents are always v1. `AgentAuthMiddleware` dispatches by `kdf_version` so a single API surface handles both.
+**KDF v0 (legacy):** `derived_key = SHA256(api_key || "bmb-encrypt")`. Still accepted on read for agents created before the migration; new agents are always v1. `AgentAuthMiddleware` dispatches by `kdf_version` so a single API surface handles both — but only ever for a row that has a wrapped DEK at all (see the H6 note above).
 
 **Key point:** `key_hash != derived_key`.
 - `key_hash = SHA256(api_key)` — for lookup

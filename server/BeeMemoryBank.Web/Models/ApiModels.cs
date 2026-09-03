@@ -88,9 +88,12 @@ public record WhitelistEntryDto(
 
 public record NodeIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
 
-public record AgentDto(int Id, string Name, string? Description, string KeyPrefix, DateTime CreatedAt, DateTime? LastAccessedAt, long RequestCount, int OwnerUserId = 0, string? OwnerName = null);
+// CanAutoUnlock: true only for an agent owned by a superadmin (see AGENTS.md H6 fix). Such a key
+// can wake a locked node by itself; an ordinary user's agent cannot -- it only ever works while
+// someone else has already unlocked the vault. Rendered in Admin/Profile so this is visible.
+public record AgentDto(int Id, string Name, string? Description, string KeyPrefix, DateTime CreatedAt, DateTime? LastAccessedAt, long RequestCount, int OwnerUserId = 0, string? OwnerName = null, bool CanAutoUnlock = false);
 
-public record AgentCreatedDto(int Id, string Name, string ApiKey);
+public record AgentCreatedDto(int Id, string Name, string ApiKey, bool CanAutoUnlock = false);
 
 public record ErrorDto(string Error);
 
