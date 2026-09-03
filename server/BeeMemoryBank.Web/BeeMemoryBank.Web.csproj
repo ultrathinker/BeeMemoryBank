@@ -16,7 +16,7 @@
   <ItemGroup>
     <!-- QR-code generation for the "Connect a device" page (Connect.cshtml). Pure-managed,
          dependency-free; PngByteQRCode produces a PNG byte array rendered as a data URI. -->
-    <PackageReference Include="QRCoder" Version="1.6.0" />
+    <PackageReference Include="QRCoder" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,76 @@
+<!--
+  Central Package Management: every NuGet version for the whole repository lives here,
+  and project files reference packages by name only. Before this, the same package was
+  pinned separately in up to 18 .csproj files, so a bump that touched some of them and
+  not the others produced a "package downgrade" (NU1605) build failure across the
+  solution — which is exactly what Dependabot kept doing, since it updates one project
+  directory at a time. With one version per package there is nothing left to desync.
+
+  Add a package: put its <PackageVersion> here, then reference it from the project
+  without a Version attribute. A project that genuinely needs a different version uses
+  VersionOverride on its own PackageReference.
+-->
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="Avalonia" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Controls.WebView" Version="12.0.1" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.0" />
+    <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" />
+    <PackageVersion Include="BouncyCastle.Cryptography" Version="2.5.1" />
+    <PackageVersion Include="Certes" Version="3.0.4" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Dapper" Version="2.1.66" />
+    <PackageVersion Include="DiffPlex" Version="1.9.0" />
+    <PackageVersion Include="FluentAssertions" Version="7.0.0" />
+    <PackageVersion Include="Indiko.Maui.Controls.Markdown" Version="1.5.0" />
+    <PackageVersion Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
+    <PackageVersion Include="Makaretu.Dns.Multicast" Version="0.27.0" />
+    <PackageVersion Include="Markdig" Version="0.44.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.3" />
+    <!-- The Microsoft.Extensions.* family moves in lockstep: these packages reference each other
+         with a ">= same patch" floor, so raising one of them alone makes every project that still
+         pins the others fail with NU1605. The mobile app used to float Http to 10.0.11 while the
+         rest of the repo pinned 10.0.3; it now uses the repo's version like everything else. -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
+    <!-- These five were floating ("10.*", "*", "1.19.*") in the mobile project, i.e. the build was
+         not reproducible — a restore months apart could pull different packages. They are pinned to
+         the versions that restore last resolved. Keep Xamarin.AndroidX.Core and Core.Core.Ktx on the
+         same train when bumping (see the comment in BeeMemoryBank.Mobile.csproj). -->
+    <PackageVersion Include="Microsoft.Maui.Controls" Version="10.0.90" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.0.0" />
+    <PackageVersion Include="QRCoder" Version="1.6.0" />
+    <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+    <PackageVersion Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
+    <PackageVersion Include="System.IO.Hashing" Version="8.0.0" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.9" />
+    <PackageVersion Include="Velopack" Version="1.2.0" />
+    <PackageVersion Include="Xamarin.AndroidX.Biometric" Version="1.1.0.33" />
+    <PackageVersion Include="Xamarin.AndroidX.Core" Version="1.19.0.1" />
+    <PackageVersion Include="Xamarin.AndroidX.Core.Core.Ktx" Version="1.19.0.1" />
+    <PackageVersion Include="Xamarin.AndroidX.Work.Runtime" Version="2.11.2.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageVersion Include="Yarp.ReverseProxy" Version="2.2.0" />
+  </ItemGroup>
+
+</Project>

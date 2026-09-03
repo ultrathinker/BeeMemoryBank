@@ -14,9 +14,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.0.0" />
-    <PackageReference Include="Velopack" Version="1.2.0" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <PackageReference Include="Velopack" />
   </ItemGroup>
 
   <!-- model.onnx is NOT in git — download separately (see docs/deployment.md) -->

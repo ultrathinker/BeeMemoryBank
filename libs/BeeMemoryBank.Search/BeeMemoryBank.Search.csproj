@@ -6,7 +6,7 @@
          format (see Segment/SegmentWriter.cs). Hand-rolling a 64-bit hash correctly would be a
          worse use of time than using a vetted one; everything else in this library stays
          dependency-free. -->
-    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
+    <PackageReference Include="System.IO.Hashing" />
   </ItemGroup>
 
 </Project>
