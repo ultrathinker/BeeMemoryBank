@@ -8,6 +8,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Hosting.AspNetCore;
 using Microsoft.Extensions.Logging;
 using BeeMemoryBank.Sync;
 
@@ -23,6 +24,26 @@ public static class SyncEndpoints
     {
         Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
     };
+
+    // L9: /api/sync/challenge is intentionally unauthenticated (a peer needs a challenge before it
+    // can prove anything) and, unlike every other sync endpoint, has no Bearer-token gate to bound
+    // request volume. Each call allocates a ChallengeEntry plus a CSPRNG-filled 32-byte buffer; the
+    // 60s TTL bounds how long any one entry lives, but nothing previously bounded the ALLOCATION
+    // rate within that window. Reuses the same SlidingWindowRateLimiter the API's RateLimitMiddleware
+    // and the Web layer's public-endpoint limiter use, keyed per-IP like RateLimitMiddleware — a
+    // generous budget, since this endpoint is legitimately hit once per sync cycle by every peer in
+    // the mesh, each from a different IP with its own independent bucket.
+    private static readonly SlidingWindowRateLimiter ChallengeLimiter = new(30, TimeSpan.FromMinutes(1));
+
+    // M5a: sized to comfortably fit a single legitimate event — MediaService's 20MB max file size,
+    // base64-expanded (~4/3x, ~27MB), plus JSON envelope overhead for the rest of the SyncEvent's
+    // fields and the enclosing array. Matches what SyncClient's own size-aware push batching
+    // (SplitIntoByteBoundedBatches / PushChunkWithSplitAsync) assumes "too large" means.
+    private const long PushMaxRequestBytes = 32L * 1024 * 1024;
+
+    // M5b: pull responses are also bounded by cumulative payload size, not just event count — see
+    // the /api/sync/events GET handler below.
+    private const long PullResponseByteTarget = 32L * 1024 * 1024;
 
     public static void MapSyncEndpoints(this WebApplication app)
     {
@@ -48,9 +69,17 @@ public static class SyncEndpoints
 
         // ─── Challenge ───────────────────────────────────────────────────────────
         app.MapPost("/api/sync/challenge", async (
+            HttpContext ctx,
             SyncTokenStore store,
             INodeIdentityRepository nodeRepo) =>
         {
+            // L9: per-IP throttle — see ChallengeLimiter's doc comment. Uses the raw connection IP,
+            // same as RateLimitMiddleware, not the GDPR-masked one MaskIp produces for logging (that
+            // would bucket a whole /24 together and let one IP in a subnet exhaust another's budget).
+            var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            if (!ChallengeLimiter.TryAcquire(ip))
+                return Results.StatusCode(429);
+
             var identity = await nodeRepo.GetAsync();
             if (identity == null) return Results.Problem("Node is not initialized.", statusCode: 503);
             var challenge = store.IssueChallenge(identity.NodeId);
@@ -71,7 +100,12 @@ public static class SyncEndpoints
             // for identifying an individual host without correlating with other data.
             var remoteIp = MaskIp(httpCtx.Connection.RemoteIpAddress);
 
-            if (!store.ConsumeChallenge(req.ChallengeB64, out _))
+            // ConsumeChallenge hands back the NodeId THIS node stamped into the challenge when it
+            // issued it (IssueChallenge(identity.NodeId) below) — our own real identity at that
+            // moment, from server-side state, not anything the caller supplies. This is the audience
+            // anchor for the M6 verification below: a signature is only accepted here if it was made
+            // FOR THIS NODE, regardless of what req.NodeId or anything else in the request claims.
+            if (!store.ConsumeChallenge(req.ChallengeB64, out var serverNodeId))
             {
                 logger.LogWarning("Auth 401 from {Ip} for {NodeId}: challenge not found or expired", remoteIp, req.NodeId);
                 return Results.Unauthorized();
@@ -97,11 +131,29 @@ public static class SyncEndpoints
                 return Results.BadRequest("Invalid base64 format.");
             }
 
-            // Domain-separated Ed25519 signature: prepend "BMB-CHALLENGE-V1\0" tag before signing
-            // to prevent cross-protocol oracle attacks. All clients in this repo use the tagged form.
-            var domainTag = "BMB-CHALLENGE-V1\0"u8.ToArray();
-            var taggedPayload = domainTag.Concat(challengeBytes).ToArray();
-            var sigOk = Ed25519Signer.Verify(entry.Ed25519PublicKey, taggedPayload, signature);
+            // M6: domain-separated Ed25519 signature, now bound to OUR OWN NodeId (serverNodeId,
+            // above) as well as the challenge bytes. Before this, the signed payload was just
+            // "BMB-CHALLENGE-V1\0" + challenge with no audience binding at all — a malicious peer
+            // (or a LAN MITM; plain-HTTP peers are realistic given mDNS discovery) that a victim
+            // node authenticates TO could fetch a challenge from some unrelated third node C and
+            // hand it to the victim as its own. The victim would sign it not knowing any better, and
+            // whoever relayed it could redeem that signature AS THE VICTIM on C — full event-log
+            // pull and join-snapshot access, on a node the victim never intended to talk to. Binding
+            // our real NodeId into what's verified means a signature only verifies at the node it
+            // was actually made for.
+            //
+            // V1 (unbound) is still accepted as a fallback for interop with a peer whose
+            // PeerAuthenticator hasn't been upgraded past this fix yet — it only ever produces a V1
+            // signature, and rejecting it outright would silently wedge sync with every node in the
+            // mesh that hasn't upgraded. A peer still on V1 gets exactly the (lack of) protection it
+            // had before this fix, no worse than today; retire this branch once the whole mesh has
+            // upgraded.
+            var domainTagV2 = "BMB-CHALLENGE-V2\0"u8.ToArray();
+            var taggedPayloadV2 = domainTagV2.Concat(serverNodeId.ToByteArray()).Concat(challengeBytes).ToArray();
+            var domainTagV1 = "BMB-CHALLENGE-V1\0"u8.ToArray();
+            var taggedPayloadV1 = domainTagV1.Concat(challengeBytes).ToArray();
+            var sigOk = Ed25519Signer.Verify(entry.Ed25519PublicKey, taggedPayloadV2, signature)
+                || Ed25519Signer.Verify(entry.Ed25519PublicKey, taggedPayloadV1, signature);
             if (!sigOk)
             {
                 logger.LogWarning("Auth 401 for {NodeId} ({Display}): Ed25519 signature verify failed (pubkey {PubLen}b, sig {SigLen}b)",
@@ -126,6 +178,11 @@ public static class SyncEndpoints
             if (!TryAuth(ctx, store, out var nodeId)) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
+            // M5b: clamp the caller-suppliable page size — a peer requesting an arbitrarily large
+            // `limit` would otherwise force a correspondingly large single DB fetch before we ever
+            // get a chance to size-bound the response below.
+            limit = Math.Clamp(limit, 1, 1000);
+
             var lastCompactionCp = await eventLogRepo.GetLastCompactionCpAsync();
             if (lastCompactionCp != null && afterSequence < lastCompactionCp.Value)
             {
@@ -140,6 +197,27 @@ public static class SyncEndpoints
             }
 
             var events = await eventLogRepo.GetAfterSequenceAsync(afterSequence, limit);
+
+            // M5b: even at the count-based `limit` (1000 by default), events aren't uniformly
+            // sized — a burst of near-max-size media_create events (~27MB each once base64-encoded)
+            // could otherwise balloon this single response to tens of gigabytes. Trim to a
+            // cumulative byte budget, always keeping at least one event so pull still makes forward
+            // progress; the client naturally continues from wherever its cursor lands on the next
+            // sync cycle (SyncClient does one page per cycle, not an internal drain-everything
+            // loop), so returning fewer than `limit` events here is not a correctness issue.
+            if (events.Count > 0)
+            {
+                var trimmed = new List<SyncEvent>(events.Count);
+                long size = 0;
+                foreach (var evt in events)
+                {
+                    var evtSize = evt.Payload?.Length ?? 0;
+                    if (trimmed.Count > 0 && size + evtSize > PullResponseByteTarget) break;
+                    trimmed.Add(evt);
+                    size += evtSize;
+                }
+                events = trimmed;
+            }
 
             // Record the highest sequence we sent, so delivery-status knows this node is up to date
             if (events.Count > 0)
@@ -260,13 +338,34 @@ public static class SyncEndpoints
             if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
-            if (ctx.Request.ContentLength is > 10 * 1024 * 1024)
-                return Results.StatusCode(413);
+            // M5a: `ctx.Request.ContentLength is > 10MB` used to be the only guard here, and it
+            // did nothing against the real client — HttpClient sends a JsonContent body chunked,
+            // with no Content-Length header at all, so this check silently never fired against a
+            // normal push. It only ever fired behind a buffering proxy that added a Content-Length
+            // header, and even then 10MB was too small: a single legitimate media_create event can
+            // carry up to ~20MB of base64 ciphertext (~27MB once JSON-encoded) alone, so a WORKING
+            // guard at that size would have permanently 413'd every push containing it (SyncClient
+            // would retry the identical batch forever — see PushChunkWithSplitAsync's doc comment).
+            //
+            // Fix: set the actual Kestrel per-request body size limit, which is enforced against
+            // bytes actually read off the stream regardless of Content-Length/chunking, to a cap
+            // that comfortably fits the largest legitimate single event.
+            var maxBodyFeature = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+            if (maxBodyFeature is { IsReadOnly: false })
+                maxBodyFeature.MaxRequestBodySize = PushMaxRequestBytes;
 
             SyncEvent[] events;
             try
             {
                 events = await ctx.Request.ReadFromJsonAsync<SyncEvent[]>() ?? [];
+            }
+            catch (Microsoft.AspNetCore.Http.BadHttpRequestException ex) when (ex.StatusCode == 413)
+            {
+                // Body exceeded PushMaxRequestBytes while reading — the pusher's
+                // PushChunkWithSplitAsync reacts to this by halving and retrying, or quarantining a
+                // single event that's still too large alone, rather than resending the same request
+                // forever.
+                return Results.StatusCode(413);
             }
             catch
             {
@@ -432,6 +531,18 @@ public static class SyncEndpoints
             return Results.Ok(new DeliveryStatusResponse(identity?.NodeId, invisibleMode.IsInvisible, statuses));
         }).RequireInternalKey().WithTags("Sync");
 
+        // ─── Quarantined events (M5c operator visibility) ───────────────────────
+        // Events that have repeatedly failed to apply during pull — see SyncEventQuarantine's doc
+        // comment for why this exists: before it, a permanently-broken event silently wedged the
+        // whole pull loop behind it every cycle, forever, with nothing beyond a repeating log line
+        // to notice it by. Internal-key-gated like the other diagnostic endpoints above (exposes
+        // node/event topology, not sensitive content — event payloads aren't included).
+        app.MapGet("/api/sync/quarantine", () =>
+        {
+            var entries = SyncEventQuarantine.ListAll();
+            return Results.Ok(entries);
+        }).RequireInternalKey().WithTags("Sync");
+
         // ─── Reachability self-test: probe (local wizard call, internal-key-gated) ──
         // The originating node (running the internet-access wizard) calls THIS endpoint on
         // itself. It picks one active whitelisted peer, authenticates to it (reusing the same
@@ -500,8 +611,11 @@ public static class SyncEndpoints
                 string token;
                 try
                 {
+                    // peer.NodeId (the whitelist entry we're iterating) is the trusted audience
+                    // anchor for M6's challenge-relay protection — it's what we independently
+                    // believe this peerBase belongs to, not anything the peer's own responses claim.
                     token = await PeerAuthenticator.AuthenticateAsync(
-                        authSigner, http, peerBase, identity, ctx.RequestAborted);
+                        authSigner, http, peerBase, identity, peer.NodeId, ctx.RequestAborted);
                 }
                 catch (Exception ex)
                 {

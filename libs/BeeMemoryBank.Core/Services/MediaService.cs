@@ -138,11 +138,42 @@ public class MediaService(
         };
 
         Directory.CreateDirectory(options.MediaDir);
-        // DB first, then file — if file write fails we can detect the missing file.
-        // The reverse (file first, DB fails) leaves orphaned .enc files with no cleanup path.
+        var filePath = Path.Combine(options.MediaDir, $"{media.Id}.enc");
+
+        // Ordering, and why this isn't one SQL transaction (M10):
+        //
+        // DB row first, then file — if the file write fails we can detect the missing file (the row
+        // exists, `{media.Id}.enc` doesn't) and clean it up below. The reverse (file first, DB fails)
+        // would leave an orphaned .enc file with nothing pointing back at it to find and delete.
+        //
+        // The row and the sync event ideally belong in ONE transaction, the same shape EventApplier's
+        // article create/update now uses (see EventApplier.Article.cs, H5): without it, a crash
+        // between the row commit and the event append leaves media that exists locally and NEVER
+        // propagates to peers, with nothing to detect or retry it. That requires
+        // IMediaRepository.CreateAsync to accept an IDbTransaction the way IArticleRepository /
+        // IArticleBodyRepository / IEventLogRepository already do (see the shared contract documented
+        // on IArticleRepository) — it currently doesn't, and that interface is outside this change's
+        // scope, so it's flagged for a follow-up there instead of patched here.
+        //
+        // Until then, this at least closes the THROWN-exception case (event signing failure, disk
+        // full on the file write, etc.): compensate by deleting what was just written, so a caller
+        // sees a clean failure with nothing left behind, rather than a silently orphaned, never-synced
+        // media row. This does NOT cover a hard process crash between the writes (kill -9, power
+        // loss) — that narrower window still needs the transactional fix above.
         await mediaRepo.CreateAsync(media);
-        await File.WriteAllBytesAsync(Path.Combine(options.MediaDir, $"{media.Id}.enc"), ciphertext);
-        await eventLogger.LogMediaCreateAsync(media, ciphertext);
+        try
+        {
+            await File.WriteAllBytesAsync(filePath, ciphertext);
+            await eventLogger.LogMediaCreateAsync(media, ciphertext);
+        }
+        catch
+        {
+            // Best-effort compensation — swallow cleanup failures so they don't mask the real
+            // (original) exception the caller needs to see.
+            try { await mediaRepo.DeleteByIdAsync(media.Id); } catch { /* best-effort */ }
+            try { if (File.Exists(filePath)) File.Delete(filePath); } catch { /* best-effort */ }
+            throw;
+        }
 
         return media;
     }
