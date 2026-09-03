@@ -269,9 +269,20 @@ public static class FolderEndpoints
             // other ACL/business-rule denial in this file returns.
             try
             {
+                var folder = await folderRepo.GetByPathAsync(path);
+
+                // Validate BEFORE destroying anything. DeleteByPathAsync below removes this
+                // folder's articles, and folderSvc.DeleteAsync's own guards (system, remote mirror,
+                // remote descendants, and the H1 descendant write-ACL walk) would otherwise not run
+                // until after that — turning a correctly-denied 403 into a 403 that already deleted
+                // the caller's articles. Same trap the system/remote pre-check above was added for;
+                // EnsureDeletableAsync is the authoritative, non-mutating form of every guard
+                // DeleteAsync enforces.
+                if (folder != null)
+                    await folderSvc.EnsureDeletableAsync(folder.Id);
+
                 var deleted = await svc.DeleteByPathAsync(path);
 
-                var folder = await folderRepo.GetByPathAsync(path);
                 if (folder != null)
                     await folderSvc.DeleteAsync(folder.Id);
 

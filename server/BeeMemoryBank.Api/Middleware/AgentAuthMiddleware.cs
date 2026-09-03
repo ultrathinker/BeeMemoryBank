@@ -21,10 +21,11 @@ namespace BeeMemoryBank.Api.Middleware;
 /// /api/init/reset, ...) is only ever meant to be reachable on localhost / from within this
 /// process's own container — NEVER published straight to a host port or the internet (H4: the
 /// shipped docker-compose.yml briefly did exactly that, which is what made this comment a lie
-/// instead of an invariant). Enforced two ways now: docker-entrypoint.sh binds the API process
-/// itself to 127.0.0.1, and docker-compose.yml no longer publishes port 5300 at all — see the
-/// comment there for what to do instead if you need cross-node sync (/api/sync, /api/join) or
-/// /mcp reachable from another machine. This is defense-in-depth, not the sole auth layer.
+/// instead of an invariant). Enforced by the deployment: docker-compose.yml no longer publishes
+/// port 5300 at all, and a node that does need cross-node sync (/api/sync, /api/join) or /mcp
+/// reachable from another machine publishes it bound to the HOST's loopback behind a
+/// path-filtering reverse proxy — see docs/deployment.md. This is defense-in-depth, not the sole
+/// auth layer.
 ///
 /// AUTO-UNLOCK: Agents are permitted to auto-unlock the session via their encrypted DEK.
 /// This is intentional — it ensures MCP clients can work without manual intervention.

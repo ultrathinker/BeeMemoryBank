@@ -14,6 +14,15 @@ public interface IFolderRepository
     Task SoftDeleteAsync(Guid id, DateTime deletedAt, Guid? cascadeOpId = null);
     /// <summary>Soft-deletes all sub-folders whose path starts with the given prefix.</summary>
     Task<int> SoftDeleteByPathPrefixAsync(string pathPrefix, DateTime deletedAt, Guid? cascadeOpId = null);
+
+    /// <summary>
+    /// Throws if any ACTIVE folder strictly under <paramref name="pathPrefix"/> is denied or
+    /// read-only for the ambient caller scope. <see cref="SoftDeleteByPathPrefixAsync"/> calls this
+    /// itself, but it is exposed separately so a caller that destroys other things BEFORE reaching
+    /// the folder delete (the REST delete endpoint removes the folder's articles first) can
+    /// validate up front instead of discovering the denial half-way through.
+    /// </summary>
+    Task ThrowIfAnyDescendantWriteDeniedAsync(string pathPrefix);
     /// <summary>Returns soft-deleted folders under pathPrefix that share the same cascade op id.
     /// Used by Restore to recreate the subtree structure.</summary>
     Task<List<Folder>> ListSoftDeletedByCascadeOpIdAsync(Guid cascadeOpId, string pathPrefix);

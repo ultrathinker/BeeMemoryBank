@@ -218,7 +218,21 @@ public class FolderService(
         await folderAccessService.InvalidateCacheForFoldersAsync(allFolderIds);
     }
 
-    public async Task DeleteAsync(Guid folderId)
+    /// <summary>
+    /// Runs every guard <see cref="DeleteAsync"/> enforces, without changing anything: system
+    /// folder, remote mirror, remote descendants, and the descendant write-ACL walk.
+    ///
+    /// <para>
+    /// Exists because the REST delete endpoint deletes the folder's ARTICLES before it calls
+    /// <see cref="DeleteAsync"/>. Any guard that only fires inside <see cref="DeleteAsync"/> is
+    /// therefore reached too late: the caller gets a correct 403, but their articles are already
+    /// gone — a denied request that still destroyed data. That trap already had a comment in
+    /// FolderEndpoints for the system/remote cases; the H1 descendant-ACL check re-opened it,
+    /// because the endpoint's own descendant pre-check only ever covered callers with no allow
+    /// rows. Validate through this method BEFORE destroying anything.
+    /// </para>
+    /// </summary>
+    public async Task EnsureDeletableAsync(Guid folderId)
     {
         var folder = await folderRepo.GetByIdAsync(folderId)
             ?? throw new KeyNotFoundException($"Folder {folderId} not found");
@@ -232,6 +246,20 @@ public class FolderService(
                 $"Folder '{folder.Path}' is a remote mirror. Detach the subscription on the Remote Accounts page instead.");
 
         await EnsureNoRemoteDescendantsAsync(folder.Path, "deleted");
+
+        // The authoritative descendant write-ACL check — the same one SoftDeleteByPathPrefixAsync
+        // runs, so the two can't drift. Superadmin/System scope is skipped inside the repository.
+        await folderRepo.ThrowIfAnyDescendantWriteDeniedAsync(folder.Path);
+    }
+
+    public async Task DeleteAsync(Guid folderId)
+    {
+        var folder = await folderRepo.GetByIdAsync(folderId)
+            ?? throw new KeyNotFoundException($"Folder {folderId} not found");
+
+        // Re-validated here rather than assumed: DeleteAsync is also called directly (MCP tools,
+        // other services), not only through the endpoint that pre-checks.
+        await EnsureDeletableAsync(folderId);
 
         var deletedAt = DateTime.UtcNow;
         // Shared op id tags this folder and its cascade-deleted subfolders, so
@@ -259,6 +287,25 @@ public class FolderService(
 
         await folderRepo.SoftDeleteAsync(folderId, deletedAt, cascadeOpId);
         await articleRepo.ClearFolderIdAsync(folderId);
+
+        // Emit a delete event for EVERY folder this cascade took down, not just the one the caller
+        // named. The local cascade above is a bulk UPDATE that writes no events, and
+        // EventApplier.ApplyFolderDeleteAsync only ever acts on the single folder id inside the
+        // event it is given — so logging only the top folder meant a peer deleted `/Work` and left
+        // `/Work/Reports` alive, with its articles still attached, forever. Nothing detects or
+        // repairs that: the mesh just silently disagrees about the tree from then on.
+        //
+        // One event per folder rather than one "delete this subtree" event, so each folder keeps
+        // its own Lamport comparison on the receiving side — a peer that has a genuinely newer
+        // version of one subfolder still wins for that subfolder instead of being flattened by a
+        // coarse subtree delete. ListSoftDeletedByCascadeOpIdAsync returns exactly the rows this
+        // op just marked (id and path), so the events describe what actually happened.
+        foreach (var cascaded in await folderRepo.ListSoftDeletedByCascadeOpIdAsync(cascadeOpId, folder.Path))
+        {
+            if (cascaded.Id == folderId) continue; // logged below as the named folder
+            await eventLogger.LogFolderDeleteAsync(cascaded.Id, cascaded.Path, deletedAt);
+        }
+
         await eventLogger.LogFolderDeleteAsync(folderId, folder.Path, deletedAt);
     }
 

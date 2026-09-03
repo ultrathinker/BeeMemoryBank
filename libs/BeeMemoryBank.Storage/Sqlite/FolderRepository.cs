@@ -193,8 +193,7 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         // real (unfiltered) descendant paths and re-check every single one before touching
         // anything. Skipped for superadmins/System scope, where every check below is a guaranteed
         // no-op anyway — no need to pay for the extra query.
-        if (!_holder.Scope.IsSuperadmin)
-            await ThrowIfAnyDescendantWriteDeniedAsync(pathPrefix);
+        await ThrowIfAnyDescendantWriteDeniedAsync(pathPrefix);
 
         using var conn = OpenConnection();
         var now = deletedAt.ToString("o");
@@ -212,8 +211,14 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     /// see) and then re-checks each path against the same per-path guards every other write method
     /// here uses, so the two never drift out of sync.
     /// </summary>
-    private async Task ThrowIfAnyDescendantWriteDeniedAsync(string pathPrefix)
+    public async Task ThrowIfAnyDescendantWriteDeniedAsync(string pathPrefix)
     {
+        // Skipped for superadmin/System scope, where every per-path check below is a guaranteed
+        // no-op — no need to pay for the extra query. Lives here rather than at the call sites so
+        // every caller gets the same behaviour.
+        if (_holder.Scope.IsSuperadmin)
+            return;
+
         using var conn = OpenConnection();
         var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
         var descendantPaths = await conn.QueryAsync<string>(
