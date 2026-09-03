@@ -22,14 +22,21 @@ public class EventLogRepository(DbConnectionFactory factory) : BaseRepository(fa
         actor_name      AS ActorName,
         via_agent_name  AS ViaAgentName";
 
-    public async Task AppendAsync(SyncEvent evt)
+    public async Task AppendAsync(SyncEvent evt, System.Data.IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        await conn.ExecuteAsync(
-            @"INSERT INTO tbl_event
-              (event_id, node_id, lamport_ts, event_type, article_id, entity_id, payload, signature, protocol_version, created_at, actor_type, actor_name, via_agent_name)
-              VALUES (@EventId, @NodeId, @LamportTs, @EventType, @ArticleId, @EntityId, @Payload, @Signature, @ProtocolVersion, @CreatedAt, @ActorType, @ActorName, @ViaAgentName)",
-            evt);
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_event
+                  (event_id, node_id, lamport_ts, event_type, article_id, entity_id, payload, signature, protocol_version, created_at, actor_type, actor_name, via_agent_name)
+                  VALUES (@EventId, @NodeId, @LamportTs, @EventType, @ArticleId, @EntityId, @Payload, @Signature, @ProtocolVersion, @CreatedAt, @ActorType, @ActorName, @ViaAgentName)",
+                evt, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
     public async Task<bool> AppendIfNotExistsAsync(SyncEvent evt)

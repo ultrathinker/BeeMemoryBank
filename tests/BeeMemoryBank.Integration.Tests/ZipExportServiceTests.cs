@@ -53,7 +53,7 @@ public class ZipExportServiceTests : IAsyncLifetime
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(), mediaRepo, _folderRepo,
-            versionRepo, new NullActorProvider(), _conceptTagService);
+            versionRepo, new NullActorProvider(), _conceptTagService, _factory);
 
         _exportService = new ZipExportService(_articleService, _mediaService, _conceptTagService, _folderRepo, scopeHolder);
 
@@ -159,7 +159,7 @@ public class ZipExportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullEventLogger(), new MediaStorageOptions(Path.GetTempPath()));
         var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
-            otherVersionRepo, new NullActorProvider(), otherConceptTagService);
+            otherVersionRepo, new NullActorProvider(), otherConceptTagService, otherVaultFactory);
         await otherInit.InitializeAsync("admin", "OtherNode", "password2");
         await otherSession.UnlockAsync("password2");
         var importService = new BeeImportService(otherArticleService, otherMediaService, otherFolderRepo, otherNodeRepo);
@@ -222,7 +222,7 @@ public class ZipExportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullEventLogger(), new MediaStorageOptions(Path.GetTempPath()));
         var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
-            otherVersionRepo, new NullActorProvider(), otherConceptTagService);
+            otherVersionRepo, new NullActorProvider(), otherConceptTagService, otherVaultFactory);
         await otherInit.InitializeAsync("admin", "OtherNode", "password2");
         await otherSession.UnlockAsync("password2");
         var importService = new BeeImportService(otherArticleService, otherMediaService, otherFolderRepo, otherNodeRepo);

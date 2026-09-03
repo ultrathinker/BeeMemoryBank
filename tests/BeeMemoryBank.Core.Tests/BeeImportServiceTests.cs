@@ -52,7 +52,7 @@ public class BeeImportServiceTests : IAsyncLifetime
         InitService = new InitializationService(nodeRepo, keySlotRepo, userRepo, Factory);
         ArticleService = new ArticleService(articleRepo, bodyRepo, Session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(), mediaRepo, folderRepo,
-            versionRepo, new NullActorProvider(), conceptTagService);
+            versionRepo, new NullActorProvider(), conceptTagService, Factory);
 
         TempMediaDir = Path.Combine(Path.GetTempPath(), $"bmb_test_media_{Guid.NewGuid():N}");
         Directory.CreateDirectory(TempMediaDir);

@@ -23,9 +23,13 @@ namespace BeeMemoryBank.Core.Services;
 /// </para>
 ///
 /// <para>
-/// This does NOT make an update atomic — metadata, version snapshot, body and event log are still
-/// four separate transactions, so a crash mid-update can still diverge from peers. It removes the
-/// concurrency half of that problem, not the crash-safety half.
+/// This lock is what makes atomicity possible, not a substitute for it: it serializes concurrent
+/// writers to the same article to exactly one at a time, so the one writer holding it can safely
+/// open a single SQLite transaction spanning metadata, version snapshot, body and event log
+/// (<see cref="ArticleService"/>'s <c>UpdateCoreAsync</c>/<c>CreateAsync</c>/<c>DeleteAsync</c>)
+/// without another in-process writer interleaving mid-transaction. Crash safety itself — all of
+/// those writes landing together or not at all — comes from that shared transaction, not from
+/// this lock.
 /// </para>
 /// </summary>
 public static class ArticleWriteLock

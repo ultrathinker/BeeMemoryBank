@@ -69,18 +69,25 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
         }
     }
 
-    public async Task UpsertAsync(EncryptedArticleBody body)
+    public async Task UpsertAsync(EncryptedArticleBody body, System.Data.IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        await conn.ExecuteAsync(
-            @"INSERT INTO tbl_article_body (article_id, ciphertext, iv, encrypted_dek, dek_iv)
-              VALUES (@ArticleId, @Ciphertext, @IV, @EncryptedDek, @DekIV)
-              ON CONFLICT (article_id) DO UPDATE SET
-                ciphertext    = excluded.ciphertext,
-                iv            = excluded.iv,
-                encrypted_dek = excluded.encrypted_dek,
-                dek_iv        = excluded.dek_iv",
-            body);
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_article_body (article_id, ciphertext, iv, encrypted_dek, dek_iv)
+                  VALUES (@ArticleId, @Ciphertext, @IV, @EncryptedDek, @DekIV)
+                  ON CONFLICT (article_id) DO UPDATE SET
+                    ciphertext    = excluded.ciphertext,
+                    iv            = excluded.iv,
+                    encrypted_dek = excluded.encrypted_dek,
+                    dek_iv        = excluded.dek_iv",
+                body, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
     public async Task<int> PurgeForDeletedArticlesOlderThanAsync(DateTime cutoff)

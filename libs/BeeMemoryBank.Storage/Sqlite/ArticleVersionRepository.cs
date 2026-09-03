@@ -10,12 +10,12 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
 {
     private readonly CallerScopeHolder _holder = scopeHolder;
 
-    private async Task<bool> IsArticleAccessibleAsync(IDbConnection conn, Guid articleId)
+    private async Task<bool> IsArticleAccessibleAsync(IDbConnection conn, Guid articleId, IDbTransaction? transaction = null)
     {
         if (_holder.Scope.IsSuperadmin) return true;
         var treePath = await conn.QuerySingleOrDefaultAsync<string?>(
             "SELECT COALESCE(f.path, '/') FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id WHERE a.id = @articleId AND a.status = 'A'",
-            new { articleId });
+            new { articleId }, transaction: transaction);
         return treePath != null && !_holder.Scope.IsAccessDenied(treePath);
     }
     public async Task<List<ArticleVersion>> GetByArticleIdAsync(Guid articleId)
@@ -115,54 +115,75 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
         };
     }
 
-    public async Task<int> GetMaxVersionNumberAsync(Guid articleId)
+    public async Task<int> GetMaxVersionNumberAsync(Guid articleId, IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        return await conn.ExecuteScalarAsync<int>(
-            "SELECT COALESCE(MAX(version_number), 0) FROM tbl_article_version WHERE article_id = @articleId",
-            new { articleId });
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            return await conn.ExecuteScalarAsync<int>(
+                "SELECT COALESCE(MAX(version_number), 0) FROM tbl_article_version WHERE article_id = @articleId",
+                new { articleId }, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
-    public async Task CreateAsync(ArticleVersion version)
+    public async Task CreateAsync(ArticleVersion version, IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        if (!await IsArticleAccessibleAsync(conn, version.ArticleId))
-            throw new UnauthorizedAccessException($"Write access denied for version on article {version.ArticleId}");
-        await conn.ExecuteAsync(
-            @"INSERT INTO tbl_article_version
-              (id, article_id, version_number, title, tree_path, ciphertext, iv, encrypted_dek, dek_iv, updated_by, created_at)
-              VALUES (@Id, @ArticleId, @VersionNumber, @Title, @TreePath, @Ciphertext, @IV, @EncryptedDek, @DekIV, @UpdatedBy, @CreatedAt)",
-            new
-            {
-                version.Id,
-                version.ArticleId,
-                version.VersionNumber,
-                version.Title,
-                version.TreePath,
-                version.Ciphertext,
-                version.IV,
-                version.EncryptedDek,
-                version.DekIV,
-                version.UpdatedBy,
-                version.CreatedAt
-            });
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            if (!await IsArticleAccessibleAsync(conn, version.ArticleId, transaction))
+                throw new UnauthorizedAccessException($"Write access denied for version on article {version.ArticleId}");
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_article_version
+                  (id, article_id, version_number, title, tree_path, ciphertext, iv, encrypted_dek, dek_iv, updated_by, created_at)
+                  VALUES (@Id, @ArticleId, @VersionNumber, @Title, @TreePath, @Ciphertext, @IV, @EncryptedDek, @DekIV, @UpdatedBy, @CreatedAt)",
+                new
+                {
+                    version.Id,
+                    version.ArticleId,
+                    version.VersionNumber,
+                    version.Title,
+                    version.TreePath,
+                    version.Ciphertext,
+                    version.IV,
+                    version.EncryptedDek,
+                    version.DekIV,
+                    version.UpdatedBy,
+                    version.CreatedAt
+                }, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
-    public async Task DeleteOldVersionsAsync(Guid articleId, int keepCount)
+    public async Task DeleteOldVersionsAsync(Guid articleId, int keepCount, IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        if (!await IsArticleAccessibleAsync(conn, articleId))
-            throw new UnauthorizedAccessException($"Write access denied for versions on article {articleId}");
-        await conn.ExecuteAsync(
-            @"DELETE FROM tbl_article_version
-              WHERE article_id = @articleId
-              AND version_number NOT IN (
-                  SELECT version_number FROM tbl_article_version
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            if (!await IsArticleAccessibleAsync(conn, articleId, transaction))
+                throw new UnauthorizedAccessException($"Write access denied for versions on article {articleId}");
+            await conn.ExecuteAsync(
+                @"DELETE FROM tbl_article_version
                   WHERE article_id = @articleId
-                  ORDER BY version_number DESC
-                  LIMIT @keepCount
-              )",
-            new { articleId, keepCount });
+                  AND version_number NOT IN (
+                      SELECT version_number FROM tbl_article_version
+                      WHERE article_id = @articleId
+                      ORDER BY version_number DESC
+                      LIMIT @keepCount
+                  )",
+                new { articleId, keepCount }, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
 }

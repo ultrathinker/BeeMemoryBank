@@ -245,7 +245,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(factory, new CallerScopeHolder());
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), eventLogger);
         var articleService = new ArticleService(articleRepo, bodyRepo, session, nodeRepo, clock, eventLogger,
-            mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
+            mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, factory);
 
         if (initialize)
         {

@@ -66,13 +66,13 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
             new { articleId })).ToList();
     }
 
-    private async Task EnsureWriteAllowedAsync(System.Data.IDbConnection conn, Guid? articleId)
+    private async Task EnsureWriteAllowedAsync(System.Data.IDbConnection conn, Guid? articleId, System.Data.IDbTransaction? transaction = null)
     {
         if (_holder.Scope.IsSuperadmin) return;
         if (!articleId.HasValue) return;  // orphaned upload, scope check happens via article creation
         var treePath = await conn.QuerySingleOrDefaultAsync<string?>(
             "SELECT COALESCE(f.path, '/') FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id WHERE a.id = @articleId AND a.status = 'A'",
-            new { articleId = articleId.Value });
+            new { articleId = articleId.Value }, transaction: transaction);
         if (treePath == null || _holder.Scope.IsAccessDenied(treePath))
             throw new UnauthorizedAccessException($"Write access denied for media on article {articleId}");
         if (_holder.Scope.IsReadOnly(treePath))
@@ -92,14 +92,21 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
             media);
     }
 
-    public async Task SoftDeleteByArticleIdAsync(Guid articleId)
+    public async Task SoftDeleteByArticleIdAsync(Guid articleId, System.Data.IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        await EnsureWriteAllowedAsync(conn, articleId);
-        var now = UtcNow();
-        await conn.ExecuteAsync(
-            "UPDATE tbl_media SET status = 'D', deleted_at = @now WHERE article_id = @articleId AND status = 'A'",
-            new { articleId, now });
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            await EnsureWriteAllowedAsync(conn, articleId, transaction);
+            var now = UtcNow();
+            await conn.ExecuteAsync(
+                "UPDATE tbl_media SET status = 'D', deleted_at = @now WHERE article_id = @articleId AND status = 'A'",
+                new { articleId, now }, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
     public async Task<List<Media>> GetDeletedOlderThanAsync(DateTime cutoff)

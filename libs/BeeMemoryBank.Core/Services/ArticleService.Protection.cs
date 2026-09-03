@@ -41,19 +41,13 @@ public partial class ArticleService
 
         var wrapped = ProtectedContentCodec.Wrap(current, passphrase);
 
-        // Order matters for crash-safety: purge the pre-protection plaintext history FIRST, then
-        // write the protected body WITHOUT taking a new (plaintext) snapshot (suppressVersion). A
-        // crash between the two leaves the article unprotected-but-historyless (safe, retryable) —
-        // never protected-with-readable-plaintext-versions. The version endpoint serves any
-        // surviving plaintext version without a passphrase, so this gap must not exist.
-        //
-        // Both steps run under ONE write lock. Splitting them let a concurrent append slip in
-        // between: it took the lock inside UpdateAsync, snapshotted the still-plaintext body into
-        // tbl_article_version, and that snapshot outlived the purge that had already run. The
-        // version endpoint serves any surviving plaintext version with no passphrase, so a single
-        // unlucky interleaving defeated the protection entirely.
-        await versionRepo.DeleteOldVersionsAsync(id, 0);
-        await UpdateCoreAsync(id, null, null, null, wrapped, hint, updateHint: true, suppressVersion: true);
+        // Atomicity and crash-safety: the history purge (DeleteOldVersionsAsync(id, 0)) and the
+        // protected body write are executed within the SAME atomic transaction inside UpdateCoreAsync.
+        // If a crash or error occurs, both roll back together, leaving the article unprotected with
+        // its history intact. When committed, the article is protected with zero plaintext versions.
+        // It is physically impossible for the article to be saved as protected while readable
+        // plaintext versions survive in tbl_article_version.
+        await UpdateCoreAsync(id, null, null, null, wrapped, hint, updateHint: true, suppressVersion: true, purgeHistoryKeepCount: 0);
     }
 
     /// <summary>Remove protection, restoring a plaintext body. Verifies the passphrase.</summary>
@@ -87,12 +81,8 @@ public partial class ArticleService
         var plaintext = ProtectedContentCodec.Unwrap(wrapped, oldPassphrase); // throws on wrong old passphrase
         var rewrapped = ProtectedContentCodec.Wrap(plaintext, newPassphrase);
 
-        // Purge old-passphrase-encrypted versions FIRST, then re-wrap without snapshotting (same
-        // crash-safety rationale as ProtectAsync). A surviving old-passphrase version is only a
-        // BMBENC1 blob — but it could be brute-forced if the old passphrase was weak, so don't leave it.
-        // One write lock across both steps — see ProtectAsync for the interleaving this closes.
-        await versionRepo.DeleteOldVersionsAsync(id, 0);
-        await UpdateCoreAsync(id, null, null, null, rewrapped, newHint, updateHint: true, suppressVersion: true);
+        // Purge old-passphrase-encrypted versions and write rewrapped body in the SAME transaction.
+        await UpdateCoreAsync(id, null, null, null, rewrapped, newHint, updateHint: true, suppressVersion: true, purgeHistoryKeepCount: 0);
     }
 
     /// <summary>

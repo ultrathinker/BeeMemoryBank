@@ -220,7 +220,7 @@ public class MigratorTests : IDisposable
         var versionRepo = new ArticleVersionRepository(factory, scopeHolder);
         var conceptTagRepo = new ConceptTagRepository(factory, scopeHolder);
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
-        var articleService = new ArticleService(articleRepo, bodyRepo, session, nodeRepo, new NullLamportClock(), new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
+        var articleService = new ArticleService(articleRepo, bodyRepo, session, nodeRepo, new NullLamportClock(), new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, factory);
 
         var conceptTags = await conceptTagRepo.GetByArticleIdAsync(devArticle.Id);
         conceptTags.Should().BeEquivalentTo(["go", "backend"]);

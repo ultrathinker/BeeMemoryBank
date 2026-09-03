@@ -1,10 +1,11 @@
+using System.Data;
 using BeeMemoryBank.Core.Models;
 
 namespace BeeMemoryBank.Core.Interfaces;
 
 public interface IEventLogRepository
 {
-    Task AppendAsync(SyncEvent evt);
+    Task AppendAsync(SyncEvent evt, IDbTransaction? transaction = null);
     /// <summary>Atomically inserts the event if not already present. Returns true if inserted, false if duplicate.</summary>
     Task<bool> AppendIfNotExistsAsync(SyncEvent evt);
     Task<bool> ExistsAsync(Guid eventId);

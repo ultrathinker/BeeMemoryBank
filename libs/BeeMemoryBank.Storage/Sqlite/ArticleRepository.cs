@@ -212,7 +212,9 @@ public class ArticleRepository(
         return _holder.Scope.FilterArticles(articles);
     }
 
-    public async Task CreateAsync(Article article)
+    public void InvalidateVectorCache() => _vectorCache.Invalidate();
+
+    public async Task CreateAsync(Article article, System.Data.IDbTransaction? transaction = null)
     {
         // Repo-level write guard: close the "new endpoint forgets manual ACL check" hole.
         if (_holder.Scope.IsAccessDenied(article.TreePath))
@@ -220,11 +222,7 @@ public class ArticleRepository(
         if (_holder.Scope.IsReadOnly(article.TreePath))
             throw new ReadOnlyAccessException(article.TreePath);
 
-        using var conn = OpenConnection();
-        using var tx = conn.BeginTransaction();
-
-        await conn.ExecuteAsync(
-            @"INSERT INTO tbl_article
+        const string insertSql = @"INSERT INTO tbl_article
               (id, title, tree_path, folder_id, embedding_projection, embedding_model_version, embedding_pending, index_pending,
                status, lamport_ts, source_node_id, created_at, updated_at,
                remote_subscription_id, remote_origin_id, remote_version, remote_updated_by,
@@ -232,17 +230,28 @@ public class ArticleRepository(
               VALUES (@Id, @Title, @TreePath, @FolderId, @EmbeddingProjection, @EmbeddingModelVersion, @EmbeddingPending, @IndexPending,
                       @Status, @LamportTs, @SourceNodeId, @CreatedAt, @UpdatedAt,
                       @RemoteSubscriptionId, @RemoteOriginId, @RemoteVersion, @RemoteUpdatedBy,
-                      @Protected, @ProtectionHint)",
-            article, tx);
+                      @Protected, @ProtectionHint)";
 
-        tx.Commit();
+        if (transaction != null)
+        {
+            await transaction.Connection!.ExecuteAsync(insertSql, article, transaction);
+        }
+        else
+        {
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
 
-        // WP-14: a brand-new row may carry an embedding_projection (sync create, or a create with
-        // an inline projection), so the cache must be rebuilt on next search to pick it up.
-        _vectorCache.Invalidate();
+            await conn.ExecuteAsync(insertSql, article, tx);
+
+            tx.Commit();
+
+            // WP-14: a brand-new row may carry an embedding_projection (sync create, or a create with
+            // an inline projection), so the cache must be rebuilt on next search to pick it up.
+            _vectorCache.Invalidate();
+        }
     }
 
-    public async Task UpdateAsync(Article article)
+    public async Task UpdateAsync(Article article, System.Data.IDbTransaction? transaction = null)
     {
         if (_holder.Scope.IsAccessDenied(article.TreePath))
             throw new UnauthorizedAccessException($"Write access denied for path '{article.TreePath}'");
@@ -260,37 +269,36 @@ public class ArticleRepository(
         // round-trip.
         if (!_holder.Scope.IsSuperadmin)
         {
-            using var check = OpenConnection();
-            var stored = await check.QuerySingleOrDefaultAsync<ArticleUpdateGuardMeta>(
-                @"SELECT COALESCE(f.path, '/') AS StoredTreePath,
-                         a.remote_subscription_id AS RemoteSubId
-                    FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
-                   WHERE a.id = @id",
-                new { id = article.Id });
-            if (stored != null)
+            var check = transaction?.Connection ?? OpenConnection();
+            try
             {
-                if (!string.IsNullOrEmpty(stored.RemoteSubId))
-                    throw new ReadOnlyAccessException($"Article {article.Id} is in a remote read-only share.");
-                if (!string.IsNullOrEmpty(stored.StoredTreePath))
+                var stored = await check.QuerySingleOrDefaultAsync<ArticleUpdateGuardMeta>(
+                    @"SELECT COALESCE(f.path, '/') AS StoredTreePath,
+                             a.remote_subscription_id AS RemoteSubId
+                        FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
+                       WHERE a.id = @id",
+                    new { id = article.Id }, transaction: transaction);
+                if (stored != null)
                 {
-                    if (_holder.Scope.IsAccessDenied(stored.StoredTreePath))
-                        throw new UnauthorizedAccessException(
-                            $"Write access denied for stored path '{stored.StoredTreePath}' (cannot move article you don't own).");
-                    if (_holder.Scope.IsReadOnly(stored.StoredTreePath))
-                        throw new ReadOnlyAccessException(stored.StoredTreePath);
+                    if (!string.IsNullOrEmpty(stored.RemoteSubId))
+                        throw new ReadOnlyAccessException($"Article {article.Id} is in a remote read-only share.");
+                    if (!string.IsNullOrEmpty(stored.StoredTreePath))
+                    {
+                        if (_holder.Scope.IsAccessDenied(stored.StoredTreePath))
+                            throw new UnauthorizedAccessException(
+                                $"Write access denied for stored path '{stored.StoredTreePath}' (cannot move article you don't own).");
+                        if (_holder.Scope.IsReadOnly(stored.StoredTreePath))
+                            throw new ReadOnlyAccessException(stored.StoredTreePath);
+                    }
                 }
+            }
+            finally
+            {
+                if (transaction == null) check.Dispose();
             }
         }
 
-        using var conn = OpenConnection();
-        using var tx = conn.BeginTransaction();
-
-        // Note: no `status = 'A'` filter — must allow resurrecting soft-deleted rows
-        // when LWW says incoming Create wins over an older Delete (Wave 2 audit
-        // claude-A #7). The caller sets Status explicitly via the @Status param.
-        // deleted_at is reset when transitioning back to 'A'.
-        await conn.ExecuteAsync(
-            @"UPDATE tbl_article
+        const string updateSql = @"UPDATE tbl_article
               SET title = @Title, tree_path = @TreePath, folder_id = @FolderId,
                   embedding_projection = @EmbeddingProjection,
                   embedding_model_version = @EmbeddingModelVersion,
@@ -304,54 +312,83 @@ public class ArticleRepository(
                   remote_updated_by = @RemoteUpdatedBy,
                   protected = @Protected,
                   protection_hint = @ProtectionHint
-              WHERE id = @Id",
-            article, tx);
+              WHERE id = @Id";
 
-        tx.Commit();
+        if (transaction != null)
+        {
+            await transaction.Connection!.ExecuteAsync(updateSql, article, transaction);
+        }
+        else
+        {
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
 
-        // WP-14: UpdateAsync rewrites embedding_projection with whatever the Article model carries.
-        // Every current caller load-then-modify-then-save (so the bytes are usually unchanged), but
-        // the column is written unconditionally here and a future caller could change it -- bumping
-        // unconditionally keeps the "cache never silently goes stale" guarantee simple at the cost
-        // of a redundant rebuild on metadata-only edits. See the WP-14 report for the tradeoff.
-        _vectorCache.Invalidate();
+            // Note: no `status = 'A'` filter — must allow resurrecting soft-deleted rows
+            // when LWW says incoming Create wins over an older Delete (Wave 2 audit
+            // claude-A #7). The caller sets Status explicitly via the @Status param.
+            // deleted_at is reset when transitioning back to 'A'.
+            await conn.ExecuteAsync(updateSql, article, tx);
+
+            tx.Commit();
+
+            // WP-14: UpdateAsync rewrites embedding_projection with whatever the Article model carries.
+            // Every current caller load-then-modify-then-save (so the bytes are usually unchanged), but
+            // the column is written unconditionally here and a future caller could change it -- bumping
+            // unconditionally keeps the "cache never silently goes stale" guarantee simple at the cost
+            // of a redundant rebuild on metadata-only edits. See the WP-14 report for the tradeoff.
+            _vectorCache.Invalidate();
+        }
     }
 
-    public async Task SoftDeleteAsync(Guid id)
+    public async Task SoftDeleteAsync(Guid id, System.Data.IDbTransaction? transaction = null)
     {
         // GetByIdAsync respects ambient scope (returns null if denied), so fetching
         // through SystemCallerScope to get the raw path, then enforce denial explicitly.
         if (!_holder.Scope.IsSuperadmin)
         {
-            using var check = OpenConnection();
-            // Dapper maps ValueTuple by position (Item1/Item2), not by alias, so
-            // `(string?, string?)` would receive nulls regardless of SELECT — the
-            // ACL/Read-only guard would silently no-op. Use a dedicated record so
-            // properties bind by name. Caught by Claude+gemini third review.
-            var meta = await check.QuerySingleOrDefaultAsync<ArticleDeleteMeta>(
-                @"SELECT COALESCE(f.path, '/') AS TreePath, a.remote_subscription_id AS RemoteSubId
-                  FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
-                  WHERE a.id = @id",
-                new { id });
-            if (meta != null)
+            var check = transaction?.Connection ?? OpenConnection();
+            try
             {
-                if (!string.IsNullOrEmpty(meta.TreePath))
+                // Dapper maps ValueTuple by position (Item1/Item2), not by alias, so
+                // `(string?, string?)` would receive nulls regardless of SELECT — the
+                // ACL/Read-only guard would silently no-op. Use a dedicated record so
+                // properties bind by name. Caught by Claude+gemini third review.
+                var meta = await check.QuerySingleOrDefaultAsync<ArticleDeleteMeta>(
+                    @"SELECT COALESCE(f.path, '/') AS TreePath, a.remote_subscription_id AS RemoteSubId
+                      FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
+                      WHERE a.id = @id",
+                    new { id }, transaction: transaction);
+                if (meta != null)
                 {
-                    if (_holder.Scope.IsAccessDenied(meta.TreePath))
-                        throw new UnauthorizedAccessException($"Write access denied for path '{meta.TreePath}'");
-                    if (_holder.Scope.IsReadOnly(meta.TreePath))
-                        throw new ReadOnlyAccessException(meta.TreePath);
+                    if (!string.IsNullOrEmpty(meta.TreePath))
+                    {
+                        if (_holder.Scope.IsAccessDenied(meta.TreePath))
+                            throw new UnauthorizedAccessException($"Write access denied for path '{meta.TreePath}'");
+                        if (_holder.Scope.IsReadOnly(meta.TreePath))
+                            throw new ReadOnlyAccessException(meta.TreePath);
+                    }
+                    if (!string.IsNullOrEmpty(meta.RemoteSubId))
+                        throw new ReadOnlyAccessException($"Article {id} is in a remote read-only share.");
                 }
-                if (!string.IsNullOrEmpty(meta.RemoteSubId))
-                    throw new ReadOnlyAccessException($"Article {id} is in a remote read-only share.");
+            }
+            finally
+            {
+                if (transaction == null) check.Dispose();
             }
         }
 
-        using var conn = OpenConnection();
-        var now = UtcNow();
-        await conn.ExecuteAsync(
-            "UPDATE tbl_article SET status = 'D', deleted_at = @now, updated_at = @now WHERE id = @id AND status = 'A'",
-            new { id, now });
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            var now = UtcNow();
+            await conn.ExecuteAsync(
+                "UPDATE tbl_article SET status = 'D', deleted_at = @now, updated_at = @now WHERE id = @id AND status = 'A'",
+                new { id, now }, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
     public async Task<List<Article>> GetEmbeddingPendingAsync(int limit = 100)

@@ -16,7 +16,8 @@ public partial class ArticleService(
     IFolderRepository folderRepo,
     IArticleVersionRepository versionRepo,
     IActorProvider actorProvider,
-    ConceptTagService conceptTagService)
+    ConceptTagService conceptTagService,
+    IDbConnectionFactory connFactory)
 {
     [GeneratedRegex(@"!\[[^\]]*\]\(/api/media/([0-9a-fA-F-]{36})\)")]
     private static partial Regex MediaRefRegex();
@@ -79,10 +80,10 @@ public partial class ArticleService(
             ProtectionHint = ProtectedContentCodec.IsProtected(plaintext) ? protectionHint : null
         };
 
+        // Note: Folder auto-vivification stays outside the transaction (an ancestor folder
+        // vivified by a write that later rolls back is an inert, harmless empty folder).
         var folder = await EnsureFolderExistsAsync(treePath);
         article.FolderId = folder?.Id;
-
-        await articleRepo.CreateAsync(article);
 
         var body = new EncryptedArticleBody
         {
@@ -92,15 +93,42 @@ public partial class ArticleService(
             EncryptedDek = encryptedDek,
             DekIV = dekIv
         };
-        await bodyRepo.UpsertAsync(body);
 
-        if (tags.Count > 0)
+        // Precompute new-tag embeddings in memory before starting the SQLite transaction
+        var precomputedEmbeddings = tags.Count > 0
+            ? await conceptTagService.PrecomputeNewTagEmbeddingsAsync(tags)
+            : null;
+
+        using (var conn = connFactory.CreateConnection())
+        using (var tx = conn.BeginTransaction())
         {
-            await conceptTagService.SetForArticleAsync(article.Id, tags);
+            try
+            {
+                await articleRepo.CreateAsync(article, tx);
+                await bodyRepo.UpsertAsync(body, tx);
+
+                if (tags.Count > 0)
+                {
+                    await conceptTagService.SetForArticleAsync(article.Id, tags, precomputedEmbeddings, tx);
+                }
+
+                // Read tags back through the SAME transaction so the sync event carries the
+                // DB-canonical name/casing, not whatever casing the caller happened to pass.
+                var conceptTags = (await conceptTagService.GetByArticleIdAsync(article.Id, tx)).ToArray();
+
+                await eventLogger.LogCreateAsync(article, body, conceptTags, tx);
+
+                tx.Commit();
+            }
+            catch
+            {
+                try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back; don't mask the real failure */ }
+                throw;
+            }
         }
 
-        var conceptTags = tags.Count > 0 ? tags.ToArray() : (await conceptTagService.GetByArticleIdAsync(article.Id)).ToArray();
-        await eventLogger.LogCreateAsync(article, body, conceptTags);
+        articleRepo.InvalidateVectorCache();
+        eventLogger.SignalSync();
 
         await LinkOrphanMediaAsync(article.Id, plaintext);
 
@@ -166,7 +194,8 @@ public partial class ArticleService(
         string? plaintext,
         string? protectionHint,
         bool updateHint,
-        bool suppressVersion)
+        bool suppressVersion,
+        int? purgeHistoryKeepCount = null)
     {
         var article = await articleRepo.GetByIdAsync(id)
                        ?? throw new KeyNotFoundException($"Article {id} not found.");
@@ -178,6 +207,7 @@ public partial class ArticleService(
         if (treePath != null)
         {
             treePath = TreePathCanonicalizer.Canonicalize(treePath);
+            // Note: Folder auto-vivification stays outside the transaction (Correction 4)
             var folder = await EnsureFolderExistsAsync(treePath);
             article.FolderId = folder?.Id;
             article.TreePath = treePath;
@@ -217,64 +247,72 @@ public partial class ArticleService(
         if (updateHint)
             article.ProtectionHint = protectionHint;
 
-        await articleRepo.UpdateAsync(article);
-
-        if (tags != null)
-        {
-            await conceptTagService.SetForArticleAsync(id, tags);
-        }
+        // Precompute new tag embeddings in memory before starting the SQLite transaction (Correction 1)
+        var precomputedTagEmbeddings = tags != null
+            ? await conceptTagService.PrecomputeNewTagEmbeddingsAsync(tags)
+            : null;
 
         EncryptedArticleBody? body = null;
+        ArticleVersion? versionToCreate = null;
+
         if (plaintext != null)
         {
-            body = await bodyRepo.GetByArticleIdAsync(id)
+            var existingBody = await bodyRepo.GetByArticleIdAsync(id)
                    ?? throw new KeyNotFoundException($"Article body {id} not found.");
 
             // suppressVersion: skip snapshotting the CURRENT body. Used by Protect/ChangePassphrase,
             // where the current body is pre-protection plaintext (or old-passphrase ciphertext) that
-            // must NOT linger in history. Those callers purge history BEFORE calling this, so there is
-            // never a window where a protected article has a readable plaintext version.
+            // must NOT linger in history. Those callers purge history via purgeHistoryKeepCount below,
+            // in the SAME transaction as the protected body write — either both land or neither does,
+            // so there is never a window where a protected article has a readable plaintext version.
             if (!suppressVersion)
             {
+                // Read outside the transaction — safe because ArticleWriteLock already serializes
+                // every writer to this article, in-process, for the whole call, and versionRepo has
+                // exactly one caller (this method) that ever creates a version row, so no other
+                // writer can race this read against the eventual INSERT below.
                 var maxVer = await versionRepo.GetMaxVersionNumberAsync(id);
                 var actorName = actorProvider.ActorName ?? actorProvider.ActorType;
                 var nodeDisplayName = identity?.DisplayName;
                 var updatedBy = nodeDisplayName != null
                     ? $"{nodeDisplayName} / {actorName}"
                     : actorName;
-                await versionRepo.CreateAsync(new ArticleVersion
+                versionToCreate = new ArticleVersion
                 {
                     Id = Guid.NewGuid(),
                     ArticleId = id,
                     VersionNumber = maxVer + 1,
                     Title = prevTitle,
                     TreePath = prevTreePath,
-                    Ciphertext = body.Ciphertext,
-                    IV = body.IV,
-                    EncryptedDek = body.EncryptedDek,
-                    DekIV = body.DekIV,
+                    Ciphertext = existingBody.Ciphertext,
+                    IV = existingBody.IV,
+                    EncryptedDek = existingBody.EncryptedDek,
+                    DekIV = existingBody.DekIV,
                     UpdatedBy = updatedBy,
                     CreatedAt = now
-                });
-                await versionRepo.DeleteOldVersionsAsync(id, 50);
+                };
             }
 
             var masterDek = session.GetMasterDek();
             try
             {
-                var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
+                var isV1 = existingBody.EncryptedDek.Length > 48 && existingBody.EncryptedDek[0] == 0x01;
                 var unwrapAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(id.ToByteArray()).ToArray() : null;
-                var articleDek = DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, unwrapAad);
+                var articleDek = DekManager.UnwrapDek(existingBody.EncryptedDek, existingBody.DekIV, masterDek, unwrapAad);
                 try
                 {
                     var dekAad = "bmb-art-dek"u8.ToArray().Concat(id.ToByteArray()).ToArray();
                     var bodyAad = "bmb-art-body"u8.ToArray().Concat(id.ToByteArray()).ToArray();
                     var (ciphertext, iv) = ArticleEncryptor.Encrypt(plaintext, articleDek, bodyAad);
                     var (encryptedDek, dekIv) = DekManager.WrapDek(articleDek, masterDek, dekAad);
-                    body.Ciphertext = ciphertext;
-                    body.IV = iv;
-                    body.EncryptedDek = encryptedDek;
-                    body.DekIV = dekIv;
+                    body = new EncryptedArticleBody
+                    {
+                        ArticleId = id,
+                        Ciphertext = ciphertext,
+                        IV = iv,
+                        EncryptedDek = encryptedDek,
+                        DekIV = dekIv
+                    };
                 }
                 finally
                 {
@@ -285,15 +323,57 @@ public partial class ArticleService(
             {
                 Array.Clear(masterDek);
             }
-            await bodyRepo.UpsertAsync(body);
         }
         else
         {
             body = await bodyRepo.GetByArticleIdAsync(id);
         }
 
-        var conceptTags = await conceptTagService.GetByArticleIdAsync(id);
-        await eventLogger.LogUpdateAsync(article, body, conceptTags.ToArray());
+        using (var conn = connFactory.CreateConnection())
+        using (var tx = conn.BeginTransaction())
+        {
+            try
+            {
+                if (purgeHistoryKeepCount.HasValue)
+                {
+                    await versionRepo.DeleteOldVersionsAsync(id, purgeHistoryKeepCount.Value, tx);
+                }
+
+                await articleRepo.UpdateAsync(article, tx);
+
+                if (tags != null)
+                {
+                    await conceptTagService.SetForArticleAsync(id, tags, precomputedTagEmbeddings, tx);
+                }
+
+                if (versionToCreate != null)
+                {
+                    await versionRepo.CreateAsync(versionToCreate, tx);
+                    await versionRepo.DeleteOldVersionsAsync(id, 50, tx);
+                }
+
+                if (plaintext != null && body != null)
+                {
+                    await bodyRepo.UpsertAsync(body, tx);
+                }
+
+                // Read tags back through the SAME transaction so the sync event carries the
+                // DB-canonical name/casing, not whatever casing the caller happened to pass.
+                var conceptTags = (await conceptTagService.GetByArticleIdAsync(id, tx)).ToArray();
+
+                await eventLogger.LogUpdateAsync(article, body, conceptTags, tx);
+
+                tx.Commit();
+            }
+            catch
+            {
+                try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back; don't mask the real failure */ }
+                throw;
+            }
+        }
+
+        articleRepo.InvalidateVectorCache();
+        eventLogger.SignalSync();
 
         if (plaintext != null)
             await LinkOrphanMediaAsync(id, plaintext);
@@ -359,9 +439,27 @@ public partial class ArticleService(
     /// <summary>Soft-deletes an article.</summary>
     public async Task DeleteAsync(Guid id)
     {
-        await mediaRepo.SoftDeleteByArticleIdAsync(id);
-        await articleRepo.SoftDeleteAsync(id);
-        await eventLogger.LogDeleteAsync(id);
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+
+        using (var conn = connFactory.CreateConnection())
+        using (var tx = conn.BeginTransaction())
+        {
+            try
+            {
+                await mediaRepo.SoftDeleteByArticleIdAsync(id, tx);
+                await articleRepo.SoftDeleteAsync(id, tx);
+                await eventLogger.LogDeleteAsync(id, tx);
+
+                tx.Commit();
+            }
+            catch
+            {
+                try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back; don't mask the real failure */ }
+                throw;
+            }
+        }
+
+        eventLogger.SignalSync();
     }
 
     /// <summary>List of article metadata, optionally filtered by tree path and/or a strict updatedAfter cutoff.</summary>

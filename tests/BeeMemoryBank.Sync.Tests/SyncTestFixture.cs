@@ -71,7 +71,7 @@ public abstract class SyncTestFixture : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(Factory, new CallerScopeHolder());
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), EventLogger);
         HardDeleteService = new HardDeleteService(Factory, EventLogger, Clock, NodeRepo, new MediaStorageOptions(Path.GetTempPath()));
-        ArticleService = new ArticleService(ArticleRepo, BodyRepo, Session, NodeRepo, Clock, EventLogger, mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
+        ArticleService = new ArticleService(ArticleRepo, BodyRepo, Session, NodeRepo, Clock, EventLogger, mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, Factory);
         var replayShieldRepo = new BeeMemoryBank.Storage.Sqlite.RestoreReplayShieldRepository(Factory);
         var restoreEventStateRepo = new BeeMemoryBank.Storage.Sqlite.RestoreEventStateRepository(Factory);
         var dekRotationStateRepo = new BeeMemoryBank.Storage.Sqlite.DekRotationStateRepository(Factory);

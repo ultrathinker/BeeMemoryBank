@@ -109,7 +109,8 @@ public class MigratorService
             services.GetRequiredService<IFolderRepository>(),
             services.GetRequiredService<IArticleVersionRepository>(),
             new NullActorProvider(),
-            services.GetRequiredService<ConceptTagService>()
+            services.GetRequiredService<ConceptTagService>(),
+            services.GetRequiredService<IDbConnectionFactory>()
         );
 
         // Migrate articles

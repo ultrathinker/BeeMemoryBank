@@ -1,3 +1,4 @@
+using System.Data;
 using BeeMemoryBank.Core.Models;
 
 namespace BeeMemoryBank.Core.Interfaces;
@@ -6,7 +7,7 @@ public interface IArticleBodyRepository
 {
     Task<EncryptedArticleBody?> GetByArticleIdAsync(Guid articleId);
     Task<List<EncryptedArticleBody>> GetAllActiveAsync();
-    Task UpsertAsync(EncryptedArticleBody body);
+    Task UpsertAsync(EncryptedArticleBody body, IDbTransaction? transaction = null);
     /// <summary>
     /// Streams all active article bodies over a single, long-lived SQLite connection.
     /// Each yielded <see cref="EncryptedArticleBody"/> is materialized lazily as the reader

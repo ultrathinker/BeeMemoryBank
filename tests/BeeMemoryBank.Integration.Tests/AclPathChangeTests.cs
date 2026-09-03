@@ -57,7 +57,7 @@ public class AclPathChangeTests : IAsyncLifetime
         _conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
 
-        _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, _folderRepo, versionRepo, new NullActorProvider(), _conceptTagService);
+        _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, _folderRepo, versionRepo, new NullActorProvider(), _conceptTagService, _factory);
 
         await initService.InitializeAsync("admin", "AclPathTestNode", Password);
         await _session.UnlockAsync(Password);

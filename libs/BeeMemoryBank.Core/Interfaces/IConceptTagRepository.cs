@@ -1,3 +1,4 @@
+using System.Data;
 using BeeMemoryBank.Core.Models;
 
 namespace BeeMemoryBank.Core.Interfaces;
@@ -5,9 +6,9 @@ namespace BeeMemoryBank.Core.Interfaces;
 public interface IConceptTagRepository
 {
     Task<List<ConceptTagInfo>> GetAllAsync();
-    Task<List<string>> GetByArticleIdAsync(Guid articleId);
+    Task<List<string>> GetByArticleIdAsync(Guid articleId, IDbTransaction? transaction = null);
     Task<Dictionary<Guid, List<string>>> GetByArticleIdsAsync(IEnumerable<Guid> articleIds);
-    Task SetForArticleAsync(Guid articleId, List<string> conceptNames);
+    Task SetForArticleAsync(Guid articleId, List<string> conceptNames, IDbTransaction? transaction = null);
     Task<List<RelatedArticle>> GetRelatedArticlesAsync(Guid articleId);
     Task<List<(Guid Id, string Title, string TreePath)>> SearchByConceptAsync(string concept);
 
@@ -21,7 +22,7 @@ public interface IConceptTagRepository
     Task RenameAsync(string name, string newName);
     Task MergeAsync(string source, string target);
     Task DeleteAsync(string name);
-    Task UpdateEmbeddingAsync(string name, byte[] embedding, string modelVersion);
+    Task UpdateEmbeddingAsync(string name, byte[] embedding, string modelVersion, IDbTransaction? transaction = null);
 
     Task<ConceptTagGraphData> GetHomeGraphAsync();
     Task<ConceptTagGraphData> SearchGraphAsync(string query, int depth, int maxNodes, string? treePath = null);

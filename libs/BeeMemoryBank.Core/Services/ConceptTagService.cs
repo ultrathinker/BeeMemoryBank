@@ -73,12 +73,14 @@ public class ConceptTagService(
             .ToList();
     }
 
-    public async Task SetForArticleAsync(Guid articleId, List<string> conceptNames)
+    /// <summary>
+    /// Computes embeddings for genuinely new concept tags in memory before starting a write transaction.
+    /// </summary>
+    public async Task<Dictionary<string, byte[]>> PrecomputeNewTagEmbeddingsAsync(IEnumerable<string> conceptNames)
     {
         var existingAll = await repo.GetWithEmbeddingsAsync();
         var existingNames = new HashSet<string>(existingAll.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
-
-        await repo.SetForArticleAsync(articleId, conceptNames);
+        var precomputed = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var name in conceptNames.Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -87,13 +89,43 @@ public class ConceptTagService(
                 try
                 {
                     var embedding = embeddingGenerator.GenerateQuery(name);
-                    await repo.UpdateEmbeddingAsync(name, FloatsToBytes(embedding), ModelVersion);
+                    precomputed[name] = FloatsToBytes(embedding);
                 }
                 catch (ModelUnavailableException)
                 {
                     break;
                 }
             }
+        }
+
+        return precomputed;
+    }
+
+    public async Task SetForArticleAsync(
+        Guid articleId,
+        List<string> conceptNames,
+        Dictionary<string, byte[]>? precomputedEmbeddings = null,
+        System.Data.IDbTransaction? transaction = null)
+    {
+        if (precomputedEmbeddings == null)
+        {
+            // Falling through to PrecomputeNewTagEmbeddingsAsync here would run ONNX model
+            // inference while the caller's transaction is open, holding its SQLite write lock for
+            // however long inference takes — exactly the bug a prior review caught and fixed by
+            // moving embedding generation out of the transactional path. A caller inside a
+            // transaction must precompute first and pass the result in.
+            if (transaction != null)
+                throw new InvalidOperationException(
+                    $"{nameof(SetForArticleAsync)} requires precomputed embeddings when called with a transaction — " +
+                    $"call {nameof(PrecomputeNewTagEmbeddingsAsync)} before opening the transaction.");
+            precomputedEmbeddings = await PrecomputeNewTagEmbeddingsAsync(conceptNames);
+        }
+
+        await repo.SetForArticleAsync(articleId, conceptNames, transaction);
+
+        foreach (var (name, embedding) in precomputedEmbeddings)
+        {
+            await repo.UpdateEmbeddingAsync(name, embedding, ModelVersion, transaction);
         }
     }
 
@@ -157,6 +189,12 @@ public class ConceptTagService(
     }
 
     public Task<List<string>> GetByArticleIdAsync(Guid articleId) => repo.GetByArticleIdAsync(articleId);
+
+    /// <summary>Reads through the given transaction's connection — used to read back the
+    /// DB-canonical tag names/casing right after <see cref="SetForArticleAsync"/> in the same
+    /// transaction, rather than trusting whatever casing the caller passed in.</summary>
+    public Task<List<string>> GetByArticleIdAsync(Guid articleId, System.Data.IDbTransaction? transaction) =>
+        repo.GetByArticleIdAsync(articleId, transaction);
     public Task RemoveFromArticleAsync(Guid articleId, string conceptName) => repo.RemoveFromArticleAsync(articleId, conceptName);
     public async Task RenameAsync(string name, string newName)
     {

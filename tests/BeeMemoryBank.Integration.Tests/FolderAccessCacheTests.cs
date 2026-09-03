@@ -50,7 +50,7 @@ public class FolderAccessCacheTests : IAsyncLifetime
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
         var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
-        _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
+        _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, _factory);
 
         await initService.InitializeAsync("admin", "CacheTestNode", Password);
         await _session.UnlockAsync(Password);

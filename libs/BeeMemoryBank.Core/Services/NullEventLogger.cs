@@ -1,3 +1,4 @@
+using System.Data;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 
@@ -8,9 +9,10 @@ namespace BeeMemoryBank.Core.Services;
 /// </summary>
 public sealed class NullEventLogger : IEventLogger
 {
-    public Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags) => Task.CompletedTask;
-    public Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags) => Task.CompletedTask;
-    public Task LogDeleteAsync(Guid articleId) => Task.CompletedTask;
+    public Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags, IDbTransaction? transaction = null) => Task.CompletedTask;
+    public Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags, IDbTransaction? transaction = null) => Task.CompletedTask;
+    public Task LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null) => Task.CompletedTask;
+    public void SignalSync() { }
     public Task LogWhitelistAddAsync(WhitelistEntry entry) => Task.CompletedTask;
     public Task LogWhitelistRevokeAsync(Guid nodeId) => Task.CompletedTask;
     public Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName) => Task.CompletedTask;

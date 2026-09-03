@@ -67,7 +67,7 @@ public class McpToolsTests : IAsyncLifetime
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
 
-        _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
+        _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, _factory);
         _indexBuilder = new IndexBuilder();
         _searchService = new SearchService(articleRepo, bodyRepo, folderRepo, _session, scopeHolder, new SearchQueryCache(), _indexBuilder);
         var matrixRepo = new ProjectionMatrixRepository(_factory);

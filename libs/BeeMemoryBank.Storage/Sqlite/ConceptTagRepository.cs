@@ -24,16 +24,23 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
         return AggregateByScope(rows);
     }
 
-    public async Task<List<string>> GetByArticleIdAsync(Guid articleId)
+    public async Task<List<string>> GetByArticleIdAsync(Guid articleId, IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        return (await conn.QueryAsync<string>(
-            @"SELECT ct.name
-              FROM tbl_concept_tag ct
-              JOIN tbl_article_concept_tag act ON ct.id = act.concept_tag_id
-              WHERE act.article_id = @articleId
-              ORDER BY (substr(ct.name,1,1)='_') DESC, ct.name",
-            new { articleId })).ToList();
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            return (await conn.QueryAsync<string>(
+                @"SELECT ct.name
+                  FROM tbl_concept_tag ct
+                  JOIN tbl_article_concept_tag act ON ct.id = act.concept_tag_id
+                  WHERE act.article_id = @articleId
+                  ORDER BY (substr(ct.name,1,1)='_') DESC, ct.name",
+                new { articleId }, transaction)).ToList();
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
     public async Task<Dictionary<Guid, List<string>>> GetByArticleIdsAsync(IEnumerable<Guid> articleIds)
@@ -58,11 +65,22 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
         return dict;
     }
 
-    public async Task SetForArticleAsync(Guid articleId, List<string> conceptNames)
+    public async Task SetForArticleAsync(Guid articleId, List<string> conceptNames, IDbTransaction? transaction = null)
     {
+        if (transaction != null)
+        {
+            await SetForArticleCoreAsync(transaction.Connection!, transaction, articleId, conceptNames);
+            return;
+        }
+
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
+        await SetForArticleCoreAsync(conn, tx, articleId, conceptNames);
+        tx.Commit();
+    }
 
+    private static async Task SetForArticleCoreAsync(IDbConnection conn, IDbTransaction tx, Guid articleId, List<string> conceptNames)
+    {
         foreach (var name in conceptNames.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             await conn.ExecuteAsync(
@@ -83,8 +101,6 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
                 "INSERT OR IGNORE INTO tbl_article_concept_tag (article_id, concept_tag_id) VALUES (@articleId, @id)",
                 new { articleId, id }, tx);
         }
-
-        tx.Commit();
     }
 
     public async Task<List<RelatedArticle>> GetRelatedArticlesAsync(Guid articleId)
@@ -318,14 +334,21 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
         tx.Commit();
     }
 
-    public async Task UpdateEmbeddingAsync(string name, byte[] embedding, string modelVersion)
+    public async Task UpdateEmbeddingAsync(string name, byte[] embedding, string modelVersion, IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        await conn.ExecuteAsync(
-            @"UPDATE tbl_concept_tag
-              SET embedding = @embedding, embedding_model_version = @modelVersion
-              WHERE name = @name COLLATE NOCASE",
-            new { name, embedding, modelVersion });
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            await conn.ExecuteAsync(
+                @"UPDATE tbl_concept_tag
+                  SET embedding = @embedding, embedding_model_version = @modelVersion
+                  WHERE name = @name COLLATE NOCASE",
+                new { name, embedding, modelVersion }, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
     private List<ConceptTagInfo> AggregateByScope(List<ConceptTagRow> rows)

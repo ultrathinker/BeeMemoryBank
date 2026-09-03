@@ -302,7 +302,7 @@ public class SustainedConcurrentLoadTests : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(factory, callerScopeHolder);
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), eventLogger);
         var articleService = new ArticleService(articleRepo, bodyRepo, session, nodeRepo, clock, eventLogger,
-            mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService);
+            mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, factory);
 
         var initService = new InitializationService(nodeRepo, keySlotRepo, userRepo, factory);
         await initService.InitializeAsync("admin", "TestNode", Password, canGenerateEmbeddings: false);

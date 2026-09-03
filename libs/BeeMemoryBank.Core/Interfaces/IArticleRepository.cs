@@ -1,3 +1,4 @@
+using System.Data;
 using BeeMemoryBank.Core.Models;
 
 namespace BeeMemoryBank.Core.Interfaces;
@@ -14,9 +15,32 @@ public interface IArticleRepository
     /// </summary>
     Task<Article?> GetByIdUnfilteredAsync(Guid id, bool includeDeleted = false);
     Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null);
-    Task CreateAsync(Article article);
-    Task UpdateAsync(Article article);
-    Task SoftDeleteAsync(Guid id);
+
+    /// <summary>
+    /// Every method here (and on the other article-write repositories:
+    /// <c>IArticleBodyRepository</c>, <c>IArticleVersionRepository</c>, <c>IConceptTagRepository</c>,
+    /// <c>IEventLogRepository</c>, <c>IMediaRepository</c>) that takes an optional
+    /// <see cref="IDbTransaction"/> follows the same contract: pass null (the default) and the
+    /// method opens, commits and disposes its own connection exactly as before — every existing
+    /// caller is unaffected. Pass a non-null transaction and it executes against that transaction's
+    /// connection WITHOUT committing or disposing anything — commit, rollback, and (for this
+    /// interface) <see cref="InvalidateVectorCache"/> become the caller's responsibility, to be
+    /// done once, after the caller's own transaction actually commits. See
+    /// <c>ArticleService.UpdateCoreAsync</c>/<c>CreateAsync</c>/<c>DeleteAsync</c> for the intended
+    /// caller pattern.
+    /// </summary>
+    Task CreateAsync(Article article, IDbTransaction? transaction = null);
+    Task UpdateAsync(Article article, IDbTransaction? transaction = null);
+    Task SoftDeleteAsync(Guid id, IDbTransaction? transaction = null);
+
+    /// <summary>
+    /// Invalidates the process-wide embedding vector cache. Call exactly once, after a transaction
+    /// passed to <see cref="CreateAsync"/>/<see cref="UpdateAsync"/> actually commits — those
+    /// methods do NOT invalidate the cache themselves when given a transaction, since invalidating
+    /// before commit would repopulate the cache with pre-write data that nothing would ever
+    /// invalidate again.
+    /// </summary>
+    void InvalidateVectorCache();
     Task<List<Article>> SearchAsync(string query);
     /// <summary>
     /// Pre-WP-07 exact-substring search (per-row <c>unicode_contains</c> scan over title and tag

@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -18,7 +19,9 @@ public class EventLogger(
     ISyncTrigger syncTrigger,
     SessionService session) : IEventLogger
 {
-    public async Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags)
+    public void SignalSync() => syncTrigger.Signal();
+
+    public async Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags, IDbTransaction? transaction = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -40,10 +43,10 @@ public class EventLogger(
         );
 
         await AppendEventAsync(identity, EventTypes.ArticleCreate, article.Id, article.LamportTs,
-            JsonSerializer.Serialize(payload));
+            JsonSerializer.Serialize(payload), transaction: transaction);
     }
 
-    public async Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags)
+    public async Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags, IDbTransaction? transaction = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -67,10 +70,10 @@ public class EventLogger(
         );
 
         await AppendEventAsync(identity, EventTypes.ArticleUpdate, article.Id, article.LamportTs,
-            JsonSerializer.Serialize(payload));
+            JsonSerializer.Serialize(payload), transaction: transaction);
     }
 
-    public async Task LogDeleteAsync(Guid articleId)
+    public async Task LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -79,7 +82,7 @@ public class EventLogger(
         var payload = new ArticleDeletePayload(DeletedAt: DateTime.UtcNow);
 
         await AppendEventAsync(identity, EventTypes.ArticleDelete, articleId, lamportTs,
-            JsonSerializer.Serialize(payload));
+            JsonSerializer.Serialize(payload), transaction: transaction);
     }
 
     public async Task LogWhitelistAddAsync(WhitelistEntry entry)
@@ -324,7 +327,8 @@ public class EventLogger(
         Guid? articleId,
         long lamportTs,
         string payloadJson,
-        string? entityId = null)
+        string? entityId = null,
+        IDbTransaction? transaction = null)
     {
         var now = DateTime.UtcNow;
         var evt = new SyncEvent
@@ -367,7 +371,10 @@ public class EventLogger(
             }
         }
 
-        await eventLogRepo.AppendAsync(evt);
-        syncTrigger.Signal();
+        await eventLogRepo.AppendAsync(evt, transaction);
+        if (transaction == null)
+        {
+            syncTrigger.Signal();
+        }
     }
 }

@@ -1,3 +1,4 @@
+using System.Data;
 using BeeMemoryBank.Core.Models;
 
 namespace BeeMemoryBank.Core.Interfaces;
@@ -8,9 +9,19 @@ namespace BeeMemoryBank.Core.Interfaces;
 /// </summary>
 public interface IEventLogger
 {
-    Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags);
-    Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags);
-    Task LogDeleteAsync(Guid articleId);
+    Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags, IDbTransaction? transaction = null);
+    Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags, IDbTransaction? transaction = null);
+    Task LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null);
+
+    /// <summary>
+    /// Wakes the background sync-push loop. When any of the three log methods above is given a
+    /// transaction, it deliberately does NOT self-signal (it would fire before the caller's
+    /// transaction commits, waking the push loop to look for a row on another connection that
+    /// can't see it yet) — the caller must call this explicitly, once, strictly after its own
+    /// <c>tx.Commit()</c> succeeds. Given no transaction, the three log methods self-signal as
+    /// before and callers don't need to call this at all.
+    /// </summary>
+    void SignalSync();
     Task LogWhitelistAddAsync(WhitelistEntry entry);
     Task LogWhitelistRevokeAsync(Guid nodeId);
     Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName);
