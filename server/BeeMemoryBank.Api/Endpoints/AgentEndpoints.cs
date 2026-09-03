@@ -47,7 +47,7 @@ public static class AgentEndpoints
                 users.TryGetValue(a.OwnerUserId, out var owner);
                 return new AgentListItem(
                     a.Id, a.Name, a.Description, a.KeyPrefix + "****", a.CreatedAt, a.LastAccessedAt,
-                    a.RequestCount, a.OwnerUserId, owner?.DisplayName ?? owner?.Username);
+                    a.RequestCount, a.OwnerUserId, owner?.DisplayName ?? owner?.Username, a.CanAutoUnlock);
             }).ToList();
             return Results.Ok(items);
         });
@@ -82,46 +82,60 @@ public static class AgentEndpoints
             if (owner == null)
                 return Results.BadRequest(new ErrorResponse($"User {ownerUserId} not found"));
 
-            // Get Master DEK from session (already unlocked)
-            byte[] masterDek;
-            try { masterDek = session.GetMasterDek(); }
-            catch { return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403); }
+            var apiKey = AgentKeyHelper.GenerateApiKey();
 
-            try
+            // H6 hybrid model: only a superadmin's agents get a wrapped master DEK, i.e. only
+            // they can auto-unlock the vault (AgentAuthMiddleware). Superadmins can already
+            // unlock the vault through the web UI, so an agent that does it on their behalf
+            // adds no new capability; an ordinary user cannot ("Server is locked" in
+            // SessionEndpoints), so an agent that could would be handing them a capability the
+            // web UI deliberately refuses. Everything below the branch — key hash, prefix,
+            // folder ACL, read-only enforcement — is identical for both owner kinds; the only
+            // difference is whether the row carries key material capable of unwrapping the
+            // master DEK at all.
+            var agent = new Agent
             {
-                var apiKey = AgentKeyHelper.GenerateApiKey();
-                var (ciphertext, iv, salt) = AgentKeyHelper.EncryptDekV1(apiKey, masterDek);
+                Name = req.Name.Trim(),
+                Description = req.Description?.Trim(),
+                KeyPrefix = AgentKeyHelper.GetKeyPrefix(apiKey),
+                KeyHash = AgentKeyHelper.ComputeKeyHash(apiKey),
+                Status = "A",
+                CreatedAt = DateTime.UtcNow,
+                OwnerUserId = ownerUserId
+            };
 
-                var agent = new Agent
+            if (owner.Role == UserRoles.Superadmin)
+            {
+                // Get Master DEK from session (already unlocked)
+                byte[] masterDek;
+                try { masterDek = session.GetMasterDek(); }
+                catch { return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403); }
+
+                try
                 {
-                    Name = req.Name.Trim(),
-                    Description = req.Description?.Trim(),
-                    KeyPrefix = AgentKeyHelper.GetKeyPrefix(apiKey),
-                    KeyHash = AgentKeyHelper.ComputeKeyHash(apiKey),
-                    EncryptedDek = ciphertext,
-                    DekIV = iv,
-                    Salt = salt,
-                    KdfVersion = 1,
-                    Status = "A",
-                    CreatedAt = DateTime.UtcNow,
-                    OwnerUserId = ownerUserId
-                };
-
-                agent.Id = await repo.CreateAsync(agent);
-
-                // Agents are API keys with full vault access (scoped to owner's
-                // ACL). Their lifecycle is security-critical — log creation +
-                // deletion so a compromised superadmin can't silently provision
-                // a backdoor agent.
-                await auditRepo.LogAsync("agent", agent.Id.ToString(), "agent_created", "web",
-                    $"Agent '{agent.Name}' (key prefix={agent.KeyPrefix}) created for user #{ownerUserId} by user {callerId}");
-
-                return Results.Ok(new AgentCreatedResponse(agent.Id, agent.Name, apiKey));
+                    var (ciphertext, iv, salt) = AgentKeyHelper.EncryptDekV1(apiKey, masterDek);
+                    agent.EncryptedDek = ciphertext;
+                    agent.DekIV = iv;
+                    agent.Salt = salt;
+                    agent.KdfVersion = 1;
+                }
+                finally
+                {
+                    Array.Clear(masterDek);
+                }
             }
-            finally
-            {
-                Array.Clear(masterDek);
-            }
+
+            agent.Id = await repo.CreateAsync(agent);
+
+            // Agents are API keys with full vault access (scoped to owner's
+            // ACL). Their lifecycle is security-critical — log creation +
+            // deletion so a compromised superadmin can't silently provision
+            // a backdoor agent.
+            await auditRepo.LogAsync("agent", agent.Id.ToString(), "agent_created", "web",
+                $"Agent '{agent.Name}' (key prefix={agent.KeyPrefix}) created for user #{ownerUserId} by user {callerId}" +
+                (agent.CanAutoUnlock ? " [can auto-unlock: owner is superadmin]" : " [cannot auto-unlock]"));
+
+            return Results.Ok(new AgentCreatedResponse(agent.Id, agent.Name, apiKey, agent.CanAutoUnlock));
         });
 
         // DELETE /api/agents/{id} — soft delete

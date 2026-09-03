@@ -55,47 +55,58 @@ public static class AgentCommand
             }
         }
 
-        byte[] masterDek;
-        try { masterDek = session.GetMasterDek(); }
-        catch
-        {
-            await output.WriteLineAsync("Error: session is locked.");
-            return 1;
-        }
+        var apiKey = AgentKeyHelper.GenerateApiKey();
 
-        try
+        var agent = new Agent
         {
-            var apiKey = AgentKeyHelper.GenerateApiKey();
-            var (ciphertext, iv, salt) = AgentKeyHelper.EncryptDekV1(apiKey, masterDek);
+            Name = name.Trim(),
+            Description = description?.Trim(),
+            KeyPrefix = AgentKeyHelper.GetKeyPrefix(apiKey),
+            KeyHash = AgentKeyHelper.ComputeKeyHash(apiKey),
+            Status = "A",
+            CreatedAt = DateTime.UtcNow,
+            OwnerUserId = owner.Id
+        };
 
-            var agent = new Agent
+        // H6 hybrid model (see AgentEndpoints for the full reasoning): only a superadmin's
+        // agent gets a wrapped master DEK and can therefore auto-unlock a locked vault. An
+        // ordinary user's CLI-created agent is otherwise identical — it authenticates and
+        // works normally whenever the vault is already unlocked.
+        if (owner.Role == UserRoles.Superadmin)
+        {
+            byte[] masterDek;
+            try { masterDek = session.GetMasterDek(); }
+            catch
             {
-                Name = name.Trim(),
-                Description = description?.Trim(),
-                KeyPrefix = AgentKeyHelper.GetKeyPrefix(apiKey),
-                KeyHash = AgentKeyHelper.ComputeKeyHash(apiKey),
-                EncryptedDek = ciphertext,
-                DekIV = iv,
-                Salt = salt,
-                KdfVersion = 1,
-                Status = "A",
-                CreatedAt = DateTime.UtcNow,
-                OwnerUserId = owner.Id
-            };
+                await output.WriteLineAsync("Error: session is locked.");
+                return 1;
+            }
 
-            var agentRepo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
-            agent.Id = await agentRepo.CreateAsync(agent);
+            try
+            {
+                var (ciphertext, iv, salt) = AgentKeyHelper.EncryptDekV1(apiKey, masterDek);
+                agent.EncryptedDek = ciphertext;
+                agent.DekIV = iv;
+                agent.Salt = salt;
+                agent.KdfVersion = 1;
+            }
+            finally
+            {
+                Array.Clear(masterDek);
+            }
+        }
 
-            await output.WriteLineAsync($"Agent created: {agent.Id}");
-            await output.WriteLineAsync($"  Name:  {agent.Name}");
-            await output.WriteLineAsync($"  Owner: {owner.DisplayName} (id={owner.Id})");
-            await output.WriteLineAsync($"  API Key (shown once — copy it now!):");
-            await output.WriteLineAsync($"  {apiKey}");
-            return 0;
-        }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
+        var agentRepo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
+        agent.Id = await agentRepo.CreateAsync(agent);
+
+        await output.WriteLineAsync($"Agent created: {agent.Id}");
+        await output.WriteLineAsync($"  Name:  {agent.Name}");
+        await output.WriteLineAsync($"  Owner: {owner.DisplayName} (id={owner.Id})");
+        await output.WriteLineAsync(agent.CanAutoUnlock
+            ? "  Owner is a superadmin: this key can auto-unlock a locked vault."
+            : "  Owner is not a superadmin: this key cannot unlock a locked vault; it only works while the vault is already unlocked.");
+        await output.WriteLineAsync($"  API Key (shown once — copy it now!):");
+        await output.WriteLineAsync($"  {apiKey}");
+        return 0;
     }
 }

@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -17,6 +18,7 @@ public class UserServiceTests : TestFixture
     private KeySlotRepository KeySlots = null!;
     private RoleRepository Roles = null!;
     private FolderAccessService FolderAccess = null!;
+    private AgentRepository AgentRepo = null!;
 
     public override async Task InitializeAsync()
     {
@@ -36,11 +38,44 @@ public class UserServiceTests : TestFixture
             .AddScoped<Core.Interfaces.IFolderRepository>(_ => new FolderRepository(Factory, ScopeHolder))
             .AddScoped(_ => ScopeHolder)
             .BuildServiceProvider());
-        Users = new UserService(UserRepo, KeySlots, Session, Roles, FolderAccess);
+        AgentRepo = new AgentRepository(Factory);
+        Users = new UserService(UserRepo, KeySlots, Session, Roles, FolderAccess, agentRepo: AgentRepo);
     }
 
     private async Task<User> CreateRegularUserAsync(string username = "bob", string password = "BobPass1")
         => await Users.CreateUserAsync(username, username, password, UserRoles.User);
+
+    /// <summary>
+    /// Creates an agent owned by <paramref name="ownerId"/> with a real wrapped DEK, the same
+    /// shape AgentEndpoints/AgentCommand produce for a superadmin owner. Requires the session to
+    /// already be unlocked (it is, throughout this fixture, once InitService has run).
+    /// </summary>
+    private async Task<int> CreateWrappedAgentAsync(int ownerId, string nameSuffix = "agent")
+    {
+        var apiKey = AgentKeyHelper.GenerateApiKey();
+        var masterDek = Session.GetMasterDek();
+        try
+        {
+            var (ciphertext, iv, salt) = AgentKeyHelper.EncryptDekV1(apiKey, masterDek);
+            return await AgentRepo.CreateAsync(new Agent
+            {
+                Name = "test-" + nameSuffix,
+                KeyPrefix = AgentKeyHelper.GetKeyPrefix(apiKey),
+                KeyHash = AgentKeyHelper.ComputeKeyHash(apiKey),
+                EncryptedDek = ciphertext,
+                DekIV = iv,
+                Salt = salt,
+                KdfVersion = 1,
+                Status = "A",
+                CreatedAt = DateTime.UtcNow,
+                OwnerUserId = ownerId
+            });
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+    }
 
     [Fact]
     public async Task Promote_WithoutPassword_Succeeds_AndDefersKeySlot()
@@ -192,6 +227,94 @@ public class UserServiceTests : TestFixture
 
         (await UserRepo.GetByIdAsync(bob.Id))!.KeySlotId.Should().BeNull();
         (await KeySlots.GetAllAsync()).Should().HaveCount(1);
+    }
+
+    // ---- H6: agent wrapped-DEK lifecycle on promotion/demotion --------------------------------
+
+    [Fact]
+    public async Task Demote_ClearsWrappedDekFromTheDemotedUsersAgents()
+    {
+        var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
+        var agentId = await CreateWrappedAgentAsync(carol.Id);
+        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeTrue("sanity check on the fixture");
+
+        await Users.UpdateUserAsync(carol.Id, "Carol", UserRoles.User);
+
+        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeFalse(
+            "a demoted user must not keep an agent that can auto-unlock the vault");
+    }
+
+    [Fact]
+    public async Task Demote_DoesNotTouchAnotherUsersAgents()
+    {
+        var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
+        var dave = await Users.CreateUserAsync("dave", "Dave", "DavePass1", UserRoles.Superadmin);
+        var daveAgentId = await CreateWrappedAgentAsync(dave.Id);
+
+        await Users.UpdateUserAsync(carol.Id, "Carol", UserRoles.User);
+
+        (await AgentRepo.GetByIdAsync(daveAgentId))!.CanAutoUnlock.Should().BeTrue(
+            "demoting Carol must never reach Dave's agents");
+    }
+
+    [Fact]
+    public async Task Demote_ClearingAgentDeks_DoesNotPreventTheRoleChangeItself()
+    {
+        var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
+        await CreateWrappedAgentAsync(carol.Id);
+
+        await Users.UpdateUserAsync(carol.Id, "Carol", UserRoles.User);
+
+        (await UserRepo.GetByIdAsync(carol.Id))!.Role.Should().Be(UserRoles.User);
+    }
+
+    [Fact]
+    public async Task Demote_ThatFailsTheLastKeySlotGuard_LeavesAgentDeksUntouched()
+    {
+        // Promote Bob (his slot stays unprovisioned) so admin still looks demotable on the
+        // "last superadmin" count, but admin's key slot remains the only one that can actually
+        // unlock the vault -- EnsureAnotherSuperadminHoldsAKeySlotAsync must still refuse this.
+        // If agent-DEK stripping ran before that guard, a rejected demotion would irreversibly
+        // wipe key material anyway (see the ordering comment in UserService.UpdateUserAsync).
+        var bob = await CreateRegularUserAsync();
+        await Users.UpdateUserAsync(bob.Id, "Bob", UserRoles.Superadmin);
+
+        var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
+        var agentId = await CreateWrappedAgentAsync(admin.Id);
+
+        var act = async () => await Users.UpdateUserAsync(admin.Id, "admin", UserRoles.User);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*only remaining way to unlock*");
+        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeTrue(
+            "a demotion that ultimately failed must not have already wiped irreplaceable key material");
+        (await UserRepo.GetByIdAsync(admin.Id))!.Role.Should().Be(UserRoles.Superadmin);
+    }
+
+    [Fact]
+    public async Task Promote_DoesNotWrapAnExistingAgentsKey()
+    {
+        // A regular user's agent has no wrapped DEK. Promoting its owner to superadmin cannot
+        // retroactively wrap it -- that would need the agent's plaintext API key, which was only
+        // ever shown once at creation and is not recoverable from key_hash. Only a NEW agent,
+        // created after the promotion, gets wrapped.
+        var bob = await CreateRegularUserAsync();
+        var agent = new Agent
+        {
+            Name = "bob-pre-promotion-agent",
+            KeyPrefix = "bee_preprom01",
+            KeyHash = "hash-preprom",
+            Status = "A",
+            CreatedAt = DateTime.UtcNow,
+            OwnerUserId = bob.Id
+        };
+        var agentId = await AgentRepo.CreateAsync(agent);
+        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeFalse("sanity check on the fixture");
+
+        await Users.UpdateUserAsync(bob.Id, "Bob", UserRoles.Superadmin);
+
+        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeFalse(
+            "promotion must not silently upgrade a pre-existing agent's key to a vault key");
     }
 
     [Fact]

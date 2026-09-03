@@ -12,7 +12,8 @@ public class UserService(
     SessionService session,
     IRoleRepository roleRepo,
     FolderAccessService folderAccess,
-    IRemoteApiTokenRepository? remoteTokenRepo = null)
+    IRemoteApiTokenRepository? remoteTokenRepo = null,
+    IAgentRepository? agentRepo = null)
 {
     // Roles are rows now, not a hard-coded pair. The only role this service still special-cases
     // is "superadmin", because that is the one that owns a key slot; every other role is just a
@@ -313,7 +314,9 @@ public class UserService(
 
             // Any move off superadmin is a demotion — not just a move to the built-in 'user'
             // role. Before custom roles existed those were the same thing.
-            if (oldRole == UserRoles.Superadmin && role != UserRoles.Superadmin)
+            var demotedFromSuperadmin = oldRole == UserRoles.Superadmin && role != UserRoles.Superadmin;
+
+            if (demotedFromSuperadmin)
             {
                 var allActiveUsers = await userRepo.ListActiveAsync();
                 var remainingSuperadmins = allActiveUsers.Count(u =>
@@ -332,7 +335,9 @@ public class UserService(
             {
                 // "Cannot demote the last superadmin" above is not enough on its own: the
                 // remaining superadmins may all be promoted-but-not-yet-logged-in, and so hold
-                // no slot. Dropping the only slot left would lock the vault permanently.
+                // no slot. Dropping the only slot left would lock the vault permanently. This can
+                // still throw and abort the whole role change — see the H6 comment below for why
+                // that ordering matters.
                 await EnsureAnotherSuperadminHoldsAKeySlotAsync(userId, "demote");
 
                 await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
@@ -348,6 +353,16 @@ public class UserService(
                 // A caller that does know the password can hand it over to skip the wait — that
                 // also resets the login password, since the slot's password and the login
                 // password must stay the same secret.
+                //
+                // The SAME limitation applies to this user's existing agents, and there is no
+                // workaround for it: an agent's wrapped DEK is derived from its own plaintext API
+                // key (AgentKeyHelper.EncryptDekV1), which — unlike the user's login password —
+                // was only ever shown once at creation and is not recoverable from the KeyHash
+                // stored in tbl_agent. A promoted user's pre-existing agents therefore stay
+                // exactly as they were (CanAutoUnlock == false) permanently; only a NEWLY created
+                // agent, made after this promotion, will be wrapped. The Admin/Profile UI's
+                // per-agent "can wake a locked node" indicator reflects this truthfully rather
+                // than implying promotion silently upgraded old keys.
                 if (!string.IsNullOrWhiteSpace(password))
                 {
                     ValidatePassword(password);
@@ -356,6 +371,24 @@ public class UserService(
                     passwordChanged = true;
                 }
             }
+
+            // H6 fix: a demoted user must not keep agents that can auto-unlock the vault. Only a
+            // superadmin's agents are allowed to carry a wrapped master DEK (AgentEndpoints /
+            // Agent.CanAutoUnlock) — leaving a stale one behind on this user's existing agents
+            // would let a demoted admin (or anyone who steals one of their old keys) keep unlocking
+            // the vault indefinitely, exactly the backdoor this fix closes. This does NOT depend on
+            // whether the user held a key slot above — an agent can have been minted at any point
+            // while its owner was still a superadmin, key slot or not. Only clears wrapped key
+            // material; the agent keeps authenticating exactly like an ordinary user's agent
+            // always has. Placed AFTER the key-slot branch above deliberately: that branch can
+            // still throw ("their key slot is the only remaining way to unlock the vault"), and an
+            // aborted demotion must not have already, irreversibly, wiped agent key material that
+            // cannot be re-wrapped without the plaintext API key. Also deliberately not swallowed
+            // in a try/catch the way RevokeRemoteTokensAsync is below — unlike a stale remote
+            // token, a wrapped DEK left behind IS the H6 vulnerability, so a failure here must
+            // fail the whole role change rather than silently succeed with the backdoor still open.
+            if (demotedFromSuperadmin && agentRepo != null)
+                await agentRepo.ClearWrappedDekForOwnerAsync(userId);
         }
 
         await userRepo.UpdateAsync(user);

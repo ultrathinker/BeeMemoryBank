@@ -8,7 +8,7 @@ The MCP (Model Context Protocol) server is built into the API process at the `/m
 
 - Streamable HTTP (SSE) at `/mcp`
 - Authentication: Bearer token in the `Authorization` HTTP header
-- Auto-unlock: AgentAuthMiddleware decrypts the Master DEK from the bearer token on the first request
+- Auto-unlock: AgentAuthMiddleware decrypts the Master DEK from the bearer token on the first request — but only for an agent owned by a superadmin. An ordinary user's agent has no wrapped DEK at all (see docs/encryption.md's Agent section): it authenticates and works normally whenever the vault is already unlocked by someone else, but cannot unlock it itself. A tool call that needs decrypted content while the vault is locked fails with a clear "Bank is locked" error either way.
 
 ## 7 Tool Groups
 
