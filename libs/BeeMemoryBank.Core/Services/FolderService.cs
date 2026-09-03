@@ -269,7 +269,7 @@ public class FolderService(
         // H1: capture the descendant id list up front — read-only, no ACL check needed for a bare
         // id list — BEFORE SoftDeleteByPathPrefixAsync flips their status to 'D' (it only returns
         // status='A' rows, so calling it after would silently return an empty list and skip the
-        // ClearFolderIdAsync loop below entirely).
+        // ClearFolderIdUnscopedAsync loop below entirely).
         var subfolderIds = await folderRepo.ListIdsByPathPrefixAsync(folder.Path);
 
         // SoftDeleteByPathPrefixAsync now walks every descendant folder under folder.Path and
@@ -277,16 +277,16 @@ public class FolderService(
         // itself — a caller can be authorized on the top of a subtree (allow=/, deny=/Work/Secret)
         // while a descendant is individually denied. Running it BEFORE the loop below means a
         // denied descendant aborts the whole cascade instead of the loop already having relocated
-        // its articles to '/' via ClearFolderIdAsync — which carries no ACL check of its own (by
+        // its articles to '/' via ClearFolderIdUnscopedAsync — which carries no ACL check of its own (by
         // design: it's also called from sync/background code) and must never be reachable for a
         // denied path from this user-facing method.
         await folderRepo.SoftDeleteByPathPrefixAsync(folder.Path, deletedAt, cascadeOpId);
 
         foreach (var subId in subfolderIds)
-            await articleRepo.ClearFolderIdAsync(subId);
+            await articleRepo.ClearFolderIdUnscopedAsync(subId);
 
         await folderRepo.SoftDeleteAsync(folderId, deletedAt, cascadeOpId);
-        await articleRepo.ClearFolderIdAsync(folderId);
+        await articleRepo.ClearFolderIdUnscopedAsync(folderId);
 
         // Emit a delete event for EVERY folder this cascade took down, not just the one the caller
         // named. The local cascade above is a bulk UPDATE that writes no events, and

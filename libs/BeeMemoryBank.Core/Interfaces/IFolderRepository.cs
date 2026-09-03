@@ -36,6 +36,13 @@ public interface IFolderRepository
     /// Creates <paramref name="path"/> and any missing ancestors. The LEAF is checked against the
     /// caller's folder ACL first; ancestors deliberately are not, so an allow-list caller can still
     /// create /A/B/C when /A and /A/B lie outside their scope.
+    ///
+    /// <para>
+    /// Does NOT canonicalize <paramref name="path"/> via <c>TreePathCanonicalizer</c> — it trusts
+    /// the caller already did. Untrusted input (import manifests, anything not already produced by
+    /// a canonicalizing write path) must be canonicalized by the caller BEFORE it reaches here, or
+    /// "../"/control-char segments get persisted verbatim.
+    /// </para>
     /// </summary>
     Task EnsureExistsAsync(string path, Guid? sourceNodeId);
 
@@ -50,6 +57,11 @@ public interface IFolderRepository
     /// rejected because /Work is outside their scope. Callers of this method MUST check the real
     /// leaf themselves (see <see cref="ThrowIfWriteDenied"/>) BEFORE calling it; skipping that is
     /// what let a denied caller litter restricted subtrees with folders in the first place.
+    /// </para>
+    ///
+    /// <para>
+    /// Also does NOT canonicalize <paramref name="path"/> — same caveat as
+    /// <see cref="EnsureExistsAsync"/> above; canonicalize untrusted input before calling this.
     /// </para>
     /// </summary>
     Task EnsureAncestorsExistAsync(string path, Guid? sourceNodeId);

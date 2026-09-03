@@ -50,7 +50,7 @@ public class ProjectionMatrixRecoveryTests : TestFixture
 
         var article = await ArticleService.CreateAsync("Indexed", "/Recovery", [], "some body text");
         // Simulate the article having already been embedded under the doomed matrix.
-        await _articleRepo.UpdateEmbeddingAsync(article.Id, new byte[16], "test-model");
+        await _articleRepo.UpdateEmbeddingUnscopedAsync(article.Id, new byte[16], "test-model");
         (await _articleRepo.GetByIdAsync(article.Id))!.EmbeddingPending.Should().BeFalse();
 
         // Reproduce the post-rotation state: same matrix bytes, sealed under a DEK nobody holds.
@@ -89,7 +89,7 @@ public class ProjectionMatrixRecoveryTests : TestFixture
         var original = await _matrixRepo.GetAsync();
 
         var article = await ArticleService.CreateAsync("Indexed", "/Recovery", [], "some body text");
-        await _articleRepo.UpdateEmbeddingAsync(article.Id, new byte[16], "test-model");
+        await _articleRepo.UpdateEmbeddingUnscopedAsync(article.Id, new byte[16], "test-model");
 
         // Idempotent no-op — the repair path must not fire on a matrix that opens fine, or every
         // background cycle would re-embed the whole vault.

@@ -99,7 +99,7 @@ public class PendingEmbeddingProcessor(
         // stale vectors (dimension-based staleness checks elsewhere don't catch a same-dimension
         // model swap). ConceptTagService.BackfillEmbeddingsAsync does the equivalent check for
         // concept tags on its own call a few lines up.
-        await articleRepo.MarkStaleEmbeddingsPendingAsync(OnnxEmbeddingGenerator.Version);
+        await articleRepo.MarkStaleEmbeddingsPendingUnscopedAsync(OnnxEmbeddingGenerator.Version);
 
         var pending = await articleRepo.GetEmbeddingPendingAsync(_batchSize);
         if (pending.Count == 0) return 0;

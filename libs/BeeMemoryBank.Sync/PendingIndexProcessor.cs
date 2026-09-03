@@ -123,7 +123,7 @@ public class PendingIndexProcessor(
                     // processor stops retrying it; it simply won't appear in search (by design),
                     // mirroring EmbeddingProjectionService.ProjectArticleAsync's identical
                     // protected-article skip.
-                    await articleRepo.ClearIndexPendingAsync(article.Id);
+                    await articleRepo.ClearIndexPendingUnscopedAsync(article.Id);
                     resolved++;
                     continue;
                 }
@@ -145,7 +145,7 @@ public class PendingIndexProcessor(
                     await lifecycle.PersistMostRecentlySealedSegmentAsync(ct);
                 }
 
-                await articleRepo.ClearIndexPendingAsync(article.Id);
+                await articleRepo.ClearIndexPendingUnscopedAsync(article.Id);
                 processed++;
                 resolved++;
             }

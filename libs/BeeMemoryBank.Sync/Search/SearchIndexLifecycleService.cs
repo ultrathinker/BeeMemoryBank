@@ -210,7 +210,7 @@ public sealed class SearchIndexLifecycleService(
         try
         {
             logger.LogWarning("Triggering a full search index rebuild: clearing the persisted manifest/tombstones and re-flagging every active article as index-pending.");
-            int affected = await articleRepo.MarkAllIndexPendingAsync();
+            int affected = await articleRepo.MarkAllIndexPendingUnscopedAsync();
             await tombstoneRepo.DeleteAllAsync();
             await manifestRepo.DeleteAllManifestsAsync();
             runtimeState.ClearPersistedSegmentIds();
