@@ -428,6 +428,70 @@ public class RestoreInitiatorService : IRestoreInitiator
         }
         if (!selfOriginator)
         {
+            // Extracted into DownloadFromWhitelistedSeederAsync below — see that method for the
+            // candidate-selection and challenge/authenticate/download logic.
+            await DownloadFromWhitelistedSeederAsync(eventId, payload, originator!, identity, whitelistRepo, filePath);
+        }
+
+        // Hash check runs for BOTH self-originator AND remote paths. Catches:
+        //   (a) tampered-in-flight bytes from a remote seeder (download path)
+        //   (b) tampered local file between /restore-network endpoint writing it and
+        //       this background task picking it up (self-originator path) — closes the
+        //       local-tamper window if another process briefly has write access to
+        //       restore-pending/<eventId>.bin (uclaw isolation breach, container
+        //       escape, etc.). Cheap defense (one SHA256 pass).
+        var actualHash = await ComputeHashAsync(filePath);
+        if (!string.Equals(actualHash, payload.SnapshotHash, StringComparison.OrdinalIgnoreCase))
+        {
+            File.Delete(filePath);
+
+            var failCount = await IncrementHashFailCountAsync(eventId);
+            if (failCount >= 5)
+            {
+                _currentStep = RestoreFlowStep.NeedsAdminDecision;
+                _errorMessage = "Snapshot hash mismatch after 5 consecutive attempts — possible tampering or corruption.";
+                await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Failed, _errorMessage);
+                throw new NeedsAdminDecisionException(eventId, _errorMessage);
+            }
+
+            throw new InvalidOperationException("Snapshot hash mismatch — the file content does not match the announced hash.");
+        }
+
+        await ResetHashFailCountAsync(eventId);
+
+        _currentStep = RestoreFlowStep.ApplyingSnapshot;
+        _percentage = 70;
+        _statusMessage = "Applying snapshot (this may take a while)...";
+        await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Applying);
+
+        await _snapshotService.ApplyNetworkRestoreAsync(filePath, payload, restoreEvent);
+
+        _currentStep = RestoreFlowStep.Completed;
+        _percentage = 100;
+        _statusMessage = "Restore completed successfully.";
+        
+        // record applied_at
+        using var conn = _connFactory.CreateConnection();
+        await conn.ExecuteAsync("UPDATE tbl_restore_event_state SET applied_at = @Now WHERE event_id = @EventId",
+            new { Now = DateTime.UtcNow.ToString("O"), EventId = eventId });
+        
+        await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Applied);
+    }
+
+    // Extracted from ExecuteDownloadAndApplyAsync (pure cut-and-paste, no behavior change) so an
+    // end-to-end test can drive the real V2 challenge/authenticate handshake and the whitelist
+    // audience-pinning check against a real peer server, without needing to exercise the full
+    // destructive restore-apply path (ApplyNetworkRestoreAsync) that normally follows it.
+    // `internal` purely for that test seam — BeeMemoryBank.Integration.Tests is the only
+    // InternalsVisibleTo grantee (see BeeMemoryBank.Api.csproj).
+    internal async Task DownloadFromWhitelistedSeederAsync(
+        string eventId,
+        RestoreNetworkEventPayload payload,
+        WhitelistEntry originator,
+        NodeIdentity identity,
+        IWhitelistRepository whitelistRepo,
+        string filePath)
+    {
         // Build seeder candidate list: prefer originator (canonical source), then any other
         // whitelisted peer (distributed seeding — any peer that already accepted this restore
         // can re-serve the file). Without this fallback, a leaf node in A→B→C topology where
@@ -455,7 +519,7 @@ public class RestoreInitiatorService : IRestoreInitiator
         }
 
         var candidates = new List<(string url, BeeMemoryBank.Core.Models.WhitelistEntry peer)>();
-        if (!string.IsNullOrWhiteSpace(originator!.ApiAddress) && IsAcceptableSeederUrl(originator.ApiAddress))
+        if (!string.IsNullOrWhiteSpace(originator.ApiAddress) && IsAcceptableSeederUrl(originator.ApiAddress))
             candidates.Add((originator.ApiAddress.TrimEnd('/'), originator));
         else if (!string.IsNullOrWhiteSpace(originator.ApiAddress))
             _logger.LogWarning("Originator URL {Url} rejected (not https or private LAN); falling back to other seeders",
@@ -579,57 +643,12 @@ public class RestoreInitiatorService : IRestoreInitiator
         // SnapshotEndpoints.cs:289), but distributed seeding means the seeder may not be the
         // originator. Verifying against the seeder's pubkey would require trusting that any
         // whitelisted peer can swap files (defeats defense-in-depth). The originator-signed
-        // payload.SnapshotHash check below (line ~591) is the canonical integrity proof:
-        // it's signed inside the RESTORE_NETWORK event by the originator and binds the file
-        // bytes to that immutable signature. The seeder-key signature is therefore redundant
+        // payload.SnapshotHash check in ExecuteDownloadAndApplyAsync is the canonical integrity
+        // proof: it's signed inside the RESTORE_NETWORK event by the originator and binds the
+        // file bytes to that immutable signature. The seeder-key signature is therefore redundant
         // and we drop the check — keeping it would require either trusting the seeder
         // unconditionally (security regression) OR distributing originator-signed signatures
         // through every relay hop (extra complexity for no gain over hash verify).
-        } // end if (!selfOriginator)
-
-        // Hash check runs for BOTH self-originator AND remote paths. Catches:
-        //   (a) tampered-in-flight bytes from a remote seeder (download path)
-        //   (b) tampered local file between /restore-network endpoint writing it and
-        //       this background task picking it up (self-originator path) — closes the
-        //       local-tamper window if another process briefly has write access to
-        //       restore-pending/<eventId>.bin (uclaw isolation breach, container
-        //       escape, etc.). Cheap defense (one SHA256 pass).
-        var actualHash = await ComputeHashAsync(filePath);
-        if (!string.Equals(actualHash, payload.SnapshotHash, StringComparison.OrdinalIgnoreCase))
-        {
-            File.Delete(filePath);
-
-            var failCount = await IncrementHashFailCountAsync(eventId);
-            if (failCount >= 5)
-            {
-                _currentStep = RestoreFlowStep.NeedsAdminDecision;
-                _errorMessage = "Snapshot hash mismatch after 5 consecutive attempts — possible tampering or corruption.";
-                await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Failed, _errorMessage);
-                throw new NeedsAdminDecisionException(eventId, _errorMessage);
-            }
-
-            throw new InvalidOperationException("Snapshot hash mismatch — the file content does not match the announced hash.");
-        }
-
-        await ResetHashFailCountAsync(eventId);
-
-        _currentStep = RestoreFlowStep.ApplyingSnapshot;
-        _percentage = 70;
-        _statusMessage = "Applying snapshot (this may take a while)...";
-        await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Applying);
-
-        await _snapshotService.ApplyNetworkRestoreAsync(filePath, payload, restoreEvent);
-
-        _currentStep = RestoreFlowStep.Completed;
-        _percentage = 100;
-        _statusMessage = "Restore completed successfully.";
-        
-        // record applied_at
-        using var conn = _connFactory.CreateConnection();
-        await conn.ExecuteAsync("UPDATE tbl_restore_event_state SET applied_at = @Now WHERE event_id = @EventId",
-            new { Now = DateTime.UtcNow.ToString("O"), EventId = eventId });
-        
-        await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Applied);
     }
 
     private static async Task<string> ComputeHashAsync(string path)
