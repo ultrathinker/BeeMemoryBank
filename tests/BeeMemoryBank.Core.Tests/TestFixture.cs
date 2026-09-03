@@ -72,7 +72,7 @@ public abstract class TestFixture : IAsyncLifetime
             .AddScoped<IUserRepository>(_ => userRepo)
             .AddScoped<CallerScopeHolder>(_ => ScopeHolder)
             .BuildServiceProvider());
-        FolderService = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccess);
+        FolderService = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccess, ScopeHolder);
 
         TreeService = new TreeService(articleRepo, folderRepo);
         IndexBuilder = new IndexBuilder();

@@ -32,30 +32,46 @@ public static class JoinEndpoints
             if (req.NodeId == identity.NodeId)
                 return Results.BadRequest(new ErrorResponse("A node cannot join itself"));
 
-            // 2. Validate password: take the first password-bearing slot, try to decrypt Master DEK.
+            // 2. Validate password: try EVERY password-bearing slot, not just the first one found.
             // After A2, fresh nodes have a "user" slot instead of legacy "password". Accept both
             // types so multi-node join works on post-A2 nodes. Found by E2E test on 2026-04-26.
+            //
+            // L3: a node can carry MULTIPLE "user" slots — one per superadmin, each independently
+            // wrapping the SAME master DEK with that user's own password-derived KEK (see
+            // UserService's promote-to-superadmin path). Checking only slots.FirstOrDefault(...)
+            // meant every superadmin except whichever one happened to sort first got "invalid
+            // master password" trying to join a new node with THEIR OWN correct password. Try every
+            // candidate slot and accept the first one the supplied password actually unwraps —
+            // mirrors the same try-every-candidate-slot pattern KeyManagementService.
+            // ChangePasswordAsync already uses for the equivalent "which slot is this password for"
+            // problem.
             var slots = await keySlotRepo.GetAllAsync();
-            var passwordSlot = slots.FirstOrDefault(s => s.SlotType == "user")
-                              ?? slots.FirstOrDefault(s => s.SlotType == "password");
-            if (passwordSlot == null)
+            var candidateSlots = slots.Where(s => s.SlotType == "user" || s.SlotType == "password").ToList();
+            if (candidateSlots.Count == 0)
                 return Results.Json(new ErrorResponse("No password-bearing key slot found on this node"), statusCode: 500);
 
-            try
+            MasterKeyStore? passwordSlot = null;
+            foreach (var candidate in candidateSlots)
             {
-                var kek = KeyDerivation.DeriveKek(
-                    req.MasterPassword,
-                    passwordSlot.Salt!,
-                    passwordSlot.ArgonMemory ?? CryptoConstants.DefaultArgonMemory,
-                    passwordSlot.ArgonIterations ?? CryptoConstants.DefaultArgonIterations,
-                    passwordSlot.ArgonParallelism ?? CryptoConstants.DefaultArgonParallelism);
-                // Attempt to decrypt — if password is wrong, an exception will be thrown
-                MasterKeyManager.UnwrapMasterDek(passwordSlot.EncryptedMasterDek, passwordSlot.IV, kek);
+                try
+                {
+                    var candidateKek = KeyDerivation.DeriveKek(
+                        req.MasterPassword,
+                        candidate.Salt!,
+                        candidate.ArgonMemory ?? CryptoConstants.DefaultArgonMemory,
+                        candidate.ArgonIterations ?? CryptoConstants.DefaultArgonIterations,
+                        candidate.ArgonParallelism ?? CryptoConstants.DefaultArgonParallelism);
+                    // Attempt to decrypt — if the password is wrong for THIS slot, an exception is
+                    // thrown and we move on to the next candidate rather than failing outright.
+                    MasterKeyManager.UnwrapMasterDek(candidate.EncryptedMasterDek, candidate.IV, candidateKek);
+                    passwordSlot = candidate;
+                    break;
+                }
+                catch { /* wrong password for this slot — try the next candidate */ }
             }
-            catch
-            {
+
+            if (passwordSlot == null)
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 401);
-            }
 
             // 3. Validate the public key of the new node
             byte[] publicKey;

@@ -15,6 +15,7 @@ public class BeeWriteTools(
     FolderService folderSvc,
     CopyService copySvc,
     ConceptTagService conceptTagSvc,
+    CallerScopeHolder scopeHolder,
     ILogger<BeeWriteTools> logger,
     McpResponseManager responseManager)
 {
@@ -272,8 +273,27 @@ public class BeeWriteTools(
             if (folder == null)
                 return $"Error: folder '{path}' not found";
 
-            var children = await folderRepo.GetChildrenAsync(path);
-            var articles = await articleService.ListAsync(path);
+            // L7: emptiness must be checked against the TRUE contents, not this caller's
+            // ACL-filtered view. GetChildrenAsync/ListAsync apply the ambient scope's FilterFolders/
+            // FilterArticles -- a folder whose only contents are hidden from this caller (e.g. a
+            // deny rule on a descendant subtree) would otherwise read as "empty" and get deleted,
+            // silently orphaning the hidden subtree (it stays on disk, but its parent is gone and
+            // nothing can navigate to it any more). Swap to System scope for JUST this read; the
+            // caller's own authorization to perform the delete is still enforced separately, by
+            // folderRepo.SoftDeleteAsync's ACL check on `path` itself below.
+            var previousScope = scopeHolder.Scope;
+            scopeHolder.Scope = SystemCallerScope.Instance;
+            List<Folder> children;
+            List<Article> articles;
+            try
+            {
+                children = await folderRepo.GetChildrenAsync(path);
+                articles = await articleService.ListAsync(path);
+            }
+            finally
+            {
+                scopeHolder.Scope = previousScope;
+            }
             if (children.Count > 0 || articles.Count > 0)
             {
                 // Report both counts in one message so the caller sees the full picture,

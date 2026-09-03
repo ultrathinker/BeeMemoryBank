@@ -634,7 +634,13 @@ public class ArticleRepository(
             new { articleId, folderId });
     }
 
-    // AUDIT: unguarded. Same rationale as SetFolderIdAsync — background/sync only.
+    // AUDIT: unguarded — carries no ACL check of its own, by design, since sync/background
+    // callers run under SystemCallerScope where every check would be a no-op anyway. The one
+    // user-facing caller, FolderService.DeleteAsync, is safe DESPITE that: it now calls
+    // folderRepo.SoftDeleteByPathPrefixAsync (which walks every descendant and throws on the
+    // first ACL violation — see the H1 comment there) BEFORE ever reaching this method, so a
+    // denied descendant aborts the whole cascade first. Do not add a new call site ahead of an
+    // equivalent guard.
     public async Task ClearFolderIdAsync(Guid folderId)
     {
         using var conn = OpenConnection();

@@ -186,12 +186,48 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         if (_holder.Scope.IsReadOnly(pathPrefix))
             throw new ReadOnlyAccessException(pathPrefix);
 
+        // H1: the two checks above only cover pathPrefix itself. A caller can be authorized on the
+        // TOP of a subtree (e.g. allow=/, deny=/Work/Secret) while a DESCENDANT under it is
+        // individually denied or read-only — this cascading soft-delete must not silently sweep
+        // that descendant along for the ride just because the top of the subtree passed. Walk the
+        // real (unfiltered) descendant paths and re-check every single one before touching
+        // anything. Skipped for superadmins/System scope, where every check below is a guaranteed
+        // no-op anyway — no need to pay for the extra query.
+        if (!_holder.Scope.IsSuperadmin)
+            await ThrowIfAnyDescendantWriteDeniedAsync(pathPrefix);
+
         using var conn = OpenConnection();
         var now = deletedAt.ToString("o");
         var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
         return await conn.ExecuteAsync(
             "UPDATE tbl_folder SET status = 'D', deleted_at = @now, updated_at = @now, cascade_delete_op_id = @cascadeOpId WHERE path LIKE @prefix ESCAPE '\\' AND status = 'A'",
             new { prefix, now, cascadeOpId });
+    }
+
+    /// <summary>
+    /// H1: throws <see cref="UnauthorizedAccessException"/> or <see cref="ReadOnlyAccessException"/>
+    /// if any ACTIVE folder strictly under <paramref name="pathPrefix"/> is denied or read-only for
+    /// the ambient caller scope. Reads the raw path list directly (no ACL filter applied to the
+    /// query itself — that's the point: we need the true descendant set, not what the caller can
+    /// see) and then re-checks each path against the same per-path guards every other write method
+    /// here uses, so the two never drift out of sync.
+    /// </summary>
+    private async Task ThrowIfAnyDescendantWriteDeniedAsync(string pathPrefix)
+    {
+        using var conn = OpenConnection();
+        var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
+        var descendantPaths = await conn.QueryAsync<string>(
+            "SELECT path FROM tbl_folder WHERE path LIKE @prefix ESCAPE '\\' AND status = 'A'",
+            new { prefix });
+
+        foreach (var path in descendantPaths)
+        {
+            if (_holder.Scope.IsAccessDenied(path))
+                throw new UnauthorizedAccessException(
+                    $"Write access denied for path '{path}' (descendant of '{pathPrefix}')");
+            if (_holder.Scope.IsReadOnly(path))
+                throw new ReadOnlyAccessException(path);
+        }
     }
 
     public async Task<List<Folder>> ListSoftDeletedByCascadeOpIdAsync(Guid cascadeOpId, string pathPrefix)
