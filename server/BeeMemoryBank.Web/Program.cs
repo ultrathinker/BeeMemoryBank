@@ -192,6 +192,10 @@ var app = builder.Build();
 
 app.UseLoopbackForwardedHeaders();
 
+// Must sit immediately after UseLoopbackForwardedHeaders so RemoteIpAddress is already the real
+// client, and before anything that can spend an Argon2 derivation on an anonymous request.
+app.UseMiddleware<BeeMemoryBank.Web.Middleware.PublicRateLimitMiddleware>();
+
 // BMB_READY_FILE: signals startup completion to a parent orchestrator (bmbd) by writing
 // {pid, urls, applicationName, version, startupTimeUtc} once Kestrel has bound its actual
 // port — ApplicationStarted fires after that. Off by default: standalone/Docker/tests don't
