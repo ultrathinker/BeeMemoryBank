@@ -279,12 +279,33 @@ public class NodeOrchestrator : IDisposable
 
             child.CancelFailureReset();
 
-            // Clean up process resources
+            // Clean up process resources.
+            //
+            // Reaching here does NOT imply the child is gone: WaitForExitAsync above swallows
+            // OperationCanceledException, and the ready-file wait can return null, so both paths
+            // can land here with the process still running. Kill() only SIGNALS — on Linux/macOS
+            // SIGKILL delivery is asynchronous (unlike Windows' near-synchronous TerminateProcess),
+            // so Dispose() would otherwise land while the tree is still dying and the child would
+            // never be reaped. AGENTS.md calls this pattern out; it caused three CI-only failures
+            // elsewhere before it was applied consistently.
+            //
+            // The wait is skipped during shutdown, and deliberately so. StopAsync below already
+            // does its own Kill-plus-bounded-wait for every child, so waiting again here is pure
+            // duplication — and harmful duplication: this loop runs inside the host's shutdown
+            // budget (5s by default), so a second 5s wait can consume the whole of it and the
+            // status/runtime files never get cleaned up, which is exactly what
+            // E2E_GracefulStop_ViaStdinLifeline asserts. Two seconds is also plenty for a
+            // just-SIGKILLed process; this is a reaping window, not a graceful-exit wait.
             try
             {
                 if (!process.HasExited)
                 {
                     process.Kill(entireProcessTree: true);
+                    if (!stoppingToken.IsCancellationRequested)
+                    {
+                        using var reapCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                        await process.WaitForExitAsync(reapCts.Token).ConfigureAwait(false);
+                    }
                 }
             }
             catch { }
