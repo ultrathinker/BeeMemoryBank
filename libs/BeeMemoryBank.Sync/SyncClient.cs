@@ -23,6 +23,8 @@ public class SyncClient(
     INodeAuthSigner authSigner,
     ILogger<SyncClient> logger,
     PeerNewerProtocolState peerNewerProtocolState,
+    IWhitelistRepository whitelistRepo,
+    ISyncQuarantineRepository quarantineRepo,
     IRestoreRetrier? restoreRetrier = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
@@ -52,10 +54,41 @@ public class SyncClient(
         var remoteIdentity = await GetRemoteIdentityAsync(http, remoteApiBase, ct);
         logger.LogDebug("Synchronizing with {NodeId} ({Base})", remoteIdentity.NodeId, remoteApiBase);
 
-        // 2. Authentication. remoteIdentity.NodeId (from step 1's /api/sync/identity call on this
-        // same connection) is the audience anchor for M6's challenge-relay protection — see
-        // PeerAuthenticator.AuthenticateAsync's doc comment.
-        var token = await AuthenticateAsync(http, remoteApiBase, identity, remoteIdentity.NodeId, ct);
+        // 2. Authentication. The audience anchor for M6's challenge-relay protection MUST be our
+        // own whitelist's pinned identity for this address, not remoteIdentity.NodeId — that's
+        // self-declared, from step 1's /api/sync/identity call on THIS SAME CONNECTION, meaning a
+        // malicious/compromised peer (or a LAN MITM; plain-HTTP peers are realistic given mDNS
+        // discovery) fully controls it too. Trusting it as the audience anchor would let such a
+        // peer simply declare itself to be whatever third node C it wants, relay a genuine
+        // challenge fetched live from C (whose ServerNodeId then "matches" what it just told us),
+        // and walk away with a signature bound to C that it can redeem there — the exact relay
+        // attack M6 was supposed to close, just moved one level up. tbl_whitelist is the one thing
+        // we didn't just ask this same peer about: every real caller (SyncScheduler, mobile
+        // InitialSyncPage/SyncWorker/SyncStatusService) iterates active whitelist entries and
+        // passes THEIR ApiAddress straight through as remoteApiBase, so a reverse lookup by that
+        // exact string is authoritative here without needing a new parameter threaded through any
+        // of those call sites.
+        var pinnedNodeId = await ResolvePinnedNodeIdAsync(remoteApiBase);
+        if (pinnedNodeId.HasValue && pinnedNodeId.Value != remoteIdentity.NodeId)
+        {
+            // Fail fast, before ever touching the network for a challenge: the peer at this
+            // address claims to be someone OTHER than who our whitelist pins it to. This alone
+            // isn't what stops the relay attack (a peer could report a self-consistent identity
+            // here while still relaying a mismatched challenge from elsewhere — that's what
+            // PeerAuthenticator's own check, driven by pinnedNodeId below, actually stops) but it
+            // gives a far clearer diagnosis for the mundane case — a stale/wrong ApiAddress in our
+            // own whitelist — instead of a cryptic "challenge audience mismatch" thrown from deep
+            // inside the auth handshake.
+            throw new InvalidOperationException(
+                $"Peer at {remoteApiBase} declares NodeId {remoteIdentity.NodeId}, but our whitelist " +
+                $"pins this address to {pinnedNodeId.Value}. Refusing to sync — this is either a " +
+                "stale/incorrect ApiAddress entry in our own whitelist, or a peer impersonation attempt.");
+        }
+        // No whitelist entry pins this exact address (first contact, or a caller that doesn't go
+        // through the whitelist) — nothing to pin against, so fall back to the pre-M6-fix trust
+        // level (self-declared identity). No worse than before this change.
+        var audienceNodeId = pinnedNodeId ?? remoteIdentity.NodeId;
+        var token = await AuthenticateAsync(http, remoteApiBase, identity, audienceNodeId, ct);
 
         int appliedCount = 0;
 
@@ -99,7 +132,7 @@ public class SyncClient(
                     }
                     // Applied cleanly (this cycle, possibly after earlier transient failures) —
                     // forget any failure streak SyncEventQuarantine was tracking for it.
-                    SyncEventQuarantine.ClearFailure(evt.EventId);
+                    await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, evt.EventId);
                 }
                 catch (Exception ex)
                 {
@@ -112,7 +145,7 @@ public class SyncClient(
                     // one bad event. A merely transient failure (network blip, momentarily-locked
                     // local DB) hasn't built up a streak yet and still gets the old
                     // stop-and-retry-from-here behavior.
-                    var quarantined = SyncEventQuarantine.RecordFailure(evt.EventId, evt.EventType, evt.NodeId, ex.Message);
+                    var quarantined = await SyncEventQuarantine.RecordFailureAsync(quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex.Message);
                     if (quarantined)
                     {
                         logger.LogError(ex,
@@ -304,6 +337,26 @@ public class SyncClient(
         HttpClient http, string baseUrl, NodeIdentity identity, Guid expectedServerNodeId, CancellationToken ct)
         => PeerAuthenticator.AuthenticateAsync(authSigner, http, baseUrl, identity, expectedServerNodeId, ct);
 
+    /// <summary>
+    /// M6: resolves the whitelist-pinned NodeId for the peer at <paramref name="remoteApiBase"/>,
+    /// or null if no active whitelist entry's ApiAddress matches it exactly (first contact, or a
+    /// caller that doesn't dial an address sourced from the whitelist — see SyncWithAsync's
+    /// caller-convention comment above). TrimEnd('/') + OrdinalIgnoreCase mirrors the same
+    /// defensive-comparison style used for ApiAddress elsewhere (e.g. the /api/sync/probe
+    /// endpoint's peer.ApiAddress!.TrimEnd('/')) even though every current caller passes the
+    /// whitelist entry's ApiAddress through completely unmodified, so an exact match would already
+    /// suffice today — this just avoids a silent miss if that ever changes.
+    /// </summary>
+    private async Task<Guid?> ResolvePinnedNodeIdAsync(string remoteApiBase)
+    {
+        var trimmedBase = remoteApiBase.TrimEnd('/');
+        var active = await whitelistRepo.GetAllActiveAsync();
+        return active
+            .FirstOrDefault(e => !string.IsNullOrEmpty(e.ApiAddress)
+                && string.Equals(e.ApiAddress!.TrimEnd('/'), trimmedBase, StringComparison.OrdinalIgnoreCase))
+            ?.NodeId;
+    }
+
     private static async Task<List<SyncEvent>> PullEventsAsync(
         HttpClient http, string baseUrl, string token, long afterSequence, CancellationToken ct)
     {
@@ -396,7 +449,7 @@ public class SyncClient(
                 "forever. This needs operator attention (server per-request cap and actual event size " +
                 "are mismatched). See GET /api/sync/quarantine.",
                 evt.SequenceNum, evt.EventId, evt.EventType, evt.Payload?.Length ?? 0);
-            SyncEventQuarantine.RecordFailure(evt.EventId, evt.EventType, evt.NodeId, "Rejected as too large to push (413), even alone.");
+            await SyncEventQuarantine.RecordFailureAsync(quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, "Rejected as too large to push (413), even alone.");
             return (0, 1, 0, evt.SequenceNum);
         }
 

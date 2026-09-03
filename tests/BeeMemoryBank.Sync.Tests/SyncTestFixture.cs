@@ -31,6 +31,7 @@ public abstract class SyncTestFixture : IAsyncLifetime
     public IArticleRepository ArticleRepo { get; private set; } = null!;
     public IArticleBodyRepository BodyRepo { get; private set; } = null!;
     public IWhitelistRepository WhitelistRepo { get; private set; } = null!;
+    public ISyncQuarantineRepository QuarantineRepo { get; private set; } = null!;
     public IConflictVersionRepository ConflictRepo { get; private set; } = null!;
     public ITombstoneRepository TombstoneRepo { get; private set; } = null!;
     public ICommentRepository CommentRepo { get; private set; } = null!;
@@ -50,6 +51,7 @@ public abstract class SyncTestFixture : IAsyncLifetime
         var keySlotRepo = new KeySlotRepository(Factory);
         NodeRepo = new NodeIdentityRepository(Factory);
         WhitelistRepo = new WhitelistRepository(Factory);
+        QuarantineRepo = new SyncQuarantineRepository(Factory);
         var userRepo = new UserRepository(Factory);
         EventLogRepo = new EventLogRepository(Factory);
         var syncPositionRepo = new SyncPositionRepository(Factory);
