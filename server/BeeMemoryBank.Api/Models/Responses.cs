@@ -1,3 +1,5 @@
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Models;
 namespace BeeMemoryBank.Api.Models;
 
 public record AgentListItem(int Id, string Name, string? Description, string KeyPrefix, DateTime CreatedAt, DateTime? LastAccessedAt, long RequestCount, int OwnerUserId = 0, string? OwnerName = null);
@@ -178,25 +180,6 @@ public record SnapshotUploadResponse(
     bool NetworkRestoreAllowed,
     string? DekMismatchReason
 );
-
-public enum DekRotationFlowStep
-{
-    Idle,
-    Proposing,
-    AwaitingQuorum,
-    Committing,
-    SessionsClosing,
-    PreRotationBackup,
-    ReWrappingPerItem,
-    ReEncryptingDirect,
-    InvalidatingSlots,
-    InvalidatingAgents,
-    Finalizing,
-    Completed,
-    Failed,
-    NeedsAdminDecision,
-    NeedsNewRecoveryKey
-}
 
 public record DekRotationProgressResponse(
     Guid? EventId,

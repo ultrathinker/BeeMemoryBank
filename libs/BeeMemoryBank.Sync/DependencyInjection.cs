@@ -43,21 +43,24 @@ public static class DependencyInjection
         // rotation since slot can't be rewrapped against the new DEK.
         services.AddSingleton<ILazySlotRewrapService, LazySlotRewrapService>();
 
-        // Default no-op implementations of restore/dek-rotation initiators for environments
-        // (mobile, CLI) that don't have the server-side handlers. The server's Program.cs
-        // overrides these via AddSingleton later. EventApplier needs both as constructor
-        // dependencies; without these the DI container fails to activate it.
+        // Restore stays a no-op off-server: initiating a network restore is a server-side flow.
+        // EventApplier takes it as a constructor dependency, so something must be registered.
         services.TryAddSingleton<IRestoreInitiator, NoOpRestoreInitiator>();
-        services.TryAddSingleton<IDekRotationApplier, NoOpDekRotationApplier>();
+        // The REAL peer applier, not a no-op. A mobile or CLI node must rewrap its own vault when
+        // a peer rotates the master DEK; with the no-op it stayed on the retired key forever and
+        // everything that synced afterwards was silently unreadable. The server registers its own
+        // DekRotationService over this (AddSingleton beats TryAddSingleton) because it also
+        // proposes, accepts and reports progress — but both run the identical rewrap.
+        services.TryAddSingleton<IDekRotationApplier, DekRotation.PeerDekRotationApplier>();
 
         return services;
     }
 
-    // Both NoOps log a loud warning when invoked. EventApplier requires these handlers
-    // to be activate-able; on the server the real implementations are registered in
-    // Program.cs via AddSingleton (which wins over TryAddSingleton). If a future
-    // refactor accidentally drops that override, restore/rotation events would be
-    // silently swallowed without these warnings — a security-relevant regression
+    // The NoOp logs a loud warning when invoked. EventApplier requires the handler to be
+    // activate-able; on the server the real implementation is registered in Program.cs via
+    // AddSingleton (which wins over TryAddSingleton). If a future refactor accidentally drops
+    // that override, restore events would be silently swallowed without this warning — a
+    // security-relevant regression
     // (peers think DEK rotated; this node still uses old DEK). The warning forces
     // the misconfiguration into operator logs immediately.
     private sealed class NoOpRestoreInitiator(ILogger<NoOpRestoreInitiator> logger) : IRestoreInitiator
@@ -71,19 +74,6 @@ public static class DependencyInjection
             return Task.CompletedTask;
         }
         public Task RetryPendingRestoresAsync() => Task.CompletedTask;
-    }
-
-    private sealed class NoOpDekRotationApplier(ILogger<NoOpDekRotationApplier> logger) : IDekRotationApplier
-    {
-        public Task AutoAcceptCommitAsync(SyncEvent commitEvent)
-        {
-            logger.LogWarning(
-                "NoOpDekRotationApplier.AutoAcceptCommitAsync invoked for event {EventId} — server's real IDekRotationApplier is NOT registered. " +
-                "DEK rotation will NOT be applied; node will fall behind cluster on next rotation.",
-                commitEvent.EventId);
-            return Task.CompletedTask;
-        }
-        public Task RetryPendingAutoAcceptsAsync() => Task.CompletedTask;
     }
 
     /// <summary>

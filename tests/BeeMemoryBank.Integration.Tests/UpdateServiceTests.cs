@@ -334,7 +334,7 @@ public class UpdateServiceTests : IAsyncLifetime
         _svc.PreUpdateSnapshotPath.Should().NotBeNull();
         File.Exists(_svc.PreUpdateSnapshotPath!).Should().BeTrue("pre-update backup file should exist");
 
-        await using var conn = new SqliteConnection($"Data Source={_svc.PreUpdateSnapshotPath}");
+        await using var conn = new SqliteConnection($"Data Source={_svc.PreUpdateSnapshotPath};Pooling=False");
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT 1";

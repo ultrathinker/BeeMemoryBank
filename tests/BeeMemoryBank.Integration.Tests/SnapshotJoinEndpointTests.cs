@@ -138,7 +138,9 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
                 var dbPath = Path.Combine(tempDir, "beememorybank.db");
                 File.Exists(dbPath).Should().BeTrue();
 
-                var cs = $"Data Source={dbPath}";
+                // Pooling=False: a pooled handle survives Dispose and keeps the extracted db locked,
+                // so the Directory.Delete below fails on Windows.
+                var cs = $"Data Source={dbPath};Pooling=False";
                 using var conn = new SqliteConnection(cs);
                 conn.Open();
 

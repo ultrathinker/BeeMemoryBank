@@ -1,3 +1,5 @@
+using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
 using System.Security.Cryptography;
 using System.Text;
 using BeeMemoryBank.Core.Interfaces;

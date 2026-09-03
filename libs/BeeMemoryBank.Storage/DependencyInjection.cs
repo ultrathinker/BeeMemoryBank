@@ -13,9 +13,14 @@ public static class DependencyInjection
     {
         DapperConfig.Configure();
 
-        var factory = new DbConnectionFactory(dataPath);
-        services.AddSingleton(factory);
-        services.AddSingleton<Core.Interfaces.IDbConnectionFactory>(factory);
+        // Registered through a factory delegate, NOT as a pre-built instance. The DI container
+        // only disposes what it creates itself: an object handed to AddSingleton(instance) is
+        // never disposed, so DbConnectionFactory.Dispose — which clears the SQLite connection
+        // pool — simply never ran. Every pooled handle stayed open on the database file, and on
+        // Windows that made "delete the data directory" fail long after the provider was gone.
+        // Both registrations resolve the same instance; Dispose is idempotent.
+        services.AddSingleton(_ => new DbConnectionFactory(dataPath));
+        services.AddSingleton<Core.Interfaces.IDbConnectionFactory>(sp => sp.GetRequiredService<DbConnectionFactory>());
         services.AddSingleton<MigrationRunner>();
 
         // WP-09: encrypted-at-rest search index segments. Files live in a sibling directory next

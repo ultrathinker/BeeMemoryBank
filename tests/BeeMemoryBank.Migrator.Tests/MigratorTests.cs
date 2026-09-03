@@ -46,7 +46,7 @@ public class MigratorTests : IDisposable
         IEnumerable<(int Id, int NodeId, string Title, string Content)> articles,
         IEnumerable<(int ArticleId, string Tag)>? tags = null)
     {
-        using var conn = new SqliteConnection($"Data Source={_v1DbPath}");
+        using var conn = new SqliteConnection($"Data Source={_v1DbPath};Pooling=False");
         conn.Open();
 
         conn.Execute("""
@@ -138,7 +138,7 @@ public class MigratorTests : IDisposable
     [Fact]
     public void V1Reader_ReadArticles_OnlyActive()
     {
-        using var conn = new SqliteConnection($"Data Source={_v1DbPath}");
+        using var conn = new SqliteConnection($"Data Source={_v1DbPath};Pooling=False");
         conn.Open();
         conn.Execute("""
             CREATE TABLE tbl_node (id INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'A', created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '');

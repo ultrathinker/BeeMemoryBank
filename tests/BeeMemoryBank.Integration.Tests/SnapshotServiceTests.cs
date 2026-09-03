@@ -69,7 +69,7 @@ public class SnapshotServiceTests : IAsyncLifetime
             var dbPath = Path.Combine(extractDir, "beememorybank.db");
             File.Exists(dbPath).Should().BeTrue();
 
-            using var conn = new SqliteConnection($"Data Source={dbPath}");
+            using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False");
             conn.Open();
 
             var secretTables = new[]

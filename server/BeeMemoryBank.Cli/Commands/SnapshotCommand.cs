@@ -80,11 +80,18 @@ public static class SnapshotCommand
             await using (var gzip = new GZipStream(fileStream, CompressionLevel.Optimal))
             using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))
             {
-                // Add DB file
-                await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, DbFileName)
+                // Add DB file. The stream is scoped, not handed to the entry inline: TarWriter does
+                // not take ownership of DataStream, so an inline File.OpenRead leaked the handle
+                // and the `finally` below could not delete tempDb. On Linux that is invisible —
+                // unlink succeeds on an open file — which is why it only ever failed on Windows,
+                // and why CI stayed green while three CLI tests failed locally.
                 {
-                    DataStream = File.OpenRead(tempDb)
-                });
+                    await using var dbStream = File.OpenRead(tempDb);
+                    await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, DbFileName)
+                    {
+                        DataStream = dbStream
+                    });
+                }
 
                 // Add manifest
                 var manifestBytes = Encoding.UTF8.GetBytes(manifestJson);

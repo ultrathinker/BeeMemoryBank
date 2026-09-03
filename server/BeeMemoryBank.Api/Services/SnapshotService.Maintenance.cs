@@ -74,7 +74,14 @@ public partial class SnapshotService
 
     private static void FilterSecretsFrom(string tempDbPath)
     {
-        var cs = $"Data Source={tempDbPath}";
+        // Pooling=False is load-bearing, not tidiness. Microsoft.Data.Sqlite pools by default, so
+        // Dispose only returns the connection to the pool and the native handle stays open on the
+        // file. Every caller here deletes or replaces that file immediately afterwards, and on
+        // Windows deleting a file with an open handle fails outright — which is why snapshot
+        // creation threw IOException locally while Linux CI, where unlink on an open file just
+        // works, stayed green. These are one-shot connections to a throwaway file; pooling buys
+        // nothing and costs the delete.
+        var cs = $"Data Source={tempDbPath};Pooling=False";
         using var conn = new SqliteConnection(cs);
         conn.Open();
         using var pragmaCmd = conn.CreateCommand();

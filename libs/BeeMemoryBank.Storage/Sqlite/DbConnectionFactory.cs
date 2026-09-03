@@ -67,10 +67,28 @@ public class DbConnectionFactory : IDbConnectionFactory, IDisposable
         return connection;
     }
 
+    private bool _disposed;
+
     public void Dispose()
     {
+        // Idempotent: the same instance is registered under both DbConnectionFactory and
+        // IDbConnectionFactory, so the container can capture and dispose it twice.
+        if (_disposed) return;
+        _disposed = true;
+
         _keepAlive?.Dispose();
         _keepAlive = null;
+
+        // Disposing a SqliteConnection only returns it to the pool; the native handle stays open on
+        // the database file. Every connection this factory ever handed out is still pooled under
+        // _connectionString, so without this the file remains locked after the factory is gone.
+        //
+        // On Linux that is harmless (unlink works on an open file) and the process usually exits
+        // anyway. In-process it is not: the temp-file deletes below silently failed and leaked a DB
+        // per test, and a CLI test that removed its data directory after the command returned got
+        // IOException on beememorybank.db. Both looked like flakes and were a leaked handle.
+        try { SqliteConnection.ClearPool(new SqliteConnection(_connectionString)); } catch { }
+
         if (_tempFilePath != null)
         {
             // SQLite WAL leftover side files: -wal, -shm, -journal

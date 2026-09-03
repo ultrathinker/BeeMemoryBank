@@ -158,6 +158,14 @@ public class RemoteAccountService(
         // /MountPath manually and have the poller adopt their folder.
         // Run under system scope so the create itself isn't refused by
         // repo-level ACL checks.
+        //
+        // Authorize the mount path against the CALLER's scope first — everything below runs as
+        // System, so a check placed inside the swapped block would be evaluated against
+        // SystemCallerScope and could never refuse anything. (The endpoint is superadmin-gated
+        // today, so this is defence in depth; it stops being so the moment mirror administration
+        // is delegated.)
+        folderRepo.ThrowIfWriteDenied(mountPath);
+
         var prevScope = scopeHolder.Scope;
         scopeHolder.Scope = SystemCallerScope.Instance;
         try
@@ -188,11 +196,10 @@ public class RemoteAccountService(
                     var existingAncestor = await folderRepo.GetByPathAsync(ancestor);
                     if (existingAncestor == null)
                     {
-                        // Ancestors, so the unchecked variant: the leaf here is stakeOut.Path, and
-                        // folderRepo.CreateAsync authorizes that on the next line. Passing an
-                        // ancestor to the leaf-checking EnsureExistsAsync would refuse mount paths
-                        // whose parent lies outside an allow-list caller's scope.
-                        folderRepo.ThrowIfWriteDenied(stakeOut.Path);
+                        // Unchecked variant: this whole block runs as System by design, and the
+                        // leaf was authorized against the caller's real scope before the swap.
+                        // Passing an ancestor to the leaf-checking EnsureExistsAsync would refuse
+                        // mount paths whose parent lies outside an allow-list caller's scope.
                         await folderRepo.EnsureAncestorsExistAsync(ancestor, identity?.NodeId);
                     }
                 }

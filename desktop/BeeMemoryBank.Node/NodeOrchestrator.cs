@@ -478,6 +478,18 @@ public class NodeOrchestrator : IDisposable
     {
         lock (_lock)
         {
+            // Do not resurrect the status file during shutdown. This runs late in startup — after
+            // the front binds, and after a firewall call that can take seconds — so a stop
+            // requested in between arrives first, StopAsync deletes the status and runtime files,
+            // and this write then puts node.status.json back on disk. A stale status file tells
+            // every reader the node is up when it is gone; the E2E graceful-stop test caught it as
+            // an intermittent failure, roughly one run in three.
+            //
+            // Same guard the status publisher uses, for the same reason (see
+            // CheckAndPublishOverallStatus), and it has to be inside this lock: _isStopping is set
+            // under it.
+            if (_isStopping) return;
+
             var tempManager = new NodeStatusManager(_dataDirectory, frontUrl);
             var readyDict = _children
                 .Where(c => c.ReadyInfo != null)

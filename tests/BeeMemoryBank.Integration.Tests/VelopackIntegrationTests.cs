@@ -302,7 +302,7 @@ public class VelopackIntegrationTests : IAsyncLifetime
         }
 
         // Clear pools to release locks held by the singleton factory and other connections
-        using (var tempConn = new SqliteConnection($"Data Source={originalDbPath}"))
+        using (var tempConn = new SqliteConnection($"Data Source={originalDbPath};Pooling=False"))
         {
             SqliteConnection.ClearPool(tempConn);
         }
@@ -332,7 +332,7 @@ public class VelopackIntegrationTests : IAsyncLifetime
             var expectedBackupDb = Path.Combine(updatesDir, $"pre-update-{version}", "beememorybank.db");
             if (File.Exists(expectedBackupDb))
             {
-                using (var tempConn = new SqliteConnection($"Data Source={originalDbPath}"))
+                using (var tempConn = new SqliteConnection($"Data Source={originalDbPath};Pooling=False"))
                 {
                     SqliteConnection.ClearPool(tempConn);
                 }

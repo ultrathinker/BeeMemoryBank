@@ -3,12 +3,46 @@ using System.Text;
 
 namespace BeeMemoryBank.Hosting.AspNetCore;
 
+/// <summary>Throttling class of an incoming Web request.</summary>
+public enum RateLimitedRoute
+{
+    /// <summary>Not a throttled route.</summary>
+    None,
+    /// <summary>Ordinary sign-in.</summary>
+    Login,
+    /// <summary>Verifies the master password and, on a match, WIPES THE NODE.</summary>
+    NodeReset
+}
+
 /// <summary>
 /// Path normalization shared by every rate limiter, so all of them match a route the same way the
 /// router does.
 /// </summary>
 public static class RateLimitPath
 {
+    public const string LoginPath = "/login";
+    public const string ResetProxyPath = "/api-proxy/init/reset";
+
+    /// <summary>
+    /// Which throttling class a Web request falls into. Pure and testable, because the two
+    /// mistakes possible here are both silent: send a destructive route to the permissive budget,
+    /// or give two vectors onto the same destructive action a budget each.
+    /// </summary>
+    /// <param name="handlerValues">
+    /// Every value of the <c>handler</c> query parameter, not a joined string. Razor dispatches on
+    /// the FIRST value, so "?handler=Reset&amp;handler=x" runs the node wipe — while a joined
+    /// "Reset,x" compares unequal to "Reset" and would fall through to the sign-in budget. Any
+    /// value matching wins: erring toward the stricter limiter only ever costs an attacker.
+    /// </param>
+    public static RateLimitedRoute Classify(string normalizedPath, IEnumerable<string?>? handlerValues)
+    {
+        if (normalizedPath == ResetProxyPath) return RateLimitedRoute.NodeReset;
+        if (normalizedPath != LoginPath) return RateLimitedRoute.None;
+
+        bool isReset = handlerValues?.Any(v => string.Equals(v, "Reset", StringComparison.OrdinalIgnoreCase)) == true;
+        return isReset ? RateLimitedRoute.NodeReset : RateLimitedRoute.Login;
+    }
+
     /// <summary>
     /// Lower-cases, collapses runs of slashes, and drops a trailing slash.
     ///
@@ -63,14 +97,25 @@ public sealed class SlidingWindowRateLimiter(int maxAttempts, TimeSpan window)
     public bool TryAcquire(string key, DateTime? nowUtc = null)
     {
         var now = nowUtc ?? DateTime.UtcNow;
-        var timestamps = _attempts.GetOrAdd(key, _ => new List<DateTime>());
 
         bool allowed;
-        lock (timestamps)
+        while (true)
         {
-            timestamps.RemoveAll(t => now - t > Window);
-            allowed = timestamps.Count < MaxAttempts;
-            if (allowed) timestamps.Add(now);
+            var timestamps = _attempts.GetOrAdd(key, _ => new List<DateTime>());
+            lock (timestamps)
+            {
+                // The periodic sweep evicts empty lists, so between GetOrAdd and this lock our
+                // brand-new list may already have been removed from the dictionary — recording an
+                // attempt on it would write to an orphan nobody reads, silently granting a free
+                // attempt. Confirm we still hold the published list, and retry if not.
+                if (!_attempts.TryGetValue(key, out var current) || !ReferenceEquals(current, timestamps))
+                    continue;
+
+                timestamps.RemoveAll(t => now - t > Window);
+                allowed = timestamps.Count < MaxAttempts;
+                if (allowed) timestamps.Add(now);
+            }
+            break;
         }
 
         // Periodic sweep so keys that stop being used don't accumulate forever.

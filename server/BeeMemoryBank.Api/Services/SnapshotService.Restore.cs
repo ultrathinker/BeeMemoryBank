@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Services;
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -63,7 +64,10 @@ public partial class SnapshotService
                 var newNodeId = Guid.NewGuid();
                 var (pubKey, privKey) = Ed25519Signer.GenerateKeyPair();
 
-                using (var stagingConn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={stagingPath.Replace("'", "''")}"))
+                // Pooling=False — same reason as FilterSecretsFrom: the staging file is moved or
+                // deleted right after this block, and a pooled handle would keep it locked on
+                // Windows long after Dispose.
+                using (var stagingConn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={stagingPath.Replace("'", "''")};Pooling=False"))
                 {
                     stagingConn.Open();
                     using var tx = stagingConn.BeginTransaction();

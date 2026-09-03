@@ -40,9 +40,6 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
     // Node reset: destructive and never routine. A legitimate admin needs one or two tries.
     private static readonly SlidingWindowRateLimiter ResetLimiter = new(5, TimeSpan.FromMinutes(15));
 
-    private const string LoginPath = "/login";
-    private const string ResetProxyPath = "/api-proxy/init/reset";
-
     public async Task InvokeAsync(HttpContext context)
     {
         if (context.Request.Method != HttpMethods.Post)
@@ -53,19 +50,19 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
 
         var path = RateLimitPath.Normalize(context.Request.Path.Value);
 
-        // /Login carries three handlers, and they are not equally dangerous. The default one signs
-        // in; ?handler=Reset WIPES THE NODE on a correct master password. Matching on path alone
-        // put the node wipe under the sign-in budget — four times the attempts, and any successful
-        // login on the shared address cleared the bucket outright.
-        bool isResetHandler = path == LoginPath &&
-            string.Equals(context.Request.Query["handler"], "Reset", StringComparison.OrdinalIgnoreCase);
-
-        var (limiter, label) = (path, isResetHandler) switch
+        // Classification lives in RateLimitPath so it can be unit-tested: both mistakes possible
+        // here are silent ones. /Login carries three handlers and they are not equally dangerous —
+        // the default signs in, ?handler=Reset WIPES THE NODE on a correct master password.
+        //
+        // The bucket key is the ROUTE CLASS, not the path. Both reset vectors perform the identical
+        // wipe, so keying them separately handed an attacker 5 attempts on /Login?handler=Reset
+        // plus another 5 on /api-proxy/init/reset — double the budget the limiter exists to impose.
+        var route = RateLimitPath.Classify(path, context.Request.Query["handler"]);
+        var (limiter, label, keySuffix) = route switch
         {
-            (LoginPath, true) => (ResetLimiter, "node reset (login handler)"),
-            (LoginPath, false) => (LoginLimiter, "login"),
-            (ResetProxyPath, _) => (ResetLimiter, "node reset"),
-            _ => (null, "")
+            RateLimitedRoute.NodeReset => (ResetLimiter, "node reset", "reset"),
+            RateLimitedRoute.Login => (LoginLimiter, "login", "login"),
+            _ => (null, "", "")
         };
         if (limiter == null)
         {
@@ -74,7 +71,7 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
         }
 
         var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        var key = $"{ip}:{path}";
+        var key = $"{ip}:{keySuffix}";
 
         if (!limiter.TryAcquire(key))
         {
@@ -104,8 +101,8 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
     /// </remarks>
     private static bool IsSuccess(string path, int statusCode) => path switch
     {
-        LoginPath => statusCode is >= 300 and < 400,
-        ResetProxyPath => statusCode is >= 200 and < 300,
+        RateLimitPath.LoginPath => statusCode is >= 300 and < 400,
+        RateLimitPath.ResetProxyPath => statusCode is >= 200 and < 300,
         _ => false
     };
 }

@@ -123,3 +123,63 @@ public class RateLimitPathTests
         RateLimitPath.Normalize("/loginx").Should().NotBe("/login");
     }
 }
+
+/// <summary>
+/// Route classification decides which budget a request is charged to. Both possible mistakes are
+/// silent: send the node wipe to the permissive sign-in budget, or give the two vectors onto that
+/// same wipe a separate budget each.
+/// </summary>
+public class RateLimitRouteClassificationTests
+{
+    [Fact]
+    public void PlainLoginIsTheLoginBudget()
+        => RateLimitPath.Classify("/login", null).Should().Be(RateLimitedRoute.Login);
+
+    [Fact]
+    public void TheProxyResetRouteIsTheResetBudget()
+        => RateLimitPath.Classify("/api-proxy/init/reset", null).Should().Be(RateLimitedRoute.NodeReset);
+
+    [Theory]
+    [InlineData("Reset")]
+    [InlineData("reset")]
+    [InlineData("RESET")]
+    public void TheLoginResetHandlerIsTheResetBudget(string handler)
+        => RateLimitPath.Classify("/login", [handler]).Should().Be(RateLimitedRoute.NodeReset);
+
+    /// <summary>
+    /// The bypass: Razor dispatches on the FIRST handler value, so this really does run the node
+    /// wipe. Reading the joined "Reset,x" instead of the individual values compared unequal to
+    /// "Reset" and quietly dropped the request into the sign-in budget — four times the attempts,
+    /// with any successful login on the same address clearing the bucket.
+    /// </summary>
+    [Fact]
+    public void ARepeatedHandlerParameterCannotEscapeTheResetBudget()
+    {
+        RateLimitPath.Classify("/login", ["Reset", "anything"]).Should().Be(RateLimitedRoute.NodeReset);
+        RateLimitPath.Classify("/login", ["anything", "Reset"]).Should().Be(RateLimitedRoute.NodeReset);
+    }
+
+    [Fact]
+    public void OtherHandlersStayOnTheLoginBudget()
+        => RateLimitPath.Classify("/login", ["ContinueWithoutBackup"]).Should().Be(RateLimitedRoute.Login);
+
+    [Fact]
+    public void UnrelatedPathsAreNotThrottled()
+    {
+        RateLimitPath.Classify("/tree", null).Should().Be(RateLimitedRoute.None);
+        RateLimitPath.Classify("/loginx", ["Reset"]).Should().Be(RateLimitedRoute.None);
+    }
+
+    /// <summary>
+    /// Both reset vectors must share ONE bucket. Keyed by path they got 5 attempts each, doubling
+    /// the budget the limiter exists to impose — so classification, not the path, has to be what
+    /// the key is derived from.
+    /// </summary>
+    [Fact]
+    public void BothResetVectorsClassifyIdentically()
+    {
+        var viaLogin = RateLimitPath.Classify("/login", ["Reset"]);
+        var viaProxy = RateLimitPath.Classify("/api-proxy/init/reset", null);
+        viaLogin.Should().Be(viaProxy).And.Be(RateLimitedRoute.NodeReset);
+    }
+}

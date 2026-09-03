@@ -32,7 +32,7 @@ public class LegacyMigrationTests
             if (!File.Exists(dbPath)) return null;
 
             TestLegacyCandidate? result = null;
-            using (var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly"))
+            using (var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False"))
             {
                 conn.Open();
 
@@ -123,7 +123,7 @@ public class LegacyMigrationTests
         var migrationRunner = new MigrationRunner(dbFactory);
         await migrationRunner.RunMigrationsAsync();
 
-        using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+        using (var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
