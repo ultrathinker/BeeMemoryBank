@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using SixLabors.ImageSharp;
@@ -23,7 +24,9 @@ public class BeeReadTools(
     IMediaRepository mediaRepo,
     IConceptTagRepository conceptTagRepo,
     ArticleDiffService articleDiffService,
-    TreeService treeService)
+    TreeService treeService,
+    FolderAccessService folderAccess,
+    IHttpContextAccessor httpContextAccessor)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -96,8 +99,22 @@ public class BeeReadTools(
         [Description("Article ID (GUID).")] Guid id,
         [Description("Include the decrypted article body as 'content' in the response. Default: true. Pass false for metadata only.")] bool content = true)
     {
-        var article = await articleService.GetMetadataAsync(id);
-        if (article == null)
+        // No ambient HttpContext means this ran outside a real HTTP request (e.g. a test harness
+        // that constructs BeeReadTools directly) -- the primary access gate (GetMetadataAsync's
+        // CallerScope filter, below) already applies regardless, so fail OPEN on just this extra
+        // defense-in-depth re-check rather than deny every caller we have no way to identify.
+        // Every real MCP request has a live HttpContext here.
+        var httpCtx = httpContextAccessor.HttpContext;
+        int? userId; int? agentId; bool isSuperadmin;
+        if (httpCtx != null)
+            (userId, agentId, isSuperadmin) = BeeMemoryBank.Api.Helpers.CallerIdentity.Extract(httpCtx);
+        else
+            (userId, agentId, isSuperadmin) = (null, null, true);
+
+        var gate = await BeeMemoryBank.Api.Helpers.ArticleContentPolicy.ResolveAsync(
+            id, content, userId, agentId, isSuperadmin, articleService, session, folderAccess);
+
+        if (gate.Status == BeeMemoryBank.Api.Helpers.ArticleContentPolicy.Status.NotFound)
         {
             // Distinguish "soft-deleted" from "never existed" for callers with access to the
             // article's folder; GetMetadataAsync(includeDeleted:true) still enforces folder-scope
@@ -109,37 +126,18 @@ public class BeeReadTools(
             return $"Error: article {id} not found";
         }
 
+        var article = gate.Article!;
         var tags = await conceptTagRepo.GetByArticleIdAsync(id);
         var related = await conceptTagRepo.GetRelatedArticlesAsync(id);
         var relatedCount = related.Count;
         var relatedStrength = related.Sum(r => r.Strength);
 
-        if (content && article.Protected)
+        switch (gate.Status)
         {
-            // Protected articles are passphrase-locked end-to-end. An agent has no passphrase and
-            // must never receive (or accidentally rewrite) the BMBENC1 ciphertext.
-            return responseManager.ProcessResponse(JsonSerializer.Serialize(new
-            {
-                id = article.Id,
-                title = article.Title,
-                treePath = article.TreePath,
-                tags,
-                relatedCount,
-                relatedStrength,
-                content = (string?)null,
-                isProtected = true,
-                notice = "This article is password-protected (second-layer encryption). Its body can only be unlocked by a human in the web/mobile UI; agents cannot read or modify it.",
-                createdAt = article.CreatedAt,
-                updatedAt = article.UpdatedAt
-            }, JsonOpts));
-        }
-
-        if (content)
-        {
-            try
-            {
-                var plaintext = await articleService.GetContentAsync(id);
-                var json = JsonSerializer.Serialize(new
+            case BeeMemoryBank.Api.Helpers.ArticleContentPolicy.Status.Protected:
+                // Protected articles are passphrase-locked end-to-end. An agent has no passphrase
+                // and must never receive (or accidentally rewrite) the BMBENC1 ciphertext.
+                return responseManager.ProcessResponse(JsonSerializer.Serialize(new
                 {
                     id = article.Id,
                     title = article.Title,
@@ -147,29 +145,68 @@ public class BeeReadTools(
                     tags,
                     relatedCount,
                     relatedStrength,
-                    content = plaintext,
+                    content = (string?)null,
+                    isProtected = true,
+                    notice = "This article is password-protected (second-layer encryption). Its body can only be unlocked by a human in the web/mobile UI; agents cannot read or modify it.",
                     createdAt = article.CreatedAt,
                     updatedAt = article.UpdatedAt
-                }, JsonOpts);
-                return responseManager.ProcessResponse(json);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return $"Error: {ex.Message}";
-            }
-        }
+                }, JsonOpts));
 
-        return responseManager.ProcessResponse(JsonSerializer.Serialize(new
-        {
-            id = article.Id,
-            title = article.Title,
-            treePath = article.TreePath,
-            tags,
-            relatedCount,
-            relatedStrength,
-            createdAt = article.CreatedAt,
-            updatedAt = article.UpdatedAt
-        }, JsonOpts));
+            case BeeMemoryBank.Api.Helpers.ArticleContentPolicy.Status.Locked:
+                return responseManager.ProcessResponse(JsonSerializer.Serialize(new
+                {
+                    id = article.Id,
+                    title = article.Title,
+                    treePath = article.TreePath,
+                    tags,
+                    relatedCount,
+                    relatedStrength,
+                    content = (string?)null,
+                    isLocked = true,
+                    notice = "The vault is locked. Unlock it to read article content; metadata is still available."
+                }, JsonOpts));
+
+            case BeeMemoryBank.Api.Helpers.ArticleContentPolicy.Status.AccessDenied:
+                return responseManager.ProcessResponse(JsonSerializer.Serialize(new
+                {
+                    id = article.Id,
+                    title = article.Title,
+                    treePath = article.TreePath,
+                    tags,
+                    relatedCount,
+                    relatedStrength,
+                    content = (string?)null,
+                    accessDenied = true,
+                    notice = "You don't have permission to read this article's content."
+                }, JsonOpts));
+
+            case BeeMemoryBank.Api.Helpers.ArticleContentPolicy.Status.Ok when content:
+                return responseManager.ProcessResponse(JsonSerializer.Serialize(new
+                {
+                    id = article.Id,
+                    title = article.Title,
+                    treePath = article.TreePath,
+                    tags,
+                    relatedCount,
+                    relatedStrength,
+                    content = gate.Content,
+                    createdAt = article.CreatedAt,
+                    updatedAt = article.UpdatedAt
+                }, JsonOpts));
+
+            default: // Ok, metadata only (content=false)
+                return responseManager.ProcessResponse(JsonSerializer.Serialize(new
+                {
+                    id = article.Id,
+                    title = article.Title,
+                    treePath = article.TreePath,
+                    tags,
+                    relatedCount,
+                    relatedStrength,
+                    createdAt = article.CreatedAt,
+                    updatedAt = article.UpdatedAt
+                }, JsonOpts));
+        }
     }
 
     [McpServerTool(Name = "bee_get_tree")]

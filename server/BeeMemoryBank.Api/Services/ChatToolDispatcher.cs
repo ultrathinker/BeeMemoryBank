@@ -17,8 +17,10 @@ namespace BeeMemoryBank.Api.Services;
 /// reads automatically by that scope, so the AI can only ever see what the calling user can see —
 /// this is also the prompt-injection backstop.</para>
 ///
-/// <para><b>CRITICAL ACL gate (plan §1):</b> <c>bee_get_article</c>'s content branch mirrors the
-/// <c>ArticleEndpoints</c> <c>/{id}/content</c> handler EXACTLY — <see cref="ArticleService.GetMetadataAsync"/>
+/// <para><b>CRITICAL ACL gate (plan §1):</b> <c>bee_get_article</c>'s content branch runs through
+/// <see cref="BeeMemoryBank.Api.Helpers.ArticleContentPolicy"/> — the SAME shared gate
+/// <c>BeeReadTools.GetArticle</c> (MCP) uses — which mirrors the <c>ArticleEndpoints</c>
+/// <c>/{id}/content</c> handler exactly: <see cref="ArticleService.GetMetadataAsync"/>
 /// (scope-filtered, null if denied) → <see cref="FolderAccessService.IsAccessDenied"/> on the
 /// metadata's TreePath → only then <see cref="ArticleService.GetContentAsync"/>. Calling
 /// <c>GetContentAsync</c> directly bypasses folder ACLs (it hits the body repo with no scope
@@ -48,7 +50,8 @@ public sealed partial class ChatToolDispatcher(
     FolderAccessService folderAccess,
     SessionService session,
     ChatAttachmentRepository attachRepo,
-    MediaService mediaService)
+    MediaService mediaService,
+    McpToolRegistry mcpToolRegistry)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -97,6 +100,30 @@ public sealed partial class ChatToolDispatcher(
             return args.ValueKind == JsonValueKind.Object
                 && args.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String;
         return false;
+    }
+
+    /// <summary>Whether THIS specific write-tool call needs the master DEK before it can do
+    /// anything useful. Most write tools need it unconditionally (they always carry a body to
+    /// encrypt) — for those, read straight from <see cref="McpToolRegistry"/>'s own
+    /// <c>[RequiresUnlockedSession]</c> classification (see <c>McpToolRegistryTests</c>'
+    /// <c>MustHaveUnlockedSession</c> / <c>DeliberatelyUnguarded</c> sets) so the two surfaces
+    /// cannot silently drift apart on this again. Two tools are call-args-aware, matching
+    /// <c>BeeWriteTools</c> exactly: <c>bee_update_article</c> only needs it when the call
+    /// actually carries a <c>content</c> argument (a metadata-only rename/retag never touches the
+    /// encrypted body), and <c>bee_delete_article</c> never needs it (a soft-delete only flips a
+    /// status column). Before this, the dispatcher blocked ALL writes on ANY lock — including a
+    /// metadata-only update or a delete, neither of which needs the DEK — while the MCP tools
+    /// (deliberately) allow both while locked.</summary>
+    public static bool RequiresUnlockedSessionForCall(string name, JsonElement args, McpToolRegistry registry)
+    {
+        if (name == "bee_update_article")
+            return args.ValueKind == JsonValueKind.Object
+                && args.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String;
+        if (name == "bee_delete_article")
+            return false;
+        // Fail-safe default true for a tool with no MCP counterpart at all (currently only
+        // bee_insert_image_into_article, a chat-only tool that always touches the encrypted body).
+        return registry.Get(name)?.RequiresUnlockedSession ?? true;
     }
 
     /// <summary>The value recorded as <c>ViaAgentName</c> on chat-driven writes so /Activity shows
@@ -188,9 +215,11 @@ public sealed partial class ChatToolDispatcher(
 
         try
         {
-            // Writes need the master DEK (bodies are encrypted/decrypted through ArticleService).
-            // Mirror the read path: degrade to a clear tool result, never an exception.
-            if (isWrite && !session.IsUnlocked)
+            // Writes need the master DEK (bodies are encrypted/decrypted through ArticleService) —
+            // but not EVERY write does (see RequiresUnlockedSessionForCall: a metadata-only update
+            // or a delete never touches the DEK, matching BeeWriteTools). Mirror the read path:
+            // degrade to a clear tool result, never an exception.
+            if (isWrite && RequiresUnlockedSessionForCall(name, args, mcpToolRegistry) && !session.IsUnlocked)
             {
                 sw.Stop();
                 return new ToolDispatchResult(

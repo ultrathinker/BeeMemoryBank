@@ -73,9 +73,10 @@ public sealed partial class ChatToolDispatcher
         return JsonSerializer.Serialize(new { paths = byPath }, JsonOpts);
     }
 
-    // Mirrors BeeReadTools.GetArticle, BUT adds the ArticleEndpoints /{id}/content ACL gate
-    // (plan §1 CRITICAL) before any content read, and returns "vault is locked" as a tool result
-    // (not an exception) when the session is locked.
+    // Shares BeeReadTools.GetArticle's gate order via ArticleContentPolicy (plan §1 CRITICAL):
+    // metadata (scope-filtered) -> protected check -> session-lock check -> explicit folder-ACL
+    // re-check -> decrypt. Content is withheld — never an exception — for every reason a caller
+    // might not get it, so a locked vault or a denied folder degrades to a clear tool result.
     private async Task<string> GetArticleAsync(JsonElement args, HttpContext ctx)
     {
         if (!args.TryGetProperty("id", out var idEl) || !Guid.TryParse(idEl.GetString(), out var id))
@@ -86,91 +87,66 @@ public sealed partial class ChatToolDispatcher
         if (args.TryGetProperty("content", out var cEl) && cEl.ValueKind == JsonValueKind.False)
             includeContent = false;
 
-        // GetMetadataAsync is scope-filtered (ArticleRepository.GetByIdAsync returns null when the
-        // caller's scope denies the article's tree path) → this is the first ACL gate.
-        var article = await articleService.GetMetadataAsync(id);
-        if (article == null)
+        var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
+        var gate = await ArticleContentPolicy.ResolveAsync(
+            id, includeContent, userId, agentId, isSuperadmin, articleService, session, folderAccess);
+
+        if (gate.Status == ArticleContentPolicy.Status.NotFound)
             return ErrorJson($"article {id} not found");
 
+        var article = gate.Article!;
         var tags = await conceptTagService.GetByArticleIdAsync(id);
         var related = await conceptTagService.GetRelatedArticlesAsync(id);
+        var relatedCount = related.Count;
+        var relatedStrength = related.Sum(r => r.Strength);
 
-        // Protected articles: second-layer (passphrase) encryption. No passphrase in the chat path
-        // (and none ever will be) → body stays opaque. Mirror BeeReadTools.
-        if (includeContent && article.Protected)
+        return gate.Status switch
         {
-            return JsonSerializer.Serialize(new
+            // Protected articles: second-layer (passphrase) encryption. No passphrase in the chat
+            // path (and none ever will be) — body stays opaque.
+            ArticleContentPolicy.Status.Protected => JsonSerializer.Serialize(new
             {
                 id = article.Id, title = article.Title, treePath = article.TreePath,
-                tags, relatedCount = related.Count, relatedStrength = related.Sum(r => r.Strength),
+                tags, relatedCount, relatedStrength,
                 content = (string?)null,
                 isProtected = true,
                 notice = "This article is password-protected (second-layer encryption). Its body can only be unlocked by a human in the web/mobile UI.",
                 createdAt = article.CreatedAt, updatedAt = article.UpdatedAt
-            }, JsonOpts);
-        }
+            }, JsonOpts),
 
-        if (includeContent)
-        {
-            // Defense-in-depth: a content read requires an unlocked session even though the
-            // /message endpoint already gates on it. Return a clear tool result, not an exception.
-            if (!session.IsUnlocked)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    id = article.Id, title = article.Title, treePath = article.TreePath,
-                    tags, relatedCount = related.Count, relatedStrength = related.Sum(r => r.Strength),
-                    content = (string?)null,
-                    isLocked = true,
-                    notice = "The vault is locked. Unlock it to read article content; metadata is still available."
-                }, JsonOpts);
-            }
-
-            // Folder ACL gate — mirrors ArticleEndpoints /{id}/content. GetContentAsync goes straight
-            // to the body repo with NO scope filter, so without this check any caller who happens to
-            // know an article GUID could read its plaintext.
-            var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
-            if (!isSuperadmin)
-            {
-                var (denyPaths, allowPaths) = await folderAccess.GetAccessInfoAsync(userId, agentId);
-                if (FolderAccessService.IsAccessDenied(denyPaths, allowPaths, article.TreePath))
-                {
-                    return JsonSerializer.Serialize(new
-                    {
-                        id = article.Id, title = article.Title, treePath = article.TreePath,
-                        tags, relatedCount = related.Count, relatedStrength = related.Sum(r => r.Strength),
-                        content = (string?)null,
-                        accessDenied = true,
-                        notice = "You don't have permission to read this article's content."
-                    }, JsonOpts);
-                }
-            }
-
-            string plaintext;
-            try
-            {
-                plaintext = await articleService.GetContentAsync(id);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return ErrorJson(ex.Message);
-            }
-
-            return JsonSerializer.Serialize(new
+            ArticleContentPolicy.Status.Locked => JsonSerializer.Serialize(new
             {
                 id = article.Id, title = article.Title, treePath = article.TreePath,
-                tags, relatedCount = related.Count, relatedStrength = related.Sum(r => r.Strength),
-                content = plaintext,
-                createdAt = article.CreatedAt, updatedAt = article.UpdatedAt
-            }, JsonOpts);
-        }
+                tags, relatedCount, relatedStrength,
+                content = (string?)null,
+                isLocked = true,
+                notice = "The vault is locked. Unlock it to read article content; metadata is still available."
+            }, JsonOpts),
 
-        return JsonSerializer.Serialize(new
-        {
-            id = article.Id, title = article.Title, treePath = article.TreePath,
-            tags, relatedCount = related.Count, relatedStrength = related.Sum(r => r.Strength),
-            createdAt = article.CreatedAt, updatedAt = article.UpdatedAt
-        }, JsonOpts);
+            ArticleContentPolicy.Status.AccessDenied => JsonSerializer.Serialize(new
+            {
+                id = article.Id, title = article.Title, treePath = article.TreePath,
+                tags, relatedCount, relatedStrength,
+                content = (string?)null,
+                accessDenied = true,
+                notice = "You don't have permission to read this article's content."
+            }, JsonOpts),
+
+            ArticleContentPolicy.Status.Ok when includeContent => JsonSerializer.Serialize(new
+            {
+                id = article.Id, title = article.Title, treePath = article.TreePath,
+                tags, relatedCount, relatedStrength,
+                content = gate.Content,
+                createdAt = article.CreatedAt, updatedAt = article.UpdatedAt
+            }, JsonOpts),
+
+            _ => JsonSerializer.Serialize(new // Ok, metadata only (content=false)
+            {
+                id = article.Id, title = article.Title, treePath = article.TreePath,
+                tags, relatedCount, relatedStrength,
+                createdAt = article.CreatedAt, updatedAt = article.UpdatedAt
+            }, JsonOpts)
+        };
     }
 
     // Mirrors BeeSearchTools.SearchContent / POST /api/search/hybrid.

@@ -91,7 +91,7 @@ public class McpToolsTests : IAsyncLifetime
             .BuildServiceProvider());
         _searchTools = new BeeSearchTools(_searchService, hybridSearchService, responseManager, _session);
         var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccessService, scopeHolder);
-        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo));
+        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo), folderAccessService, new HttpContextAccessor());
         var copySvc = new CopyService(_articleService, folderSvc, _mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, conceptTagService, scopeHolder, NullLogger<BeeWriteTools>.Instance, responseManager);
         _uploadTools = new BeeUploadTools(_articleService, _mediaService, _session, responseManager);
