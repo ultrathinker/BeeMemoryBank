@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
@@ -128,6 +130,140 @@ public class DekRotationFlowTests : IAsyncLifetime
             var slotCount = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM tbl_key_slot");
             slotCount.Should().Be(1);
         }
+    }
+
+    /// <summary>
+    /// Regression: rotation used to build the unwrap AAD for tbl_article_version /
+    /// tbl_conflict_version from the ROW's GUID primary key instead of the parent article_id.
+    /// Those rows carry a byte-copy of the article body's DEK, wrapped under the article's AAD,
+    /// so every version row made the rewrap throw AuthenticationTagMismatch and roll the whole
+    /// rotation back — i.e. rotation was impossible on any vault whose articles had ever been
+    /// edited, which is every real vault. The pre-existing rotation tests all rotated over
+    /// freshly-created articles and so had no version rows at all.
+    /// </summary>
+    [Fact]
+    public async Task RotationAfterAnArticleWasEdited_CompletesAndKeepsHistoryReadable()
+    {
+        var create = await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Edited Before Rotation",
+            treePath = "/RotationTests",
+            content = "original body"
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var articleId = (await create.Content.ReadFromJsonAsync<ArticleResponse>())!.Id;
+
+        // Two edits → two version rows, the exact state that used to break rotation.
+        foreach (var body in new[] { "second body", "third body" })
+        {
+            var edit = await _client.PutAsJsonAsync($"/api/articles/{articleId}", new { content = body });
+            edit.EnsureSuccessStatusCode();
+        }
+
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        using (var conn = connFactory.CreateConnection())
+        {
+            var versionCount = await conn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM tbl_article_version WHERE article_id = @id COLLATE NOCASE",
+                new { id = articleId.ToString() });
+            versionCount.Should().Be(2, "the test premise is that version rows exist before rotating");
+        }
+
+        (await RotateAsync()).Should().BeTrue("rotation must survive a vault that has version rows");
+
+        // Current body still readable under the new DEK...
+        var contentResp = await _client.GetAsync($"/api/articles/{articleId}/content");
+        contentResp.EnsureSuccessStatusCode();
+        (await contentResp.Content.ReadFromJsonAsync<ArticleContentResponse>())!
+            .Content.Should().Be("third body");
+
+        // ...and so is history, which is what the broken AAD corrupted the path to. Version 1 is
+        // the snapshot of the ORIGINAL body taken by the first edit.
+        var versionResp = await _client.GetAsync($"/api/articles/{articleId}/versions/1");
+        versionResp.EnsureSuccessStatusCode();
+        var versionBody = await versionResp.Content.ReadFromJsonAsync<JsonElement>();
+        versionBody.GetProperty("content").GetString().Should().Be("original body");
+    }
+
+    /// <summary>
+    /// Regression: the semantic-search projection matrix is sealed directly under the master DEK,
+    /// but rotation only re-wrapped the four per-row-DEK tables. A completed rotation therefore
+    /// left the matrix under the retired DEK, and every semantic query plus every background
+    /// re-embed threw CryptographicException from then on, permanently.
+    /// </summary>
+    [Fact]
+    public async Task Rotation_ReWrapsTheProjectionMatrix()
+    {
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        var session = _factory.Services.GetRequiredService<SessionService>();
+
+        // Seed a matrix-shaped payload sealed under the CURRENT master DEK. Wrapped directly here
+        // rather than via EmbeddingProjectionService so the test doesn't need the ONNX model file
+        // (gitignored, ~87MB) — the rewrap path only cares about the wrap format, not the contents.
+        var plaintextMatrix = new byte[4096];
+        Random.Shared.NextBytes(plaintextMatrix);
+
+        var dekBefore = session.GetMasterDek();
+        byte[] encBefore, ivBefore;
+        try
+        {
+            (encBefore, ivBefore) = DekManager.WrapDek(plaintextMatrix, dekBefore);
+        }
+        finally
+        {
+            Array.Clear(dekBefore);
+        }
+
+        using (var conn = connFactory.CreateConnection())
+        {
+            await conn.ExecuteAsync("DELETE FROM tbl_projection_matrix");
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_projection_matrix (encrypted_matrix, iv, created_at)
+                  VALUES (@enc, @iv, @createdAt)",
+                new { enc = encBefore, iv = ivBefore, createdAt = DateTime.UtcNow.ToString("O") });
+        }
+
+        (await RotateAsync()).Should().BeTrue("rotation should complete");
+
+        // The stored blob must now open under the NEW master DEK and still hold the same matrix.
+        byte[] encAfter, ivAfter;
+        using (var conn = connFactory.CreateConnection())
+        {
+            var row = await conn.QuerySingleAsync<dynamic>(
+                "SELECT encrypted_matrix, iv FROM tbl_projection_matrix");
+            encAfter = (byte[])row.encrypted_matrix;
+            ivAfter = (byte[])row.iv;
+        }
+        encAfter.Should().NotEqual(encBefore, "the matrix must actually be re-wrapped, not left alone");
+
+        var dekAfter = session.GetMasterDek();
+        try
+        {
+            var recovered = DekManager.UnwrapVersioned(encAfter, ivAfter, dekAfter);
+            recovered.Should().Equal(plaintextMatrix);
+        }
+        finally
+        {
+            Array.Clear(dekAfter);
+        }
+    }
+
+    /// <summary>Proposes and accepts a rotation; returns whether it reached Completed.</summary>
+    private async Task<bool> RotateAsync()
+    {
+        var proposeResp = await _client.PostAsJsonAsync("/api/dek-rotation/propose",
+            new { masterPassword = Password });
+        proposeResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var commitEventId = (await proposeResp.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("commitEventId").GetGuid().ToString();
+
+        var acceptResp = await _client.PostAsJsonAsync("/api/dek-rotation/accept",
+            new { commitEventId, masterPassword = Password });
+        acceptResp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        return await PollProgressAsync(
+            step => step == DekRotationFlowStep.Completed,
+            timeout: TimeSpan.FromSeconds(15));
     }
 
     [Fact]

@@ -25,10 +25,26 @@ public class EmbeddingProjectionService(
     public async Task EnsureProjectionMatrixAsync()
     {
         var stored = await matrixRepo.GetAsync();
-        if (stored != null) return; // already initialized
 
         if (!session.IsUnlocked)
+        {
+            // Nothing to initialize and nothing to verify without the DEK. Keep the original
+            // message for the genuinely-uninitialized case; a present-but-unverifiable matrix is
+            // not an error here, the next unlocked pass will check it.
+            if (stored != null) return;
             throw new InvalidOperationException("Session is locked. Unlock to initialize the projection matrix.");
+        }
+
+        if (stored != null && CanDecrypt(stored)) return; // already initialized and readable
+
+        // Either no matrix yet, or one we can no longer decrypt. The latter is recoverable only by
+        // regenerating: a matrix sealed under a key we don't have is not coming back, and every
+        // projection derived from it is meaningless in the new matrix's space. This is the repair
+        // path for vaults rotated by a build that did not re-wrap tbl_projection_matrix (see
+        // DekRotationService.ReWrapProjectionMatrix) — without it, semantic search stayed broken
+        // forever. A wrong-but-valid DEK cannot reach here: unlock verifies the DEK against the
+        // node sentinel before caching it, so an unwrap failure means the matrix, not the key.
+        bool regenerating = stored != null;
 
         var masterDek = session.GetMasterDek();
         try
@@ -42,6 +58,36 @@ public class EmbeddingProjectionService(
                 IV = iv,
                 CreatedAt = DateTime.UtcNow
             });
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+
+        if (regenerating)
+        {
+            // Re-flag everything for re-embedding. Chunk rows are replaced wholesale by
+            // ProjectArticleAsync as each article is reprocessed, so they need no separate purge.
+            await articleRepo.MarkAllEmbeddingsPendingAsync();
+        }
+    }
+
+    /// <summary>
+    /// True if the stored matrix unwraps under the current master DEK. A CryptographicException
+    /// here is deterministic (AES-GCM tag mismatch), never transient, so treating it as
+    /// "regenerate" cannot be triggered by a flaky read.
+    /// </summary>
+    private bool CanDecrypt(ProjectionMatrixStore stored)
+    {
+        var masterDek = session.GetMasterDek();
+        try
+        {
+            ProjectionMatrix.Unwrap(stored.EncryptedMatrix, stored.IV, masterDek);
+            return true;
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return false;
         }
         finally
         {

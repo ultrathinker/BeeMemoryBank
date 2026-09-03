@@ -41,6 +41,15 @@ public interface IArticleRepository
     /// </summary>
     Task<int> MarkStaleEmbeddingsPendingAsync(string currentModelVersion);
 
+    /// <summary>
+    /// Re-flags every active article as embedding_pending = 1. Used only by the projection-matrix
+    /// recovery path in <c>EmbeddingProjectionService.EnsureProjectionMatrixAsync</c>: when the
+    /// stored matrix can no longer be decrypted the matrix must be regenerated, and every stored
+    /// projection was computed in the OLD matrix's space, so all of them have to be recomputed —
+    /// leaving them would silently return nonsense similarity scores. Returns rows affected.
+    /// </summary>
+    Task<int> MarkAllEmbeddingsPendingAsync();
+
     /// <summary>WP-11: mirrors GetEmbeddingPendingAsync exactly, for the search-index background processor.</summary>
     Task<List<Article>> GetIndexPendingAsync(int limit = 100);
 

@@ -410,6 +410,20 @@ public class ArticleRepository(
         return await conn.ExecuteAsync("UPDATE tbl_article SET index_pending = 1 WHERE status = 'A'");
     }
 
+    // AUDIT: unguarded, matching MarkAllIndexPendingAsync above. Only reachable from
+    // EmbeddingProjectionService's matrix-recovery path, itself driven by the background
+    // PendingEmbeddingProcessor (SystemCallerScope).
+    public async Task<int> MarkAllEmbeddingsPendingAsync()
+    {
+        using var conn = OpenConnection();
+        var affected = await conn.ExecuteAsync(
+            "UPDATE tbl_article SET embedding_pending = 1 WHERE status = 'A'");
+        // The cached vectors were projected in the discarded matrix's space — drop the cache so
+        // no search can score against them while the re-embed catches up.
+        _vectorCache.Invalidate();
+        return affected;
+    }
+
     // AUDIT: unguarded. Only reachable from PendingEmbeddingProcessor (background worker,
     // SystemCallerScope), mirroring UpdateEmbeddingAsync's own note above.
     public async Task<int> MarkStaleEmbeddingsPendingAsync(string currentModelVersion)

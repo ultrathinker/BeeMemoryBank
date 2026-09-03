@@ -48,15 +48,24 @@ public partial class DekRotationService
             _progress.Update(DekRotationFlowStep.ReWrappingPerItem, 35,
                 isInitiator ? "Re-wrapping article versions..." : "Auto-accept: re-wrapping article versions...");
 
-            ReWrapTableAsync(conn, tx, "tbl_article_version", "id", "encrypted_dek", "dek_iv", oldDek, newDek);
+            // aadIdColumn = "article_id": version/conflict rows are keyed by their own GUID but
+            // carry a copy of the ARTICLE's wrapped DEK, so the AAD is the article's.
+            ReWrapTableAsync(conn, tx, "tbl_article_version", "id", "encrypted_dek", "dek_iv", oldDek, newDek,
+                aadIdColumn: "article_id");
             _progress.Update(DekRotationFlowStep.ReWrappingPerItem, 50,
                 isInitiator ? "Re-wrapping conflict versions..." : "Auto-accept: re-wrapping conflict versions...");
 
-            ReWrapTableAsync(conn, tx, "tbl_conflict_version", "id", "encrypted_dek", "dek_iv", oldDek, newDek);
+            ReWrapTableAsync(conn, tx, "tbl_conflict_version", "id", "encrypted_dek", "dek_iv", oldDek, newDek,
+                aadIdColumn: "article_id");
             _progress.Update(DekRotationFlowStep.ReWrappingPerItem, 65,
                 isInitiator ? "Re-wrapping media..." : "Auto-accept: re-wrapping media...");
 
             ReWrapTableAsync(conn, tx, "tbl_media", "id", "encrypted_dek", "dek_iv", oldDek, newDek);
+
+            _progress.Update(DekRotationFlowStep.ReWrappingPerItem, 70,
+                isInitiator ? "Re-wrapping projection matrix..." : "Auto-accept: re-wrapping projection matrix...");
+
+            ReWrapProjectionMatrix(conn, tx, oldDek, newDek);
 
             _progress.Update(DekRotationFlowStep.InvalidatingAgents, 75,
                 isInitiator ? "Invalidating agents..." : "Auto-accept: invalidating agents...");
@@ -137,12 +146,66 @@ public partial class DekRotationService
     }
 
     /// <summary>
+    /// Re-wraps the semantic-search projection matrix, which is sealed directly under the master
+    /// DEK (ProjectionMatrix.Wrap, no AAD) rather than under a per-row DEK — so it is invisible to
+    /// ReWrapTableAsync's encrypted_dek/dek_iv shape and needs its own pass.
+    /// <para>
+    /// Omitting it used to leave the matrix sealed under the RETIRED DEK after a successful
+    /// rotation: EmbeddingProjectionService.LoadMatrixAsync unwraps with the current master DEK,
+    /// so every semantic query and every background re-embed threw CryptographicException from
+    /// then on, permanently and with no recovery path.
+    /// </para>
+    /// Runs inside the rotation transaction, so a failure here rolls the whole rotation back
+    /// rather than leaving a half-rotated vault.
+    /// </summary>
+    private static void ReWrapProjectionMatrix(
+        System.Data.IDbConnection conn, System.Data.IDbTransaction tx, byte[] oldDek, byte[] newDek)
+    {
+        // Nodes that have never run semantic search have no row at all — nothing to do.
+        var rows = conn.Query<dynamic>(
+            "SELECT id AS id, encrypted_matrix AS enc, iv AS iv FROM tbl_projection_matrix", transaction: tx).ToList();
+
+        foreach (var row in rows)
+        {
+            var enc = (byte[])row.enc;
+            var iv = (byte[])row.iv;
+            var id = (long)row.id;
+
+            // UnwrapVersioned, not UnwrapDek: the payload is the serialized matrix (hundreds of
+            // KB), not a 32-byte DEK, so UnwrapDek's exact-length dispatch would reject it.
+            var plainMatrix = DekManager.UnwrapVersioned(enc, iv, oldDek);
+            try
+            {
+                var (newEnc, newIv) = DekManager.WrapDek(plainMatrix, newDek);
+                conn.Execute(
+                    "UPDATE tbl_projection_matrix SET encrypted_matrix = @enc, iv = @iv WHERE id = @id",
+                    new { enc = newEnc, iv = newIv, id }, tx);
+            }
+            finally
+            {
+                Array.Clear(plainMatrix, 0, plainMatrix.Length);
+            }
+        }
+    }
+
+    /// <summary>
     /// Builds AAD for a per-row DEK wrap. Format must match the encrypt-side AAD used
     /// when the row was created. For Wave 1 v=1 rows, AAD includes a table-specific
-    /// prefix and the row's primary-key bytes (article_id / media_id). For v=0 rows
-    /// (legacy plaintext wrap) returns null — DekManager.UnwrapDek handles that path.
+    /// prefix and the OWNING ENTITY's id bytes — the article_id for every article-scoped
+    /// DEK, the media_id for media. For v=0 rows (legacy plaintext wrap) returns null —
+    /// DekManager.UnwrapDek handles that path.
     /// </summary>
-    private static byte[]? BuildPerRowAadForTable(string tableName, string pk, byte[] wrapped)
+    /// <param name="aadId">
+    /// The owning entity's id, NOT necessarily the row's primary key. For tbl_article_body
+    /// and tbl_media the two coincide; for tbl_article_version / tbl_conflict_version the PK
+    /// is a per-row GUID while the AAD is built from the parent article_id — those rows carry
+    /// a byte-for-byte copy of the article body's wrapped DEK (ArticleService.UpdateAsync,
+    /// EventApplier.Article's conflict paths), so they must be unwrapped with the article's
+    /// AAD, exactly as every reader does (BeeReadTools.GetArticleVersion, VersionEndpoints).
+    /// Deriving it from the row PK instead made rotation throw AuthenticationTagMismatch on
+    /// any vault whose articles had ever been edited.
+    /// </param>
+    private static byte[]? BuildPerRowAadForTable(string tableName, string aadId, byte[] wrapped)
     {
         // v=0 legacy: exactly 48 bytes, no version prefix → no AAD
         if (wrapped.Length == 48) return null;
@@ -156,13 +219,12 @@ public partial class DekRotationService
             _ => null
         };
         if (prefix == null) return null;
-        // PK is the article_id / media_id GUID (string form). Convert back to bytes via Guid.
-        if (!Guid.TryParse(pk, out var pkGuid))
+        // aadId is the article_id / media_id GUID (string form). Convert back to bytes via Guid.
+        if (!Guid.TryParse(aadId, out var pkGuid))
         {
-            // Some tables (tbl_article_version, tbl_conflict_version) use a separate row id
-            // as PK, not articleId. Their AAD scheme would need the parent article_id.
-            // For now skip AAD on those — UnwrapDek will fall through to legacy path on
-            // length 48; for length-49 v=1 rows the unwrap will throw and the caller can decide.
+            // Not a GUID at all — no AAD scheme applies. UnwrapDek falls through to the legacy
+            // path on length 48; a length-49 v=1 row would throw, which is the correct signal
+            // that the row's format is not what this table's scheme expects.
             return null;
         }
         var pkBytes = pkGuid.ToByteArray();
@@ -172,6 +234,11 @@ public partial class DekRotationService
         return aad;
     }
 
+    /// <param name="aadIdColumn">
+    /// Column holding the id the per-row AAD is built from. Defaults to <paramref name="pkColumn"/>,
+    /// which is correct only where the row IS the entity (tbl_article_body, tbl_media). Version and
+    /// conflict rows must pass "article_id" — see <see cref="BuildPerRowAadForTable"/>.
+    /// </param>
     private static void ReWrapTableAsync(
         System.Data.IDbConnection conn,
         System.Data.IDbTransaction tx,
@@ -180,8 +247,10 @@ public partial class DekRotationService
         string dekColumn,
         string dekIvColumn,
         byte[] oldDek,
-        byte[] newDek)
+        byte[] newDek,
+        string? aadIdColumn = null)
     {
+        aadIdColumn ??= pkColumn;
         // Roadmap p7: keyset pagination instead of OFFSET. SQLite scans+discards rows on
         // OFFSET, making each batch progressively slower (O(n²) for the whole rewrap). Keyset
         // (WHERE pk > @lastPk ORDER BY pk LIMIT N) is O(n) total. PK columns here are TEXT
@@ -192,8 +261,8 @@ public partial class DekRotationService
         while (true)
         {
             var sql = lastPk == null
-                ? $"SELECT [{pkColumn}] AS pk, [{dekColumn}] AS enc_dek, [{dekIvColumn}] AS dek_iv FROM [{tableName}] ORDER BY [{pkColumn}] LIMIT @limit"
-                : $"SELECT [{pkColumn}] AS pk, [{dekColumn}] AS enc_dek, [{dekIvColumn}] AS dek_iv FROM [{tableName}] WHERE [{pkColumn}] > @lastPk ORDER BY [{pkColumn}] LIMIT @limit";
+                ? $"SELECT [{pkColumn}] AS pk, [{aadIdColumn}] AS aad_id, [{dekColumn}] AS enc_dek, [{dekIvColumn}] AS dek_iv FROM [{tableName}] ORDER BY [{pkColumn}] LIMIT @limit"
+                : $"SELECT [{pkColumn}] AS pk, [{aadIdColumn}] AS aad_id, [{dekColumn}] AS enc_dek, [{dekIvColumn}] AS dek_iv FROM [{tableName}] WHERE [{pkColumn}] > @lastPk ORDER BY [{pkColumn}] LIMIT @limit";
 
             var rows = conn.Query<dynamic>(sql, new { limit = batchSize, lastPk }, tx).ToList();
             if (rows.Count == 0) break;
@@ -203,11 +272,12 @@ public partial class DekRotationService
                 var encDek = (byte[])row.enc_dek;
                 var dekIv = (byte[])row.dek_iv;
                 var pk = (string)row.pk;
+                var aadId = (string)row.aad_id;
 
                 // Hold plainDek in try/finally so an exception from Wrap or Execute can't leak
                 // the per-item DEK on the heap. Use DekManager (per-row AAD) — these are
                 // article/media DEKs, not master DEKs. AAD format depends on the table.
-                var aad = BuildPerRowAadForTable(tableName, pk, encDek);
+                var aad = BuildPerRowAadForTable(tableName, aadId, encDek);
                 var plainDek = DekManager.UnwrapDek(encDek, dekIv, oldDek, aad);
                 try
                 {
