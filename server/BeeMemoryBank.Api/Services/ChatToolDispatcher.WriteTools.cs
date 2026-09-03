@@ -11,8 +11,10 @@ public sealed partial class ChatToolDispatcher
     // Each mirrors the corresponding BeeWriteTools method: same scope-checked ArticleService calls,
     // same ACL-error handling (ReadOnlyAccessException → "read-only folder", UnauthorizedAccessException
     // → "restricted folder"), same two-step confirm for delete. ACL is enforced BY REUSE — the Core
-    // repos throw these on write; we surface them as graceful tool results, never exceptions. A locked
-    // vault is already rejected up-front in InvokeAsync (writes need the master DEK).
+    // repos throw these on write; we surface them as graceful tool results, never exceptions. A
+    // locked vault is already rejected up-front in InvokeAsync for every call that actually needs
+    // the master DEK (see RequiresUnlockedSessionForCall) — a metadata-only bee_update_article and
+    // any bee_delete_article reach here even while locked, exactly like their MCP counterparts.
 
     // Mirrors BeeWriteTools.SaveArticle / ArticleEndpoints POST /api/articles.
     private async Task<string> SaveArticleAsync(JsonElement args)
@@ -29,7 +31,18 @@ public sealed partial class ChatToolDispatcher
         {
             // CreateAsync encrypts the body under a per-article DEK (wrapped under the master DEK),
             // creates folders as needed, and logs the create event (synced like a human edit).
-            var article = await articleService.CreateAsync(title!, treePath!, tags, content);
+            //
+            // Tags are set via a SEPARATE ConceptTagService call, NOT passed into CreateAsync,
+            // mirroring BeeWriteTools.SaveArticle and ArticleEndpoints POST /api/articles exactly.
+            // CreateAsync DOES support setting tags atomically in the same transaction (passing
+            // `tags` directly) — but neither of the other two surfaces uses that path, so the
+            // first CREATE sync/audit event there always carries an empty tag set, with a separate
+            // tag-set event following. Passing tags straight into CreateAsync here made the chat
+            // surface's CREATE event diverge from what MCP/REST actually produce for the exact same
+            // call; keeping the same two-step shape keeps sync/audit behavior identical everywhere.
+            var article = await articleService.CreateAsync(title!, treePath!, [], content);
+            if (tags.Count > 0)
+                await conceptTagService.SetForArticleAsync(article.Id, tags);
             return OkJson($"Created article '{article.Title}' in {article.TreePath}.", article.Id);
         }
         catch (UnauthorizedAccessException ex)
@@ -65,7 +78,13 @@ public sealed partial class ChatToolDispatcher
 
         try
         {
-            await articleService.UpdateAsync(id, title, treePath, tags, content);
+            // Tags are set via a SEPARATE ConceptTagService call, NOT passed into UpdateAsync —
+            // see the comment in SaveArticleAsync for why. Mirrors BeeWriteTools.UpdateArticle and
+            // ArticleEndpoints PUT /api/articles/{id} exactly, so the UPDATE sync/audit event's tag
+            // snapshot is identical across all three surfaces.
+            await articleService.UpdateAsync(id, title, treePath, null, content);
+            if (tags != null)
+                await conceptTagService.SetForArticleAsync(id, tags);
             return OkJson($"Updated article {id} ({article.Title}).", id);
         }
         catch (UnauthorizedAccessException ex)
