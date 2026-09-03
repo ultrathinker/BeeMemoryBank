@@ -26,9 +26,9 @@
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.7.0" />
     <PackageVersion Include="Certes" Version="3.0.4" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="Dapper" Version="2.1.66" />
+    <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="DiffPlex" Version="1.9.0" />
-    <PackageVersion Include="FluentAssertions" Version="7.0.0" />
+    <PackageVersion Include="FluentAssertions" Version="7.2.2" />
     <PackageVersion Include="Indiko.Maui.Controls.Markdown" Version="1.5.0" />
     <PackageVersion Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
     <PackageVersion Include="Makaretu.Dns.Multicast" Version="0.27.0" />
@@ -52,12 +52,12 @@
          project, i.e. the build was not reproducible — a restore months apart could pull different packages. They are pinned to
          the versions that restore last resolved. Keep Xamarin.AndroidX.Core and Core.Core.Ktx on the
          same train when bumping (see the comment in BeeMemoryBank.Mobile.csproj). -->
-    <PackageVersion Include="Microsoft.Maui.Controls" Version="10.0.90" />
+    <PackageVersion Include="Microsoft.Maui.Controls" Version="10.0.100" />
     <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
     <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.0.0" />
-    <PackageVersion Include="QRCoder" Version="1.6.0" />
+    <PackageVersion Include="QRCoder" Version="1.8.0" />
     <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
@@ -71,7 +71,7 @@
     <PackageVersion Include="Xamarin.AndroidX.Work.Runtime" Version="2.11.2.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
-    <PackageVersion Include="Yarp.ReverseProxy" Version="2.2.0" />
+    <PackageVersion Include="Yarp.ReverseProxy" Version="2.3.0" />
   </ItemGroup>
 
 </Project>

@@ -19,6 +19,10 @@ updates:
       # Remove this entry only together with a decision about that licence.
       - dependency-name: "FluentAssertions"
         versions: [">=8.0.0"]
+      # Indiko.Maui.Controls.Markdown 1.10 looks like a minor bump but requires Markdig >= 1.3.2,
+      # and Markdig 0.44 -> 1.x is a major bump that is deliberately held back. Taking the control
+      # alone fails the build with NU1605, so the two have to move together, as one change.
+      - dependency-name: "Indiko.Maui.Controls.Markdown"
       # System.CommandLine 2.0 stable is not an upgrade from the beta the CLI is written against,
       # it is a different API surface — the whole command tree has to be rewritten against it.
       # SemVer does not catch this (both sides are "2"), so it needs naming explicitly.
