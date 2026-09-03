@@ -255,10 +255,13 @@
 (function() {
     var currentPath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath));
 
+    // Attribute-safe: escapes quotes as well as angle brackets. The
+    // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+    // value it produced was unsafe the moment it landed inside an HTML attribute.
     function escapeHtml(text) {
-        var d = document.createElement('div');
-        d.textContent = text;
-        return d.innerHTML;
+        return String(text == null ? '' : text)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     var exportFolderBtn = document.getElementById('btn-export-folder');

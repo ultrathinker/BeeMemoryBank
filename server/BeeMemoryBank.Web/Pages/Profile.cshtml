@@ -228,8 +228,17 @@ function loadAgents() {
                                '<td><code class="text-sm">' + escapeHtml(a.keyPrefix) + '</code></td>' +
                                '<td class="text-muted text-sm">' + new Date(a.createdAt).toLocaleDateString() + '</td>' +
                                '<td class="text-muted text-sm">' + (a.lastAccessedAt ? timeAgo(new Date(a.lastAccessedAt)) : 'never') + '</td>' +
-                               '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" onclick="deleteAgent(' + a.id + ', \'' + escapeHtml(a.name) + '\')"></sl-icon-button></td>';
+                               // Name carried on a data-attribute rather than interpolated into
+                               // inline JS. HTML-escaping cannot secure a JS string literal inside
+                               // an attribute: the browser decodes entities BEFORE the JS is
+                               // parsed, so even an escaped apostrophe closes the literal again.
+                               '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" class="agent-delete-btn" data-agent-id="' + escapeHtml(a.id) + '" data-agent-name="' + escapeHtml(a.name) + '"></sl-icon-button></td>';
                 tbody.appendChild(tr);
+            });
+            tbody.querySelectorAll('.agent-delete-btn').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    deleteAgent(btn.dataset.agentId, btn.dataset.agentName);
+                });
             });
             document.getElementById('agents-table-container').style.display = 'block';
         });
@@ -301,10 +310,13 @@ function timeAgo(date) {
     return Math.floor(sec / 86400) + 'd ago';
 }
 
+// Attribute-safe: escapes quotes as well as angle brackets. The
+// textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+// value it produced was unsafe the moment it landed inside an HTML attribute.
 function escapeHtml(text) {
-    var d = document.createElement('div');
-    d.textContent = text;
-    return d.innerHTML;
+    return String(text == null ? '' : text)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function showAlert(variant, message) {

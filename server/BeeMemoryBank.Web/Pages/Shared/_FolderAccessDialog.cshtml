@@ -89,10 +89,13 @@
 <script>
 // Shared helpers. Defined here rather than on each page so the dialog is self-contained and the
 // two pages that host it cannot end up with divergent copies.
+// Attribute-safe: escapes quotes as well as angle brackets. The
+// textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+// value it produced was unsafe the moment it landed inside an HTML attribute.
 function escapeHtml(text) {
-    var d = document.createElement('div');
-    d.textContent = text == null ? '' : text;
-    return d.innerHTML;
+    return String(text == null ? '' : text)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function showDlgError(alertId, message) {

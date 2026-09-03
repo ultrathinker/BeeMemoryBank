@@ -272,6 +272,32 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     {
         if (string.IsNullOrEmpty(path) || path == "/") return;
 
+        // Enforce, at the point that assumes it, the invariant the ancestor-vivification code
+        // below states as given: "the leaf creation has already been authorized at the endpoint
+        // level". It wasn't, on the busiest path in the app — ArticleService.CreateAsync (and the
+        // move branch of UpdateAsync) vivified folders BEFORE articleRepo.CreateAsync applied the
+        // caller's ACL, and nothing rolled the folders back when that throw came. So an agent
+        // denied on /Secrets, or read-only on /Public, could call bee_save_article with
+        // treePath=/Secrets/Anything and persist arbitrary folders there — plaintext metadata,
+        // visible to everyone, and node-local since no FolderCreate event is emitted for them.
+        //
+        // Only the requested LEAF is checked. Ancestors deliberately are not: an AllowList user
+        // creating /A/B/C must not be blocked because /A and /A/B are outside their scope — the
+        // recursion below re-enters through EnsureExistsCoreAsync, not here, precisely so those
+        // stubs stay creatable. System-scope callers (sync's EventApplier, the startup
+        // FolderBootstrapper, background workers with no HttpContext) pass by construction.
+        if (_holder.Scope.IsAccessDenied(path))
+            throw new UnauthorizedAccessException($"Write access denied for path '{path}'");
+        if (_holder.Scope.IsReadOnly(path))
+            throw new ReadOnlyAccessException(path);
+
+        await EnsureExistsCoreAsync(path, sourceNodeId);
+    }
+
+    private async Task EnsureExistsCoreAsync(string path, Guid? sourceNodeId)
+    {
+        if (string.IsNullOrEmpty(path) || path == "/") return;
+
         // Raw existence check (no scope filter): an AllowList user creating
         // /A/B/C must not be blocked here just because /A and /A/B are hidden
         // from their scope — those ancestors already exist in the DB (an admin
@@ -285,10 +311,12 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
             if (exists > 0) return;
         }
 
-        // Ensure all parents exist first (recurse up)
+        // Ensure all parents exist first (recurse up). Deliberately re-enters the Core method, not
+        // the public one — ancestors are stubs the caller may well have no ACL for, and blocking
+        // on them would break the AllowList case documented above.
         var parentPath = GetParentPath(path);
         if (parentPath != null)
-            await EnsureExistsAsync(parentPath, sourceNodeId);
+            await EnsureExistsCoreAsync(parentPath, sourceNodeId);
 
         // Auto-creating a missing ancestor stub: bypass the repo-level write
         // guard by swapping scope to System for the Create call. The leaf

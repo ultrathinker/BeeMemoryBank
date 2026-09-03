@@ -149,6 +149,7 @@ public static partial class ChatEndpoints
                 return Results.NotFound(new ErrorResponse("Attachment not found"));
 
             ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+            BeeMemoryBank.Hosting.AspNetCore.UserContentResponseHeaders.ApplyTo(ctx.Response);
             var mime = att!.Mime;
             return Results.File(blob, string.IsNullOrWhiteSpace(mime) ? "application/octet-stream" : mime);
         });

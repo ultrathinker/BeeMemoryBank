@@ -56,7 +56,14 @@
 <script>
 let currentAccountId = null;
 
-function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+// Attribute-safe: escapes quotes as well as angle brackets. The
+// textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+// value it produced was unsafe the moment it landed inside an HTML attribute.
+function escapeHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 async function refresh() {
     const resp = await fetch('/api-proxy/remote-accounts');
@@ -78,11 +85,21 @@ async function refresh() {
             + (a.lastError ? '<br><span style="color:var(--sl-color-danger-600);">' + escapeHtml(a.lastError) + '</span>' : '')
             + '</div></div>'
             + '<div>'
-            + '<sl-button size="small" variant="default" onclick="openSubsDialog(\'' + a.id + '\', \'' + escapeHtml(a.displayName).replace(/'/g, "\\'") + '\')">'
+            // data-attributes rather than an inline call. The previous form ran the display name
+            // through HTML escaping and then a JS escape, but entity decoding happens first, so
+            // neither pass could keep a quote out of the JS string literal it was building.
+            + '<sl-button size="small" variant="default" class="subs-open-btn" data-account-id="' + escapeHtml(a.id) + '" data-account-name="' + escapeHtml(a.displayName) + '">'
             + '<sl-icon slot="prefix" name="diagram-2"></sl-icon> Subscriptions</sl-button> '
-            + '<sl-icon-button name="trash" label="Delete" onclick="removeAccount(\'' + a.id + '\')"></sl-icon-button>'
+            + '<sl-icon-button name="trash" label="Delete" class="account-remove-btn" data-account-id="' + escapeHtml(a.id) + '"></sl-icon-button>'
             + '</div></div>';
     }).join('');
+
+    container.querySelectorAll('.subs-open-btn').forEach(function (b) {
+        b.addEventListener('click', function () { openSubsDialog(b.dataset.accountId, b.dataset.accountName); });
+    });
+    container.querySelectorAll('.account-remove-btn').forEach(function (b) {
+        b.addEventListener('click', function () { removeAccount(b.dataset.accountId); });
+    });
 }
 
 async function saveAccount() {
@@ -176,9 +193,13 @@ function renderAvailable(folders, subscribedIds) {
             + ' <sl-badge variant="neutral" pill>' + f.articleCount + '</sl-badge></div>'
             + (already
                 ? '<sl-badge variant="success" pill>Mirrored</sl-badge>'
-                : '<sl-button size="small" variant="primary" onclick="addSub(\'' + f.id + '\', \'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')">Mirror</sl-button>')
+                : '<sl-button size="small" variant="primary" class="subs-add-btn" data-folder-id="' + escapeHtml(f.id) + '" data-folder-path="' + escapeHtml(f.path) + '">Mirror</sl-button>')
             + '</div>';
     }).join('');
+
+    a.querySelectorAll('.subs-add-btn').forEach(function (b) {
+        b.addEventListener('click', function () { addSub(b.dataset.folderId, b.dataset.folderPath); });
+    });
 }
 
 async function addSub(remoteFolderId, remoteFolderPath) {

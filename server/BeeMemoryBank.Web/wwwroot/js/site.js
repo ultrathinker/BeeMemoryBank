@@ -196,10 +196,13 @@ $(function () {
         };
         expandedPaths = getExpandedSet();
 
+        // Attribute-safe: escapes quotes as well as angle brackets. The
+        // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+        // value it produced was unsafe the moment it landed inside an HTML attribute.
         function escapeHtml(str) {
-            var d = document.createElement('div');
-            d.textContent = str || '';
-            return d.innerHTML;
+            return String(str == null ? '' : str)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
         function getLastSegment(path) {
@@ -1159,10 +1162,20 @@ $(function () {
     // The dropdown always shows a "/ (root)" option above search results.
     // Idempotent: listeners are bound on first init only; subsequent calls
     // refresh state and reset the input value.
+    // Safe in ATTRIBUTE context as well as text context — the textContent→innerHTML trick that
+    // used to live here does NOT escape quotes, and this helper's output is interpolated straight
+    // into data-path="...". A folder named  x" onmouseover="…  therefore closed the attribute and
+    // injected an event handler into every user's folder picker, which the page's
+    // script-src 'unsafe-inline' CSP happily executes. TreePathCanonicalizer permits quotes in
+    // folder names (it only rejects control chars, "." and ".."), so the input really is reachable.
+    // Escapes the same five characters as Article/View.cshtml's namesake, plus the single quote.
     function escHtml(s) {
-        var d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     // ARIA-listbox helper: keep dropdown items announceable to assistive tech.
@@ -1450,10 +1463,13 @@ function updateSyncModal() {
             var content = document.getElementById('syncModalContent');
             if (!content || !data.nodes) return;
 
+            // Attribute-safe: escapes quotes as well as angle brackets. The
+            // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+            // value it produced was unsafe the moment it landed inside an HTML attribute.
             function escForModal(str) {
-                var d = document.createElement('div');
-                d.textContent = str;
-                return d.innerHTML;
+                return String(str == null ? '' : str)
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
             }
 
             function getRelativeTime(dateStr) {

@@ -568,10 +568,13 @@ else
     var moveArticleSearch = document.getElementById('move-article-search');
     var moveArticleDropdown = document.getElementById('move-article-dropdown');
 
+    // Attribute-safe: escapes quotes as well as angle brackets. The
+    // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+    // value it produced was unsafe the moment it landed inside an HTML attribute.
     function escapeHtmlMove(text) {
-        var d = document.createElement('div');
-        d.textContent = text;
-        return d.innerHTML;
+        return String(text == null ? '' : text)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     if (moveArticleSearch) {
@@ -1129,10 +1132,13 @@ else
         });
     }
 
+    // Attribute-safe: escapes quotes as well as angle brackets. The
+    // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+    // value it produced was unsafe the moment it landed inside an HTML attribute.
     function escConceptHtml(s) {
-        var d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function renderChips() {
@@ -1281,7 +1287,14 @@ else
     var articleIdLocal = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
     if (!articleIdLocal) return;
     var page = 1, pageSize = 5, totalPages = 1;
-    function escRel(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
+    // Attribute-safe: escapes quotes as well as angle brackets. The
+    // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
+    // value it produced was unsafe the moment it landed inside an HTML attribute.
+    function escRel(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
     function load(p) {
         prev.loading = next.loading = true;
         fetch('/api-proxy/article/' + articleIdLocal + '/related?page=' + p + '&pageSize=' + pageSize)

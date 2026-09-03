@@ -885,7 +885,9 @@
         var keysBody = document.getElementById('chat-keys-body');
         var modelsBody = document.getElementById('chat-models-body');
 
-        function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+        // Quotes included: esc() feeds a title="..." attribute a few lines down, where an
+        // unescaped " would end the attribute early.
+        function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
         function rel(t) {
             if (!t) return '—';
             var d = new Date(t); if (isNaN(d)) return esc(t);

@@ -88,6 +88,7 @@ public static class MediaEndpoints
 
             var (data, contentType, fileName) = result.Value;
             ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+            BeeMemoryBank.Hosting.AspNetCore.UserContentResponseHeaders.ApplyTo(ctx.Response);
             return Results.File(data, contentType, fileName);
         });
 

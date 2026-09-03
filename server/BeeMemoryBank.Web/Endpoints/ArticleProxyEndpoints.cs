@@ -255,6 +255,7 @@ public static class ArticleProxyEndpoints
             var result = await api.DownloadMediaAsync(id);
             if (result == null) return Results.NotFound();
             ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+            BeeMemoryBank.Hosting.AspNetCore.UserContentResponseHeaders.ApplyTo(ctx.Response);
             return Results.File(result.Data, result.ContentType);
         }).RequireAuthorization();
     }
