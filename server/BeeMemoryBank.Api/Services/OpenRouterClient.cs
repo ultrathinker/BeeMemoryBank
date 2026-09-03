@@ -330,10 +330,15 @@ public sealed class OpenRouterClient
         // content (mimicking ChatGPT-plugin-style transcripts from training data). That looks like
         // "the tool didn't work" from the user's side but is a model-capability limitation, not a
         // dispatch bug. Log tool-call outcome + a content snippet so this is diagnosable from logs
-        // instead of guessed at.
+        // instead of guessed at. M3 fix: Debug, not Information — the snippet quotes the model's
+        // actual output, which routinely quotes vault content the model just read via a tool
+        // result (e.g. an article body). Information-level logs are typically always-on in
+        // production and often shipped to less-protected/longer-retention log aggregators;
+        // Debug keeps this diagnostic available (enable it locally when actually diagnosing this
+        // exact symptom) without it being on by default.
         if (tools is { Count: > 0 })
         {
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "OpenRouter tool-call turn: model={Model} toolCalls={ToolCallCount} contentSnippet={Snippet}",
                 resolvedModel ?? model, toolCalls?.Count ?? 0,
                 toolCalls is null ? Truncate(contentBuilder.ToString(), 200) : "(n/a — tool_calls present)");
@@ -555,8 +560,14 @@ public sealed class OpenRouterClient
             }
         }
 
+        // M3 fix: truncated, not the entire raw body — this response can carry the model's full
+        // text answer (which may quote/paraphrase vault content the prompt included) and, in the
+        // "some image field we don't recognize yet" case this warning exists to catch, potentially
+        // base64 image data too. A bounded snippet is still enough to see the response's shape
+        // (which fields ARE present) and add support for it, without an unbounded plaintext dump
+        // landing in the log sink.
         if (imageSources.Count == 0)
-            _logger.LogWarning("OpenRouter image-gen completion returned no image sources. Raw body: {Body}", body);
+            _logger.LogWarning("OpenRouter image-gen completion returned no image sources. Body snippet: {Body}", Truncate(body, 500));
 
         return new ImageGenResult(
             Text: textBuilder.Length == 0 ? null : textBuilder.ToString(),

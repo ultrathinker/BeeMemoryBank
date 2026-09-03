@@ -20,6 +20,20 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static partial class ChatEndpoints
 {
+    // M3 fix: neither a size nor a rate limit existed on /stream before this — chat is on by
+    // default for every user, and each turn can trigger several OpenRouter calls internally
+    // (vision delegation, the tool loop's own iterations, generate_image), all billed to the
+    // admin's configured key(s). This budget is generous for a real interactive conversation
+    // (a message roughly every 10s, sustained) while still bounding a scripted/bulk sender.
+    // Per-user (see the /stream handler for why), process-wide singleton — resets on restart,
+    // same accepted trade-off as ChatDestructiveOpCounter/McpResponseManager's per-caller limits.
+    private static readonly BeeMemoryBank.Hosting.AspNetCore.SlidingWindowRateLimiter StreamRateLimiter =
+        new(maxAttempts: 30, window: TimeSpan.FromMinutes(5));
+
+    // Bounds a single call's worst-case egress size/token cost. ~25k tokens at a rough 4
+    // chars/token — generous for legitimate long pastes.
+    private const int MaxMessageLength = 100_000;
+
     private static void MapStreamEndpoint(RouteGroupBuilder group)
     {
         // ── Phase 2: STREAMING tool-loop turn + persistence ─────────────────────────
@@ -69,6 +83,40 @@ public static partial class ChatEndpoints
                 await JsonError(400, "Message is required");
                 return;
             }
+            // M3 fix: bound a single call's worst-case egress size. Generous for legitimate long
+            // pastes, but every extra character is more prompt tokens billed to the admin's
+            // OpenRouter key(s) on a feature that's on by default for every user.
+            if (req.Message.Length > MaxMessageLength)
+            {
+                await JsonError(400, $"Message is too long ({req.Message.Length} chars; the limit is {MaxMessageLength}).");
+                return;
+            }
+
+            // Identity is resolved here (moved up from the conversation-load step below) so both
+            // the rate limiter and everything after it share one CallerIdentity.Extract call.
+            var identity = CallerIdentity.Extract(ctx);
+            if (identity.UserId is null)
+            {
+                await JsonError(401, "Unauthorized");
+                return;
+            }
+            int userId = identity.UserId.Value; // Web always forwards X-User-Id.
+
+            // M3 fix: chat has no rate limit at all today, and it's on by default for every user
+            // (RequireChatAccess only checks the two access flags, not volume) — so any user with
+            // access could burn the admin's configured OpenRouter credits without bound. Keyed by
+            // the caller's OWN user id (not IP): the Web proxy calls this from one loopback
+            // address for every browser user, so an IP-keyed limit would either throttle everyone
+            // together or nobody. An agent shares its owner's identity (CallerIdentity.UserId
+            // already resolves to the owner — see AgentAuthMiddleware), so an owner's budget is
+            // shared between their own chats and their agents' chats, which is the intended unit
+            // of "whose OpenRouter spend is this".
+            if (!StreamRateLimiter.TryAcquire($"user:{userId}"))
+            {
+                await JsonError(429, "You're sending chat messages too quickly. Please wait a few minutes and try again.");
+                return;
+            }
+
             // Decrypting the OpenRouter key needs the master DEK → vault must be unlocked.
             if (!session.IsUnlocked)
             {
@@ -163,13 +211,7 @@ public static partial class ChatEndpoints
             }
 
             // ── conversation load/create (scoped to the caller's own user_id) ──
-            var identity = CallerIdentity.Extract(ctx);
-            if (identity.UserId is null)
-            {
-                await JsonError(401, "Unauthorized");
-                return;
-            }
-            int userId = identity.UserId.Value; // Web always forwards X-User-Id.
+            // identity/userId were already resolved above (for the rate limiter).
             Guid conversationId;
             if (req.ConversationId.HasValue)
             {
@@ -223,7 +265,7 @@ public static partial class ChatEndpoints
             Dictionary<Guid, List<ChatAttachment>> attachmentsByMessage = new();
             try
             {
-                var allAttachments = await attachRepo.ListByConversationAsync(conversationId);
+                var allAttachments = await attachRepo.ListByConversationAsync(conversationId, session);
                 foreach (var a in allAttachments)
                 {
                     if (!attachmentsByMessage.TryGetValue(a.MessageId, out var list))
@@ -235,7 +277,7 @@ public static partial class ChatEndpoints
 
             try
             {
-                var history = await msgRepo.ListByConversationAsync(conversationId);
+                var history = await msgRepo.ListByConversationAsync(conversationId, session);
                 foreach (var row in history)
                 {
                     var m = new ChatToolMessage { Role = row.Role, Content = row.ContentText };
@@ -285,7 +327,7 @@ public static partial class ChatEndpoints
             var newUserTurn = new ChatToolMessage { Role = "user", Content = userText };
             try
             {
-                await msgRepo.CreateAsync(newUserMessage);
+                await msgRepo.CreateAsync(newUserMessage, session);
             }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat user message"); }
 
@@ -315,7 +357,7 @@ public static partial class ChatEndpoints
                     };
                     try
                     {
-                        await attachRepo.CreateAsync(newAttachment);
+                        await attachRepo.CreateAsync(newAttachment, session);
                         persistedAtts.Add(newAttachment);
                     }
                     catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat attachment"); }
@@ -365,13 +407,13 @@ public static partial class ChatEndpoints
             try
             {
                 await RunToolLoopAsync(new ChatLoopContext(
-                    Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Repo: repo,
+                    Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Session: session, Repo: repo,
                     MsgRepo: msgRepo, ConvoRepo: convoRepo, AttachRepo: attachRepo, Logger: logger,
                     Keys: keys, Model: effectiveText.ModelId,
                     EffectiveImageGenModelId: effectiveImageGen?.ModelId ?? "",
                     ConversationId: conversationId,
                     ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter,
-                    ContextWindow: effectiveText.ContextWindow));
+                    ContextWindow: effectiveText.ContextWindow, UserId: userId));
             }
             finally
             {

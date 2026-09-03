@@ -267,25 +267,30 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
             new { textId, visionId, imageGenId });
     }
 
-    // ── chat_settings (single row, id=1) ────────────────────────────────────────
+    // ── chat_user_settings (per-user; M1 fix) ───────────────────────────────────
 
-    /// <summary>Superadmin-only opt-in: when true, the streaming tool loop executes write tool
-    /// calls immediately (still ACL-checked, still destructive-op-capped, still audit-tagged)
-    /// instead of pausing for a human Allow/Deny. Off by default.</summary>
-    public async Task<bool> GetAutoApproveWritesAsync()
+    /// <summary>Per-user opt-in (redesigned from a superadmin-only node-global toggle — see M1):
+    /// when true, the streaming tool loop executes THIS USER's write tool calls immediately (still
+    /// ACL-checked, still destructive-op-capped, still audit-tagged) instead of pausing for a human
+    /// Allow/Deny. Off by default; no row for a user means false, not a table miss.</summary>
+    public async Task<bool> GetAutoApproveWritesAsync(int userId)
     {
         using var conn = OpenConnection();
         return await conn.ExecuteScalarAsync<bool>(
-            "SELECT auto_approve_writes FROM chat_settings WHERE id = 1");
+            "SELECT COALESCE((SELECT auto_approve_writes FROM chat_user_settings WHERE user_id = @userId), 0)",
+            new { userId });
     }
 
-    public async Task SetAutoApproveWritesAsync(bool enabled)
+    public async Task SetAutoApproveWritesAsync(int userId, bool enabled)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
-            "UPDATE chat_settings SET auto_approve_writes = @enabled WHERE id = 1",
-            new { enabled });
+            @"INSERT INTO chat_user_settings (user_id, auto_approve_writes) VALUES (@userId, @enabled)
+              ON CONFLICT(user_id) DO UPDATE SET auto_approve_writes = @enabled",
+            new { userId, enabled });
     }
+
+    // ── chat_settings (single row, id=1) ────────────────────────────────────────
 
     public async Task<bool> GetChatGloballyEnabledAsync()
     {

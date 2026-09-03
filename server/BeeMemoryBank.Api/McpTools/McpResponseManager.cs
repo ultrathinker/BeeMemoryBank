@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
 using Microsoft.AspNetCore.Http;
 
 namespace BeeMemoryBank.Api.McpTools;
@@ -18,9 +21,28 @@ namespace BeeMemoryBank.Api.McpTools;
 /// bee_set_max_tokens silently changes what every other concurrently connected agent's calls
 /// return too -- that was a real bug, not just a surprising default.
 /// </remarks>
-public class McpResponseManager(string dataPath, IHttpContextAccessor httpContextAccessor)
+/// <remarks>
+/// SECURITY: the content overflowing max_tokens is routinely a full decrypted article body (e.g.
+/// bee_get_article) -- exactly the plaintext this product's whole design promises to keep off
+/// disk unencrypted. The temp file therefore holds AES-256-GCM ciphertext under the master DEK
+/// (<see cref="ArticleEncryptor"/>, same primitive/AAD-pattern as RemoteAccountService and the AI
+/// chat key store), never the raw response. Saving requires <see cref="SessionService.IsUnlocked"/>
+/// (there is no DEK to encrypt with otherwise) and reading back degrades to a clear "vault is
+/// locked" tool result rather than throwing -- consistent with how every other content-touching
+/// MCP path behaves when the session lock kicks in mid-flight.
+/// </remarks>
+public class McpResponseManager(string dataPath, IHttpContextAccessor httpContextAccessor, SessionService session)
 {
     private static readonly TimeSpan TempFileExpiry = TimeSpan.FromHours(24);
+
+    // Constant AAD for the on-disk continuation store (distinct from every other AAD tag used
+    // elsewhere in the codebase, so a ciphertext saved here can never be mistaken for/reused as
+    // one from another encrypted-at-rest store even though they all share the master DEK).
+    private static readonly byte[] ContinuationAad = "bmb-mcp-continuation-v1"u8.ToArray();
+
+    // On-disk envelope for one continuation file. Property names are serialized as-is (no
+    // camelCase policy applied here -- this file is never read by anything except this class).
+    private sealed record TempFileEnvelope(string IvB64, string CiphertextB64);
 
     public const int MinTokens = 1000;
     public const int MaxTokensCeiling = 100_000;
@@ -133,7 +155,45 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
                 error = "Continuation file not found or expired (24h). Re-run the original tool call."
             });
 
-        var fullContent = File.ReadAllText(filePath, Encoding.UTF8);
+        // The file holds ciphertext under the master DEK -- decrypting needs an unlocked session,
+        // same invariant every other content-touching MCP path relies on. Degrade gracefully
+        // rather than throw: the session can lock between the original call and this one.
+        if (!session.IsUnlocked)
+            return JsonSerializer.Serialize(new
+            {
+                error = "Vault is locked. Unlock it, then call bee_continue again."
+            });
+
+        string fullContent;
+        var masterDek = session.GetMasterDek();
+        try
+        {
+            var envelopeJson = File.ReadAllText(filePath, Encoding.UTF8);
+            var envelope = JsonSerializer.Deserialize<TempFileEnvelope>(envelopeJson);
+            if (envelope is null)
+                return JsonSerializer.Serialize(new { error = "Continuation file is corrupt. Re-run the original tool call." });
+
+            fullContent = ArticleEncryptor.Decrypt(
+                Convert.FromBase64String(envelope.CiphertextB64),
+                Convert.FromBase64String(envelope.IvB64),
+                masterDek, ContinuationAad);
+        }
+        catch (Exception ex) when (ex is CryptographicException or FormatException or JsonException)
+        {
+            // Most likely cause: the master DEK rotated between the save and this read, so the
+            // old ciphertext no longer unwraps under the current DEK. Whatever the cause, this is
+            // an expected/recoverable condition for a stored blob, not a bug -- report it the same
+            // way an expired/missing file is reported above, not as a 500.
+            return JsonSerializer.Serialize(new
+            {
+                error = "Could not decrypt the saved continuation (it may predate a DEK rotation). Re-run the original tool call."
+            });
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+
         if (offset < 0)
             return JsonSerializer.Serialize(new { error = $"Invalid offset {offset}: must be >= 0." });
         if (offset >= fullContent.Length)
@@ -186,10 +246,30 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
                $"hard ceiling {MaxTokensCeiling}) — must be read incrementally.";
     }
 
+    /// <summary>Encrypts <paramref name="content"/> under the master DEK and writes the envelope
+    /// to disk. No-op when the session is locked -- there is no DEK to encrypt with, and writing
+    /// the plaintext instead is exactly the bug this class exists to not have. The caller
+    /// (<see cref="ProcessResponse"/>) still returns its inline truncated preview either way; a
+    /// bee_continue call against a guid that was never actually saved reports "not found", which
+    /// is the truth.</summary>
     private void SaveTempFile(string guid, string content)
     {
+        if (!session.IsUnlocked)
+            return;
+
         Directory.CreateDirectory(_tempPath);
-        File.WriteAllText(Path.Combine(_tempPath, $"{guid}.json"), content, Encoding.UTF8);
+        var masterDek = session.GetMasterDek();
+        try
+        {
+            var (ciphertext, iv) = ArticleEncryptor.Encrypt(content, masterDek, ContinuationAad);
+            var envelope = JsonSerializer.Serialize(new TempFileEnvelope(
+                Convert.ToBase64String(iv), Convert.ToBase64String(ciphertext)));
+            File.WriteAllText(Path.Combine(_tempPath, $"{guid}.json"), envelope, Encoding.UTF8);
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
     }
 
     private void CleanupExpiredFiles()

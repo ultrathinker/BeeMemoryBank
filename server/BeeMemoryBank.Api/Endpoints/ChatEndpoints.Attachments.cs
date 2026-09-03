@@ -157,7 +157,7 @@ public static partial class ChatEndpoints
             sw.Stop();
             var noModelJson = Err("No image generation model is configured. Tell the user that image generation is not available on this node.");
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = noModelJson });
-            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, noModelJson);
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, noModelJson, lc.Session);
             await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = true, durationMs = (int)sw.ElapsedMilliseconds, error = (string?)null });
             return;
         }
@@ -168,7 +168,7 @@ public static partial class ChatEndpoints
             sw.Stop();
             var badArgsJson = Err("prompt is required");
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = badArgsJson });
-            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, badArgsJson);
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, badArgsJson, lc.Session);
             await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = "prompt is required" });
             return;
         }
@@ -208,7 +208,7 @@ public static partial class ChatEndpoints
                         Mime = imgMime,
                         Blob = imgBytes,
                         CreatedAt = DateTime.UtcNow
-                    });
+                    }, lc.Session);
                 }
                 catch (Exception ex)
                 {
@@ -230,7 +230,7 @@ public static partial class ChatEndpoints
             {
                 var noImgJson = Err("The image model did not return an image. Tell the user image generation failed and they can try again.");
                 lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = noImgJson });
-                await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, noImgJson);
+                await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, noImgJson, lc.Session);
                 await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = "No image returned" });
                 return;
             }
@@ -243,7 +243,7 @@ public static partial class ChatEndpoints
                 hint = "Use an attachmentId with bee_insert_image_into_article to save this image into an article."
             }, SseJsonOpts);
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = okJson });
-            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, okJson);
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, okJson, lc.Session);
             await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = true, durationMs = (int)sw.ElapsedMilliseconds, error = (string?)null });
         }
         catch (OperationCanceledException) { throw; }
@@ -252,7 +252,7 @@ public static partial class ChatEndpoints
             sw.Stop();
             var errJson = Err("Image generation failed (all API keys exhausted): " + ex.Message);
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errJson });
-            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson);
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson, lc.Session);
             await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = ex.Message });
         }
         catch (OpenRouterHttpException ex)
@@ -260,7 +260,7 @@ public static partial class ChatEndpoints
             sw.Stop();
             var errJson = Err("Image generation failed: " + ex.Message);
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errJson });
-            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson);
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson, lc.Session);
             await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = ex.Message });
         }
         catch (InvalidOperationException ex)
@@ -268,7 +268,7 @@ public static partial class ChatEndpoints
             sw.Stop();
             var errJson = Err("Image generation failed: " + ex.Message);
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errJson });
-            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson);
+            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson, lc.Session);
             await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = ex.Message });
         }
     }

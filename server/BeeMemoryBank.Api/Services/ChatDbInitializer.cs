@@ -65,6 +65,24 @@ public sealed class ChatDbInitializer
             "ALTER TABLE chat_message ADD COLUMN tool_calls_count INTEGER");
         await EnsureColumnAsync(conn, "chat_message", "duration_ms",
             "ALTER TABLE chat_message ADD COLUMN duration_ms INTEGER");
+        // H3 fix: content_text used to be stored (and read/written) as plaintext, even though it
+        // routinely carries decrypted vault content (a tool result JSON is a full article body —
+        // see ChatToolLoop.SafePersistToolMessage). New rows are now encrypted under the master
+        // DEK (AES-256-GCM, see ChatMessageRepository) into these two columns instead, and
+        // content_text is left NULL going forward. Existing rows are NOT retroactively
+        // re-encrypted (there is no reliable point in startup to do that — the vault may still be
+        // locked here); ChatMessageRepository reads content_ciphertext when present and falls back
+        // to the legacy plaintext content_text otherwise, exactly like this codebase's other
+        // lazy v0→v1 migrations (e.g. node-identity private key, agent KDF version).
+        await EnsureColumnAsync(conn, "chat_message", "content_ciphertext",
+            "ALTER TABLE chat_message ADD COLUMN content_ciphertext BLOB");
+        await EnsureColumnAsync(conn, "chat_message", "content_iv",
+            "ALTER TABLE chat_message ADD COLUMN content_iv BLOB");
+        // H3 fix: chat_attachment.blob used to hold raw image bytes unencrypted. New rows encrypt
+        // the blob under the master DEK and record the IV here; NULL iv (legacy rows) means the
+        // blob column still holds plaintext bytes, read as-is for backward compatibility.
+        await EnsureColumnAsync(conn, "chat_attachment", "iv",
+            "ALTER TABLE chat_attachment ADD COLUMN iv BLOB");
 
         _logger.LogInformation("chat.db schema initialized");
     }
@@ -111,18 +129,23 @@ public sealed class ChatDbInitializer
         """,
         """
         CREATE TABLE IF NOT EXISTS chat_message (
-            id              TEXT PRIMARY KEY,
-            conversation_id TEXT NOT NULL,
-            role            TEXT NOT NULL,
-            content_text    TEXT,
-            tool_calls_json TEXT,
-            tool_call_id    TEXT,
-            model           TEXT,
-            tokens_in       INTEGER,
-            tokens_out      INTEGER,
-            tool_calls_count INTEGER,
-            duration_ms     INTEGER,
-            created_at      TEXT NOT NULL
+            id                 TEXT PRIMARY KEY,
+            conversation_id    TEXT NOT NULL,
+            role               TEXT NOT NULL,
+            -- content_text is legacy plaintext, kept for backward-compat reads of rows written
+            -- before the H3 encryption fix. New rows leave it NULL and populate the two columns
+            -- below instead (AES-256-GCM under the master DEK) — see ChatMessageRepository.
+            content_text       TEXT,
+            content_ciphertext BLOB,
+            content_iv         BLOB,
+            tool_calls_json    TEXT,
+            tool_call_id       TEXT,
+            model              TEXT,
+            tokens_in          INTEGER,
+            tokens_out         INTEGER,
+            tool_calls_count   INTEGER,
+            duration_ms        INTEGER,
+            created_at         TEXT NOT NULL
         );
         """,
         """
@@ -131,7 +154,11 @@ public sealed class ChatDbInitializer
             message_id  TEXT NOT NULL,
             kind        TEXT NOT NULL,
             mime        TEXT NOT NULL,
+            -- blob holds ciphertext (AES-256-GCM under the master DEK) when iv is set; a NULL iv
+            -- means a legacy row written before the H3 encryption fix, whose blob is still
+            -- plaintext bytes — see ChatAttachmentRepository.
             blob        BLOB,
+            iv          BLOB,
             created_at  TEXT NOT NULL
         );
         """,
@@ -165,12 +192,16 @@ public sealed class ChatDbInitializer
             created_at            TEXT
         );
         """,
-        // Single-row settings table (id is always 1). Holds auto_approve_writes (superadmin-only
-        // opt-in that skips the human-in-the-loop confirm gate for write tools) and the three
-        // pinned default-model ids (nullable GUIDs referencing chat_model.id; null = "use the
-        // oldest model with the matching property"). Node-local like the rest of chat.db; never
-        // synced. The old category/enabled/default_for_category columns on chat_model are kept
-        // for backward compatibility but are no longer read or written by application code.
+        // Single-row settings table (id is always 1). Holds the three pinned default-model ids
+        // (nullable GUIDs referencing chat_model.id; null = "use the oldest model with the
+        // matching property") and the node-wide chat_globally_enabled kill switch. Node-local like
+        // the rest of chat.db; never synced. The old category/enabled/default_for_category columns
+        // on chat_model are kept for backward compatibility but are no longer read or written by
+        // application code — same for auto_approve_writes here (see chat_user_settings below):
+        // M1 fix, a single node-global auto-approve toggle removed the human confirm gate for
+        // EVERY user at once (and required superadmin to touch it on everyone's behalf); the
+        // column is kept only so an upgrade from an older chat.db doesn't need a destructive
+        // migration, never read or written by current code.
         """
         CREATE TABLE IF NOT EXISTS chat_settings (
             id                         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -179,6 +210,17 @@ public sealed class ChatDbInitializer
             default_text_model_id      TEXT,
             default_vision_model_id    TEXT,
             default_image_gen_model_id TEXT
+        );
+        """,
+        // M1 fix: auto-approve-writes is now per-user, not a single node-global toggle — each user
+        // controls only their OWN confirm-gate bypass for their OWN chat writes (still fully ACL
+        // + destructive-cap + audit-tag gated regardless; this only skips the human Allow/Deny
+        // click). No row for a user means "off" (see ChatSettingsRepository.GetAutoApproveWritesAsync's
+        // COALESCE), so a brand-new user needs no seed row here.
+        """
+        CREATE TABLE IF NOT EXISTS chat_user_settings (
+            user_id             INTEGER PRIMARY KEY,
+            auto_approve_writes INTEGER NOT NULL DEFAULT 0
         );
         """,
         // chat_globally_enabled is intentionally NOT seeded here: on an existing chat.db this

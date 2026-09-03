@@ -49,17 +49,26 @@ public static partial class ChatEndpoints
     // Process-singleton (resets on restart — same accepted trade-off as ChatDestructiveOpCounter).
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _inFlightConfirms = new();
 
+    // L5 fix (see ChatEndpoints.Confirm.cs): how long a confirm_required card stays confirmable
+    // after the assistant message that proposed it was created. Mirrors McpResponseManager's
+    // TempFileExpiry (also 24h) for consistency — old enough that no legitimate human click
+    // should ever hit it, short enough that a genuinely abandoned confirm card can't be
+    // resurrected days or weeks later against a conversation that has moved on.
+    private static readonly TimeSpan PendingConfirmExpiry = TimeSpan.FromHours(24);
+
     public static void MapChatEndpoints(this WebApplication app)
     {
         // "Am I allowed to use chat?" — ungated by the group-wide ChatAccessEndpointFilter
         // (registered directly on app, NOT on the /api/chat group below) so a blocked user can
         // still ask and get a straight yes/no answer for UI gating. Still behind the internal-key
-        // gate (RequireInternalKey). Superadmins and agent callers always pass; everyone else needs
-        // BOTH the node-wide toggle AND their own per-user flag.
+        // gate (RequireInternalKey). Superadmins always pass; everyone else — including an agent
+        // caller, whose access inherits its OWNER's (M2 fix: an agent key must never be MORE
+        // privileged than the user it belongs to) — needs BOTH the node-wide toggle AND their own
+        // per-user flag. Mirrors ChatAccessEndpointFilter exactly; keep both in sync.
         app.MapGet("/api/chat/access", async (HttpContext ctx, IUserRepository userRepo, ChatSettingsRepository chatSettingsRepo) =>
         {
             var caller = CallerIdentity.Extract(ctx);
-            if (caller.IsSuperadmin || caller.AgentId.HasValue)
+            if (caller.IsSuperadmin)
                 return Results.Ok(new { allowed = true });
 
             if (caller.UserId is null)
@@ -256,26 +265,33 @@ public static partial class ChatEndpoints
             return Results.Ok(new { defaultTextModelId = req.DefaultTextModelId, defaultVisionModelId = req.DefaultVisionModelId, defaultImageGenModelId = req.DefaultImageGenModelId });
         });
 
-        // Auto-approve writes (opt-in, superadmin-only): when enabled, the streaming tool loop
-        // executes write tool calls immediately instead of pausing for a human Allow/Deny. ACL,
-        // the destructive-op cap, and audit tagging still apply in full — only the human-in-the-
-        // loop pause is skipped. Article history/restore is the accepted safety net.
+        // Auto-approve writes (opt-in, PER-USER — M1 fix): when enabled, the streaming tool loop
+        // executes THIS caller's write tool calls immediately instead of pausing for a human
+        // Allow/Deny. ACL, the destructive-op cap, and audit tagging still apply in full — only the
+        // human-in-the-loop pause is skipped, and only for the caller's own turns. Article
+        // history/restore is the accepted safety net. Previously a single superadmin-controlled
+        // node-global toggle that removed the confirm gate for EVERY user at once; no role gate
+        // needed now — a user can only ever waive their OWN confirmation, never anyone else's, so
+        // there is nothing here for a role check to protect that ACL/the destructive cap don't
+        // already cover.
         group.MapGet("/settings/auto-approve", async (ChatSettingsRepository repo, HttpContext ctx) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+            var identity = CallerIdentity.Extract(ctx);
+            if (identity.UserId is null)
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 401);
 
-            var enabled = await repo.GetAutoApproveWritesAsync();
+            var enabled = await repo.GetAutoApproveWritesAsync(identity.UserId.Value);
             return Results.Ok(new { autoApproveWrites = enabled });
         });
 
         group.MapPatch("/settings/auto-approve", async (UpdateAutoApproveRequest req,
             ChatSettingsRepository repo, HttpContext ctx) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+            var identity = CallerIdentity.Extract(ctx);
+            if (identity.UserId is null)
+                return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 401);
 
-            await repo.SetAutoApproveWritesAsync(req.Enabled);
+            await repo.SetAutoApproveWritesAsync(identity.UserId.Value, req.Enabled);
             return Results.Ok(new { autoApproveWrites = req.Enabled });
         });
 

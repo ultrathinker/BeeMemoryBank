@@ -71,15 +71,33 @@ public sealed partial class ChatToolDispatcher(
         "bee_replace_in_article", "bee_delete_article", "bee_insert_image_into_article"
     };
 
-    /// <summary>Destructive tools (plan §2 Phase 3 "per-session destructive-op cap"). These are
-    /// counted per conversation and refused beyond a small cap (see ChatDestructiveOpCounter).</summary>
+    /// <summary>Tool names that CAN be destructive (plan §2 Phase 3 "per-session destructive-op
+    /// cap") — see <see cref="IsDestructiveTool"/> for the actual (args-aware) determination.
+    /// <c>bee_delete_article</c>/<c>bee_replace_in_article</c> always count; <c>bee_update_article</c>
+    /// only counts when its call actually carries a <c>content</c> argument.</summary>
     public static readonly IReadOnlySet<string> DestructiveTools = new HashSet<string>
     {
-        "bee_delete_article", "bee_replace_in_article"
+        "bee_delete_article", "bee_replace_in_article", "bee_update_article"
     };
 
     public static bool IsWriteTool(string name) => WriteTools.Contains(name);
-    public static bool IsDestructiveTool(string name) => DestructiveTools.Contains(name);
+
+    /// <summary>True if this specific call is destructive and must count against the per-conversation
+    /// cap (see ChatDestructiveOpCounter). <c>bee_delete_article</c> and <c>bee_replace_in_article</c>
+    /// always are. <c>bee_update_article</c> only is when it carries a <c>content</c> argument — that
+    /// replaces the ENTIRE article body (no partial/no-op outcome, unlike replace's "0 occurrences"),
+    /// exactly as destructive as bee_replace_in_article; a metadata-only update (title/treePath/tags,
+    /// no content) is no more destructive than a rename and would otherwise burn the shared budget for
+    /// free. Before this, the whole cap could be sidestepped by asking the model to "update" the body
+    /// instead of "replace" it.</summary>
+    public static bool IsDestructiveTool(string name, JsonElement args)
+    {
+        if (name is "bee_delete_article" or "bee_replace_in_article") return true;
+        if (name == "bee_update_article")
+            return args.ValueKind == JsonValueKind.Object
+                && args.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String;
+        return false;
+    }
 
     /// <summary>The value recorded as <c>ViaAgentName</c> on chat-driven writes so /Activity shows
     /// "via agent: chat" exactly like MCP-agent-driven edits (plan §1 "Audit", §2 Phase 3).</summary>
@@ -98,20 +116,45 @@ public sealed partial class ChatToolDispatcher(
     public const string ChatWriteExecItemsKey = "ChatWriteExec";
 
     /// <summary>Short human-readable summary of a write tool call, shown on the confirm card
-    /// ("AI wants to: &lt;summary&gt;"). Built from the tool name + the model's args; never throws.</summary>
+    /// ("AI wants to: &lt;summary&gt;"). Built from the tool name + the model's args; never throws.
+    ///
+    /// <para><b>M1 fix:</b> this used to deliberately omit <c>content</c>/<c>search</c>/<c>replace</c>
+    /// — a human approved "Update article 3f2a…" with no sight of the payload, which is not a
+    /// meaningful confirmation against a prompt-injected write (the injected instruction controls
+    /// exactly the text nobody was shown). Every text-carrying write tool now includes a truncated,
+    /// single-line preview of what will actually be written. It is still a PREVIEW, not the full
+    /// body/diff — the confirm card is a short summary, not a document viewer — but a bounded
+    /// snippet is enough for a human to recognize "this isn't what I asked for" the same way a git
+    /// commit's diffstat is enough to smell a bad commit without reading the whole patch.</para></summary>
     public static string SummarizeWriteCall(string name, JsonElement args)
     {
         string Id() => args.TryGetProperty("id", out var e) ? (e.GetString() ?? "") : "";
         string Title() => args.TryGetProperty("title", out var e) ? (e.GetString() ?? "") : "";
         string Path() => args.TryGetProperty("treePath", out var e) ? (e.GetString() ?? "") : "";
+
+        // Truncated, single-line preview of a string argument (content/search/replace). Collapses
+        // real newlines to a visible " ↵ " marker rather than relying on the confirm card's HTML
+        // to render literal line breaks (it doesn't — see chat.js, a plain innerHTML div), so a
+        // multi-line body still reads as one coherent preview line instead of silently losing its
+        // line breaks to HTML whitespace collapsing.
+        string Preview(string prop, int maxLen = 200)
+        {
+            if (!args.TryGetProperty(prop, out var e) || e.ValueKind != JsonValueKind.String) return "";
+            var s = e.GetString() ?? "";
+            var oneLine = s.Replace("\r\n", "\n").Replace('\n', '↵' /* ↵ */);
+            return oneLine.Length <= maxLen ? oneLine : oneLine[..maxLen] + "…";
+        }
+
         return name switch
         {
             "bee_save_article" => string.IsNullOrWhiteSpace(Title())
-                ? $"Create a new article{(string.IsNullOrWhiteSpace(Path()) ? "" : " in " + Path())}"
-                : $"Create article '{Title()}'{(string.IsNullOrWhiteSpace(Path()) ? "" : " in " + Path())}",
-            "bee_update_article" => $"Update article {Id()}{(string.IsNullOrWhiteSpace(Title()) ? "" : " → '" + Title() + "'")}",
-            "bee_append_to_article" => $"Append text to article {Id()}",
-            "bee_replace_in_article" => $"Replace text in article {Id()}",
+                ? $"Create a new article{(string.IsNullOrWhiteSpace(Path()) ? "" : " in " + Path())}: \"{Preview("content")}\""
+                : $"Create article '{Title()}'{(string.IsNullOrWhiteSpace(Path()) ? "" : " in " + Path())}: \"{Preview("content")}\"",
+            "bee_update_article" => args.TryGetProperty("content", out var uc) && uc.ValueKind == JsonValueKind.String
+                ? $"Update article {Id()}{(string.IsNullOrWhiteSpace(Title()) ? "" : " → '" + Title() + "'")} — REPLACES THE ENTIRE BODY with: \"{Preview("content")}\""
+                : $"Update article {Id()}{(string.IsNullOrWhiteSpace(Title()) ? "" : " → '" + Title() + "'")} (metadata only — title/path/tags, no body change)",
+            "bee_append_to_article" => $"Append to article {Id()}: \"{Preview("text")}\"",
+            "bee_replace_in_article" => $"In article {Id()}, replace \"{Preview("search", 100)}\" with \"{Preview("replace", 100)}\"",
             "bee_delete_article" => $"Delete article {Id()}",
             "bee_insert_image_into_article" => args.TryGetProperty("articleId", out var aid)
                 ? $"Insert an image into article {aid.GetString()}"
