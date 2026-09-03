@@ -150,21 +150,22 @@ public class McpToolRegistryTests
     }
 
     /// <summary>
-    /// Enumerates tool names the same way <see cref="McpToolRegistry"/> does — by reflecting over
-    /// the same tool types for [McpServerTool] — rather than through a registry accessor, so the
-    /// completeness check does not depend on production code growing an enumeration API.
+    /// Enumerates every tool name the production registry would see, by scanning the WHOLE
+    /// BeeMemoryBank.Api assembly for [McpServerTool] rather than a hardcoded list of tool
+    /// classes. A hardcoded list is what made the old tests a snapshot instead of a guard: a new
+    /// tool CLASS registered in Program.cs would be invisible here and the completeness check
+    /// would pass without ever having seen it.
+    ///
+    /// The name falls back to the method name when the attribute does not set Name — mirroring
+    /// <see cref="McpToolRegistry"/>'s own resolution, so an unnamed tool cannot slip past by
+    /// deserializing to null here while registering fine in production.
     /// </summary>
     private static HashSet<string> AllToolNames()
     {
-        var types = new[]
-        {
-            typeof(BeeSearchTools), typeof(BeeReadTools), typeof(BeeWriteTools),
-            typeof(BeeSessionTools), typeof(BeeUploadTools), typeof(BeeAuditTools),
-            typeof(BeeConceptTools)
-        };
+        var assembly = typeof(BeeSearchTools).Assembly;
 
         var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var type in types)
+        foreach (var type in assembly.GetTypes())
         {
             foreach (var method in type.GetMethods(
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
@@ -173,10 +174,27 @@ public class McpToolRegistryTests
                     .FirstOrDefault(a => a.GetType().Name == "McpServerToolAttribute");
                 if (attr == null) continue;
 
-                var name = attr.GetType().GetProperty("Name")?.GetValue(attr) as string;
-                if (!string.IsNullOrEmpty(name)) names.Add(name);
+                var declared = attr.GetType().GetProperty("Name")?.GetValue(attr) as string;
+                names.Add(string.IsNullOrWhiteSpace(declared) ? method.Name : declared!);
             }
         }
+
+        // A scan that found nothing would make every assertion above vacuously true.
+        names.Should().NotBeEmpty("the [McpServerTool] scan must actually find the MCP tools");
         return names;
+    }
+
+    [Fact]
+    public void ToolScan_SeesEveryToolClassTheRegistryIsBuiltFrom()
+    {
+        // Guards the guard: if a new tool class appears in the assembly, the assembly-wide scan
+        // above picks it up, but `Registry` (built from the same hardcoded list Program.cs uses)
+        // would not know it — and ToolsListedAsRequiringAnUnlockedSession would then dereference
+        // a null ToolInfo. Fail with a clear message instead.
+        foreach (var name in AllToolNames())
+            Registry.Get(name).Should().NotBeNull(
+                "{0} carries [McpServerTool] but is not reachable through the registry this test " +
+                "builds — add its declaring class to the list at the top of this file, and check " +
+                "it is registered in Program.cs too", name);
     }
 }

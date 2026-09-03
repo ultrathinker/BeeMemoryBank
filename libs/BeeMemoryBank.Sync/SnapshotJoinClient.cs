@@ -61,8 +61,20 @@ public class SnapshotJoinClient
             ?? throw new InvalidOperationException("Empty challenge response");
 
         var challengeBytes = Convert.FromBase64String(challenge.Challenge);
-        var domainTag = "BMB-CHALLENGE-V1\0"u8.ToArray();
-        var challengePayload = domainTag.Concat(challengeBytes).ToArray();
+        // V2: the signature is bound to the audience node's id. /api/sync/authenticate verifies
+        // against ITS OWN recorded identity and no longer accepts the old unbound V1 tag at all,
+        // so signing V1 here would simply 401 — see PeerAuthenticator's domain-tag comment.
+        //
+        // Unlike the steady-state sync path, the anchor here can only be the id the remote just
+        // declared: this is first contact, so there is no whitelist row to pin against yet. That
+        // is trust-on-first-use, and it is what the operator is already doing by typing this URL
+        // and master password. It is still strictly better than the unbound payload it replaces —
+        // the resulting signature is redeemable only at the node that issued the challenge.
+        var domainTag = "BMB-CHALLENGE-V2\0"u8.ToArray();
+        var challengePayload = domainTag
+            .Concat(challenge.ServerNodeId.ToByteArray())
+            .Concat(challengeBytes)
+            .ToArray();
         var challengeSig = Ed25519Signer.Sign(localPrivateKey, challengePayload);
 
         var authResp = await _http.PostAsJsonAsync($"{remoteUrl}/api/sync/authenticate",

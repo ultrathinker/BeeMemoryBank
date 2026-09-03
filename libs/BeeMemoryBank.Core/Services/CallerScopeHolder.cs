@@ -48,11 +48,20 @@ public class CallerScopeHolder
     /// </summary>
     public ScopeElevation ElevateToSystem() => new(this, SystemCallerScope.Instance);
 
-    /// <summary>Restores the previous <see cref="CallerScopeHolder.Scope"/> on dispose.</summary>
-    public readonly struct ScopeElevation : IDisposable
+    /// <summary>
+    /// Restores the previous <see cref="CallerScopeHolder.Scope"/> on dispose.
+    ///
+    /// <para>A sealed class rather than a struct on purpose. A struct can be copied — passed by
+    /// value into a helper, assigned to a second variable — and each copy carries its own
+    /// "previous scope" that it would re-apply on disposal, stomping whatever scope is active by
+    /// then; a readonly struct also cannot mark itself disposed to prevent that. These blocks are
+    /// nowhere near hot enough for one allocation to matter.</para>
+    /// </summary>
+    public sealed class ScopeElevation : IDisposable
     {
         private readonly CallerScopeHolder _holder;
         private readonly ICallerScope _previous;
+        private bool _disposed;
 
         internal ScopeElevation(CallerScopeHolder holder, ICallerScope elevated)
         {
@@ -63,9 +72,9 @@ public class CallerScopeHolder
 
         public void Dispose()
         {
-            // Guarded because `default(ScopeElevation)` is constructible and would otherwise NRE
-            // here; restoring is idempotent, so a copied struct disposing twice is harmless.
-            if (_holder != null) _holder.Scope = _previous;
+            if (_disposed) return;
+            _disposed = true;
+            _holder.Scope = _previous;
         }
     }
 }

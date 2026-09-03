@@ -76,12 +76,28 @@ public class ScopeElevationTests
     }
 
     [Fact]
-    public void Dispose_OnADefaultElevation_DoesNotThrow()
+    public void DisposingTwice_DoesNotClobberAScopeSetInBetween()
     {
-        // `default(ScopeElevation)` is constructible whether we like it or not; disposing it must
-        // be a no-op rather than a NullReferenceException.
-        var act = () => default(CallerScopeHolder.ScopeElevation).Dispose();
-        act.Should().NotThrow();
+        // A second Dispose must not re-apply the scope this elevation captured. If it did, an
+        // elevation disposed twice (a stray extra Dispose, or a struct copy — which is why this
+        // is a class) would silently roll a later, unrelated scope change backwards.
+        var holder = new CallerScopeHolder();
+        var original = DenyAllScope.Instance;
+        holder.Scope = original;
+
+        var elevation = holder.ElevateToSystem();
+        elevation.Dispose();
+        holder.Scope.Should().BeSameAs(original);
+
+        var laterScope = new HttpCallerScope(
+            isSuperadmin: false,
+            denyPaths: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            allowPaths: new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "/Work" });
+        holder.Scope = laterScope;
+
+        elevation.Dispose();
+
+        holder.Scope.Should().BeSameAs(laterScope, "a redundant Dispose must be a no-op");
     }
 
     /// <summary>
@@ -104,10 +120,23 @@ public class ScopeElevationTests
             .Select(d => Path.Combine(repoRoot, d))
             .Where(Directory.Exists);
 
-        // `<anything>.Scope = SystemCallerScope.Instance` — the hand-rolled elevation this replaces.
-        var handRolled = new Regex(@"\.Scope\s*=\s*SystemCallerScope\.Instance", RegexOptions.Compiled);
+        // Matched against the whole file, not line by line: `Scope =` and the value can sit on
+        // separate lines after a reformat, and a line-oriented scan would see neither half.
+        // `Singleline` lets `\s` span the newline. The optional namespace prefix covers a fully
+        // qualified `BeeMemoryBank.Core.Services.SystemCallerScope.Instance`.
+        var handRolled = new Regex(
+            @"\.Scope\s*=\s*(?:[\w.]+\.)?SystemCallerScope\.Instance",
+            RegexOptions.Compiled | RegexOptions.Singleline);
+
+        // Any assignment of SystemCallerScope.Instance to a local, which could then be assigned
+        // to .Scope out of this pattern's sight. There is no legitimate reason to hold the
+        // singleton in a variable in production code — it is passed directly where it is needed.
+        var launderedViaLocal = new Regex(
+            @"=\s*(?:[\w.]+\.)?SystemCallerScope\.Instance\s*;",
+            RegexOptions.Compiled);
 
         var offenders = new List<string>();
+        var filesScanned = 0;
         foreach (var root in searchRoots)
         {
             foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
@@ -117,17 +146,37 @@ public class ScopeElevationTests
                     file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
                     continue;
 
-                // The helper itself is where the assignment legitimately lives.
-                if (Path.GetFileName(file) == "CallerScopeHolder.cs") continue;
+                // Three files legitimately name SystemCallerScope.Instance and are not elevations:
+                // the helper that performs (and restores) the elevation, and the two
+                // ICallerScopeStore implementations, whose reference is the DEFAULT a store starts
+                // at before any caller identity is known — a CLI run, a background job, a test.
+                // CallerScopeMiddleware overwrites it for every HTTP request, and never with
+                // SystemCallerScope (a superadmin gets an empty-rule HttpCallerScope instead).
+                if (Path.GetFileName(file) is "CallerScopeHolder.cs"
+                    or "InstanceCallerScopeStore.cs"
+                    or "HttpContextCallerScopeStore.cs") continue;
 
-                var lines = File.ReadAllLines(file);
-                for (var i = 0; i < lines.Length; i++)
+                filesScanned++;
+                var text = File.ReadAllText(file);
+                var relative = Path.GetRelativePath(repoRoot, file);
+
+                foreach (Match m in handRolled.Matches(text))
+                    offenders.Add($"{relative} (offset {m.Index}): direct assignment");
+
+                foreach (Match m in launderedViaLocal.Matches(text))
                 {
-                    if (handRolled.IsMatch(lines[i]))
-                        offenders.Add($"{Path.GetRelativePath(repoRoot, file)}:{i + 1}");
+                    // A direct `.Scope = ...Instance;` also matches this second pattern; do not
+                    // report the same occurrence twice.
+                    if (handRolled.Matches(text).Any(h => h.Index + h.Length == m.Index + m.Length))
+                        continue;
+                    offenders.Add($"{relative} (offset {m.Index}): SystemCallerScope.Instance held in a local");
                 }
             }
         }
+
+        // A scan that walked nothing would make the assertion below vacuously true.
+        filesScanned.Should().BeGreaterThan(100,
+            "the scan must actually be walking the production source tree");
 
         offenders.Should().BeEmpty(
             "elevation must go through CallerScopeHolder.ElevateToSystem(), whose Dispose restores " +

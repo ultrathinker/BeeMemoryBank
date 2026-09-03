@@ -80,9 +80,21 @@ public partial class SnapshotService
                             DELETE FROM tbl_sync_position;
                             DELETE FROM tbl_sync_push_position;
                             DELETE FROM tbl_restore_replay_shield;
-                            DELETE FROM tbl_sync_quarantine;
                             DELETE FROM tbl_event;";
                         wipeNetCmd.ExecuteNonQuery();
+
+                        // Separate statement, and tolerant of the table being absent: the staging
+                        // database is the ARCHIVE's schema, not ours, and migrations have not run
+                        // on it yet. tbl_sync_quarantine arrived in migration 013, so an older
+                        // archive simply has no such table — folding this DELETE into the batch
+                        // above would abort the whole transaction with "no such table" and make
+                        // every pre-013 backup unrestorable. Same tolerance the join-snapshot
+                        // sanitizer already applies for the same reason.
+                        using var wipeQuarantineCmd = stagingConn.CreateCommand();
+                        wipeQuarantineCmd.Transaction = tx;
+                        wipeQuarantineCmd.CommandText = "DELETE FROM tbl_sync_quarantine;";
+                        try { wipeQuarantineCmd.ExecuteNonQuery(); }
+                        catch (Microsoft.Data.Sqlite.SqliteException) { /* pre-013 archive */ }
 
                         using var identityCmd = stagingConn.CreateCommand();
                         identityCmd.Transaction = tx;

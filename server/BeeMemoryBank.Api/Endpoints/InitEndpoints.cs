@@ -318,8 +318,16 @@ public static class InitEndpoints
                         ?? throw new InvalidOperationException("No challenge from remote");
 
                     var challengeBytes = Convert.FromBase64String(challenge.Challenge);
-                    var domainTag = "BMB-CHALLENGE-V1\0"u8.ToArray();
-                    var challengePayload = domainTag.Concat(challengeBytes).ToArray();
+                    // V2: bound to the audience node's id. /api/sync/authenticate verifies against
+                    // its own recorded identity and no longer accepts the unbound V1 tag, so a V1
+                    // signature here would simply 401. First contact, so the anchor is the id the
+                    // remote just declared — trust-on-first-use, same as the operator typing this
+                    // URL and master password. See SnapshotJoinClient for the same reasoning.
+                    var domainTag = "BMB-CHALLENGE-V2\0"u8.ToArray();
+                    var challengePayload = domainTag
+                        .Concat(challenge.ServerNodeId.ToByteArray())
+                        .Concat(challengeBytes)
+                        .ToArray();
                     var challengeSig = Ed25519Signer.Sign(privateKey, challengePayload);
                     Array.Clear(privateKey);
 

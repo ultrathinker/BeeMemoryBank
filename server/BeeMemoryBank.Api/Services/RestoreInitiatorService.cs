@@ -502,8 +502,25 @@ public class RestoreInitiatorService : IRestoreInitiator
                     ?? throw new InvalidDataException("Invalid challenge response.");
 
                 var challengeBytes = Convert.FromBase64String(challengeData.Challenge);
-                var domainTag = "BMB-CHALLENGE-V1\0"u8.ToArray();
-                var challengePayload = domainTag.Concat(challengeBytes).ToArray();
+                // V2: bound to the audience node's id. /api/sync/authenticate verifies against its
+                // own recorded identity and no longer accepts the unbound V1 tag, so a V1
+                // signature here would simply 401.
+                //
+                // Unlike the two join paths, this one HAS an out-of-band anchor and uses it:
+                // seederPeer is our own whitelist row for this candidate, so refuse if the peer
+                // answering at this address issues a challenge for anyone else. That stops a
+                // seeder from relaying a challenge fetched live from a third node and redeeming
+                // our signature there.
+                if (challengeData.ServerNodeId != seederPeer.NodeId)
+                    throw new InvalidOperationException(
+                        $"Seeder at {sourceUrl} issued a challenge for node {challengeData.ServerNodeId}, " +
+                        $"but our whitelist pins it to {seederPeer.NodeId}. Refusing to sign.");
+
+                var domainTag = "BMB-CHALLENGE-V2\0"u8.ToArray();
+                var challengePayload = domainTag
+                    .Concat(seederPeer.NodeId.ToByteArray())
+                    .Concat(challengeBytes)
+                    .ToArray();
                 var signature = NodeIdentityCrypto.SignWithIdentityOrGetDek(
                     identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                     identity.NodeId, () => _sessionService.GetMasterDek(), challengePayload);
