@@ -106,6 +106,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
 
             byte[] currentCandidate = unwrappedDek!;
             bool sentinelMatch = false;
+            bool authorized = true;
 
             try
             {
@@ -141,13 +142,55 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                     {
                         sentinelMatch = true;
                     }
+
+                    // SECURITY: only a superadmin may unlock the shared, process-wide vault
+                    // session — the same policy SessionEndpoints' /login already enforces (a
+                    // non-superadmin gets 403 "Server is locked" there instead of ever reaching
+                    // UnlockAsync). /unlock itself had no such gate: it accepted ANY slot whose
+                    // password matched, including — in principle — an ordinary user's "user"
+                    // slot. Checked HERE rather than via an X-User-Role header or any other
+                    // caller-supplied claim, because this is the one point that cannot be lied
+                    // to: the password has just been cryptographically proven (KEK unwrap +
+                    // sentinel match) to belong to THIS row in tbl_key_slot, so asking "whose
+                    // slot is this, really?" against tbl_user directly is authoritative
+                    // regardless of what the caller claims about itself.
+                    //
+                    // Only "user" slots need this check. "recovery" and legacy pre-migration
+                    // "password" slots are intentionally exempt: a recovery key is never tied to
+                    // any user account (it's the user's sole break-glass path back into the
+                    // vault — rejecting it here would be a self-inflicted lockout), and a legacy
+                    // "password" slot predates the whole user table / role concept — it IS the
+                    // superadmin-equivalent credential until LegacyPasswordSlotMigrationService
+                    // (below) converts it to a "user" slot on a synthetic admin account. Under
+                    // the current invariants (UserService only ever creates/keeps a "user" slot
+                    // for a superadmin — see CreateUserAsync / RewrapOrProvisionKeySlotAsync /
+                    // ProvisionMissingKeySlotAsync, and UpdateUserAsync deletes the slot the
+                    // instant its owner is demoted) no non-superadmin should ever hold a "user"
+                    // slot, so this is defence in depth against a future bug or hand-edited DB
+                    // row, not a fix for a reachable path — but it's cheap enough to check
+                    // unconditionally rather than rely on that invariant never being violated.
+                    if (sentinelMatch && slot.SlotType == "user")
+                    {
+                        var userRepo = sentinelScope.ServiceProvider.GetService<IUserRepository>();
+                        if (userRepo != null)
+                        {
+                            var owner = (await userRepo.ListActiveAsync())
+                                .FirstOrDefault(u => u.KeySlotId == slot.SlotId);
+                            authorized = owner != null && owner.Role == UserRoles.Superadmin;
+                        }
+                    }
                 }
                 else
                 {
                     sentinelMatch = true;
                 }
 
-                if (!sentinelMatch)
+                // A wrong password and a correct-password-but-not-permitted slot must be
+                // indistinguishable to the caller: both just fall through to the next candidate
+                // slot here, and if nothing else matches, UnlockAsync returns false exactly like
+                // a plain wrong-password attempt — no separate error path that would turn this
+                // endpoint into an oracle for "is this someone else's valid password".
+                if (!sentinelMatch || !authorized)
                 {
                     Array.Clear(currentCandidate, 0, currentCandidate.Length);
                     Array.Clear(kek, 0, kek.Length);
