@@ -30,7 +30,7 @@ public interface IEventLogger
     Task LogFolderCreateAsync(Folder folder);
     Task LogFolderRenameAsync(Guid folderId, string oldPath, string newPath, string newName, string? newParentPath, long lamportTs, DateTime updatedAt);
     Task LogFolderDeleteAsync(Guid folderId, string path, DateTime deletedAt);
-    Task LogMediaCreateAsync(Media media, byte[] ciphertext);
+    Task LogMediaCreateAsync(Media media, byte[] ciphertext, IDbTransaction? transaction = null);
     Task LogMediaDeleteAsync(Guid mediaId);
     Task LogConceptTagRenameAsync(string oldName, string newName);
     Task LogConceptTagMergeAsync(string source, string target);

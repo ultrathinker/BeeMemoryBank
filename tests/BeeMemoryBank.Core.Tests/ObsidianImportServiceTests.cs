@@ -49,7 +49,7 @@ public class ObsidianImportServiceTests : IAsyncLifetime
         Directory.CreateDirectory(TempMediaDir);
         MediaService = new MediaService(mediaRepo, articleRepo, Session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(),
-            new MediaStorageOptions(TempMediaDir));
+            new MediaStorageOptions(TempMediaDir), Factory);
 
         ImportService = new ObsidianImportService(ArticleService, MediaService);
 

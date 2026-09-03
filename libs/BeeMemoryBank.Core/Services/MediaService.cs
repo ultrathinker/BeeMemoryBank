@@ -16,7 +16,8 @@ public class MediaService(
     INodeIdentityRepository nodeRepo,
     ILamportClock clock,
     IEventLogger eventLogger,
-    MediaStorageOptions options)
+    MediaStorageOptions options,
+    IDbConnectionFactory connFactory)
 {
     private static readonly HashSet<string> AllowedContentTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -140,40 +141,47 @@ public class MediaService(
         Directory.CreateDirectory(options.MediaDir);
         var filePath = Path.Combine(options.MediaDir, $"{media.Id}.enc");
 
-        // Ordering, and why this isn't one SQL transaction (M10):
+        // Ordering (M10): file first, then the row and its sync event together in ONE transaction.
         //
-        // DB row first, then file — if the file write fails we can detect the missing file (the row
-        // exists, `{media.Id}.enc` doesn't) and clean it up below. The reverse (file first, DB fails)
-        // would leave an orphaned .enc file with nothing pointing back at it to find and delete.
+        // The row and the event must be atomic, the same shape EventApplier's article create/update
+        // uses (EventApplier.Article.cs, H5) and for the same reason: a crash between them would
+        // leave media that exists locally and NEVER propagates to peers, with nothing to detect or
+        // retry it.
         //
-        // The row and the sync event ideally belong in ONE transaction, the same shape EventApplier's
-        // article create/update now uses (see EventApplier.Article.cs, H5): without it, a crash
-        // between the row commit and the event append leaves media that exists locally and NEVER
-        // propagates to peers, with nothing to detect or retry it. That requires
-        // IMediaRepository.CreateAsync to accept an IDbTransaction the way IArticleRepository /
-        // IArticleBodyRepository / IEventLogRepository already do (see the shared contract documented
-        // on IArticleRepository) — it currently doesn't, and that interface is outside this change's
-        // scope, so it's flagged for a follow-up there instead of patched here.
-        //
-        // Until then, this at least closes the THROWN-exception case (event signing failure, disk
-        // full on the file write, etc.): compensate by deleting what was just written, so a caller
-        // sees a clean failure with nothing left behind, rather than a silently orphaned, never-synced
-        // media row. This does NOT cover a hard process crash between the writes (kill -9, power
-        // loss) — that narrower window still needs the transactional fix above.
-        await mediaRepo.CreateAsync(media);
+        // The file goes first, before the transaction, because the two failure modes are not
+        // symmetric. A crash after the file write but before the commit leaves an orphaned .enc file
+        // — inert bytes nothing references, cleanable by a sweep. The reverse (committing a row and
+        // an event that reference a file that was never written) is a dangling reference that cannot
+        // self-heal: peers would receive the event, and the local row would point at nothing.
+        // Note the event payload carries the ciphertext itself, so peers are unaffected by the local
+        // file either way.
+        await File.WriteAllBytesAsync(filePath, ciphertext);
         try
         {
-            await File.WriteAllBytesAsync(filePath, ciphertext);
-            await eventLogger.LogMediaCreateAsync(media, ciphertext);
+            using var conn = connFactory.CreateConnection();
+            using var tx = conn.BeginTransaction();
+            try
+            {
+                await mediaRepo.CreateAsync(media, tx);
+                await eventLogger.LogMediaCreateAsync(media, ciphertext, tx);
+                tx.Commit();
+            }
+            catch
+            {
+                try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back */ }
+                throw;
+            }
         }
         catch
         {
-            // Best-effort compensation — swallow cleanup failures so they don't mask the real
-            // (original) exception the caller needs to see.
-            try { await mediaRepo.DeleteByIdAsync(media.Id); } catch { /* best-effort */ }
+            // The transaction rolled back, so there is no row and no event — delete the file we
+            // wrote so a failure leaves nothing behind at all. Best-effort: swallow cleanup failures
+            // so they can't mask the original exception the caller needs to see.
             try { if (File.Exists(filePath)) File.Delete(filePath); } catch { /* best-effort */ }
             throw;
         }
+
+        eventLogger.SignalSync();
 
         return media;
     }

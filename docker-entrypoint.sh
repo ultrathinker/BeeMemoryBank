@@ -11,16 +11,18 @@ if [ -z "$BMB_INTERNAL_KEY" ]; then
     export BMB_INTERNAL_KEY=$(cat "$KEY_FILE")
 fi
 
-# Start API in background, bound to loopback ONLY (port 5300). AgentAuthMiddleware's auth model
-# assumes the MCP endpoint (and every other unauthenticated-looking route: /api/session/unlock,
-# /api/session/status, /api/join, /api/init/reset, ...) is unreachable from outside this
-# container/host — that assumption used to be false for the shipped docker-compose.yml, which
-# published 5300 straight to the host with the API listening on 0.0.0.0 (H4). Both processes
-# share this container's network namespace, so Web (below) still reaches the API over
-# localhost exactly as before — only external reachability changes. See docs/deployment.md's
-# "Reverse Proxy — What Is Exposed" for the equivalent from-source setup, and note that this
-# compose file itself no longer publishes the API port at all (belt AND suspenders).
-ASPNETCORE_URLS=http://127.0.0.1:5300 \
+# Start API in background (port 5300), bound to 0.0.0.0 *within this container's network
+# namespace*. The container is the isolation boundary here, not the process bind address: what
+# decides whether the raw API surface (/api/session/unlock, /api/session/status, /api/join,
+# /api/init/reset, /mcp, ...) is reachable from outside is whether the host publishes this port,
+# which is why the shipped docker-compose.yml no longer publishes it at all.
+#
+# Do NOT "harden" this to 127.0.0.1: Docker's published-port DNAT arrives on the container's
+# bridge interface, not its loopback, so a loopback-only bind silently breaks every deployment
+# that publishes this port on purpose — including the reverse-proxied one where Apache/Nginx
+# path-filters to /mcp, /api/sync, /api/join and forwards to a host-loopback-bound mapping
+# (`127.0.0.1:5004:5300`). Bind the port on the HOST side to control exposure.
+ASPNETCORE_URLS=http://0.0.0.0:5300 \
     dotnet /app/api/BeeMemoryBank.Api.dll &
 
 # Start Web as the main process — Docker monitors this (port 5301)

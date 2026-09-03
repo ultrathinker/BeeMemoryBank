@@ -15,11 +15,25 @@
 
 ```
 Container: bmb  (docker compose)
-API:  localhost:5300  → container :5300
-Web:  localhost:5301  → container :5301
+Web:  localhost:5301  → container :5301   (published)
+API:  container :5300                     (NOT published — see below)
 Data: /var/lib/beememorybank  (bind mount to /app/data)
 Image: multi-stage build from Dockerfile
 ```
+
+The shipped `docker-compose.yml` deliberately publishes only the Web port. If you need the API
+reachable from other nodes, publish it **bound to the host's loopback** and put a path-filtering
+reverse proxy in front of it:
+
+```yaml
+ports:
+  - "127.0.0.1:5004:5300"
+  - "::1:5004:5300"      # if your proxy resolves "localhost" to ::1
+```
+
+Never publish the API port on `0.0.0.0`. Docker's port publishing writes DNAT rules directly and
+bypasses `ufw`, so a `0.0.0.0` mapping is internet-reachable even on a host you believe is
+firewalled.
 
 ## Reverse Proxy — What Is Exposed
 
@@ -30,7 +44,20 @@ Only the following endpoints should be publicly accessible:
 
 Everything else (including `/api/articles`) should be restricted to trusted IPs or localhost.
 
-**How the application enforces this:** All non-public endpoints require the `X-Internal-Key` header matching `BMB_INTERNAL_KEY`. Requests without it receive `403 Forbidden` regardless of where they come from — so even if your reverse proxy accidentally exposes an endpoint, the API will block unauthorized access. The IP restriction at the proxy level is defense-in-depth, not the sole protection.
+**How the application enforces this — and where it does NOT:** most non-public endpoints require the
+`X-Internal-Key` header matching `BMB_INTERNAL_KEY` and return `403 Forbidden` without it (`/api/init/reset`,
+for example). But several endpoints deliberately skip that check because they must be callable before a
+session exists, and those are genuinely unauthenticated if the port is reachable:
+
+- `POST /api/session/unlock` — returns `401` on a wrong master password, i.e. it *processes* the attempt.
+  Exposed publicly this is a master-password oracle, and a correct guess unlocks the vault **globally, for
+  every user and agent on the node**, not just for the caller.
+- `GET /api/session/status` — returns `200` and leaks whether the vault is currently unlocked.
+- `POST /api/join` — master password grants mesh membership.
+
+So the proxy path-filter is **not** merely defense-in-depth for these routes; it is the only thing standing
+in front of them. Restrict the API port to loopback and expose only `/mcp`, `/api/sync` and `/api/join`
+through the proxy, over TLS.
 
 ## Deployment Procedure (Docker)
 

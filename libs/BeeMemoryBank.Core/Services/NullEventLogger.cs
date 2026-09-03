@@ -21,7 +21,7 @@ public sealed class NullEventLogger : IEventLogger
     public Task LogFolderCreateAsync(Folder folder) => Task.CompletedTask;
     public Task LogFolderRenameAsync(Guid folderId, string oldPath, string newPath, string newName, string? newParentPath, long lamportTs, DateTime updatedAt) => Task.CompletedTask;
     public Task LogFolderDeleteAsync(Guid folderId, string path, DateTime deletedAt) => Task.CompletedTask;
-    public Task LogMediaCreateAsync(Media media, byte[] ciphertext) => Task.CompletedTask;
+    public Task LogMediaCreateAsync(Media media, byte[] ciphertext, System.Data.IDbTransaction? transaction = null) => Task.CompletedTask;
     public Task LogMediaDeleteAsync(Guid mediaId) => Task.CompletedTask;
     public Task LogConceptTagRenameAsync(string oldName, string newName) => Task.CompletedTask;
     public Task LogConceptTagMergeAsync(string source, string target) => Task.CompletedTask;

@@ -208,7 +208,7 @@ public class EventLogger(
             JsonSerializer.Serialize(payload), path);
     }
 
-    public async Task LogMediaCreateAsync(Media media, byte[] ciphertext)
+    public async Task LogMediaCreateAsync(Media media, byte[] ciphertext, IDbTransaction? transaction = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -228,7 +228,7 @@ public class EventLogger(
             Kind: media.Kind);
 
         await AppendEventAsync(identity, EventTypes.MediaCreate, null, lamportTs,
-            JsonSerializer.Serialize(payload));
+            JsonSerializer.Serialize(payload), transaction: transaction);
     }
 
     public async Task LogMediaDeleteAsync(Guid mediaId)

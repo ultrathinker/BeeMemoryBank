@@ -58,7 +58,7 @@ public class BeeImportServiceTests : IAsyncLifetime
         Directory.CreateDirectory(TempMediaDir);
         MediaService = new MediaService(mediaRepo, articleRepo, Session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(),
-            new MediaStorageOptions(TempMediaDir));
+            new MediaStorageOptions(TempMediaDir), Factory);
 
         ImportService = new BeeImportService(ArticleService, MediaService, folderRepo, nodeRepo);
 

@@ -79,17 +79,24 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
             throw new ReadOnlyAccessException(treePath);
     }
 
-    public async Task CreateAsync(Media media)
+    public async Task CreateAsync(Media media, System.Data.IDbTransaction? transaction = null)
     {
-        using var conn = OpenConnection();
-        await EnsureWriteAllowedAsync(conn, media.ArticleId);
-        await conn.ExecuteAsync(
-            @"INSERT INTO tbl_media
-              (id, article_id, file_name, content_type, file_size,
-               encrypted_dek, dek_iv, iv, status, lamport_ts, source_node_id, created_at, kind)
-              VALUES (@Id, @ArticleId, @FileName, @ContentType, @FileSize,
-                      @EncryptedDek, @DekIV, @IV, @Status, @LamportTs, @SourceNodeId, @CreatedAt, @Kind)",
-            media);
+        var conn = transaction?.Connection ?? OpenConnection();
+        try
+        {
+            await EnsureWriteAllowedAsync(conn, media.ArticleId, transaction);
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_media
+                  (id, article_id, file_name, content_type, file_size,
+                   encrypted_dek, dek_iv, iv, status, lamport_ts, source_node_id, created_at, kind)
+                  VALUES (@Id, @ArticleId, @FileName, @ContentType, @FileSize,
+                          @EncryptedDek, @DekIV, @IV, @Status, @LamportTs, @SourceNodeId, @CreatedAt, @Kind)",
+                media, transaction);
+        }
+        finally
+        {
+            if (transaction == null) conn.Dispose();
+        }
     }
 
     public async Task SoftDeleteByArticleIdAsync(Guid articleId, System.Data.IDbTransaction? transaction = null)
