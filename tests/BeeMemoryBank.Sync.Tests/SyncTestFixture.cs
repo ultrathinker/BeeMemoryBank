@@ -92,7 +92,7 @@ public abstract class SyncTestFixture : IAsyncLifetime
             ConflictRepo, TombstoneRepo, WhitelistRepo, commentRepo, folderRepo, Clock, mediaRepo, NodeRepo, conceptTagService, conceptTagRepo,
             new FakeEmbeddingGenerator(), HardDeleteService, null,
             replayShieldRepo, restoreEventStateRepo, new NullRestoreInitiator(),
-            dekRotationStateRepo, new NullDekRotationApplier(), folderAccess,
+            dekRotationStateRepo, new NullDekRotationApplier(), folderAccess, Factory,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance);
     }
 

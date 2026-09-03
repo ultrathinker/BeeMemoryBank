@@ -104,8 +104,16 @@ public partial class EventApplier
         if (!ConflictResolver.IncomingWins(folder.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
             return;
 
-        await folderRepo.SoftDeleteAsync(p.FolderId, p.DeletedAt);
+        // H5: detach articles BEFORE marking the folder deleted, not after. ClearFolderIdAsync is a
+        // plain idempotent UPDATE ("WHERE folder_id = @folderId"), safe to call more than once. With
+        // the OLD order (soft-delete then detach) a crash in between left the folder permanently
+        // Status='D' with its articles still pointing at the now-invisible folder id: the
+        // `folder.Status == "D"` branch above returns early on every retry (only bumping lamport if
+        // higher) and never reaches ClearFolderIdAsync again, so the orphaned folder_id could never
+        // self-heal. Detaching first means a crash before the soft-delete just leaves the folder
+        // status still 'A', so the retry re-runs this whole method and completes it.
         await articleRepo.ClearFolderIdAsync(p.FolderId);
+        await folderRepo.SoftDeleteAsync(p.FolderId, p.DeletedAt);
         await folderAccess.InvalidateCacheForFolderAsync(p.FolderId);
     }
 

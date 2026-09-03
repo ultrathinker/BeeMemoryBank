@@ -38,6 +38,7 @@ public partial class EventApplier(
     IDekRotationStateRepository dekRotationStateRepo,
     IDekRotationApplier dekRotationApplier,
     FolderAccessService folderAccess,
+    IDbConnectionFactory connFactory,
     ILogger<EventApplier> logger)
 {
     // whitelistRepoWrite is the same whitelist, just separated for read/write intent clarity
@@ -143,7 +144,12 @@ public partial class EventApplier(
         // if the process crashes during apply, the event is NOT in tbl_event,
         // so the next sync cycle will re-send it and apply will retry.
         // All apply methods are idempotent (LWW conflict resolution, existence checks),
-        // so re-applying a partially-applied event is safe.
+        // so re-applying a partially-applied event is safe — PROVIDED the apply method itself never
+        // leaves half of a multi-row write committed. The article create/update paths wrap their
+        // row + body + concept-tag writes in one SQLite transaction for exactly this reason (H5):
+        // without it, a crash between two of those writes could commit the first, and a redelivered
+        // event would then tie LWW against the row that DID commit and lose — permanently stranding
+        // the article half-written instead of ever healing. See EventApplier.Article.cs.
         clock.Update(evt.LamportTs);
 
         switch (evt.EventType)

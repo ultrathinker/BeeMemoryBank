@@ -122,6 +122,25 @@ public partial class SnapshotService
         favoriteCmd.CommandText = "DELETE FROM tbl_favorite";
         try { favoriteCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-011 archive */ }
 
+        // L10: tbl_remote_account holds THIS node's wrapped bearer tokens for OTHER people's nodes
+        // (remote-subscription "read-only mirror" feature) — encrypted_token is wrapped with our
+        // own master DEK, so a joining node that later unlocks the vault (which it's fully trusted
+        // with) could otherwise decrypt and use credentials to accounts on completely unrelated
+        // third-party nodes it was never given access to. Emptied rather than dropped — same schema
+        // reason as the role/favorite tables above: nothing in the join flow recreates this table,
+        // so DROP TABLE would leave a joiner's schema silently missing it forever. Child rows in
+        // tbl_remote_subscription (mount path, folder path, sync cursor — no credentials, but still
+        // node-local config pointing at a relationship the joiner shouldn't inherit) are deleted
+        // first since FK enforcement is OFF for this whole method (see PRAGMA above) and won't
+        // cascade the delete on its own.
+        using var remoteSubCmd = conn.CreateCommand();
+        remoteSubCmd.CommandText = "DELETE FROM tbl_remote_subscription";
+        try { remoteSubCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-existing-feature archive */ }
+
+        using var remoteAccountCmd = conn.CreateCommand();
+        remoteAccountCmd.CommandText = "DELETE FROM tbl_remote_account";
+        try { remoteAccountCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-existing-feature archive */ }
+
         using var vacuumCmd = conn.CreateCommand();
         vacuumCmd.CommandText = "VACUUM";
         vacuumCmd.ExecuteNonQuery();
