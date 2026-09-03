@@ -12,6 +12,13 @@ updates:
       aspnetcore:
         patterns:
           - "Microsoft.AspNetCore.*"
+    ignore:
+      # FluentAssertions 8 is not a technical upgrade but a licence change: from 8.0 the
+      # library is commercial for anything that is not an open-source project, and the
+      # assertion API this repo uses gained nothing worth paying for. Version 7 stays.
+      # Remove this entry only together with a decision about that licence.
+      - dependency-name: "FluentAssertions"
+        versions: [">=8.0.0"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

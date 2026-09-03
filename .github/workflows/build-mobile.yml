@@ -33,16 +33,16 @@ jobs:
       DOTNET_INSTALL_DIR: ${{ github.workspace }}/.dotnet
 
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup .NET
         id: dotnet
-        uses: actions/setup-dotnet@4d6c8fcf3c8f7a60068d26b594648e99df24cee3 # v4.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
 
       - name: Setup Java JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'microsoft'
           java-version: '17'
@@ -55,7 +55,7 @@ jobs:
       # version invalidates it on a float so the workload is reinstalled to match.
       - name: Cache .NET workloads
         id: workload-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.dotnet
           key: dotnet-workloads-maui-android-net10-${{ runner.os }}-${{ steps.dotnet.outputs.dotnet-version }}
@@ -69,7 +69,7 @@ jobs:
       # the server-side build.yml strategy.
       - name: Cache ONNX model
         id: onnx-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx
           key: onnx-multilingual-e5-small-v1
