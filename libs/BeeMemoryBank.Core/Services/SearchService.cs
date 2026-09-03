@@ -35,8 +35,25 @@ public class SearchService(
     private static readonly ITokenizer IndexedSearchTokenizer = new DefaultTokenizer();
     private static readonly IStemmer IndexedSearchStemmer = new DefaultStemmer();
 
+    // M11: hard cap on query length. The query string is embedded verbatim in the query-cache key,
+    // fed to the FTS5 MATCH builder, and (for content search) compared against every candidate
+    // body via a substring scan -- none of that is bounded by anything else, and a legitimate
+    // search query has no reason to be long. Throwing here is deliberate: it's an ArgumentException,
+    // which Program.cs's global exception handler already maps to 400 for every REST caller, and
+    // MCP tool callers get the usual tool-error surface -- no new plumbing needed anywhere else.
+    private const int MaxQueryLength = 1000;
+
+    private static void ThrowIfQueryTooLong(string query)
+    {
+        if (query.Length > MaxQueryLength)
+            throw new ArgumentException(
+                $"Search query is too long ({query.Length} characters, max {MaxQueryLength}).");
+    }
+
     public async Task<SearchResults> SearchAsync(string query)
     {
+        ThrowIfQueryTooLong(query);
+
         // WP-17: every call goes through the single-flight + TTL cache. The cache key embeds the
         // caller's read-scope fingerprint so two callers with different folder ACLs can never share
         // a result (see SearchQueryCache). On a miss the underlying logic below runs unchanged.
@@ -89,6 +106,8 @@ public class SearchService(
     /// </summary>
     public async Task<SearchResults> SearchWithContentAsync(string query)
     {
+        ThrowIfQueryTooLong(query);
+
         // WP-17: same single-flight + TTL cache as SearchAsync. Body-content search is by far the
         // most expensive query path (it decrypts every active body), so coalescing concurrent
         // identical calls and caching near-repeat calls is where the cache pays off most.
@@ -123,6 +142,20 @@ public class SearchService(
         MergeById(metadataResults, await byIdTask);
 
         if (!session.IsUnlocked)
+            return new SearchResults(folderResults, metadataResults);
+
+        // M11: resolve the caller's full visible-article set BEFORE touching any encrypted body,
+        // so the decrypt pass below is proportional to what THIS CALLER can actually see instead of
+        // the whole vault. Previously ACL filtering only happened at the very end (GetByIdsAsync on
+        // the matched ids), which meant every uncached content search -- including one from a
+        // caller whose scope denies everything -- streamed and AES-decrypted every active article
+        // body in the vault first and only threw the invisible results away afterwards. N distinct
+        // (cache-missing) queries meant N full-vault decrypt passes, independent of what the caller
+        // was ever going to be allowed to see. ListAsync() here is metadata-only (no ciphertext) and
+        // already applies scopeHolder.Scope.FilterArticles, so this costs one cheap query instead of
+        // decrypting every article outside the caller's scope.
+        var visibleArticleIds = new HashSet<Guid>((await articleRepo.ListAsync()).Select(a => a.Id));
+        if (visibleArticleIds.Count == 0)
             return new SearchResults(folderResults, metadataResults);
 
         var matchedIds = new HashSet<Guid>(metadataResults.Select(a => a.Id));
@@ -186,7 +219,13 @@ public class SearchService(
             try
             {
                 await foreach (var body in bodyRepo.StreamActiveAsync())
+                {
+                    // M11: skip bodies the caller cannot see at all -- never even hand them to a
+                    // worker for decryption, rather than filtering the match set after the fact.
+                    if (!visibleArticleIds.Contains(body.ArticleId))
+                        continue;
                     await channel.Writer.WriteAsync(body);
+                }
                 channel.Writer.Complete();
             }
             catch (Exception ex)
@@ -252,6 +291,8 @@ public class SearchService(
     /// </remarks>
     public async Task<List<Article>> SearchIndexedContentAsync(string query, int topK = 20)
     {
+        ThrowIfQueryTooLong(query);
+
         List<string> stemmedTerms = TokenizeAndStemQuery(query);
         if (stemmedTerms.Count == 0)
         {

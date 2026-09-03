@@ -67,7 +67,7 @@ public class FolderAccessCacheTests : IAsyncLifetime
             .AddScoped<CallerScopeHolder>(_ => _scopeHolder)
             .BuildServiceProvider());
 
-        _folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), _folderAccessService);
+        _folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), _folderAccessService, _scopeHolder);
 
         // Create /Secret folder
         _scopeHolder.Scope = SystemCallerScope.Instance;

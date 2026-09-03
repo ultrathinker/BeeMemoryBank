@@ -10,7 +10,8 @@ public class FolderService(
     INodeIdentityRepository nodeRepo,
     ILamportClock clock,
     IEventLogger eventLogger,
-    FolderAccessService folderAccessService)
+    FolderAccessService folderAccessService,
+    CallerScopeHolder scopeHolder)
 {
     public async Task<Folder> CreateAsync(string path)
     {
@@ -95,6 +96,9 @@ public class FolderService(
     {
         if (string.IsNullOrWhiteSpace(newName))
             throw new ArgumentException("Folder name cannot be empty.");
+        // '/' and '\' are rejected here (not left to Canonicalize below) because newName must
+        // stay a SINGLE path segment -- Canonicalize would happily accept "a/b" as two legal
+        // segments and silently change what folder gets created/renamed instead of rejecting it.
         if (newName.Contains('/') || newName.Contains('\\') || newName == ".." || newName == ".")
             throw new ArgumentException("Folder name contains invalid characters.");
         if (newName.Length > 255)
@@ -119,8 +123,14 @@ public class FolderService(
 
         var oldPath = folder.Path;
         var newParentPath = folder.ParentPath;
-        var newPath = (newParentPath != null ? newParentPath : "") + "/" + newName;
-        newPath = "/" + newPath.Trim('/');
+        // M7: route the assembled path through TreePathCanonicalizer — the single source of truth
+        // for tree-path normalization — instead of a hand-rolled Trim('/') join. The checks above
+        // reject '/' and '\' in newName but not control characters, and a hand-rolled join can't
+        // catch those. A non-canonical path that slipped through used to survive locally while
+        // EventApplier.cs rejects non-canonical paths from peers outright: the rename would appear
+        // to succeed here and every peer would silently discard the resulting FolderRename event,
+        // permanently diverging the mesh with nothing but a warning in a log to show for it.
+        var newPath = TreePathCanonicalizer.Canonicalize((newParentPath ?? "") + "/" + newName);
 
         // Defence-in-depth: forbid renaming to a reserved system path (otherwise
         // a user could create `/MyFolder`, fill it, then rename → `/_Drafts` and
@@ -150,6 +160,15 @@ public class FolderService(
         if (string.IsNullOrWhiteSpace(newParentPath) || !newParentPath.StartsWith('/'))
             throw new ArgumentException("Path must start with '/'.");
 
+        // M7: canonicalize the caller-supplied parent path through TreePathCanonicalizer.
+        // Previously only the leading '/' was checked, so "/Work/../.." or "//Archive" survived
+        // straight into tbl_folder.path via the TrimEnd('/') join below. Beyond storing garbage,
+        // a non-canonical path is REJECTED by peers (EventApplier.cs), so the move would succeed
+        // locally and every peer would silently drop the FolderRename event — permanent mesh
+        // divergence. Canonicalize also collapses "//" so the deny-prefix matcher (which compares
+        // raw strings) can't be evaded by an extra slash.
+        newParentPath = TreePathCanonicalizer.Canonicalize(newParentPath);
+
         var folder = await folderRepo.GetByIdAsync(folderId)
             ?? throw new KeyNotFoundException($"Folder {folderId} not found");
 
@@ -172,7 +191,13 @@ public class FolderService(
                 $"Cannot move to reserved system path '{newPath}'.");
 
         if (newPath == oldPath) return;
-        if (newPath.StartsWith(oldPath + "/"))
+        // M7: OrdinalIgnoreCase to agree with RenamePathAsync's descendant rewrite, which matches
+        // via SQLite's default case-insensitive LIKE. A culture-sensitive/case-sensitive StartsWith
+        // here let a caller move a folder into a differently-cased alias of its own descendant
+        // (e.g. oldPath "/Work" into newParentPath "/WORK/Sub") straight past this guard — the SQL
+        // below would then match and rewrite "/Work"'s own row as a descendant of itself, corrupting
+        // the tree, precisely the self-nesting this check exists to prevent.
+        if (newPath.StartsWith(oldPath + "/", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Cannot move a folder into itself.");
 
         var existing = await folderRepo.GetByPathAsync(newPath);
@@ -213,11 +238,24 @@ public class FolderService(
         // Restore can later recreate exactly the subtree that went down together.
         var cascadeOpId = Guid.NewGuid();
 
+        // H1: capture the descendant id list up front — read-only, no ACL check needed for a bare
+        // id list — BEFORE SoftDeleteByPathPrefixAsync flips their status to 'D' (it only returns
+        // status='A' rows, so calling it after would silently return an empty list and skip the
+        // ClearFolderIdAsync loop below entirely).
         var subfolderIds = await folderRepo.ListIdsByPathPrefixAsync(folder.Path);
+
+        // SoftDeleteByPathPrefixAsync now walks every descendant folder under folder.Path and
+        // throws if this caller is denied or read-only on ANY of them, not just on folder.Path
+        // itself — a caller can be authorized on the top of a subtree (allow=/, deny=/Work/Secret)
+        // while a descendant is individually denied. Running it BEFORE the loop below means a
+        // denied descendant aborts the whole cascade instead of the loop already having relocated
+        // its articles to '/' via ClearFolderIdAsync — which carries no ACL check of its own (by
+        // design: it's also called from sync/background code) and must never be reachable for a
+        // denied path from this user-facing method.
+        await folderRepo.SoftDeleteByPathPrefixAsync(folder.Path, deletedAt, cascadeOpId);
+
         foreach (var subId in subfolderIds)
             await articleRepo.ClearFolderIdAsync(subId);
-
-        await folderRepo.SoftDeleteByPathPrefixAsync(folder.Path, deletedAt, cascadeOpId);
 
         await folderRepo.SoftDeleteAsync(folderId, deletedAt, cascadeOpId);
         await articleRepo.ClearFolderIdAsync(folderId);
@@ -236,7 +274,26 @@ public class FolderService(
     // page is the only sanctioned way to remove a mirror.
     private async Task EnsureNoRemoteDescendantsAsync(string path, string verb)
     {
-        var all = await folderRepo.GetAllActiveAsync();
+        // L7: GetAllActiveAsync ACL-filters its result (FilterFolders) for the ambient scope. A
+        // remote-mirror descendant hidden from THIS caller by a deny rule would then be invisible
+        // to the FirstOrDefault below, letting a rename/move/delete silently corrupt or orphan a
+        // mirror subscription the caller merely cannot see — not one they were ever authorized to
+        // touch. This check protects data integrity (a mirror's stored MountPath must track
+        // reality), not the caller's own read access, so it has to run against the TRUE,
+        // unfiltered folder set. Same scope-swap pattern as FolderRepository.EnsureExistsCoreAsync's
+        // ancestor-stub lookup.
+        var previousScope = scopeHolder.Scope;
+        scopeHolder.Scope = SystemCallerScope.Instance;
+        List<Folder> all;
+        try
+        {
+            all = await folderRepo.GetAllActiveAsync();
+        }
+        finally
+        {
+            scopeHolder.Scope = previousScope;
+        }
+
         var prefix = path.TrimEnd('/') + "/";
         var blocker = all.FirstOrDefault(f =>
             f.RemoteSubscriptionId.HasValue

@@ -111,7 +111,12 @@ public static class FolderEndpoints
             if (folder == null)
                 return Results.NotFound(new ErrorResponse($"Folder '{path}' not found"));
 
-            var newName = req.NewPath.Split('/').Last();
+            // L6: TrimEnd('/') before splitting -- "/Foo/" used to split into ["", "Foo", ""],
+            // so .Last() picked up the trailing EMPTY segment as the new name. RenameAsync then
+            // threw ArgumentException("Folder name cannot be empty.") for a request that looks
+            // completely reasonable to the caller, and (see the catch clauses below) nothing
+            // caught ArgumentException here, so it surfaced as an unhandled 500.
+            var newName = req.NewPath.TrimEnd('/').Split('/').Last();
 
             if (!isSuperadmin)
             {
@@ -139,6 +144,10 @@ public static class FolderEndpoints
             catch (InvalidOperationException ex)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 403);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new ErrorResponse(ex.Message));
             }
 
             var updated = await folderRepo.GetByIdAsync(folder.Id);
@@ -186,6 +195,19 @@ public static class FolderEndpoints
             catch (InvalidOperationException ex)
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
+            }
+            // L6: the pre-checks above re-validate against a cache snapshot (GetFullAccessInfoAsync,
+            // 60s TTL) that can be stale relative to what folderSvc.MoveAsync itself enforces at
+            // write time -- and MoveAsync's own descendant-rewrite path can throw for reasons the
+            // pre-checks never model at all. Without this, that throw propagated as an unhandled
+            // 500 instead of the 403 every other ACL denial in this file returns.
+            catch (UnauthorizedAccessException ex)
+            {
+                WriteAclDenial.TryClassify(ex, out var kind, out var deniedPath);
+                var message = kind == WriteAclDenialKind.ReadOnly
+                    ? $"Folder {PathHelper.Display(deniedPath)} is read-only for your user."
+                    : "You don't have permission to complete this move.";
+                return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
         });
 
@@ -239,13 +261,34 @@ public static class FolderEndpoints
                         statusCode: 403);
             }
 
-            var deleted = await svc.DeleteByPathAsync(path);
+            // L6: folderSvc.DeleteAsync (via SoftDeleteByPathPrefixAsync's H1 descendant walk) and
+            // EnsureNoRemoteDescendantsAsync can both still throw here even after the pre-checks
+            // above -- the pre-checks re-validate against a 60s-TTL cache snapshot and, for the
+            // descendant-deny case, only ever covered the allowPaths.Count == 0 shape. Without a
+            // catch here those exceptions propagated as unhandled 500s instead of the 403/409 every
+            // other ACL/business-rule denial in this file returns.
+            try
+            {
+                var deleted = await svc.DeleteByPathAsync(path);
 
-            var folder = await folderRepo.GetByPathAsync(path);
-            if (folder != null)
-                await folderSvc.DeleteAsync(folder.Id);
+                var folder = await folderRepo.GetByPathAsync(path);
+                if (folder != null)
+                    await folderSvc.DeleteAsync(folder.Id);
 
-            return Results.Ok(new FolderDeleteResult(path, deleted));
+                return Results.Ok(new FolderDeleteResult(path, deleted));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                WriteAclDenial.TryClassify(ex, out var kind, out var deniedPath);
+                var message = kind == WriteAclDenialKind.ReadOnly
+                    ? $"Folder {PathHelper.Display(deniedPath)} is read-only for your user."
+                    : "Cannot delete: folder contains restricted sub-folders.";
+                return Results.Json(new ErrorResponse(message), statusCode: 403);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 403);
+            }
         });
     }
 }

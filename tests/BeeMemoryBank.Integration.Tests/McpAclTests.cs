@@ -42,6 +42,8 @@ public class McpAclTests : IAsyncLifetime
     private FolderAccessService _folderAccessService = null!;
     private ConceptTagService _conceptTagService = null!;
     private CallerScopeHolder _scopeHolder = null!;
+    private IFolderRepository _folderRepo = null!;
+    private IFolderAclRepository _restrictionRepo = null!;
 
     private const string Password = "aclTestPassword";
     private int _restrictedUserId;
@@ -69,6 +71,7 @@ public class McpAclTests : IAsyncLifetime
         var initService = new InitializationService(nodeRepo, keySlotRepo, userRepo, _factory);
         var mediaRepo = new MediaRepository(_factory, _scopeHolder);
         var folderRepo = new BeeMemoryBank.Storage.Sqlite.FolderRepository(_factory, _scopeHolder);
+        _folderRepo = folderRepo;
         var versionRepo = new ArticleVersionRepository(_factory, _scopeHolder);
         var conceptTagRepo = new ConceptTagRepository(_factory, _scopeHolder);
         _conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
@@ -92,6 +95,7 @@ public class McpAclTests : IAsyncLifetime
         await _projectionService.EnsureProjectionMatrixAsync();
 
         var restrictionRepo = new FolderAclRepository(_factory);
+        _restrictionRepo = restrictionRepo;
         var eventLogRepo = new EventLogRepository(_factory);
 
         var services = new ServiceCollection()
@@ -104,7 +108,7 @@ public class McpAclTests : IAsyncLifetime
             .AddScoped<CallerScopeHolder>(_ => _scopeHolder)
             .BuildServiceProvider();
         _folderAccessService = new FolderAccessService(services);
-        var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), _folderAccessService);
+        var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), _folderAccessService, _scopeHolder);
 
 
         _httpContextAccessor = new HttpContextAccessor();
@@ -114,7 +118,7 @@ public class McpAclTests : IAsyncLifetime
         _searchTools = new BeeSearchTools(searchService, hybridSearchService, responseManager, _session);
         _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo));
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
-        _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
+        _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _conceptTagService, _scopeHolder, NullLogger<BeeWriteTools>.Instance, responseManager);
         _conceptTools = new BeeConceptTools(_conceptTagService, _articleService, _httpContextAccessor, responseManager);
         _auditTools = new BeeAuditTools(eventLogRepo, articleRepo, whitelistRepo, nodeRepo, _httpContextAccessor, _scopeHolder, responseManager);
 
@@ -529,6 +533,50 @@ public class McpAclTests : IAsyncLifetime
         // This is info-leak-safe (caller cannot distinguish "doesn't exist" from "denied").
         result.Should().MatchRegex("Access denied|not found");
         ClearCaller();
+    }
+
+    /// <summary>
+    /// L7: emptiness must be checked against the TRUE contents, not the caller's ACL-filtered
+    /// view. /Container is visible to the restricted user and holds only a subfolder AND an
+    /// article the user is denied on (/Container/Hidden). Before the fix, GetChildrenAsync/
+    /// ListAsync applied the caller's scope, both came back empty, and bee_delete_folder happily
+    /// soft-deleted /Container -- orphaning /Container/Hidden and its article: they stay on disk,
+    /// but their parent is gone and nothing can navigate to them any more.
+    /// </summary>
+    [Fact]
+    public async Task Acl_BeeDeleteFolder_RefusesWhenOnlyHiddenContentsExist()
+    {
+        ClearCaller();
+        await _folderRepo.CreateAsync(new Folder
+        {
+            Id = Guid.NewGuid(), Path = "/Container", Name = "Container",
+            Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        var hidden = new Folder
+        {
+            Id = Guid.NewGuid(), Path = "/Container/Hidden", Name = "Hidden", ParentPath = "/Container",
+            Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        };
+        await _folderRepo.CreateAsync(hidden);
+        await _articleService.CreateAsync("Buried", "/Container/Hidden", [], "buried content");
+
+        await _restrictionRepo.AddAsync(new FolderAclEntry
+        {
+            UserId = _restrictedUserId,
+            FolderId = hidden.Id,
+            Effect = AclEffect.Deny,
+            CreatedAt = DateTime.UtcNow
+        });
+        _folderAccessService.InvalidateCache(_restrictedUserId);
+
+        await SetRestrictedCaller();
+        var result = await _writeTools.DeleteFolder("/Container", confirm: true);
+
+        result.Should().Contain("not empty", "the hidden subfolder/article must still count as contents");
+
+        ClearCaller();
+        (await _folderRepo.GetByPathAsync("/Container")).Should().NotBeNull("nothing may have been deleted");
+        (await _folderRepo.GetByPathAsync("/Container/Hidden")).Should().NotBeNull("the hidden subtree must not be orphaned");
     }
 
     // ══════════════════════════════════════════════════════════════════════════

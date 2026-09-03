@@ -74,13 +74,13 @@ public class AclPathChangeTests : IAsyncLifetime
             .AddScoped<CallerScopeHolder>(_ => _scopeHolder)
             .BuildServiceProvider());
 
-        _folderSvc = new FolderService(_folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), _folderAccessService);
+        _folderSvc = new FolderService(_folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), _folderAccessService, _scopeHolder);
 
         _httpContextAccessor = new HttpContextAccessor();
         var responseManager = new McpResponseManager(Path.GetTempPath(), new HttpContextAccessor());
         var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions);
         var copySvc = new CopyService(_articleService, _folderSvc, mediaService, articleRepo, _folderRepo, _conceptTagService, _scopeHolder);
-        _writeTools = new BeeWriteTools(_articleService, _folderRepo, articleRepo, _folderSvc, copySvc, _conceptTagService, NullLogger<BeeWriteTools>.Instance, responseManager);
+        _writeTools = new BeeWriteTools(_articleService, _folderRepo, articleRepo, _folderSvc, copySvc, _conceptTagService, _scopeHolder, NullLogger<BeeWriteTools>.Instance, responseManager);
 
         _scopeHolder.Scope = SystemCallerScope.Instance;
 
