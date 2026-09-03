@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using BeeMemoryBank.Api.Helpers;
@@ -102,6 +102,7 @@ public class BeeConceptTools(
         "already on the article are not counted. If everything was already present, returns 0. " +
         "Tags new to the vocabulary get embeddings generated automatically for future semantic search.\n" +
         "Returns plain-text confirmation (not JSON), e.g. \"Added 2 tag(s) to article 'Foo'.\"")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> AddTags(
         [Description("Article ID (GUID).")] Guid id,
         [Description("List of tag names to add. Pass as a JSON array of strings: [\"tag1\", \"tag2\"]. NOT a comma-separated string. Duplicates and tags already on the article are ignored silently.")] List<string> tags)
@@ -144,6 +145,7 @@ public class BeeConceptTools(
         "instead of \"Removed tag '...' from article '...'\". Use this to distinguish a real removal " +
         "from a typo/no-op.\n" +
         "Returns plain-text confirmation (not JSON).")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> RemoveTag(
         [Description("Article ID (GUID).")] Guid id,
         [Description("Tag name to remove (case-insensitive match).")] string tag)
@@ -181,6 +183,7 @@ public class BeeConceptTools(
         "Rename a tag globally. Affects every article using it. Returns error if the new name already exists " +
         "(use bee_merge_tags instead to consolidate). Requires superadmin — regular agents get an error.\n" +
         "Returns plain-text confirmation.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> RenameTag(
         [Description("Current tag name.")] string name,
         [Description("New name for the tag. Must not already exist in the vocabulary.")] string newName)
@@ -208,6 +211,7 @@ public class BeeConceptTools(
         "deleted from the vocabulary. Use this to consolidate duplicates or near-duplicates " +
         "(e.g. 'ml' + 'machine-learning' → 'machine-learning'). Requires superadmin.\n" +
         "Returns plain-text confirmation.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> MergeTags(
         [Description("Source tag to merge (will be deleted from the vocabulary).")] string source,
         [Description("Target tag to merge into (will be kept).")] string target)
@@ -235,6 +239,7 @@ public class BeeConceptTools(
         "Requires superadmin. Cannot be undone — use bee_rename_tag or bee_merge_tags first if you want " +
         "to preserve article-tag associations.\n" +
         "Returns plain-text confirmation.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> DeleteTag(
         [Description("Tag name to delete globally.")] string name)
     {

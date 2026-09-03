@@ -1,4 +1,4 @@
-using BeeMemoryBank.Api.Models;
+﻿using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
@@ -101,6 +101,17 @@ public static class JoinEndpoints
             if (publicKey.Length != CryptoConstants.Ed25519PublicKeySize)
                 return Results.BadRequest(new ErrorResponse("Ed25519 public key must be 32 bytes"));
 
+            // Normalize the peer's advertised address on the way IN, the same way
+            // WhitelistEndpoints does when an operator edits it by hand. Every consumer builds
+            // request URLs by string concatenation ($"{apiAddress}/api/sync/..."), so an address
+            // stored with a trailing slash yields "https://peer:5300//api/sync/identity" — a
+            // double slash that ASP.NET routing answers with 404, silently wedging sync with that
+            // peer. The value also travels to every other node in a whitelist_add event, so one
+            // unnormalized join propagates the breakage across the mesh.
+            var apiAddress = string.IsNullOrWhiteSpace(req.ApiAddress)
+                ? req.ApiAddress
+                : req.ApiAddress!.Trim().TrimEnd('/');
+
             // 4. Add the new node to the whitelist (or update if already exists)
             var existing = await whitelistRepo.GetByNodeIdAsync(req.NodeId, includeDeleted: true);
             if (existing != null && existing.Status == "R")
@@ -118,7 +129,7 @@ public static class JoinEndpoints
                         statusCode: 403);
 
                 existing.DisplayName = req.DisplayName;
-                existing.ApiAddress = req.ApiAddress;
+                existing.ApiAddress = apiAddress;
                 existing.UpdatedAt = DateTime.UtcNow;
                 await whitelistRepo.UpdateAsync(existing);
             }
@@ -130,7 +141,7 @@ public static class JoinEndpoints
                     NodeId = req.NodeId,
                     DisplayName = req.DisplayName,
                     Ed25519PublicKey = publicKey,
-                    ApiAddress = req.ApiAddress,
+                    ApiAddress = apiAddress,
                     Status = "A",
                     CreatedAt = now,
                     UpdatedAt = now,

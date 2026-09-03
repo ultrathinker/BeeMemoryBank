@@ -97,6 +97,11 @@ public static class PeerAuthenticator
         Guid expectedServerNodeId,
         CancellationToken ct)
     {
+        // TrimEnd('/'): the two requests below are string-concatenated onto baseUrl, so a base
+        // ending in a slash yields "//api/sync/challenge" and a 404. Callers that come through
+        // SyncClient are already normalized; this covers the ones that call in directly.
+        baseUrl = baseUrl.TrimEnd('/');
+
         // Get challenge
         var challengeResp = await http.PostAsync($"{baseUrl}/api/sync/challenge", null, ct);
         challengeResp.EnsureSuccessStatusCode();

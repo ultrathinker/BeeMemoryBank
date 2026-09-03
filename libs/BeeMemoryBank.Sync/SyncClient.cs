@@ -45,6 +45,12 @@ public class SyncClient(
     public async Task<int> SyncWithAsync(
         HttpClient http, string remoteApiBase, Guid expectedPeerNodeId, CancellationToken ct = default)
     {
+        // Defensive: every request below is built as $"{remoteApiBase}/api/sync/...", so a base
+        // that ends in a slash produces a double slash and a 404 from ASP.NET routing. Addresses
+        // are normalized on ingest (JoinEndpoints, WhitelistEndpoints), but a row predating that,
+        // or a caller assembling an address by hand, would otherwise wedge sync with this peer.
+        remoteApiBase = remoteApiBase.TrimEnd('/');
+
         // Belt-and-suspenders for bug #5: in addition to the unlock-time sweep in
         // SessionService, retry stuck restore events at the start of every sync cycle.
         // Catches the case where the user stays unlocked but a transient failure (network,

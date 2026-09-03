@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using BeeMemoryBank.Api.Helpers;
@@ -102,25 +102,28 @@ public sealed partial class ChatToolDispatcher(
         return false;
     }
 
-    /// <summary>Whether THIS specific write-tool call needs the master DEK before it can do
-    /// anything useful. Most write tools need it unconditionally (they always carry a body to
-    /// encrypt) — for those, read straight from <see cref="McpToolRegistry"/>'s own
-    /// <c>[RequiresUnlockedSession]</c> classification (see <c>McpToolRegistryTests</c>'
-    /// <c>MustHaveUnlockedSession</c> / <c>DeliberatelyUnguarded</c> sets) so the two surfaces
-    /// cannot silently drift apart on this again. Two tools are call-args-aware, matching
-    /// <c>BeeWriteTools</c> exactly: <c>bee_update_article</c> only needs it when the call
-    /// actually carries a <c>content</c> argument (a metadata-only rename/retag never touches the
-    /// encrypted body), and <c>bee_delete_article</c> never needs it (a soft-delete only flips a
-    /// status column). Before this, the dispatcher blocked ALL writes on ANY lock — including a
-    /// metadata-only update or a delete, neither of which needs the DEK — while the MCP tools
-    /// (deliberately) allow both while locked.</summary>
+    /// <summary>Whether this write-tool call needs an unlocked session. Answered entirely from
+    /// <see cref="McpToolRegistry"/>'s own <c>[RequiresUnlockedSession]</c> classification (see
+    /// <c>McpToolRegistryTests</c>' <c>MustHaveUnlockedSession</c> / <c>DeliberatelyUnguarded</c>
+    /// sets), so chat and MCP cannot silently drift apart on which writes a lock blocks.
+    /// <para/>
+    /// Deliberately NOT call-args-aware. The signature keeps <paramref name="args"/> for callers
+    /// and for the args-sensitive sibling <see cref="IsDestructiveTool"/>, but no argument shape
+    /// makes a write safe while locked — see the body for why a "metadata-only" update or a soft
+    /// delete still needs the DEK.</summary>
     public static bool RequiresUnlockedSessionForCall(string name, JsonElement args, McpToolRegistry registry)
     {
-        if (name == "bee_update_article")
-            return args.ValueKind == JsonValueKind.Object
-                && args.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String;
-        if (name == "bee_delete_article")
-            return false;
+        // No special cases. This briefly carved out bee_delete_article and metadata-only
+        // bee_update_article on the reasoning that neither re-encrypts anything — true of the
+        // article and media repositories, but not of the write as a whole: EVERY write logs an
+        // event, and EventLogger.AppendEventAsync SIGNS it with the node's Ed25519 key, which on
+        // any node initialized after the key-wrapping change (Ed25519PrivateKeyV == 1, i.e. every
+        // node InitializationService creates) is unwrapped with the master DEK. session
+        // .GetMasterDek() throws while locked, so a "metadata-only" write fails just as hard as a
+        // content write — it just fails deeper, as an exception instead of a clean tool result.
+        // Verified against the real event logger in WriteWhileLockedTests; the test that
+        // originally justified the carve-out used a NullEventLogger and so could not see it.
+        //
         // Fail-safe default true for a tool with no MCP counterpart at all (currently only
         // bee_insert_image_into_article, a chat-only tool that always touches the encrypted body).
         return registry.Get(name)?.RequiresUnlockedSession ?? true;

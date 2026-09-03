@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Api.Services;
@@ -204,8 +204,12 @@ public class ChatMcpToolPolicyUnificationTests : IAsyncLifetime
     // ───── write-tool lock gate: bee_update_article (metadata-only) / bee_delete_article ─────
 
     [Fact]
-    public async Task ChatUpdateArticle_MetadataOnly_SucceedsWhileLocked()
+    public async Task ChatUpdateArticle_MetadataOnly_IsStillBlockedWhileLocked()
     {
+        // A title-only update re-encrypts nothing, which briefly looked like grounds for letting
+        // it through on a locked vault. It is not: the update still logs an event, and signing
+        // that event needs the master DEK (see WriteWhileLockedTests). Letting it through only
+        // moves the failure deeper, from a clean tool result to an exception.
         var article = await _articleService.CreateAsync("Old Title", "/LockTest", [], "body");
         _session.Lock();
         try
@@ -215,10 +219,10 @@ public class ChatMcpToolPolicyUnificationTests : IAsyncLifetime
                 Args(new { id = article.Id.ToString(), title = "New Title While Locked" }),
                 ConfirmedWriteCtx());
 
-            dispatch.Json.Should().NotContain("locked");
+            dispatch.Json.Should().Contain("locked");
 
             var meta = await _articleService.GetMetadataAsync(article.Id);
-            meta!.Title.Should().Be("New Title While Locked");
+            meta!.Title.Should().Be("Old Title", "the blocked update must not have been applied");
         }
         finally
         {
@@ -247,8 +251,10 @@ public class ChatMcpToolPolicyUnificationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ChatDeleteArticle_SucceedsWhileLocked()
+    public async Task ChatDeleteArticle_IsStillBlockedWhileLocked()
     {
+        // Same reasoning as the metadata-only update above: a soft delete writes no ciphertext,
+        // but it logs a signed delete event, and signing needs the master DEK.
         var article = await _articleService.CreateAsync("Delete While Locked", "/LockTest", [], "body");
         _session.Lock();
         try
@@ -258,10 +264,10 @@ public class ChatMcpToolPolicyUnificationTests : IAsyncLifetime
                 Args(new { id = article.Id.ToString(), confirm = true }),
                 ConfirmedWriteCtx());
 
-            dispatch.Json.Should().NotContain("locked");
+            dispatch.Json.Should().Contain("locked");
 
             var meta = await _articleService.GetMetadataAsync(article.Id, includeDeleted: true);
-            meta!.Status.Should().NotBe("A");
+            meta!.Status.Should().Be("A", "the blocked delete must not have been applied");
         }
         finally
         {

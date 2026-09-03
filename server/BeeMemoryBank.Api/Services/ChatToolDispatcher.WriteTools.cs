@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Core.Services;
 
@@ -32,17 +32,18 @@ public sealed partial class ChatToolDispatcher
             // CreateAsync encrypts the body under a per-article DEK (wrapped under the master DEK),
             // creates folders as needed, and logs the create event (synced like a human edit).
             //
-            // Tags are set via a SEPARATE ConceptTagService call, NOT passed into CreateAsync,
-            // mirroring BeeWriteTools.SaveArticle and ArticleEndpoints POST /api/articles exactly.
-            // CreateAsync DOES support setting tags atomically in the same transaction (passing
-            // `tags` directly) — but neither of the other two surfaces uses that path, so the
-            // first CREATE sync/audit event there always carries an empty tag set, with a separate
-            // tag-set event following. Passing tags straight into CreateAsync here made the chat
-            // surface's CREATE event diverge from what MCP/REST actually produce for the exact same
-            // call; keeping the same two-step shape keeps sync/audit behavior identical everywhere.
-            var article = await articleService.CreateAsync(title!, treePath!, [], content);
-            if (tags.Count > 0)
-                await conceptTagService.SetForArticleAsync(article.Id, tags);
+            // Tags go straight into CreateAsync, which writes the article, its body, its tags and
+            // the CREATE event inside ONE transaction — so the event carries the DB-canonical tag
+            // set and there is no moment where the article exists untagged.
+            //
+            // This briefly used the two-step shape (create with no tags, then SetForArticleAsync)
+            // to match BeeWriteTools.SaveArticle and ArticleEndpoints POST /api/articles, whose
+            // CREATE event carries an empty tag set with a separate tag-set event after. That
+            // traded a real failure mode for cosmetic event parity: if the second step throws, the
+            // article is already committed untagged while the caller is told the save failed, and
+            // a retry then duplicates or collides. MCP and REST should move TO this atomic form —
+            // the divergence is theirs to fix, not a reason to copy it here.
+            var article = await articleService.CreateAsync(title!, treePath!, tags, content);
             return OkJson($"Created article '{article.Title}' in {article.TreePath}.", article.Id);
         }
         catch (UnauthorizedAccessException ex)
@@ -78,13 +79,9 @@ public sealed partial class ChatToolDispatcher
 
         try
         {
-            // Tags are set via a SEPARATE ConceptTagService call, NOT passed into UpdateAsync —
-            // see the comment in SaveArticleAsync for why. Mirrors BeeWriteTools.UpdateArticle and
-            // ArticleEndpoints PUT /api/articles/{id} exactly, so the UPDATE sync/audit event's tag
-            // snapshot is identical across all three surfaces.
-            await articleService.UpdateAsync(id, title, treePath, null, content);
-            if (tags != null)
-                await conceptTagService.SetForArticleAsync(id, tags);
+            // Tags go into UpdateAsync itself — one transaction, one event carrying the final tag
+            // set. See the comment in SaveArticleAsync for why the two-step shape was reverted.
+            await articleService.UpdateAsync(id, title, treePath, tags, content);
             return OkJson($"Updated article {id} ({article.Title}).", id);
         }
         catch (UnauthorizedAccessException ex)

@@ -1,4 +1,4 @@
-using BeeMemoryBank.Api.Helpers;
+﻿using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.McpTools;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -43,8 +43,6 @@ public class McpToolRegistryTests
     [InlineData("bee_get_article")]
     [InlineData("bee_get_tree")]
     [InlineData("bee_get_article_versions")]
-    [InlineData("bee_update_article")]
-    [InlineData("bee_copy_to")]
     [InlineData("bee_search")]
     [InlineData("bee_search_content")]
     public void RequiresUnlockedSession_FalseForUnmarkedTools(string toolName)
@@ -78,6 +76,17 @@ public class McpToolRegistryTests
         "bee_replace_in_article",
         "bee_append_to_article",
         "bee_prepend_to_article",
+        "bee_update_article",
+        "bee_copy_to",
+        "bee_delete_article",
+        "bee_delete_folder",
+        "bee_rename_folder",
+        "bee_move_folder",
+        "bee_add_tags",
+        "bee_remove_tag",
+        "bee_delete_tag",
+        "bee_rename_tag",
+        "bee_merge_tags",
     };
 
     private static readonly HashSet<string> DeliberatelyUnguarded = new(StringComparer.Ordinal)
@@ -89,8 +98,6 @@ public class McpToolRegistryTests
         "bee_get_article",
         "bee_get_tree",
         "bee_get_article_versions",
-        "bee_update_article",
-        "bee_copy_to",
         "bee_search",
         "bee_search_content",
         "bee_search_by_tag",
@@ -99,15 +106,6 @@ public class McpToolRegistryTests
         "bee_get_upload_script",
         "bee_set_max_tokens",
         "bee_continue",
-        "bee_delete_article",
-        "bee_delete_folder",
-        "bee_rename_folder",
-        "bee_move_folder",
-        "bee_add_tags",
-        "bee_remove_tag",
-        "bee_delete_tag",
-        "bee_rename_tag",
-        "bee_merge_tags",
         "bee_list_tags",
     };
 

@@ -27,6 +27,7 @@ public class BeeWriteTools(
         "or a folder ID with targetParentPath. Result: brand-new article/folder (new GUID, re-encrypted " +
         "with current user's master key, no metadata link to the source). Title/name collisions in target " +
         "are auto-resolved with a ' (N)' suffix. Returns the new ID.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> CopyTo(
         [Description("ID of the article or folder to copy (GUID).")] Guid sourceId,
         [Description("For articles: target folder path. For folders: target parent path. Use '/' for root.")] string targetPath)
@@ -110,6 +111,7 @@ public class BeeWriteTools(
         "(see bee_get_article_versions). For cheaper edits without resending the whole body, use " +
         "bee_append_to_article / bee_prepend_to_article / bee_replace_in_article.\n" +
         "Returns plain-text confirmation (not JSON).")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> UpdateArticle(
         [Description("Article ID (GUID).")] Guid id,
         [Description("New title. Omit (null) to keep current.")] string? title = null,
@@ -155,6 +157,7 @@ public class BeeWriteTools(
         "Single SQL operation — fast even for folders with hundreds of articles.\n" +
         "Example: bee_move_folder path=/Work/Docs newParentPath=/Archive → folder becomes /Archive/Docs.\n" +
         "The folder name stays the same, only the parent changes.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> MoveFolder(
         [Description("Current full path of the folder to move, e.g. /Work/Docs")] string path,
         [Description("Full path of the destination parent folder, e.g. /Archive")] string newParentPath)
@@ -188,6 +191,7 @@ public class BeeWriteTools(
         "Rename a folder. All articles and subfolders keep their relative structure.\n" +
         "Single atomic operation — fast even for folders with hundreds of articles.\n" +
         "Example: bee_rename_folder path=/Work/OldName newName=NewName → folder becomes /Work/NewName.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> RenameFolder(
         [Description("Current full path of the folder to rename, e.g. /Work/OldName")] string path,
         [Description("New name for the folder (just the name, not a full path), e.g. NewName")] string newName)
@@ -224,6 +228,7 @@ public class BeeWriteTools(
         "they all return \"not found\". Data is still on disk and can be restored from the Web UI; there is " +
         "currently NO MCP tool to list or restore soft-deleted articles, so use with care.\n" +
         "Returns plain-text confirmation.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> DeleteArticle(
         [Description("Article ID (GUID).")] Guid id,
         [Description("Must be true to actually delete. Default false = dry-run that returns a warning.")] bool confirm = false)
@@ -260,6 +265,7 @@ public class BeeWriteTools(
         "Two-step: pass confirm=true to execute. Soft-deleted folders can be restored from the Web UI; " +
         "there is currently NO MCP tool to list or restore soft-deleted folders.\n" +
         "Returns plain-text confirmation.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> DeleteFolder(
         [Description("Full path of the folder to delete, e.g. '/Work/OldProject'.")] string path,
         [Description("Must be true to actually delete. Default false = dry-run that returns a warning.")] bool confirm = false)

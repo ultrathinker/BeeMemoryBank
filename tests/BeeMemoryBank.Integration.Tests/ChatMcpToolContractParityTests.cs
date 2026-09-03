@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Reflection;
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
@@ -215,34 +215,20 @@ public class ChatWriteToolLockGateUnitTests
     }
 
     [Fact]
-    public void UpdateArticle_TitleOnly_DoesNotRequireUnlockedSession()
+    public void UpdateArticle_TitleOnly_StillRequiresUnlockedSession()
     {
+        // Re-encrypts nothing, but still logs a signed event — and signing needs the master DEK.
         ChatToolDispatcher.RequiresUnlockedSessionForCall(
             "bee_update_article", Args(new { id = Guid.NewGuid().ToString(), title = "New Title" }), Registry)
-            .Should().BeFalse();
+            .Should().BeTrue();
     }
 
     [Fact]
-    public void UpdateArticle_TagsOnly_DoesNotRequireUnlockedSession()
-    {
-        ChatToolDispatcher.RequiresUnlockedSessionForCall(
-            "bee_update_article", Args(new { id = Guid.NewGuid().ToString(), tags = new[] { "a" } }), Registry)
-            .Should().BeFalse();
-    }
-
-    [Fact]
-    public void UpdateArticle_NoArgsAtAll_DoesNotRequireUnlockedSession()
-    {
-        ChatToolDispatcher.RequiresUnlockedSessionForCall("bee_update_article", default, Registry)
-            .Should().BeFalse();
-    }
-
-    [Fact]
-    public void DeleteArticle_NeverRequiresUnlockedSession()
+    public void DeleteArticle_StillRequiresUnlockedSession()
     {
         ChatToolDispatcher.RequiresUnlockedSessionForCall(
             "bee_delete_article", Args(new { id = Guid.NewGuid().ToString(), confirm = true }), Registry)
-            .Should().BeFalse();
+            .Should().BeTrue();
     }
 
     [Theory]
