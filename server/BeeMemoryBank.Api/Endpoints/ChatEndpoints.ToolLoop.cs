@@ -87,7 +87,7 @@ public static partial class ChatEndpoints
     // Best-effort persistence of a role="tool" result message: never let a chat.db write failure
     // abort the live SSE stream.
     private static async Task SafePersistToolMessage(ChatMessageRepository repo, ILogger logger,
-        Guid conversationId, string toolCallId, string content)
+        Guid conversationId, string toolCallId, string content, SessionService session)
     {
         try
         {
@@ -99,7 +99,7 @@ public static partial class ChatEndpoints
                 ContentText = content,
                 ToolCallId = toolCallId,
                 CreatedAt = DateTime.UtcNow
-            });
+            }, session);
         }
         catch (Exception ex)
         {
@@ -116,6 +116,11 @@ public static partial class ChatEndpoints
         HttpContext Ctx,
         OpenRouterClient OpenRouter,
         ChatToolDispatcher Dispatcher,
+        // Threaded through to every chat_message/chat_attachment repo call the loop makes — both
+        // encrypt/decrypt under the master DEK now (H3 fix). The caller has already checked
+        // session.IsUnlocked before entering the loop (decrypting the OpenRouter key itself needs
+        // the DEK), so this is always unlocked by the time the loop uses it.
+        SessionService Session,
         ChatSettingsRepository Repo,
         ChatMessageRepository MsgRepo,
         ChatConversationRepository ConvoRepo,
@@ -131,7 +136,10 @@ public static partial class ChatEndpoints
         ChatDestructiveOpCounter DestructiveCounter,
         // The effective text model's context-window size (tokens), for the context-fill % metric.
         // Null when unset — ComputeContextFill returns null in that case.
-        int? ContextWindow);
+        int? ContextWindow,
+        // The conversation owner's user id — auto-approve-writes is per-user (M1 fix), so the loop
+        // needs to know WHOSE setting to check, not just whether "someone" turned it on.
+        int UserId);
 
     /// <summary>Computes the context-fill percentage (0–100) from prompt tokens vs the model's
     /// context window. Returns null when either value is missing or the window is invalid.</summary>
@@ -202,7 +210,7 @@ public static partial class ChatEndpoints
                             ToolCallsCount = toolCallsCount,
                             DurationMs = sw.ElapsedMilliseconds,
                             CreatedAt = DateTime.UtcNow
-                        });
+                        }, lc.Session);
                         await lc.ConvoRepo.TouchAsync(lc.ConversationId);
                     }
                     catch (Exception ex) { lc.Logger.LogWarning(ex, "Failed to persist assistant message"); }
@@ -247,7 +255,7 @@ public static partial class ChatEndpoints
                         ToolCallsJson = toolCallsJson,
                         Model = turn.Model,
                         CreatedAt = DateTime.UtcNow
-                    });
+                    }, lc.Session);
                 }
                 catch (Exception ex) { lc.Logger.LogWarning(ex, "Failed to persist assistant tool-call turn"); }
 
@@ -271,7 +279,7 @@ public static partial class ChatEndpoints
                     {
                         var errMsg = "{\"error\":\"malformed arguments JSON\"}";
                         lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errMsg });
-                        await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errMsg);
+                        await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errMsg, lc.Session);
                         await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = 0, error = "malformed arguments JSON" });
                         continue;
                     }
@@ -287,10 +295,10 @@ public static partial class ChatEndpoints
 
                     if (ChatToolDispatcher.IsWriteTool(tc.Name))
                     {
-                        if (await lc.Repo.GetAutoApproveWritesAsync())
+                        if (await lc.Repo.GetAutoApproveWritesAsync(lc.UserId))
                         {
-                            // Auto-approve (opt-in, superadmin-only, Admin -> AI/Chat): skip the human
-                            // confirm gate and execute immediately, through the SAME defense-in-depth
+                            // Auto-approve (opt-in, per-user — M1 fix): skip the human confirm gate
+                            // for THIS user's turn and execute immediately, through the SAME defense-in-depth
                             // path /confirm uses (ACL via CallerScope reuse, the destructive-op cap,
                             // the ChatWriteExecItemsKey marker, audit tagging). tool_call_start was
                             // already emitted above for this call.
@@ -298,7 +306,7 @@ public static partial class ChatEndpoints
                                 lc.Ctx, lc.Dispatcher, lc.DestructiveCounter, lc.ConversationId, tc.Name, tc.ArgumentsJson);
                             var autoArticleId = TryExtractArticleId(autoJson, tc.Name);
                             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = autoJson });
-                            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, autoJson);
+                            await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, autoJson, lc.Session);
                             await lc.Sse("confirm_resolved", new { toolCallId = tc.Id, allowed = true, ok = autoOk, error = autoErr, toolName = tc.Name, articleId = autoArticleId });
                             continue;
                         }
@@ -315,7 +323,7 @@ public static partial class ChatEndpoints
                     await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = result.Ok, durationMs = result.DurationMs, error = result.Error });
 
                     lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = result.Json });
-                    await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, result.Json);
+                    await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, result.Json, lc.Session);
                 }
             }
 
@@ -336,7 +344,7 @@ public static partial class ChatEndpoints
                     ToolCallsCount = toolCallsCount,
                     DurationMs = sw.ElapsedMilliseconds,
                     CreatedAt = DateTime.UtcNow
-                });
+                }, lc.Session);
                 await lc.ConvoRepo.TouchAsync(lc.ConversationId);
             }
             catch (Exception ex) { lc.Logger.LogWarning(ex, "Failed to persist cap message"); }
@@ -467,16 +475,10 @@ public static partial class ChatEndpoints
         HttpContext ctx, ChatToolDispatcher dispatcher, ChatDestructiveOpCounter destructiveCounter,
         Guid conversationId, string toolName, string? argumentsJson)
     {
-        bool reservedDestructive = ChatToolDispatcher.IsDestructiveTool(toolName)
-            && destructiveCounter.TryReserve(conversationId);
-        bool capRefused = ChatToolDispatcher.IsDestructiveTool(toolName) && !reservedDestructive;
-
-        if (capRefused)
-        {
-            var msg = $"Destructive operation cap reached for this conversation (max {destructiveCounter.Cap} {toolName} calls). Start a new conversation to continue.";
-            return (JsonSerializer.Serialize(new { error = msg }, SseJsonOpts), false, msg);
-        }
-
+        // Args must be parsed BEFORE the destructive-op check now: bee_update_article is only
+        // destructive when it actually carries a content payload (see IsDestructiveTool), so
+        // whether this call counts against the cap depends on what's inside argumentsJson, not
+        // just the tool's name.
         JsonElement execArgs;
         bool parsed;
         try
@@ -492,9 +494,16 @@ public static partial class ChatEndpoints
         }
 
         if (!parsed)
-        {
-            if (reservedDestructive) destructiveCounter.Release(conversationId);
             return ("{\"error\":\"malformed arguments JSON\"}", false, "malformed arguments JSON");
+
+        bool isDestructive = ChatToolDispatcher.IsDestructiveTool(toolName, execArgs);
+        bool reservedDestructive = isDestructive && destructiveCounter.TryReserve(conversationId);
+        bool capRefused = isDestructive && !reservedDestructive;
+
+        if (capRefused)
+        {
+            var msg = $"Destructive operation cap reached for this conversation (max {destructiveCounter.Cap} destructive calls). Start a new conversation to continue.";
+            return (JsonSerializer.Serialize(new { error = msg }, SseJsonOpts), false, msg);
         }
 
         // The caller's approval (human Allow click, or the auto-approve setting) satisfies

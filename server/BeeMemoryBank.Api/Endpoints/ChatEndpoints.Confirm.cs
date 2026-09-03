@@ -85,7 +85,7 @@ public static partial class ChatEndpoints
             // never trust a client-supplied model). The resumed loop uses the effective text model;
             // generate_image (if called in the continuation) uses the effective image-gen model.
             List<ChatMessage> history;
-            try { history = await msgRepo.ListByConversationAsync(conversationId); }
+            try { history = await msgRepo.ListByConversationAsync(conversationId, session); }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to load chat history for {Id}", conversationId);
@@ -106,6 +106,7 @@ public static partial class ChatEndpoints
             // Find the pending WRITE tool call by id (the source of truth for name+args — never trust
             // the client). The pending call lives on an assistant message's tool_calls_json.
             ResolvedToolCall? pending = null;
+            DateTime? pendingCreatedAt = null;
             foreach (var m in history)
             {
                 if (m.Role != "assistant" || string.IsNullOrEmpty(m.ToolCallsJson)) continue;
@@ -117,12 +118,26 @@ public static partial class ChatEndpoints
                 if (match != null)
                 {
                     pending = new ResolvedToolCall(match.Id, match.Function!.Name!, match.Function.Arguments ?? "{}");
+                    pendingCreatedAt = m.CreatedAt;
                     break;
                 }
             }
             if (pending is null)
             {
                 await JsonError(404, "Pending tool call not found in this conversation.");
+                return;
+            }
+            // L5 fix: a pending write used to be confirmable forever — a stale confirm_required
+            // card from any earlier turn (possibly one the UI never even rendered — the browser
+            // reloaded, the tab was left open for days) could still be clicked "Allow" and execute
+            // the model's ORIGINAL proposed write with today's approval, even though the model has
+            // no memory of proposing it and the conversation has long since moved on. Expire it the
+            // same way the MCP continuation store expires saved responses (McpResponseManager's
+            // 24h TempFileExpiry) — old enough that no legitimate human click should ever hit it,
+            // short enough that a genuinely abandoned confirm card cannot be resurrected.
+            if (DateTime.UtcNow - pendingCreatedAt!.Value > PendingConfirmExpiry)
+            {
+                await JsonError(410, "This confirmation has expired. Ask the assistant to repeat the request.");
                 return;
             }
             if (!ChatToolDispatcher.IsWriteTool(pending.Name))
@@ -173,7 +188,7 @@ public static partial class ChatEndpoints
                 Dictionary<Guid, List<ChatAttachment>> attachmentsByMessage = new();
                 try
                 {
-                    foreach (var a in await attachRepo.ListByConversationAsync(conversationId))
+                    foreach (var a in await attachRepo.ListByConversationAsync(conversationId, session))
                     {
                         if (!attachmentsByMessage.TryGetValue(a.MessageId, out var list))
                             attachmentsByMessage[a.MessageId] = list = new();
@@ -213,7 +228,7 @@ public static partial class ChatEndpoints
 
                 // Append + persist the tool result, then resume the loop.
                 convoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = req.ToolCallId, Content = toolResultJson });
-                await SafePersistToolMessage(msgRepo, logger, conversationId, req.ToolCallId, toolResultJson);
+                await SafePersistToolMessage(msgRepo, logger, conversationId, req.ToolCallId, toolResultJson, session);
 
                 // Commit to SSE and resume — the continuation streams to the UI, appended to the same bubble.
                 ctx.Response.ContentType = "text/event-stream";
@@ -233,13 +248,13 @@ public static partial class ChatEndpoints
                 try
                 {
                     await RunToolLoopAsync(new ChatLoopContext(
-                        Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Repo: repo,
+                        Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Session: session, Repo: repo,
                         MsgRepo: msgRepo, ConvoRepo: convoRepo, AttachRepo: attachRepo, Logger: logger,
                         Keys: keys, Model: resumeModel,
                         EffectiveImageGenModelId: effectiveImageGen?.ModelId ?? "",
                         ConversationId: conversationId,
                         ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter,
-                        ContextWindow: effectiveText.ContextWindow));
+                        ContextWindow: effectiveText.ContextWindow, UserId: userId));
                 }
                 catch (OperationCanceledException) { /* client gone */ }
                 finally

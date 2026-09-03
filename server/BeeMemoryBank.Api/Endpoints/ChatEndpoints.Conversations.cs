@@ -71,7 +71,7 @@ public static partial class ChatEndpoints
         // are NOT inlined here — the UI fetches them via GET /attachments/{id} (ownership-checked).
         group.MapGet("/conversations/{id:guid}/messages", async (Guid id, HttpContext ctx,
             ChatConversationRepository convoRepo, ChatMessageRepository msgRepo,
-            ChatAttachmentRepository attachRepo, ChatSettingsRepository repo) =>
+            ChatAttachmentRepository attachRepo, ChatSettingsRepository repo, SessionService session) =>
         {
             var identity = CallerIdentity.Extract(ctx);
             if (identity.UserId is null)
@@ -81,13 +81,20 @@ public static partial class ChatEndpoints
             if (convo is null)
                 return Results.NotFound(new ErrorResponse("Conversation not found"));
 
-            var msgs = await msgRepo.ListByConversationAsync(id);
+            // H3 fix: content_text/attachment blobs are encrypted under the master DEK now, so
+            // this plaintext transcript cache can no longer be read while the vault is locked —
+            // previously it had NO unlock check at all, so a locked node still handed out every
+            // decrypted article body the AI had ever read in this conversation.
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
+
+            var msgs = await msgRepo.ListByConversationAsync(id, session);
 
             // Group attachments by message_id (one pass) so the transcript build is N+0, not N+1.
             var byMessage = new Dictionary<Guid, List<ChatAttachment>>();
             try
             {
-                foreach (var a in await attachRepo.ListByConversationAsync(id))
+                foreach (var a in await attachRepo.ListByConversationAsync(id, session))
                 {
                     if (!byMessage.TryGetValue(a.MessageId, out var list))
                         byMessage[a.MessageId] = list = new();
@@ -137,13 +144,21 @@ public static partial class ChatEndpoints
         // so a foreign id yields 404, never a leak. Cacheable (immutable content). The CSP allows
         // 'self' for img-src, so this route renders without any CSP change.
         group.MapGet("/attachments/{id:guid}", async (Guid id, HttpContext ctx,
-            ChatAttachmentRepository attachRepo) =>
+            ChatAttachmentRepository attachRepo, SessionService session) =>
         {
             var identity = CallerIdentity.Extract(ctx);
             if (identity.UserId is null)
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 401);
             var userId = identity.UserId.Value;
-            var att = await attachRepo.GetByIdForUserAsync(id, userId);
+
+            // H3 fix: the blob is ciphertext under the master DEK now (see ChatAttachmentRepository)
+            // — this endpoint had NO unlock check at all before, so a locked node still served the
+            // raw image bytes (a user-uploaded photo, or a generated image derived from vault
+            // content) to anyone who still held a valid session cookie/agent key.
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
+
+            var att = await attachRepo.GetByIdForUserAsync(id, userId, session);
             var blob = att?.Blob;
             if (blob is null || blob.Length == 0)
                 return Results.NotFound(new ErrorResponse("Attachment not found"));

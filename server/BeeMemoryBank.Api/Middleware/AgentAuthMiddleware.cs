@@ -16,8 +16,15 @@ namespace BeeMemoryBank.Api.Middleware;
 /// AUDIT NOTE: This middleware intentionally calls next(context) unconditionally.
 /// It is NOT an authentication gate — it only performs opportunistic session unlock.
 /// Authorization is enforced at the endpoint level: content endpoints check session.IsUnlocked,
-/// write endpoints check InternalKeyValidator. The MCP endpoint is only accessible on localhost
-/// (API port 5300 is not exposed via Nginx). This is defense-in-depth, not the sole auth layer.
+/// write endpoints check InternalKeyValidator. The MCP endpoint (and every other
+/// route on this port — /api/session/unlock, /api/session/status, /api/join,
+/// /api/init/reset, ...) is only ever meant to be reachable on localhost / from within this
+/// process's own container — NEVER published straight to a host port or the internet (H4: the
+/// shipped docker-compose.yml briefly did exactly that, which is what made this comment a lie
+/// instead of an invariant). Enforced two ways now: docker-entrypoint.sh binds the API process
+/// itself to 127.0.0.1, and docker-compose.yml no longer publishes port 5300 at all — see the
+/// comment there for what to do instead if you need cross-node sync (/api/sync, /api/join) or
+/// /mcp reachable from another machine. This is defense-in-depth, not the sole auth layer.
 ///
 /// AUTO-UNLOCK: Agents are permitted to auto-unlock the session via their encrypted DEK.
 /// This is intentional — it ensures MCP clients can work without manual intervention.
@@ -107,9 +114,19 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
 
                         context.Items["AuthAgent"] = agent;
 
-                        _ = agentRepo.UpdateAccessAsync(agent.Id)
-                            .ContinueWith(static t => { /* swallow — non-critical tracking */ },
-                                TaskContinuationOptions.OnlyOnFaulted);
+                        // Awaited (not fire-and-forget) — agentRepo is request-scoped, so a
+                        // detached ContinueWith could still be running after this request's DI
+                        // scope (and the repo's underlying connection) is disposed at the end of
+                        // the request, silently failing every time. Same bug, same fix as
+                        // TouchAsync above for remote tokens.
+                        try
+                        {
+                            await agentRepo.UpdateAccessAsync(agent.Id);
+                        }
+                        catch
+                        {
+                            // non-critical; allow the request to proceed
+                        }
 
                         context.Items["CallerIdentity"] = new CallerIdentity(
                             UserId: owner.Id,
@@ -121,9 +138,14 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                     {
                         context.Items["AuthAgent"] = agent;
 
-                        _ = agentRepo.UpdateAccessAsync(agent.Id)
-                            .ContinueWith(static t => { /* swallow — non-critical tracking */ },
-                                TaskContinuationOptions.OnlyOnFaulted);
+                        try
+                        {
+                            await agentRepo.UpdateAccessAsync(agent.Id);
+                        }
+                        catch
+                        {
+                            // non-critical; allow the request to proceed
+                        }
                     }
 
                     if (!session.IsUnlocked)

@@ -127,7 +127,15 @@ public class ChatMessage
     public Guid Id { get; set; }
     public Guid ConversationId { get; set; }
     public string Role { get; set; } = "";
+    // Plaintext content. On the way IN to ChatMessageRepository.CreateAsync this is the value
+    // that gets encrypted (into ContentCiphertext/ContentIv) before the row is ever written. On
+    // the way OUT of ListByConversationAsync this is already decrypted -- callers never see
+    // ciphertext. See H3 fix in ChatMessageRepository.
     public string? ContentText { get; set; }
+    /// <summary>On-disk ciphertext for <see cref="ContentText"/> (AES-256-GCM under the master
+    /// DEK). Populated by Dapper on read; never set directly by application code.</summary>
+    public byte[]? ContentCiphertext { get; set; }
+    public byte[]? ContentIv { get; set; }
     public string? ToolCallsJson { get; set; }
     public string? ToolCallId { get; set; }
     public string? Model { get; set; }
@@ -150,7 +158,12 @@ public class ChatAttachment
     public Guid MessageId { get; set; }
     public string Kind { get; set; } = ""; // "user-upload" | "generated-image"
     public string Mime { get; set; } = "";
+    // Plaintext bytes going IN to ChatAttachmentRepository.CreateAsync (encrypted before the row
+    // is written); already-decrypted bytes coming OUT of a repository read. See H3 fix.
     public byte[]? Blob { get; set; }
+    /// <summary>AES-256-GCM IV for <see cref="Blob"/>. Null means a legacy row written before the
+    /// H3 encryption fix, whose Blob is still plaintext.</summary>
+    public byte[]? Iv { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

@@ -11,8 +11,16 @@ if [ -z "$BMB_INTERNAL_KEY" ]; then
     export BMB_INTERNAL_KEY=$(cat "$KEY_FILE")
 fi
 
-# Start API in background (port 5300)
-ASPNETCORE_URLS=http://0.0.0.0:5300 \
+# Start API in background, bound to loopback ONLY (port 5300). AgentAuthMiddleware's auth model
+# assumes the MCP endpoint (and every other unauthenticated-looking route: /api/session/unlock,
+# /api/session/status, /api/join, /api/init/reset, ...) is unreachable from outside this
+# container/host — that assumption used to be false for the shipped docker-compose.yml, which
+# published 5300 straight to the host with the API listening on 0.0.0.0 (H4). Both processes
+# share this container's network namespace, so Web (below) still reaches the API over
+# localhost exactly as before — only external reachability changes. See docs/deployment.md's
+# "Reverse Proxy — What Is Exposed" for the equivalent from-source setup, and note that this
+# compose file itself no longer publishes the API port at all (belt AND suspenders).
+ASPNETCORE_URLS=http://127.0.0.1:5300 \
     dotnet /app/api/BeeMemoryBank.Api.dll &
 
 # Start Web as the main process — Docker monitors this (port 5301)

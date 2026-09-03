@@ -182,7 +182,19 @@ builder.Services.AddScoped<ChatMessageRepository>();
 builder.Services.AddScoped<ChatSettingsRepository>();
 // Phase 5: chat_attachment CRUD (vision uploads + generated images) — chat.db only, never synced.
 builder.Services.AddScoped<ChatAttachmentRepository>();
-builder.Services.AddScoped<OpenRouterClient>();
+// M3 fix: OpenRouterClient's egress is documented as "pinned to https://openrouter.ai ... prevents
+// an SSRF-style redirect of vault content to an attacker host" (see OpenRouterClient.cs), but that
+// was only true of the URL, not the HttpClient — the plain AddScoped<OpenRouterClient>() this
+// replaced resolved the DEFAULT HttpClient (registered above via AddHttpClient() +
+// AddTransient<HttpClient>()), whose handler has AllowAutoRedirect=true. A 307/308 from
+// openrouter.ai would silently re-POST the entire conversation (decrypted article bodies
+// included) to wherever the redirect pointed, with only the Authorization header stripped
+// cross-origin — the payload travels regardless. AddHttpClient<T>() gives OpenRouterClient its
+// OWN typed client instead of sharing the default one, so this handler config can't leak onto
+// (or be overridden by) any other HttpClient consumer. Mirrors ImageFetchClient's SSRF hardening
+// in ChatEndpoints.Stream.cs, which got this right from the start.
+builder.Services.AddHttpClient<OpenRouterClient>()
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 // Phase 3: per-conversation destructive-op cap (in-memory singleton — see ChatDestructiveOpCounter).
 builder.Services.AddSingleton<ChatDestructiveOpCounter>();
 // Phase 1: curated read-only tool surface for the native AI chat. Scoped (depends on the

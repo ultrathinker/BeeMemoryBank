@@ -199,7 +199,7 @@ public sealed partial class ChatToolDispatcher
         // Ownership: the attachment must belong to a conversation of the calling user.
         var (userId, _, _) = CallerIdentity.Extract(ctx);
         if (userId is null) return ErrorJson("Unauthorized");
-        var attachment = await attachRepo.GetByIdForUserAsync(attachmentId, userId.Value);
+        var attachment = await attachRepo.GetByIdForUserAsync(attachmentId, userId.Value, session);
         if (attachment?.Blob is not { Length: > 0 })
             return ErrorJson($"attachment {attachmentId} not found (use an attachmentId from the attachment manifest or a generate_image result, copied exactly)");
 

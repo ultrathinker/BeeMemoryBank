@@ -3,8 +3,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Only the Web port is published (H4 fix). The API (port 5300) is the raw, mostly-unauthenticated
+    # surface — /api/session/unlock (a password oracle that unlocks the vault for every user/agent on
+    # success), /api/init/reset, /api/session/status, /api/join, /mcp, ... — that
+    # AgentAuthMiddleware's own comment says is "only accessible on localhost". Publishing it
+    # straight to the host (as this file used to) bypassed that assumption AND ufw entirely,
+    # since Docker's port publishing writes iptables/nftables DNAT rules directly. docker-entrypoint.sh
+    # also binds the API process itself to 127.0.0.1 (defense-in-depth), so Web — which shares this
+    # container's network namespace — still reaches it exactly as before; only external reachability
+    # changes. If you need the sync/join endpoints reachable from another node, put a reverse proxy in
+    # front that path-filters to /mcp, /api/sync, /api/join (see docs/deployment.md) rather than
+    # re-publishing this port wholesale.
     ports:
-      - "${BMB_API_PORT:-5300}:5300"
       - "${BMB_WEB_PORT:-5301}:5301"
     volumes:
       - ${BMB_DATA_PATH:-./data}:/app/data
