@@ -21,19 +21,20 @@ Data: /var/lib/beememorybank  (bind mount to /app/data)
 Image: multi-stage build from Dockerfile
 ```
 
-The shipped `docker-compose.yml` deliberately publishes only the Web port. If you need the API
-reachable from other nodes, publish it **bound to the host's loopback** and put a path-filtering
-reverse proxy in front of it:
+The shipped `docker-compose.yml` deliberately publishes only the Web port — the right choice for a
+purely local node. For a node that must be reachable from other nodes or MCP agents, use
+**`docker-compose.reverse-proxy.yml`** instead: it publishes both ports bound to the host's
+loopback, for a reverse proxy to sit in front of.
 
-```yaml
-ports:
-  - "127.0.0.1:5004:5300"
-  - "::1:5004:5300"      # if your proxy resolves "localhost" to ::1
+```bash
+docker compose -f docker-compose.reverse-proxy.yml up -d
 ```
 
 Never publish the API port on `0.0.0.0`. Docker's port publishing writes DNAT rules directly and
 bypasses `ufw`, so a `0.0.0.0` mapping is internet-reachable even on a host you believe is
-firewalled.
+firewalled — and the API surface includes a master-password oracle (see below). Personal
+per-server compose files live under `deploy/`, which is gitignored; keep them in step with the
+reverse-proxy reference file, because nothing in CI can check a file that isn't in the repository.
 
 ## Reverse Proxy — What Is Exposed
 

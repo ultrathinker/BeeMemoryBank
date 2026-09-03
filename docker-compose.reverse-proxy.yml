@@ -1,0 +1,61 @@
+# Reference deployment for a node that must be reachable from other nodes / MCP agents.
+#
+# Use this when a reverse proxy (Apache/Nginx/Caddy) terminates TLS in front of the node. The
+# default docker-compose.yml publishes only the Web port and is the right choice for a purely
+# local node; this file is its counterpart for a published one.
+#
+# THE ONE RULE: the API port is published on the HOST'S LOOPBACK ONLY, never 0.0.0.0.
+#
+# The API surface is not safe to expose directly. Several routes deliberately skip the
+# X-Internal-Key check because they must work before a session exists:
+#   POST /api/session/unlock  — answers 401 on a wrong master password, i.e. it PROCESSES the
+#                               attempt. Publicly reachable, that is a master-password oracle, and
+#                               a correct guess unlocks the vault globally for every user and agent
+#                               on the node, not just for the caller.
+#   GET  /api/session/status  — answers 200 and leaks whether the vault is unlocked.
+#   POST /api/join            — master password grants mesh membership.
+# The reverse proxy is what keeps those private: it forwards only the routes that are meant to be
+# public and nothing else. Publishing the port on 0.0.0.0 bypasses that filter entirely — and
+# Docker's port publishing writes DNAT rules directly, so it is reachable from the internet even on
+# a host you believe ufw is protecting. This was a real, live exposure once; don't recreate it.
+#
+# Both loopback families are listed because a proxy resolving "localhost" gets ::1 first on most
+# modern distributions, and an IPv4-only mapping would leave it connecting to a closed port.
+#
+# Do NOT "harden" this further by binding the API process to 127.0.0.1 inside the container (via
+# ASPNETCORE_URLS in docker-entrypoint.sh): Docker's published-port DNAT arrives on the container's
+# bridge interface, not its loopback, so a loopback bind there silently breaks these mappings and
+# takes every proxied route down with them.
+#
+# Proxy configuration: forward ONLY these paths to the API port, everything else to the Web port.
+#   /mcp        -> API   (MCP for AI agents; Bearer-token auth at the application level)
+#   /api/sync   -> API   (node-to-node synchronization, Ed25519-authenticated)
+#   /api/join   -> API   (join protocol)
+#   /           -> Web
+# See docs/deployment.md ("Reverse Proxy — What Is Exposed") for the full rationale.
+
+services:
+  bmb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      # Web — reached by the reverse proxy, not by browsers directly.
+      - "127.0.0.1:${BMB_WEB_PORT:-5301}:5301"
+      - "::1:${BMB_WEB_PORT:-5301}:5301"
+      # API — loopback only. See the warning above before changing this.
+      - "127.0.0.1:${BMB_API_PORT:-5300}:5300"
+      - "::1:${BMB_API_PORT:-5300}:5300"
+    volumes:
+      - ${BMB_DATA_PATH:-./data}:/app/data
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - BMB_DATA_PATH=/app/data
+      - BMB_ONNX_MODEL_PATH=/app/data/model.onnx
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5300/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
