@@ -234,7 +234,12 @@ public class SustainedConcurrentLoadTests : IAsyncLifetime
         bool completedInTime = true;
         try
         {
-            await Task.WhenAll([writer, .. readers]).WaitAsync(TimeSpan.FromSeconds(60));
+            // This bound is a hang detector, not a performance budget: a deadlock never finishes,
+            // while 21 tasks doing real indexing and search work on a shared two-core CI runner
+            // legitimately take minutes — a sibling test in this same assembly was observed taking
+            // over four minutes in the run where 60 seconds failed here. Generous enough that only
+            // a genuine hang trips it.
+            await Task.WhenAll([writer, .. readers]).WaitAsync(TimeSpan.FromMinutes(5));
         }
         catch (TimeoutException)
         {

@@ -166,9 +166,14 @@ public class DekRotationFlowTests : IAsyncLifetime
             epoch.Should().Be(originalEpoch);
         }
 
-        // Assert: login with original password still works
-        var loginResp = await _client.PostAsJsonAsync("/api/session/login",
-            new { username = "admin", password = Password });
+        // Assert: login with original password still works.
+        //
+        // Polled rather than asserted outright: the Failed progress step is published from inside
+        // AcceptCommitCoreAsync, while maintenance mode is released by the finally one frame out
+        // in AcceptCommitAsync. Between those two the node correctly answers 503, and a CI runner
+        // is slow enough to land in that window — the point of this test is that the node comes
+        // back, not that it comes back within zero milliseconds.
+        var loginResp = await PollLoginAsync(TimeSpan.FromSeconds(15));
         loginResp.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
@@ -195,6 +200,26 @@ public class DekRotationFlowTests : IAsyncLifetime
         await PollProgressAsync(
             step => step == DekRotationFlowStep.Completed || step == DekRotationFlowStep.Failed,
             timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Logs in, retrying while the node still reports maintenance mode (503). Any other status —
+    /// including a genuine failure — is returned immediately so the caller's assertion sees it.
+    /// </summary>
+    private async Task<HttpResponseMessage> PollLoginAsync(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        HttpResponseMessage resp;
+        do
+        {
+            resp = await _client.PostAsJsonAsync("/api/session/login",
+                new { username = "admin", password = Password });
+            if (resp.StatusCode != HttpStatusCode.ServiceUnavailable)
+                return resp;
+            await Task.Delay(200);
+        } while (DateTime.UtcNow < deadline);
+
+        return resp;
     }
 
     private async Task<bool> PollProgressAsync(
