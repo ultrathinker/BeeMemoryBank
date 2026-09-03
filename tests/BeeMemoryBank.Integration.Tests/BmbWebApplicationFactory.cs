@@ -9,6 +9,7 @@ using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -23,13 +24,40 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string _tempDir =
         Path.Combine(Path.GetTempPath(), "bmb_integration_" + Guid.NewGuid().ToString("N"));
 
+    private HttpMessageHandler? _outboundHandler;
+
     public string DataPath => _tempDir;
+
+    /// <summary>
+    /// Routes ALL of this node's outbound <see cref="IHttpClientFactory"/> clients — the default
+    /// unnamed client (used by e.g. InitEndpoints' /api/init/join) AND any named one (e.g.
+    /// RestoreInitiatorService's "SyncClient") — through <paramref name="handler"/> instead of a
+    /// real SocketsHttpHandler. Lets a test steer production code that calls
+    /// httpClientFactory.CreateClient(...) into another in-process TestServer/WebApplicationFactory
+    /// without opening real sockets. A common choice is another <see cref="BmbWebApplicationFactory"/>'s
+    /// <c>Server.CreateHandler()</c>.
+    /// <para>
+    /// Must be called BEFORE the host is first built — i.e. before <c>Server</c>,
+    /// <c>CreateClient()</c>, or <c>Services</c> is touched — since <see cref="ConfigureWebHost"/>
+    /// only runs once, at that point.
+    /// </para>
+    /// </summary>
+    public void RouteOutboundHttpThrough(HttpMessageHandler handler) => _outboundHandler = handler;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
         builder.UseSetting("BeeMemoryBank:DataPath", _tempDir);
         Environment.SetEnvironmentVariable("BMB_INTERNAL_KEY", TestInternalKey);
+
+        if (_outboundHandler is { } handler)
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.ConfigureAll<HttpClientFactoryOptions>(o =>
+                    o.HttpMessageHandlerBuilderActions.Add(b => b.PrimaryHandler = handler));
+            });
+        }
     }
 
     public new HttpClient CreateClient()

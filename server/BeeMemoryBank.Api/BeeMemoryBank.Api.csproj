@@ -19,6 +19,14 @@
     <PackageReference Include="Velopack" />
   </ItemGroup>
 
+  <!-- Test-only seam: lets BeeMemoryBank.Integration.Tests call
+       RestoreInitiatorService.DownloadFromWhitelistedSeederAsync directly, so it can drive the
+       real V2 challenge/authenticate handshake against a real peer server without exercising the
+       full destructive restore-apply path. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="BeeMemoryBank.Integration.Tests" />
+  </ItemGroup>
+
   <!-- model.onnx is NOT in git — download separately (see docs/deployment.md) -->
   <ItemGroup>
     <Content Include="..\..\libs\BeeMemoryBank.Core\Embeddings\Models\model.onnx" Condition="Exists('..\..\libs\BeeMemoryBank.Core\Embeddings\Models\model.onnx')">
