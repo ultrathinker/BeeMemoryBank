@@ -19,13 +19,20 @@ updates:
       # Remove this entry only together with a decision about that licence.
       - dependency-name: "FluentAssertions"
         versions: [">=8.0.0"]
+      # System.CommandLine 2.0 stable is not an upgrade from the beta the CLI is written against,
+      # it is a different API surface — the whole command tree has to be rewritten against it.
+      # SemVer does not catch this (both sides are "2"), so it needs naming explicitly.
+      - dependency-name: "System.CommandLine"
       # Patch and minor updates are worth automating; major ones are API-breaking by definition
       # and every one of them needs its own change, its own test run and a human deciding it is
       # worth the churn (Test.Sdk 18, coverlet 10, xunit.runner 4, ModelContextProtocol 2,
-      # System.CommandLine 2.0, ImageSharp 4, Markdig 1.x, SQLitePCLRaw 3 are all sitting there
-      # for exactly that reason). Left on, they reopen weekly and nobody merges them, which is
-      # how the previous backlog of stale pull requests happened. Run `dotnet list package
-      # --outdated` when you want to see them.
+      # ImageSharp 4, Markdig 1.x, SQLitePCLRaw 3 are all sitting there for exactly that reason).
+      # Left on, they reopen weekly and nobody merges them, which is how the previous backlog of
+      # stale pull requests happened. Run `dotnet list package --outdated` to see them.
+      #
+      # Deliberately NOT ignored: Microsoft.ML.OnnxRuntime. 1.24 -> 1.29 is a minor bump, so it
+      # will be proposed — and it should be, since it is a native runtime that receives security
+      # fixes. Judge it on arrival against the embedding model rather than silencing it here.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 

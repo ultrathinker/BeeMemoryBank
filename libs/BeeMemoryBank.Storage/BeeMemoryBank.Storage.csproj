@@ -14,10 +14,14 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <!-- Pin the native SQLite build above the vulnerable 2.1.11 (GHSA-2m69-gcr7-jv3q,
          CVE-2025-6965: memory corruption in SQLite versions prior to 3.50.2).
-         Microsoft.Data.Sqlite 10.0.3 transitively pulls SQLitePCLRaw.lib.e_sqlite3 2.1.11;
+         Microsoft.Data.Sqlite 10.0.3 transitively pulled SQLitePCLRaw.lib.e_sqlite3 2.1.11;
          this direct reference forces 2.1.12 (which bundles a fixed SQLite) for this project
          and every project that references Storage. Verified via the dotnet vulnerable
-         package audit (NU1903 warning clears after this pin). -->
+         package audit (NU1903 warning clears after this pin).
+         Since Microsoft.Data.Sqlite 10.0.11 the whole SQLitePCLRaw set arrives at 2.1.12 on its
+         own, so this reference no longer changes the resolved version — it is kept as a floor,
+         so a future downgrade of Microsoft.Data.Sqlite cannot quietly bring the vulnerable
+         native build back. -->
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
   </ItemGroup>
 
