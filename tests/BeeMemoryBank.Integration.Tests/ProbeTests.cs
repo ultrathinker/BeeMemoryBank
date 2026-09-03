@@ -203,6 +203,9 @@ public class ProbeTests : IAsyncLifetime
         challengeResp.EnsureSuccessStatusCode();
         var challengeData = await challengeResp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
         var challengeB64 = challengeData.GetProperty("challenge").GetString()!;
+        // V2 binds the signature to the audience node's id; the unbound V1 tag is no longer
+        // accepted by /api/sync/authenticate.
+        var serverNodeId = challengeData.GetProperty("serverNodeId").GetGuid();
 
         using var scope = clientNode.Services.CreateScope();
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
@@ -215,7 +218,10 @@ public class ProbeTests : IAsyncLifetime
             signature = BeeMemoryBank.Crypto.NodeIdentityCrypto.SignWithIdentity(
                 identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                 identity.NodeId, masterDek,
-                "BMB-CHALLENGE-V1\0"u8.ToArray().Concat(Convert.FromBase64String(challengeB64)).ToArray());
+                "BMB-CHALLENGE-V2\0"u8.ToArray()
+                    .Concat(serverNodeId.ToByteArray())
+                    .Concat(Convert.FromBase64String(challengeB64))
+                    .ToArray());
         }
         finally { Array.Clear(masterDek); }
 

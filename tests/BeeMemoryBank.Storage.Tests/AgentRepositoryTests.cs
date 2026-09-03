@@ -82,6 +82,52 @@ public class AgentRepositoryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DeleteAsync_WipesKeyMaterial_NotJustTheStatusFlag()
+    {
+        // Revoking an agent must destroy its wrapped DEK, not merely stop it authenticating.
+        // Otherwise the revoked bee_... key plus a copy of the database file still unwraps the
+        // master DEK — the key stays a vault key long after an operator believes it was cut off.
+        var id = await CreateAgentAsync(_ownerId, wrapped: true, keySuffix: "revoked");
+
+        await _repo.DeleteAsync(id);
+
+        using var conn = _factory.CreateConnection();
+        var row = await conn.QuerySingleAsync<(string Status, byte[]? Dek, byte[]? Iv, byte[]? Salt, long Kdf)>(
+            @"SELECT status AS Status, encrypted_dek AS Dek, dek_iv AS Iv, salt AS Salt,
+                     kdf_version AS Kdf
+                FROM tbl_agent WHERE id = @id", new { id });
+
+        row.Status.Should().Be("D");
+        row.Dek.Should().BeNull();
+        row.Iv.Should().BeNull();
+        row.Salt.Should().BeNull();
+        row.Kdf.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ClearWrappedDek_AlsoCoversAlreadyRevokedAgents()
+    {
+        // A demoted superadmin's soft-deleted agents matter as much as their live ones: the row
+        // still holds the wrapped DEK, and an offline attacker with the old key does not care
+        // whether it is marked revoked.
+        var revokedId = await CreateAgentAsync(_ownerId, wrapped: true, keySuffix: "old");
+        using (var seed = _factory.CreateConnection())
+        {
+            // Flip the status directly rather than through DeleteAsync, which now wipes key
+            // material itself — this must reproduce a row left behind by the OLD delete path.
+            await seed.ExecuteAsync("UPDATE tbl_agent SET status = 'D' WHERE id = @revokedId", new { revokedId });
+        }
+
+        var affected = await _repo.ClearWrappedDekForOwnerAsync(_ownerId);
+
+        affected.Should().Be(1);
+        using var conn = _factory.CreateConnection();
+        var dek = await conn.QuerySingleAsync<byte[]?>(
+            "SELECT encrypted_dek FROM tbl_agent WHERE id = @revokedId", new { revokedId });
+        dek.Should().BeNull("a revoked agent's wrapped DEK must be cleared too");
+    }
+
+    [Fact]
     public async Task ClearWrappedDek_DoesNotTouchAnotherOwnersAgents()
     {
         var mineId = await CreateAgentAsync(_ownerId, wrapped: true, keySuffix: "mine");

@@ -122,6 +122,15 @@ public partial class SnapshotService
         favoriteCmd.CommandText = "DELETE FROM tbl_favorite";
         try { favoriteCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-011 archive */ }
 
+        // The sync quarantine is this node's own failure bookkeeping: which events it could not
+        // apply, and the raw exception text explaining why. Shipping it to a joiner both leaks our
+        // internal paths and diagnostics through last_error and pre-poisons the joiner against
+        // events it has never actually tried to apply. Emptied rather than dropped for the same
+        // schema reason as the role/favorite tables above.
+        using var quarantineCmd = conn.CreateCommand();
+        quarantineCmd.CommandText = "DELETE FROM tbl_sync_quarantine";
+        try { quarantineCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-013 archive */ }
+
         // L10: tbl_remote_account holds THIS node's wrapped bearer tokens for OTHER people's nodes
         // (remote-subscription "read-only mirror" feature) — encrypted_token is wrapped with our
         // own master DEK, so a joining node that later unlocks the vault (which it's fully trusted

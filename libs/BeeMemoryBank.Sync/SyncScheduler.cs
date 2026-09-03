@@ -100,7 +100,7 @@ public class SyncScheduler(
             if (ct.IsCancellationRequested) break;
             try
             {
-                totalApplied += await syncClient.SyncWithAsync(http, node.ApiAddress!, ct);
+                totalApplied += await syncClient.SyncWithAsync(http, node.ApiAddress!, node.NodeId, ct);
                 snapshotRequiredState?.Clear();
             }
             catch (SnapshotRequiredException ex)

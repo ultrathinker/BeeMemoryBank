@@ -91,7 +91,7 @@ public class SyncWorker : Worker
         http.Timeout = TimeSpan.FromSeconds(30);
         foreach (var node in nodes)
         {
-            try { applied += await syncClient.SyncWithAsync(http, node.ApiAddress!, CancellationToken.None); }
+            try { applied += await syncClient.SyncWithAsync(http, node.ApiAddress!, node.NodeId, CancellationToken.None); }
             catch (Exception ex) { err = ex.Message; }
         }
         Services.SyncHeartbeat.RecordCycle(err == null, applied, err, "wm");

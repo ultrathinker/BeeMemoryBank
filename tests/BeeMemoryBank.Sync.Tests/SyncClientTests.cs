@@ -46,7 +46,6 @@ public class SyncClientTests : IAsyncLifetime
             authSigner,
             logger,
             _peerNewerProtocolState,
-            _node.WhitelistRepo,
             _node.QuarantineRepo);
 
         _remoteNodeId = Guid.NewGuid();
@@ -119,7 +118,7 @@ public class SyncClientTests : IAsyncLifetime
         });
 
         // Act
-        var result = await _client.SyncWithAsync(_http, "http://remote.local");
+        var result = await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
 
         // Assert
         result.Should().Be(0);
@@ -146,7 +145,7 @@ public class SyncClientTests : IAsyncLifetime
         });
 
         // Act
-        var result = await _client.SyncWithAsync(_http, "http://remote.local");
+        var result = await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
 
         // Assert
         result.Should().Be(0);
@@ -173,7 +172,7 @@ public class SyncClientTests : IAsyncLifetime
         });
 
         // Act
-        var result = await _client.SyncWithAsync(_http, "http://remote.local");
+        var result = await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
 
         // Assert
         result.Should().Be(0);
@@ -200,78 +199,55 @@ public class SyncClientTests : IAsyncLifetime
             }), Encoding.UTF8, "application/json")
         });
 
-        var result1 = await _client.SyncWithAsync(_http, "http://remote.local");
+        var result1 = await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
         result1.Should().Be(0);
         _peerNewerProtocolState.HasNewerProtocol.Should().BeTrue();
 
         isHigher = false;
 
-        var result2 = await _client.SyncWithAsync(_http, "http://remote.local");
+        var result2 = await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
         result2.Should().Be(0);
         _peerNewerProtocolState.HasNewerProtocol.Should().BeFalse();
     }
 
-    // ─── M6: whitelist-pinned audience anchor ──────────────────────────────────
+    // ─── M6: caller-pinned audience anchor ─────────────────────────────────────
 
     [Fact]
-    public async Task SyncWith_WhitelistPinnedNodeIdDiffersFromSelfDeclaredIdentity_RefusesToSync()
+    public async Task SyncWith_PeerDeclaresADifferentNodeIdThanWeDialed_RefusesToSync()
     {
-        // Our whitelist pins this exact address to a DIFFERENT NodeId than what the peer's own
-        // /api/sync/identity response claims about itself — e.g. a stale/incorrect ApiAddress
-        // entry, or a peer impersonating the node we intended to dial. SyncClient's own fast-fail
-        // check must refuse before ever touching the network for a challenge.
-        var pinnedNodeId = Guid.NewGuid();
-        await _node.WhitelistRepo.CreateAsync(new WhitelistEntry
-        {
-            NodeId = pinnedNodeId,
-            DisplayName = "PinnedPeer",
-            Ed25519PublicKey = new byte[32],
-            ApiAddress = "http://remote.local",
-            Status = "A",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        });
-
+        // We dial _remoteNodeId — in production, the whitelist entry SyncScheduler is iterating.
+        // The peer's own /api/sync/identity response claims to be someone else: a stale/incorrect
+        // ApiAddress entry, or a peer impersonating the node we meant to reach. SyncClient's
+        // fast-fail check must refuse before ever touching the network for a challenge.
         _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {
             Content = new StringContent(JsonSerializer.Serialize(new
             {
-                nodeId = _remoteNodeId, // self-declared — deliberately != pinnedNodeId
+                nodeId = Guid.NewGuid(), // self-declared — deliberately != the pinned _remoteNodeId
                 displayName = "Impersonator",
                 ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
                 protocolVersion = SyncProtocolVersion.Current
             }), Encoding.UTF8, "application/json")
         });
 
-        var act = async () => await _client.SyncWithAsync(_http, "http://remote.local");
+        var act = async () => await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
-            .WithMessage("*whitelist pins this address*");
+            .WithMessage("*but we dialed it as*");
 
         // Refused before ever fetching a challenge.
         _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/challenge"));
     }
 
     [Fact]
-    public async Task SyncWith_ChallengeClaimsForeignAudience_RefusesToSign_EvenWhenSelfDeclaredIdentityMatchesPin()
+    public async Task SyncWith_ChallengeClaimsForeignAudience_RefusesToSign_EvenWhenSelfDeclaredIdentityMatches()
     {
         // The actually security-relevant case (the M6 hole this fix closes): the peer's
-        // self-declared /api/sync/identity is CONSISTENT with our whitelist pin — so the fast-fail
-        // check above does NOT catch it — but /api/sync/challenge claims a DIFFERENT ServerNodeId,
+        // self-declared /api/sync/identity AGREES with the id we dialed — so the fast-fail check
+        // above does NOT catch it — but /api/sync/challenge claims a DIFFERENT ServerNodeId,
         // modeling a peer that relays a genuine challenge fetched live from some unrelated third
-        // node. PeerAuthenticator must still refuse to sign, because the audience anchor is now
-        // the whitelist-pinned NodeId, never whatever this same connection claims about itself.
-        await _node.WhitelistRepo.CreateAsync(new WhitelistEntry
-        {
-            NodeId = _remoteNodeId,
-            DisplayName = "PinnedPeer",
-            Ed25519PublicKey = new byte[32],
-            ApiAddress = "http://remote.local",
-            Status = "A",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        });
-
+        // node. PeerAuthenticator must still refuse to sign, because the audience anchor is the
+        // NodeId the CALLER dialed, never whatever this same connection claims about itself.
         _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {
             Content = new StringContent(JsonSerializer.Serialize(new
@@ -293,7 +269,7 @@ public class SyncClientTests : IAsyncLifetime
             }), Encoding.UTF8, "application/json")
         });
 
-        var act = async () => await _client.SyncWithAsync(_http, "http://remote.local");
+        var act = async () => await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .WithMessage("*Challenge audience mismatch*");
@@ -303,15 +279,15 @@ public class SyncClientTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SyncWith_PeerChallengeOmitsServerNodeId_FallsBackToV1_DoesNotThrow()
+    public async Task SyncWith_PeerChallengeOmitsServerNodeId_RefusesToSign_NoUnboundFallback()
     {
-        // Simulates a genuinely not-yet-upgraded peer: its /api/sync/challenge response uses the
-        // pre-M6 one-field shape (no ServerNodeId at all), which must be treated as "nothing to
-        // check the audience against" and fall back to the unbound V1 signature — NOT as a hard
-        // "Challenge audience mismatch" failure. Regression test for a bug found while
-        // implementing the whitelist-pinning fix above: a non-nullable Guid made "field absent"
-        // indistinguishable from Guid.Empty, so the audience check always failed for a genuinely
-        // old peer and the V1 fallback path was unreachable dead code.
+        // A challenge response with no ServerNodeId used to be read as "an old peer that predates
+        // audience binding" and answered with an unbound V1 signature. That was a downgrade
+        // anyone could trigger: the responding peer decides whether to send the field, so an
+        // attacker only had to omit it, hand us a challenge fetched live from node C, and redeem
+        // the resulting unbound signature at C — the exact relay attack the binding exists to
+        // stop, reachable by deleting one JSON property. There is no fallback any more: a peer
+        // that declares no audience gets no signature.
         _peerNewerProtocolState.HasNewerProtocol = false;
         _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {
@@ -325,17 +301,20 @@ public class SyncClientTests : IAsyncLifetime
         });
         _mockHandler.MapRoute("/api/sync/challenge", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {
-            // Pre-M6 shape: no serverNodeId field at all (not even null — absent).
+            // No serverNodeId field at all (not even null — absent).
             Content = new StringContent(JsonSerializer.Serialize(new
             {
                 challenge = Convert.ToBase64String(new byte[32])
             }), Encoding.UTF8, "application/json")
         });
 
-        var result = await _client.SyncWithAsync(_http, "http://remote.local");
+        var act = async () => await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
 
-        result.Should().Be(0);
-        _mockHandler.CallLog.Should().Contain(s => s.Contains("/api/sync/authenticate"));
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("*no ServerNodeId*");
+
+        // Never posted a signature of any kind.
+        _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/authenticate"));
     }
 
     private class ConcreteFixture : SyncTestFixture { }

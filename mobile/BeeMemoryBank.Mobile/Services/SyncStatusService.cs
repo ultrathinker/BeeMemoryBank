@@ -138,7 +138,7 @@ public class SyncStatusService : INotifyPropertyChanged
                 if (token.IsCancellationRequested) break;
                 try
                 {
-                    await syncClient.SyncWithAsync(http, node.ApiAddress!, token);
+                    await syncClient.SyncWithAsync(http, node.ApiAddress!, node.NodeId, token);
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)

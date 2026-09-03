@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -23,7 +23,6 @@ public class SyncClient(
     INodeAuthSigner authSigner,
     ILogger<SyncClient> logger,
     PeerNewerProtocolState peerNewerProtocolState,
-    IWhitelistRepository whitelistRepo,
     ISyncQuarantineRepository quarantineRepo,
     IRestoreRetrier? restoreRetrier = null)
 {
@@ -32,7 +31,19 @@ public class SyncClient(
     /// <summary>
     /// Synchronizes with a remote node. Returns the number of new events applied locally.
     /// </summary>
-    public async Task<int> SyncWithAsync(HttpClient http, string remoteApiBase, CancellationToken ct = default)
+    /// <param name="expectedPeerNodeId">
+    /// The whitelist entry's NodeId for the peer being dialed — the audience anchor for M6's
+    /// challenge-relay protection. It is a required parameter rather than something resolved in
+    /// here precisely because it must come from a source the peer does not control: every caller
+    /// (SyncScheduler, and the mobile InitialSyncPage/SyncWorker/SyncStatusService) is already
+    /// iterating tbl_whitelist rows and has it in hand. An earlier version looked it up by
+    /// matching remoteApiBase against tbl_whitelist.api_address, which quietly resolved to
+    /// "nothing pinned" for any caller that passed the address in a different shape — and the
+    /// only safe thing to do with "nothing pinned" is refuse, so a string mismatch became a
+    /// sync outage. Passing the id explicitly removes the string comparison from the trust path.
+    /// </param>
+    public async Task<int> SyncWithAsync(
+        HttpClient http, string remoteApiBase, Guid expectedPeerNodeId, CancellationToken ct = default)
     {
         // Belt-and-suspenders for bug #5: in addition to the unlock-time sweep in
         // SessionService, retry stuck restore events at the start of every sync cycle.
@@ -54,41 +65,32 @@ public class SyncClient(
         var remoteIdentity = await GetRemoteIdentityAsync(http, remoteApiBase, ct);
         logger.LogDebug("Synchronizing with {NodeId} ({Base})", remoteIdentity.NodeId, remoteApiBase);
 
-        // 2. Authentication. The audience anchor for M6's challenge-relay protection MUST be our
-        // own whitelist's pinned identity for this address, not remoteIdentity.NodeId — that's
-        // self-declared, from step 1's /api/sync/identity call on THIS SAME CONNECTION, meaning a
-        // malicious/compromised peer (or a LAN MITM; plain-HTTP peers are realistic given mDNS
-        // discovery) fully controls it too. Trusting it as the audience anchor would let such a
-        // peer simply declare itself to be whatever third node C it wants, relay a genuine
-        // challenge fetched live from C (whose ServerNodeId then "matches" what it just told us),
-        // and walk away with a signature bound to C that it can redeem there — the exact relay
-        // attack M6 was supposed to close, just moved one level up. tbl_whitelist is the one thing
-        // we didn't just ask this same peer about: every real caller (SyncScheduler, mobile
-        // InitialSyncPage/SyncWorker/SyncStatusService) iterates active whitelist entries and
-        // passes THEIR ApiAddress straight through as remoteApiBase, so a reverse lookup by that
-        // exact string is authoritative here without needing a new parameter threaded through any
-        // of those call sites.
-        var pinnedNodeId = await ResolvePinnedNodeIdAsync(remoteApiBase);
-        if (pinnedNodeId.HasValue && pinnedNodeId.Value != remoteIdentity.NodeId)
+        // 2. Authentication. The audience anchor for M6's challenge-relay protection is
+        // expectedPeerNodeId — the caller's whitelist entry — never remoteIdentity.NodeId, which
+        // is self-declared by step 1's /api/sync/identity call on THIS SAME CONNECTION and so is
+        // fully controlled by a malicious/compromised peer (or a LAN MITM; plain-HTTP peers are
+        // realistic given mDNS discovery). Anchoring on the self-report would let such a peer
+        // declare itself to be whatever third node C it likes, relay a genuine challenge fetched
+        // live from C (whose ServerNodeId then "matches" what it just told us), and walk away
+        // with a signature bound to C that it can redeem there — the exact relay attack the
+        // binding exists to stop, moved one level up.
+        if (expectedPeerNodeId != remoteIdentity.NodeId)
         {
             // Fail fast, before ever touching the network for a challenge: the peer at this
-            // address claims to be someone OTHER than who our whitelist pins it to. This alone
+            // address claims to be someone OTHER than the whitelist entry we dialed. This alone
             // isn't what stops the relay attack (a peer could report a self-consistent identity
             // here while still relaying a mismatched challenge from elsewhere — that's what
-            // PeerAuthenticator's own check, driven by pinnedNodeId below, actually stops) but it
-            // gives a far clearer diagnosis for the mundane case — a stale/wrong ApiAddress in our
-            // own whitelist — instead of a cryptic "challenge audience mismatch" thrown from deep
-            // inside the auth handshake.
+            // PeerAuthenticator's own check, driven by the same anchor, actually stops) but it
+            // gives a far clearer diagnosis for the mundane case — a stale/wrong ApiAddress in
+            // our own whitelist — than a "challenge audience mismatch" thrown from deep inside
+            // the auth handshake.
             throw new InvalidOperationException(
-                $"Peer at {remoteApiBase} declares NodeId {remoteIdentity.NodeId}, but our whitelist " +
-                $"pins this address to {pinnedNodeId.Value}. Refusing to sync — this is either a " +
-                "stale/incorrect ApiAddress entry in our own whitelist, or a peer impersonation attempt.");
+                $"Peer at {remoteApiBase} declares NodeId {remoteIdentity.NodeId}, but we dialed it as " +
+                $"{expectedPeerNodeId}. Refusing to sync — this is either a stale/incorrect ApiAddress " +
+                "entry in our own whitelist, or a peer impersonation attempt.");
         }
-        // No whitelist entry pins this exact address (first contact, or a caller that doesn't go
-        // through the whitelist) — nothing to pin against, so fall back to the pre-M6-fix trust
-        // level (self-declared identity). No worse than before this change.
-        var audienceNodeId = pinnedNodeId ?? remoteIdentity.NodeId;
-        var token = await AuthenticateAsync(http, remoteApiBase, identity, audienceNodeId, ct);
+
+        var token = await AuthenticateAsync(http, remoteApiBase, identity, expectedPeerNodeId, ct);
 
         int appliedCount = 0;
 
@@ -336,26 +338,6 @@ public class SyncClient(
     private Task<string> AuthenticateAsync(
         HttpClient http, string baseUrl, NodeIdentity identity, Guid expectedServerNodeId, CancellationToken ct)
         => PeerAuthenticator.AuthenticateAsync(authSigner, http, baseUrl, identity, expectedServerNodeId, ct);
-
-    /// <summary>
-    /// M6: resolves the whitelist-pinned NodeId for the peer at <paramref name="remoteApiBase"/>,
-    /// or null if no active whitelist entry's ApiAddress matches it exactly (first contact, or a
-    /// caller that doesn't dial an address sourced from the whitelist — see SyncWithAsync's
-    /// caller-convention comment above). TrimEnd('/') + OrdinalIgnoreCase mirrors the same
-    /// defensive-comparison style used for ApiAddress elsewhere (e.g. the /api/sync/probe
-    /// endpoint's peer.ApiAddress!.TrimEnd('/')) even though every current caller passes the
-    /// whitelist entry's ApiAddress through completely unmodified, so an exact match would already
-    /// suffice today — this just avoids a silent miss if that ever changes.
-    /// </summary>
-    private async Task<Guid?> ResolvePinnedNodeIdAsync(string remoteApiBase)
-    {
-        var trimmedBase = remoteApiBase.TrimEnd('/');
-        var active = await whitelistRepo.GetAllActiveAsync();
-        return active
-            .FirstOrDefault(e => !string.IsNullOrEmpty(e.ApiAddress)
-                && string.Equals(e.ApiAddress!.TrimEnd('/'), trimmedBase, StringComparison.OrdinalIgnoreCase))
-            ?.NodeId;
-    }
 
     private static async Task<List<SyncEvent>> PullEventsAsync(
         HttpClient http, string baseUrl, string token, long afterSequence, CancellationToken ct)

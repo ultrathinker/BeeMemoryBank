@@ -61,8 +61,17 @@ public class AgentRepository(DbConnectionFactory factory) : BaseRepository(facto
     public async Task DeleteAsync(int id)
     {
         using var conn = OpenConnection();
+        // Revoking an agent also destroys its wrapped master DEK, not just its ability to
+        // authenticate. Leaving the blob behind meant a revoked key was still a vault key: anyone
+        // holding the old plaintext bee_... string plus a copy of the database file (a backup, a
+        // decommissioned disk) could re-derive the KEK from the stored salt and decrypt everything,
+        // long after the operator believed they had cut that key off. Wiping is safe because the
+        // row is never re-activated — DeleteAsync is the only writer of status = 'D' and nothing
+        // undeletes an agent.
         await conn.ExecuteAsync(
-            "UPDATE tbl_agent SET status = 'D' WHERE id = @id",
+            @"UPDATE tbl_agent
+              SET status = 'D', encrypted_dek = NULL, dek_iv = NULL, salt = NULL, kdf_version = 0
+              WHERE id = @id",
             new { id });
     }
 
@@ -77,10 +86,15 @@ public class AgentRepository(DbConnectionFactory factory) : BaseRepository(facto
     public async Task<int> ClearWrappedDekForOwnerAsync(int ownerUserId)
     {
         using var conn = OpenConnection();
+        // Deliberately NOT filtered by status = 'A'. A soft-deleted agent's row still holds the
+        // wrapped DEK unless something clears it, and "this owner may no longer hold vault keys"
+        // has to cover every row they own, not just the ones still usable for authentication —
+        // the attack this closes needs only the old plaintext key and a copy of the database, and
+        // does not care whether the row is marked revoked.
         return await conn.ExecuteAsync(
             @"UPDATE tbl_agent
               SET encrypted_dek = NULL, dek_iv = NULL, salt = NULL, kdf_version = 0
-              WHERE owner_user_id = @ownerUserId AND status = 'A' AND encrypted_dek IS NOT NULL",
+              WHERE owner_user_id = @ownerUserId AND encrypted_dek IS NOT NULL",
             new { ownerUserId });
     }
 }

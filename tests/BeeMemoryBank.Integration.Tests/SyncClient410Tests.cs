@@ -87,7 +87,7 @@ public class SyncClient410Tests
             var syncClient = scope.ServiceProvider.GetRequiredService<SyncClient>();
 
             var ex = await Assert.ThrowsAsync<SnapshotRequiredException>(
-                () => syncClient.SyncWithAsync(http, "http://test.local"));
+                () => syncClient.SyncWithAsync(http, "http://test.local", testNodeId));
 
             Assert.Equal(500, ex.LastCompactionCp);
             Assert.Equal(1886, ex.CurrentHeadSeq);
@@ -156,7 +156,7 @@ public class SyncClient410Tests
             var syncClient = scope.ServiceProvider.GetRequiredService<SyncClient>();
 
             var ex = await Assert.ThrowsAsync<SnapshotRequiredException>(
-                () => syncClient.SyncWithAsync(http, "http://test.local"));
+                () => syncClient.SyncWithAsync(http, "http://test.local", testNodeId));
 
             Assert.Equal(0, ex.LastCompactionCp);
             Assert.Equal(0, ex.CurrentHeadSeq);

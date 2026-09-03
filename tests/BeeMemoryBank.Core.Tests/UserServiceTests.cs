@@ -245,6 +245,39 @@ public class UserServiceTests : TestFixture
     }
 
     [Fact]
+    public async Task DeleteUser_ClearsWrappedDekFromTheDeletedUsersAgents()
+    {
+        // Deleting a superadmin leaves their agent rows behind (owner_user_id is ON DELETE
+        // RESTRICT, and DeleteAsync only flips is_active), so without an explicit wipe the
+        // account is gone while its agent keys stay vault keys — the same hole demotion closes,
+        // reached through a different door.
+        await Users.CreateUserAsync("keeper", "Keeper", "KeeperPass1", UserRoles.Superadmin);
+        var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
+        var agentId = await CreateWrappedAgentAsync(carol.Id);
+        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeTrue("sanity check on the fixture");
+
+        await Users.DeleteUserAsync(carol.Id);
+
+        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeFalse(
+            "a deleted user's agents must not keep unwrapping the master DEK");
+    }
+
+    [Fact]
+    public async Task DeleteUser_ThatFailsTheLastSuperadminGuard_LeavesAgentDeksUntouched()
+    {
+        // The wipe is irreversible (the plaintext API key is not recoverable from key_hash), so
+        // it must sit behind every guard that can still abort the deletion.
+        var solo = (await UserRepo.ListActiveAsync()).Single(u => u.Role == UserRoles.Superadmin);
+        var agentId = await CreateWrappedAgentAsync(solo.Id);
+
+        var act = async () => await Users.DeleteUserAsync(solo.Id);
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeTrue(
+            "a deletion that was refused must not have already destroyed key material");
+    }
+
+    [Fact]
     public async Task Demote_DoesNotTouchAnotherUsersAgents()
     {
         var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);

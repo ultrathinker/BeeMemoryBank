@@ -257,6 +257,17 @@ public class UserService(
             await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
         }
 
+        // H6: strip the wrapped master DEK from every agent this user owns. Deleting the account
+        // leaves its agent rows in tbl_agent (owner_user_id is ON DELETE RESTRICT and DeleteAsync
+        // only flips is_active), so without this a deleted superadmin's agent keys stay vault keys
+        // forever — the same hole demotion already closes, reached by a different door. Placed
+        // after the last-superadmin and key-slot guards above, which can still throw and abort the
+        // deletion: wiping key material that cannot be re-wrapped (the plaintext API key was shown
+        // once at creation and is not recoverable from key_hash) must not happen for a deletion
+        // that then fails.
+        if (agentRepo != null)
+            await agentRepo.ClearWrappedDekForOwnerAsync(userId);
+
         // Bump the stamp so the deleted user's outstanding Web cookie is rejected on next
         // revalidation. Done before the soft-delete so it lands even though DeleteAsync only
         // flips is_active (the stamp lookup ignores is_active, so the bumped value still resolves).

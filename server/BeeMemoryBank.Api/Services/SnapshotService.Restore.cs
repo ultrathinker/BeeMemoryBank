@@ -80,6 +80,7 @@ public partial class SnapshotService
                             DELETE FROM tbl_sync_position;
                             DELETE FROM tbl_sync_push_position;
                             DELETE FROM tbl_restore_replay_shield;
+                            DELETE FROM tbl_sync_quarantine;
                             DELETE FROM tbl_event;";
                         wipeNetCmd.ExecuteNonQuery();
 

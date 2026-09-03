@@ -50,6 +50,28 @@ ordinal comparison downstream.
 
 ### Fixed
 
+- **BREAKING (sync): the unbound V1 challenge signature is gone from both ends.** Peer
+  authentication used to fall back to the pre-audience-binding `BMB-CHALLENGE-V1` payload whenever
+  a peer's challenge response carried no `ServerNodeId`, and servers still verified that payload.
+  Whether the field is sent is the *responding* peer's choice, so "old peer" and "attacker" were
+  indistinguishable: omit one JSON property, hand the victim a challenge fetched live from node C,
+  and redeem the resulting unbound signature at C as the victim — the exact relay attack the
+  binding exists to prevent. The client now signs only `BMB-CHALLENGE-V2` (audience-bound) and
+  refuses a challenge that declares no `ServerNodeId`; the server verifies only V2.
+  **Every node in the mesh must run this build or newer to sync — including the Android app.**
+- **The sync audience anchor is now a required parameter, not a lookup.** `SyncClient.SyncWithAsync`
+  takes the peer's NodeId from the caller (which is already iterating `tbl_whitelist`) instead of
+  reverse-matching `remoteApiBase` against `api_address`. The lookup silently resolved to "nothing
+  pinned" whenever the address was passed in a different shape, and the only safe response to
+  "nothing pinned" is refusal — so a string mismatch would have become a sync outage.
+- **A revoked agent key stayed a vault key.** Deleting an agent only flipped its status, and
+  clearing a demoted superadmin's agents skipped already-revoked rows, and deleting a superadmin
+  account cleared nothing at all. In each case the row kept its wrapped master DEK, so the old
+  `bee_…` string plus a copy of the database file still decrypted the whole vault. All three paths
+  now wipe `encrypted_dek`/`dek_iv`/`salt`.
+- **`tbl_sync_quarantine` leaked between nodes.** It was neither cleared by a standalone restore
+  (pre-poisoning the restored node against events it had never tried) nor stripped from join
+  snapshots (shipping this node's raw exception text to a joining peer).
 - **Finding H6: every agent key was, cryptographically, a key to the entire vault.** Creating an
   agent wrapped the master DEK with that agent's API key regardless of who owned it, so a
   self-service agent minted by an ordinary, folder-restricted user (limit 20 per user) unwrapped

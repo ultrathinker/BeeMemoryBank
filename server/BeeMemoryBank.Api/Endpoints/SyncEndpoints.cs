@@ -142,18 +142,17 @@ public static class SyncEndpoints
             // our real NodeId into what's verified means a signature only verifies at the node it
             // was actually made for.
             //
-            // V1 (unbound) is still accepted as a fallback for interop with a peer whose
-            // PeerAuthenticator hasn't been upgraded past this fix yet — it only ever produces a V1
-            // signature, and rejecting it outright would silently wedge sync with every node in the
-            // mesh that hasn't upgraded. A peer still on V1 gets exactly the (lack of) protection it
-            // had before this fix, no worse than today; retire this branch once the whole mesh has
-            // upgraded.
+            // V1 (unbound) used to be accepted here as an interop fallback for peers that had not
+            // upgraded yet. That acceptance is what made the relay attack redeemable: an attacker
+            // only had to get SOME node to produce an unbound signature over a challenge fetched
+            // from here, and this branch would honour it. The client half of that downgrade is
+            // gone (PeerAuthenticator no longer signs V1 at all, and refuses a challenge with no
+            // ServerNodeId), so keeping the verifier would only preserve the attack surface
+            // without preserving any peer that still needs it. Both ends changed together: every
+            // node in the mesh must run this build or newer to authenticate.
             var domainTagV2 = "BMB-CHALLENGE-V2\0"u8.ToArray();
             var taggedPayloadV2 = domainTagV2.Concat(serverNodeId.ToByteArray()).Concat(challengeBytes).ToArray();
-            var domainTagV1 = "BMB-CHALLENGE-V1\0"u8.ToArray();
-            var taggedPayloadV1 = domainTagV1.Concat(challengeBytes).ToArray();
-            var sigOk = Ed25519Signer.Verify(entry.Ed25519PublicKey, taggedPayloadV2, signature)
-                || Ed25519Signer.Verify(entry.Ed25519PublicKey, taggedPayloadV1, signature);
+            var sigOk = Ed25519Signer.Verify(entry.Ed25519PublicKey, taggedPayloadV2, signature);
             if (!sigOk)
             {
                 logger.LogWarning("Auth 401 for {NodeId} ({Display}): Ed25519 signature verify failed (pubkey {PubLen}b, sig {SigLen}b)",

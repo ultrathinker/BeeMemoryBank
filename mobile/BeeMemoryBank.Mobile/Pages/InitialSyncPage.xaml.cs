@@ -74,7 +74,7 @@ public partial class InitialSyncPage : ContentPage
                 {
                     if (token.IsCancellationRequested) break;
                     CounterLabel.Text = $"Downloading from {peer.DisplayName}… ({_eventsApplied} events)";
-                    var applied = await syncClient.SyncWithAsync(http, peer.ApiAddress!, token);
+                    var applied = await syncClient.SyncWithAsync(http, peer.ApiAddress!, peer.NodeId, token);
                     _eventsApplied += applied;
                     roundTotal += applied;
                     CounterLabel.Text = $"Downloaded {_eventsApplied} events";

@@ -107,7 +107,7 @@ public class TwoNodeSyncTests : IAsyncLifetime
         var articleId = articleResp.GetProperty("id").GetString()!;
 
         // NodeB syncs with NodeA
-        await SyncNodeWithAsync(_nodeB, _clientA);
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
 
         // Article should appear on NodeB
         var resp = await _clientB.GetAsync($"/api/articles/{articleId}");
@@ -128,9 +128,9 @@ public class TwoNodeSyncTests : IAsyncLifetime
         var idB = artB.GetProperty("id").GetString()!;
 
         // NodeB syncs with NodeA: receives article A and sends article B
-        await SyncNodeWithAsync(_nodeB, _clientA);
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
         // NodeA syncs with NodeB: receives article B
-        await SyncNodeWithAsync(_nodeA, _clientB);
+        await SyncNodeWithAsync(_nodeA, _clientB, _nodeB);
 
         // Article A on NodeB
         (await _clientB.GetAsync($"/api/articles/{idA}")).IsSuccessStatusCode.Should().BeTrue();
@@ -143,8 +143,8 @@ public class TwoNodeSyncTests : IAsyncLifetime
     {
         await CreateArticleAsync(_clientA, "Idempotent", "/Test");
 
-        await SyncNodeWithAsync(_nodeB, _clientA);
-        await SyncNodeWithAsync(_nodeB, _clientA); // second time — no-op
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA); // second time — no-op
 
         var resp = await _clientB.GetAsync("/api/articles");
         var articles = await resp.Content.ReadFromJsonAsync<JsonElement[]>(JsonOpts);
@@ -157,7 +157,7 @@ public class TwoNodeSyncTests : IAsyncLifetime
         // NodeA creates and syncs
         var art = await CreateArticleAsync(_clientA, "For deletion", "/Del");
         var id = art.GetProperty("id").GetString()!;
-        await SyncNodeWithAsync(_nodeB, _clientA);
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
 
         // Verify article exists on NodeB
         (await _clientB.GetAsync($"/api/articles/{id}")).IsSuccessStatusCode.Should().BeTrue();
@@ -166,7 +166,7 @@ public class TwoNodeSyncTests : IAsyncLifetime
         await _clientA.DeleteAsync($"/api/articles/{id}");
 
         // NodeB syncs — article should disappear
-        await SyncNodeWithAsync(_nodeB, _clientA);
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
         var resp = await _clientB.GetAsync($"/api/articles/{id}");
         resp.StatusCode.Should().Be(System.Net.HttpStatusCode.NotFound);
     }
@@ -208,8 +208,13 @@ public class TwoNodeSyncTests : IAsyncLifetime
         var identity = await nodeRepo.GetAsync() ?? throw new InvalidOperationException();
 
         var challengeBytes = Convert.FromBase64String(challengeData.Challenge);
-        var domainTag = "BMB-CHALLENGE-V1\0"u8.ToArray();
-        var challengePayload = domainTag.Concat(challengeBytes).ToArray();
+        // V2: the signed payload is bound to the audience node's id. The server no longer accepts
+        // the old unbound V1 tag at all — see PeerAuthenticator's domain-tag comment.
+        var domainTag = "BMB-CHALLENGE-V2\0"u8.ToArray();
+        var challengePayload = domainTag
+            .Concat(challengeData.ServerNodeId.ToByteArray())
+            .Concat(challengeBytes)
+            .ToArray();
         var session = scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>();
         var masterDek = session.GetMasterDek();
         byte[] signature;
@@ -239,12 +244,20 @@ public class TwoNodeSyncTests : IAsyncLifetime
     /// Node syncs with remote server.
     /// Uses the real SyncClient from node's DI.
     /// </summary>
-    private static async Task SyncNodeWithAsync(BmbWebApplicationFactory node, HttpClient serverClient)
+    private static async Task SyncNodeWithAsync(
+        BmbWebApplicationFactory node, HttpClient serverClient, BmbWebApplicationFactory server)
     {
+        using var serverScope = server.Services.CreateScope();
+        var serverIdentity = await serverScope.ServiceProvider
+            .GetRequiredService<INodeIdentityRepository>().GetAsync()
+            ?? throw new InvalidOperationException("Server node is not initialized.");
+
         using var scope = node.Services.CreateScope();
         var syncClient = scope.ServiceProvider.GetRequiredService<SyncClient>();
-        // remoteApiBase = "" works because serverClient.BaseAddress = http://localhost/
-        await syncClient.SyncWithAsync(serverClient, "");
+        // remoteApiBase = "" works because serverClient.BaseAddress = http://localhost/. The peer
+        // id is passed explicitly, exactly as SyncScheduler passes the whitelist entry's NodeId —
+        // it is the audience anchor the peer itself must not be able to choose.
+        await syncClient.SyncWithAsync(serverClient, "", serverIdentity.NodeId);
     }
 
     private static async Task<JsonElement> CreateArticleAsync(

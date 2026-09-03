@@ -204,8 +204,13 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
         var identity = await nodeRepo.GetAsync() ?? throw new InvalidOperationException();
 
         var challengeBytes = Convert.FromBase64String(challengeData.Challenge);
-        var domainTag = "BMB-CHALLENGE-V1\0"u8.ToArray();
-        var challengePayload = domainTag.Concat(challengeBytes).ToArray();
+        // V2: the signed payload is bound to the audience node's id. The server no longer accepts
+        // the old unbound V1 tag at all — see PeerAuthenticator's domain-tag comment.
+        var domainTag = "BMB-CHALLENGE-V2\0"u8.ToArray();
+        var challengePayload = domainTag
+            .Concat(challengeData.ServerNodeId.ToByteArray())
+            .Concat(challengeBytes)
+            .ToArray();
         var session = scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>();
         var masterDek = session.GetMasterDek();
         byte[] signature;
