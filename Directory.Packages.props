@@ -53,7 +53,7 @@
          the versions that restore last resolved. Keep Xamarin.AndroidX.Core and Core.Core.Ktx on the
          same train when bumping (see the comment in BeeMemoryBank.Mobile.csproj). -->
     <PackageVersion Include="Microsoft.Maui.Controls" Version="10.0.90" />
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
     <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.0.0" />
