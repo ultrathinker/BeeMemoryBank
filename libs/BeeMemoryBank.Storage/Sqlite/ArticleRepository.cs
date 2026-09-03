@@ -258,46 +258,6 @@ public class ArticleRepository(
         if (_holder.Scope.IsReadOnly(article.TreePath))
             throw new ReadOnlyAccessException(article.TreePath);
 
-        // SECURITY: we ALSO need to check the article's CURRENT (pre-update)
-        // path. Without this, a caller with write permission on /Public could
-        // call UpdateAsync with article.Id pointing at a /Secrets article and
-        // article.TreePath = "/Public" — the guard above passes, and the row
-        // is moved (with full plaintext attached) into the caller's reach.
-        // Gemini security review 2026-05-25.
-        //
-        // The mirrored-share guard is in the same SELECT so we avoid a second
-        // round-trip.
-        if (!_holder.Scope.IsSuperadmin)
-        {
-            var check = transaction?.Connection ?? OpenConnection();
-            try
-            {
-                var stored = await check.QuerySingleOrDefaultAsync<ArticleUpdateGuardMeta>(
-                    @"SELECT COALESCE(f.path, '/') AS StoredTreePath,
-                             a.remote_subscription_id AS RemoteSubId
-                        FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
-                       WHERE a.id = @id",
-                    new { id = article.Id }, transaction: transaction);
-                if (stored != null)
-                {
-                    if (!string.IsNullOrEmpty(stored.RemoteSubId))
-                        throw new ReadOnlyAccessException($"Article {article.Id} is in a remote read-only share.");
-                    if (!string.IsNullOrEmpty(stored.StoredTreePath))
-                    {
-                        if (_holder.Scope.IsAccessDenied(stored.StoredTreePath))
-                            throw new UnauthorizedAccessException(
-                                $"Write access denied for stored path '{stored.StoredTreePath}' (cannot move article you don't own).");
-                        if (_holder.Scope.IsReadOnly(stored.StoredTreePath))
-                            throw new ReadOnlyAccessException(stored.StoredTreePath);
-                    }
-                }
-            }
-            finally
-            {
-                if (transaction == null) check.Dispose();
-            }
-        }
-
         const string updateSql = @"UPDATE tbl_article
               SET title = @Title, tree_path = @TreePath, folder_id = @FolderId,
                   embedding_projection = @EmbeddingProjection,
@@ -316,12 +276,43 @@ public class ArticleRepository(
 
         if (transaction != null)
         {
+            // Caller-supplied transaction: the guard and the write already share the
+            // caller's connection, so just run them against it in order -- unchanged
+            // from before this fix.
+            if (!_holder.Scope.IsSuperadmin)
+            {
+                await CheckStoredPathGuardAsync(transaction.Connection!, transaction, article);
+            }
             await transaction.Connection!.ExecuteAsync(updateSql, article, transaction);
         }
         else
         {
+            // SECURITY: the pre-update stored-path guard (CheckStoredPathGuardAsync) reads
+            // the article's CURRENT path, and the UPDATE below is only safe to run under
+            // the authorization that read produced if NOTHING can move the row between the
+            // two. This used to open a short-lived connection for the guard, read, and
+            // dispose it BEFORE the UPDATE even began on a second, independent
+            // connection/transaction -- a concurrent UpdateAsync/move for the same article
+            // could land in that gap, and this call would then write against a stored path
+            // that was already stale by the time its own transaction opened.
+            //
+            // BeginTransaction() on this provider issues BEGIN IMMEDIATE, which takes
+            // SQLite's write lock the instant the transaction opens (see
+            // DbConnectionFactory.CreateConnection). Opening the connection+transaction
+            // FIRST and running BOTH the guard query and the UPDATE against it closes that
+            // window: any other writer touching this article row blocks on the write lock
+            // until this transaction commits or rolls back, so the stored path the guard
+            // just verified is guaranteed to still be the path the UPDATE acts on. Do not
+            // split these back onto separate connections "to simplify" -- that's exactly
+            // what reopened the race before. Keep everything between BeginTransaction() and
+            // Commit() cheap: the write lock is held for the whole span.
             using var conn = OpenConnection();
             using var tx = conn.BeginTransaction();
+
+            if (!_holder.Scope.IsSuperadmin)
+            {
+                await CheckStoredPathGuardAsync(conn, tx, article);
+            }
 
             // Note: no `status = 'A'` filter — must allow resurrecting soft-deleted rows
             // when LWW says incoming Create wins over an older Delete (Wave 2 audit
@@ -340,54 +331,116 @@ public class ArticleRepository(
         }
     }
 
+    /// <summary>
+    /// SECURITY: we ALSO need to check the article's CURRENT (pre-update) path. Without this, a
+    /// caller with write permission on /Public could call UpdateAsync with article.Id pointing at
+    /// a /Secrets article and article.TreePath = "/Public" — the ordinary guard at the top of
+    /// <see cref="UpdateAsync"/> only sees the NEW path and passes, and the row would be moved
+    /// (with full plaintext attached) into the caller's reach. Gemini security review 2026-05-25.
+    ///
+    /// Must run against the SAME connection AND transaction as the UPDATE it protects -- see the
+    /// SECURITY comment in the self-managed branch of <see cref="UpdateAsync"/> for why a
+    /// separate connection here would reopen the TOCTOU race. The mirrored-share guard is in the
+    /// same SELECT so we avoid a second round-trip.
+    /// </summary>
+    private async Task CheckStoredPathGuardAsync(System.Data.IDbConnection conn, System.Data.IDbTransaction? transaction, Article article)
+    {
+        var stored = await conn.QuerySingleOrDefaultAsync<ArticleUpdateGuardMeta>(
+            @"SELECT COALESCE(f.path, '/') AS StoredTreePath,
+                     a.remote_subscription_id AS RemoteSubId
+                FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
+               WHERE a.id = @id",
+            new { id = article.Id }, transaction: transaction);
+        if (stored != null)
+        {
+            if (!string.IsNullOrEmpty(stored.RemoteSubId))
+                throw new ReadOnlyAccessException($"Article {article.Id} is in a remote read-only share.");
+            if (!string.IsNullOrEmpty(stored.StoredTreePath))
+            {
+                if (_holder.Scope.IsAccessDenied(stored.StoredTreePath))
+                    throw new UnauthorizedAccessException(
+                        $"Write access denied for stored path '{stored.StoredTreePath}' (cannot move article you don't own).");
+                if (_holder.Scope.IsReadOnly(stored.StoredTreePath))
+                    throw new ReadOnlyAccessException(stored.StoredTreePath);
+            }
+        }
+    }
+
     public async Task SoftDeleteAsync(Guid id, System.Data.IDbTransaction? transaction = null)
     {
-        // GetByIdAsync respects ambient scope (returns null if denied), so fetching
-        // through SystemCallerScope to get the raw path, then enforce denial explicitly.
-        if (!_holder.Scope.IsSuperadmin)
+        if (transaction != null)
         {
-            var check = transaction?.Connection ?? OpenConnection();
-            try
+            // Caller-supplied transaction: guard and write already share the caller's
+            // connection, so just run them against it in order -- unchanged from before
+            // this fix.
+            if (!_holder.Scope.IsSuperadmin)
             {
-                // Dapper maps ValueTuple by position (Item1/Item2), not by alias, so
-                // `(string?, string?)` would receive nulls regardless of SELECT — the
-                // ACL/Read-only guard would silently no-op. Use a dedicated record so
-                // properties bind by name. Caught by Claude+gemini third review.
-                var meta = await check.QuerySingleOrDefaultAsync<ArticleDeleteMeta>(
-                    @"SELECT COALESCE(f.path, '/') AS TreePath, a.remote_subscription_id AS RemoteSubId
-                      FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
-                      WHERE a.id = @id",
-                    new { id }, transaction: transaction);
-                if (meta != null)
-                {
-                    if (!string.IsNullOrEmpty(meta.TreePath))
-                    {
-                        if (_holder.Scope.IsAccessDenied(meta.TreePath))
-                            throw new UnauthorizedAccessException($"Write access denied for path '{meta.TreePath}'");
-                        if (_holder.Scope.IsReadOnly(meta.TreePath))
-                            throw new ReadOnlyAccessException(meta.TreePath);
-                    }
-                    if (!string.IsNullOrEmpty(meta.RemoteSubId))
-                        throw new ReadOnlyAccessException($"Article {id} is in a remote read-only share.");
-                }
+                await CheckSoftDeleteGuardAsync(transaction.Connection!, transaction, id);
             }
-            finally
-            {
-                if (transaction == null) check.Dispose();
-            }
-        }
-
-        var conn = transaction?.Connection ?? OpenConnection();
-        try
-        {
             var now = UtcNow();
-            await conn.ExecuteAsync(
+            await transaction.Connection!.ExecuteAsync(
                 "UPDATE tbl_article SET status = 'D', deleted_at = @now, updated_at = @now WHERE id = @id AND status = 'A'",
                 new { id, now }, transaction);
+            return;
         }
-        finally
+
+        // SECURITY: same TOCTOU shape as the stored-path guard in UpdateAsync above (not
+        // called out in the original review comment, but identical bug): the pre-delete
+        // ACL/read-only/remote-share guard (CheckSoftDeleteGuardAsync) reads this article's
+        // CURRENT path, and that read only stays valid for the UPDATE below if nothing else
+        // can move or reassign the row in the meantime. This used to run the guard on its
+        // own short-lived connection and then the UPDATE on a second connection with NO
+        // explicit transaction at all -- a concurrent move could land in the gap and this
+        // call would delete/keep based on a stale path. Opening the connection+transaction
+        // FIRST (BEGIN IMMEDIATE takes the write lock immediately, see
+        // DbConnectionFactory.CreateConnection) and running both the guard query and the
+        // UPDATE against it closes that window the same way UpdateAsync's fix does. Keep
+        // the span between BeginTransaction() and Commit() cheap -- the write lock is held
+        // for the whole span.
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+
+        if (!_holder.Scope.IsSuperadmin)
         {
-            if (transaction == null) conn.Dispose();
+            await CheckSoftDeleteGuardAsync(conn, tx, id);
+        }
+
+        var nowTs = UtcNow();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_article SET status = 'D', deleted_at = @now, updated_at = @now WHERE id = @id AND status = 'A'",
+            new { id, now = nowTs }, tx);
+
+        tx.Commit();
+    }
+
+    /// <summary>
+    /// GetByIdAsync respects ambient scope (returns null if denied), so this reads the raw
+    /// path/remote-share metadata directly and enforces denial explicitly. Must run against the
+    /// SAME connection AND transaction as the UPDATE it protects -- see the SECURITY comment in
+    /// the self-managed branch of <see cref="SoftDeleteAsync"/> for why.
+    /// </summary>
+    private async Task CheckSoftDeleteGuardAsync(System.Data.IDbConnection conn, System.Data.IDbTransaction? transaction, Guid id)
+    {
+        // Dapper maps ValueTuple by position (Item1/Item2), not by alias, so
+        // `(string?, string?)` would receive nulls regardless of SELECT — the
+        // ACL/Read-only guard would silently no-op. Use a dedicated record so
+        // properties bind by name. Caught by Claude+gemini third review.
+        var meta = await conn.QuerySingleOrDefaultAsync<ArticleDeleteMeta>(
+            @"SELECT COALESCE(f.path, '/') AS TreePath, a.remote_subscription_id AS RemoteSubId
+              FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
+              WHERE a.id = @id",
+            new { id }, transaction: transaction);
+        if (meta != null)
+        {
+            if (!string.IsNullOrEmpty(meta.TreePath))
+            {
+                if (_holder.Scope.IsAccessDenied(meta.TreePath))
+                    throw new UnauthorizedAccessException($"Write access denied for path '{meta.TreePath}'");
+                if (_holder.Scope.IsReadOnly(meta.TreePath))
+                    throw new ReadOnlyAccessException(meta.TreePath);
+            }
+            if (!string.IsNullOrEmpty(meta.RemoteSubId))
+                throw new ReadOnlyAccessException($"Article {id} is in a remote read-only share.");
         }
     }
 

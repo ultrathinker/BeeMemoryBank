@@ -117,21 +117,34 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         if (_holder.Scope.IsReadOnly(folder.Path))
             throw new ReadOnlyAccessException(folder.Path);
 
-        // SECURITY: consult the stored row, not the caller-supplied object — a
-        // malicious or buggy caller could clear RemoteSubscriptionId on the
-        // in-memory Folder to bypass the read-only guard. Same fix pattern as
-        // ArticleRepository.UpdateAsync (gemini+kilo round-3 finding).
+        // SECURITY: consult the stored row, not the caller-supplied object — a malicious or
+        // buggy caller could clear RemoteSubscriptionId on the in-memory Folder to bypass the
+        // read-only guard. Same fix pattern as ArticleRepository.UpdateAsync (gemini+kilo
+        // round-3 finding).
+        //
+        // The guard read and the UPDATE below must run inside the SAME transaction, not just
+        // the same connection: this used to read storedRemoteSubId on a short-lived connection
+        // that was opened, queried and disposed BEFORE a second, independent connection ran the
+        // UPDATE with no transaction of its own. A concurrent write that set
+        // remote_subscription_id in that gap (e.g. a sync event turning this folder into a
+        // mirrored remote share) would never be seen, and this UPDATE would proceed anyway.
+        // BeginTransaction() here issues BEGIN IMMEDIATE, which takes SQLite's write lock the
+        // instant the transaction opens (see DbConnectionFactory.CreateConnection), so opening
+        // the connection+transaction FIRST and running both the guard query and the UPDATE
+        // against it closes that window. Keep everything between BeginTransaction() and
+        // Commit() cheap: the write lock is held for the whole span.
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+
         if (!_holder.Scope.IsSuperadmin)
         {
-            using var check = OpenConnection();
-            var storedRemoteSubId = await check.QuerySingleOrDefaultAsync<string?>(
+            var storedRemoteSubId = await conn.QuerySingleOrDefaultAsync<string?>(
                 "SELECT remote_subscription_id FROM tbl_folder WHERE id = @id",
-                new { id = folder.Id });
+                new { id = folder.Id }, transaction: tx);
             if (!string.IsNullOrEmpty(storedRemoteSubId))
                 throw new ReadOnlyAccessException($"Folder '{folder.Path}' belongs to a remote read-only share.");
         }
 
-        using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"UPDATE tbl_folder
               SET path = @Path, name = @Name, parent_path = @ParentPath,
@@ -150,16 +163,25 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
                 IsSystem = folder.IsSystem ? 1 : 0,
                 folder.RemoteSubscriptionId,
                 folder.RemoteOriginId
-            });
+            }, tx);
+
+        tx.Commit();
     }
 
     public async Task SoftDeleteAsync(Guid id, DateTime deletedAt, Guid? cascadeOpId = null)
     {
+        // SECURITY: same TOCTOU shape as UpdateAsync above -- the guard read (this folder's
+        // CURRENT path) and the UPDATE below must run inside the SAME transaction so a
+        // concurrent rename/move of this folder can't slip in between them and invalidate the
+        // authorization decision the guard just made. See the SECURITY comment in UpdateAsync
+        // for the full BEGIN IMMEDIATE / write-lock reasoning.
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+
         if (!_holder.Scope.IsSuperadmin)
         {
-            using var check = OpenConnection();
-            var path = await check.QuerySingleOrDefaultAsync<string?>(
-                "SELECT path FROM tbl_folder WHERE id = @id", new { id });
+            var path = await conn.QuerySingleOrDefaultAsync<string?>(
+                "SELECT path FROM tbl_folder WHERE id = @id", new { id }, transaction: tx);
             if (path != null)
             {
                 if (_holder.Scope.IsAccessDenied(path))
@@ -169,14 +191,15 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
             }
         }
 
-        using var conn = OpenConnection();
         var now = deletedAt.ToString("o");
         // Bind cascadeOpId as Guid? (not .ToString()) so it normalizes to uppercase TEXT
         // and matches rows written via tbl_folder.CreateAsync/UpdateAsync, which bind the
         // Folder.CascadeDeleteOpId property via Dapper's handler.
         await conn.ExecuteAsync(
             "UPDATE tbl_folder SET status = 'D', deleted_at = @now, updated_at = @now, cascade_delete_op_id = @cascadeOpId WHERE id = @id AND status = 'A'",
-            new { id, now, cascadeOpId });
+            new { id, now, cascadeOpId }, tx);
+
+        tx.Commit();
     }
 
     public async Task<int> SoftDeleteByPathPrefixAsync(string pathPrefix, DateTime deletedAt, Guid? cascadeOpId = null)
@@ -186,6 +209,27 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         if (_holder.Scope.IsReadOnly(pathPrefix))
             throw new ReadOnlyAccessException(pathPrefix);
 
+        // SECURITY: the descendant scan below (H1) and the cascading UPDATE it guards must run
+        // inside the SAME transaction. This used to scan descendants on a short-lived connection
+        // that was opened, queried and disposed BEFORE the UPDATE even began on a second,
+        // independent connection with no transaction of its own -- a restricted subfolder created
+        // or moved under pathPrefix in that gap would never get re-checked, it would just get
+        // swept up by the UPDATE's LIKE match and soft-deleted without ever having been
+        // authorized.
+        //
+        // BeginTransaction() on this provider issues BEGIN IMMEDIATE, which takes SQLite's write
+        // lock the instant the transaction opens (see DbConnectionFactory.CreateConnection).
+        // Opening the connection+transaction FIRST and running BOTH the descendant scan and the
+        // UPDATE against it closes that window: any concurrent writer that would create or move a
+        // folder under this prefix blocks on the write lock until this transaction commits or
+        // rolls back, so the descendant set the scan just cleared is guaranteed to still be
+        // accurate when the UPDATE runs. Do not go back to scanning on a separate, short-lived
+        // connection "to keep it simple" -- that's exactly what reopened the race before. Keep
+        // everything between BeginTransaction() and Commit() cheap: the write lock is held for
+        // the whole span.
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+
         // H1: the two checks above only cover pathPrefix itself. A caller can be authorized on the
         // TOP of a subtree (e.g. allow=/, deny=/Work/Secret) while a DESCENDANT under it is
         // individually denied or read-only — this cascading soft-delete must not silently sweep
@@ -193,14 +237,19 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         // real (unfiltered) descendant paths and re-check every single one before touching
         // anything. Skipped for superadmins/System scope, where every check below is a guaranteed
         // no-op anyway — no need to pay for the extra query.
-        await ThrowIfAnyDescendantWriteDeniedAsync(pathPrefix);
+        if (!_holder.Scope.IsSuperadmin)
+        {
+            await ThrowIfAnyDescendantWriteDeniedCoreAsync(pathPrefix, conn, tx);
+        }
 
-        using var conn = OpenConnection();
         var now = deletedAt.ToString("o");
         var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
-        return await conn.ExecuteAsync(
+        var affected = await conn.ExecuteAsync(
             "UPDATE tbl_folder SET status = 'D', deleted_at = @now, updated_at = @now, cascade_delete_op_id = @cascadeOpId WHERE path LIKE @prefix ESCAPE '\\' AND status = 'A'",
-            new { prefix, now, cascadeOpId });
+            new { prefix, now, cascadeOpId }, tx);
+
+        tx.Commit();
+        return affected;
     }
 
     /// <summary>
@@ -210,6 +259,13 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     /// query itself — that's the point: we need the true descendant set, not what the caller can
     /// see) and then re-checks each path against the same per-path guards every other write method
     /// here uses, so the two never drift out of sync.
+    ///
+    /// This overload always owns (and disposes) its own connection, for callers that just want a
+    /// standalone up-front check (e.g. the REST delete endpoint, before it deletes the folder's
+    /// articles). <see cref="SoftDeleteByPathPrefixAsync"/> does NOT call this overload -- it calls
+    /// <see cref="ThrowIfAnyDescendantWriteDeniedCoreAsync"/> directly against its own transaction,
+    /// so the scan and the cascading UPDATE it guards observe the same write lock. See the
+    /// SECURITY comment there for why that distinction matters.
     /// </summary>
     public async Task ThrowIfAnyDescendantWriteDeniedAsync(string pathPrefix)
     {
@@ -220,10 +276,15 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
             return;
 
         using var conn = OpenConnection();
+        await ThrowIfAnyDescendantWriteDeniedCoreAsync(pathPrefix, conn, null);
+    }
+
+    private async Task ThrowIfAnyDescendantWriteDeniedCoreAsync(string pathPrefix, System.Data.IDbConnection conn, System.Data.IDbTransaction? transaction)
+    {
         var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
         var descendantPaths = await conn.QueryAsync<string>(
             "SELECT path FROM tbl_folder WHERE path LIKE @prefix ESCAPE '\\' AND status = 'A'",
-            new { prefix });
+            new { prefix }, transaction: transaction);
 
         foreach (var path in descendantPaths)
         {
