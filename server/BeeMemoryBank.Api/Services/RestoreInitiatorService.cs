@@ -737,7 +737,13 @@ public class RestoreInitiatorService : IRestoreInitiator
                 var builder = new UriBuilder(u);
                 var addrStr = addr.ToString();
                 builder.Host = addrStr.Contains(':') ? $"[{addrStr}]" : addrStr;
-                return (builder.Uri.ToString(), host);
+                // TrimEnd('/'): Uri.ToString() normalizes "https://host:5300" to end in a slash,
+                // and every caller appends "/api/sync/..." to what we return — producing
+                // "https://1.2.3.4:5300//api/sync/challenge", which ASP.NET routing 404s. The
+                // literal-IP branch above returns the caller's own string untouched, so only
+                // hostname seeders (mDNS/.local, Tailscale MagicDNS, dynamic DNS, any real domain)
+                // hit this path — which is why it went unnoticed: tests use loopback IPs.
+                return (builder.Uri.ToString().TrimEnd('/'), host);
             }
         }
 
