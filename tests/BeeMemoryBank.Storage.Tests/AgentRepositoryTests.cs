@@ -91,17 +91,19 @@ public class AgentRepositoryTests : IAsyncLifetime
 
         await _repo.DeleteAsync(id);
 
+        // Read straight from SQL: GetByIdAsync only returns active agents, and the whole point
+        // here is what the revoked row still contains.
         using var conn = _factory.CreateConnection();
-        var row = await conn.QuerySingleAsync<(string Status, byte[]? Dek, byte[]? Iv, byte[]? Salt, long Kdf)>(
-            @"SELECT status AS Status, encrypted_dek AS Dek, dek_iv AS Iv, salt AS Salt,
-                     kdf_version AS Kdf
-                FROM tbl_agent WHERE id = @id", new { id });
-
-        row.Status.Should().Be("D");
-        row.Dek.Should().BeNull();
-        row.Iv.Should().BeNull();
-        row.Salt.Should().BeNull();
-        row.Kdf.Should().Be(0);
+        (await conn.QuerySingleAsync<string>("SELECT status FROM tbl_agent WHERE id = @id", new { id }))
+            .Should().Be("D");
+        (await conn.QuerySingleAsync<byte[]?>("SELECT encrypted_dek FROM tbl_agent WHERE id = @id", new { id }))
+            .Should().BeNull();
+        (await conn.QuerySingleAsync<byte[]?>("SELECT dek_iv FROM tbl_agent WHERE id = @id", new { id }))
+            .Should().BeNull();
+        (await conn.QuerySingleAsync<byte[]?>("SELECT salt FROM tbl_agent WHERE id = @id", new { id }))
+            .Should().BeNull();
+        (await conn.QuerySingleAsync<long>("SELECT kdf_version FROM tbl_agent WHERE id = @id", new { id }))
+            .Should().Be(0);
     }
 
     [Fact]

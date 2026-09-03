@@ -180,4 +180,68 @@ public class MigrationTests : IAsyncLifetime
         deactivatedOwnerAgent.CanAutoUnlock.Should().BeFalse(
             "is_active must not matter to this decision -- only role does");
     }
+
+    // Migration 014 clears by the OWNER'S ROLE, so a SUPERADMIN's already-revoked agents kept
+    // their wrapped DEK: revoked, but still a key to the whole vault for anyone holding the old
+    // plaintext bee_... string and a copy of the database. Observed on a live node right after
+    // 014 shipped. 015 closes it for existing rows; AgentRepository.DeleteAsync keeps it closed
+    // for every revocation from here on.
+    [Fact]
+    public async Task Migration015_ClearsWrappedDekFromRevokedAgents_EvenSuperadminOwned()
+    {
+        int superadminAgentId, revokedSuperadminAgentId;
+
+        using (var conn = _factory.CreateConnection())
+        {
+            var now = DateTime.UtcNow.ToString("o");
+
+            var superadminId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_user (username, display_name, password_hash, role, is_active, created_at)
+                  VALUES ('root015', 'Root', 'hash', 'superadmin', 1, @now);
+                  SELECT last_insert_rowid();", new { now });
+
+            superadminAgentId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_agent
+                    (name, key_prefix, key_hash, encrypted_dek, dek_iv, kdf_version, salt, status, created_at, owner_user_id)
+                  VALUES ('live', 'bee_live015', 'hash-live015', @dek, @iv, 1, @salt, 'A', @now, @ownerId);
+                  SELECT last_insert_rowid();",
+                new { dek = new byte[] { 1, 2, 3 }, iv = new byte[] { 4, 5, 6 }, salt = new byte[] { 7, 8, 9 }, now, ownerId = superadminId });
+
+            revokedSuperadminAgentId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO tbl_agent
+                    (name, key_prefix, key_hash, encrypted_dek, dek_iv, kdf_version, salt, status, created_at, owner_user_id)
+                  VALUES ('revoked', 'bee_rev015', 'hash-rev015', @dek, @iv, 1, @salt, 'D', @now, @ownerId);
+                  SELECT last_insert_rowid();",
+                new { dek = new byte[] { 10, 11, 12 }, iv = new byte[] { 13, 14, 15 }, salt = new byte[] { 16, 17, 18 }, now, ownerId = superadminId });
+
+            await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 15");
+        }
+
+        await _runner.RunMigrationsAsync();
+
+        using var check = _factory.CreateConnection();
+        var repo = new AgentRepository(_factory);
+
+        // Read the revoked row straight from SQL: GetByIdAsync only returns active agents, which
+        // is exactly why this row was easy to overlook in the first place.
+        (await check.QuerySingleAsync<byte[]?>(
+            "SELECT encrypted_dek FROM tbl_agent WHERE id = @revokedSuperadminAgentId",
+            new { revokedSuperadminAgentId }))
+            .Should().BeNull("a revoked agent must not keep key material, whoever owned it");
+        (await check.QuerySingleAsync<byte[]?>(
+            "SELECT dek_iv FROM tbl_agent WHERE id = @revokedSuperadminAgentId", new { revokedSuperadminAgentId }))
+            .Should().BeNull();
+        (await check.QuerySingleAsync<byte[]?>(
+            "SELECT salt FROM tbl_agent WHERE id = @revokedSuperadminAgentId", new { revokedSuperadminAgentId }))
+            .Should().BeNull();
+        (await check.QuerySingleAsync<long>(
+            "SELECT kdf_version FROM tbl_agent WHERE id = @revokedSuperadminAgentId", new { revokedSuperadminAgentId }))
+            .Should().Be(0);
+        (await check.QuerySingleAsync<string>(
+            "SELECT key_hash FROM tbl_agent WHERE id = @revokedSuperadminAgentId", new { revokedSuperadminAgentId }))
+            .Should().Be("hash-rev015", "the audit trail must survive — only the key material goes");
+
+        (await repo.GetByIdAsync(superadminAgentId))!.CanAutoUnlock.Should().BeTrue(
+            "an ACTIVE superadmin agent is untouched by this migration");
+    }
 }
