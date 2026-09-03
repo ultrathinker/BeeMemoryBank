@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
@@ -67,7 +67,11 @@ public static class WhitelistEndpoints
                 return Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
 
             if (req.DisplayName != null) entry.DisplayName = req.DisplayName;
-            if (req.ApiAddress != null) entry.ApiAddress = req.ApiAddress;
+            // Normalize the same way /api/join and the /address endpoint below do: every consumer
+            // builds request URLs as $"{apiAddress}/api/sync/...", so a stored trailing slash
+            // yields a double slash and a 404. The sync clients trim defensively too, but the
+            // stored value also travels to other nodes, so keep the table itself clean.
+            if (req.ApiAddress != null) entry.ApiAddress = req.ApiAddress.Trim().TrimEnd('/');
             if (req.CanGenerateEmbeddings.HasValue) entry.CanGenerateEmbeddings = req.CanGenerateEmbeddings.Value;
             entry.UpdatedAt = DateTime.UtcNow;
 

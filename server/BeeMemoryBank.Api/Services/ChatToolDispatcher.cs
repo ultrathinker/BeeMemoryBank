@@ -218,9 +218,9 @@ public sealed partial class ChatToolDispatcher(
 
         try
         {
-            // Writes need the master DEK (bodies are encrypted/decrypted through ArticleService) —
-            // but not EVERY write does (see RequiresUnlockedSessionForCall: a metadata-only update
-            // or a delete never touches the DEK, matching BeeWriteTools). Mirror the read path:
+            // Every write needs the master DEK — not only the ones that encrypt a body: each one
+            // also logs an event, and EventLogger signs it with a key unwrapped from the DEK. So
+            // this blocks all of them (see RequiresUnlockedSessionForCall). Mirror the read path:
             // degrade to a clear tool result, never an exception.
             if (isWrite && RequiresUnlockedSessionForCall(name, args, mcpToolRegistry) && !session.IsUnlocked)
             {

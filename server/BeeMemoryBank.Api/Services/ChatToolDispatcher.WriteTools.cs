@@ -12,9 +12,9 @@ public sealed partial class ChatToolDispatcher
     // same ACL-error handling (ReadOnlyAccessException → "read-only folder", UnauthorizedAccessException
     // → "restricted folder"), same two-step confirm for delete. ACL is enforced BY REUSE — the Core
     // repos throw these on write; we surface them as graceful tool results, never exceptions. A
-    // locked vault is already rejected up-front in InvokeAsync for every call that actually needs
-    // the master DEK (see RequiresUnlockedSessionForCall) — a metadata-only bee_update_article and
-    // any bee_delete_article reach here even while locked, exactly like their MCP counterparts.
+    // locked vault is rejected up-front in InvokeAsync for EVERY write — including a metadata-only
+    // bee_update_article and bee_delete_article, which still log a DEK-signed event — so nothing
+    // here has to re-check it.
 
     // Mirrors BeeWriteTools.SaveArticle / ArticleEndpoints POST /api/articles.
     private async Task<string> SaveArticleAsync(JsonElement args)

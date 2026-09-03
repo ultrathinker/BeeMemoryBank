@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -301,11 +301,13 @@ public class VelopackIntegrationTests : IAsyncLifetime
             checkCmd.ExecuteNonQuery();
         }
 
-        // Clear pools to release locks held by the singleton factory and other connections
-        using (var tempConn = new SqliteConnection($"Data Source={originalDbPath};Pooling=False"))
-        {
-            SqliteConnection.ClearPool(tempConn);
-        }
+        // Release every pooled handle on this database before touching the files directly.
+        // ClearPool is per-connection-STRING, and the string used here ("...;Pooling=False") is
+        // not the one DbConnectionFactory uses — so clearing this one's pool left the migration
+        // runner's idle pooled connections open, still holding beememorybank.db-wal, and the
+        // File.Delete below failed with a sharing violation whenever one happened to be alive.
+        // ClearAllPools doesn't need to know the factory's connection string, so it can't miss.
+        SqliteConnection.ClearAllPools();
 
         // Copy the current database to the backup location (this represents our pre-update snapshot database)
         var backupDbPath = Path.Combine(backupDir, "beememorybank.db");
@@ -332,10 +334,9 @@ public class VelopackIntegrationTests : IAsyncLifetime
             var expectedBackupDb = Path.Combine(updatesDir, $"pre-update-{version}", "beememorybank.db");
             if (File.Exists(expectedBackupDb))
             {
-                using (var tempConn = new SqliteConnection($"Data Source={originalDbPath};Pooling=False"))
-                {
-                    SqliteConnection.ClearPool(tempConn);
-                }
+                // Same reason as above: clear ALL pools, not the pool of a connection string
+                // nothing else uses, or the WAL delete a few lines down hits a locked file.
+                SqliteConnection.ClearAllPools();
 
                 File.Copy(expectedBackupDb, originalDbPath, overwrite: true);
                 
