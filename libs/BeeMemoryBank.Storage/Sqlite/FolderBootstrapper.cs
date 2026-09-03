@@ -35,7 +35,7 @@ public class FolderBootstrapper(
             if (normalizedPath == "/") continue;
             var folder = await folderRepo.GetByPathAsync(normalizedPath);
             if (folder != null)
-                await articleRepo.SetFolderIdAsync(id, folder.Id);
+                await articleRepo.SetFolderIdUnscopedAsync(id, folder.Id);
         }
     }
 

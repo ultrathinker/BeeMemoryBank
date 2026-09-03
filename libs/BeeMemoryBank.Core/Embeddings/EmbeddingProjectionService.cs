@@ -83,7 +83,7 @@ public class EmbeddingProjectionService(
         {
             // Re-flag everything for re-embedding. Chunk rows are replaced wholesale by
             // ProjectArticleAsync as each article is reprocessed, so they need no separate purge.
-            await articleRepo.MarkAllEmbeddingsPendingAsync();
+            await articleRepo.MarkAllEmbeddingsPendingUnscopedAsync();
         }
     }
 
@@ -128,7 +128,7 @@ public class EmbeddingProjectionService(
         // it simply won't appear in semantic search (by design).
         if (Crypto.ProtectedContentCodec.IsProtected(plaintext))
         {
-            await articleRepo.UpdateEmbeddingAsync(article.Id, [], ModelVersion);
+            await articleRepo.UpdateEmbeddingUnscopedAsync(article.Id, [], ModelVersion);
             await chunkRepo.ReplaceChunksAsync(article.Id, [], ModelVersion);
             return;
         }
@@ -138,7 +138,7 @@ public class EmbeddingProjectionService(
         var projection = matrix.Project(embedding);
         var projectionBytes = FloatsToBytes(projection);
 
-        await articleRepo.UpdateEmbeddingAsync(article.Id, projectionBytes, ModelVersion);
+        await articleRepo.UpdateEmbeddingUnscopedAsync(article.Id, projectionBytes, ModelVersion);
 
         List<string> chunkTexts = chunker.Chunk(plaintext);
         var chunkRows = new List<(byte[] Projection, float Scale)>(chunkTexts.Count);

@@ -400,9 +400,10 @@ public class ArticleRepository(
         return _holder.Scope.FilterArticles(articles);
     }
 
-    // AUDIT: unguarded. Only reachable from PendingEmbeddingProcessor (background worker,
-    // SystemCallerScope). If a future HTTP endpoint calls this, add a scope check.
-    public async Task UpdateEmbeddingAsync(Guid id, byte[] projection, string modelVersion)
+    // Unscoped by name (see IArticleRepository's doc comment) — only reachable from
+    // PendingEmbeddingProcessor (background worker, SystemCallerScope). If a future HTTP endpoint
+    // calls this, add a scope check.
+    public async Task UpdateEmbeddingUnscopedAsync(Guid id, byte[] projection, string modelVersion)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
@@ -429,9 +430,9 @@ public class ArticleRepository(
         return _holder.Scope.FilterArticles(articles);
     }
 
-    // AUDIT: unguarded. Only reachable from PendingIndexProcessor (background worker,
-    // SystemCallerScope), mirroring UpdateEmbeddingAsync's own note above.
-    public async Task ClearIndexPendingAsync(Guid id)
+    // Unscoped by name. Only reachable from PendingIndexProcessor (background worker,
+    // SystemCallerScope), mirroring UpdateEmbeddingUnscopedAsync's own note above.
+    public async Task ClearIndexPendingUnscopedAsync(Guid id)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
@@ -439,18 +440,18 @@ public class ArticleRepository(
             new { id });
     }
 
-    // AUDIT: unguarded. Only reachable from the search-index full-rebuild path (background
+    // Unscoped by name. Only reachable from the search-index full-rebuild path (background
     // worker, SystemCallerScope) -- see SearchIndexLifecycleService.TriggerFullRebuildAsync.
-    public async Task<int> MarkAllIndexPendingAsync()
+    public async Task<int> MarkAllIndexPendingUnscopedAsync()
     {
         using var conn = OpenConnection();
         return await conn.ExecuteAsync("UPDATE tbl_article SET index_pending = 1 WHERE status = 'A'");
     }
 
-    // AUDIT: unguarded, matching MarkAllIndexPendingAsync above. Only reachable from
+    // Unscoped by name, matching MarkAllIndexPendingUnscopedAsync above. Only reachable from
     // EmbeddingProjectionService's matrix-recovery path, itself driven by the background
     // PendingEmbeddingProcessor (SystemCallerScope).
-    public async Task<int> MarkAllEmbeddingsPendingAsync()
+    public async Task<int> MarkAllEmbeddingsPendingUnscopedAsync()
     {
         using var conn = OpenConnection();
         var affected = await conn.ExecuteAsync(
@@ -461,9 +462,9 @@ public class ArticleRepository(
         return affected;
     }
 
-    // AUDIT: unguarded. Only reachable from PendingEmbeddingProcessor (background worker,
-    // SystemCallerScope), mirroring UpdateEmbeddingAsync's own note above.
-    public async Task<int> MarkStaleEmbeddingsPendingAsync(string currentModelVersion)
+    // Unscoped by name. Only reachable from PendingEmbeddingProcessor (background worker,
+    // SystemCallerScope), mirroring UpdateEmbeddingUnscopedAsync's own note above.
+    public async Task<int> MarkStaleEmbeddingsPendingUnscopedAsync(string currentModelVersion)
     {
         using var conn = OpenConnection();
         return await conn.ExecuteAsync(
@@ -623,10 +624,14 @@ public class ArticleRepository(
         return _holder.Scope.FilterArticles(articles);
     }
 
-    // AUDIT: unguarded. Reachable only from FolderBootstrapper (startup migration) and
-    // EventApplier folder-delete replay — both run under SystemCallerScope. Do not expose
-    // from an HTTP endpoint without adding a scope check.
-    public async Task SetFolderIdAsync(Guid articleId, Guid folderId)
+    // Unguarded (no caller-scope check) and, since this is exactly the shape that once let a
+    // user-facing folder-delete path relocate ACL-denied articles to the vault root (see
+    // ClearFolderIdUnscopedAsync below), marked `internal` on the interface rather than just
+    // documented: BeeMemoryBank.Api/Web cannot reference this member at all, by construction, not
+    // by convention. See IArticleRepository's doc comment for the InternalsVisibleTo grants this
+    // relies on. Reachable only from FolderBootstrapper (startup migration, same assembly) and
+    // EventApplier folder-delete replay (Sync, granted access) — both run under SystemCallerScope.
+    async Task IArticleRepository.SetFolderIdUnscopedAsync(Guid articleId, Guid folderId)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
@@ -634,14 +639,17 @@ public class ArticleRepository(
             new { articleId, folderId });
     }
 
-    // AUDIT: unguarded — carries no ACL check of its own, by design, since sync/background
-    // callers run under SystemCallerScope where every check would be a no-op anyway. The one
-    // user-facing caller, FolderService.DeleteAsync, is safe DESPITE that: it now calls
-    // folderRepo.SoftDeleteByPathPrefixAsync (which walks every descendant and throws on the
-    // first ACL violation — see the H1 comment there) BEFORE ever reaching this method, so a
-    // denied descendant aborts the whole cascade first. Do not add a new call site ahead of an
-    // equivalent guard.
-    public async Task ClearFolderIdAsync(Guid folderId)
+    // Unguarded (no caller-scope check) — the exact method a user-facing folder-delete path once
+    // called directly, relocating ACL-denied articles to the vault root instead of being blocked.
+    // Marked `internal` on the interface (see IArticleRepository's doc comment) so the compiler,
+    // not a comment someone has to notice, keeps it off the API/MCP surface. The two remaining
+    // callers are safe DESPITE the missing check: FolderService.DeleteAsync (Core, same assembly)
+    // calls folderRepo.SoftDeleteByPathPrefixAsync first, which walks every descendant and throws
+    // on the first ACL violation — see the H1 comment there — so a denied descendant aborts the
+    // whole cascade before this is ever reached; EventApplier.Folder (Sync, granted access) runs
+    // under SystemCallerScope, where every check would be a no-op anyway. Do not add a new call
+    // site ahead of an equivalent guard.
+    async Task IArticleRepository.ClearFolderIdUnscopedAsync(Guid folderId)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(

@@ -141,7 +141,7 @@ public class ChunkedSemanticSearchRecallTests : IAsyncLifetime
         var projection = matrix.Project(embedding);
         var bytes = new byte[projection.Length * 4];
         Buffer.BlockCopy(projection, 0, bytes, 0, bytes.Length);
-        await _articleRepo.UpdateEmbeddingAsync(article.Id, bytes, "test-model");
+        await _articleRepo.UpdateEmbeddingUnscopedAsync(article.Id, bytes, "test-model");
 
         var query = await _projectionService.ProjectQueryAsync(NeedleMarker);
         var results = await _articleRepo.SearchByChunkEmbeddingAsync(query, topK: 10);

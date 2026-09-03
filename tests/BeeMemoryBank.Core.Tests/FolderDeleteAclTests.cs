@@ -1,3 +1,6 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 
 namespace BeeMemoryBank.Core.Tests;
@@ -10,7 +13,7 @@ namespace BeeMemoryBank.Core.Tests;
 /// The concrete scenario this guards against: a caller with allow=/ and deny=/Work/Secret (an
 /// ordinary "everything except this" configuration) deletes /Work. The deny check on /Work itself
 /// passes -- the caller IS authorized on /Work -- but before this fix the cascade underneath
-/// (<c>FolderService.DeleteAsync</c> -&gt; <c>ArticleRepository.ClearFolderIdAsync</c>, which
+/// (<c>FolderService.DeleteAsync</c> -&gt; <c>ArticleRepository.ClearFolderIdUnscopedAsync</c>, which
 /// carries no ACL check of its own) relocated every article in /Work/Secret to '/' and
 /// soft-deleted the /Work/Secret folder row, without ever re-checking the caller's ACL against
 /// that descendant. Articles that were supposed to stay hidden under /Work/Secret became readable
@@ -109,5 +112,40 @@ public class FolderDeleteAclTests : TestFixture
         var article = await ArticleService.GetMetadataAsync(articleId);
         article!.TreePath.Should().Be("/", "articles under a deleted subtree are still relocated to '/' when authorized");
         article.FolderId.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Regression guard for the fix that followed the H1 bug above: <c>ClearFolderIdUnscopedAsync</c>
+    /// and <c>SetFolderIdUnscopedAsync</c> must stay <see langword="internal"/> on
+    /// <see cref="IArticleRepository"/> — a future refactor that quietly makes either one public
+    /// again would put it right back within reach of BeeMemoryBank.Api/Web without anyone having to
+    /// notice a doc comment, which is exactly how the original bug happened. This test fails loudly
+    /// if that ever regresses, instead of relying on someone re-reading the interface's XML docs.
+    /// </summary>
+    [Fact]
+    public void FolderIdUnscopedMethods_StayInternal_NotReachableFromApiOrWeb()
+    {
+        var iface = typeof(IArticleRepository);
+
+        var clearMethod = iface.GetMethod("ClearFolderIdUnscopedAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+        clearMethod.Should().NotBeNull("ClearFolderIdUnscopedAsync must still exist on the interface");
+        clearMethod!.IsAssembly.Should().BeTrue("it must be declared `internal`, not public — this is the compile-time guard, not just a comment");
+
+        var setMethod = iface.GetMethod("SetFolderIdUnscopedAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+        setMethod.Should().NotBeNull("SetFolderIdUnscopedAsync must still exist on the interface");
+        setMethod!.IsAssembly.Should().BeTrue("it must be declared `internal`, not public — same guard as ClearFolderIdUnscopedAsync");
+
+        // The grants must name exactly the assemblies that legitimately implement/call these two
+        // internal members (Storage implements them; Sync calls ClearFolderIdUnscopedAsync from
+        // its folder-delete event replay) — and must NOT name Api or Web, which is the whole point.
+        var grantedTo = iface.Assembly
+            .GetCustomAttributes<InternalsVisibleToAttribute>()
+            .Select(a => a.AssemblyName.Split(',')[0])
+            .ToHashSet(StringComparer.Ordinal);
+
+        grantedTo.Should().Contain("BeeMemoryBank.Storage");
+        grantedTo.Should().Contain("BeeMemoryBank.Sync");
+        grantedTo.Should().NotContain("BeeMemoryBank.Api");
+        grantedTo.Should().NotContain("BeeMemoryBank.Web");
     }
 }

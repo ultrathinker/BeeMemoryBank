@@ -51,7 +51,17 @@ public interface IArticleRepository
     Task<List<Article>> SearchByIdPartialAsync(string partial, int limit = 20);
     Task<List<Article>> GetByIdsAsync(List<Guid> ids);
     Task<List<Article>> GetEmbeddingPendingAsync(int limit = 100);
-    Task UpdateEmbeddingAsync(Guid id, byte[] projection, string modelVersion);
+
+    /// <summary>
+    /// Writes the embedding projection directly and clears embedding_pending, with NO caller-scope
+    /// check of its own — the "Unscoped" suffix is the load-bearing part of the name, not
+    /// decoration: it exists so a call site reads as a deliberate choice instead of an oversight.
+    /// Only ever reachable from <c>PendingEmbeddingProcessor</c> (background worker,
+    /// SystemCallerScope, where every scope check would be a no-op anyway). If a future HTTP
+    /// endpoint needs this, add a scope check at the endpoint AND rename the call site's intent
+    /// back into a guarded wrapper — do not just call this directly.
+    /// </summary>
+    Task UpdateEmbeddingUnscopedAsync(Guid id, byte[] projection, string modelVersion);
 
     /// <summary>
     /// Re-flags every active article whose stored <c>embedding_model_version</c> is present but
@@ -62,8 +72,11 @@ public interface IArticleRepository
     /// when the old and new models happen to share a dimension. Rows with no stored version at all
     /// are left alone -- they're already pending for the ordinary "never embedded yet" reason.
     /// Returns the number of rows re-flagged, for logging.
+    ///
+    /// "Unscoped": no caller-scope check, by design — reachable only from
+    /// <c>PendingEmbeddingProcessor</c> (background worker, SystemCallerScope).
     /// </summary>
-    Task<int> MarkStaleEmbeddingsPendingAsync(string currentModelVersion);
+    Task<int> MarkStaleEmbeddingsPendingUnscopedAsync(string currentModelVersion);
 
     /// <summary>
     /// Re-flags every active article as embedding_pending = 1. Used only by the projection-matrix
@@ -71,27 +84,61 @@ public interface IArticleRepository
     /// stored matrix can no longer be decrypted the matrix must be regenerated, and every stored
     /// projection was computed in the OLD matrix's space, so all of them have to be recomputed —
     /// leaving them would silently return nonsense similarity scores. Returns rows affected.
+    ///
+    /// "Unscoped": no caller-scope check, by design — reachable only from
+    /// <c>EmbeddingProjectionService</c>'s matrix-recovery path (background, SystemCallerScope).
     /// </summary>
-    Task<int> MarkAllEmbeddingsPendingAsync();
+    Task<int> MarkAllEmbeddingsPendingUnscopedAsync();
 
     /// <summary>WP-11: mirrors GetEmbeddingPendingAsync exactly, for the search-index background processor.</summary>
     Task<List<Article>> GetIndexPendingAsync(int limit = 100);
 
-    /// <summary>WP-11: mirrors the embedding_pending = 0 clear inside UpdateEmbeddingAsync, without any projection payload to store.</summary>
-    Task ClearIndexPendingAsync(Guid id);
+    /// <summary>
+    /// WP-11: mirrors the embedding_pending = 0 clear inside <see cref="UpdateEmbeddingUnscopedAsync"/>,
+    /// without any projection payload to store. "Unscoped": no caller-scope check, by design —
+    /// reachable only from <c>PendingIndexProcessor</c> (background worker, SystemCallerScope).
+    /// </summary>
+    Task ClearIndexPendingUnscopedAsync(Guid id);
 
     /// <summary>
     /// WP-11: re-flags every active article as index_pending = 1. Used only by the search-index
     /// full-rebuild path (a persisted segment failed to load and the whole persisted index is no
     /// longer trustworthy) -- returns the number of rows affected for logging.
+    ///
+    /// "Unscoped": no caller-scope check, by design — reachable only from
+    /// <c>SearchIndexLifecycleService.TriggerFullRebuildAsync</c> (background, SystemCallerScope).
     /// </summary>
-    Task<int> MarkAllIndexPendingAsync();
+    Task<int> MarkAllIndexPendingUnscopedAsync();
     Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10);
 
     /// <summary>WP-15: chunk-based semantic search — see <c>ArticleRepository.SearchByChunkEmbeddingAsync</c>'s doc comment.</summary>
     Task<List<Article>> SearchByChunkEmbeddingAsync(float[] queryProjection, int topK = 10);
     Task<List<Article>> GetRecentActivityAsync(int limit = 50);
-    Task SetFolderIdAsync(Guid articleId, Guid folderId);
-    Task ClearFolderIdAsync(Guid folderId);
+
+    /// <summary>
+    /// Sets an article's folder_id directly, with NO caller-scope check of its own. Marked
+    /// <see langword="internal"/> (see the <c>InternalsVisibleTo</c> grants on
+    /// BeeMemoryBank.Core's project file) rather than merely documented, so the compiler — not a
+    /// comment someone has to notice — keeps this off the API/MCP surface: only
+    /// BeeMemoryBank.Storage (the implementation, and <c>FolderBootstrapper</c>'s startup
+    /// migration) and BeeMemoryBank.Sync (sync replay) can see this member at all.
+    /// </summary>
+    internal Task SetFolderIdUnscopedAsync(Guid articleId, Guid folderId);
+
+    /// <summary>
+    /// Detaches every article under a folder by setting folder_id = NULL and tree_path = '/', with
+    /// NO caller-scope check of its own — this is the exact method a user-facing folder-delete path
+    /// once called directly, relocating ACL-denied articles to the vault root instead of being
+    /// blocked. Marked <see langword="internal"/> for the same reason as
+    /// <see cref="SetFolderIdUnscopedAsync"/>: the compiler, not a comment, keeps it off the
+    /// API/MCP surface. The two remaining callers are safe DESPITE the missing check:
+    /// <c>FolderService.DeleteAsync</c> (Core, same assembly) calls
+    /// <c>folderRepo.SoftDeleteByPathPrefixAsync</c> first, which walks every descendant and throws
+    /// on the first ACL violation, so a denied descendant aborts the whole cascade before this is
+    /// ever reached; <c>EventApplier.Folder</c> (Sync, granted access via InternalsVisibleTo) runs
+    /// under SystemCallerScope, where every check would be a no-op anyway. Do not add a new call
+    /// site ahead of an equivalent guard.
+    /// </summary>
+    internal Task ClearFolderIdUnscopedAsync(Guid folderId);
     Task<List<(Guid Id, string TreePath)>> GetArticlesWithNullFolderIdAsync();
 }

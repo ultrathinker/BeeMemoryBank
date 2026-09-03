@@ -2,7 +2,7 @@
 
 ## Encryption Architecture
 
-BeeMemoryBank uses a **3-layer envelope encryption** model designed to protect user data at rest and in transit. No unencrypted content is ever stored on disk.
+BeeMemoryBank uses a **3-layer envelope encryption** model designed to protect article, version, and media content at rest and in transit. Titles, folder paths and names, concept tag names, timestamps, the FTS5 search index, sync event-log payloads, and audit-log details are stored in plaintext by design — they're metadata that folder ACLs, search, and sync all need as fast, plain lookups rather than per-row decrypt operations. This is a deliberate, documented trade-off, not an oversight: see [ADR-0005](docs/adr/0005-plaintext-metadata.md) for the exact table-by-table split and what it means for someone who obtains the raw database file.
 
 ### Encryption Layers
 
@@ -62,7 +62,8 @@ API agent keys use a separate wrapping mechanism:
 
 ### Data at Rest
 
-- All article content is stored encrypted in SQLite
+- All article, version, and media content is stored encrypted in SQLite (or, for media bytes, as `.enc` files on disk)
+- Titles, folder paths/names, tag names, and timestamps are stored in plaintext — see [ADR-0005](docs/adr/0005-plaintext-metadata.md)
 - Keys are never persisted in plaintext
 - The Master DEK exists only in memory during an active session
 - Salt and wrapped key material are stored per-slot for offline brute-force resistance

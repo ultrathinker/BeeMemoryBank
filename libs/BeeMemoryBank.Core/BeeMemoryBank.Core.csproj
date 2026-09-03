@@ -37,4 +37,16 @@
     <EmbeddedResource Include="Embeddings\Models\sentencepiece.bpe.model" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- IArticleRepository.SetFolderIdUnscopedAsync/ClearFolderIdUnscopedAsync are internal
+         interface members (no caller-scope check of their own — see their doc comments): Storage
+         implements them (ArticleRepository, via explicit interface implementation) and also calls
+         one of them from FolderBootstrapper; Sync calls ClearFolderIdUnscopedAsync from its
+         folder-delete event replay. Neither BeeMemoryBank.Api nor BeeMemoryBank.Web is listed here
+         — that omission is the point: it keeps these two methods off the API/MCP surface at
+         compile time, not just by convention. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Storage" />
+    <InternalsVisibleTo Include="BeeMemoryBank.Sync" />
+  </ItemGroup>
+
 </Project>

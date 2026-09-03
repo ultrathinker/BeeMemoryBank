@@ -18,7 +18,7 @@ public sealed class ArticleChunkEmbeddingRepository(DbConnectionFactory factory,
     /// Replaces every chunk row for <paramref name="articleId"/> with <paramref name="chunks"/>,
     /// atomically (delete-then-insert in one transaction). Called on every
     /// <c>EmbeddingProjectionService.ProjectArticleAsync</c> run for that article, exactly like
-    /// <c>ArticleRepository.UpdateEmbeddingAsync</c> rewrites the single full-document projection —
+    /// <c>ArticleRepository.UpdateEmbeddingUnscopedAsync</c> rewrites the single full-document projection —
     /// so re-embedding an edited article naturally drops stale chunks from its previous content
     /// instead of accumulating them.
     /// </summary>
@@ -51,7 +51,7 @@ public sealed class ArticleChunkEmbeddingRepository(DbConnectionFactory factory,
 
         // WP-15: this is the one write path that changes chunk-embedding bytes during normal
         // operation (PendingEmbeddingProcessor via EmbeddingProjectionService). Mirrors
-        // ArticleRepository.UpdateEmbeddingAsync's own EmbeddingVectorCache.Invalidate() call.
+        // ArticleRepository.UpdateEmbeddingUnscopedAsync's own EmbeddingVectorCache.Invalidate() call.
         cache?.Invalidate();
     }
 

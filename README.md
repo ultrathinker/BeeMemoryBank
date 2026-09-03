@@ -3,7 +3,7 @@
   BeeMemoryBank
 </h1>
 
-> **Your AI agents' shared memory.** Self-hosted, end-to-end encrypted, syncs across every device you own — and your AI agent works with it natively from day one.
+> **Your AI agents' shared memory.** Self-hosted, your notes encrypted end-to-end, syncs across every device you own — and your AI agent works with it natively from day one.
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 ![.NET](https://img.shields.io/badge/.NET-10.0-purple)
@@ -78,7 +78,7 @@ You've been talking to AI agents for months. Every conversation produces useful 
 The fix isn't another notes app. It's a memory the agent can read **and write to** itself, that you actually control:
 
 - **The agent saves and retrieves on its own.** No copy-paste. No "let me put that in Notion later." Native [MCP](https://modelcontextprotocol.io/) support — the agent treats your knowledge base like its own working memory. 32 tools across 7 categories. Token-aware truncation so a 50KB article doesn't blow your context window.
-- **Your data, your server.** Self-hosted on your laptop, your VPS, your home NAS. End-to-end encrypted with **per-article keys** — the encryption happens on your device, the server holds ciphertext. No vendor lock-in, no telemetry, no "we updated our terms of service".
+- **Your data, your server.** Self-hosted on your laptop, your VPS, your home NAS. Article, version, and media content is encrypted with **per-article/per-media keys** — unreadable without your master password, even to whoever has the raw database file. Titles, folder paths, tags, and timestamps stay in plaintext by design, so search and folder ACLs work as ordinary SQL instead of a decrypt-then-filter pass over every row ([full trade-off in ADR-0005](docs/adr/0005-plaintext-metadata.md)). No vendor lock-in, no telemetry, no "we updated our terms of service".
 - **Syncs everywhere automatically.** Three nodes on three continents stay in sync via Ed25519-signed events with Lamport-clock conflict resolution. Push-on-save means your phone sees the article seconds after your laptop saves it. Works behind NAT.
 - **Team-ready when you need it.** Per-folder ACLs, per-user key slots, per-agent isolation. Each teammate connects their own AI agent; the agent can only see folders the user can see.
 - **Production-grade.** Survived 7 sequential security audit waves (crypto, sync, auth, input, admin, hygiene, mobile) — every finding either fixed or explicitly documented as accepted-risk. **359 tests pass on every build.** Online DEK rotation, snapshot/restore, hard-delete propagation, encrypted version history, audit log. Code is open under AGPL-3.0; nothing hidden.
@@ -176,13 +176,13 @@ Agent writes: bee_save_article(title: "Galaxy Tetris — Architecture", treePath
 
 ### Your Knowledge, Everywhere — Encrypted
 
-Once saved, your articles don't sit on one server. Spin up a node on your laptop, phone, or a VPS on another continent — everything syncs automatically, encrypted end-to-end with your master key.
+Once saved, your articles don't sit on one server. Spin up a node on your laptop, phone, or a VPS on another continent — everything syncs automatically: article, version, and media bodies travel end-to-end encrypted; titles and folder paths travel in plaintext, since every node needs them to keep its own search and folder ACLs working locally.
 
 - **Public API URL?** Sync is near-instant — push-on-save, seconds after every write.
 - **Phone in your pocket?** Background polling kicks in — every 5 seconds when active, up to 5–10 minutes in deep sleep.
 - **Three nodes on three continents?** Sleep well. Your knowledge survives anything.
 
-No cloud service has your keys. No provider can read your notes. The encryption happens on your device — always.
+No cloud service holds your master key, and no provider can read your article content without it. Titles, folder structure, and tags are visible to anyone with access to the raw database — see [ADR-0005](docs/adr/0005-plaintext-metadata.md) for exactly what a compromised server file would and wouldn't expose.
 
 ### Zero-Context Upload
 
@@ -751,6 +751,7 @@ BeeMemoryBank uses a defense-in-depth approach:
 - **AES-256-GCM** authenticated encryption for all article content
 - **Argon2id** key derivation (64 MiB / parallelism=4 / 3 iterations — OWASP-recommended)
 - **Per-article and per-media DEKs** for cryptographic isolation
+- **Metadata is plaintext by design** — titles, folder paths/names, tags, and timestamps are not encrypted; that's what lets search, folder ACLs, and sync run as plain, fast SQL instead of a decrypt-then-filter pass over every row. See [ADR-0005](docs/adr/0005-plaintext-metadata.md) for the full table-by-table split and what a raw database compromise would expose
 - **Encrypted node identity** — the Ed25519 private key used to sign sync events is wrapped under the Master DEK, so a stolen DB file alone cannot be used to impersonate the node
 - **HKDF-derived agent keys** — per-agent random salt; stealing one key does not enable precomputation against any other agent
 - **Ed25519** signatures on all sync events (tamper-proof, with replay-shield against pre-restore zombie events)
@@ -805,7 +806,7 @@ All inter-node sync is encrypted end-to-end with Ed25519-signed events. Replica 
 
 - Folder ACLs are enforced **only by the API process**. A user who bypasses the API (e.g., direct SQLite read, RAM dump) can read everything — ACL is app-layer, not cryptographic.
 - Regular users **cannot decrypt data** without the superadmin having unlocked the node first.
-- All sync traffic is end-to-end encrypted; replica nodes cannot join without superadmin credentials during setup.
+- Sync events are Ed25519-signed and carry article/media bodies end-to-end encrypted, but the same events carry titles and folder paths in plaintext (every peer needs them to keep search and ACLs working locally — see [ADR-0005](docs/adr/0005-plaintext-metadata.md)). Replica nodes cannot join without superadmin credentials during setup.
 
 ---
 

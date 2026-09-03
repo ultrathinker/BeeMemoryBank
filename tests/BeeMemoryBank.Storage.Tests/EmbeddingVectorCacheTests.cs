@@ -157,7 +157,7 @@ public class EmbeddingVectorCacheTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Invalidate_UpdateEmbeddingAsync_RebuildsWithNewVector()
+    public async Task Invalidate_UpdateEmbeddingUnscopedAsync_RebuildsWithNewVector()
     {
         var random = new Random(9);
         var original = RandomVector(random, Dim);
@@ -166,12 +166,12 @@ public class EmbeddingVectorCacheTests : IAsyncLifetime
         // Warm the cache with the original vector.
         await _repo.SearchByEmbeddingAsync(original, 5);
 
-        // UpdateEmbeddingAsync rewrites the projection directly — this must invalidate too.
+        // UpdateEmbeddingUnscopedAsync rewrites the projection directly — this must invalidate too.
         var replacement = RandomVector(random, Dim);
-        await _repo.UpdateEmbeddingAsync(id, MemoryMarshal.AsBytes(replacement.AsSpan()).ToArray(), "v2");
+        await _repo.UpdateEmbeddingUnscopedAsync(id, MemoryMarshal.AsBytes(replacement.AsSpan()).ToArray(), "v2");
 
         var resultForReplacement = await _repo.SearchByEmbeddingAsync(replacement, 5);
-        resultForReplacement.Should().ContainSingle(a => a.Id == id, "UpdateEmbeddingAsync must invalidate the cache so the new vector is immediately searchable");
+        resultForReplacement.Should().ContainSingle(a => a.Id == id, "UpdateEmbeddingUnscopedAsync must invalidate the cache so the new vector is immediately searchable");
     }
 
     // --- Concurrency ------------------------------------------------------------------

@@ -7,7 +7,7 @@ BeeMemoryBank is a knowledge base for individuals and teams, with end-to-end enc
 **Problem:** Notes, documentation, and technical decisions are scattered across dozens of places — Notion, Google Docs, local files, chat apps. Nothing is searchable, nothing is protected, and everything depends on third-party servers.
 
 **Solution:** A self-hosted knowledge base that:
-- **Encrypts everything** — AES-256-GCM per article; even if the database file leaks, article texts are unreadable without the master password
+- **Encrypts content, not metadata** — AES-256-GCM per article/media; even if the database file leaks, article, version, and media content are unreadable without the master password. Titles, folder paths, tags, and timestamps stay in plaintext by design — that's what keeps search, folder ACLs, and sync working as ordinary, fast SQL instead of a decrypt-then-filter pass over every row (see [ADR-0005](adr/0005-plaintext-metadata.md) for the full split)
 - **Synchronizes** — multiple nodes (home server, VPS, laptop) exchange events, work autonomously, and merge without conflicts
 - **Integrates with AI** — a built-in MCP server lets AI agents (Claude Code, etc.) read, write, and search articles as if it were a regular knowledge base
 - **Works everywhere** — Web UI in the browser, CLI in the terminal, mobile app on Android
