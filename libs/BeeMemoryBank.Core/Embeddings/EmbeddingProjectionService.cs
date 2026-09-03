@@ -14,7 +14,8 @@ public class EmbeddingProjectionService(
     IArticleRepository articleRepo,
     SessionService session,
     ArticleChunker chunker,
-    IArticleChunkEmbeddingRepository chunkRepo)
+    IArticleChunkEmbeddingRepository chunkRepo,
+    MaintenanceModeService? maintenance = null)
 {
     private const string ModelVersion = OnnxEmbeddingGenerator.Version;
 
@@ -36,6 +37,20 @@ public class EmbeddingProjectionService(
         }
 
         if (stored != null && CanDecrypt(stored)) return; // already initialized and readable
+
+        // A matrix that will not open is NOT proof it is dead while a heavy operation is in
+        // flight. DEK rotation commits the re-wrapped matrix inside its transaction and only
+        // swaps the in-memory master DEK AFTER the commit, so between those two points the row
+        // is sealed under the NEW key while this service still holds the OLD one — and the
+        // retired-DEK candidates cannot help, because the new key is not a candidate yet. The
+        // background PendingEmbeddingProcessor calls this method every cycle, so without this
+        // guard a rotation could land in that window and be met with a full regeneration:
+        // every vector in the vault discarded, every article re-queued, and the freshly written
+        // matrix overwritten with one sealed under the retired key — leaving the vault worse
+        // than before and failing the same way on every later cycle. Rotation and restore both
+        // hold maintenance mode across their whole operation, so backing off here costs one
+        // cycle and nothing else.
+        if (stored != null && maintenance?.IsInMaintenance == true) return;
 
         // Either no matrix yet, or one we can no longer decrypt. The latter is recoverable only by
         // regenerating: a matrix sealed under a key we don't have is not coming back, and every
@@ -79,19 +94,19 @@ public class EmbeddingProjectionService(
     /// </summary>
     private bool CanDecrypt(ProjectionMatrixStore stored)
     {
-        var masterDek = session.GetMasterDek();
         try
         {
-            ProjectionMatrix.Unwrap(stored.EncryptedMatrix, stored.IV, masterDek);
+            // Retired DEKs included, the same way every article read does it: right after a
+            // rotation the matrix a peer sent (or one written moments before the swap) is still
+            // sealed under the previous key, and treating that as corruption would throw away
+            // every vector in the vault for what is a perfectly recoverable row.
+            session.TryUnwrapWithCandidates(dek =>
+                ProjectionMatrix.Unwrap(stored.EncryptedMatrix, stored.IV, dek));
             return true;
         }
         catch (System.Security.Cryptography.CryptographicException)
         {
             return false;
-        }
-        finally
-        {
-            Array.Clear(masterDek);
         }
     }
 
@@ -155,15 +170,10 @@ public class EmbeddingProjectionService(
     {
         var stored = await matrixRepo.GetAsync()
             ?? throw new InvalidOperationException("Projection matrix not initialized. Call EnsureProjectionMatrixAsync.");
-        var masterDek = session.GetMasterDek();
-        try
-        {
-            return ProjectionMatrix.Unwrap(stored.EncryptedMatrix, stored.IV, masterDek);
-        }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
+        // Candidates, not just the current DEK — must agree with CanDecrypt above, or a matrix
+        // still sealed under a retired key would be judged healthy and then fail to load.
+        return session.TryUnwrapWithCandidates(dek =>
+            ProjectionMatrix.Unwrap(stored.EncryptedMatrix, stored.IV, dek));
     }
 
     private static byte[] FloatsToBytes(float[] floats)

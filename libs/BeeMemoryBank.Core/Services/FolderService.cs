@@ -59,9 +59,18 @@ public class FolderService(
         var now = DateTime.UtcNow;
         var parentPath = GetParentPath(path);
 
-        // Ensure parent exists first
+        // Authorize the folder being created BEFORE anything is persisted. folderRepo.CreateAsync
+        // below applies the same check, but only after the ancestors have already been written —
+        // and nothing rolls those back, so a denied caller could still litter a restricted subtree
+        // with folder names (plaintext metadata, visible to everyone).
+        folderRepo.ThrowIfWriteDenied(path);
+
+        // Ancestors, explicitly unchecked. EnsureExistsAsync checks whatever it is given as the
+        // leaf, and what we hand it is the PARENT — so an allow-list user creating the very folder
+        // their allow entry names (/Work/Project) would be refused because /Work lies outside their
+        // scope. The real leaf is authorized on the line above instead.
         if (parentPath != null)
-            await folderRepo.EnsureExistsAsync(parentPath, identity?.NodeId);
+            await folderRepo.EnsureAncestorsExistAsync(parentPath, identity?.NodeId);
 
         var folder = new Folder
         {

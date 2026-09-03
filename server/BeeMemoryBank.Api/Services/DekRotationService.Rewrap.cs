@@ -277,11 +277,20 @@ public partial class DekRotationService
                 // Hold plainDek in try/finally so an exception from Wrap or Execute can't leak
                 // the per-item DEK on the heap. Use DekManager (per-row AAD) — these are
                 // article/media DEKs, not master DEKs. AAD format depends on the table.
+                // Framing must survive the rewrap. Every reader decides "is this row v1?" from the
+                // DEK blob itself (length > 48 && blob[0] == 0x01) and then applies the v1 AAD to
+                // BOTH the DEK unwrap and the BODY decrypt. WrapDek always emits v1, so re-wrapping
+                // a legacy v0 row with it silently relabels the row: readers switch to v1 AAD while
+                // the body ciphertext is still v0 and was sealed with none, and the row is lost for
+                // good. Rotation is the one place that must preserve v0.
+                var isLegacyV0 = encDek.Length == 48;
                 var aad = BuildPerRowAadForTable(tableName, aadId, encDek);
                 var plainDek = DekManager.UnwrapDek(encDek, dekIv, oldDek, aad);
                 try
                 {
-                    var (newEnc, newIv) = DekManager.WrapDek(plainDek, newDek, aad);
+                    var (newEnc, newIv) = isLegacyV0
+                        ? DekManager.WrapDekLegacyV0(plainDek, newDek)
+                        : DekManager.WrapDek(plainDek, newDek, aad);
                     conn.Execute(
                         $"UPDATE [{tableName}] SET [{dekColumn}] = @enc, [{dekIvColumn}] = @iv WHERE [{pkColumn}] = @pk",
                         new { enc = newEnc, iv = newIv, pk },

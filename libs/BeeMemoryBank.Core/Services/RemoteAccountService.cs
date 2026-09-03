@@ -187,7 +187,14 @@ public class RemoteAccountService(
                 {
                     var existingAncestor = await folderRepo.GetByPathAsync(ancestor);
                     if (existingAncestor == null)
-                        await folderRepo.EnsureExistsAsync(ancestor, identity?.NodeId);
+                    {
+                        // Ancestors, so the unchecked variant: the leaf here is stakeOut.Path, and
+                        // folderRepo.CreateAsync authorizes that on the next line. Passing an
+                        // ancestor to the leaf-checking EnsureExistsAsync would refuse mount paths
+                        // whose parent lies outside an allow-list caller's scope.
+                        folderRepo.ThrowIfWriteDenied(stakeOut.Path);
+                        await folderRepo.EnsureAncestorsExistAsync(ancestor, identity?.NodeId);
+                    }
                 }
                 await folderRepo.CreateAsync(stakeOut);
             }

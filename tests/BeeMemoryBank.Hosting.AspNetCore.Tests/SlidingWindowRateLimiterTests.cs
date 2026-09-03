@@ -89,3 +89,37 @@ public class SlidingWindowRateLimiterTests
         granted.Should().Be(50, "the window must hold under concurrent callers, not merely on average");
     }
 }
+
+/// <summary>
+/// A limiter that matches routes by string equality has to normalize exactly as ASP.NET Core
+/// routing does — the difference between the two IS the bypass. "/api/init/reset/" reaches the
+/// node-wiping endpoint just as "/api/init/reset" does, and used to skip the limiter entirely.
+/// </summary>
+public class RateLimitPathTests
+{
+    [Theory]
+    [InlineData("/api/init/reset", "/api/init/reset")]
+    [InlineData("/api/init/reset/", "/api/init/reset")]
+    [InlineData("/API/Init/Reset", "/api/init/reset")]
+    [InlineData("//api/init/reset", "/api/init/reset")]
+    [InlineData("/api//init///reset//", "/api/init/reset")]
+    [InlineData("/Login", "/login")]
+    [InlineData("//Login/", "/login")]
+    public void NormalizesToTheRoutedForm(string raw, string expected)
+        => RateLimitPath.Normalize(raw).Should().Be(expected);
+
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData("/", "/")]
+    [InlineData("//", "/")]
+    public void HandlesDegenerateInput(string? raw, string expected)
+        => RateLimitPath.Normalize(raw).Should().Be(expected);
+
+    [Fact]
+    public void DoesNotMergeUnrelatedPaths()
+    {
+        RateLimitPath.Normalize("/api/init/resetx").Should().NotBe("/api/init/reset");
+        RateLimitPath.Normalize("/loginx").Should().NotBe("/login");
+    }
+}

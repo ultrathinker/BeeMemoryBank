@@ -30,6 +30,11 @@ public partial class ArticleService
             throw new InvalidOperationException(
                 "This article has attached media (images or files); remove it before adding password protection.");
 
+        // Lock BEFORE reading the body, not merely before writing it: everything from here to the
+        // final write is one read-modify-write over the article, and a concurrent edit landing in
+        // the middle would be wrapped away or silently overwritten.
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+
         var current = await GetContentAsync(id);
         if (ProtectedContentCodec.IsProtected(current))
             throw new InvalidOperationException("Article body is already protected.");
@@ -41,8 +46,14 @@ public partial class ArticleService
         // crash between the two leaves the article unprotected-but-historyless (safe, retryable) —
         // never protected-with-readable-plaintext-versions. The version endpoint serves any
         // surviving plaintext version without a passphrase, so this gap must not exist.
+        //
+        // Both steps run under ONE write lock. Splitting them let a concurrent append slip in
+        // between: it took the lock inside UpdateAsync, snapshotted the still-plaintext body into
+        // tbl_article_version, and that snapshot outlived the purge that had already run. The
+        // version endpoint serves any surviving plaintext version with no passphrase, so a single
+        // unlucky interleaving defeated the protection entirely.
         await versionRepo.DeleteOldVersionsAsync(id, 0);
-        await UpdateAsync(id, plaintext: wrapped, protectionHint: hint, updateHint: true, suppressVersion: true);
+        await UpdateCoreAsync(id, null, null, null, wrapped, hint, updateHint: true, suppressVersion: true);
     }
 
     /// <summary>Remove protection, restoring a plaintext body. Verifies the passphrase.</summary>
@@ -53,9 +64,12 @@ public partial class ArticleService
         if (!meta.Protected)
             throw new InvalidOperationException("Article is not protected.");
 
+        // Read and write under one lock — see ProtectAsync.
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+
         var wrapped = await GetContentAsync(id);
         var plaintext = ProtectedContentCodec.Unwrap(wrapped, passphrase); // throws on wrong passphrase
-        await UpdateAsync(id, plaintext: plaintext, protectionHint: null, updateHint: true);
+        await UpdateCoreAsync(id, null, null, null, plaintext, null, updateHint: true, suppressVersion: false);
     }
 
     /// <summary>Change the passphrase (and optionally the hint) on a protected article.</summary>
@@ -66,6 +80,9 @@ public partial class ArticleService
         if (!meta.Protected)
             throw new InvalidOperationException("Article is not protected.");
 
+        // Lock before the read — see ProtectAsync.
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+
         var wrapped = await GetContentAsync(id);
         var plaintext = ProtectedContentCodec.Unwrap(wrapped, oldPassphrase); // throws on wrong old passphrase
         var rewrapped = ProtectedContentCodec.Wrap(plaintext, newPassphrase);
@@ -73,8 +90,9 @@ public partial class ArticleService
         // Purge old-passphrase-encrypted versions FIRST, then re-wrap without snapshotting (same
         // crash-safety rationale as ProtectAsync). A surviving old-passphrase version is only a
         // BMBENC1 blob — but it could be brute-forced if the old passphrase was weak, so don't leave it.
+        // One write lock across both steps — see ProtectAsync for the interleaving this closes.
         await versionRepo.DeleteOldVersionsAsync(id, 0);
-        await UpdateAsync(id, plaintext: rewrapped, protectionHint: newHint, updateHint: true, suppressVersion: true);
+        await UpdateCoreAsync(id, null, null, null, rewrapped, newHint, updateHint: true, suppressVersion: true);
     }
 
     /// <summary>
@@ -101,10 +119,14 @@ public partial class ArticleService
         if (!meta.Protected)
             throw new InvalidOperationException("Article is not protected.");
 
+        // Verify-then-write is a read-modify-write like the rest of this file; one lock over both,
+        // or the passphrase could be verified against a body that is gone by the time we write.
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+
         var currentWrapped = await GetContentAsync(id);
         ProtectedContentCodec.Unwrap(currentWrapped, passphrase); // verify passphrase; throws if wrong
 
         var rewrapped = ProtectedContentCodec.Wrap(newPlaintext, passphrase);
-        await UpdateAsync(id, plaintext: rewrapped);
+        await UpdateCoreAsync(id, null, null, null, rewrapped, null, updateHint: false, suppressVersion: false);
     }
 }

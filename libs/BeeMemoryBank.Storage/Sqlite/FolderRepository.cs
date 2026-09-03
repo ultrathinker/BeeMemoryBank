@@ -286,12 +286,20 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         // recursion below re-enters through EnsureExistsCoreAsync, not here, precisely so those
         // stubs stay creatable. System-scope callers (sync's EventApplier, the startup
         // FolderBootstrapper, background workers with no HttpContext) pass by construction.
+        ThrowIfWriteDenied(path);
+
+        await EnsureExistsCoreAsync(path, sourceNodeId);
+    }
+
+    public Task EnsureAncestorsExistAsync(string path, Guid? sourceNodeId)
+        => EnsureExistsCoreAsync(path, sourceNodeId);
+
+    public void ThrowIfWriteDenied(string? path)
+    {
         if (_holder.Scope.IsAccessDenied(path))
             throw new UnauthorizedAccessException($"Write access denied for path '{path}'");
         if (_holder.Scope.IsReadOnly(path))
             throw new ReadOnlyAccessException(path);
-
-        await EnsureExistsCoreAsync(path, sourceNodeId);
     }
 
     private async Task EnsureExistsCoreAsync(string path, Guid? sourceNodeId)

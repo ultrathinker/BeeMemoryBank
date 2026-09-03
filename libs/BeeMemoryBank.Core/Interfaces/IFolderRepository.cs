@@ -23,7 +23,34 @@ public interface IFolderRepository
     /// </summary>
     Task<int> RenamePathAsync(string oldPath, string newPath, Guid folderId,
         long lamportTs, Guid? sourceNodeId, DateTime updatedAt);
-    Task EnsureExistsAsync(string path, Guid? sourceNodeId); // creates if missing (for EventApplier)
+    /// <summary>
+    /// Creates <paramref name="path"/> and any missing ancestors. The LEAF is checked against the
+    /// caller's folder ACL first; ancestors deliberately are not, so an allow-list caller can still
+    /// create /A/B/C when /A and /A/B lie outside their scope.
+    /// </summary>
+    Task EnsureExistsAsync(string path, Guid? sourceNodeId);
+
+    /// <summary>
+    /// Same vivification with NO ACL check at all — for callers whose leaf is a DIFFERENT path
+    /// they authorize themselves, so what they pass here is only ever an ancestor.
+    ///
+    /// <para>
+    /// <see cref="FolderService"/> is the case: it creates folder X and passes X's PARENT here,
+    /// which under <see cref="EnsureExistsAsync"/>'s leaf check would refuse an allow-list user
+    /// permission to create the very folder their allow entry names — /Work/Project would be
+    /// rejected because /Work is outside their scope. Callers of this method MUST check the real
+    /// leaf themselves (see <see cref="ThrowIfWriteDenied"/>) BEFORE calling it; skipping that is
+    /// what let a denied caller litter restricted subtrees with folders in the first place.
+    /// </para>
+    /// </summary>
+    Task EnsureAncestorsExistAsync(string path, Guid? sourceNodeId);
+
+    /// <summary>
+    /// Throws if the current caller may not write at <paramref name="path"/> — the same two checks
+    /// the folder write methods apply, exposed so a service can enforce them BEFORE taking any
+    /// action that persists something.
+    /// </summary>
+    void ThrowIfWriteDenied(string? path);
     Task<List<Folder>> SearchAsync(string query);
     /// <summary>
     /// Pre-WP-07 exact-substring search (per-row <c>unicode_contains</c> scan over name and path,

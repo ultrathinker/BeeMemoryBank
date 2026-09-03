@@ -28,7 +28,12 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var path = context.Request.Path.Value ?? "";
+        // Normalized the same way the Web limiter does, and for the same reason: this list matched
+        // the raw path by equality, so "/api/init/reset/" — which routing happily dispatches to the
+        // same endpoint — was not in the set and skipped the limiter entirely. A throttle keyed on
+        // string equality has to normalize exactly as the router does, or the difference between
+        // the two IS the bypass.
+        var path = RateLimitPath.Normalize(context.Request.Path.Value);
 
         if (context.Request.Method == "POST" && ProtectedPaths.Contains(path))
         {

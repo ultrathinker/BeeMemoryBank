@@ -19,6 +19,27 @@ public static class DekManager
         return (versioned, iv);
     }
 
+    /// <summary>
+    /// Re-wraps a DEK in the LEGACY v0 framing: no version byte, no AAD, exactly
+    /// <see cref="LegacyWrappedDekSize"/> bytes — byte-for-byte the shape
+    /// <see cref="UnwrapDek"/>'s v0 branch expects.
+    ///
+    /// <para>
+    /// Exists solely for DEK rotation, and must not be used to create new rows. Every reader
+    /// decides whether a row is v1 by inspecting the DEK blob (<c>length &gt; 48 &amp;&amp;
+    /// blob[0] == 0x01</c>) and then applies the v1 AAD to BOTH the DEK unwrap and the BODY
+    /// decrypt. So re-wrapping a v0 row with <see cref="WrapDek"/> — which always emits v1 —
+    /// silently relabels it: readers switch to v1 AAD while the body ciphertext is still v0 and
+    /// was sealed with none, and the row becomes permanently undecryptable. Rotation must
+    /// therefore preserve whatever framing a row already had.
+    /// </para>
+    /// </summary>
+    public static (byte[] wrapped, byte[] iv) WrapDekLegacyV0(byte[] articleDek, byte[] masterDek)
+    {
+        // aad: null — v0 rows never had one, and the reader will not supply one either.
+        return AesGcmHelper.Encrypt(masterDek, articleDek, aad: null);
+    }
+
     public static byte[] UnwrapDek(byte[] wrapped, byte[] iv, byte[] masterDek, byte[]? aad = null)
     {
         // Strict length-based dispatch — eliminates ambiguity that previously allowed

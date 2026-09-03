@@ -102,6 +102,46 @@ public class FolderVivificationAclTests : TestFixture
         (await FolderRepo.GetByPathAsync("/Work/Project/Sub/Deeper")).Should().NotBeNull();
     }
 
+    /// <summary>
+    /// The regression the first version of this fix caused, caught in review.
+    ///
+    /// FolderService creates folder X by passing X's PARENT to the vivification call. With the ACL
+    /// check on that call's argument, an allow-list user creating the very folder their allow entry
+    /// names — /Work/Project — was refused, because the argument was /Work, which is outside their
+    /// scope. The check has to be on the folder actually being created.
+    /// </summary>
+    [Fact]
+    public async Task AnAllowListCaller_CanCreateTheFolderTheirAllowEntryNames()
+    {
+        ScopeHolder.Scope = new HttpCallerScope(
+            isSuperadmin: false, denyPaths: Set(), allowPaths: Set("/Work/Project"));
+
+        var created = await FolderService.CreateAsync("/Work/Project");
+        created.Path.Should().Be("/Work/Project");
+
+        ScopeHolder.Scope = SystemCallerScope.Instance;
+        (await FolderRepo.GetByPathAsync("/Work")).Should().NotBeNull("the ancestor is vivified unchecked");
+        (await FolderRepo.GetByPathAsync("/Work/Project")).Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// ...and the security half must still hold on that same path: FolderService authorizes the
+    /// folder being created before any ancestor is written.
+    /// </summary>
+    [Fact]
+    public async Task ADeniedCaller_CannotCreateFoldersThroughFolderService()
+    {
+        ScopeHolder.Scope = new HttpCallerScope(
+            isSuperadmin: false, denyPaths: Set("/Secrets"), allowPaths: Set());
+
+        var act = async () => await FolderService.CreateAsync("/Secrets/Planted");
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        ScopeHolder.Scope = SystemCallerScope.Instance;
+        (await FolderRepo.GetByPathAsync("/Secrets")).Should().BeNull("not even the ancestor may be written");
+        (await FolderRepo.GetByPathAsync("/Secrets/Planted")).Should().BeNull();
+    }
+
     [Fact]
     public async Task SystemScope_IsUnaffected()
     {

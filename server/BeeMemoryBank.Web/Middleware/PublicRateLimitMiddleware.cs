@@ -51,11 +51,20 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
             return;
         }
 
-        var path = context.Request.Path.Value?.TrimEnd('/').ToLowerInvariant() ?? "";
-        var (limiter, label) = path switch
+        var path = RateLimitPath.Normalize(context.Request.Path.Value);
+
+        // /Login carries three handlers, and they are not equally dangerous. The default one signs
+        // in; ?handler=Reset WIPES THE NODE on a correct master password. Matching on path alone
+        // put the node wipe under the sign-in budget — four times the attempts, and any successful
+        // login on the shared address cleared the bucket outright.
+        bool isResetHandler = path == LoginPath &&
+            string.Equals(context.Request.Query["handler"], "Reset", StringComparison.OrdinalIgnoreCase);
+
+        var (limiter, label) = (path, isResetHandler) switch
         {
-            LoginPath => (LoginLimiter, "login"),
-            ResetProxyPath => (ResetLimiter, "node reset"),
+            (LoginPath, true) => (ResetLimiter, "node reset (login handler)"),
+            (LoginPath, false) => (LoginLimiter, "login"),
+            (ResetProxyPath, _) => (ResetLimiter, "node reset"),
             _ => (null, "")
         };
         if (limiter == null)

@@ -1,6 +1,40 @@
 using System.Collections.Concurrent;
+using System.Text;
 
 namespace BeeMemoryBank.Hosting.AspNetCore;
+
+/// <summary>
+/// Path normalization shared by every rate limiter, so all of them match a route the same way the
+/// router does.
+/// </summary>
+public static class RateLimitPath
+{
+    /// <summary>
+    /// Lower-cases, collapses runs of slashes, and drops a trailing slash.
+    ///
+    /// <para>
+    /// A throttle that matches paths by equality has to normalize exactly as routing does, or the
+    /// difference between the two IS the bypass. ASP.NET Core reaches the same endpoint for
+    /// <c>/api/init/reset</c> and <c>/api/init/reset/</c>, and (depending on host and proxy) for
+    /// <c>//login</c> — a limiter comparing raw strings sees different paths and throttles only one
+    /// of them, leaving a node-wiping endpoint wide open behind a one-character change.
+    /// </para>
+    /// </summary>
+    public static string Normalize(string? rawPath)
+    {
+        if (string.IsNullOrEmpty(rawPath)) return "";
+
+        var sb = new StringBuilder(rawPath.Length);
+        foreach (var ch in rawPath)
+        {
+            if (ch == '/' && sb.Length > 0 && sb[^1] == '/') continue;
+            sb.Append(char.ToLowerInvariant(ch));
+        }
+        // A trailing slash carries no meaning for these routes; "/" itself must stay "/".
+        if (sb.Length > 1 && sb[^1] == '/') sb.Length--;
+        return sb.ToString();
+    }
+}
 
 /// <summary>
 /// Per-key sliding-window attempt limiter, shared by the API's <c>RateLimitMiddleware</c> and the

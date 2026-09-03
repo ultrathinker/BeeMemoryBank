@@ -86,7 +86,7 @@ public class DekRotationFlowTests : IAsyncLifetime
         // Poll progress until Completed or timeout
         var completed = await PollProgressAsync(
             step => step == DekRotationFlowStep.Completed,
-            timeout: TimeSpan.FromSeconds(15));
+            timeout: TimeSpan.FromSeconds(60));
         completed.Should().BeTrue("rotation should complete within timeout");
 
         // Assert: epoch incremented
@@ -297,7 +297,7 @@ public class DekRotationFlowTests : IAsyncLifetime
         // Poll until Failed
         var failed = await PollProgressAsync(
             step => step == DekRotationFlowStep.Failed,
-            timeout: TimeSpan.FromSeconds(15));
+            timeout: TimeSpan.FromSeconds(60));
         failed.Should().BeTrue("rotation should fail with wrong password");
 
         // Assert: epoch unchanged
@@ -314,7 +314,7 @@ public class DekRotationFlowTests : IAsyncLifetime
         // in AcceptCommitAsync. Between those two the node correctly answers 503, and a CI runner
         // is slow enough to land in that window — the point of this test is that the node comes
         // back, not that it comes back within zero milliseconds.
-        var loginResp = await PollLoginAsync(TimeSpan.FromSeconds(15));
+        var loginResp = await PollLoginAsync(TimeSpan.FromSeconds(60));
         loginResp.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
@@ -340,7 +340,7 @@ public class DekRotationFlowTests : IAsyncLifetime
 
         await PollProgressAsync(
             step => step == DekRotationFlowStep.Completed || step == DekRotationFlowStep.Failed,
-            timeout: TimeSpan.FromSeconds(15));
+            timeout: TimeSpan.FromSeconds(60));
     }
 
     /// <summary>

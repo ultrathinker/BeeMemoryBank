@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
@@ -21,6 +22,7 @@ public abstract class TestFixture : IAsyncLifetime
     protected KeyManagementService KeyManagement { get; private set; } = null!;
     protected TreeService TreeService { get; private set; } = null!;
     protected IFolderRepository FolderRepo { get; private set; } = null!;
+    protected FolderService FolderService { get; private set; } = null!;
     protected SearchService SearchService { get; private set; } = null!;
     protected CallerScopeHolder ScopeHolder { get; private set; } = null!;
 
@@ -60,6 +62,18 @@ public abstract class TestFixture : IAsyncLifetime
         var userRepoForKeyMgmt = new BeeMemoryBank.Storage.Sqlite.UserRepository(Factory);
         KeyManagement = new KeyManagementService(keySlotRepo, Session, userRepoForKeyMgmt);
         FolderRepo = folderRepo;
+
+        var folderAccess = new FolderAccessService(new ServiceCollection()
+            .AddScoped<IFolderAclRepository>(_ => new FolderAclRepository(Factory))
+            .AddSingleton<IDbConnectionFactory>(_ => Factory)
+            .AddScoped<IRoleRepository>(_ => new RoleRepository(Factory))
+            .AddScoped<IRoleAclRepository>(_ => new RoleAclRepository(Factory))
+            .AddScoped<IFolderRepository>(_ => folderRepo)
+            .AddScoped<IUserRepository>(_ => userRepo)
+            .AddScoped<CallerScopeHolder>(_ => ScopeHolder)
+            .BuildServiceProvider());
+        FolderService = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccess);
+
         TreeService = new TreeService(articleRepo, folderRepo);
         IndexBuilder = new IndexBuilder();
         SearchService = new SearchService(articleRepo, bodyRepo, folderRepo, Session, ScopeHolder, new SearchQueryCache(), IndexBuilder);
