@@ -26,7 +26,7 @@
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.5.1" />
     <PackageVersion Include="Certes" Version="3.0.4" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="Dapper" Version="2.1.66" />
+    <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="DiffPlex" Version="1.9.0" />
     <PackageVersion Include="FluentAssertions" Version="7.0.0" />
     <PackageVersion Include="Indiko.Maui.Controls.Markdown" Version="1.5.0" />
