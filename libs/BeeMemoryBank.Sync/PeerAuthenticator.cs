@@ -36,6 +36,22 @@ public static class PeerAuthenticator
     // SyncEndpoints.cs. Retire the V1 branch (both here and server-side) once the whole mesh has
     // upgraded; until then a not-yet-upgraded peer gets exactly the protection it had before M6
     // (none), which is no worse than today.
+    //
+    // Deprecation/downgrade note (found while closing the remaining M6 hole — see SyncClient's
+    // caller for the fix that made expectedServerNodeId whitelist-sourced instead of self-
+    // reported): V1 fallback is ONLY safe to keep because it only ever triggers for a peer that
+    // never declared an audience at all (see AuthenticateOnceAsync's null-ServerNodeId handling
+    // below) — an UPGRADED peer that declares a wrong audience gets a hard failure with no V1
+    // retry, so an attacker can't force the downgrade merely by answering with a bad node id.
+    // What V1 fallback can still be tricked into, and what whitelist-pinning does NOT fix: if the
+    // peer at this address genuinely doesn't speak V2 yet, an on-path attacker who can prevent us
+    // from ever reaching an upgraded server (or who controls a node that's legitimately still on
+    // V1) still gets the pre-M6 lack of audience binding for that one connection — V1 has no
+    // node-identity field to pin in the first place, so no amount of caller-side trust anchoring
+    // can retrofit it. The only real fix is finishing the mesh-wide upgrade and then deleting the
+    // V1 branch (both here and in SyncEndpoints.cs's /api/sync/authenticate verifier); until then,
+    // treat any peer still answering without ServerNodeId as a known, accepted gap, not a fixed
+    // one.
     private static readonly byte[] DomainTagV2 = "BMB-CHALLENGE-V2\0"u8.ToArray();
     private static readonly byte[] DomainTagV1 = "BMB-CHALLENGE-V1\0"u8.ToArray();
 
@@ -60,10 +76,14 @@ public static class PeerAuthenticator
     /// <param name="baseUrl">Remote node base URL (no trailing slash required).</param>
     /// <param name="identity">This node's identity (NodeId + keys).</param>
     /// <param name="expectedServerNodeId">
-    /// The NodeId we independently believe <paramref name="baseUrl"/> belongs to — e.g. the
-    /// whitelist entry's NodeId for the peer being dialed, or the NodeId a prior
-    /// <c>/api/sync/identity</c> call on this same connection returned. This is the audience
-    /// anchor: we refuse to sign a challenge whose claimed ServerNodeId doesn't match it.
+    /// The NodeId we independently believe <paramref name="baseUrl"/> belongs to. This MUST come
+    /// from a source the peer at <paramref name="baseUrl"/> doesn't control — the whitelist
+    /// entry's NodeId for the peer being dialed (tbl_whitelist, pinned out-of-band when the peer
+    /// was added), never a value read from this same connection (e.g. a prior
+    /// <c>/api/sync/identity</c> call), which a malicious/compromised peer can set to whatever it
+    /// likes. This is the audience anchor: we refuse to sign a challenge whose claimed
+    /// ServerNodeId doesn't match it. See <see cref="SyncClient"/>'s caller for how it resolves
+    /// this from the whitelist rather than trusting the peer's own self-report.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The Bearer token to attach to subsequent peer requests.</returns>
@@ -103,20 +123,43 @@ public static class PeerAuthenticator
         var challengeData = await challengeResp.Content.ReadFromJsonAsync<ChallengeDto>(JsonOpts, ct)
             ?? throw new InvalidDataException("Invalid challenge response.");
 
-        // Audience check (M6): refuse to sign a challenge issued for a DIFFERENT node than the one
-        // we intended to dial. This is what actually stops the relay attack described above — the
-        // server-side signature verification alone isn't enough, because a peer that honestly
-        // relays a foreign ServerNodeId (rather than lying about it) would otherwise get us to
-        // embed that foreign node's id ourselves, producing a signature that's perfectly valid
-        // there. Not a substitute for the server-side check (SyncEndpoints.cs verifies against ITS
-        // OWN recorded identity, not anything the caller claims) — the two are complementary: this
-        // one stops us from signing for the wrong audience in the first place; that one stops a
-        // signature from being redeemable anywhere but the node it was actually bound to.
-        if (challengeData.ServerNodeId != expectedServerNodeId)
-            throw new InvalidOperationException(
-                $"Challenge audience mismatch from {baseUrl}: expected node {expectedServerNodeId}, got " +
-                $"{challengeData.ServerNodeId}. Refusing to sign — this looks like a relayed/foreign " +
-                "challenge (possible MITM).");
+        if (bindAudience)
+        {
+            // Audience check (M6): refuse to sign a challenge issued for a DIFFERENT node than the
+            // one we intended to dial. This is what actually stops the relay attack described
+            // above — the server-side signature verification alone isn't enough, because a peer
+            // that honestly relays a foreign ServerNodeId (rather than lying about it) would
+            // otherwise get us to embed that foreign node's id ourselves, producing a signature
+            // that's perfectly valid there. Not a substitute for the server-side check
+            // (SyncEndpoints.cs verifies against ITS OWN recorded identity, not anything the
+            // caller claims) — the two are complementary: this one stops us from signing for the
+            // wrong audience in the first place; that one stops a signature from being redeemable
+            // anywhere but the node it was actually bound to.
+            //
+            // ChallengeDto.ServerNodeId is null exactly when the peer hasn't upgraded past M6 at
+            // all — its /api/sync/challenge still returns the pre-M6 one-field shape, so the
+            // property is simply absent from the JSON and deserializes to null. That peer never
+            // declared an audience to check in the first place, so there is nothing to compare —
+            // treat it the same as the "peer 401'd our V2 signature" case below (return
+            // Unauthorized=true) so AuthenticateAsync's existing retry falls back to the unbound
+            // V1 tag, exactly the (lack of) protection this peer had before M6 existed.
+            //
+            // A NON-null but WRONG ServerNodeId is a different and much more serious case: this
+            // peer HAS upgraded and DID declare an audience, and it's the wrong one. That is a
+            // hard failure with NO fallback to V1 — falling back here would hand an attacker a
+            // trivial downgrade (answer with any mismatched-but-non-null node id and get the exact
+            // "no audience binding at all" protection level a genuinely unupgraded peer gets for
+            // free), which would make keeping V1 around strictly worse than not offering it.
+            if (challengeData.ServerNodeId is not { } actualServerNodeId)
+                return (null, true);
+
+            if (actualServerNodeId != expectedServerNodeId)
+                throw new InvalidOperationException(
+                    $"Challenge audience mismatch from {baseUrl}: expected node {expectedServerNodeId}, " +
+                    $"got {actualServerNodeId}. Refusing to sign — this looks like a relayed/foreign " +
+                    "challenge (possible MITM), not a not-yet-upgraded peer (which would omit " +
+                    "ServerNodeId entirely) — not falling back to the unbound V1 tag for this.");
+        }
 
         var challengeBytes = Convert.FromBase64String(challengeData.Challenge);
         // Signing is delegated to INodeAuthSigner: the default derives the key via the master
@@ -146,6 +189,10 @@ public static class PeerAuthenticator
         return (authData.Token, false);
     }
 
-    private sealed record ChallengeDto(string Challenge, Guid ServerNodeId);
+    // ServerNodeId is nullable specifically so "the peer's JSON omitted the field" (not-yet-
+    // upgraded peer) is unambiguously distinguishable from "the peer declared Guid.Empty" (which
+    // System.Text.Json would otherwise produce for a missing non-nullable Guid property, making it
+    // indistinguishable from a value a hostile peer could also just... send).
+    private sealed record ChallengeDto(string Challenge, Guid? ServerNodeId);
     private sealed record AuthTokenDto(string Token);
 }

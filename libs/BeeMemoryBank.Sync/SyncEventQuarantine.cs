@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using BeeMemoryBank.Core.Interfaces;
 
 namespace BeeMemoryBank.Sync;
 
@@ -27,14 +27,19 @@ namespace BeeMemoryBank.Sync;
 /// </para>
 ///
 /// <para>
-/// Static and in-memory rather than DB-backed or DI-registered, for the same reason
-/// <see cref="BeeMemoryBank.Core.Services.ArticleWriteLock"/> is static: a lightweight, process-wide
-/// tracker needs neither a schema migration nor a DI registration to be useful here, and
-/// <see cref="SyncClient"/> is constructed per sync-scope (<c>AddScoped</c>), so any per-instance
-/// state would reset every cycle and never accumulate a streak. The tradeoff is that the streak
-/// (and the quarantine itself) resets on process restart — acceptable, since a genuinely broken
-/// event re-accumulates failures within a handful of cycles, and a restart is already a reasonable
-/// point to give a fix (or an admin's manual event-log edit) another chance.
+/// M5 follow-up: this USED to be a static, purely in-memory <c>ConcurrentDictionary</c> (see git
+/// history) for the same reason <see cref="BeeMemoryBank.Core.Services.ArticleWriteLock"/> is
+/// static — a lightweight tracker needing neither a migration nor DI registration. That tradeoff
+/// turned out to be wrong in practice: a node restart forgot every recorded failure, so a
+/// permanently-bad event that had just been quarantined started blocking the pull loop again on
+/// the very next cycle after the restart — and a stuck sync is exactly the situation most likely
+/// to make an operator reach for a restart. It is now backed by
+/// <see cref="ISyncQuarantineRepository"/> (durable, survives restart) instead of the dictionary.
+/// The class stays a static, stateless helper taking its dependency as a parameter — the same
+/// shape <see cref="PeerAuthenticator"/> already uses for exactly this reason (see its own remarks)
+/// — rather than becoming a DI-registered instance service, since every caller already has (or can
+/// trivially obtain via DI) an <see cref="ISyncQuarantineRepository"/> to pass in, and the
+/// threshold-comparison logic here doesn't need any instance state of its own.
 /// </para>
 ///
 /// <para>
@@ -58,76 +63,40 @@ public static class SyncEventQuarantine
         string LastError,
         bool Quarantined);
 
-    private sealed class MutableEntry
-    {
-        public required string EventType;
-        public required Guid OriginNodeId;
-        public int FailureCount;
-        public DateTime FirstFailedAtUtc;
-        public DateTime LastFailedAtUtc;
-        public required string LastError;
-    }
-
-    private static readonly ConcurrentDictionary<Guid, MutableEntry> Failures = new();
-
     /// <summary>
     /// Records one failed apply attempt for <paramref name="eventId"/>. Returns true once this
     /// event has now failed <see cref="QuarantineThreshold"/> times in a row and should be skipped
     /// rather than retried; false if the caller should keep the existing "stop and retry next
     /// cycle" behavior.
     /// </summary>
-    public static bool RecordFailure(Guid eventId, string eventType, Guid originNodeId, string error)
+    public static async Task<bool> RecordFailureAsync(
+        ISyncQuarantineRepository repo, Guid eventId, string eventType, Guid originNodeId, string error)
     {
-        var now = DateTime.UtcNow;
-        var entry = Failures.AddOrUpdate(
-            eventId,
-            _ => new MutableEntry
-            {
-                EventType = eventType,
-                OriginNodeId = originNodeId,
-                FailureCount = 1,
-                FirstFailedAtUtc = now,
-                LastFailedAtUtc = now,
-                LastError = error
-            },
-            (_, existing) =>
-            {
-                lock (existing)
-                {
-                    existing.FailureCount++;
-                    existing.LastFailedAtUtc = now;
-                    existing.LastError = error;
-                    return existing;
-                }
-            });
-
-        lock (entry)
-        {
-            return entry.FailureCount >= QuarantineThreshold;
-        }
+        var entry = await repo.RecordFailureAsync(eventId, eventType, originNodeId, error);
+        return entry.FailureCount >= QuarantineThreshold;
     }
 
-    /// <summary>Clears any tracked failures for an event that just applied successfully.</summary>
-    public static void ClearFailure(Guid eventId) => Failures.TryRemove(eventId, out _);
+    /// <summary>
+    /// Clears any tracked failures for an event — automatically, once it applies successfully, or
+    /// via an operator-triggered "clear / retry" action (<c>DELETE /api/sync/quarantine/{eventId}</c>
+    /// in SyncEndpoints.cs) once the underlying cause has been fixed. Resets the failure streak to
+    /// zero; it does NOT by itself force the event to be re-delivered — see the endpoint's own
+    /// comment for that caveat.
+    /// </summary>
+    public static Task ClearFailureAsync(ISyncQuarantineRepository repo, Guid eventId) => repo.ClearAsync(eventId);
 
     /// <summary>
     /// Every event with at least one recorded failure, most-failed first — surfaced via
     /// <c>GET /api/sync/quarantine</c> so an operator has somewhere to look beyond log lines.
     /// </summary>
-    public static List<Entry> ListAll()
+    public static async Task<List<Entry>> ListAllAsync(ISyncQuarantineRepository repo)
     {
-        return Failures
-            .Select(kvp =>
-            {
-                var e = kvp.Value;
-                lock (e)
-                {
-                    return new Entry(
-                        kvp.Key, e.EventType, e.OriginNodeId, e.FailureCount,
-                        e.FirstFailedAtUtc, e.LastFailedAtUtc, e.LastError,
-                        e.FailureCount >= QuarantineThreshold);
-                }
-            })
+        var rows = await repo.GetAllAsync();
+        return rows
+            .Select(e => new Entry(
+                e.EventId, e.EventType, e.OriginNodeId, e.FailureCount,
+                e.FirstFailedAtUtc, e.LastFailedAtUtc, e.LastError,
+                e.FailureCount >= QuarantineThreshold))
             .OrderByDescending(e => e.FailureCount)
             .ToList();
     }

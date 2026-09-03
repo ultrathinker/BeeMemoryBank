@@ -537,10 +537,39 @@ public static class SyncEndpoints
         // whole pull loop behind it every cycle, forever, with nothing beyond a repeating log line
         // to notice it by. Internal-key-gated like the other diagnostic endpoints above (exposes
         // node/event topology, not sensitive content — event payloads aren't included).
-        app.MapGet("/api/sync/quarantine", () =>
+        //
+        // M5 follow-up: reads through ISyncQuarantineRepository now (persisted), not the static
+        // in-memory dictionary this used to be — see SyncEventQuarantine's updated doc comment for
+        // why that was a real gap (a restart re-opened a stall it looked like it had just fixed).
+        app.MapGet("/api/sync/quarantine", async (ISyncQuarantineRepository quarantineRepo) =>
         {
-            var entries = SyncEventQuarantine.ListAll();
+            var entries = await SyncEventQuarantine.ListAllAsync(quarantineRepo);
             return Results.Ok(entries);
+        }).RequireInternalKey().WithTags("Sync");
+
+        // ─── Clear / retry a quarantined event (M5 follow-up: operator-triggered) ────
+        // Deletes the tracking row so the event's failure streak starts fresh (FailureCount back
+        // to 0) — the same state transition ClearFailureAsync already performs automatically the
+        // moment an event applies/pushes cleanly (SyncClient.cs), just triggered by an operator
+        // instead of by success. Exists specifically so fixing the underlying cause (bad
+        // signature, a peer's cap mismatch, whatever LastError pointed at) doesn't also require
+        // editing the database by hand to give the event a fresh chance.
+        //
+        // IMPORTANT caveat, spelled out here because it's easy to assume this endpoint does more
+        // than it does: clearing resets visibility/counters but does NOT itself force redelivery.
+        // The pull/push cursor that skipped past this event when it was originally quarantined
+        // (SyncClient.cs's lastApplied/pushAfter "advance past a quarantined event" logic) is left
+        // untouched, so whether the event actually gets a chance to re-apply depends on it being
+        // redelivered some other way — e.g. gossip relay from a different peer at a different
+        // local sequence number, or a future rejoin/resnapshot. There is no general "rewind this
+        // peer's position and re-fetch" tool today; building one is a materially bigger feature
+        // (deciding which peer/sequence to rewind to, and re-validating everything applied after
+        // that point) that's out of scope here — this endpoint only ever needed to stop requiring
+        // manual DB surgery for the tracking row itself.
+        app.MapDelete("/api/sync/quarantine/{eventId:guid}", async (Guid eventId, ISyncQuarantineRepository quarantineRepo) =>
+        {
+            await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, eventId);
+            return Results.NoContent();
         }).RequireInternalKey().WithTags("Sync");
 
         // ─── Reachability self-test: probe (local wizard call, internal-key-gated) ──

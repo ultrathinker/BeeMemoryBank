@@ -24,6 +24,13 @@ public static class DependencyInjection
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
 
+        // M5: registered here (Sync's own DI) rather than Storage's AddStorage(), unlike the other
+        // repositories this project consumes — this one is Sync-specific (only ever consumed by
+        // SyncEventQuarantine/SyncClient and the GET+DELETE /api/sync/quarantine endpoints), so it
+        // stays colocated with its only consumer, the same way EventLogger/EventApplier/SyncClient
+        // themselves are registered here rather than in Storage.
+        services.AddScoped<Core.Interfaces.ISyncQuarantineRepository, BeeMemoryBank.Storage.Sqlite.SyncQuarantineRepository>();
+
         // WP-11: the search index lifecycle. IndexBuilder and SearchIndexRuntimeState are process-
         // lifetime singletons (the in-memory index itself, and the internal-segment-id -> persisted
         // Guid map / rebuild coordination lock must survive across PendingIndexProcessor's per-cycle
