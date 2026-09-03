@@ -20,7 +20,8 @@ namespace BeeMemoryBank.Api.Services;
 /// <see cref="CreateAsync"/> now encrypts it under the master DEK (AES-256-GCM) before the row is
 /// written; every read method decrypts it back, so callers only ever see plaintext bytes. A NULL
 /// <c>iv</c> column means a legacy row written before this fix — its <c>blob</c> is read as-is
-/// (backward compat, not retroactively re-encrypted, mirroring ChatMessageRepository).</para>
+/// (backward compat, not retroactively re-encrypted by this repository on its own — see
+/// <see cref="BackfillLegacyPlaintextBatchAsync"/> for the one-time migration off of that path).</para>
 /// </summary>
 public sealed class ChatAttachmentRepository(ChatDbConnectionFactory factory) : ChatRepositoryBase(factory)
 {
@@ -112,5 +113,58 @@ public sealed class ChatAttachmentRepository(ChatDbConnectionFactory factory) : 
         {
             Array.Clear(masterDek);
         }
+    }
+
+    /// <summary>
+    /// H3a fix: one-time backfill for attachment blobs written before the H3 encryption fix
+    /// (<c>iv IS NULL</c>). Mirrors <c>ChatMessageRepository.BackfillLegacyPlaintextBatchAsync</c>
+    /// — see that method's doc comment for the crash-safety/idempotency/fresh-node-cost reasoning,
+    /// which applies identically here. Returns the number of rows touched (0 = nothing left to
+    /// backfill; a node that has never had a plaintext attachment pays only the empty SELECT).
+    /// </summary>
+    public async Task<int> BackfillLegacyPlaintextBatchAsync(int batchSize, SessionService session, CancellationToken ct)
+    {
+        using var conn = OpenConnection();
+        var legacyRows = (await conn.QueryAsync<LegacyAttachmentRow>(
+            @"SELECT id AS Id, blob AS Blob FROM chat_attachment
+              WHERE iv IS NULL AND blob IS NOT NULL AND length(blob) > 0
+              LIMIT @batchSize",
+            new { batchSize })).ToList();
+
+        if (legacyRows.Count == 0)
+            return 0;
+
+        var masterDek = session.GetMasterDek();
+        try
+        {
+            foreach (var row in legacyRows)
+            {
+                if (ct.IsCancellationRequested) break;
+
+                var (ciphertext, iv) = MediaEncryptor.Encrypt(row.Blob!, masterDek, BlobAad);
+
+                // "AND iv IS NULL" repeats the SELECT's guard on the UPDATE itself: belt-and-braces
+                // idempotency in case a concurrent run ever raced past ChatHistoryBackfillProcessor's
+                // single-flight lock — a second write for an already-migrated row becomes a no-op
+                // instead of re-encrypting (with a fresh random IV) and discarding the original,
+                // already-correct ciphertext.
+                await conn.ExecuteAsync(
+                    "UPDATE chat_attachment SET blob = @Ciphertext, iv = @Iv WHERE id = @Id AND iv IS NULL",
+                    new { row.Id, Ciphertext = ciphertext, Iv = iv });
+            }
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+
+        return legacyRows.Count;
+    }
+
+    /// <summary>Row shape for <see cref="BackfillLegacyPlaintextBatchAsync"/>'s scan query.</summary>
+    private sealed class LegacyAttachmentRow
+    {
+        public Guid Id { get; set; }
+        public byte[]? Blob { get; set; }
     }
 }

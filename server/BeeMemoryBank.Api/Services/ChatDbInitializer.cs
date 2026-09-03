@@ -78,11 +78,41 @@ public sealed class ChatDbInitializer
             "ALTER TABLE chat_message ADD COLUMN content_ciphertext BLOB");
         await EnsureColumnAsync(conn, "chat_message", "content_iv",
             "ALTER TABLE chat_message ADD COLUMN content_iv BLOB");
+        // H3b fix: tool_calls_json was left out of the original H3 fix even though it carries the
+        // same class of decrypted vault content (a WRITE tool's arguments ARE the article body
+        // being saved) — see ChatMessageRepository's class remarks. Same shape as content_text's
+        // pair above: new rows encrypt into these two columns and leave tool_calls_json NULL;
+        // ChatMessageRepository reads tool_calls_ciphertext when present and falls back to legacy
+        // plaintext tool_calls_json otherwise.
+        await EnsureColumnAsync(conn, "chat_message", "tool_calls_ciphertext",
+            "ALTER TABLE chat_message ADD COLUMN tool_calls_ciphertext BLOB");
+        await EnsureColumnAsync(conn, "chat_message", "tool_calls_iv",
+            "ALTER TABLE chat_message ADD COLUMN tool_calls_iv BLOB");
         // H3 fix: chat_attachment.blob used to hold raw image bytes unencrypted. New rows encrypt
         // the blob under the master DEK and record the IV here; NULL iv (legacy rows) means the
         // blob column still holds plaintext bytes, read as-is for backward compatibility.
         await EnsureColumnAsync(conn, "chat_attachment", "iv",
             "ALTER TABLE chat_attachment ADD COLUMN iv BLOB");
+
+        // H3a fix: partial indexes backing ChatMessageRepository/ChatAttachmentRepository's
+        // BackfillLegacyPlaintextBatchAsync scans. Each index only contains rows still needing
+        // migration (its WHERE clause mirrors the "still plaintext" side of the backfill query),
+        // so it self-shrinks to empty as rows get migrated and stays empty forever after — a node
+        // that has never had a plaintext row (or has finished backfilling) pays an empty-index
+        // lookup per scan, never a full table scan, regardless of how large chat.db grows.
+        // CREATE INDEX IF NOT EXISTS is unconditionally idempotent (unlike ALTER TABLE ADD COLUMN),
+        // so these run every startup with no existence check needed.
+        foreach (var indexDdl in new[]
+        {
+            "CREATE INDEX IF NOT EXISTS idx_chat_message_legacy_content ON chat_message(id) WHERE content_ciphertext IS NULL AND content_text IS NOT NULL AND content_text != ''",
+            "CREATE INDEX IF NOT EXISTS idx_chat_message_legacy_toolcalls ON chat_message(id) WHERE tool_calls_ciphertext IS NULL AND tool_calls_json IS NOT NULL AND tool_calls_json != ''",
+            "CREATE INDEX IF NOT EXISTS idx_chat_attachment_legacy_blob ON chat_attachment(id) WHERE iv IS NULL AND blob IS NOT NULL"
+        })
+        {
+            await using var indexCmd = conn.CreateCommand();
+            indexCmd.CommandText = indexDdl;
+            await indexCmd.ExecuteNonQueryAsync();
+        }
 
         _logger.LogInformation("chat.db schema initialized");
     }
@@ -129,23 +159,28 @@ public sealed class ChatDbInitializer
         """,
         """
         CREATE TABLE IF NOT EXISTS chat_message (
-            id                 TEXT PRIMARY KEY,
-            conversation_id    TEXT NOT NULL,
-            role               TEXT NOT NULL,
-            -- content_text is legacy plaintext, kept for backward-compat reads of rows written
-            -- before the H3 encryption fix. New rows leave it NULL and populate the two columns
-            -- below instead (AES-256-GCM under the master DEK) — see ChatMessageRepository.
-            content_text       TEXT,
-            content_ciphertext BLOB,
-            content_iv         BLOB,
-            tool_calls_json    TEXT,
-            tool_call_id       TEXT,
-            model              TEXT,
-            tokens_in          INTEGER,
-            tokens_out         INTEGER,
-            tool_calls_count   INTEGER,
-            duration_ms        INTEGER,
-            created_at         TEXT NOT NULL
+            id                    TEXT PRIMARY KEY,
+            conversation_id       TEXT NOT NULL,
+            role                  TEXT NOT NULL,
+            -- content_text/tool_calls_json are legacy plaintext, kept for backward-compat reads of
+            -- rows written before the H3/H3b encryption fixes. New rows leave them NULL and
+            -- populate the ciphertext/iv column pairs below instead (AES-256-GCM under the master
+            -- DEK, one independent AAD-bound pair per column) — see ChatMessageRepository. A fresh
+            -- database created after both fixes shipped gets these columns here directly and never
+            -- needs the additive ALTER path below.
+            content_text          TEXT,
+            content_ciphertext    BLOB,
+            content_iv            BLOB,
+            tool_calls_json       TEXT,
+            tool_calls_ciphertext BLOB,
+            tool_calls_iv         BLOB,
+            tool_call_id          TEXT,
+            model                 TEXT,
+            tokens_in             INTEGER,
+            tokens_out            INTEGER,
+            tool_calls_count      INTEGER,
+            duration_ms           INTEGER,
+            created_at            TEXT NOT NULL
         );
         """,
         """

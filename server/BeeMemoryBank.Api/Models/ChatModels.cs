@@ -136,7 +136,19 @@ public class ChatMessage
     /// DEK). Populated by Dapper on read; never set directly by application code.</summary>
     public byte[]? ContentCiphertext { get; set; }
     public byte[]? ContentIv { get; set; }
+    // H3b fix: ToolCallsJson carries the assistant's raw tool-call arguments, which for any WRITE
+    // tool (bee_save_article, bee_update_article, bee_append_to_article, bee_replace_in_article)
+    // ARE decrypted vault content -- the exact gap the original H3 fix (ContentText only) missed.
+    // Same in/out contract as ContentText: plaintext going IN to CreateAsync (encrypted into
+    // ToolCallsCiphertext/ToolCallsIv before the row is written), already-decrypted coming OUT of
+    // ListByConversationAsync.
     public string? ToolCallsJson { get; set; }
+    /// <summary>On-disk ciphertext for <see cref="ToolCallsJson"/> (AES-256-GCM under the master
+    /// DEK, its OWN AAD distinct from <see cref="ContentCiphertext"/>'s -- see
+    /// ChatMessageRepository.ToolCallsAad -- so a ciphertext cannot be swapped between the two
+    /// columns). Populated by Dapper on read; never set directly by application code.</summary>
+    public byte[]? ToolCallsCiphertext { get; set; }
+    public byte[]? ToolCallsIv { get; set; }
     public string? ToolCallId { get; set; }
     public string? Model { get; set; }
     public int? TokensIn { get; set; }
