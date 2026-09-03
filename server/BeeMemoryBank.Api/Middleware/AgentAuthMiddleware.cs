@@ -41,7 +41,7 @@ namespace BeeMemoryBank.Api.Middleware;
 /// unlock the vault through the web UI, so their agent doing it too is not a new capability; an
 /// ordinary user cannot (SessionEndpoints' login returns 403 "Server is locked" for them), so
 /// giving their agent that power was a bug, not a feature. See Agent.CanAutoUnlock and migration
-/// 013_agent_dek_optional.sql (which strips wrapped DEKs from every pre-existing non-superadmin
+/// 014_agent_dek_optional.sql (which strips wrapped DEKs from every pre-existing non-superadmin
 /// agent). An agent without one simply skips the unlock attempt below — the vault stays exactly
 /// as locked or unlocked as it already was, and a subsequent tool call that needs decrypted
 /// content fails the ordinary "vault is locked" way (McpSessionGuardMiddleware /
@@ -166,7 +166,7 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                     // H6 hybrid model: only an agent that actually carries wrapped key material
                     // (owner was a superadmin at creation time — see AgentEndpoints/AgentCommand)
                     // is even attempted here. An ordinary user's agent has agent.CanAutoUnlock ==
-                    // false (EncryptedDek/DekIV are null — see migration 013 for pre-existing
+                    // false (EncryptedDek/DekIV are null — see migration 014 for pre-existing
                     // rows), so this whole block is skipped for it: the session simply stays
                     // however it already was. That is not a silent failure — a request that then
                     // needs decrypted content still hits the same "locked" errors a human's

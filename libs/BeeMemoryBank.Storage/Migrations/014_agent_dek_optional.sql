@@ -36,7 +36,7 @@
 -- tbl_role_folder_acl_entry comment, and see MigrationRunner's needsFkOff handling of
 -- RENAME TO / DROP TABLE, which this migration relies on).
 
-ALTER TABLE tbl_agent RENAME TO tbl_agent_pre013;
+ALTER TABLE tbl_agent RENAME TO tbl_agent_pre014;
 
 CREATE TABLE tbl_agent (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +70,7 @@ SELECT
     CASE WHEN u.role = 'superadmin' THEN a.kdf_version    ELSE 0    END,
     CASE WHEN u.role = 'superadmin' THEN a.salt           ELSE NULL END,
     a.status, a.created_at, a.last_accessed_at, a.request_count, a.owner_user_id
-FROM tbl_agent_pre013 a
+FROM tbl_agent_pre014 a
 LEFT JOIN tbl_user u ON u.id = a.owner_user_id;
 
-DROP TABLE tbl_agent_pre013;
+DROP TABLE tbl_agent_pre014;

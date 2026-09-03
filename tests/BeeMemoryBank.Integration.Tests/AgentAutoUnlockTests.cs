@@ -78,7 +78,7 @@ public class AgentAutoUnlockTests : IAsyncLifetime
     }
 
     /// <summary>An agent with NO wrapped DEK — the shape AgentEndpoints now produces for a
-    /// non-superadmin owner, and what migration 013 leaves behind for a pre-existing one.</summary>
+    /// non-superadmin owner, and what migration 014 leaves behind for a pre-existing one.</summary>
     private async Task<string> CreateUnwrappedAgentAsync(int ownerId, string name = "unwrapped-agent")
     {
         var apiKey = AgentKeyHelper.GenerateApiKey();

@@ -22,7 +22,7 @@ public class Agent
     /// ordinary user's agent gets null here: it authenticates and works exactly as before
     /// whenever the vault is already unlocked, it just can't unlock it, and a stolen database
     /// file yields nothing from its row alone. See <see cref="CanAutoUnlock"/>,
-    /// AgentAuthMiddleware, and migration 013_agent_dek_optional.sql (which strips this from
+    /// AgentAuthMiddleware, and migration 014_agent_dek_optional.sql (which strips this from
     /// every pre-existing non-superadmin agent).
     /// </summary>
     public byte[]? EncryptedDek { get; set; }

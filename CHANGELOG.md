@@ -66,7 +66,7 @@ ordinal comparison downstream.
   not keep a key that can still unlock the vault. Promoting a user does NOT retroactively wrap
   their pre-existing agents' keys: that would need the plaintext API key, which is shown only once
   at creation and is not recoverable from `key_hash`; only a newly created agent gets wrapped.
-  Migration `013_agent_dek_optional.sql` clears the wrapped DEK from every existing agent row
+  Migration `014_agent_dek_optional.sql` clears the wrapped DEK from every existing agent row
   whose owner isn't a superadmin (irreversible, for the same reason) and relaxes
   `encrypted_dek`/`dek_iv` to nullable. The Admin and Profile agent tables now show whether each
   key can wake a locked node.

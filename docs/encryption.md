@@ -120,7 +120,7 @@ so their agent doing it too adds no capability an attacker didn't already have b
 that person. Every other owner gets `NULL` in all three columns: `Agent.CanAutoUnlock` is false,
 `AgentAuthMiddleware` never attempts to decrypt anything for that row, and the key authenticates
 exactly as before — it just can't unlock a locked vault, and a stolen copy of the database file
-yields nothing usable from its row alone. Migration `013_agent_dek_optional.sql` retroactively
+yields nothing usable from its row alone. Migration `014_agent_dek_optional.sql` retroactively
 clears these three columns (and resets `kdf_version` to 0) for every pre-existing agent whose
 owner isn't a superadmin; this is irreversible (there is no way to re-wrap without the plaintext
 API key, which is shown only once at creation). Demoting a superadmin

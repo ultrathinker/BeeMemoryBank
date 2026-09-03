@@ -101,13 +101,13 @@ public class MigrationTests : IAsyncLifetime
         slotTypes.Should().Contain("user", "only recovery slots are unsafe — password/user slots must survive untouched");
     }
 
-    // Regression test for finding H6 / migration 013: before this fix, EVERY agent row wrapped
+    // Regression test for finding H6 / migration 014: before this fix, EVERY agent row wrapped
     // the master DEK regardless of owner, making an ordinary user's self-service agent key
     // cryptographically a key to the whole vault. This simulates a pre-fix database that already
     // has agents belonging to both a superadmin and a non-superadmin owner, then re-applies the
     // migration exactly as an upgrading production node would.
     [Fact]
-    public async Task Migration013_ClearsWrappedDekForNonSuperadminAgents_ButLeavesSuperadminAgentsAlone()
+    public async Task Migration014_ClearsWrappedDekForNonSuperadminAgents_ButLeavesSuperadminAgentsAlone()
     {
         int superadminId, regularUserId, deactivatedUserId;
         int superadminAgentId, regularAgentId, deactivatedOwnerAgentId;
@@ -152,9 +152,9 @@ public class MigrationTests : IAsyncLifetime
                   SELECT last_insert_rowid();",
                 new { dek = new byte[] { 19, 20, 21 }, iv = new byte[] { 22, 23, 24 }, salt = new byte[] { 25, 26, 27 }, now, ownerId = deactivatedUserId });
 
-            // Force migration 013 to be re-applied on top of this pre-fix data, simulating an
+            // Force migration 014 to be re-applied on top of this pre-fix data, simulating an
             // upgrading production node.
-            await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 13");
+            await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 14");
         }
 
         await _runner.RunMigrationsAsync();
