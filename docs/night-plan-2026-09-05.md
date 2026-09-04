@@ -160,10 +160,23 @@ test fail, restore the fix, watch it pass — and to say so plainly if a test pa
 - ACL-drift guardrail across the sync path and the remote-subscription path (above).
 - `WhitelistRevokeBackfill` is dead code: its own docstring says it runs on every startup, but
   nothing in the tree constructs or calls it.
-- `tests/BeeMemoryBank.Integration.Tests` has real, reproducible parallelism flakiness — three runs
-  produced three different victims, all in the snapshot / restore / DEK-rotation family, which share
-  the process-wide `SessionService.IsUnlocked` flag. It is missing isolation, not bad luck; an xUnit
-  collection fixes it.
+- `tests/BeeMemoryBank.Integration.Tests` is intermittently flaky and the cause is **not yet
+  established**. Across five runs, two produced failures and three were clean; the failing tests
+  differed each time (`SnapshotRestoreSessionTests`, then `SnapshotRoundTripTests` plus
+  `DekRotationFlowTests`), and each passed in isolation immediately afterwards.
+
+  Two hypotheses were raised here and **both were checked and are wrong**, recorded so nobody spends
+  the time again: (1) a shared process-wide session flag — `SessionService` holds no static state,
+  every test class gets its own instance; (2) the static ACL cache in `FolderAccessService` leaking
+  between test classes — its keys are already namespaced by `DatabaseId`, with a comment saying why.
+  The classes that did fail are also already inside `HeavyOperationCollection`, so they are serialized
+  against each other and against compaction/restore/rotation.
+
+  A diagnostic full run captured for this purpose came back clean, so there is still no failure
+  message to work from. The next person to see it should capture the assertion text before changing
+  anything — the remaining suspects are other static state (`ArticleWriteLock.Locks`,
+  `LegacyPasswordSlotMigrationService`'s static semaphore) and shared on-disk paths, but that is a
+  list of suspects, not a diagnosis.
 - Items 2 and 3 (deploy, backup-restore drill) need a human present.
 - Whether the sync-only principle should eventually absorb remote subscriptions is an open product
   question, not a bug. It would mean removing the ability to mirror a vault you have not joined.
