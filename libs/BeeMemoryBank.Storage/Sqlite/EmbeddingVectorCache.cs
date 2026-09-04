@@ -151,15 +151,29 @@ public sealed class EmbeddingVectorCache
                 return;
             }
 
-            // Read the generation BEFORE building the patch, not after: if an unrelated Invalidate()
-            // races in while the patch below is being built (e.g. MarkAllEmbeddingsPendingUnscopedAsync's
-            // matrix-recovery invalidation, which means "every row is suspect", not just this one),
-            // tagging the patched snapshot with the value captured HERE -- not a fresher one read
-            // just before publish -- makes the next GetOrRebuild's generation compare correctly treat
-            // this patch as stale and fall back to a full rebuild. Never re-read _generation right
-            // before publishing: that would silently swallow a concurrent "invalidate everything"
-            // signal a single-row patch cannot possibly satisfy on its own.
             long gen = Interlocked.Read(ref _generation);
+
+            // Patch ONLY a snapshot that is still current. If an Invalidate() has already landed —
+            // at any point since this snapshot was published, not merely while this method runs —
+            // then `current` is stale by definition and a one-row patch cannot make it fresh.
+            //
+            // Stamping the patch with the newer generation anyway is the trap, and it is not
+            // theoretical: the result publishes as "matches _generation", so the next
+            // GetOrRebuild() sees a snapshot that looks fresh, skips the rebuild the Invalidate()
+            // asked for, and every row that changed independently of this cache (a new article, a
+            // regenerated projection matrix) stays invisible to search until some later invalidate
+            // happens to race the other way. An earlier version of this comment reasoned only about
+            // an Invalidate landing DURING the patch build and concluded the capture order was
+            // enough; it is not, because the damaging case is an Invalidate that landed BEFORE this
+            // method was ever called.
+            //
+            // Returning here loses nothing: the caller has already committed its row to the
+            // database, so the pending full rebuild reads it from there.
+            if (current.Generation != gen)
+            {
+                return;
+            }
+
             _current = current.WithUpdatedRow(id, projection, floatLen, gen);
         }
     }

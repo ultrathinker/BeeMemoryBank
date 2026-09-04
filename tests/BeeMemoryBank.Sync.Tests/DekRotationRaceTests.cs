@@ -198,4 +198,52 @@ public class DekRotationRaceTests : SyncTestFixture
             roundTripped.Should().Equal(matrix);
         }
     }
+
+    /// <summary>
+    /// A projection matrix readable under neither key must not take the rotation down with it.
+    ///
+    /// <para>
+    /// This pass used to throw, and because it runs inside the rotation transaction the throw rolled
+    /// the whole rotation back on every retry — the exact lockout the per-row path was rewritten to
+    /// remove, one table over. The matrix is derived from the articles and the embedding service
+    /// already knows how to regenerate it, so the rotation records the row and carries on.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task UnreadableProjectionMatrix_IsReportedButDoesNotAbortTheRotation()
+    {
+        await InitService.InitializeAsync("admin", "TestNode", "password");
+        await Session.UnlockAsync("password");
+
+        var article = await ArticleService.CreateAsync("Any", "/", [], "body");
+
+        var oldDek = Session.GetMasterDek();
+        var newDek = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+
+        using (var conn = Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync("DELETE FROM tbl_projection_matrix");
+            await conn.ExecuteAsync(
+                "INSERT INTO tbl_projection_matrix (encrypted_matrix, iv, created_at) VALUES (@enc, @iv, @now)",
+                new
+                {
+                    enc = System.Security.Cryptography.RandomNumberGenerator.GetBytes(2048),
+                    iv = System.Security.Cryptography.RandomNumberGenerator.GetBytes(12),
+                    now = DateTime.UtcNow.ToString("O")
+                });
+        }
+
+        var (_, _, tally) = await DekRewrapper.RewrapAllAsync(
+            Factory, Session,
+            oldDek: oldDek, newDek: newDek,
+            newEpoch: 2, commitEventId: Guid.NewGuid().ToString(),
+            isInitiator: false);
+
+        tally.Unreadable.Should().Be(1);
+        tally.UnreadableExamples.Should().ContainSingle()
+            .Which.Should().Contain("tbl_projection_matrix");
+
+        // The rotation finished, so the article rotated with it and still opens.
+        (await ArticleService.GetContentAsync(article.Id)).Should().Be("body");
+    }
 }

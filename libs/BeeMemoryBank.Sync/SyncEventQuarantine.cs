@@ -128,7 +128,14 @@ public static class SyncEventQuarantine
     /// </summary>
     public static bool IsQuarantined(SyncQuarantineEntry entry, DateTime nowUtc) =>
         entry.PermanentFailureCount >= QuarantineThreshold
-        || (entry.LastFailureKind == SyncFailureKind.Deferred
+        // Any deferral in this event's history puts it under the time budget — not just a deferral
+        // on its MOST RECENT attempt. Gating on the last kind alone left a gap: an event with a
+        // handful of permanent failures (below the threshold) whose latest attempt happened to be
+        // permanent was invisible to the time check no matter how old it was, so it could sit
+        // un-quarantined indefinitely and under-report its own staleness in the operator's
+        // quarantine view — the exact "nobody ever finds out" outcome this whole mechanism exists
+        // to close.
+        || (entry.DeferredFailureCount > 0
             && nowUtc - entry.FirstFailedAtUtc >= DeferredQuarantineBudget);
 
     /// <summary>

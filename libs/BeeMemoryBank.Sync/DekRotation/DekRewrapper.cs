@@ -74,7 +74,7 @@ public static class DekRewrapper
             Report(progress, DekRotationFlowStep.ReWrappingPerItem, 70,
                 isInitiator ? "Re-wrapping projection matrix..." : "Auto-accept: re-wrapping projection matrix...");
 
-            ReWrapProjectionMatrix(conn, tx, oldDek, newDek);
+            ReWrapProjectionMatrix(conn, tx, oldDek, newDek, tally, logger);
 
             Report(progress, DekRotationFlowStep.InvalidatingAgents, 75,
                 isInitiator ? "Invalidating agents..." : "Auto-accept: invalidating agents...");
@@ -208,7 +208,8 @@ public static class DekRewrapper
     /// rather than leaving a half-rotated vault.
     /// </summary>
     internal static void ReWrapProjectionMatrix(
-        System.Data.IDbConnection conn, System.Data.IDbTransaction tx, byte[] oldDek, byte[] newDek)
+        System.Data.IDbConnection conn, System.Data.IDbTransaction tx, byte[] oldDek, byte[] newDek,
+        RewrapTally tally, Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         // Nodes that have never run semantic search have no row at all — nothing to do.
         var rows = conn.Query<dynamic>(
@@ -238,12 +239,24 @@ public static class DekRewrapper
                     continue;
                 }
 
-                // Readable under neither key. The matrix is a derived artifact — it can be rebuilt
-                // from the articles — so losing it costs re-embedding time, not data. That is worth
-                // far less than the node, which is what aborting here would cost.
-                throw new InvalidOperationException(
-                    $"The projection matrix (row {id}) could not be unwrapped with either the old or the new master key. "
-                    + "It must be dropped and rebuilt; the rotation cannot re-seal it.");
+                // Readable under neither key. The comment used to say aborting was worse than
+                // losing the matrix and then aborted anyway — a throw here propagates out of the
+                // rotation transaction and rolls the whole thing back, on every retry, which is the
+                // exact lockout the rest of this class was rewritten to remove.
+                //
+                // So: count it, say so, and carry on. Leaving the row alone is deliberate rather
+                // than deleting it — EmbeddingProjectionService.EnsureProjectionMatrixAsync already
+                // handles a matrix that will not open, and regenerating one means every article's
+                // stored projection has to be recomputed against the new matrix. That re-flagging is
+                // its job and it knows how; a rewrap pass quietly deleting the row would start the
+                // same recovery without the half that makes it correct.
+                tally.Unreadable++;
+                tally.UnreadableExamples.Add($"tbl_projection_matrix:{id}");
+                logger?.LogError(
+                    "DEK rotation: the projection matrix (row {Id}) opened under neither the old nor the new master key. "
+                    + "The rotation continues; semantic search will regenerate the matrix and re-embed on its next pass.",
+                    id);
+                continue;
             }
             try
             {

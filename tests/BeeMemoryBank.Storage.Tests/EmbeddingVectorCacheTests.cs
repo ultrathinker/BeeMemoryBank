@@ -260,6 +260,48 @@ public class EmbeddingVectorCacheTests : IAsyncLifetime
             "a dimension conflict must fall back to a full rebuild rather than risk corrupting the flat vector layout");
     }
 
+    /// <summary>
+    /// A pending <see cref="EmbeddingVectorCache.Invalidate"/> must survive a subsequent
+    /// <see cref="EmbeddingVectorCache.UpdateOne"/>.
+    ///
+    /// <para>
+    /// UpdateOne patches one row onto the published snapshot and stamps the result with the current
+    /// generation. If an Invalidate landed at any point beforehand, that snapshot is already stale —
+    /// and stamping the patch with the newer generation makes it LOOK fresh, so the next
+    /// GetOrRebuild skips the rebuild the Invalidate asked for. Everything that changed
+    /// independently of this cache then stays invisible to search until some later invalidate
+    /// happens to race the other way.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task UpdateOne_AfterAPendingInvalidate_DoesNotSwallowTheRebuild()
+    {
+        var random = new Random(20260905);
+        var vecA = RandomVector(random, Dim);
+        var idA = await InsertArticleAsync("A", vecA);
+
+        await _repo.SearchByEmbeddingAsync(vecA, 5); // warm the cache; snapshot now holds A only
+        var rebuildsAfterWarm = _cache.RebuildCount;
+
+        // A row the cache knows nothing about, exactly as an independent writer would produce.
+        var vecB = RandomVector(random, Dim);
+        var idB = await InsertArticleAsync("B", vecB);
+
+        // "Everything is suspect" — the signal a single-row patch cannot possibly satisfy.
+        _cache.Invalidate();
+
+        // And now a one-row patch for a DIFFERENT article arrives.
+        _cache.UpdateOne(idA, MemoryMarshal.AsBytes(vecA.AsSpan()).ToArray());
+
+        _cache.GetOrRebuild();
+        _cache.RebuildCount.Should().Be(rebuildsAfterWarm + 1,
+            "the pending invalidate must still force a full rebuild after an unrelated single-row patch");
+
+        var hits = await _repo.SearchByEmbeddingAsync(vecB, 5);
+        hits.Select(h => h.Id).Should().Contain(idB,
+            "the article inserted before the invalidate must be findable once the rebuild it asked for has run");
+    }
+
     // --- Concurrency ------------------------------------------------------------------
 
     [Fact]
