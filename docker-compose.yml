@@ -23,6 +23,13 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - BMB_DATA_PATH=/app/data
       - BMB_ONNX_MODEL_PATH=/app/data/model.onnx
+      # Uncomment when a reverse proxy (Caddy, nginx, Apache) sits in front of the Web port — which
+      # it must, on anything but localhost, because the session cookie is Secure and needs TLS.
+      # Docker publishes the port by DNAT through the bridge, so the node sees the BRIDGE GATEWAY as
+      # the client for every request, no matter what the proxy forwards. Every per-IP rate limit
+      # then shares one bucket: one person fumbling their password locks everyone out of login.
+      # Loopback trust does not help here — proxied traffic never arrives on loopback.
+      # - BMB_TRUSTED_PROXIES=172.16.0.0/12
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5300/health"]
       interval: 30s

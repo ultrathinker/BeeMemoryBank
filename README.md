@@ -588,6 +588,27 @@ server {
 ```
 Then `sudo certbot --nginx -d bee.example.com`.
 
+**Tell the node whose `X-Forwarded-For` to believe.** Without this the node sees the *proxy* as the
+client for every request, so all your users share a single rate-limit bucket: one person fumbling
+their password can lock everyone out of login, and one stranger hitting the sync endpoint can stall
+synchronization for every node in your mesh. Which variable you need depends on how the proxy
+reaches the node:
+
+| Setup | Set on API **and** Web |
+|---|---|
+| Proxy on the same host, forwarding to `127.0.0.1` (the nginx/Caddy examples above, systemd/launchd/NSSM installs) | `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS=true` |
+| Docker (any published port — the proxy's traffic arrives from the bridge, never from loopback) | `BMB_TRUSTED_PROXIES=172.16.0.0/12` |
+| Proxy on another machine | `BMB_TRUSTED_PROXIES=<that machine's IP>` |
+
+`BMB_TRUSTED_PROXIES` takes IP addresses and CIDR networks, comma-separated. Keep it as narrow as
+your setup allows: anything that can reach the port from a listed address is trusted to name the
+client, and can therefore claim any IP it likes. Only one hop is believed, so a client cannot forge
+a chain through your real proxy. Both variables can be set together; an unparsable entry is logged
+and ignored rather than taking the node down.
+
+Make sure the proxy actually sends the header — nginx needs the `proxy_set_header X-Forwarded-For`
+line shown above (Caddy and Apache `mod_proxy` send it by default).
+
 #### Updating
 
 | Method | Commands |
@@ -612,6 +633,7 @@ Tip: take a snapshot via Admin → Snapshots → Create before updating, in case
 | `bmb init` wrote data where API doesn't look | `--data` and `BMB_DATA_PATH` disagree | Use the same absolute path for both |
 | 401/403 between Web and API | Different `BMB_INTERNAL_KEY` in the two processes | Use `EnvironmentFile=` (systemd) or a shared env file |
 | `docker compose down -v` did not delete `./data` | `data/` is a bind mount, not a named volume — `-v` doesn't touch it | Remove manually: `rm -rf data/` |
+| `Too many attempts` for everyone at once, or peers stop syncing after one busy client | Behind a proxy, every client looks like the proxy, so they share one rate-limit bucket | Set `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS=true` (proxy on the same host) or `BMB_TRUSTED_PROXIES` (Docker or remote proxy) — see [HTTPS Reverse Proxy](#https-reverse-proxy). The startup log prints which hops are trusted. |
 
 ### Join an Existing Network
 
