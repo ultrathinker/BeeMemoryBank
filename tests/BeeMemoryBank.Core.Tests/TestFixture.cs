@@ -31,6 +31,12 @@ public abstract class TestFixture : IAsyncLifetime
     // see SearchIndexedContentTests' own IndexBuilder-exposure comment for the same rationale.
     protected IArticleRepository ArticleRepo { get; private set; } = null!;
 
+    // The exact EmbeddingVectorCache instance ArticleRepo scores semantic search against. Exposed
+    // (rather than left as ArticleRepository's own private "new EmbeddingVectorCache(factory)"
+    // fallback) so tests can assert on RebuildCount / snapshot identity to prove a given write path
+    // does (or does not) force a full cache rebuild -- see the cache invalidation tests.
+    protected EmbeddingVectorCache VectorCache { get; private set; } = null!;
+
     // WP-12: the exact IndexBuilder instance SearchService.SearchIndexedContentAsync queries.
     // Exposed so tests can feed it content directly (bypassing PendingIndexProcessor, which this
     // fixture does not run) to exercise the ranked-search integration end to end.
@@ -46,7 +52,8 @@ public abstract class TestFixture : IAsyncLifetime
 
         ScopeHolder = new CallerScopeHolder();
 
-        var articleRepo = new ArticleRepository(Factory, ScopeHolder);
+        VectorCache = new EmbeddingVectorCache(Factory);
+        var articleRepo = new ArticleRepository(Factory, ScopeHolder, VectorCache);
         ArticleRepo = articleRepo;
         var bodyRepo = new ArticleBodyRepository(Factory);
         var keySlotRepo = new KeySlotRepository(Factory);

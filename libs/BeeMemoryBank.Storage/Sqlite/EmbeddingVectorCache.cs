@@ -22,14 +22,27 @@ namespace BeeMemoryBank.Storage.Sqlite;
 /// </para>
 ///
 /// <para>
-/// <b>Invalidation.</b> A generation counter (<see cref="_generation"/>) is incremented by
-/// <see cref="Invalidate"/> on every embedding-projection write path in
-/// <see cref="ArticleRepository"/> (Create/Update/UpdateEmbedding). <see cref="GetOrRebuild"/>
-/// compares the published snapshot's build generation against the current invalidation generation
-/// and, if they differ, rebuilds the whole cache from a fresh SQL query. This is deliberately a
-/// full rebuild, not a single-row patch: embeddings change rarely relative to how often semantic
-/// search is queried, and a full rebuild keeps the correctness story simple (no risk of an
-/// incremental patch silently drifting from the DB). See the WP-14 report for the tradeoff.
+/// <b>Invalidation.</b> A generation counter (<see cref="_generation"/>) is bumped by
+/// <see cref="Invalidate"/>, and <see cref="GetOrRebuild"/> compares the published snapshot's build
+/// generation against the current one, rebuilding the whole cache from a fresh SQL query if they
+/// differ. <see cref="ArticleRepository.CreateAsync"/>/<see cref="ArticleRepository.UpdateAsync"/>
+/// only call <see cref="Invalidate"/> when given NO transaction (a caller-supplied transaction means
+/// the caller is responsible for invalidating itself after commit -- see
+/// <see cref="IArticleRepository.InvalidateVectorCache"/>'s doc comment). Neither
+/// <c>ArticleService.CreateAsync</c> nor <c>UpdateCoreAsync</c> (both always pass a transaction) call
+/// it either, deliberately: neither ever sets <c>Article.EmbeddingProjection</c> to anything other
+/// than what was already on the row (null for a brand-new article, unchanged for an edit -- editing
+/// an article's TEXT never touches its stored projection bytes), so there is nothing for those two
+/// call sites to ever invalidate. The one path that genuinely rewrites projection bytes during
+/// normal operation, <see cref="ArticleRepository.UpdateEmbeddingUnscopedAsync"/> (driven by
+/// <c>PendingEmbeddingProcessor</c>/<c>EmbeddingProjectionService.ProjectArticleAsync</c>), calls
+/// <see cref="UpdateOne"/> instead of a blind <see cref="Invalidate"/>: it already has the new
+/// projection bytes in hand, so it patches just that one row into the published snapshot in place of
+/// forcing the next <see cref="GetOrRebuild"/> to re-read the entire corpus (~150MB of SQLite reads
+/// at 100k articles) for a change that touched exactly one row.
+/// <see cref="ArticleRepository.MarkAllEmbeddingsPendingUnscopedAsync"/> (projection-matrix recovery)
+/// still calls the blind full <see cref="Invalidate"/>, correctly -- that event means every cached
+/// vector is suspect, not just one row's.
 /// </para>
 ///
 /// <para>
@@ -71,18 +84,85 @@ public sealed class EmbeddingVectorCache
 
     private readonly object _buildLock = new();
 
+    // Number of times RebuildFromDb has actually re-queried SQLite for the whole corpus. Only ever
+    // mutated under _buildLock (RebuildFromDb and UpdateOne's dimension-conflict fallback are the
+    // only writers), so a plain field is safe -- no Interlocked needed. Exposed for tests/diagnostics
+    // to prove a given write path is (or is not) forcing the expensive full rebuild.
+    public long RebuildCount { get; private set; }
+
     public EmbeddingVectorCache(DbConnectionFactory factory)
     {
         _factory = factory;
     }
 
     /// <summary>
-    /// Signals that the <c>embedding_projection</c> column may have changed (a row was inserted,
-    /// updated, or its projection rewritten). The next <see cref="GetOrRebuild"/> call does a full
-    /// SQL rebuild. Call this from every embedding-projection write path in
-    /// <see cref="ArticleRepository"/>.
+    /// Signals that the <c>embedding_projection</c> column may have changed in a way this cache
+    /// cannot patch incrementally (an unknown number of rows, or a caller that doesn't have the new
+    /// bytes in hand). The next <see cref="GetOrRebuild"/> call does a full SQL rebuild. Prefer
+    /// <see cref="UpdateOne"/> when the caller already knows exactly which single row changed and to
+    /// what -- see that method's doc comment.
     /// </summary>
     public void Invalidate() => Interlocked.Increment(ref _generation);
+
+    /// <summary>
+    /// Incrementally patches ONE article's row into the currently published snapshot instead of
+    /// forcing the next <see cref="GetOrRebuild"/> to re-query all of SQLite. Safe specifically
+    /// because the caller (<see cref="ArticleRepository.UpdateEmbeddingUnscopedAsync"/>) already has
+    /// the new projection bytes in hand -- there is nothing left to read from the DB, only the
+    /// in-memory snapshot arrays need this one row's slot updated or appended. At 100k articles this
+    /// is the difference between copying a few KB and re-reading ~150MB for a single article's
+    /// re-embed.
+    /// </summary>
+    /// <remarks>
+    /// Falls back to a plain <see cref="Invalidate"/> (the next <see cref="GetOrRebuild"/> does a
+    /// full SQL rebuild) whenever an in-place patch cannot be proven safe:
+    /// <list type="bullet">
+    /// <item>no snapshot has been published yet -- nothing to patch, and the next
+    /// <see cref="GetOrRebuild"/> call builds one from scratch anyway, picking this row up for
+    /// free;</item>
+    /// <item>the new projection's dimension conflicts with the snapshot's already-established
+    /// dimension -- only possible transiently, mid-way through a projection-matrix swap (see
+    /// <see cref="ArticleRepository.MarkAllEmbeddingsPendingUnscopedAsync"/>'s doc comment).</item>
+    /// </list>
+    /// Both are rare compared to the steady-state "re-embed one edited article" case this exists
+    /// for, and falling back to a full rebuild is always correct, merely slower -- this method never
+    /// trades correctness for speed.
+    /// </remarks>
+    public void UpdateOne(Guid id, byte[] projection)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        lock (_buildLock)
+        {
+            Snapshot? current = _current;
+            if (current == null)
+            {
+                // Nothing published to patch onto. The next GetOrRebuild call does a full rebuild
+                // unconditionally (see its null check), so there's nothing useful to bump either.
+                return;
+            }
+
+            int floatLen = projection.Length / sizeof(float);
+            if (floatLen > 0 && current.Dimension > 0 && floatLen != current.Dimension)
+            {
+                // Can't fit this row into the snapshot's flat D-wide layout without corrupting every
+                // other row's slot. Force a full rebuild, which re-derives the dimension from
+                // scratch (see RebuildFromDb) instead of trying to be clever here.
+                Interlocked.Increment(ref _generation);
+                return;
+            }
+
+            // Read the generation BEFORE building the patch, not after: if an unrelated Invalidate()
+            // races in while the patch below is being built (e.g. MarkAllEmbeddingsPendingUnscopedAsync's
+            // matrix-recovery invalidation, which means "every row is suspect", not just this one),
+            // tagging the patched snapshot with the value captured HERE -- not a fresher one read
+            // just before publish -- makes the next GetOrRebuild's generation compare correctly treat
+            // this patch as stale and fall back to a full rebuild. Never re-read _generation right
+            // before publishing: that would silently swallow a concurrent "invalidate everything"
+            // signal a single-row patch cannot possibly satisfy on its own.
+            long gen = Interlocked.Read(ref _generation);
+            _current = current.WithUpdatedRow(id, projection, floatLen, gen);
+        }
+    }
 
     /// <summary>
     /// Returns the current cache snapshot, rebuilding it from a fresh SQL query first if it was
@@ -132,6 +212,8 @@ public sealed class EmbeddingVectorCache
 
     private Snapshot RebuildFromDb(long generation)
     {
+        RebuildCount++; // always called under _buildLock -- see GetOrRebuildLocked
+
         using var conn = _factory.CreateConnection();
 
         // Same predicate the pre-WP-14 first pass used: every active article whose
@@ -209,6 +291,93 @@ public sealed class EmbeddingVectorCache
             _vectors = vectors;
             _norms = norms;
             _dimension = dimension;
+        }
+
+        /// <summary>
+        /// Builds a new immutable snapshot identical to this one except for <paramref name="id"/>'s
+        /// row, which is patched in place (or appended, if this id has no existing slot). Called only
+        /// by <see cref="EmbeddingVectorCache.UpdateOne"/>, which has already checked
+        /// <paramref name="floatLen"/> is compatible with <see cref="Dimension"/> (equal, or this
+        /// snapshot's dimension is still 0 -- meaning no row has ever carried a real vector, so
+        /// establishing it fresh from this row is safe). Never mutates this instance's own arrays --
+        /// copies them, exactly like <see cref="EmbeddingVectorCache.RebuildFromDb"/> never mutates a
+        /// previously-published snapshot.
+        /// </summary>
+        internal Snapshot WithUpdatedRow(Guid id, byte[] projection, int floatLen, long generation)
+        {
+            // Establish the dimension the first time a non-empty vector appears in an until-now
+            // all-zero (dimension 0) snapshot; otherwise keep the snapshot's existing dimension.
+            int newDim = _dimension > 0 ? _dimension : floatLen;
+            int existingIndex = Array.IndexOf(_ids, id);
+
+            Guid[] newIds;
+            float[] newVectors;
+            float[] newNorms;
+
+            if (existingIndex >= 0)
+            {
+                // Existing candidate -- the id set itself doesn't change, so it's safe to share the
+                // old array (it's never mutated, only ever replaced wholesale on a future rebuild).
+                newIds = _ids;
+                newNorms = (float[])_norms.Clone();
+                newVectors = newDim == _dimension
+                    ? (float[])_vectors.Clone()
+                    // Dimension just established from 0 -- every existing row was necessarily a
+                    // zero-filled placeholder (a dimension of 0 means no row has ever carried a real
+                    // vector), so re-packing at the new width with every old slot left zero is
+                    // exactly what those rows already were.
+                    : new float[_ids.Length * newDim];
+
+                PatchRow(newVectors, newNorms, existingIndex, newDim, projection, floatLen);
+            }
+            else
+            {
+                // Brand-new candidate (first embedding this article has ever had, or the article
+                // itself was created after this snapshot was published). Append one slot.
+                int oldCount = _ids.Length;
+                newIds = new Guid[oldCount + 1];
+                _ids.CopyTo(newIds, 0);
+                newIds[oldCount] = id;
+
+                newNorms = new float[oldCount + 1];
+                _norms.CopyTo(newNorms, 0);
+
+                newVectors = new float[newIds.Length * newDim];
+                if (newDim == _dimension)
+                {
+                    _vectors.CopyTo(newVectors, 0);
+                }
+                // else: dimension just established from 0 -- every prior row was already a zero
+                // placeholder (see above), so leaving their slots zero-initialized in the larger
+                // array is correct; there's nothing real to copy.
+
+                PatchRow(newVectors, newNorms, oldCount, newDim, projection, floatLen);
+            }
+
+            return new Snapshot(generation, newIds, newVectors, newNorms, newDim);
+        }
+
+        // Writes one row's slot in `vectors`/`norms` at `index`, reproducing RebuildFromDb's own
+        // "zero-fill a non-conforming/empty projection, score 0" behavior for floatLen == 0.
+        private static void PatchRow(float[] vectors, float[] norms, int index, int dim, byte[] projection, int floatLen)
+        {
+            if (floatLen == dim && dim > 0)
+            {
+                var floats = MemoryMarshal.Cast<byte, float>(projection.AsSpan());
+                floats.CopyTo(vectors.AsSpan(index * dim));
+                norms[index] = MathF.Sqrt(TensorPrimitives.SumOfSquares(floats));
+            }
+            else
+            {
+                // Empty (protected-article) projection, or dim == 0 (no real vector has ever
+                // existed in this snapshot) -- leave the slot zeroed and norm 0, same as
+                // RebuildFromDb's handling of a non-conforming/empty candidate.
+                if (dim > 0)
+                {
+                    vectors.AsSpan(index * dim, dim).Clear();
+                }
+                norms[index] = 0f;
+            }
         }
 
         /// <summary>

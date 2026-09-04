@@ -23,11 +23,25 @@ public interface IArticleRepository
     /// <see cref="IDbTransaction"/> follows the same contract: pass null (the default) and the
     /// method opens, commits and disposes its own connection exactly as before — every existing
     /// caller is unaffected. Pass a non-null transaction and it executes against that transaction's
-    /// connection WITHOUT committing or disposing anything — commit, rollback, and (for this
-    /// interface) <see cref="InvalidateVectorCache"/> become the caller's responsibility, to be
-    /// done once, after the caller's own transaction actually commits. See
-    /// <c>ArticleService.UpdateCoreAsync</c>/<c>CreateAsync</c>/<c>DeleteAsync</c> for the intended
-    /// caller pattern.
+    /// connection WITHOUT committing or disposing anything — commit and rollback become the caller's
+    /// responsibility.
+    ///
+    /// <para>
+    /// <b>Vector cache:</b> when given no transaction, both methods invalidate the embedding vector
+    /// cache themselves after their own commit (a generic safety net for a hypothetical direct
+    /// caller that sets <c>Article.EmbeddingProjection</c> to something new). When given a
+    /// transaction, they do NOT — <see cref="InvalidateVectorCache"/> would then be the caller's
+    /// responsibility, to be called once after the caller's own transaction commits. In practice
+    /// neither of this codebase's two transactional callers
+    /// (<c>ArticleService.CreateAsync</c>/<c>UpdateCoreAsync</c>, and
+    /// <c>EventApplier.ApplyArticleCreateCoreAsync</c>/<c>ApplyArticleUpdateCoreAsync</c>) ever calls
+    /// it, because neither ever sets <c>EmbeddingProjection</c> to anything other than what the row
+    /// already carried — see <c>EmbeddingVectorCache</c>'s own doc comment for the full reasoning
+    /// and why that's deliberate, not an oversight. A future transactional caller that DOES
+    /// genuinely change projection bytes must call <see cref="InvalidateVectorCache"/> (or, if it has
+    /// the new bytes in hand for exactly one row like <see cref="UpdateEmbeddingUnscopedAsync"/>
+    /// does, prefer patching the cache directly the same way that method does).
+    /// </para>
     /// </summary>
     Task CreateAsync(Article article, IDbTransaction? transaction = null);
     Task UpdateAsync(Article article, IDbTransaction? transaction = null);

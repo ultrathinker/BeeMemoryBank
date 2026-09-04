@@ -485,10 +485,14 @@ public class ArticleRepository(
               WHERE id = @id",
             new { id, projection, modelVersion });
 
-        // WP-14: this is the one write path that actually changes embedding bytes during normal
-        // operation (the background PendingEmbeddingProcessor). Invalidate so the next search
-        // rebuilds the cache with the fresh projection.
-        _vectorCache.Invalidate();
+        // WP-14/perf follow-up: this is the one write path that actually changes embedding bytes
+        // during normal operation (the background PendingEmbeddingProcessor). Patch the single
+        // changed row into the cache directly -- we already have `projection` in hand, so there is
+        // nothing left to read from the DB, unlike a blind Invalidate() which would force the next
+        // search to re-query and re-pack the WHOLE corpus (~150MB of SQLite reads at 100k articles)
+        // just to pick up this one row. See EmbeddingVectorCache.UpdateOne's doc comment for the
+        // (narrow, always-safe-to-fall-back) cases this still defers to a full rebuild for.
+        _vectorCache.UpdateOne(id, projection);
     }
 
     // WP-11: mirrors GetEmbeddingPendingAsync exactly, for PendingIndexProcessor.

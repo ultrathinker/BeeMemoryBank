@@ -165,13 +165,99 @@ public class EmbeddingVectorCacheTests : IAsyncLifetime
 
         // Warm the cache with the original vector.
         await _repo.SearchByEmbeddingAsync(original, 5);
+        var rebuildsAfterWarm = _cache.RebuildCount;
 
-        // UpdateEmbeddingUnscopedAsync rewrites the projection directly — this must invalidate too.
+        // UpdateEmbeddingUnscopedAsync rewrites the projection directly -- this must patch the
+        // cache (incrementally, not via a full rebuild -- see the RebuildCount assertion below).
         var replacement = RandomVector(random, Dim);
         await _repo.UpdateEmbeddingUnscopedAsync(id, MemoryMarshal.AsBytes(replacement.AsSpan()).ToArray(), "v2");
 
+        _cache.RebuildCount.Should().Be(rebuildsAfterWarm,
+            "UpdateEmbeddingUnscopedAsync already has the new bytes in hand -- it must patch the " +
+            "single changed row into the cache instead of forcing a full SQL rebuild");
+
         var resultForReplacement = await _repo.SearchByEmbeddingAsync(replacement, 5);
-        resultForReplacement.Should().ContainSingle(a => a.Id == id, "UpdateEmbeddingUnscopedAsync must invalidate the cache so the new vector is immediately searchable");
+        resultForReplacement.Should().ContainSingle(a => a.Id == id, "UpdateEmbeddingUnscopedAsync must invalidate/patch the cache so the new vector is immediately searchable");
+    }
+
+    // --- UpdateOne (incremental patch) -------------------------------------------------
+
+    [Fact]
+    public async Task UpdateOne_NoSnapshotPublishedYet_IsANoOpAndFirstSearchStillWorks()
+    {
+        var random = new Random(101);
+        var vec = RandomVector(random, Dim);
+        var id = await InsertArticleAsync("Doc", null); // no embedding at insert time
+
+        // Cache has never been built (_current is still null) -- UpdateOne must not throw and must
+        // not need to do anything, since the next real read builds fresh from SQL anyway.
+        var updated = MemoryMarshal.AsBytes(vec.AsSpan()).ToArray();
+        // Directly exercise the raw SQL write + UpdateOne pairing UpdateEmbeddingUnscopedAsync does,
+        // without going through the repo method (which would also update tbl_article itself) --
+        // here we only care about the cache's own behavior before anything is published.
+        using (var conn = _factory.CreateConnection())
+        {
+            await conn.ExecuteAsync("UPDATE tbl_article SET embedding_projection = @bytes WHERE id = @id", new { bytes = updated, id });
+        }
+        _cache.UpdateOne(id, updated);
+
+        _cache.RebuildCount.Should().Be(0, "UpdateOne must not force a rebuild when nothing has been published yet");
+
+        var result = await _repo.SearchByEmbeddingAsync(vec, 5);
+        result.Should().ContainSingle(a => a.Id == id, "the first real read must build a fresh snapshot straight from SQL and find the row");
+        _cache.RebuildCount.Should().Be(1, "the first GetOrRebuild call after nothing was published must do exactly one full rebuild");
+    }
+
+    [Fact]
+    public async Task UpdateOne_NewCandidateAfterWarm_AppendsWithoutFullRebuild()
+    {
+        var random = new Random(102);
+        var seedVec = RandomVector(random, Dim);
+        var seedId = await InsertArticleAsync("Seed", seedVec);
+
+        // Warm the cache -- the new article below does not exist in this snapshot yet.
+        await _repo.SearchByEmbeddingAsync(seedVec, 5);
+        var rebuildsAfterWarm = _cache.RebuildCount;
+
+        var newVec = RandomVector(random, Dim);
+        var newId = await InsertArticleAsync("Fresh", null); // row exists, no embedding at insert time
+        using (var conn = _factory.CreateConnection())
+        {
+            await conn.ExecuteAsync(
+                "UPDATE tbl_article SET embedding_projection = @bytes WHERE id = @id",
+                new { bytes = MemoryMarshal.AsBytes(newVec.AsSpan()).ToArray(), id = newId });
+        }
+        _cache.UpdateOne(newId, MemoryMarshal.AsBytes(newVec.AsSpan()).ToArray());
+
+        _cache.RebuildCount.Should().Be(rebuildsAfterWarm,
+            "appending a brand-new candidate must patch the snapshot in place, not force a full SQL rebuild");
+
+        var result = await _repo.SearchByEmbeddingAsync(newVec, 5);
+        result.Should().ContainSingle(a => a.Id == newId, "the appended row must be immediately searchable");
+        _cache.RebuildCount.Should().Be(rebuildsAfterWarm, "reading the patched snapshot must not trigger a rebuild either");
+    }
+
+    [Fact]
+    public async Task UpdateOne_DimensionConflict_FallsBackToFullRebuildRatherThanCorruptTheLayout()
+    {
+        var random = new Random(103);
+        var vec = RandomVector(random, Dim);
+        var id = await InsertArticleAsync("Doc", vec);
+
+        await _repo.SearchByEmbeddingAsync(vec, 5); // warm at Dim
+        var rebuildsAfterWarm = _cache.RebuildCount;
+
+        // A projection at a DIFFERENT dimension than the snapshot's established one (e.g. mid-way
+        // through a projection-matrix swap) cannot be patched into the existing flat D-wide layout.
+        var wrongDim = new byte[(Dim + 4) * sizeof(float)];
+        _cache.UpdateOne(id, wrongDim);
+
+        // UpdateOne must have forced the generation forward (via a plain Invalidate), so the very
+        // next GetOrRebuild call does a full rebuild rather than silently living with a mismatched
+        // patch.
+        _cache.GetOrRebuild();
+        _cache.RebuildCount.Should().Be(rebuildsAfterWarm + 1,
+            "a dimension conflict must fall back to a full rebuild rather than risk corrupting the flat vector layout");
     }
 
     // --- Concurrency ------------------------------------------------------------------
