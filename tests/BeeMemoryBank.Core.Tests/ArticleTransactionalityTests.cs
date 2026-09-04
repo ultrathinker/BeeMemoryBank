@@ -162,7 +162,11 @@ public class ArticleTransactionalityTests : IAsyncLifetime
     {
         // 1. Create successfully
         var article = await _articleService.CreateAsync("Original Title", "/original", ["original_tag"], "Original Content");
-        _articleRepo.InvalidateVectorCacheCount.Should().Be(1);
+        // ArticleService.CreateAsync deliberately does NOT call InvalidateVectorCache: a brand-new
+        // article's EmbeddingProjection is always null (embeddings are generated asynchronously by
+        // PendingEmbeddingProcessor, which invalidates/patches the cache itself when that happens)
+        // -- see ArticleService.CreateAsync's own comment.
+        _articleRepo.InvalidateVectorCacheCount.Should().Be(0);
         _syncTrigger.SignalCount.Should().Be(1);
 
         var originalUpdatedAt = article.UpdatedAt;
@@ -200,7 +204,7 @@ public class ArticleTransactionalityTests : IAsyncLifetime
         var updateEvents = await conn4.ExecuteScalarAsync<int>("SELECT count(*) FROM tbl_event WHERE event_type = 'article.update' AND article_id = @id", new { id = article.Id });
         updateEvents.Should().Be(0, "No update event should exist if update fails");
 
-        _articleRepo.InvalidateVectorCacheCount.Should().Be(1, "Vector cache should not be invalidated again on failed update");
+        _articleRepo.InvalidateVectorCacheCount.Should().Be(0, "Vector cache must not be invalidated by a text edit -- successful or failed");
         _syncTrigger.SignalCount.Should().Be(1, "SyncTrigger should not be signaled on failed update");
     }
 

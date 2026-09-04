@@ -127,7 +127,16 @@ public partial class ArticleService(
             }
         }
 
-        articleRepo.InvalidateVectorCache();
+        // No embedding-vector-cache invalidation here on purpose: this freshly-created Article's
+        // EmbeddingProjection is never set anywhere above (embeddings are generated asynchronously,
+        // later, by PendingEmbeddingProcessor), so the row lands in tbl_article with a NULL
+        // projection and the cache's rebuild query (`WHERE embedding_projection IS NOT NULL`) would
+        // never have picked it up anyway. The path that actually gives this article a projection --
+        // EmbeddingProjectionService.ProjectArticleAsync, via ArticleRepository.UpdateEmbeddingUnscopedAsync
+        // -- already invalidates (incrementally) the moment it happens. Invalidating here too used to
+        // force a full corpus-wide cache rebuild (~150MB of SQLite reads at 100k articles) on every
+        // single create, for a row the rebuild wouldn't even include. Do not "restore" this call --
+        // see EmbeddingVectorCache's own doc comment for the full reasoning.
         eventLogger.SignalSync();
 
         await LinkOrphanMediaAsync(article.Id, plaintext);
@@ -372,7 +381,20 @@ public partial class ArticleService(
             }
         }
 
-        articleRepo.InvalidateVectorCache();
+        // No embedding-vector-cache invalidation here on purpose. This method never sets
+        // `article.EmbeddingProjection` itself -- `article` came from articleRepo.GetByIdAsync above
+        // and only Title/TreePath/Status/EmbeddingPending/etc. are touched, so UpdateAsync's SQL
+        // rewrites the SAME projection bytes that were already cached, byte for byte, even for a
+        // plaintext-changing edit (EmbeddingPending is set true above so the background processor
+        // re-embeds it LATER -- the OLD projection stays correctly cached and searchable until then).
+        // The one path that actually rewrites projection bytes --
+        // EmbeddingProjectionService.ProjectArticleAsync via
+        // ArticleRepository.UpdateEmbeddingUnscopedAsync -- already invalidates (incrementally, see
+        // EmbeddingVectorCache.UpdateOne) the moment it happens. Invalidating here too used to force a
+        // full corpus-wide cache rebuild (~150MB of SQLite reads at 100k articles) on every single
+        // edit -- from ~20 people editing constantly, that made the cache "essentially never warm".
+        // Do not "restore" this call -- see EmbeddingVectorCache's own doc comment for the full
+        // reasoning.
         eventLogger.SignalSync();
 
         if (plaintext != null)
