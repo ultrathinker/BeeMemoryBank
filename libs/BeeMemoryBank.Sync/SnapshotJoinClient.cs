@@ -45,6 +45,14 @@ public class SnapshotJoinClient
         _logger = logger;
     }
 
+    /// <summary>
+    /// Wall-clock ceiling for pulling down the join snapshot. Deliberately generous: this is a
+    /// one-off transfer of the entire vault to a brand-new node, over whatever connection that
+    /// node happens to have, and failing it strands the node half-provisioned. It exists only so
+    /// a dead connection eventually gives up rather than hanging forever.
+    /// </summary>
+    private static readonly TimeSpan SnapshotDownloadTimeout = TimeSpan.FromMinutes(30);
+
     public async Task<(long CpSeq, long LamportTs)> DownloadAndImportAsync(
         string remoteUrl,
         Guid localNodeId,
@@ -92,7 +100,23 @@ public class SnapshotJoinClient
         using var snapReq = new HttpRequestMessage(HttpMethod.Get, $"{remoteUrl}/api/sync/snapshot/for-join");
         snapReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", authToken);
 
-        var snapResp = await _http.SendAsync(snapReq, ct);
+        // HttpClient.Timeout — 100 s by default, and nothing overrides it on the mobile client —
+        // covers the WHOLE SendAsync while the completion option is ResponseContentRead: headers
+        // AND the entire body. A join snapshot is the whole vault (92 MB on the personal node when
+        // this was found), so on any link slower than roughly 1 MB/s the download is killed
+        // mid-transfer. The join then fails with "net_http_request_timedout, 100" AFTER the key
+        // exchange has already succeeded, which leaves a half-provisioned node row on the server
+        // and tells the user nothing useful. Measured on the same 92 MB snapshot: 17 s on a phone,
+        // exactly 100 030 ms on a tablet on the same Wi-Fi.
+        //
+        // ResponseHeadersRead scopes HttpClient.Timeout to the header phase; the body copy is then
+        // bounded by the token below instead — still bounded, so a genuinely stalled transfer
+        // cannot hang forever, but by a limit that suits a large download rather than a request.
+        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        downloadCts.CancelAfter(SnapshotDownloadTimeout);
+        ct = downloadCts.Token;
+
+        var snapResp = await _http.SendAsync(snapReq, HttpCompletionOption.ResponseHeadersRead, ct);
         snapResp.EnsureSuccessStatusCode();
 
         var signatureB64 = snapResp.Headers.GetValues("X-BMB-Snapshot-Signature").FirstOrDefault()
