@@ -71,6 +71,47 @@ public sealed class EncryptedSegmentStore(
     {
         ArgumentNullException.ThrowIfNull(segmentBytes);
 
+        (string filePath, int currentEpoch) = await WriteSegmentFileAsync(segmentId, segmentBytes);
+
+        await manifestRepo.UpsertManifestAsync(new SegmentManifestEntry
+        {
+            SegmentId = segmentId,
+            FilePath = filePath,
+            DocCount = docCount,
+            DekEpoch = currentEpoch,
+            FormatVersion = EncryptedSegmentFormat.FormatVersion,
+            CreatedAt = DateTime.UtcNow,
+        });
+    }
+
+    /// <summary>
+    /// WP-19 (merge persistence): writes ONLY the encrypted segment file for a merge's output --
+    /// deliberately does NOT touch the manifest table, unlike <see cref="StoreAsync"/>. The
+    /// merge-persistence path (<c>SearchIndexLifecycleService.PersistMostRecentlyMergedSegmentAsync</c>)
+    /// needs this new segment's manifest row to be inserted in the SAME database transaction that
+    /// deletes its merged-away inputs' rows (<see cref="SegmentManifestRepository.ReplaceMergedSegmentsAsync"/>)
+    /// -- see that method's own doc comment for why a single atomic transaction matters here, and
+    /// the caller's doc comment for why the file must be durably written BEFORE that transaction
+    /// even begins. Returns the values the caller needs to build that manifest row itself: the file
+    /// path this segment was written to, and the dek_epoch it was encrypted under.
+    /// </summary>
+    public async Task<(string FilePath, int DekEpoch)> StoreMergedSegmentFileAsync(Guid segmentId, byte[] segmentBytes)
+    {
+        ArgumentNullException.ThrowIfNull(segmentBytes);
+        return await WriteSegmentFileAsync(segmentId, segmentBytes);
+    }
+
+    /// <summary>
+    /// Shared write path behind both <see cref="StoreAsync"/> and
+    /// <see cref="StoreMergedSegmentFileAsync"/>: encrypts <paramref name="segmentBytes"/> and
+    /// writes it to a fresh on-disk file, atomically (temp-file-then-rename, see
+    /// <see cref="WriteFileAtomicAsync"/>). Returns the file path and the dek_epoch the segment was
+    /// encrypted under; does not touch tbl_search_index_manifest at all -- that is each caller's own
+    /// responsibility, since the two callers need that write to happen in different ways (a plain
+    /// upsert for a fresh seal, or as part of a larger atomic swap for a merge's output).
+    /// </summary>
+    private async Task<(string FilePath, int DekEpoch)> WriteSegmentFileAsync(Guid segmentId, byte[] segmentBytes)
+    {
         Directory.CreateDirectory(segmentsDirectory);
 
         // WP-13 finding: WriteFileAtomicAsync's temp-file-then-rename dance makes a torn write at
@@ -98,15 +139,7 @@ public sealed class EncryptedSegmentStore(
             string filePath = Path.Combine(segmentsDirectory, segmentId.ToString("N") + ".bmesg");
             await WriteFileAtomicAsync(filePath, container);
 
-            await manifestRepo.UpsertManifestAsync(new SegmentManifestEntry
-            {
-                SegmentId = segmentId,
-                FilePath = filePath,
-                DocCount = docCount,
-                DekEpoch = currentEpoch,
-                FormatVersion = EncryptedSegmentFormat.FormatVersion,
-                CreatedAt = DateTime.UtcNow,
-            });
+            return (filePath, currentEpoch);
         }
         finally
         {

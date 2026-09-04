@@ -123,8 +123,33 @@ public sealed class SearchIndexLifecycleService(
                 // catch would protect against masking a real programming bug.
                 var reader = new SegmentReader(bytes);
                 HashSet<Guid> tombstones = await tombstoneRepo.GetForSegmentAsync(manifest.SegmentId);
+                int mergeCountBeforeAdopt = Builder.MergeCount;
                 int internalId = Builder.AdoptPersistedSegment(reader, tombstones);
                 runtimeState.RegisterPersistedSegment(internalId, manifest.SegmentId);
+
+                // WP-19: AdoptPersistedSegment ends with its own MaybeMergeLocked call (same as a
+                // fresh seal), so folding this one segment in on top of whatever was already
+                // adopted so far can itself cross a merge threshold. Persisting that merge's output
+                // immediately -- right here, per segment -- rather than waiting until this whole
+                // loop finishes matters whenever the manifest holds more un-merged segments than a
+                // single merge threshold's worth (the expected shape of the very first warm-start
+                // after upgrading to this WP, against a vault whose manifest accumulated many
+                // never-persisted historical merges under the old, buggy behavior): adopting could
+                // then trigger SEVERAL merges back to back across this one loop, and IndexBuilder's
+                // "only remembers the LAST merge" contract (see
+                // GetMostRecentlyMergedSegmentForPersistence's own doc comment) would otherwise
+                // silently lose every merge except the final one -- stranding the earlier merges'
+                // now-superseded inputs in the manifest, which is exactly the "same article live in
+                // more than one sealed segment" state this whole WP exists to eliminate. Checking
+                // after every individual AdoptPersistedSegment call (which, like AddOrUpdateDocument,
+                // can trigger at most one merge per call) guarantees none of them is ever missed,
+                // and also means a merge that folds in THIS segment's own just-registered internal
+                // id (adopted moments ago, immediately above) is retired correctly too -- its mapping
+                // is already registered by the time this check runs.
+                if (Builder.MergeCount > mergeCountBeforeAdopt)
+                {
+                    await PersistMostRecentlyMergedSegmentAsync(ct);
+                }
             }
             catch (Exception ex)
             {
@@ -170,12 +195,21 @@ public sealed class SearchIndexLifecycleService(
     /// Gap 2's fix: for every <see cref="SegmentTombstoneEvent"/> IndexBuilder just reported (from
     /// an <see cref="IndexBuilder.AddOrUpdateDocument"/> or <see cref="IndexBuilder.RemoveDocument"/>
     /// call), durably records the tombstone IF that segment has a known persisted Guid. A segment
-    /// with no known mapping (e.g. one that only ever existed as a merge output, which this WP does
-    /// not persist -- see wp-11-report.md) is skipped: there is no on-disk file to write a
-    /// tombstone row against. This is the documented residual gap: losing this durable write (e.g.
-    /// a crash between the in-memory tombstone and this call) means one stale result could
-    /// transiently reappear after a restart, until the next full rebuild -- never silent data
-    /// corruption, since the tombstone is a filter, not the source of truth for content.
+    /// with no known mapping is skipped: there is no on-disk file to write a tombstone row against.
+    ///
+    /// <para>
+    /// <b>WP-19 update:</b> "no known mapping" used to mean, in practice, ANY merge output -- WP-11
+    /// persisted fresh seals but never a merge's output, so a merge-output segment (and therefore
+    /// every tombstone against it) had no durable counterpart at all, and every restart re-adopted
+    /// and re-merged the same un-collapsed seals from scratch (the very bug this WP fixes). Since a
+    /// merge's output is now durably persisted too (see <see cref="PersistMostRecentlyMergedSegmentAsync"/>),
+    /// this skip is no longer a standing gap for merge outputs specifically -- it now only fires for
+    /// the genuinely transient case the rest of this doc comment already describes: an actual
+    /// failure/crash between an in-memory tombstone (or merge) and its corresponding durable write
+    /// finishing. Losing that one durable write means one stale result could transiently reappear
+    /// after a restart, until the next full rebuild -- never silent data corruption, since the
+    /// tombstone is a filter, not the source of truth for content.
+    /// </para>
     /// </summary>
     public async Task PersistTombstonesAsync(IReadOnlyList<SegmentTombstoneEvent> events, CancellationToken ct = default)
     {
@@ -185,6 +219,144 @@ public sealed class SearchIndexLifecycleService(
             {
                 await tombstoneRepo.AddAsync(persistedSegmentId, evt.ArticleId);
             }
+        }
+    }
+
+    /// <summary>
+    /// WP-19: persists the segment <see cref="Builder"/> most recently merged, if any, replacing its
+    /// consumed inputs' on-disk manifest/tombstone rows with the merge's output in one atomic
+    /// database transaction -- see <see cref="SegmentManifestRepository.ReplaceMergedSegmentsAsync"/>
+    /// for why that transaction is the crash-safety-critical piece. Callers detect "a merge just
+    /// happened" the same way <see cref="PersistMostRecentlySealedSegmentAsync"/>'s callers detect a
+    /// seal: comparing <see cref="IndexBuilder.MergeCount"/> before/after a call that can trigger one
+    /// (<see cref="IndexBuilder.AddOrUpdateDocument"/> in <see cref="PendingIndexProcessor"/>, or
+    /// <see cref="IndexBuilder.AdoptPersistedSegment"/> in <see cref="EnsureWarmStartedAsync"/>).
+    ///
+    /// <para>
+    /// <b>Crash-safety ordering, chosen deliberately -- and why not another order:</b>
+    /// </para>
+    /// <list type="number">
+    /// <item><description>
+    /// <b>Write the merged segment's bytes to a brand-new file</b> (a fresh persisted Guid nothing
+    /// references yet), via <see cref="EncryptedSegmentStore.StoreMergedSegmentFileAsync"/>'s own
+    /// atomic temp-file-then-rename. No manifest row points at this file until step 2 commits.
+    /// </description></item>
+    /// <item><description>
+    /// <b>Commit ONE database transaction</b> (<see cref="SegmentManifestRepository.ReplaceMergedSegmentsAsync"/>)
+    /// that both inserts the new file's manifest row AND deletes every consumed input's manifest and
+    /// tombstone rows.
+    /// </description></item>
+    /// <item><description>
+    /// <b>Only after that transaction has durably committed</b>, best-effort-delete the consumed
+    /// inputs' now-unreferenced files from disk.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// A crash between steps 1 and 2 leaves the new file an unreferenced orphan and every OLD
+    /// segment's manifest/tombstone rows fully intact -- the next warm-start simply reloads the
+    /// pre-merge segments exactly as it would have before this WP existed, and the merge is retried
+    /// next time its threshold trips. No document is lost, and no article ends up live in more than
+    /// one persisted segment. A crash between steps 2 and 3 leaves the manifest already correctly
+    /// reflecting the merged-only state (the old rows are gone, durably), so warm-start correctly
+    /// adopts only the new merged segment; the old files are just wasted, unreferenced disk space --
+    /// the same category of harmless leftover <see cref="EncryptedSegmentStore"/>'s own orphaned-
+    /// temp-file sweep already tolerates elsewhere in this WP's surrounding code.
+    /// </para>
+    /// <para>
+    /// The ordering this deliberately rules out is deleting the old rows/files FIRST and writing the
+    /// new file after: a crash in that window would leave the manifest with rows pointing at
+    /// now-missing files for segments that no longer physically exist anywhere (deleted, and the
+    /// replacement never got written), which <see cref="EncryptedSegmentStore.LoadAsync"/> already
+    /// turns into <see cref="SegmentRebuildReason.FileMissing"/> -- and per
+    /// <see cref="EnsureWarmStartedAsync"/>'s own "any single load failure means the whole persisted
+    /// index is untrustworthy" policy, that forces a full rebuild of the ENTIRE vault on the very
+    /// next restart. That full-rebuild-on-every-crash outcome is exactly the wall this WP exists to
+    /// remove, so this ordering must never be reversed.
+    /// </para>
+    /// </summary>
+    public async Task PersistMostRecentlyMergedSegmentAsync(CancellationToken ct = default)
+    {
+        MergedSegmentPersistenceInfo? mergedInfo = Builder.GetMostRecentlyMergedSegmentForPersistence();
+        if (mergedInfo is null)
+        {
+            return;
+        }
+
+        // Resolve which of the merge's consumed inputs actually correspond to a persisted on-disk
+        // segment. An internal id with no known mapping (e.g. an earlier, still-un-persisted merge
+        // output later folded into THIS merge before its own persistence call ever ran -- see
+        // IndexBuilder's residual-gap note) is safely skipped, same "unknown id, nothing to do"
+        // tolerance PersistTombstonesAsync already applies.
+        var retiredPersistedIds = new List<Guid>();
+        foreach (int internalId in mergedInfo.Value.ReplacedSegmentIds)
+        {
+            if (runtimeState.TryGetPersistedSegmentId(internalId, out Guid persistedSegmentId))
+            {
+                retiredPersistedIds.Add(persistedSegmentId);
+            }
+        }
+
+        SegmentManifestEntry? newManifestEntry = null;
+        int? newInternalSegmentId = null;
+        Guid newPersistedId = default;
+
+        if (mergedInfo.Value.NewSegment is { } newSegment)
+        {
+            // Step 1 (see this method's own doc comment): the new file, durably written, BEFORE
+            // anything references it from the database.
+            newPersistedId = Guid.NewGuid();
+            (string filePath, int dekEpoch) = await segmentStore.StoreMergedSegmentFileAsync(newPersistedId, newSegment.Bytes);
+
+            newManifestEntry = new SegmentManifestEntry
+            {
+                SegmentId = newPersistedId,
+                FilePath = filePath,
+                DocCount = newSegment.DocumentCount,
+                DekEpoch = dekEpoch,
+                FormatVersion = EncryptedSegmentFormat.FormatVersion,
+                CreatedAt = DateTime.UtcNow,
+            };
+            newInternalSegmentId = newSegment.SegmentId;
+        }
+
+        // Step 2: one atomic transaction installs the new row (if any) and retires every consumed
+        // input's rows across both tables.
+        List<string> retiredFilePaths = await manifestRepo.ReplaceMergedSegmentsAsync(newManifestEntry, retiredPersistedIds);
+
+        // Step 3: only now, after step 2's transaction has durably committed, sweep the
+        // now-unreferenced old files. Best-effort/non-fatal for the same reason
+        // EncryptedSegmentStore's own orphaned-temp-file cleanup is: correctness never depended on
+        // this succeeding, only on step 2 having already committed.
+        foreach (string filePath in retiredFilePaths)
+        {
+            try
+            {
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+            }
+            catch
+            {
+                // Best-effort: a leftover, now-unreferenced segment file is wasted disk space, never
+                // a correctness problem -- the manifest transaction that made it unreferenced has
+                // already committed regardless of whether this delete succeeds.
+            }
+        }
+
+        if (newInternalSegmentId is int newId)
+        {
+            runtimeState.RegisterPersistedSegment(newId, newPersistedId);
+        }
+
+        // Whatever internal ids this merge consumed no longer name a live segment inside
+        // IndexBuilder -- their on-disk rows are gone too now, so drop their internal-id ->
+        // persisted-Guid mappings to avoid an unbounded (if slow) memory leak across a long-running
+        // process's lifetime of repeated merges. Safe even for ids that were never registered (e.g.
+        // the residual-gap case above) -- see RemovePersistedSegment's own doc comment.
+        foreach (int internalId in mergedInfo.Value.ReplacedSegmentIds)
+        {
+            runtimeState.RemovePersistedSegment(internalId);
         }
     }
 

@@ -132,6 +132,7 @@ public class PendingIndexProcessor(
                 var plaintext = await articleService.GetContentAsync(article.Id);
 
                 int sealCountBefore = lifecycle.Builder.SealCount;
+                int mergeCountBefore = lifecycle.Builder.MergeCount;
                 IReadOnlyList<SegmentTombstoneEvent> tombstoneEvents =
                     lifecycle.Builder.AddOrUpdateDocument(article.Id, article.FolderId ?? Guid.Empty, plaintext);
 
@@ -143,6 +144,22 @@ public class PendingIndexProcessor(
                 if (lifecycle.Builder.SealCount > sealCountBefore)
                 {
                     await lifecycle.PersistMostRecentlySealedSegmentAsync(ct);
+                }
+
+                // WP-19: a single AddOrUpdateDocument call can also trigger a merge (either directly,
+                // by crossing the seal-count threshold above, or via a tombstone-fraction check run
+                // earlier inside the same call) -- persist that merge's output the same way a fresh
+                // seal's is persisted just above, checking MergeCount before/after this one call
+                // rather than once per batch, so this can never miss the merge that happened as a
+                // side effect of indexing THIS article. See
+                // SearchIndexLifecycleService.PersistMostRecentlyMergedSegmentAsync's own doc comment
+                // for the crash-safe write-new-file/commit-transaction/delete-old-files ordering,
+                // and IndexBuilder.GetMostRecentlyMergedSegmentForPersistence's doc comment for the
+                // one narrow, unreachable-under-this-class's-own-defaults edge case (two merges
+                // inside one single AddOrUpdateDocument call) this before/after check cannot see.
+                if (lifecycle.Builder.MergeCount > mergeCountBefore)
+                {
+                    await lifecycle.PersistMostRecentlyMergedSegmentAsync(ct);
                 }
 
                 await articleRepo.ClearIndexPendingUnscopedAsync(article.Id);

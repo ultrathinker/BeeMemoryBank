@@ -63,6 +63,23 @@ public sealed class SearchIndexRuntimeState
     public bool TryGetPersistedSegmentId(int internalSegmentId, out Guid persistedSegmentId) =>
         _persistedSegmentIds.TryGetValue(internalSegmentId, out persistedSegmentId);
 
+    /// <summary>
+    /// WP-19 (merge persistence): drops one internal-id -> persisted-Guid mapping, called once
+    /// <see cref="SearchIndexLifecycleService.PersistMostRecentlyMergedSegmentAsync"/> has durably
+    /// retired that internal id's on-disk manifest/tombstone rows as part of a merge. Unlike the
+    /// "a merged-away internal id just stops appearing in future tombstone reports" case this
+    /// dictionary's own field doc already calls out as needing no cleanup, THIS case does need an
+    /// explicit removal: without it, a long-running process that merges repeatedly over its
+    /// lifetime would keep accumulating one stale entry per retired input segment here forever, an
+    /// unbounded (if slow) memory leak. Safe to call for an id that is not present (e.g. one that
+    /// was never registered in the first place, such as an internal id belonging to an earlier
+    /// merge's own output that itself was never persisted -- see
+    /// <c>IndexBuilder.GetMostRecentlyMergedSegmentForPersistence</c>'s residual-gap note) --
+    /// <see cref="ConcurrentDictionary{TKey,TValue}.TryRemove(TKey,out TValue)"/> is a no-op then.
+    /// </summary>
+    public void RemovePersistedSegment(int internalSegmentId) =>
+        _persistedSegmentIds.TryRemove(internalSegmentId, out _);
+
     public void ClearPersistedSegmentIds() => _persistedSegmentIds.Clear();
 
     /// <summary>Coordination primitive for TriggerFullRebuildAsync -- see the field doc above.</summary>

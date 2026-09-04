@@ -24,6 +24,25 @@ public readonly record struct SegmentTombstoneEvent(int SegmentId, Guid ArticleI
 public readonly record struct SealedSegmentPersistenceInfo(int SegmentId, byte[] Bytes, int DocumentCount);
 
 /// <summary>
+/// The most recent merge's persistence-relevant output -- see
+/// <see cref="IndexBuilder.GetMostRecentlyMergedSegmentForPersistence"/>.
+/// <para>
+/// <see cref="NewSegment"/> is the merge's output segment (same id/bytes/doc-count shape a fresh
+/// seal produces via <see cref="SealedSegmentPersistenceInfo"/>), or <c>null</c> if this merge's
+/// surviving-document set was empty -- every one of its input segments' every document had already
+/// been tombstoned, so the merge produced no live content at all to write anywhere (see
+/// <see cref="IndexBuilder.MergeLocked"/>'s own early-return branch for exactly when this happens).
+/// </para>
+/// <para>
+/// <see cref="ReplacedSegmentIds"/> is every input <see cref="SealedSegment.Id"/> this merge
+/// consumed -- populated whether or not <see cref="NewSegment"/> ended up non-null, since a caller
+/// that durably persists segments needs to retire those inputs' manifest/tombstone rows either way
+/// (an empty merge result still means every one of those inputs' on-disk rows is now moot).
+/// </para>
+/// </summary>
+public readonly record struct MergedSegmentPersistenceInfo(SealedSegmentPersistenceInfo? NewSegment, IReadOnlyList<int> ReplacedSegmentIds);
+
+/// <summary>
 /// Ties this library's tokenizer/stemmer to the immutable "BMBI" segment format (see
 /// <see cref="Segment.SegmentWriter"/>/<see cref="Segment.SegmentReader"/>) with a small LSM-lite
 /// lifecycle, so a caller can feed it plaintext article bodies and later ask "which articles
@@ -132,6 +151,17 @@ public sealed class IndexBuilder
     private byte[]? _lastSealedSegmentBytes;
     private int _lastSealedSegmentId;
     private int _lastSealedSegmentDocumentCount;
+
+    // WP-19 (merge persistence): the merge twin of the three fields just above -- same "only ever
+    // reflects the LAST merge" contract as _lastSealedSegmentBytes, for the same reason
+    // (GetMostRecentlyMergedSegmentForPersistence's own doc comment spells out why that is safe for
+    // a caller that checks MergeCount before/after every single call that can trigger a merge --
+    // AddOrUpdateDocument, RemoveDocument, or AdoptPersistedSegment -- each of which runs
+    // MaybeMergeLocked at most once). Starts null (no merge has ever happened); once non-null it
+    // stays non-null (a merge that happens to leave zero surviving documents still records a
+    // MergedSegmentPersistenceInfo with a null NewSegment -- see that type's own doc comment -- so
+    // this field's null-ness alone distinguishes "no merge yet" from "the last merge kept nothing").
+    private MergedSegmentPersistenceInfo? _lastMergedInfo;
 
     // The copy-on-write published view of sealed segments. Always replaced wholesale (never
     // mutated in place) under `_writeLock`; read without any lock via a single volatile access, so
@@ -726,6 +756,58 @@ public sealed class IndexBuilder
     }
 
     /// <summary>
+    /// WP-19: the merge-persistence twin of <see cref="GetMostRecentlySealedSegmentForPersistence"/>
+    /// -- returns the most recent merge's output segment (if it produced one) plus the internal ids
+    /// of every input segment that merge consumed, or null if no merge has ever happened in this
+    /// builder's lifetime. A caller that persists segments to disk uses this to durably replace the
+    /// consumed inputs' on-disk rows/files with the merge's output in one atomic step -- see
+    /// <c>SearchIndexLifecycleService.PersistMostRecentlyMergedSegmentAsync</c> for the actual
+    /// crash-safe persistence sequence and why the ordering it uses matters.
+    ///
+    /// <para>
+    /// <b>Same "only reflects the LAST merge" limitation as the sealed-segment accessor, and the
+    /// same reason it is safe in the two places this codebase actually calls
+    /// <see cref="AddOrUpdateDocument"/>/<see cref="AdoptPersistedSegment"/> in a loop:</b> both
+    /// callers check <see cref="MergeCount"/> before/after EVERY SINGLE such call (never once per
+    /// batch) before deciding whether to invoke this accessor, and each of those calls can trigger
+    /// <see cref="MaybeMergeLocked"/> (and therefore <see cref="MergeLocked"/>) at most once -- so
+    /// checking after every individual call can never let an intervening merge's persistence-critical
+    /// output silently disappear before it is read here, even across a warm-start pass that ends up
+    /// triggering several merges back-to-back while adopting a manifest with many un-merged legacy
+    /// segments (see <c>SearchIndexLifecycleService.EnsureWarmStartedAsync</c>'s own comment on why
+    /// it checks per-adopt rather than once at the end of its loop).
+    /// </para>
+    /// <para>
+    /// <b>Residual gap, not closed by this WP:</b> a single <see cref="AddOrUpdateDocument"/> call
+    /// can -- in principle -- trigger two merges back to back: one from
+    /// <see cref="RetireExistingOccurrenceLocked"/>'s own tombstone-fraction check (run first, before
+    /// the new content is even added to the hot buffer), and a second from <see cref="SealLocked"/>'s
+    /// trailing <see cref="MaybeMergeLocked"/> call if adding the new seal on top of the first
+    /// merge's single output segment ALSO happens to cross the count threshold. Under this class's
+    /// documented defaults (<see cref="DefaultMergeSegmentCountThreshold"/> = 8) this second trigger
+    /// can never actually fire in the same call -- a merge always collapses the sealed-segment list
+    /// down to exactly one segment, and adding one more via a single seal can only ever bring the
+    /// count to two, nowhere near crossing a threshold of 8 -- so it is unreachable with realistic
+    /// configuration. It would require an artificially tiny
+    /// <paramref name="mergeSegmentCountThreshold"/> (effectively 1) to reach, which no caller in
+    /// this codebase configures. Because <see cref="AddOrUpdateDocument"/> is one atomic call from
+    /// its caller's perspective, there is no way for that caller to check <see cref="MergeCount"/>
+    /// between the two internal merge triggers the way <c>EnsureWarmStartedAsync</c> checks between
+    /// its own per-segment adopt calls -- closing this would need a different return shape from
+    /// <see cref="AddOrUpdateDocument"/> itself, out of this WP's scope. Documented here, exactly
+    /// like the sibling "Gap 2" residual gap already documented on
+    /// <c>SearchIndexLifecycleService.PersistTombstonesAsync</c>, rather than silently left unstated.
+    /// </para>
+    /// </summary>
+    public MergedSegmentPersistenceInfo? GetMostRecentlyMergedSegmentForPersistence()
+    {
+        lock (_writeLock)
+        {
+            return _lastMergedInfo;
+        }
+    }
+
+    /// <summary>
     /// WP-11: folds a segment reloaded from disk (via <c>EncryptedSegmentStore.LoadAsync</c> plus a
     /// fresh <see cref="Segment.SegmentReader"/> over its decrypted bytes) back into this
     /// <see cref="IndexBuilder"/>'s live sealed-segment list, so its content is immediately
@@ -911,6 +993,14 @@ public sealed class IndexBuilder
             _sealedSegments = [];
             _sealedTotalTermOccurrencesApprox = 0;
             MergeCount++;
+
+            // WP-19: every input segment's every document was tombstoned -- there is no surviving
+            // content to write anywhere, but a caller that persists segments still needs to know
+            // these inputs are now moot so it can retire their on-disk manifest/tombstone rows (see
+            // MergedSegmentPersistenceInfo.NewSegment's own doc comment for why null is the correct
+            // signal here, not an empty/zero-doc segment -- there is a real difference between "an
+            // empty segment exists" and "no new segment was produced").
+            _lastMergedInfo = new MergedSegmentPersistenceInfo(null, segments.Select(s => s.Id).ToList());
             return;
         }
 
@@ -956,6 +1046,16 @@ public sealed class IndexBuilder
         // `mergedSegment` (fresh, no tombstone) or was already excluded above (deleted for good).
         _sealedSegments = [mergedSegment];
         MergeCount++;
+
+        // WP-19: record this merge's output for a caller that durably persists segments to disk --
+        // see GetMostRecentlyMergedSegmentForPersistence's own doc comment for the full contract.
+        // `segments` (this method's own parameter) is exactly the input list MaybeMergeLocked
+        // captured before calling here, i.e. every SealedSegment this merge consumed -- its `.Id`
+        // values are what the caller looks up against its own internal-id -> persisted-Guid map to
+        // know which on-disk rows this merge just made moot.
+        _lastMergedInfo = new MergedSegmentPersistenceInfo(
+            new SealedSegmentPersistenceInfo(mergedSegment.Id, mergedBytes, mergedDocs.Count),
+            segments.Select(s => s.Id).ToList());
     }
 
     /// <summary>
