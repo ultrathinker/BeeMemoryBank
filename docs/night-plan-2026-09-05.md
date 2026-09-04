@@ -96,10 +96,18 @@ with no master password, no mesh membership, no `IsSuperadmin`, and no ability t
 events at all. There is nothing to fix for the reason the objection raised, and the feature should
 stay.
 
-**What is genuinely worth attention** is narrower and is not a security hole: folder ACL is now
-evaluated on two independent code paths — the sync/local path and the remote-subscription path. The
-risk is *drift*, where a filter is tightened in one and forgotten in the other. That is a guardrail
-test, not a redesign. Logged below as a follow-up.
+**A second correction, to a claim made here an hour later.** This document said the folder ACL is
+"evaluated on two independent code paths" and therefore at risk of drift. Reading
+`/api/folders/accessible` and `/api/folders/by-path/snapshot` shows that is also too strong: both
+call `FolderAccessService.GetFullAccessInfoAsync` and then
+`FolderAccessService.IsAccessDenied` / `IsReadOnlyForCaller` — the same primitives the local path
+uses. They are two call sites of one rule, not two implementations of it, which is the good case.
+The guardrail is accordingly not urgent, and is dropped from the follow-up list.
+
+What those endpoints *do* have is the problem item 10 is about: `/api/folders/accessible` calls
+`articleRepo.ListAsync()` with no filter and counts in memory to produce a per-folder article count.
+At 100k articles a remote subscriber's poll loads the whole vault. Worth checking that item 10's fix
+reaches this call site and not only the tree and list endpoints.
 
 ---
 
@@ -196,7 +204,6 @@ test fail, restore the fix, watch it pass — and to say so plainly if a test pa
 
 ## Follow-ups recorded, not scheduled
 
-- ACL-drift guardrail across the sync path and the remote-subscription path (above).
 - **`WhitelistRevokeBackfill` is dead code, and migration 021 made that matter.** Its docstring
   claimed it runs on every startup; nothing constructs it. Corrected in the file so the comment
   stops asserting a heal that does not happen.
