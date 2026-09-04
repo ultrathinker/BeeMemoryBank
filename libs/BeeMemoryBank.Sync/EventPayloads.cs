@@ -98,6 +98,11 @@ public record ArticleEventPayload(
     [property: JsonPropertyName("status")]        string Status,
     [property: JsonPropertyName("created_at")]    DateTime CreatedAt,
     [property: JsonPropertyName("updated_at")]    DateTime UpdatedAt,
+    // Which master-DEK generation the wrapped DEK above belongs to. Defaulted rather than
+    // required, because a pre-2026-09 sender omits it and its articles really are from epoch 1 —
+    // that release hardcoded the literal 1 here regardless of the sender's actual epoch, so the
+    // field was present and always wrong. Reading it is only safe on events new enough to have
+    // meant it.
     [property: JsonPropertyName("dek_epoch")]     int DekEpoch = 1,
     // Forward-compat: second-layer "protected" article metadata. The body ciphertext already
     // carries the BMBENC1 blob verbatim; these are the plaintext metadata a receiver needs to

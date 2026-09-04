@@ -120,4 +120,34 @@ public class DekRotationRaceTests : SyncTestFixture
 
         (await ArticleService.GetContentAsync(good.Id)).Should().Be("this one is fine");
     }
+
+    /// <summary>
+    /// The payload's <c>dek_epoch</c> used to be the literal 1 on every article event this node ever
+    /// emitted, whatever generation its master key was actually on. Nothing read it, so nothing
+    /// broke — but a field that is always wrong is worse than an absent one: the first reader to
+    /// trust it inherits a silent bug, and a rotation's whole point is knowing which generation a
+    /// wrapped DEK belongs to.
+    /// </summary>
+    [Fact]
+    public async Task ArticleEvents_CarryTheNodesActualDekEpoch_NotTheLiteralOne()
+    {
+        await InitService.InitializeAsync("admin", "TestNode", "password");
+        await Session.UnlockAsync("password");
+
+        // Move this node off the first generation, the way a completed rotation does.
+        using (var conn = Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET dek_epoch = 4");
+        }
+
+        var article = await ArticleService.CreateAsync("Epoch", "/", [], "body");
+
+        var events = await EventLogRepo.GetAfterSequenceAsync(0, 100);
+        var create = events.Single(e => e.EventType == EventTypes.ArticleCreate && e.ArticleId == article.Id);
+        var payload = System.Text.Json.JsonSerializer.Deserialize<ArticleEventPayload>(
+            create.Payload, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+
+        payload.DekEpoch.Should().Be(4, "the event must say which master-DEK generation sealed the DEK it carries");
+    }
+
 }

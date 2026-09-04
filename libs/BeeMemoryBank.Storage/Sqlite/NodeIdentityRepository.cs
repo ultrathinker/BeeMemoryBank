@@ -20,6 +20,7 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
                 ed25519_private_key_v    AS Ed25519PrivateKeyV,
                 can_generate_embeddings  AS CanGenerateEmbeddings,
                 initial_sync_completed   AS InitialSyncCompleted,
+                dek_epoch                AS DekEpoch,
                 created_at               AS CreatedAt
               FROM tbl_node_identity LIMIT 1");
     }

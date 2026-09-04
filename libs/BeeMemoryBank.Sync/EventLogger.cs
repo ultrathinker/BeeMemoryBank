@@ -49,7 +49,7 @@ public class EventLogger(
             Status: article.Status,
             CreatedAt: article.CreatedAt,
             UpdatedAt: article.UpdatedAt,
-            DekEpoch: 1,
+            DekEpoch: identity.DekEpoch,
             Protected: article.Protected,
             ProtectionHint: article.ProtectionHint,
             CiphertextSha256: await EnsureBlobAsync(body.Ciphertext, transaction)
@@ -77,7 +77,7 @@ public class EventLogger(
             Status: article.Status,
             CreatedAt: article.CreatedAt,
             UpdatedAt: article.UpdatedAt,
-            DekEpoch: 1,
+            DekEpoch: identity.DekEpoch,
             Protected: article.Protected,
             ProtectionHint: article.ProtectionHint,
             CiphertextSha256: await EnsureBlobAsync(body.Ciphertext, transaction)
