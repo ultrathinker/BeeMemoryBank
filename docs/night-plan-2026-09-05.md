@@ -171,6 +171,24 @@ always wrong is worse than an absent one, and the first reader to trust it inher
 Each agent is required to prove its tests catch their bug — reinstate the original defect, watch the
 test fail, restore the fix, watch it pass — and to say so plainly if a test passes either way.
 
+## Landed so far
+
+- **Item 1 (here).** Rewrap survives a row it cannot open, on both the per-row-DEK pass and the
+  projection-matrix pass; `RewrapTally` reports what was left behind; article events carry the
+  node's real DEK epoch. Commits `7464e26b`, `0c6b8d88`, `ea8341f9`.
+- **Item 7 (agent, reviewed and merged).** `SyncFailureClassifier` is the single place a failure is
+  sorted into permanent or deferred; deferred failures are budgeted by wall-clock time (6 hours)
+  rather than attempt count, because push-on-save can retry the same event many times a minute and
+  an attempt-count budget meant to span hours would burn through in minutes under load. Merge
+  `3896ec35`.
+
+  **Found in review and fixed here (`faea0981`):** the whitelist lookup filters on `status = 'A'`,
+  so "never heard of this node" and "this node is revoked" both arrived as null and were treated
+  alike — which made a revoked peer's events deferrable. Nothing applied while the check kept
+  failing, so it was not an open door, but re-adding the peer inside the six-hour window would have
+  applied its entire pre-revocation backlog, resurrecting exactly the writes the revocation was
+  meant to discard. A revoke is an answer, not a missing precondition.
+
 ## Queued after those
 
 13 (repositories reachable from the API layer), 16 (media into the blob store by hash),
