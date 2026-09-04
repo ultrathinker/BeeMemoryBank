@@ -197,6 +197,19 @@ test fail, restore the fix, watch it pass — and to say so plainly if a test pa
   applied its entire pre-revocation backlog, resurrecting exactly the writes the revocation was
   meant to discard. A revoke is an answer, not a missing precondition.
 
+- **Item 11 (agent, reviewed and merged, `ef7552ab`).** The invalidation in `ArticleService` was
+  genuinely redundant — no write path there ever assigns `Article.EmbeddingProjection`, and the one
+  path that does write projection bytes already invalidated. Removed, and the remaining invalidation
+  turned into a single-row copy-on-write patch. Measured: ten edits interleaved with searches went
+  from ten full corpus rebuilds to one.
+
+  Checked in review rather than taken on trust: the snapshot is genuinely immutable once published
+  (`WithUpdatedRow` clones, never mutates), and the generation counter is read *before* the patch is
+  built so a concurrent "invalidate everything" wins rather than being swallowed — the one ordering
+  that would have been silently wrong. The agent also caught and rewrote one of its own tests that
+  passed with the fix reverted; that is the failure mode these instructions exist to prevent, and it
+  self-reported it.
+
 ## Queued after those
 
 13 (repositories reachable from the API layer), 16 (media into the blob store by hash),
