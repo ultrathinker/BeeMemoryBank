@@ -50,7 +50,7 @@ public class ArticleTransactionalityTests : IAsyncLifetime
         _syncTrigger = new TrackingSyncTrigger();
         var realEventLogRepo = new EventLogRepository(_factory);
         _eventLogRepo = new FailingEventLogRepository(realEventLogRepo);
-        _eventLogger = new EventLogger(_nodeRepo, _eventLogRepo, _clock, new NullActorProvider(), _syncTrigger, _session);
+        _eventLogger = new EventLogger(_nodeRepo, _eventLogRepo, _clock, new NullActorProvider(), _syncTrigger, _session, new BlobRepository(_factory));
 
         _articleRepo = new TrackingArticleRepository(_factory, scopeHolder);
 

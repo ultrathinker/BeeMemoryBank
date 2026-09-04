@@ -54,6 +54,7 @@ public static class DependencyInjection
         services.AddSingleton<ChunkEmbeddingVectorCache>();
         services.AddScoped<IArticleChunkEmbeddingRepository, ArticleChunkEmbeddingRepository>();
         services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
+        services.AddScoped<IBlobRepository, BlobRepository>();
         services.AddSingleton<IKeySlotRepository, KeySlotRepository>();
         // Singleton (not Scoped) — these repos are pulled into the singleton SnapshotService
         // factory in Api/Program.cs. Resolving a scoped service from a singleton throws under

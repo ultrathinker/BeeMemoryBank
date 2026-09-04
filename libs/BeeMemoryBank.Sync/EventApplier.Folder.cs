@@ -151,10 +151,13 @@ public partial class EventApplier
         };
         if (mediaOptions != null)
         {
+            // Resolve before touching the disk: a missing blob must fail the whole apply (so the
+            // event is retried once the bytes arrive), not leave a media row without its file.
+            var ciphertext = await ResolveCiphertextAsync(p.CiphertextB64, p.CiphertextSha256);
             var mediaDir = mediaOptions.MediaDir;
             Directory.CreateDirectory(mediaDir);
             var filePath = Path.Combine(mediaDir, $"{p.MediaId}.enc");
-            await File.WriteAllBytesAsync(filePath, Convert.FromBase64String(p.CiphertextB64));
+            await File.WriteAllBytesAsync(filePath, ciphertext);
         }
 
         await mediaRepo.CreateAsync(media);

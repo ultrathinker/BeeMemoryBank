@@ -66,7 +66,7 @@ public abstract class SyncTestFixture : IAsyncLifetime
         InitService = new InitializationService(NodeRepo, keySlotRepo, userRepo, Factory);
         CommentRepo = new CommentRepository(Factory, new CallerScopeHolder());
         var commentRepo = CommentRepo;
-        EventLogger = new EventLogger(NodeRepo, EventLogRepo, Clock, new BeeMemoryBank.Core.Services.NullActorProvider(), new BeeMemoryBank.Sync.SyncTrigger(), Session);
+        EventLogger = new EventLogger(NodeRepo, EventLogRepo, Clock, new BeeMemoryBank.Core.Services.NullActorProvider(), new BeeMemoryBank.Sync.SyncTrigger(), Session, new BlobRepository(Factory));
         var mediaRepo = new MediaRepository(Factory, new CallerScopeHolder());
         var folderRepo = new BeeMemoryBank.Storage.Sqlite.FolderRepository(Factory, new CallerScopeHolder());
         var versionRepo = new ArticleVersionRepository(Factory, new CallerScopeHolder());
@@ -94,8 +94,27 @@ public abstract class SyncTestFixture : IAsyncLifetime
             ConflictRepo, TombstoneRepo, WhitelistRepo, commentRepo, folderRepo, Clock, mediaRepo, NodeRepo, conceptTagService, conceptTagRepo,
             new FakeEmbeddingGenerator(), HardDeleteService, null,
             replayShieldRepo, restoreEventStateRepo, new NullRestoreInitiator(),
-            dekRotationStateRepo, new NullDekRotationApplier(), folderAccess, Factory,
+            dekRotationStateRepo, new NullDekRotationApplier(), folderAccess, Factory, new BlobRepository(Factory),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance);
+    }
+
+    /// <summary>
+    /// Applies an event that originated on <paramref name="source"/> the way a real sync would:
+    /// any blob the event references is copied into this node's store first — that is what
+    /// BlobTransport does over HTTP before EventApplier ever sees the event — then the applier
+    /// runs. Handing an article/media event straight to EventApplier without this step fails with
+    /// BlobMissingException, by design. Hand-built events with inline ciphertext are unaffected.
+    /// </summary>
+    public async Task<EventApplyResult> ApplyFromAsync(SyncTestFixture source, SyncEvent evt)
+    {
+        var mine = new BlobRepository(Factory);
+        var theirs = new BlobRepository(source.Factory);
+        foreach (var hash in BlobReferences.Collect([evt]))
+        {
+            var data = await theirs.GetAsync(hash);
+            if (data != null) await mine.StoreAsync(data);
+        }
+        return await EventApplier.ApplyAsync(evt);
     }
 
     private sealed class NullRestoreInitiator : BeeMemoryBank.Sync.IRestoreInitiator

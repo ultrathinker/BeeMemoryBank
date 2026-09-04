@@ -238,7 +238,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         clock.Initialize(await eventLogRepo.GetMaxLamportTimestampAsync());
 
         var session = new SessionService(keySlotRepo);
-        var eventLogger = new EventLogger(nodeRepo, eventLogRepo, clock, new NullActorProvider(), new SyncTrigger(), session);
+        var eventLogger = new EventLogger(nodeRepo, eventLogRepo, clock, new NullActorProvider(), new SyncTrigger(), session, new BlobRepository(factory));
         var mediaRepo = new MediaRepository(factory, new CallerScopeHolder());
         var folderRepo = new FolderRepository(factory, new CallerScopeHolder());
         var versionRepo = new ArticleVersionRepository(factory, new CallerScopeHolder());

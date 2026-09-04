@@ -72,7 +72,7 @@ public class EventApplierTests : IAsyncLifetime
         var article = await _nodeA.ArticleService.CreateAsync("Test", "/Root", [], "body");
         var events = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
 
-        await _nodeB.EventApplier.ApplyAsync(events[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, events[0]);
 
         var applied = await _nodeB.ArticleRepo.GetByIdAsync(article.Id);
         applied.Should().NotBeNull();
@@ -85,8 +85,8 @@ public class EventApplierTests : IAsyncLifetime
         var article = await _nodeA.ArticleService.CreateAsync("A", "/", [], "x");
         var events = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
 
-        await _nodeB.EventApplier.ApplyAsync(events[0]);
-        await _nodeB.EventApplier.ApplyAsync(events[0]); // second time — no-op
+        await _nodeB.ApplyFromAsync(_nodeA, events[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, events[0]); // second time — no-op
 
         var articles = await _nodeB.ArticleRepo.ListAsync();
         articles.Should().ContainSingle(a => a.Id == article.Id);
@@ -102,7 +102,7 @@ public class EventApplierTests : IAsyncLifetime
         var tampered = events[0];
         tampered.Signature[0] ^= 0xFF;
 
-        var act = () => _nodeB.EventApplier.ApplyAsync(tampered);
+        var act = () => _nodeB.ApplyFromAsync(_nodeA, tampered);
         await act.Should().ThrowAsync<InvalidDataException>();
     }
 
@@ -117,7 +117,7 @@ public class EventApplierTests : IAsyncLifetime
         var spoofed = events[0];
         spoofed.NodeId = Guid.NewGuid(); // unknown nodeId
 
-        var act = () => _nodeB.EventApplier.ApplyAsync(spoofed);
+        var act = () => _nodeB.ApplyFromAsync(_nodeA, spoofed);
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
@@ -130,7 +130,7 @@ public class EventApplierTests : IAsyncLifetime
         var badVersion = events[0];
         badVersion.ProtocolVersion = 99;
 
-        var act = () => _nodeB.EventApplier.ApplyAsync(badVersion);
+        var act = () => _nodeB.ApplyFromAsync(_nodeA, badVersion);
         await act.Should().ThrowAsync<NotSupportedException>();
     }
 
@@ -151,7 +151,7 @@ public class EventApplierTests : IAsyncLifetime
         // NodeA creates article → NodeB applies → both know the article
         var article = await _nodeA.ArticleService.CreateAsync("Original", "/", [], "original");
         var createEvents = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createEvents[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvents[0]);
 
         // NodeB updates title (after apply, NodeB clock is higher → LamportTs is higher)
         await _nodeB.ArticleService.UpdateAsync(article.Id, title: "Version B");
@@ -161,7 +161,7 @@ public class EventApplierTests : IAsyncLifetime
         await _nodeA.ArticleService.UpdateAsync(article.Id, title: "Version A");
 
         // NodeA applies update from NodeB (NodeB has higher Lamport)
-        await _nodeA.EventApplier.ApplyAsync(bEvents.Last());
+        await _nodeA.ApplyFromAsync(_nodeB, bEvents.Last());
 
         // NodeA should accept version B
         var result = await _nodeA.ArticleRepo.GetByIdAsync(article.Id);
@@ -177,7 +177,7 @@ public class EventApplierTests : IAsyncLifetime
     {
         var article = await _nodeA.ArticleService.CreateAsync("Shared", "/", [], "v0");
         var createEvents = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createEvents[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvents[0]);
 
         // NodeA updates — LamportTs lower (NodeA doesn't know about ApplyAsync on NodeB)
         await _nodeA.ArticleService.UpdateAsync(article.Id, title: "NodeA Version");
@@ -189,7 +189,7 @@ public class EventApplierTests : IAsyncLifetime
         bEvents.Should().NotBeEmpty("NodeB should create an update event");
 
         // NodeA applies event from NodeB (Lamport NodeB > NodeA → NodeB wins)
-        await _nodeA.EventApplier.ApplyAsync(bEvents.Last());
+        await _nodeA.ApplyFromAsync(_nodeB, bEvents.Last());
 
         var winner = await _nodeA.ArticleRepo.GetByIdAsync(article.Id);
         winner!.Title.Should().Be("NodeB Version");
@@ -214,8 +214,8 @@ public class EventApplierTests : IAsyncLifetime
         var deleteEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(createEvts.Count + updateEvts.Count);
 
         // NodeB applies create and immediately delete (skipping update)
-        await _nodeB.EventApplier.ApplyAsync(createEvts[0]);
-        await _nodeB.EventApplier.ApplyAsync(deleteEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, deleteEvts[0]);
 
         // Tombstone created
         (await _nodeB.TombstoneRepo.ExistsAsync(article.Id)).Should().BeTrue();
@@ -223,7 +223,7 @@ public class EventApplierTests : IAsyncLifetime
         // NodeB receives a 'delayed' update — tombstone should block it
         if (updateEvts.Count > 0)
         {
-            await _nodeB.EventApplier.ApplyAsync(updateEvts[0]);
+            await _nodeB.ApplyFromAsync(_nodeA, updateEvts[0]);
             var afterAttempt = await _nodeB.ArticleRepo.GetByIdAsync(article.Id);
             afterAttempt.Should().BeNull(); // article is still deleted
         }
@@ -244,7 +244,7 @@ public class EventApplierTests : IAsyncLifetime
         var createArticleEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
 
         // Node B applies the article create so it knows the article
-        await _nodeB.EventApplier.ApplyAsync(createArticleEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createArticleEvts[0]);
 
         // Node A: create a comment in DB (no service — direct insert), then log create/delete events
         var comment = await _nodeA.CommentRepo.CreateAsync(article.Id, "Hello world");
@@ -259,8 +259,8 @@ public class EventApplierTests : IAsyncLifetime
         var deleteEvt = afterCommentDelete.Single(e => e.EventType == EventTypes.CommentDelete);
 
         // Node B receives events OUT OF ORDER: Delete first, then Create
-        await _nodeB.EventApplier.ApplyAsync(deleteEvt);
-        await _nodeB.EventApplier.ApplyAsync(createEvt);
+        await _nodeB.ApplyFromAsync(_nodeA, deleteEvt);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvt);
 
         // Assert: ghost row exists but is soft-deleted — resurrection was blocked
         var survived = await _nodeB.CommentRepo.GetByCommentIdAsync(comment.CommentId);
@@ -279,7 +279,7 @@ public class EventApplierTests : IAsyncLifetime
     {
         var article = await _nodeA.ArticleService.CreateAsync("Article 2", "/", [], "body");
         var createArticleEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createArticleEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createArticleEvts[0]);
 
         var comment = await _nodeA.CommentRepo.CreateAsync(article.Id, "Transient comment");
         await _nodeA.EventLogger.LogCommentCreateAsync(comment);
@@ -293,8 +293,8 @@ public class EventApplierTests : IAsyncLifetime
         var deleteEvt = afterDelete.Single(e => e.EventType == EventTypes.CommentDelete);
 
         // Node B receives events in normal order
-        await _nodeB.EventApplier.ApplyAsync(createEvt);
-        await _nodeB.EventApplier.ApplyAsync(deleteEvt);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvt);
+        await _nodeB.ApplyFromAsync(_nodeA, deleteEvt);
 
         // Comment row should be soft-deleted
         var survived = await _nodeB.CommentRepo.GetByCommentIdAsync(comment.CommentId);
@@ -313,7 +313,7 @@ public class EventApplierTests : IAsyncLifetime
         // Node A creates article; Node B applies it so both nodes know about it.
         var article = await _nodeA.ArticleService.CreateAsync("Article 3", "/", [], "body");
         var createArticleEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createArticleEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createArticleEvts[0]);
 
         // Node B: create a comment and log a CommentCreate event.
         // Node B's clock is bumped by applying nodeA's event, so LamportTs >= 2.
@@ -332,7 +332,7 @@ public class EventApplierTests : IAsyncLifetime
         ghost!.DeleteLamportTs.Should().Be(deleteLamport, "ghost row must carry the delete's lamport");
 
         // Node A applies the create event: delete_lamport_ts(N-1) < create.lamport_ts(N) → create wins.
-        await _nodeA.EventApplier.ApplyAsync(createEvt);
+        await _nodeA.ApplyFromAsync(_nodeB, createEvt);
 
         var result = await _nodeA.CommentRepo.GetByCommentIdAsync(comment.CommentId);
         result.Should().NotBeNull("create with higher lamport_ts should win over older delete");
@@ -347,12 +347,12 @@ public class EventApplierTests : IAsyncLifetime
     {
         var article = await _nodeA.ArticleService.CreateAsync("Tagged", "/", ["alpha"], "body");
         var createEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvts[0]);
 
         await _nodeA.EventLogger.LogConceptTagRenameAsync("alpha", "beta");
         var renameEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(createEvts.Count);
 
-        await _nodeB.EventApplier.ApplyAsync(renameEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, renameEvts[0]);
 
         var tags = await new BeeMemoryBank.Storage.Sqlite.ConceptTagRepository(_nodeB.Factory, new BeeMemoryBank.Core.Services.CallerScopeHolder()).GetByArticleIdAsync(article.Id);
         tags.Should().BeEquivalentTo(["beta"]);
@@ -363,12 +363,12 @@ public class EventApplierTests : IAsyncLifetime
     {
         var article = await _nodeA.ArticleService.CreateAsync("Multi-tag", "/", ["foo", "bar"], "body");
         var createEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvts[0]);
 
         await _nodeA.EventLogger.LogConceptTagMergeAsync("bar", "foo");
         var mergeEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(createEvts.Count);
 
-        await _nodeB.EventApplier.ApplyAsync(mergeEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, mergeEvts[0]);
 
         var tags = await new BeeMemoryBank.Storage.Sqlite.ConceptTagRepository(_nodeB.Factory, new BeeMemoryBank.Core.Services.CallerScopeHolder()).GetByArticleIdAsync(article.Id);
         tags.Should().BeEquivalentTo(["foo"]);
@@ -379,12 +379,12 @@ public class EventApplierTests : IAsyncLifetime
     {
         var article = await _nodeA.ArticleService.CreateAsync("To untag", "/", ["removeme"], "body");
         var createEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvts[0]);
 
         await _nodeA.EventLogger.LogConceptTagDeleteAsync("removeme");
         var deleteEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(createEvts.Count);
 
-        await _nodeB.EventApplier.ApplyAsync(deleteEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, deleteEvts[0]);
 
         var tags = await new BeeMemoryBank.Storage.Sqlite.ConceptTagRepository(_nodeB.Factory, new BeeMemoryBank.Core.Services.CallerScopeHolder()).GetByArticleIdAsync(article.Id);
         tags.Should().BeEmpty();
@@ -397,7 +397,7 @@ public class EventApplierTests : IAsyncLifetime
     {
         var evt = await BuildArticleCreateEventOnNodeA(treePath: "/Work/../Admin/Sneaky");
 
-        var result = await _nodeB.EventApplier.ApplyAsync(evt);
+        var result = await _nodeB.ApplyFromAsync(_nodeA, evt);
 
         result.Should().Be(EventApplyResult.SilentlyDropped);
         // Article must not be persisted on NodeB.
@@ -410,7 +410,7 @@ public class EventApplierTests : IAsyncLifetime
     {
         var evt = await BuildFolderCreateEventOnNodeA(path: "/Work/./Notes");
 
-        var result = await _nodeB.EventApplier.ApplyAsync(evt);
+        var result = await _nodeB.ApplyFromAsync(_nodeA, evt);
 
         result.Should().Be(EventApplyResult.SilentlyDropped);
     }
@@ -422,7 +422,7 @@ public class EventApplierTests : IAsyncLifetime
         // pre-canonicalisation code. "//" is non-canonical but not strictly illegal.
         var evt = await BuildArticleCreateEventOnNodeA(treePath: "/Work//Notes");
 
-        var result = await _nodeB.EventApplier.ApplyAsync(evt);
+        var result = await _nodeB.ApplyFromAsync(_nodeA, evt);
 
         result.Should().Be(EventApplyResult.Applied);
     }
@@ -439,7 +439,7 @@ public class EventApplierTests : IAsyncLifetime
 
         var evt = await BuildSimpleWhitelistAddEventAsync();
 
-        var act = () => _nodeB.EventApplier.ApplyAsync(evt);
+        var act = () => _nodeB.ApplyFromAsync(_nodeA, evt);
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
     }
 
@@ -452,7 +452,7 @@ public class EventApplierTests : IAsyncLifetime
 
         var evt = await BuildSimpleWhitelistAddEventAsync();
 
-        var result = await _nodeB.EventApplier.ApplyAsync(evt);
+        var result = await _nodeB.ApplyFromAsync(_nodeA, evt);
 
         result.Should().Be(EventApplyResult.Applied);
     }
@@ -492,11 +492,83 @@ public class EventApplierTests : IAsyncLifetime
             ActorType = "user"
         });
 
-        await _nodeB.EventApplier.ApplyAsync(evt);
+        await _nodeB.ApplyFromAsync(_nodeA, evt);
 
         var stored = await _nodeB.WhitelistRepo.GetByNodeIdAsync(newNodeId);
         stored.Should().NotBeNull();
         stored!.IsSuperadmin.Should().BeTrue("the IsSuperadmin bit must survive the whitelist_add → sync → apply round trip");
+    }
+
+    // ===== Blob store (protocol 2) =====
+
+    [Fact]
+    public async Task ArticleCreate_EventCarriesHashNotBody()
+    {
+        var article = await _nodeA.ArticleService.CreateAsync("Blob", "/Work", [], "the body text");
+        var evt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate);
+
+        using var doc = JsonDocument.Parse(evt.Payload);
+        doc.RootElement.TryGetProperty("ciphertext_sha256", out var hashProp).Should().BeTrue();
+        BlobReferences.IsWellFormedHash(hashProp.GetString()).Should().BeTrue();
+        // Nullable properties still serialize as null; what matters is that no base64 body is
+        // in the signed payload — that is where the 42MB of a 151MB production database went.
+        doc.RootElement.GetProperty("ciphertext").ValueKind.Should().Be(JsonValueKind.Null);
+
+        // The hash names exactly the bytes ArticleBodyRepository stored for the article.
+        var body = (await _nodeA.BodyRepo.GetByArticleIdAsync(article.Id))!;
+        BlobHash.Compute(body.Ciphertext).Should().Be(hashProp.GetString());
+        (await new BlobRepository(_nodeA.Factory).GetAsync(hashProp.GetString()!)).Should().BeEquivalentTo(body.Ciphertext);
+    }
+
+    [Fact]
+    public async Task ArticleCreate_WithoutTheBlob_ThrowsBlobMissing_ThenAppliesOnceItArrives()
+    {
+        var article = await _nodeA.ArticleService.CreateAsync("Blob", "/Work", [], "the body text");
+        var evt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate);
+
+        // Straight to the applier, bypassing the transport: the blob is not on NodeB.
+        var act = () => _nodeB.EventApplier.ApplyAsync(evt);
+        await act.Should().ThrowAsync<BlobMissingException>();
+        (await _nodeB.ArticleRepo.GetByIdAsync(article.Id, includeDeleted: true)).Should().BeNull(
+            "a failed apply must leave nothing behind, so the retry starts clean");
+
+        // Same event again once the transport has delivered the bytes — applies normally.
+        await _nodeB.ApplyFromAsync(_nodeA, evt);
+        var bodyOnB = (await _nodeB.BodyRepo.GetByArticleIdAsync(article.Id))!;
+        var bodyOnA = (await _nodeA.BodyRepo.GetByArticleIdAsync(article.Id))!;
+        bodyOnB.Ciphertext.Should().BeEquivalentTo(bodyOnA.Ciphertext);
+    }
+
+    /// <summary>
+    /// The event log is full of protocol-1 events (body inline as base64), and a peer that has not
+    /// upgraded still emits them. They must keep applying — and the inline bytes must land in the
+    /// blob store too, so a later relay of that event can ship them by hash.
+    /// </summary>
+    [Fact]
+    public async Task LegacyInlineCiphertextEvent_StillApplies()
+    {
+        var ciphertext = new byte[] { 9, 8, 7, 6, 5 };
+        var articleId = Guid.NewGuid();
+        var nodeAIdentity = (await _nodeA.NodeRepo.GetAsync())!;
+        var payload = new ArticleEventPayload(
+            Title: "legacy", TreePath: "/Work", ConceptTags: [],
+            CiphertextB64: Convert.ToBase64String(ciphertext),
+            IvB64: Convert.ToBase64String(new byte[12]),
+            EncryptedDekB64: Convert.ToBase64String(new byte[48]),
+            DekIvB64: Convert.ToBase64String(new byte[12]),
+            Status: "A", CreatedAt: DateTime.UtcNow, UpdatedAt: DateTime.UtcNow);
+        var evt = await Sign(new SyncEvent
+        {
+            EventId = Guid.NewGuid(), EventType = EventTypes.ArticleCreate, ArticleId = articleId,
+            NodeId = nodeAIdentity.NodeId, LamportTs = _nodeA.Clock.Tick(),
+            Payload = JsonSerializer.Serialize(payload), CreatedAt = DateTime.UtcNow, ActorType = "user",
+            ProtocolVersion = 1
+        });
+
+        await _nodeB.EventApplier.ApplyAsync(evt);
+
+        (await _nodeB.BodyRepo.GetByArticleIdAsync(articleId))!.Ciphertext.Should().BeEquivalentTo(ciphertext);
+        (await new BlobRepository(_nodeB.Factory).GetAsync(BlobHash.Compute(ciphertext))).Should().BeEquivalentTo(ciphertext);
     }
 
     // ===== Helpers =====

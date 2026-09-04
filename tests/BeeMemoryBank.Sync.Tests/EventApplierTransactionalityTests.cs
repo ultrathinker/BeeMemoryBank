@@ -81,7 +81,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
         await sessionB.UnlockAsync("passwordB");
 
         var commentRepoB = new CommentRepository(_bFactory, scopeHolder);
-        var eventLoggerB = new EventLogger(nodeRepoB, _bEventLogRepo, clockB, new NullActorProvider(), new SyncTrigger(), sessionB);
+        var eventLoggerB = new EventLogger(nodeRepoB, _bEventLogRepo, clockB, new NullActorProvider(), new SyncTrigger(), sessionB, new BlobRepository(_bFactory));
         var mediaRepoB = new MediaRepository(_bFactory, scopeHolder);
         var folderRepoB = new FolderRepository(_bFactory, scopeHolder);
 
@@ -124,7 +124,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
             mediaRepoB, nodeRepoB, conceptTagServiceB, _bTagRepo,
             new FakeEmbeddingGenerator(), hardDeleteServiceB, null,
             replayShieldRepoB, restoreEventStateRepoB, new NullRestoreInitiator(),
-            dekRotationStateRepoB, new NullDekRotationApplier(), folderAccessB, _bFactory,
+            dekRotationStateRepoB, new NullDekRotationApplier(), folderAccessB, _bFactory, new BlobRepository(_bFactory),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance);
     }
 
@@ -132,6 +132,31 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
     {
         await _nodeA.DisposeAsync();
         _bFactory.Dispose();
+    }
+
+    /// <summary>
+    /// Applies one of NodeA's events on NodeB the way sync would: the blob it references is copied
+    /// into B's store first (that is BlobTransport's job in a real sync), then the applier runs.
+    /// Without the copy every article event would fail with BlobMissingException before reaching
+    /// the code these tests are about.
+    /// </summary>
+    private async Task<EventApplyResult> ApplyOnBAsync(SyncEvent evt)
+    {
+        var bBlobs = new BlobRepository(_bFactory);
+        var aBlobs = new BlobRepository(_nodeA.Factory);
+        foreach (var hash in BlobReferences.Collect([evt]))
+        {
+            var data = await aBlobs.GetAsync(hash);
+            if (data != null) await bBlobs.StoreAsync(data);
+        }
+        return await _bApplier.ApplyAsync(evt);
+    }
+
+    /// <summary>The ciphertext an article event refers to, read from NodeA's blob store.</summary>
+    private async Task<byte[]> CiphertextOfAsync(ArticleEventPayload payload)
+    {
+        if (payload.CiphertextB64 != null) return Convert.FromBase64String(payload.CiphertextB64);
+        return (await new BlobRepository(_nodeA.Factory).GetAsync(payload.CiphertextSha256!))!;
     }
 
     private sealed class NullRestoreInitiator : IRestoreInitiator
@@ -157,7 +182,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
 
         _bBodyRepo.FailUpsert = true;
 
-        var act = async () => await _bApplier.ApplyAsync(evt);
+        var act = async () => await ApplyOnBAsync(evt);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("Injected body upsert failure");
 
         using var conn = _bFactory.CreateConnection();
@@ -179,7 +204,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
 
         _bTagRepo.FailSetForArticle = true;
 
-        var act = async () => await _bApplier.ApplyAsync(evt);
+        var act = async () => await ApplyOnBAsync(evt);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("Injected tag set failure");
 
         using var conn = _bFactory.CreateConnection();
@@ -206,7 +231,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
         var evt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate);
 
         _bBodyRepo.FailUpsert = true;
-        var act = async () => await _bApplier.ApplyAsync(evt);
+        var act = async () => await ApplyOnBAsync(evt);
         await act.Should().ThrowAsync<InvalidOperationException>();
 
         using (var conn = _bFactory.CreateConnection())
@@ -216,7 +241,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
 
         // Sync redelivers the identical event on the next cycle — fix the transient fault and retry.
         _bBodyRepo.FailUpsert = false;
-        await _bApplier.ApplyAsync(evt);
+        await ApplyOnBAsync(evt);
 
         var applied = await _bArticleRepo.GetByIdAsync(article.Id);
         applied.Should().NotBeNull();
@@ -236,13 +261,13 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
     public async Task ArticleUpdate_WhenBodyFails_RollsBackArticleMetadataAndTags()
     {
         var article = await _nodeA.ArticleService.CreateAsync("Original Title", "/original", ["original_tag"], "Original Content");
-        await _bApplier.ApplyAsync((await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate));
+        await ApplyOnBAsync((await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate));
 
         await _nodeA.ArticleService.UpdateAsync(article.Id, title: "New Title", treePath: "/newpath", tags: ["new_tag"], plaintext: "New Content");
         var updateEvt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleUpdate);
 
         _bBodyRepo.FailUpsert = true;
-        var act = async () => await _bApplier.ApplyAsync(updateEvt);
+        var act = async () => await ApplyOnBAsync(updateEvt);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("Injected body upsert failure");
 
         var current = await _bArticleRepo.GetByIdAsync(article.Id);
@@ -263,13 +288,13 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
     public async Task ArticleUpdate_WhenTagsFail_RollsBackArticleAndBody()
     {
         var article = await _nodeA.ArticleService.CreateAsync("Base", "/x", [], "Body A");
-        await _bApplier.ApplyAsync((await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate));
+        await ApplyOnBAsync((await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate));
 
         await _nodeA.ArticleService.UpdateAsync(article.Id, plaintext: "Body B", tags: ["new_tag"]);
         var updateEvt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleUpdate);
 
         _bTagRepo.FailSetForArticle = true;
-        var act = async () => await _bApplier.ApplyAsync(updateEvt);
+        var act = async () => await ApplyOnBAsync(updateEvt);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("Injected tag set failure");
 
         using var conn = _bFactory.CreateConnection();
@@ -297,18 +322,18 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
     public async Task ArticleUpdate_RetryAfterTransientFailure_SelfHeals()
     {
         var article = await _nodeA.ArticleService.CreateAsync("Base", "/x", [], "Body A");
-        await _bApplier.ApplyAsync((await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate));
+        await ApplyOnBAsync((await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate));
 
         await _nodeA.ArticleService.UpdateAsync(article.Id, title: "Updated", plaintext: "Body B");
         var updateEvt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleUpdate);
         var updatePayload = System.Text.Json.JsonSerializer.Deserialize<ArticleEventPayload>(updateEvt.Payload)!;
 
         _bBodyRepo.FailUpsert = true;
-        var act = async () => await _bApplier.ApplyAsync(updateEvt);
+        var act = async () => await ApplyOnBAsync(updateEvt);
         await act.Should().ThrowAsync<InvalidOperationException>();
 
         _bBodyRepo.FailUpsert = false;
-        await _bApplier.ApplyAsync(updateEvt);
+        await ApplyOnBAsync(updateEvt);
 
         var current = await _bArticleRepo.GetByIdAsync(article.Id);
         current!.Title.Should().Be("Updated");
@@ -317,7 +342,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
         var storedCiphertext = await conn.QuerySingleAsync<byte[]>(
             "SELECT ciphertext FROM tbl_article_body WHERE article_id = @id", new { id = article.Id });
         storedCiphertext.Should().BeEquivalentTo(
-            Convert.FromBase64String(updatePayload.CiphertextB64),
+            await CiphertextOfAsync(updatePayload),
             "the healed retry must store the UPDATED body ('Body B'), not the stale pre-update one");
 
         // A LWW-winning update always snapshots the row it overwrites (see ApplyArticleUpdateCoreAsync).
@@ -343,7 +368,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
     public async Task ApplyArticleUpdate_HoldsArticleWriteLockForDuration()
     {
         var article = await _nodeA.ArticleService.CreateAsync("Locked", "/x", [], "v1");
-        await _bApplier.ApplyAsync((await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate));
+        await ApplyOnBAsync((await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleCreate));
 
         await _nodeA.ArticleService.UpdateAsync(article.Id, plaintext: "v2");
         var updateEvt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Single(e => e.EventType == EventTypes.ArticleUpdate);
@@ -356,7 +381,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
             await release.Task;
         };
 
-        var applyTask = _bApplier.ApplyAsync(updateEvt);
+        var applyTask = ApplyOnBAsync(updateEvt);
         await entered.Task; // now mid-transaction, inside the write lock
 
         var acquireTask = ArticleWriteLock.AcquireAsync(article.Id);

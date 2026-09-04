@@ -46,7 +46,8 @@ public class SyncClientTests : IAsyncLifetime
             authSigner,
             logger,
             _peerNewerProtocolState,
-            _node.QuarantineRepo);
+            _node.QuarantineRepo,
+            new BlobRepository(_node.Factory));
 
         _remoteNodeId = Guid.NewGuid();
         _mockHandler = new MockHandler();
@@ -93,6 +94,22 @@ public class SyncClientTests : IAsyncLifetime
             }
         });
         _mockHandler.MapRoute("/api/sync/report-position", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+
+        // Blob transport (protocol 2): the peer reports every hash as missing, so the article's
+        // blob is uploaded ahead of its event — the wire sequence asserted by the push tests.
+        _mockHandler.MapRoute("/api/sync/blobs/check", req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            var hashes = JsonDocument.Parse(body).RootElement.GetProperty("hashes").EnumerateArray().Select(h => h.GetString()!).ToList();
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { missing = hashes }), Encoding.UTF8, "application/json")
+            };
+        });
+        _mockHandler.MapRoute("/api/sync/blobs", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new { stored = 1, rejected = 0 }), Encoding.UTF8, "application/json")
+        });
     }
 
     public async Task DisposeAsync()
@@ -126,10 +143,25 @@ public class SyncClientTests : IAsyncLifetime
         _mockHandler.CallLog.Should().Contain(s => s.StartsWith("GET") && s.Contains("/api/sync/events"));
         _mockHandler.CallLog.Should().Contain(s => s.StartsWith("POST") && s.Contains("/api/sync/report-position"));
         _mockHandler.CallLog.Should().Contain(s => s.StartsWith("POST") && s.Contains("/api/sync/events")); // push
+
+        // Protocol 2 wire order: the peer is asked which blobs it lacks, they are uploaded, and
+        // only then do the events go — the receiver cannot fetch bytes it is missing on its own.
+        var log = _mockHandler.CallLog;
+        var check  = log.FindIndex(s => s == "POST /api/sync/blobs/check");
+        var upload = log.FindIndex(s => s == "POST /api/sync/blobs");
+        var push   = log.FindIndex(s => s == "POST /api/sync/events");
+        check.Should().BeGreaterThanOrEqualTo(0);
+        upload.Should().BeGreaterThan(check);
+        push.Should().BeGreaterThan(upload);
     }
 
+    /// <summary>
+    /// A peer still on protocol 1 cannot apply protocol-2 events (no inline ciphertext, no blob
+    /// endpoints to receive it separately), so the push phase is skipped — pushing would only
+    /// stall on skipped events. Pull still runs: its protocol-1 events remain applicable here.
+    /// </summary>
     [Fact]
-    public async Task SyncWith_PeerLowerVersion_SyncsNormally()
+    public async Task SyncWith_PeerLowerVersion_PullsButSkipsPush()
     {
         // Arrange
         _peerNewerProtocolState.HasNewerProtocol = false;
@@ -152,7 +184,8 @@ public class SyncClientTests : IAsyncLifetime
         _peerNewerProtocolState.HasNewerProtocol.Should().BeFalse();
         _mockHandler.CallLog.Should().Contain(s => s.StartsWith("GET") && s.Contains("/api/sync/events"));
         _mockHandler.CallLog.Should().Contain(s => s.StartsWith("POST") && s.Contains("/api/sync/report-position"));
-        _mockHandler.CallLog.Should().Contain(s => s.StartsWith("POST") && s.Contains("/api/sync/events")); // push
+        _mockHandler.CallLog.Should().NotContain(s => s.StartsWith("POST") && s.Contains("/api/sync/events")); // push skipped
+        _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/blobs"));
     }
 
     [Fact]

@@ -82,15 +82,37 @@ public partial class EventApplier
         JsonSerializer.Deserialize<T>(json)
         ?? throw new InvalidDataException($"Failed to deserialize payload as {typeof(T).Name}");
 
-    private static EncryptedArticleBody PayloadToBody(Guid articleId, ArticleEventPayload p) =>
+    private async Task<EncryptedArticleBody> PayloadToBodyAsync(Guid articleId, ArticleEventPayload p) =>
         new()
         {
             ArticleId = articleId,
-            Ciphertext = Convert.FromBase64String(p.CiphertextB64),
+            Ciphertext = await ResolveCiphertextAsync(p.CiphertextB64, p.CiphertextSha256),
             IV = Convert.FromBase64String(p.IvB64),
             EncryptedDek = Convert.FromBase64String(p.EncryptedDekB64),
             DekIV = Convert.FromBase64String(p.DekIvB64)
         };
+
+    /// <summary>
+    /// The ciphertext an article or media payload refers to. Inline base64 (protocol 1) wins when
+    /// present — those bytes are covered by the event signature directly. Otherwise the hash is
+    /// looked up in the local blob store, which the transport filled before this event was handed
+    /// over (pusher ships blobs first; puller fetches them first). A miss is therefore transient
+    /// or a bug, never a normal state: it is thrown as <see cref="BlobMissingException"/> so the
+    /// event is retried next cycle — the pusher re-checks which hashes we lack on every push, so
+    /// a blob swept or lost in between is simply sent again — and quarantined only if it keeps
+    /// failing, like any other apply error.
+    ///
+    /// No hash check on the bytes here: BlobRepository stores everything under what it actually
+    /// hashes to, so whatever sits at this address IS the content the signed hash committed to.
+    /// </summary>
+    private async Task<byte[]> ResolveCiphertextAsync(string? inlineB64, string? sha256)
+    {
+        if (inlineB64 != null) return Convert.FromBase64String(inlineB64);
+        if (string.IsNullOrEmpty(sha256))
+            throw new InvalidDataException("Payload carries neither ciphertext nor ciphertext_sha256.");
+        return await blobRepo.GetAsync(sha256)
+            ?? throw new BlobMissingException(sha256);
+    }
 
     /// <summary>
     /// True unless a tree path inside the payload contains a strictly

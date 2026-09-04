@@ -17,9 +17,21 @@ public class EventLogger(
     ILamportClock clock,
     IActorProvider actorProvider,
     ISyncTrigger syncTrigger,
-    SessionService session) : IEventLogger
+    SessionService session,
+    IBlobRepository blobRepo) : IEventLogger
 {
     public void SignalSync() => syncTrigger.Signal();
+
+    /// <summary>
+    /// Makes sure the bytes an event is about to reference exist in tbl_blob, in the caller's
+    /// transaction, and returns their hash. For article bodies this is normally a no-op —
+    /// ArticleBodyRepository.UpsertAsync already stored the blob in the same transaction — but
+    /// doing it here too keeps one invariant in one place: an event this class writes never names
+    /// a blob this node does not hold. For media it is the only insert: the file on disk is the
+    /// media's home, and the blob row exists so the pusher can ship the bytes ahead of the event.
+    /// </summary>
+    private Task<string> EnsureBlobAsync(byte[] ciphertext, IDbTransaction? transaction) =>
+        blobRepo.StoreAsync(ciphertext, transaction);
 
     public async Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags, IDbTransaction? transaction = null)
     {
@@ -30,7 +42,7 @@ public class EventLogger(
             Title: article.Title,
             TreePath: article.TreePath,
             ConceptTags: conceptTags,
-            CiphertextB64: Convert.ToBase64String(body.Ciphertext),
+            CiphertextB64: null,
             IvB64: Convert.ToBase64String(body.IV),
             EncryptedDekB64: Convert.ToBase64String(body.EncryptedDek),
             DekIvB64: Convert.ToBase64String(body.DekIV),
@@ -39,7 +51,8 @@ public class EventLogger(
             UpdatedAt: article.UpdatedAt,
             DekEpoch: 1,
             Protected: article.Protected,
-            ProtectionHint: article.ProtectionHint
+            ProtectionHint: article.ProtectionHint,
+            CiphertextSha256: await EnsureBlobAsync(body.Ciphertext, transaction)
         );
 
         await AppendEventAsync(identity, EventTypes.ArticleCreate, article.Id, article.LamportTs,
@@ -57,7 +70,7 @@ public class EventLogger(
             Title: article.Title,
             TreePath: article.TreePath,
             ConceptTags: conceptTags,
-            CiphertextB64: Convert.ToBase64String(body.Ciphertext),
+            CiphertextB64: null,
             IvB64: Convert.ToBase64String(body.IV),
             EncryptedDekB64: Convert.ToBase64String(body.EncryptedDek),
             DekIvB64: Convert.ToBase64String(body.DekIV),
@@ -66,7 +79,8 @@ public class EventLogger(
             UpdatedAt: article.UpdatedAt,
             DekEpoch: 1,
             Protected: article.Protected,
-            ProtectionHint: article.ProtectionHint
+            ProtectionHint: article.ProtectionHint,
+            CiphertextSha256: await EnsureBlobAsync(body.Ciphertext, transaction)
         );
 
         await AppendEventAsync(identity, EventTypes.ArticleUpdate, article.Id, article.LamportTs,
@@ -220,12 +234,13 @@ public class EventLogger(
             FileName: media.FileName,
             ContentType: media.ContentType,
             FileSize: media.FileSize,
-            CiphertextB64: Convert.ToBase64String(ciphertext),
+            CiphertextB64: null,
             IvB64: Convert.ToBase64String(media.IV),
             EncryptedDekB64: Convert.ToBase64String(media.EncryptedDek),
             DekIvB64: Convert.ToBase64String(media.DekIV),
             CreatedAt: media.CreatedAt,
-            Kind: media.Kind);
+            Kind: media.Kind,
+            CiphertextSha256: await EnsureBlobAsync(ciphertext, transaction));
 
         await AppendEventAsync(identity, EventTypes.MediaCreate, null, lamportTs,
             JsonSerializer.Serialize(payload), transaction: transaction);
@@ -341,7 +356,7 @@ public class EventLogger(
             EntityId = entityId ?? articleId?.ToString(),
             Payload = payloadJson,
             Signature = [],
-            ProtocolVersion = 1,
+            ProtocolVersion = SyncProtocolVersion.Current,
             CreatedAt = now,
             ActorType = actorProvider.ActorType,
             ActorName = actorProvider.ActorName,

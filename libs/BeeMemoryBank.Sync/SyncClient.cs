@@ -24,6 +24,7 @@ public class SyncClient(
     ILogger<SyncClient> logger,
     PeerNewerProtocolState peerNewerProtocolState,
     ISyncQuarantineRepository quarantineRepo,
+    IBlobRepository blobRepo,
     IRestoreRetrier? restoreRetrier = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
@@ -117,6 +118,12 @@ public class SyncClient(
             var remoteEvents = await PullEventsAsync(http, remoteApiBase, token, afterSeq, ct);
             logger.LogDebug("Received {Count} events from {NodeId}", remoteEvents.Count, remoteIdentity.NodeId);
 
+            // Protocol 2: events name their ciphertext by hash. Fetch every blob this page needs
+            // that we do not already hold BEFORE applying anything, so EventApplier never touches
+            // the network — a blob still missing after this step fails its event with
+            // BlobMissingException and goes through the ordinary retry/quarantine path below.
+            await BlobTransport.FetchForAsync(http, remoteApiBase, token, remoteEvents, blobRepo, logger, ct);
+
             long lastApplied = afterSeq;
             int droppedCount = 0;
             foreach (var evt in remoteEvents)
@@ -204,6 +211,18 @@ public class SyncClient(
         // too large alone (see SyncEventQuarantine and GET /api/sync/quarantine).
         const int PushFetchSize = 500;
         const long PushBatchByteTarget = 8 * 1024 * 1024;
+
+        // A peer still on protocol 1 cannot apply our events (it expects the ciphertext inline and
+        // has no /api/sync/blobs/* to receive it separately), so pushing would only produce a
+        // skip on every event and a permanent stall. Leave the cursor where it is; the events go
+        // out once the peer upgrades. Its own events still reach us through the pull above.
+        if (remoteIdentity.ProtocolVersion < SyncProtocolVersion.Current)
+        {
+            logger.LogWarning("Remote node {NodeId} is on protocol {Remote} < {Local}; skipping push until it upgrades.",
+                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion, SyncProtocolVersion.Current);
+            return appliedCount;
+        }
+
         var pushPosition = await pushPositionRepo.GetAsync(remoteIdentity.NodeId);
         long pushAfter = pushPosition?.LastPushedSeq ?? 0;
         int totalApplied = 0, totalSkipped = 0;
@@ -221,6 +240,12 @@ public class SyncClient(
             bool stalled = false;
             foreach (var chunk in SplitIntoByteBoundedBatches(page, PushBatchByteTarget))
             {
+                // Blobs first, then the events that reference them — the receiver applies events
+                // as they arrive and cannot call back for bytes it lacks (it is usually behind
+                // NAT). Idempotent, so a chunk retried next cycle just re-checks and re-ships
+                // whatever the peer still reports missing.
+                await BlobTransport.ShipForAsync(http, remoteApiBase, token, chunk, blobRepo, logger, ct);
+
                 var (applied, skipped, dropped, lastAppliedSeq) =
                     await PushChunkWithSplitAsync(http, remoteApiBase, token, chunk, ct);
                 totalApplied += applied;

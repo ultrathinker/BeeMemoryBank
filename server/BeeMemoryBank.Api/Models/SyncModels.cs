@@ -24,6 +24,31 @@ public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed255
 /// </param>
 public record SyncApplyResult(int Applied, int Skipped, long? LastAppliedSequence = null, int Dropped = 0);
 
+// ─── Blob transport (protocol 2) ───────────────────────────────────────────────
+// Wire shapes for /api/sync/blobs/*. The client side (BlobTransport in BeeMemoryBank.Sync) keeps
+// its own private copies of these — the Sync library does not reference Api — so a change here
+// must be mirrored there.
+
+/// <summary>Request body for /api/sync/blobs/check and /api/sync/blobs/get.</summary>
+public record SyncBlobHashList(List<string> Hashes);
+
+/// <summary>Response of /api/sync/blobs/check: the requested hashes this node does NOT hold.</summary>
+public record SyncBlobMissing(List<string> Missing);
+
+/// <summary>One blob on the wire: lowercase-hex SHA-256 and base64 ciphertext.</summary>
+public record SyncBlob(string Hash, string Data);
+
+/// <summary>Request body of POST /api/sync/blobs and response of /api/sync/blobs/get.</summary>
+public record SyncBlobBatch(List<SyncBlob> Blobs);
+
+/// <summary>
+/// Response of POST /api/sync/blobs. Rejected counts items whose base64 was malformed — a blob
+/// whose bytes hash to something other than the claimed hash is not rejected, it is stored under
+/// its real hash (see BlobRepository.StoreAsync), so it can never shadow the content an event
+/// actually asked for.
+/// </summary>
+public record SyncBlobStoreResult(int Stored, int Rejected);
+
 public record DeliveryNodeStatus(
     Guid NodeId,
     string DisplayName,

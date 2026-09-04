@@ -74,12 +74,23 @@ public record HardDeleteEventPayload(
     [property: JsonPropertyName("deleted_at")]        DateTime DeletedAt
 );
 
-/// <summary>Payload for creating and updating an article.</summary>
+/// <summary>
+/// Payload for creating and updating an article.
+///
+/// The body travels by reference: <see cref="CiphertextSha256"/> names a blob in tbl_blob that the
+/// pusher ships ahead of the event (or the puller fetches before applying). The hash sits inside
+/// the Ed25519-signed payload, and the receiver stores incoming bytes only under what they hash to,
+/// so the signature still binds the body even though the body is no longer in the signed bytes.
+/// <see cref="CiphertextB64"/> is the pre-protocol-2 form — the whole body inline as base64 — and
+/// is still accepted on read because the event log holds such events and a peer that has not
+/// upgraded yet still emits them. Exactly one of the two is set; the applier prefers the inline
+/// form when both are present, since that is what the signature covers directly.
+/// </summary>
 public record ArticleEventPayload(
     [property: JsonPropertyName("title")]         string Title,
     [property: JsonPropertyName("tree_path")]     string TreePath,
     [property: JsonPropertyName("concept_tags")]  string[]? ConceptTags,
-    [property: JsonPropertyName("ciphertext")]    string CiphertextB64,
+    [property: JsonPropertyName("ciphertext")]    string? CiphertextB64,
     [property: JsonPropertyName("iv")]            string IvB64,
     [property: JsonPropertyName("encrypted_dek")] string EncryptedDekB64,
     [property: JsonPropertyName("dek_iv")]        string DekIvB64,
@@ -96,7 +107,8 @@ public record ArticleEventPayload(
     // receiver would strip the lock from a body that is still a BMBENC1 ciphertext, exposing it to
     // accidental overwrite. EventApplier therefore only writes the flag when it HasValue.
     [property: JsonPropertyName("protected")]       bool? Protected = null,
-    [property: JsonPropertyName("protection_hint")] string? ProtectionHint = null
+    [property: JsonPropertyName("protection_hint")] string? ProtectionHint = null,
+    [property: JsonPropertyName("ciphertext_sha256")] string? CiphertextSha256 = null
 );
 
 /// <summary>Payload for soft-deleting an article.</summary>
@@ -176,13 +188,16 @@ public record FolderDeletePayload(
     [property: JsonPropertyName("deleted_at")] DateTime DeletedAt
 );
 
+// CiphertextB64 / CiphertextSha256: same by-reference scheme as ArticleEventPayload — see there.
+// Media is where it matters most for transport: a single media_create used to carry up to ~27MB
+// of base64 in one event, which is what forced the per-request size caps on the sync endpoints.
 public record MediaEventPayload(
     [property: JsonPropertyName("media_id")]        Guid MediaId,
     [property: JsonPropertyName("article_id")]      Guid? ArticleId,
     [property: JsonPropertyName("file_name")]       string FileName,
     [property: JsonPropertyName("content_type")]    string ContentType,
     [property: JsonPropertyName("file_size")]       long FileSize,
-    [property: JsonPropertyName("ciphertext")]      string CiphertextB64,
+    [property: JsonPropertyName("ciphertext")]      string? CiphertextB64,
     [property: JsonPropertyName("iv")]              string IvB64,
     [property: JsonPropertyName("encrypted_dek")]   string EncryptedDekB64,
     [property: JsonPropertyName("dek_iv")]          string DekIvB64,
@@ -190,7 +205,8 @@ public record MediaEventPayload(
     // Defaults to "image" so events serialized before this field existed still deserialize
     // correctly — all of them predate the "attachment" kind, so the default is also the truth.
     [property: JsonPropertyName("kind")]            string Kind = "image",
-    [property: JsonPropertyName("dek_epoch")]       int DekEpoch = 1);
+    [property: JsonPropertyName("dek_epoch")]       int DekEpoch = 1,
+    [property: JsonPropertyName("ciphertext_sha256")] string? CiphertextSha256 = null);
 
 public record MediaDeletePayload(
     [property: JsonPropertyName("media_id")]   Guid MediaId,

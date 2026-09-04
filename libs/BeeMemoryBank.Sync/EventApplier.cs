@@ -39,6 +39,7 @@ public partial class EventApplier(
     IDekRotationApplier dekRotationApplier,
     FolderAccessService folderAccess,
     IDbConnectionFactory connFactory,
+    IBlobRepository blobRepo,
     ILogger<EventApplier> logger)
 {
     // whitelistRepoWrite is the same whitelist, just separated for read/write intent clarity
@@ -46,8 +47,9 @@ public partial class EventApplier(
 
     public async Task<EventApplyResult> ApplyAsync(SyncEvent evt)
     {
-        // Protocol version check
-        if (evt.ProtocolVersion != 1)
+        // Protocol version check. Version 1 events (ciphertext inline) are still applied: the log
+        // holds them, and a peer that has not upgraded still emits them.
+        if (!SyncProtocolVersion.CanApply(evt.ProtocolVersion))
             throw new NotSupportedException($"Unknown protocol version: {evt.ProtocolVersion}");
 
         // Fast-path idempotency: if event already processed, skip.

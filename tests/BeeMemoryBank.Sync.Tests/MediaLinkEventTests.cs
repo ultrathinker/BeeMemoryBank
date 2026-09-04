@@ -80,14 +80,14 @@ public class MediaLinkEventTests : IAsyncLifetime
         var mediaId = Guid.NewGuid();
         var article = await _nodeA.ArticleService.CreateAsync("Article", "/", [], "body");
         var createEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvts[0]);
 
         await InsertOrphanMediaOnNodeBAsync(mediaId);
 
         await _nodeA.EventLogger.LogMediaLinkAsync(mediaId, article.Id, _nodeA.Clock.Tick());
         var linkEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(createEvts.Count);
 
-        await _nodeB.EventApplier.ApplyAsync(linkEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, linkEvts[0]);
 
         using var conn = _nodeB.Factory.CreateConnection();
         var linkedArticleId = await conn.QuerySingleOrDefaultAsync<string>(
@@ -101,7 +101,7 @@ public class MediaLinkEventTests : IAsyncLifetime
         var mediaId = Guid.NewGuid();
         var article = await _nodeA.ArticleService.CreateAsync("Article", "/", [], "body");
         var createEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        await _nodeB.EventApplier.ApplyAsync(createEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, createEvts[0]);
 
         var otherArticleId = Guid.NewGuid();
         await InsertDummyArticleOnNodeBAsync(otherArticleId);
@@ -116,7 +116,7 @@ public class MediaLinkEventTests : IAsyncLifetime
         await _nodeA.EventLogger.LogMediaLinkAsync(mediaId, article.Id, _nodeA.Clock.Tick());
         var linkEvts = await _nodeA.EventLogRepo.GetAfterSequenceAsync(createEvts.Count);
 
-        await _nodeB.EventApplier.ApplyAsync(linkEvts[0]);
+        await _nodeB.ApplyFromAsync(_nodeA, linkEvts[0]);
 
         using var conn2 = _nodeB.Factory.CreateConnection();
         var linkedArticleId = await conn2.QuerySingleOrDefaultAsync<string>(

@@ -33,7 +33,7 @@ public class EventLoggerTests : SyncTestFixture
 
         evt.ArticleId.Should().Be(article.Id);
         evt.LamportTs.Should().Be(article.LamportTs);
-        evt.ProtocolVersion.Should().Be(1);
+        evt.ProtocolVersion.Should().Be(SyncProtocolVersion.Current);
         evt.Signature.Should().NotBeEmpty();
     }
 

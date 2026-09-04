@@ -409,6 +409,100 @@ public static class SyncEndpoints
             return Results.Ok(new SyncApplyResult(applied, skipped, lastAppliedSeq, dropped));
         }).WithTags("Sync");
 
+        // ─── Blob transport (protocol 2) ─────────────────────────────────────────
+        // Events carry ciphertext_sha256; the bytes move through these three endpoints, always
+        // driven by the peer that opened the connection (BlobTransport in BeeMemoryBank.Sync):
+        // a pusher calls check → blobs → events, a puller calls events → get. Nothing here ever
+        // dials back to the peer.
+
+        // Which of these hashes do I lack? The pusher asks before uploading so that re-pushing a
+        // chunk (retries are routine) costs a list of 64-byte strings, not the blobs again.
+        app.MapPost("/api/sync/blobs/check", async (
+            HttpContext ctx,
+            SyncTokenStore store,
+            IBlobRepository blobRepo,
+            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
+            SyncBlobHashList req) =>
+        {
+            if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
+            if (invisibleMode.IsInvisible) return Results.StatusCode(503);
+            if (!ValidateHashList(req.Hashes, out var problem)) return problem;
+
+            var have = await blobRepo.GetExistingAsync(req.Hashes);
+            return Results.Ok(new SyncBlobMissing(req.Hashes.Where(h => !have.Contains(h)).Distinct().ToList()));
+        }).WithTags("Sync");
+
+        // Store these blobs. Each is stored under the hash its bytes actually have — a peer cannot
+        // plant wrong content at an address an event will look up. Same request-size cap as the
+        // event push: the pusher batches to ~8MB raw, and a single 20MB media blob (~27MB base64)
+        // still fits alone.
+        app.MapPost("/api/sync/blobs", async (
+            HttpContext ctx,
+            SyncTokenStore store,
+            IBlobRepository blobRepo,
+            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
+            ILoggerFactory loggerFactory) =>
+        {
+            if (!TryAuth(ctx, store, out var nodeId)) return Results.Unauthorized();
+            if (invisibleMode.IsInvisible) return Results.StatusCode(503);
+
+            var maxBodyFeature = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+            if (maxBodyFeature is { IsReadOnly: false })
+                maxBodyFeature.MaxRequestBodySize = PushMaxRequestBytes;
+
+            SyncBlobBatch? batch;
+            try
+            {
+                batch = await ctx.Request.ReadFromJsonAsync<SyncBlobBatch>();
+            }
+            catch (Microsoft.AspNetCore.Http.BadHttpRequestException ex) when (ex.StatusCode == 413)
+            {
+                return Results.StatusCode(413);
+            }
+            catch
+            {
+                return Results.BadRequest(new ErrorResponse("Invalid JSON"));
+            }
+            if (batch?.Blobs is null) return Results.BadRequest(new ErrorResponse("Missing blobs"));
+            if (batch.Blobs.Count > 2000) return Results.BadRequest(new ErrorResponse("Batch too large (max 2000 blobs)"));
+
+            var logger = loggerFactory.CreateLogger("SyncEndpoints");
+            int stored = 0, rejected = 0;
+            foreach (var blob in batch.Blobs)
+            {
+                byte[] data;
+                try { data = Convert.FromBase64String(blob.Data ?? ""); }
+                catch (FormatException) { rejected++; continue; }
+                if (data.Length == 0) { rejected++; continue; }
+
+                var actual = await blobRepo.StoreAsync(data);
+                if (!string.Equals(actual, blob.Hash, StringComparison.Ordinal))
+                    logger.LogWarning("Peer {NodeId} uploaded bytes hashing to {Actual} under claimed hash {Claimed}",
+                        nodeId, actual, blob.Hash);
+                stored++;
+            }
+            return Results.Ok(new SyncBlobStoreResult(stored, rejected));
+        }).WithTags("Sync");
+
+        // Give me these blobs. Bounded by the same byte budget as the event pull; the client keeps
+        // asking for whatever it did not get back. POST rather than GET only because a page of
+        // hashes does not fit in a query string.
+        app.MapPost("/api/sync/blobs/get", async (
+            HttpContext ctx,
+            SyncTokenStore store,
+            IBlobRepository blobRepo,
+            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
+            SyncBlobHashList req) =>
+        {
+            if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
+            if (invisibleMode.IsInvisible) return Results.StatusCode(503);
+            if (!ValidateHashList(req.Hashes, out var problem)) return problem;
+
+            var blobs = await blobRepo.GetManyAsync(req.Hashes, PullResponseByteTarget);
+            return Results.Ok(new SyncBlobBatch(
+                blobs.Select(b => new SyncBlob(b.Hash, Convert.ToBase64String(b.Data))).ToList()));
+        }).WithTags("Sync");
+
         // ─── Sync status (for Web UI progress display) ─────────────────────────
         app.MapGet("/api/sync/status", async (
             HttpContext ctx,
@@ -773,6 +867,23 @@ public static class SyncEndpoints
                     ErrorDetail: ex.Message));
             }
         }).WithTags("Sync");
+    }
+
+    /// <summary>
+    /// Rejects a blob-hash list that is absent, oversized, or contains anything but well-formed
+    /// lowercase-hex SHA-256 strings — so the repository only ever sees values that can be keys.
+    /// </summary>
+    private static bool ValidateHashList(List<string>? hashes, out IResult problem)
+    {
+        problem = Results.Empty;
+        if (hashes is null) { problem = Results.BadRequest(new ErrorResponse("Missing hashes")); return false; }
+        if (hashes.Count > 2000) { problem = Results.BadRequest(new ErrorResponse("Too many hashes (max 2000)")); return false; }
+        if (hashes.Any(h => !BlobReferences.IsWellFormedHash(h)))
+        {
+            problem = Results.BadRequest(new ErrorResponse("Malformed blob hash"));
+            return false;
+        }
+        return true;
     }
 
     private static bool TryAuth(HttpContext ctx, SyncTokenStore store, out Guid nodeId)

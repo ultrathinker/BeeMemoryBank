@@ -56,7 +56,7 @@ public class HardDeleteSyncTests : IAsyncLifetime
         // 1. Create article on NodeA, sync to NodeB
         var article = await _nodeA.ArticleService.CreateAsync("Target", "/Work", new List<string>(), "Secret");
         var events = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        foreach(var e in events) await _nodeB.EventApplier.ApplyAsync(e);
+        foreach(var e in events) await _nodeB.ApplyFromAsync(_nodeA, e);
 
         (await _nodeB.ArticleRepo.GetByIdAsync(article.Id)).Should().NotBeNull();
 
@@ -67,7 +67,7 @@ public class HardDeleteSyncTests : IAsyncLifetime
         var lastEvent = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Last();
         lastEvent.EventType.Should().Be(EventTypes.HardDelete);
 
-        await _nodeB.EventApplier.ApplyAsync(lastEvent);
+        await _nodeB.ApplyFromAsync(_nodeA, lastEvent);
 
         // 4. Verify NodeB is purged
         (await _nodeB.ArticleRepo.GetByIdAsync(article.Id)).Should().BeNull();
@@ -79,7 +79,7 @@ public class HardDeleteSyncTests : IAsyncLifetime
         // 1. Create article on NodeA, sync to NodeB
         var article = await _nodeA.ArticleService.CreateAsync("Target", "/Work", new List<string>(), "Secret");
         var events = await _nodeA.EventLogRepo.GetAfterSequenceAsync(0);
-        foreach(var e in events) await _nodeB.EventApplier.ApplyAsync(e);
+        foreach(var e in events) await _nodeB.ApplyFromAsync(_nodeA, e);
 
         // 2. Hard delete on NodeB (locally)
         await _nodeB.HardDeleteService.DeleteArticleAsync(article.Id, 1, null, CancellationToken.None);
@@ -90,7 +90,7 @@ public class HardDeleteSyncTests : IAsyncLifetime
         updateEvent.EventType.Should().Be(EventTypes.ArticleUpdate);
 
         // 4. NodeB applies update
-        await _nodeB.EventApplier.ApplyAsync(updateEvent);
+        await _nodeB.ApplyFromAsync(_nodeA, updateEvent);
 
         // 5. Verify NodeB still doesn't have the article
         (await _nodeB.ArticleRepo.GetByIdAsync(article.Id)).Should().BeNull();
@@ -105,7 +105,7 @@ public class HardDeleteSyncTests : IAsyncLifetime
         var a3 = await _nodeA.ArticleService.CreateAsync("A3", "/Personal", new List<string>(), "body3");
 
         foreach (var e in await _nodeA.EventLogRepo.GetAfterSequenceAsync(0))
-            await _nodeB.EventApplier.ApplyAsync(e);
+            await _nodeB.ApplyFromAsync(_nodeA, e);
 
         (await _nodeB.ArticleRepo.GetByIdAsync(a1.Id)).Should().NotBeNull();
         (await _nodeB.ArticleRepo.GetByIdAsync(a2.Id)).Should().NotBeNull();
@@ -121,7 +121,7 @@ public class HardDeleteSyncTests : IAsyncLifetime
         // 3. Sync hard_delete event to NodeB
         var lastEvent = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Last();
         lastEvent.EventType.Should().Be(EventTypes.HardDelete);
-        await _nodeB.EventApplier.ApplyAsync(lastEvent);
+        await _nodeB.ApplyFromAsync(_nodeA, lastEvent);
 
         // 4. Verify NodeB cascaded correctly
         (await _nodeB.ArticleRepo.GetByIdAsync(a1.Id)).Should().BeNull();

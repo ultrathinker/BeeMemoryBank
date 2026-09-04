@@ -75,7 +75,25 @@ public class CleanupService(
 
         // Purge media for soft-deleted articles (30 days)
         await CleanupMediaAsync(scope, now);
+
+        // Blob store garbage collection — LAST, after the purges above have removed the rows that
+        // referenced blobs (bodies of long-deleted articles, expired conflict copies), so those
+        // blobs are swept in this same pass rather than next hour's. The grace period is what
+        // makes the sweep safe against in-flight writers and against a pushed blob whose event is
+        // still one HTTP request away; see IBlobRepository.SweepUnreferencedAsync.
+        var blobRepo = scope.ServiceProvider.GetRequiredService<IBlobRepository>();
+        var sweptBlobs = await blobRepo.SweepUnreferencedAsync(now - BlobGracePeriod);
+        if (sweptBlobs > 0)
+            logger.LogInformation("Cleanup: swept {Count} unreferenced blobs", sweptBlobs);
     }
+
+    /// <summary>
+    /// How long a blob is immune to garbage collection after it is stored. Two hours is far
+    /// beyond any real gap between "blob stored" and "referencing row committed" (a transaction,
+    /// or two consecutive sync requests) while still short enough that the store never carries
+    /// much dead weight. Exposed for tests.
+    /// </summary>
+    public static readonly TimeSpan BlobGracePeriod = TimeSpan.FromHours(2);
 
     private async Task CleanupMediaAsync(IServiceScope scope, DateTime now)
     {

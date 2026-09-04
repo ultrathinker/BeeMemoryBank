@@ -87,7 +87,7 @@ public partial class EventApplier
         var folder = await folderRepo.GetByPathAsync(p.TreePath);
         article.FolderId = folder?.Id;
 
-        var body = PayloadToBody(articleId, p);
+        var body = await PayloadToBodyAsync(articleId, p);
         var tags = (p.ConceptTags ?? []).ToList();
 
         // Precompute tag embeddings BEFORE opening the transaction: ONNX inference is CPU-bound and
@@ -208,7 +208,7 @@ public partial class EventApplier
             var folder = await folderRepo.GetByPathAsync(p.TreePath);
             existing.FolderId = folder?.Id;
 
-            var body = PayloadToBody(articleId, p);
+            var body = await PayloadToBodyAsync(articleId, p);
             var tags = (p.ConceptTags ?? []).ToList();
 
             // Precompute BEFORE the transaction — see the identical comment in
@@ -239,7 +239,7 @@ public partial class EventApplier
         }
         else
         {
-            var incomingBody = PayloadToBody(articleId, p);
+            var incomingBody = await PayloadToBodyAsync(articleId, p);
             await conflictRepo.CreateAsync(new ConflictVersion
             {
                 Id = Guid.NewGuid(),

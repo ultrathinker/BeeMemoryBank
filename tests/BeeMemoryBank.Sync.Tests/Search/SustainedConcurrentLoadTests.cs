@@ -295,7 +295,7 @@ public class SustainedConcurrentLoadTests : IAsyncLifetime
         clock.Initialize(await eventLogRepo.GetMaxLamportTimestampAsync());
 
         var session = new SessionService(keySlotRepo);
-        var eventLogger = new EventLogger(nodeRepo, eventLogRepo, clock, new NullActorProvider(), new SyncTrigger(), session);
+        var eventLogger = new EventLogger(nodeRepo, eventLogRepo, clock, new NullActorProvider(), new SyncTrigger(), session, new BlobRepository(factory));
         var mediaRepo = new MediaRepository(factory, callerScopeHolder);
         var folderRepo = new FolderRepository(factory, callerScopeHolder);
         var versionRepo = new ArticleVersionRepository(factory, callerScopeHolder);

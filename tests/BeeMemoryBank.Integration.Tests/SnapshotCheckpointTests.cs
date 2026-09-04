@@ -60,7 +60,8 @@ public class SnapshotCheckpointTests : IAsyncLifetime
         var keySlotRepoForSession = new BeeMemoryBank.Storage.Sqlite.KeySlotRepository(_factory);
         _eventLogger = new EventLogger(
             _nodeRepo, _eventLogRepo, clock, new NullActorProvider(),
-            new NullSyncTrigger(), new SessionService(keySlotRepoForSession));
+            new NullSyncTrigger(), new SessionService(keySlotRepoForSession),
+            new BeeMemoryBank.Storage.Sqlite.BlobRepository(_factory));
 
         var loggerFactory = LoggerFactory.Create(b => b.AddDebug());
         var logger = loggerFactory.CreateLogger<CompactionService>();
