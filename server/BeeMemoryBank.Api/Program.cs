@@ -139,7 +139,10 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<ILogger<SnapshotService>>(),
         sp.GetRequiredService<IRestoreReplayShieldRepository>(),
         sp.GetRequiredService<IWhitelistRepository>(),
-        sp.GetService<BeeMemoryBank.Core.Services.SessionService>()));
+        // GetRequiredService, not GetService: a SnapshotService without a session has no way to
+        // encrypt, and CreateAsync then writes the vault out in the clear. That must not be
+        // reachable by silently resolving null at the composition root.
+        sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>()));
 // Singleton: RestoreInitiatorService holds in-memory progress state for /restore/progress polling.
 // Task.Run flows in EventApplier and SnapshotEndpoints fire-and-forget, so the service must outlive
 // the request scope. Scoped dependencies (repositories) are resolved via IServiceScopeFactory per

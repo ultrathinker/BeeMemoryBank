@@ -23,6 +23,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// Locking afterwards is still required: the restore replaces the database file, and the master DEK
 /// held in memory belongs to the vault that was just swapped out.
 /// </summary>
+[Collection(HeavyOperationCollection.Name)]
 public class SnapshotRestoreSessionTests : IAsyncLifetime
 {
     private readonly BmbWebApplicationFactory _factory = new();
@@ -124,13 +125,10 @@ public class SnapshotRestoreSessionTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Creates a snapshot with <c>filterSecrets: false</c> — a complete backup, which is the shape
-    /// restore is built to consume. The default snapshot (what <c>POST /api/snapshots</c> produces)
-    /// DROPS the secret tables, and restoring one of those fails on the first
-    /// <c>DELETE FROM tbl_sync_position</c> against a table that is no longer there. That is a
-    /// separate, pre-existing defect in the create/restore pair, not what these tests are about;
-    /// going through the service directly keeps the encryption behaviour under test from depending
-    /// on it.
+    /// Creates a snapshot with an explicit <c>filterSecrets: false</c> — a complete backup, the
+    /// shape restore is built to consume — so these tests state the input they need instead of
+    /// inheriting it from a default. <c>POST /api/snapshots</c> now produces the same thing;
+    /// <see cref="SnapshotRoundTripTests"/> is what holds it to that.
     /// </summary>
     private async Task<string> CreateFullSnapshotAsync()
     {

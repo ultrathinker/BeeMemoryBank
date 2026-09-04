@@ -34,7 +34,9 @@ public partial class SnapshotService
     private static readonly byte[] DbEncryptionAad = "bmb-snap-db-v1"u8.ToArray();
     private static readonly byte[] DbEncryptionAadV2 = "bmb-snap-db-v2"u8.ToArray();
 
-    private async Task DecryptDbIfNeededAsync(string extractedDbPath)
+    // internal, not private: the integration tests read what a snapshot actually contains by
+    // decrypting the archived database the same way restore does (InternalsVisibleTo in the csproj).
+    internal async Task DecryptDbIfNeededAsync(string extractedDbPath)
     {
         var probe = new byte[Math.Min(64, new FileInfo(extractedDbPath).Length)];
         await using (var probeStream = File.OpenRead(extractedDbPath))

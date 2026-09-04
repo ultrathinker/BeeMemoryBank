@@ -65,17 +65,40 @@ public partial class SnapshotService
                 FilterSecretsFrom(tempDb);
 
             bool dbEncrypted = false;
-            if (encryptDb && _sessionService is { IsUnlocked: true })
+            if (encryptDb)
             {
-                var masterDek = _sessionService.GetMasterDek();
-                try
+                // Refuse rather than silently downgrade. This used to fall through to "write it
+                // unencrypted" whenever the vault happened to be locked, which is precisely when
+                // nobody is watching — a snapshot taken right after a restart, or by a scheduled
+                // job, landed on disk as a plain SQLite file holding every article body, key slot
+                // and user row. The caller asked for an encrypted snapshot; if that is impossible
+                // the honest answer is an error, not a weaker file with the same name.
+                //
+                // Callers that legitimately need plaintext pass encryptDb: false and say why —
+                // the join snapshot does, because the joining node has no master DEK yet and the
+                // bytes travel over an authenticated TLS channel instead.
+                //
+                // A NULL session service is a different thing from a locked one: it means this
+                // instance was constructed without any encryption capability at all, which only
+                // test scaffolding does — the composition root resolves it with GetRequiredService
+                // so a running node cannot end up in that state.
+                if (_sessionService is { IsUnlocked: false })
+                    throw new InvalidOperationException(
+                        "Cannot create an encrypted snapshot while the vault is locked. Unlock it first, " +
+                        "or request an unencrypted snapshot explicitly.");
+
+                if (_sessionService != null)
                 {
-                    await EncryptDbFileAsync(tempDb, masterDek);
-                    dbEncrypted = true;
-                }
-                finally
-                {
-                    Array.Clear(masterDek);
+                    var masterDek = _sessionService.GetMasterDek();
+                    try
+                    {
+                        await EncryptDbFileAsync(tempDb, masterDek);
+                        dbEncrypted = true;
+                    }
+                    finally
+                    {
+                        Array.Clear(masterDek);
+                    }
                 }
             }
 
@@ -166,9 +189,20 @@ public partial class SnapshotService
             };
             var manifestBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(manifestDict, jsonOpts));
 
+            // Second-resolution timestamps collide in practice: the pre-restore safety backup is
+            // created within the same second as an adjacent snapshot often enough to matter, and
+            // the second file then overwrote the first under an identical name — silently
+            // destroying the one copy that exists to be restored if the restore goes wrong.
+            // Disambiguate with a counter rather than widening the timestamp, so file names keep
+            // the shape operators and older snapshots already have.
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
             var fileName = $"bmb-snapshot-{timestamp}.tar.gz";
             var filePath = Path.Combine(SnapshotsDir, fileName);
+            for (var dedupe = 2; File.Exists(filePath); dedupe++)
+            {
+                fileName = $"bmb-snapshot-{timestamp}-{dedupe}.tar.gz";
+                filePath = Path.Combine(SnapshotsDir, fileName);
+            }
 
             // Two complementary signatures over the manifest exist for historical reasons:
             //   1) Sidecar `{filePath}.sig` over (manifest || file-content) — used by the

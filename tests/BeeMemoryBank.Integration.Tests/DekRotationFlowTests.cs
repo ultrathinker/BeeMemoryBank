@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 // TODO peer auto-accept integration test deferred — needs multi-node mock
-[Collection(CompactionCollection.Name)]
+[Collection(HeavyOperationCollection.Name)]
 public class DekRotationFlowTests : IAsyncLifetime
 {
     private readonly BmbWebApplicationFactory _factory = new();

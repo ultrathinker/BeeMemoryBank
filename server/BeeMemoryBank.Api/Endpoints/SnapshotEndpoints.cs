@@ -38,7 +38,14 @@ public static class SnapshotEndpoints
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
-            var info = await svc.CreateAsync();
+            // filterSecrets: false — this is a BACKUP of this node, not a package for a peer.
+            // Every other backup call site says so explicitly (DEK rotation, compaction, the
+            // pre-restore and pre-update backups); this one relied on the default, and when a
+            // refactor flipped that default to `true` it silently started producing snapshots with
+            // tbl_user, tbl_key_slot, tbl_node_identity and tbl_sync_position DROPPED — which
+            // restore cannot consume (it fails on the first DELETE against a table that is no
+            // longer there) and which would not carry the accounts back even if it could.
+            var info = await svc.CreateAsync(filterSecrets: false);
             var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
             await auditRepo.LogAsync("snapshot", info.FileName, "snapshot_created", "web", $"Snapshot created by user {actor}");
             return Results.Created($"/api/snapshots/{info.FileName}", info);
@@ -113,8 +120,12 @@ public static class SnapshotEndpoints
 
                 if (req.CreateBackupFirst)
                 {
+                    // filterSecrets: false — the whole point of this copy is to be restorable if
+                    // the restore below goes wrong, and a filtered snapshot is neither restorable
+                    // nor complete. Matches the pre-restore backup RestoreInitiatorService takes
+                    // and the pre-update one UpdateService takes.
                     logger.LogInformation("Creating backup snapshot before restore");
-                    var backup = await svc.CreateAsync();
+                    var backup = await svc.CreateAsync(filterSecrets: false);
                     backupFileName = backup.FileName;
                     logger.LogInformation("Backup created: {FileName}", backupFileName);
                 }
@@ -124,6 +135,17 @@ public static class SnapshotEndpoints
                 logger.LogInformation("Restore completed successfully");
 
                 return Results.Ok(new { success = true, backupFileName });
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+            {
+                // Our own pre-flight refusals — wrong archive shape, no database inside, not enough
+                // disk space — carry an operator-facing explanation and a way forward. Folding them
+                // into the generic 500 below answered "check server logs" for the one class of
+                // failure the operator can actually act on without a shell on the server.
+                logger.LogWarning(ex, "Restore refused for {FileName}", req.FileName);
+                return Results.BadRequest(new ErrorResponse(backupFileName != null
+                    ? $"{ex.Message} (A backup was saved as {backupFileName}.)"
+                    : ex.Message));
             }
             catch (Exception ex)
             {

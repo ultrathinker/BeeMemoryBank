@@ -39,6 +39,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// (mDNS/.local names, Tailscale MagicDNS, dynamic DNS) would currently fail every restore-fetch
 /// this way — independent of, and in addition to, the V1/V2 handshake issue this suite covers.
 /// </summary>
+[Collection(HeavyOperationCollection.Name)]
 public class RestoreSeederFetchTests : IAsyncLifetime
 {
     private const string MasterPassword = "restoreFetchPassword123";

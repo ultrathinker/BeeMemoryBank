@@ -16,6 +16,41 @@ namespace BeeMemoryBank.Api.Services;
 
 public partial class SnapshotService
 {
+    /// <summary>
+    /// Tables whose absence makes an archive unrestorable rather than merely older. These are
+    /// dropped by <c>FilterSecretsFrom</c>, so their absence identifies a package built for a
+    /// joining peer — see the check in <see cref="RestoreAsync"/> for why that must not be
+    /// restored over a live database.
+    /// </summary>
+    private static readonly string[] RestoreEssentialTables =
+        ["tbl_key_slot", "tbl_user", "tbl_node_identity"];
+
+    /// <summary>
+    /// Peer-relationship state wiped from a standalone restore: the archive describes the
+    /// ORIGINATOR's place in the network, and this node is becoming a fresh, unrelated one.
+    /// </summary>
+    private static readonly string[] NetworkStateTablesToWipe =
+    [
+        "tbl_whitelist", "tbl_sync_position", "tbl_sync_push_position",
+        "tbl_restore_replay_shield", "tbl_event", "tbl_sync_quarantine"
+    ];
+
+    /// <summary>Table names present in a database file, read without pooling the handle.</summary>
+    private static HashSet<string> ReadTableNames(string dbPath)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Pooling=False for the same reason as everywhere else in this file: the file is moved
+        // or deleted moments later, and a pooled handle keeps it locked on Windows.
+        using var conn = new SqliteConnection($"Data Source={dbPath.Replace("'", "''")};Pooling=False");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+        return names;
+    }
+
     public async Task RestoreAsync(string fileName, bool standaloneMode = false)
     {
         var safeName = Path.GetFileName(fileName);
@@ -49,6 +84,23 @@ public partial class SnapshotService
 
             await DecryptDbIfNeededAsync(extractedDb);
 
+            var archiveTables = ReadTableNames(extractedDb);
+
+            // Reject a peer-distribution package before it replaces the live database.
+            // A snapshot created with filterSecrets:true has tbl_key_slot DROPPED, and the key
+            // slots are the ONLY place the master DEK exists in wrapped form. Restoring one over
+            // the live DB would therefore hand back a vault whose article bodies are ciphertext
+            // that no password can ever unwrap again — strictly worse than not restoring at all.
+            // Such an archive is meant for the join path (SnapshotJoinClient), which imports
+            // content rows INTO a database that already has its own key slots.
+            var missingEssential = RestoreEssentialTables.Where(t => !archiveTables.Contains(t)).ToList();
+            if (missingEssential.Count > 0)
+                throw new InvalidOperationException(
+                    $"This snapshot cannot be restored: it is missing {string.Join(", ", missingEssential)}. " +
+                    "It was produced as a package for a joining peer (secrets filtered out), not as a backup — " +
+                    "without key slots the encrypted content could never be unlocked again. " +
+                    "Restore a snapshot created from Admin → Snapshots, or join this node to a peer instead.");
+
             if (standaloneMode)
             {
                 // Atomic standalone restore: do everything (copy + identity regen + wipe) in a
@@ -73,28 +125,22 @@ public partial class SnapshotService
                     using var tx = stagingConn.BeginTransaction();
                     try
                     {
-                        using var wipeNetCmd = stagingConn.CreateCommand();
-                        wipeNetCmd.Transaction = tx;
-                        wipeNetCmd.CommandText = @"
-                            DELETE FROM tbl_whitelist;
-                            DELETE FROM tbl_sync_position;
-                            DELETE FROM tbl_sync_push_position;
-                            DELETE FROM tbl_restore_replay_shield;
-                            DELETE FROM tbl_event;";
-                        wipeNetCmd.ExecuteNonQuery();
-
-                        // Separate statement, and tolerant of the table being absent: the staging
-                        // database is the ARCHIVE's schema, not ours, and migrations have not run
-                        // on it yet. tbl_sync_quarantine arrived in migration 013, so an older
-                        // archive simply has no such table — folding this DELETE into the batch
-                        // above would abort the whole transaction with "no such table" and make
-                        // every pre-013 backup unrestorable. Same tolerance the join-snapshot
-                        // sanitizer already applies for the same reason.
-                        using var wipeQuarantineCmd = stagingConn.CreateCommand();
-                        wipeQuarantineCmd.Transaction = tx;
-                        wipeQuarantineCmd.CommandText = "DELETE FROM tbl_sync_quarantine;";
-                        try { wipeQuarantineCmd.ExecuteNonQuery(); }
-                        catch (Microsoft.Data.Sqlite.SqliteException) { /* pre-013 archive */ }
+                        // One statement per table, skipping the ones this archive does not have.
+                        // The staging database carries the ARCHIVE's schema, not ours, and
+                        // migrations have not run on it yet — tbl_sync_quarantine arrived in
+                        // migration 013, so a pre-013 backup simply has no such table. A single
+                        // batched DELETE aborts the whole transaction on the first "no such
+                        // table" and would make every older backup unrestorable; the quarantine
+                        // wipe already carried its own try/catch for exactly this reason, and
+                        // every table in this list is subject to the same schema-age problem.
+                        foreach (var table in NetworkStateTablesToWipe)
+                        {
+                            if (!archiveTables.Contains(table)) continue;
+                            using var wipeCmd = stagingConn.CreateCommand();
+                            wipeCmd.Transaction = tx;
+                            wipeCmd.CommandText = $"DELETE FROM {table}";
+                            wipeCmd.ExecuteNonQuery();
+                        }
 
                         using var identityCmd = stagingConn.CreateCommand();
                         identityCmd.Transaction = tx;
@@ -231,10 +277,13 @@ public partial class SnapshotService
                     }
                 }
 
-                using var conn = _connFactory.CreateConnection();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "DELETE FROM tbl_sync_push_position";
-                cmd.ExecuteNonQuery();
+                if (archiveTables.Contains("tbl_sync_push_position"))
+                {
+                    using var conn = _connFactory.CreateConnection();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "DELETE FROM tbl_sync_push_position";
+                    cmd.ExecuteNonQuery();
+                }
             }
 
             // The database was replaced under an unchanged path, so the folder-ACL cache is now
@@ -245,8 +294,17 @@ public partial class SnapshotService
         }
         finally
         {
+            // Never let scratch-directory cleanup decide the outcome of a restore. The database has
+            // already been replaced by this point, so throwing here turns a completed restore into
+            // a 500 and tells the operator it failed — and on Windows this delete genuinely can
+            // fail transiently, since SQLite's -wal/-shm sidecars linger for a moment after the
+            // connection that read the archive closes. The sweep on the next start clears anything
+            // left behind; every other temp cleanup in this file already takes the same view.
             if (tempDir != null && Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            {
+                try { Directory.Delete(tempDir, recursive: true); }
+                catch (Exception ex) { _logger?.LogWarning(ex, "Failed to delete restore temp dir {TempDir}", tempDir); }
+            }
             HeavyOperationLock.Instance.Release();
         }
     }
