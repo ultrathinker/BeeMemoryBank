@@ -1,7 +1,6 @@
 // Node-local product name shown in the web header and the browser tab title.
 
 using BeeMemoryBank.Api.Helpers;
-using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -35,11 +34,6 @@ public static class BrandingEndpoints
             IAuditLogRepository auditRepo,
             HttpContext ctx) =>
         {
-            // ValidateInternalAndRole, not a bare header read: the role header is operator-asserted
-            // and is only meaningful once the internal-key check has passed.
-            if (!InternalKeyValidator.ValidateInternalAndRole(ctx))
-                return Results.Json(new ErrorResponse("Forbidden: superadmin only"), statusCode: 403);
-
             var name = req.Name?.Trim();
             if (name is { Length: 0 }) name = null;
 
@@ -65,6 +59,6 @@ public static class BrandingEndpoints
                     : $"Product name set to '{name}' by user {callerId}");
 
             return Results.Ok(new BrandingResponse(Branding.Resolve(name), name is not null, Branding.DefaultName));
-        });
+        }).RequireSuperadmin();
     }
 }

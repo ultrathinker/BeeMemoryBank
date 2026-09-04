@@ -49,16 +49,16 @@ public static class InternetAccessEndpoints
 
     public static void MapInternetAccessEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/internet-access").WithTags("InternetAccess").RequireInternalKey();
+        // Every route here is superadmin-only (see the class summary), so the gate lives on the
+        // group rather than being re-stated in each handler.
+        var group = app.MapGroup("/api/internet-access").WithTags("InternetAccess")
+            .RequireInternalKey().RequireSuperadmin();
 
         // GET /api/internet-access/info — LAN IP(s), local ports, persisted DDNS config +
         // last-known DDNS state, persisted ACME config + stored certificate (if any). Safe to
         // call; read-only. The wizard renders its sections from this single payload.
-        group.MapGet("/info", (HttpContext ctx, IConfiguration config) =>
+        group.MapGet("/info", (IConfiguration config) =>
         {
-            if (!CallerIdentity.Extract(ctx).IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
-
             var dataPath = ResolveDataPath(config);
 
             return Results.Ok(new
@@ -83,11 +83,8 @@ public static class InternetAccessEndpoints
         // POST /api/internet-access/ddns/config — persist the chosen provider + credentials +
         // IP-detection mode so a later "check now" can rebuild the provider without re-prompting.
         group.MapPost("/ddns/config", async (
-            HttpContext ctx, IConfiguration config, DdnsConfigRequest req) =>
+            IConfiguration config, DdnsConfigRequest req) =>
         {
-            if (!CallerIdentity.Extract(ctx).IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
-
             if (string.IsNullOrWhiteSpace(req.Provider)
                 || !DdnsProviders.All.Contains(req.Provider, StringComparer.OrdinalIgnoreCase))
             {
@@ -134,11 +131,8 @@ public static class InternetAccessEndpoints
         // and run one DdnsUpdater.CheckAndUpdateAsync cycle. Returns the raw result fields so the
         // wizard can show success / no-change / failure with the underlying message.
         group.MapPost("/ddns/check", async (
-            HttpContext ctx, IConfiguration config, HttpClient http, ILoggerFactory loggerFactory) =>
+            IConfiguration config, HttpClient http, ILoggerFactory loggerFactory) =>
         {
-            if (!CallerIdentity.Extract(ctx).IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
-
             var dataPath = ResolveDataPath(config);
             var cfg = await ReadAsync<DdnsConfigRequest>(DdnsConfigPath(dataPath));
             if (cfg == null)
@@ -178,11 +172,8 @@ public static class InternetAccessEndpoints
         // POST /api/internet-access/acme/config — persist the domain + contact email + staging
         // toggle used by the next certificate request.
         group.MapPost("/acme/config", async (
-            HttpContext ctx, IConfiguration config, AcmeConfigRequest req) =>
+            IConfiguration config, AcmeConfigRequest req) =>
         {
-            if (!CallerIdentity.Extract(ctx).IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
-
             if (string.IsNullOrWhiteSpace(req.Domain))
                 return Results.Json(new ErrorResponse("domain is required"), statusCode: 400);
 
@@ -196,12 +187,9 @@ public static class InternetAccessEndpoints
         // service ad-hoc (it is not a fixed DI service). Real issuance requires the TLS-ALPN-01
         // challenge responder to be shared with the live TLS listener — see the class summary.
         group.MapPost("/acme/request", async (
-            HttpContext ctx, IConfiguration config, ILoggerFactory loggerFactory,
+            IConfiguration config, ILoggerFactory loggerFactory,
             System.Threading.CancellationToken ct, AcmeRequestRequest? req) =>
         {
-            if (!CallerIdentity.Extract(ctx).IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
-
             var dataPath = ResolveDataPath(config);
 
             // Domain/staging may be supplied inline (ad-hoc request) or fall back to persisted config.

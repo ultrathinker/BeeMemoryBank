@@ -14,26 +14,24 @@ public static class RoleEndpoints
 {
     public static void MapRoleEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/roles").WithTags("Roles").RequireInternalKey();
+        // Superadmin-only in full: the only consumer is the admin Users/Roles UI, which is
+        // itself superadmin-gated, and even the listing would tell a regular user how the
+        // organisation is segmented. Declared once on the group rather than re-typed per
+        // handler, so a route added here cannot silently ship without the gate.
+        var group = app.MapGroup("/api/roles").WithTags("Roles")
+            .RequireInternalKey().RequireSuperadmin();
         group.AddEndpointFilter<RequireNonAgentFilter>();
 
-        // Superadmin-only like everything else here: the only consumer is the admin Users/Roles
-        // UI, which is itself superadmin-gated, and the list would otherwise tell a regular user
-        // how the organisation is segmented.
-        group.MapGet("/", async (RoleService roles, HttpContext ctx) =>
+        group.MapGet("/", async (RoleService roles) =>
         {
-            if (!IsSuperadmin(ctx)) return Forbidden();
-
             var summaries = await roles.ListAsync();
             return Results.Ok(summaries.Select(s => new RoleResponse(
                 s.Role.Name, s.Role.DisplayName, s.Role.Description, s.Role.IsSystem,
                 s.Role.BasePolicy, s.UserCount, s.RuleCount, s.Role.CreatedAt, s.Role.UpdatedAt)));
         });
 
-        group.MapGet("/{name}", async (string name, RoleService roles, HttpContext ctx) =>
+        group.MapGet("/{name}", async (string name, RoleService roles) =>
         {
-            if (!IsSuperadmin(ctx)) return Forbidden();
-
             var role = await roles.GetAsync(name);
             if (role is null) return Results.NotFound(new ErrorResponse("Role not found"));
 
@@ -44,8 +42,6 @@ public static class RoleEndpoints
 
         group.MapPost("/", async (CreateRoleRequest req, RoleService roles, HttpContext ctx, IAuditLogRepository audit) =>
         {
-            if (!IsSuperadmin(ctx)) return Forbidden();
-
             return await TranslateAsync(async () =>
             {
                 var role = await roles.CreateAsync(req.Name, req.DisplayName, req.Description, req.BasePolicy);
@@ -59,8 +55,6 @@ public static class RoleEndpoints
 
         group.MapPut("/{name}", async (string name, UpdateRoleRequest req, RoleService roles, HttpContext ctx, IAuditLogRepository audit) =>
         {
-            if (!IsSuperadmin(ctx)) return Forbidden();
-
             return await TranslateAsync(async () =>
             {
                 await roles.UpdateAsync(name, req.DisplayName, req.Description, req.BasePolicy);
@@ -72,8 +66,6 @@ public static class RoleEndpoints
 
         group.MapDelete("/{name}", async (string name, RoleService roles, HttpContext ctx, IAuditLogRepository audit) =>
         {
-            if (!IsSuperadmin(ctx)) return Forbidden();
-
             return await TranslateAsync(async () =>
             {
                 await roles.DeleteAsync(name);
@@ -83,12 +75,6 @@ public static class RoleEndpoints
             });
         });
     }
-
-    internal static bool IsSuperadmin(HttpContext ctx)
-        => ctx.Request.Headers["X-User-Role"].FirstOrDefault() == UserRoles.Superadmin;
-
-    internal static IResult Forbidden()
-        => Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
 
     internal static string Actor(HttpContext ctx)
         => ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";

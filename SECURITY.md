@@ -90,6 +90,38 @@ The HTTP `/accept` returns 202 immediately and the work runs in the background; 
 
 **Crash recovery.** A startup sweep marks any rotation row stuck in `Committing` from THIS node as `Failed`. Peer-originated `Committing` rows are left in place to be retried by a hook in the next successful unlock (`RetryPendingAutoAcceptsAsync`). `Proposed` rows older than 24h are auto-cancelled.
 
+## Trust Model
+
+Read this before you invite a second node onto your network. See also [docs/sync.md](docs/sync.md#trust-model)
+for the same picture from the sync layer's side.
+
+### Joining is authorised by the master password, and a joined node is fully trusted
+
+`POST /api/join` takes the master password, tries it against every password-bearing key slot, and — if it opens a slot belonging to an active superadmin (or a legacy pre-user-table `password` slot) — returns the wrapped Master DEK and adds the caller to `tbl_whitelist`. There is no invite token, no per-node approval step, and no "content only" or "read only" kind of join.
+
+The new peer is stored with `is_superadmin = 1`, and that bit travels to every other node inside the `whitelist_add` sync event so the whole mesh agrees on it. `EventApplier` consults exactly that bit before applying the cluster-state-modifying event types — `whitelist_add`, `whitelist_revoke`, `whitelist_update`, `hard_delete` and `restore_network`. So every replica on the network can, by design:
+
+- **Revoke any other peer.** A `whitelist_revoke` event it signs is applied by every node that receives it. A node never revokes *itself* on a remote event, so the revoked peer keeps its own copy of the vault — but every other node stops accepting its events, which is the same thing as being cut out.
+- **Hard-delete content network-wide.** `hard_delete` is not a tombstone: on every peer it physically purges the article (or the whole folder subtree) from the database and deletes the matching `.enc` media files from disk. Nothing is left to restore from except a snapshot taken beforehand.
+- **Initiate a network-wide restore.** A `restore_network` event replaces the vault on every peer with the initiator's snapshot. Peers with `tbl_whitelist.auto_accept_restore` set apply it unattended; the rest queue it for an admin, and rejecting it permanently disconnects them from the originator's timeline (wipe-and-rejoin to come back). Online DEK rotation propagates through the same peer-acceptance mechanism.
+
+There is currently no way to demote a peer once it has joined: nothing in the API or the Admin UI clears `is_superadmin`. The only remedy for a peer you no longer trust is revoking it (`DELETE /api/whitelist/{nodeId}`), and each node enforces the flag from its own whitelist row, so the revocation has to reach the other nodes to take effect everywhere.
+
+### The master password is the network, not the node
+
+Every consequence above follows from one credential. Anyone who has the master password can stand up their own node, join, and from it revoke your peers, hard-delete your content everywhere, or restore the entire mesh to a snapshot of their choosing — none of which requires access to any machine you own. `/api/join` is also one of the few endpoints that has to be reachable through a reverse proxy (see [docs/deployment.md](docs/deployment.md)), so it is exposed on purpose.
+
+Treat the master password as a root credential shared by every machine in the mesh, and note two things about changing it. Key slots are node-local — `tbl_key_slot` is neither synced nor included in a join snapshot — so a password change applies to the one node you made it on; every other node still accepts the old password at its own `/api/join`. And changing it does not evict a node that already holds the Master DEK, because the DEK itself is unchanged: that needs a revoke, plus a DEK rotation if the DEK may have leaked.
+
+### "Lock" is advisory
+
+`SessionService.IsUnlocked` is a single process-wide flag: one vault state shared by the web UI and every MCP agent on that node. There is no per-user or per-agent session. **Lock** wipes the Master DEK from memory, but two mechanisms put it back with no human involved:
+
+- **A superadmin-owned agent key.** An agent created by a superadmin stores the Master DEK wrapped with its own API key (`Agent.CanAutoUnlock`); an ordinary user's agent stores no key material and cannot do this. `AgentAuthMiddleware` unwraps it and re-unlocks the process on the *next request that key makes* — with a live MCP client attached, that is usually seconds after the Lock. Two things stop it: revoking the agent (its key no longer resolves to a row at all) or deactivating its owner (the request is rejected with 401 before the unlock is even attempted).
+- **OS auto-unlock (Windows, opt-in).** `OsAutoUnlockService` keeps a DPAPI-protected random secret in `<data>/os-auto-unlock.dat` that wraps the Master DEK in an `os_auto_unlock` key slot. It is attempted once, at API startup — it does *not* re-unlock after a Lock inside a running process — so its practical effect is that restarting a locked node unlocks it again. DPAPI's `CurrentUser` scope is an OS-user boundary, not a per-application one.
+
+Lock is therefore a real operation with a short half-life unless you also remove what can undo it: revoke or delete the superadmin-owned agent keys, and disable OS auto-unlock if a restart must stay locked.
+
 ## Reporting a Vulnerability
 
 We take security vulnerabilities seriously. If you discover a vulnerability in BeeMemoryBank, please report it responsibly.

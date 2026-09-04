@@ -14,17 +14,16 @@ public static class RestrictionEndpoints
 {
     public static void MapRestrictionEndpoints(this WebApplication app)
     {
-        var userGroup = app.MapGroup("/api/restrictions/user").WithTags("Restrictions").RequireInternalKey();
+        // Editing permissions is superadmin-only across the board, so the gate is declared on
+        // the group instead of at the top of each handler.
+        var userGroup = app.MapGroup("/api/restrictions/user").WithTags("Restrictions")
+            .RequireInternalKey().RequireSuperadmin();
         // Same boundary /api/users, /api/roles and the role routes below enforce: an agent bearer
         // token must never be able to edit permissions, even when its owner is a superadmin.
         userGroup.AddEndpointFilter<RequireNonAgentFilter>();
 
-        userGroup.MapGet("/{userId:int}", async (int userId, IFolderAclRepository repo, IFolderRepository folderRepo, HttpContext ctx) =>
+        userGroup.MapGet("/{userId:int}", async (int userId, IFolderAclRepository repo, IFolderRepository folderRepo) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
-
             var entries = await repo.GetByUserIdAsync(userId);
             var result = new List<object>();
             foreach (var e in entries)
@@ -43,12 +42,8 @@ public static class RestrictionEndpoints
             return Results.Ok(result);
         });
 
-        userGroup.MapPost("/{userId:int}", async (int userId, AddAclEntryRequest req, IFolderAclRepository repo, IFolderRepository folderRepo, IUserRepository userRepo, FolderAccessService folderAccess, HttpContext ctx) =>
+        userGroup.MapPost("/{userId:int}", async (int userId, AddAclEntryRequest req, IFolderAclRepository repo, IFolderRepository folderRepo, IUserRepository userRepo, FolderAccessService folderAccess) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
-
             if (!Enum.TryParse<AclEffect>(req.Effect, ignoreCase: true, out var effect))
                 return Results.BadRequest(new ErrorResponse("Invalid effect. Use 'allow' or 'deny'."));
 
@@ -111,25 +106,16 @@ public static class RestrictionEndpoints
             Guid folderId,
             UpdateAclReadOnlyRequest req,
             IFolderAclRepository repo,
-            FolderAccessService folderAccess,
-            HttpContext ctx) =>
+            FolderAccessService folderAccess) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
-
             // Only allow-entries can be RO; deny-entries are unaffected.
             await repo.SetReadOnlyAsync(userId, folderId, AclEffect.Allow, req.IsReadOnly);
             folderAccess.InvalidateCache(userId);
             return Results.NoContent();
         });
 
-        userGroup.MapDelete("/{userId:int}/{folderId:guid}", async (int userId, Guid folderId, IFolderAclRepository repo, FolderAccessService folderAccess, HttpContext ctx) =>
+        userGroup.MapDelete("/{userId:int}/{folderId:guid}", async (int userId, Guid folderId, IFolderAclRepository repo, FolderAccessService folderAccess) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
-
             await repo.RemoveByUserAndFolderAsync(userId, folderId);
             folderAccess.InvalidateCache(userId);
             return Results.NoContent();
@@ -138,13 +124,12 @@ public static class RestrictionEndpoints
         // ---- role-scoped rules --------------------------------------------------------
         // Same shape as the user routes above (/api/restrictions/{type}/{id}) so the Web
         // folder-access dialog, which is already parameterised by type, drives both.
-        var roleGroup = app.MapGroup("/api/restrictions/role").WithTags("Restrictions").RequireInternalKey();
+        var roleGroup = app.MapGroup("/api/restrictions/role").WithTags("Restrictions")
+            .RequireInternalKey().RequireSuperadmin();
         roleGroup.AddEndpointFilter<RequireNonAgentFilter>();
 
-        roleGroup.MapGet("/{roleName}", async (string roleName, RoleService roles, HttpContext ctx) =>
+        roleGroup.MapGet("/{roleName}", async (string roleName, RoleService roles) =>
         {
-            if (!RoleEndpoints.IsSuperadmin(ctx)) return RoleEndpoints.Forbidden();
-
             return await RoleEndpoints.TranslateAsync(async () =>
             {
                 var rules = await roles.ListRulesAsync(roleName);
@@ -162,8 +147,6 @@ public static class RestrictionEndpoints
 
         roleGroup.MapPost("/{roleName}", async (string roleName, AddAclEntryRequest req, RoleService roles, IFolderRepository folderRepo, IAuditLogRepository audit, HttpContext ctx) =>
         {
-            if (!RoleEndpoints.IsSuperadmin(ctx)) return RoleEndpoints.Forbidden();
-
             if (!Enum.TryParse<AclEffect>(req.Effect, ignoreCase: true, out var effect))
                 return Results.BadRequest(new ErrorResponse("Invalid effect. Use 'allow' or 'deny'."));
 
@@ -201,10 +184,8 @@ public static class RestrictionEndpoints
             });
         });
 
-        roleGroup.MapPatch("/{roleName}/{folderId:guid}", async (string roleName, Guid folderId, UpdateAclReadOnlyRequest req, RoleService roles, HttpContext ctx) =>
+        roleGroup.MapPatch("/{roleName}/{folderId:guid}", async (string roleName, Guid folderId, UpdateAclReadOnlyRequest req, RoleService roles) =>
         {
-            if (!RoleEndpoints.IsSuperadmin(ctx)) return RoleEndpoints.Forbidden();
-
             return await RoleEndpoints.TranslateAsync(async () =>
             {
                 await roles.SetRuleReadOnlyAsync(roleName, folderId, req.IsReadOnly);
@@ -214,8 +195,6 @@ public static class RestrictionEndpoints
 
         roleGroup.MapDelete("/{roleName}/{folderId:guid}", async (string roleName, Guid folderId, RoleService roles, IAuditLogRepository audit, HttpContext ctx) =>
         {
-            if (!RoleEndpoints.IsSuperadmin(ctx)) return RoleEndpoints.Forbidden();
-
             return await RoleEndpoints.TranslateAsync(async () =>
             {
                 await roles.RemoveRuleAsync(roleName, folderId);

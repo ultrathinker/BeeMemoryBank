@@ -487,6 +487,12 @@ app.Lifetime.ApplicationStopping.Register(() =>
         .LogInformation("Session locked on application shutdown — master DEK wiped from memory");
 });
 
+// What a keyless caller can reach at all — see PublicSurface. First in the chain on purpose: an
+// unpublished path should not consume a rate-limit slot or reach agent auth, and until now the
+// answer to "what is visible from the internet" lived only in the reverse proxy's configuration.
+BeeMemoryBank.Api.Middleware.PublicSurfaceMiddleware.LogStartupState();
+app.UseMiddleware<BeeMemoryBank.Api.Middleware.PublicSurfaceMiddleware>();
+
 // Rate limiting for sensitive endpoints (unlock, join) — brute-force protection
 app.UseMiddleware<BeeMemoryBank.Api.Middleware.RateLimitMiddleware>();
 

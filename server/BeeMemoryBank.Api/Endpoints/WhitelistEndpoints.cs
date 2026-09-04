@@ -16,6 +16,13 @@ public static class WhitelistEndpoints
     {
         var group = app.MapGroup("/api/whitelist").WithTags("Whitelist").RequireInternalKey();
 
+        // The five mutating routes below are RequireSuperadmin. Only the two auto-accept toggles
+        // asserted that before the endpoint-filter sweep; FOUND then: editing a peer's stored URL
+        // and revoking a peer outright were reachable by ANY signed-in user with an unlocked
+        // session. Both reshape this node's sync topology, so both belong behind the same gate.
+        // The three GETs are deliberately left open to any authenticated caller — the Nodes page
+        // renders them for everyone, and they expose no key material.
+
         group.MapGet("/sync-status", async (HttpContext ctx, ISyncPositionRepository syncRepo, ISyncPushPositionRepository pushRepo) =>
         {
 
@@ -77,7 +84,7 @@ public static class WhitelistEndpoints
 
             await repo.UpdateAsync(entry);
             return Results.Ok(WhitelistEntryResponse.From(entry));
-        });
+        }).RequireSuperadmin();
 
         // PUT /api/whitelist/{nodeId}/address — change node URL with validation
         group.MapPut("/{nodeId:guid}/address", async (
@@ -149,7 +156,7 @@ public static class WhitelistEndpoints
             await eventLogger.LogWhitelistUpdateAsync(nodeId, newUrl, null);
 
             return Results.Ok(WhitelistEntryResponse.From(entry));
-        });
+        }).RequireSuperadmin();
 
         // PUT /api/whitelist/{nodeId}/auto-accept-restore — toggle auto-accept restore
         group.MapPut("/{nodeId:guid}/auto-accept-restore", async (
@@ -160,8 +167,6 @@ public static class WhitelistEndpoints
             INodeIdentityRepository nodeIdentityRepo,
             HttpContext ctx) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -175,7 +180,7 @@ public static class WhitelistEndpoints
 
             await repo.SetAutoAcceptRestoreAsync(nodeId.ToString(), req.AutoAccept);
             return Results.Ok(new { success = true, autoAccept = req.AutoAccept });
-        });
+        }).RequireSuperadmin();
 
         // PUT /api/whitelist/{nodeId}/auto-accept-dek-rotation — toggle auto-accept DEK rotation
         group.MapPut("/{nodeId:guid}/auto-accept-dek-rotation", async (
@@ -186,8 +191,6 @@ public static class WhitelistEndpoints
             INodeIdentityRepository nodeIdentityRepo,
             HttpContext ctx) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -201,7 +204,7 @@ public static class WhitelistEndpoints
 
             await repo.SetAutoAcceptDekRotationAsync(nodeId.ToString(), req.AutoAccept);
             return Results.Ok(new { success = true, autoAccept = req.AutoAccept });
-        });
+        }).RequireSuperadmin();
 
         // DELETE /api/whitelist/{nodeId} — revoke access (requires unlock)
         group.MapDelete("/{nodeId:guid}", async (
@@ -222,6 +225,6 @@ public static class WhitelistEndpoints
             await eventLogger.LogWhitelistRevokeAsync(nodeId);
 
             return Results.NoContent();
-        });
+        }).RequireSuperadmin();
     }
 }

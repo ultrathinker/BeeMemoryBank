@@ -101,16 +101,11 @@ public static class SessionEndpoints
             return Results.Ok(new LoginResponse(user.Id, user.Username, user.DisplayName, user.Role, isUnlocked, migratedSynthetic, user.SecurityStamp));
         }).WithMetadata(new SkipInternalKey());
 
-        group.MapPost("/lock", (SessionService session, HttpContext ctx) =>
+        group.MapPost("/lock", (SessionService session) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can lock the server"), statusCode: 403);
-
             session.Lock();
             return Results.Ok(new SessionStatusResponse(false));
-        }).RequireNonAgent();
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapGet("/status", (SessionService session) =>
             Results.Ok(new SessionStatusResponse(session.IsUnlocked))).WithMetadata(new SkipInternalKey());
@@ -126,17 +121,13 @@ public static class SessionEndpoints
             return Results.Ok(new SessionSettingsResponse(hours, sliding));
         });
 
-        group.MapPut("/settings", async (SessionSettingsRequest req, INodeIdentityRepository nodeRepo, HttpContext ctx) =>
+        group.MapPut("/settings", async (SessionSettingsRequest req, INodeIdentityRepository nodeRepo) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can change session settings"), statusCode: 403);
-
             if (req.ExpireHours < 1 || req.ExpireHours > 24 * 30)
                 return Results.Json(new ErrorResponse("expireHours must be between 1 and 720"), statusCode: 400);
 
             await nodeRepo.SetSessionSettingsAsync(req.ExpireHours, req.SlidingExpiration);
             return Results.Ok(new SessionSettingsResponse(req.ExpireHours, req.SlidingExpiration));
-        }).RequireNonAgent();
+        }).RequireSuperadmin().RequireNonAgent();
     }
 }

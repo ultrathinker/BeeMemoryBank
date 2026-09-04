@@ -590,28 +590,22 @@ public static class SyncEndpoints
         }).RequireInternalKey().WithTags("Sync");
 
         app.MapGet("/api/sync/invisible", (
-            HttpContext ctx,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
             return Results.Ok(new { IsInvisible = invisibleMode.IsInvisible });
-        }).RequireInternalKey().WithTags("Sync");
+        }).RequireInternalKey().RequireSuperadmin().RequireNonAgent().WithTags("Sync");
 
+        // RequireNonAgent, like the read above: invisible mode cuts this node off from every peer,
+        // and the check it replaces (a raw X-User-Role compare) refused every agent by construction
+        // because agents do not send that header. The filter alone would have widened it silently.
         // ─── Invisible Mode Toggle ───────────────────────────────────────────────
         app.MapPost("/api/sync/invisible", (
-            HttpContext ctx,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             [Microsoft.AspNetCore.Mvc.FromBody] bool isInvisible) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden"), statusCode: 403);
-
             invisibleMode.IsInvisible = isInvisible;
             return Results.Ok();
-        }).RequireInternalKey().WithTags("Sync");
+        }).RequireInternalKey().RequireSuperadmin().RequireNonAgent().WithTags("Sync");
 
         // ─── Delivery status (requires internal key — exposes node topology) ────
         app.MapGet("/api/sync/delivery-status", async (
@@ -692,11 +686,14 @@ public static class SyncEndpoints
         // (deciding which peer/sequence to rewind to, and re-validating everything applied after
         // that point) that's out of scope here — this endpoint only ever needed to stop requiring
         // manual DB surgery for the tracking row itself.
+        // Superadmin: clearing the quarantine row makes this node retry an event that previously
+        // failed to apply — operator surgery on sync state, not something a regular user should
+        // be able to trigger. It had NO role gate at all until the endpoint-filter sweep.
         app.MapDelete("/api/sync/quarantine/{eventId:guid}", async (Guid eventId, ISyncQuarantineRepository quarantineRepo) =>
         {
             await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, eventId);
             return Results.NoContent();
-        }).RequireInternalKey().WithTags("Sync");
+        }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
 
         // ─── Reachability self-test: probe (local wizard call, internal-key-gated) ──
         // The originating node (running the internet-access wizard) calls THIS endpoint on
@@ -712,9 +709,6 @@ public static class SyncEndpoints
             System.Net.Http.IHttpClientFactory httpClientFactory,
             ILoggerFactory loggerFactory) =>
         {
-            if (!CallerIdentity.Extract(ctx).IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
-
             var logger = loggerFactory.CreateLogger("SyncProbe");
 
             SyncProbeRequest? req;
@@ -821,7 +815,7 @@ public static class SyncEndpoints
                     : $"Peer '{usedPeer.DisplayName}' could not reach {targetUrl} " +
                       $"({relayResult.ErrorCategory}). No response came back at all — this typically " +
                       $"means the port is not forwarded, or your ISP uses CGNAT."));
-        }).RequireInternalKey().WithTags("Sync");
+        }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
 
         // ─── Reachability self-test: relay (peer-to-peer, Bearer auth) ──────────
         // Called BY a whitelisted peer (standard TryAuth Bearer token), this node fetches

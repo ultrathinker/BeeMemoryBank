@@ -1,7 +1,6 @@
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
-using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 
 namespace BeeMemoryBank.Api.Endpoints;
@@ -42,10 +41,6 @@ public static class AutoUnlockEndpoints
             if (!OperatingSystem.IsWindows() || svc == null)
                 return Results.Json(new ErrorResponse("OS auto-unlock is only supported on Windows."), statusCode: 400);
 
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can enable OS auto-unlock."), statusCode: 403);
-
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked. Unlock first."), statusCode: 403);
 
@@ -55,7 +50,7 @@ public static class AutoUnlockEndpoints
 
             await svc.EnableAsync();
             return Results.Ok(new AutoUnlockStatusResponse(true, true));
-        }).RequireNonAgent();
+        }).RequireSuperadmin().RequireNonAgent();
 
         // POST /api/keys/auto-unlock/disable  — removes the os_auto_unlock slot + DPAPI secret
         group.MapPost("/disable", async (HttpContext ctx, SessionService session) =>
@@ -64,15 +59,11 @@ public static class AutoUnlockEndpoints
             if (!OperatingSystem.IsWindows() || svc == null)
                 return Results.Json(new ErrorResponse("OS auto-unlock is only supported on Windows."), statusCode: 400);
 
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can disable OS auto-unlock."), statusCode: 403);
-
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked. Unlock first."), statusCode: 403);
 
             await svc.DisableAsync();
             return Results.Ok(new AutoUnlockStatusResponse(false, true));
-        }).RequireNonAgent();
+        }).RequireSuperadmin().RequireNonAgent();
     }
 }

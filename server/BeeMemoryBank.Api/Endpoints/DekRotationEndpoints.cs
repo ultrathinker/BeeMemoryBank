@@ -17,7 +17,13 @@ public static class DekRotationEndpoints
 
     public static void MapDekRotationEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/dek-rotation").WithTags("DekRotation").RequireInternalKey();
+        // Rotating the vault's master DEK is a superadmin operation end to end, so the gate is
+        // declared once here. RequireNonAgent alongside it because these handlers used to compare
+        // the X-User-Role header directly, which no agent request ever carries — an agent owned by
+        // a superadmin would otherwise inherit the ability to re-key the vault (see KeyEndpoints
+        // for the same pairing and the same reason).
+        var group = app.MapGroup("/api/dek-rotation").WithTags("DekRotation")
+            .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 
         group.MapPost("/propose", async (
             ProposeDekRotationRequest req,
@@ -27,9 +33,6 @@ public static class DekRotationEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -76,8 +79,6 @@ public static class DekRotationEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -104,12 +105,8 @@ public static class DekRotationEndpoints
 
         group.MapPost("/cancel/{eventId}", async (
             string eventId,
-            DekRotationService svc,
-            HttpContext ctx) =>
+            DekRotationService svc) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             try
             {
                 await svc.CancelAsync(eventId);
@@ -121,7 +118,7 @@ public static class DekRotationEndpoints
             }
         });
 
-        group.MapGet("/progress", (DekRotationService svc, HttpContext ctx) =>
+        group.MapGet("/progress", (DekRotationService svc) =>
         {
             return Results.Ok(svc.GetProgress());
         });
@@ -137,8 +134,6 @@ public static class DekRotationEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -182,9 +177,6 @@ public static class DekRotationEndpoints
             IAuditLogRepository auditRepo,
             HttpContext ctx) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             await stateRepo.UpdateStateAsync(commitEventId, DekRotationState.Rejected, "Rejected by peer admin");
 
             int? userId = null;
@@ -205,12 +197,8 @@ public static class DekRotationEndpoints
             DbConnectionFactory connFactory,
             IEventLogRepository eventLogRepo,
             INodeIdentityRepository nodeIdentityRepo,
-            IWhitelistRepository whitelistRepo,
-            HttpContext ctx) =>
+            IWhitelistRepository whitelistRepo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             var identity = await nodeIdentityRepo.GetAsync();
             if (identity == null)
                 return Results.Ok(new List<object>());

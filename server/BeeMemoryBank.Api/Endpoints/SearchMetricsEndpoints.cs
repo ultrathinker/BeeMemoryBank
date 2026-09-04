@@ -21,9 +21,11 @@ public static class SearchMetricsEndpoints
 {
     public static void MapSearchMetricsEndpoints(this WebApplication app)
     {
-        // Same group + filter pattern as AdminEndpoints: the internal-key gate is applied to the
-        // whole group, and each handler re-checks the session/role individually.
-        var group = app.MapGroup("/api/admin/search").WithTags("Admin").RequireInternalKey();
+        // Same group + filter pattern as AdminEndpoints: internal-key and superadmin gates on the
+        // whole group; each handler still checks the session lock itself, since "locked" is a
+        // different refusal from "wrong role".
+        var group = app.MapGroup("/api/admin/search").WithTags("Admin")
+            .RequireInternalKey().RequireSuperadmin();
 
         // GET /api/admin/search/metrics -- latency histograms + index-health numbers.
         //
@@ -32,14 +34,13 @@ public static class SearchMetricsEndpoints
         // SearchIndexRuntimeState's warm-start flag). No query text, article title, or article
         // content is ever placed in the response -- see wp-18-report.md for the privacy audit.
         group.MapGet("/metrics", (
-            HttpContext ctx,
             SessionService session,
             SearchMetrics metrics,
             IndexBuilder indexBuilder,
             SearchIndexRuntimeState runtimeState) =>
         {
-            var gate = RequireSuperadmin(ctx, session);
-            if (gate != null) return gate;
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             SearchMetricsSnapshot snapshot = metrics.GetSnapshot();
 
@@ -74,19 +75,19 @@ public static class SearchMetricsEndpoints
         // only be flipped by hand-editing the database directly -- no CLI command, Admin UI control,
         // or REST endpoint touched it after node init (PUT /api/whitelist/{nodeId} looks similar but
         // edits tbl_whitelist, i.e. what this node believes about OTHER nodes, never its own row).
-        group.MapGet("/embeddings-enabled", async (HttpContext ctx, SessionService session, INodeIdentityRepository nodeRepo) =>
+        group.MapGet("/embeddings-enabled", async (SessionService session, INodeIdentityRepository nodeRepo) =>
         {
-            var gate = RequireSuperadmin(ctx, session);
-            if (gate != null) return gate;
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             var identity = await nodeRepo.GetAsync();
             return Results.Ok(new EmbeddingsEnabledResponse(identity?.CanGenerateEmbeddings ?? false));
         });
 
-        group.MapPut("/embeddings-enabled", async (EmbeddingsEnabledRequest req, HttpContext ctx, SessionService session, INodeIdentityRepository nodeRepo) =>
+        group.MapPut("/embeddings-enabled", async (EmbeddingsEnabledRequest req, SessionService session, INodeIdentityRepository nodeRepo) =>
         {
-            var gate = RequireSuperadmin(ctx, session);
-            if (gate != null) return gate;
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             await nodeRepo.SetCanGenerateEmbeddingsAsync(req.Enabled);
             return Results.Ok(new EmbeddingsEnabledResponse(req.Enabled));
@@ -101,15 +102,14 @@ public static class SearchMetricsEndpoints
         // block on. Progress isn't polled here; the existing GET /metrics index-health numbers and
         // server logs ("Processed embeddings:" / "Indexed articles:") are the way to watch it.
         group.MapPost("/embeddings/backfill", (
-            HttpContext ctx,
             SessionService session,
             PendingEmbeddingProcessor embeddingProcessor,
             PendingIndexProcessor indexProcessor,
             IHostApplicationLifetime lifetime,
             ILogger<PendingEmbeddingProcessor> logger) =>
         {
-            var gate = RequireSuperadmin(ctx, session);
-            if (gate != null) return gate;
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             // Use the host's own shutdown token, not CancellationToken.None -- otherwise this
             // background drain ignores app shutdown entirely, delaying it and risking
@@ -133,16 +133,6 @@ public static class SearchMetricsEndpoints
         });
     }
 
-    // 3-gate admin check shared by the admin endpoints; returns null when authorized. Kept as a
-    // private copy so this endpoint file stays self-contained and matches AdminEndpoints exactly.
-    private static IResult? RequireSuperadmin(HttpContext ctx, SessionService session)
-    {
-        if (!session.IsUnlocked)
-            return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
-        if (!CallerIdentity.Extract(ctx).IsSuperadmin)
-            return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
-        return null;
-    }
 }
 
 /// <summary>The whole response: per-search-type latency rollups + the index-health snapshot.</summary>

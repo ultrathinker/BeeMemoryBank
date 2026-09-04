@@ -17,24 +17,25 @@ public static class SnapshotEndpoints
 {
     public static void MapSnapshotEndpoints(this WebApplication app)
     {
+        // Superadmin is attached per-route rather than to the group: /restore/{eventId}/file and
+        // /restore/progress below are SkipInternalKey and authenticate as a sync peer (Bearer) or
+        // not at all, so a group-wide gate would break them.
+        //
+        // RequireNonAgent rides along on every one of them. These handlers previously compared the
+        // X-User-Role header directly, which no agent request carries; without it the switch to
+        // CallerIdentity would newly let a superadmin-owned MCP key restore, upload or delete a
+        // snapshot — i.e. read and replace the whole vault. Same pairing as /api/keys.
         var group = app.MapGroup("/api/snapshots").WithTags("Snapshots").RequireInternalKey();
 
         group.MapGet("/", (SnapshotService svc, HttpContext ctx) =>
         {
-            // Snapshot filenames carry timestamps and originator node IDs. Restrict
-            // listing to superadmins (matches restore/upload/delete which already gate
-            // on this) — non-superadmin Users have no admin reason to enumerate them.
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             return Results.Ok(svc.List());
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapPost("/", async (SnapshotService svc, SessionService session, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
-            // Creating a snapshot is an expensive VACUUM INTO + tar/gzip operation.
-            // Without a role gate, any authenticated User could DoS the disk.
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+            // Creating a snapshot is an expensive VACUUM INTO + tar/gzip operation; without the
+            // role gate above, any authenticated User could DoS the disk.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -49,15 +50,13 @@ public static class SnapshotEndpoints
             var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
             await auditRepo.LogAsync("snapshot", info.FileName, "snapshot_created", "web", $"Snapshot created by user {actor}");
             return Results.Created($"/api/snapshots/{info.FileName}", info);
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapGet("/{fileName}/download", (string fileName, SnapshotService svc, SessionService session, HttpContext ctx) =>
         {
-            // Snapshots contain the encrypted DB (incl. wrapped DEKs and key slots).
-            // Even though contents are at rest under master-DEK encryption, exfil
-            // enables offline brute-force against weak passwords. Restrict to admin.
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
+            // Snapshots contain the encrypted DB (incl. wrapped DEKs and key slots). Even though
+            // contents are at rest under master-DEK encryption, exfil enables offline brute-force
+            // against weak passwords — hence the superadmin gate on this route.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -74,14 +73,11 @@ public static class SnapshotEndpoints
             {
                 return Results.BadRequest(new ErrorResponse("Invalid snapshot file name"));
             }
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapPost("/restore", async (RestoreSnapshotRequest req, SnapshotService svc, SessionService session,
             MaintenanceModeService maintenance, HttpContext ctx, ILogger<Program> logger, IAuditLogRepository auditRepo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             // Re-authenticate. Only unlock the shared session when it is actually locked — an
             // encrypted snapshot needs the master DEK to apply, and the restore path locks again
             // when it is done. Calling UnlockAsync unconditionally (as this used to) also fired the
@@ -162,12 +158,10 @@ public static class SnapshotEndpoints
                 session.Lock();
                 maintenance.Exit();
             }
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapDelete("/{fileName}", async (string fileName, SnapshotService svc, SessionService session, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
@@ -177,7 +171,7 @@ public static class SnapshotEndpoints
             var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
             await auditRepo.LogAsync("snapshot", fileName, "snapshot_deleted", "web", $"Snapshot deleted by user {actor}");
             return Results.NoContent();
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapPost("/upload", async (
             HttpRequest request,
@@ -187,8 +181,6 @@ public static class SnapshotEndpoints
             ILogger<Program> logger,
             IAuditLogRepository auditRepo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked) return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             if (!request.HasFormContentType)
@@ -221,6 +213,7 @@ public static class SnapshotEndpoints
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
         })
+        .RequireSuperadmin().RequireNonAgent()
         .DisableAntiforgery()
         .WithName("UploadSnapshot");
 
@@ -235,8 +228,6 @@ public static class SnapshotEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (!session.IsUnlocked) return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             if (req.Mode != RestoreMode.NetworkWide) return Results.BadRequest("Use /restore for standalone");
 
@@ -311,6 +302,7 @@ public static class SnapshotEndpoints
 
             return Results.Accepted(value: new { eventId = evt.EventId.ToString() });
         })
+        .RequireSuperadmin().RequireNonAgent()
         .WithName("InitiateNetworkRestore");
 
         group.MapGet("/restore/{eventId}/file", async (
@@ -401,8 +393,6 @@ public static class SnapshotEndpoints
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             try
             {
                 await restoreSvc.ContinueWithoutBackupAsync(req.EventId.ToString(), req.MasterPassword);
@@ -418,6 +408,7 @@ public static class SnapshotEndpoints
                 return Results.BadRequest(new ErrorResponse("Restore continuation failed. Check server logs for details."));
             }
         })
+        .RequireSuperadmin().RequireNonAgent()
         .WithName("ContinueWithoutBackup");
 
         group.MapPost("/restore/cancel", async (
@@ -426,8 +417,6 @@ public static class SnapshotEndpoints
             SessionService session,
             HttpContext ctx) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             // Note: do NOT require session.IsUnlocked here — sessions are intentionally locked
             // throughout maintenance/restoration mode (see RestoreInitiatorService.AcceptRestoreAsync),
             // so the cancel endpoint must remain reachable from the locked Login screen.
@@ -436,6 +425,7 @@ public static class SnapshotEndpoints
             await restoreSvc.CancelAsync(eventId);
             return Results.Ok();
         })
+        .RequireSuperadmin().RequireNonAgent()
         .WithName("CancelRestore");
     }
 }

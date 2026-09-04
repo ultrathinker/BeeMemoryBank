@@ -50,6 +50,20 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         get { lock (_lock) { return _masterDek != null; } }
     }
 
+    /// <summary>
+    /// Opens the vault for the WHOLE PROCESS. <see cref="IsUnlocked"/> is one flag shared by the web
+    /// UI and every MCP agent — there is no per-caller session — so a successful call here unlocks
+    /// the vault for everyone on this node, and also fires the post-unlock catch-up work
+    /// (<see cref="TriggerPostUnlockCatchUp"/>).
+    /// <para>
+    /// Only call this where unlocking is the actual intent. To find out whether a password is
+    /// correct — re-authentication before a dangerous operation, say — use
+    /// <see cref="VerifyMasterPasswordAsync"/> instead. Using this method as a password check is how
+    /// a destructive endpoint once became a master-password oracle that unlocked the vault globally
+    /// as a side effect of merely being asked, even when the operation itself then failed. The set
+    /// of call sites is pinned by SessionUnlockCallSiteGuardTests in BeeMemoryBank.Core.Tests.
+    /// </para>
+    /// </summary>
     public async Task<bool> UnlockAsync(string password)
     {
         await _unlockSemaphore.WaitAsync();
@@ -265,6 +279,19 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         return null;
     }
 
+    /// <summary>
+    /// The no-password form of <see cref="UnlockAsync"/>, for callers that already hold an unwrapped
+    /// master DEK (OS auto-unlock, agent-token unlock). Same process-wide effect: the vault opens for
+    /// the web UI and every MCP agent at once, not just for whoever called. Ownership of
+    /// <paramref name="masterDek"/> transfers to this instance — do not wipe or reuse the buffer
+    /// afterwards.
+    /// <para>
+    /// Nothing is verified here: the caller must already have established that the DEK is the right
+    /// one. OS auto-unlock checks it against the sentinel; the agent path relies on the AES-GCM tag,
+    /// which fails to authenticate for a wrong API key. This is never the way to test a credential —
+    /// see <see cref="VerifyMasterPasswordAsync"/>.
+    /// </para>
+    /// </summary>
     public void UnlockWithDek(byte[] masterDek)
     {
         lock (_lock)
@@ -426,6 +453,17 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
             Array.Clear(toClear);
     }
 
+    /// <summary>
+    /// Wipes every cached key (current DEK, retired DEKs, pending-clear DEK) and raises
+    /// <see cref="Locked"/>. Process-wide, like its counterparts: this locks the vault for the web UI
+    /// and every MCP agent, not for one caller.
+    /// <para>
+    /// It is not a durable state on a node that can unlock itself. A superadmin-owned agent key
+    /// carries a wrapped master DEK and re-opens the session through
+    /// <c>UnlockWithDek</c> on its next request (AgentAuthMiddleware), and OS auto-unlock re-opens it
+    /// at the next process start. See SECURITY.md → Trust Model → "Lock is advisory".
+    /// </para>
+    /// </summary>
     public void Lock()
     {
         lock (_lock)

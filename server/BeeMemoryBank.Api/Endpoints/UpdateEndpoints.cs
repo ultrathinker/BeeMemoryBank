@@ -25,16 +25,18 @@ public static class UpdateEndpoints
 
     public static void MapUpdateEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/node/update").WithTags("NodeUpdate").RequireInternalKey();
+        // Driving the self-update state machine is superadmin-only for every route in the group.
+        // RequireNonAgent for the same reason as /api/dek-rotation: the header compare this
+        // replaces was never satisfiable by an agent request, and applying a software update on
+        // its owner's behalf is not a capability an MCP key should gain.
+        var group = app.MapGroup("/node/update").WithTags("NodeUpdate")
+            .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 
         // GET /node/update/status — current state machine snapshot. Safe to poll.
         // Superadmin-gated like the rest of the group: the payload surfaces internal
         // operational state (gates, version, error text) that non-admins have no need for.
-        group.MapGet("/status", (UpdateService svc, HttpContext ctx) =>
+        group.MapGet("/status", (UpdateService svc) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             return Results.Ok(svc.GetProgress());
         });
 
@@ -43,11 +45,8 @@ public static class UpdateEndpoints
         // signature; UpdateService verifies against the two embedded release keys before
         // deciding an update is available. Idempotent against repeated calls when already
         // up-to-date (returns to Idle).
-        group.MapPost("/check", async (UpdateCheckRequest req, UpdateService svc, HttpContext ctx) =>
+        group.MapPost("/check", async (UpdateCheckRequest req, UpdateService svc) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             if (string.IsNullOrWhiteSpace(req.ManifestJson))
                 return Results.Json(new ErrorResponse("manifestJson is required"), statusCode: 400);
             if (string.IsNullOrWhiteSpace(req.ManifestSignatureBase64))
@@ -70,11 +69,8 @@ public static class UpdateEndpoints
         // via the configured IUpdateArtifactSource. The same signed manifest is re-posted so the
         // service can locate the artifact descriptor and its declared hash. Must be called from
         // the UpdateAvailable state produced by /check.
-        group.MapPost("/download", async (UpdateCheckRequest req, UpdateService svc, HttpContext ctx) =>
+        group.MapPost("/download", async (UpdateCheckRequest req, UpdateService svc) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             if (string.IsNullOrWhiteSpace(req.ManifestJson))
                 return Results.Json(new ErrorResponse("manifestJson is required"), statusCode: 400);
 
@@ -105,11 +101,8 @@ public static class UpdateEndpoints
         // the apply, and run the post-apply health check. Must be called from ReadyToApply.
         // Long-ish running (health-check retries); the response carries the terminal progress
         // (Completed or Failed, with BlockedGates / ErrorMessage populated as appropriate).
-        group.MapPost("/apply", async (UpdateService svc, HttpContext ctx) =>
+        group.MapPost("/apply", async (UpdateService svc) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             try
             {
                 await svc.ApplyAsync();
@@ -123,11 +116,8 @@ public static class UpdateEndpoints
 
         // POST /node/update/reset — return the state machine to Idle. Lets an admin clear a
         // Failed state (e.g. after inspecting the pre-update backup) and start over.
-        group.MapPost("/reset", async (UpdateService svc, HttpContext ctx) =>
+        group.MapPost("/reset", async (UpdateService svc) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             await svc.ResetAsync();
             return Results.Ok(svc.GetProgress());
         });

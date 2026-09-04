@@ -10,35 +10,30 @@ public static class AdminEndpoints
 {
     public static void MapAdminEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/admin").WithTags("Admin").RequireInternalKey();
+        // Superadmin-only in full, declared on the group. What is left inline in each handler is
+        // the session-lock check, which is a different question with a different answer code.
+        var group = app.MapGroup("/api/admin").WithTags("Admin")
+            .RequireInternalKey().RequireSuperadmin();
 
         // backfill-media-links was a one-shot migration helper for an earlier schema change.
         // Disabled: leaving the rest of the /api/admin group registered so concept-tag-edge
         // stats + rebuild work. If we ever need backfill again, restore from git history.
 
         group.MapGet("/concept-tag-edge/stats", async (
-            HttpContext ctx, SessionService session, IConceptTagRepository conceptTagRepo) =>
+            SessionService session, IConceptTagRepository conceptTagRepo) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
-
-            var caller = CallerIdentity.Extract(ctx);
-            if (!caller.IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
 
             var stats = await conceptTagRepo.GetEdgeStatsAsync();
             return Results.Ok(stats);
         });
 
         group.MapPost("/concept-tag-edge/rebuild", async (
-            HttpContext ctx, SessionService session, IConceptTagRepository conceptTagRepo) =>
+            SessionService session, IConceptTagRepository conceptTagRepo) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
-
-            var caller = CallerIdentity.Extract(ctx);
-            if (!caller.IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
 
             var report = await conceptTagRepo.CheckAndRebuildEdgesAsync();
             return Results.Ok(report);
@@ -53,10 +48,10 @@ public static class AdminEndpoints
 
         // GET /api/admin/update/check — compare own compiled-in version to the feed.
         group.MapGet("/update/check", async (
-            HttpContext ctx, SessionService session, IHttpClientFactory httpFactory, IConfiguration config) =>
+            SessionService session, IHttpClientFactory httpFactory, IConfiguration config) =>
         {
-            var gate = RequireSuperadmin(ctx, session);
-            if (gate != null) return gate;
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             var current = AppVersion.Current;
             var feedUrl = GetFeedUrl(config);
@@ -91,10 +86,10 @@ public static class AdminEndpoints
 
         // POST /api/admin/update/apply — drop the trigger flag for the host updater.
         group.MapPost("/update/apply", async (
-            HttpContext ctx, SessionService session, IConfiguration config) =>
+            SessionService session, IConfiguration config) =>
         {
-            var gate = RequireSuperadmin(ctx, session);
-            if (gate != null) return gate;
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             var updatesDir = Path.Combine(ResolveDataPath(config), "updates");
             Directory.CreateDirectory(updatesDir);
@@ -115,10 +110,10 @@ public static class AdminEndpoints
 
         // GET /api/admin/update/status — async feedback: is an update running, and how did the last one go.
         group.MapGet("/update/status", (
-            HttpContext ctx, SessionService session, IConfiguration config) =>
+            SessionService session, IConfiguration config) =>
         {
-            var gate = RequireSuperadmin(ctx, session);
-            if (gate != null) return gate;
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             var updatesDir = Path.Combine(ResolveDataPath(config), "updates");
             var inProgress = File.Exists(Path.Combine(updatesDir, "update.inprogress"));
@@ -133,16 +128,6 @@ public static class AdminEndpoints
 
             return Results.Ok(new { inProgress, result });
         });
-    }
-
-    // 3-gate admin check shared by the update endpoints; returns null when authorized.
-    private static IResult? RequireSuperadmin(HttpContext ctx, SessionService session)
-    {
-        if (!session.IsUnlocked)
-            return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
-        if (!CallerIdentity.Extract(ctx).IsSuperadmin)
-            return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
-        return null;
     }
 
     // No hardcoded default on purpose: the public source must not bake in a specific

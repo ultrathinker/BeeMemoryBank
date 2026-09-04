@@ -17,6 +17,11 @@ public static class AgentEndpoints
         var group = app.MapGroup("/api/agents").WithTags("Agents").RequireInternalKey();
         group.AddEndpointFilter<RequireNonAgentFilter>();
 
+        // Neither route below can be .RequireSuperadmin(): the rule is conditional, not absolute.
+        // Listing defaults to the caller's OWN agents for every role and only widens with
+        // ?all=true; deleting is allowed on your own agent whatever your role. A filter can only
+        // answer yes/no before the handler runs, so both checks stay inline.
+        //
         // GET /api/agents — list active agents.
         //
         // Scope defaults to the CALLER'S OWN agents, for every role. `?all=true`

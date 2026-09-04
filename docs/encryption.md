@@ -312,11 +312,28 @@ Every rotation action is logged to `tbl_audit_log`: propose, accept, cancel, pee
 | title | Navigation and search without unlock |
 | tags | Search and filtering |
 | treePath | Tree-based navigation |
-| comments | Discussion without decryption |
 | timestamps | Sorting, activity feed |
+| media file name, content type, size | Attachment lists without unlock (the bytes are encrypted) |
 | sync event metadata | Lamport clock, node_id, event_type |
+| sync event payload | `tbl_event.payload` is plaintext JSON — see below |
 
-**Trade-off:** A leaked SQLite file reveals topics and structure, but NOT article texts.
+**Comments are encrypted**, and are deliberately not in the table above. `CommentService.CreateAsync`
+encrypts every comment with the parent article's DEK and stores it as `tbl_comment.ciphertext` with
+`encrypted = 1` (the legacy `text` column is left empty). Reading one costs exactly what reading the
+article costs: an unwrapped master DEK.
+
+**The event log is plaintext, and it carries the same metadata the tables do.** `tbl_event.payload`
+is a plain JSON string — nothing wraps it — so every metadata field a synced entity has travels in
+the clear next to the ciphertext it describes. `article_create` / `article_update` payloads carry
+`title`, `tree_path` and `concept_tags` (`ArticleEventPayload`); folder events carry the folder path
+and name; `media_create` carries the file name and content type; concept-tag events carry the tag
+names. Only bodies travel encrypted — as a `ciphertext_sha256` reference to a blob, or inline base64
+on pre-protocol-2 events — and a comment event carries the comment's ciphertext, never its text.
+Signing (Ed25519) protects the payload's integrity, not its confidentiality.
+
+**Trade-off:** A leaked SQLite file reveals topics and structure, but NOT article texts. A leaked
+event log on its own reveals the same, and so does a whitelisted peer that never does anything but
+pull: the event stream alone is enough to reconstruct the whole tree, every title and every tag.
 
 ## Media Encryption (Images)
 

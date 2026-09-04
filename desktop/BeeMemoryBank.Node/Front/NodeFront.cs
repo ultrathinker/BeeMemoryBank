@@ -157,64 +157,46 @@ public class NodeFront
             }
         });
 
-        // Configure YARP routes and clusters in-memory
-        var routes = new[]
-        {
-            new RouteConfig
+        // Which paths reach the API rather than the Web UI. Built from PublicSurface — the same
+        // list the API itself enforces — rather than hand-written here, because it WAS hand-written
+        // here and diverged: the Apache configuration on a server deployment published
+        // /api/snapshots/restore, this table did not, and a network-wide restore therefore could
+        // not seed a desktop node. Two lists of "what is public", neither reviewed when an
+        // endpoint moves, is the whole problem PublicSurface exists to end.
+        //
+        // YARP matches literal paths and {**catch-all} segments, so a PublicSurface "**" tail
+        // becomes "{**rest}" and a "{param}" segment becomes a named YARP parameter.
+        var routes = PublicSurface.Entries
+            .Select((entry, index) => new RouteConfig
             {
-                RouteId = "api-mcp",
+                RouteId = $"api-public-{index}",
                 ClusterId = "Api",
-                Match = new RouteMatch { Path = "/mcp" },
+                Match = new RouteMatch
+                {
+                    Path = ToYarpPattern(entry.Pattern),
+                    Methods = entry.Method is null ? null : new[] { entry.Method }
+                },
                 Order = 1
-            },
-            new RouteConfig
+            })
+            .Append(new RouteConfig
             {
-                RouteId = "api-mcp-rest",
-                ClusterId = "Api",
-                Match = new RouteMatch { Path = "/mcp/{**rest}" },
-                Order = 1
-            },
-            new RouteConfig
-            {
-                RouteId = "api-sync-rest",
-                ClusterId = "Api",
-                Match = new RouteMatch { Path = "/api/sync/{**rest}" },
-                Order = 1
-            },
-            new RouteConfig
-            {
-                RouteId = "api-join",
-                ClusterId = "Api",
-                Match = new RouteMatch { Path = "/api/join", Methods = new[] { "POST" } },
-                Order = 1
-            },
-            new RouteConfig
-            {
-                RouteId = "api-health",
-                ClusterId = "Api",
-                Match = new RouteMatch { Path = "/health" },
-                Order = 1
-            },
-            new RouteConfig
-            {
-                // Api owns the /node/update/* update-choreography state machine (see
-                // BeeMemoryBank.Api/Endpoints/UpdateEndpoints.cs). Without this route, any
-                // request to a path under /node/update/ falls through past the direct /node/*
-                // endpoints below (which only match the literal /status, /lock, /sync-now) to
-                // the web-catchall route and hits BeeMemoryBank.Web instead — a 404, never Api.
+                // Not in PublicSurface on purpose: /node/update/* requires the internal key, so it
+                // is not public — but it is served by the API, and without this route it falls
+                // through to the web catch-all and 404s. Routing and authorisation are separate
+                // questions, and this is the one route where the answers differ.
                 RouteId = "api-node-update",
                 ClusterId = "Api",
                 Match = new RouteMatch { Path = "/node/update/{**rest}" },
                 Order = 1
-            },
-            new RouteConfig
+            })
+            .Append(new RouteConfig
             {
                 RouteId = "web-catchall",
                 ClusterId = "Web",
                 Match = new RouteMatch { Path = "{**catchall}" },
                 Order = 1000 // Lowest priority
-            }
-        };
+            })
+            .ToArray();
 
         var clusters = new[]
         {
@@ -247,6 +229,16 @@ public class NodeFront
         services.AddReverseProxy()
             .LoadFromMemory(routes, clusters);
     }
+
+    /// <summary>
+    /// Translates a <see cref="PublicSurface"/> pattern into YARP's route syntax. The two notations
+    /// differ only in their wildcards: "**" tails become "{**rest}", and "{name}" segments pass
+    /// through unchanged since YARP already understands them.
+    /// </summary>
+    private static string ToYarpPattern(string pattern) =>
+        pattern.EndsWith("/**", StringComparison.Ordinal)
+            ? pattern[..^2] + "{**rest}"
+            : pattern;
 
     /// <summary>
     /// Maps direct endpoints (including loopback-only /node/* status endpoints) and reverse proxy middleware.

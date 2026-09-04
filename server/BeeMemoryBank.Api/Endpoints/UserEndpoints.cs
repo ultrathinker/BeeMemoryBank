@@ -42,10 +42,6 @@ public static class UserEndpoints
 
         group.MapPost("/", async (CreateUserRequest req, IUserRepository userRepo, UserService userService, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can create users"), statusCode: 403);
-
             try
             {
                 var user = await userService.CreateUserAsync(req.Username, req.DisplayName, req.Password, req.Role, req.ChatAccess);
@@ -58,14 +54,10 @@ public static class UserEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
-        });
+        }).RequireSuperadmin();
 
         group.MapPut("/{id:int}", async (int id, UpdateUserRequest req, IUserRepository userRepo, UserService userService, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can update users"), statusCode: 403);
-
             try
             {
                 var appliedPw = await userService.UpdateUserAsync(id, req.DisplayName, req.Role, req.Password, req.ChatAccess);
@@ -90,14 +82,10 @@ public static class UserEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
-        });
+        }).RequireSuperadmin();
 
         group.MapDelete("/{id:int}", async (int id, UserService userService, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can delete users"), statusCode: 403);
-
             try
             {
                 await userService.DeleteUserAsync(id);
@@ -119,9 +107,11 @@ public static class UserEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
-        });
+        }).RequireSuperadmin();
 
-        // Self-service password change — any authenticated user can change their own password
+        // Self-service password change — any authenticated user can change their own password.
+        // Not RequireSuperadmin: the rule here is "acting on yourself", which the filter cannot
+        // express — it is the forwarded X-User-Id, not the role, that decides who is affected.
         group.MapPost("/me/change-password", async (ChangePasswordRequest req, UserService userService, HttpContext ctx) =>
         {
             var userIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
@@ -153,10 +143,6 @@ public static class UserEndpoints
 
         group.MapPost("/{id:int}/change-password", async (int id, ChangeUserPasswordRequest req, UserService userService, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
-            var role = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (role != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Only superadmin can change passwords"), statusCode: 403);
-
             try
             {
                 await userService.AdminChangePasswordAsync(id, req.NewPassword);
@@ -179,6 +165,6 @@ public static class UserEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 400);
             }
-        });
+        }).RequireSuperadmin();
     }
 }

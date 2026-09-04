@@ -162,12 +162,8 @@ public static class ConceptTagEndpoints
         }).RequireInternalKey().WithTags("ConceptTags");
 
         // PUT /api/concept-tags/{name} — rename globally
-        app.MapPut("/api/concept-tags/{name}", async (string name, RenameTagRequest req, HttpContext ctx, ConceptTagService conceptTagService) =>
+        app.MapPut("/api/concept-tags/{name}", async (string name, RenameTagRequest req, ConceptTagService conceptTagService) =>
         {
-
-            var caller = CallerIdentity.Extract(ctx);
-            if (!caller.IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(req.NewName))
                 return Results.BadRequest(new ErrorResponse("newName must not be empty"));
@@ -181,15 +177,11 @@ public static class ConceptTagEndpoints
             {
                 return Results.Conflict(new ErrorResponse(ex.Message));
             }
-        }).RequireInternalKey().WithTags("ConceptTags");
+        }).RequireInternalKey().RequireSuperadmin().WithTags("ConceptTags");
 
         // POST /api/concept-tags/merge — merge source into target
-        app.MapPost("/api/concept-tags/merge", async (MergeConceptTagRequest req, HttpContext ctx, ConceptTagService conceptTagService) =>
+        app.MapPost("/api/concept-tags/merge", async (MergeConceptTagRequest req, ConceptTagService conceptTagService) =>
         {
-
-            var caller = CallerIdentity.Extract(ctx);
-            if (!caller.IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
 
             if (string.IsNullOrWhiteSpace(req.Source) || string.IsNullOrWhiteSpace(req.Target))
                 return Results.BadRequest(new ErrorResponse("source and target must not be empty"));
@@ -203,15 +195,11 @@ public static class ConceptTagEndpoints
             {
                 return Results.Conflict(new ErrorResponse(ex.Message));
             }
-        }).RequireInternalKey().WithTags("ConceptTags");
+        }).RequireInternalKey().RequireSuperadmin().WithTags("ConceptTags");
 
         // DELETE /api/concept-tags/{name} — delete globally
-        app.MapDelete("/api/concept-tags/{name}", async (string name, HttpContext ctx, ConceptTagService conceptTagService) =>
+        app.MapDelete("/api/concept-tags/{name}", async (string name, ConceptTagService conceptTagService) =>
         {
-
-            var caller = CallerIdentity.Extract(ctx);
-            if (!caller.IsSuperadmin)
-                return Results.Json(new ErrorResponse("Superadmin required"), statusCode: 403);
 
             try
             {
@@ -222,7 +210,7 @@ public static class ConceptTagEndpoints
             {
                 return Results.NotFound(new ErrorResponse(ex.Message));
             }
-        }).RequireInternalKey().WithTags("ConceptTags");
+        }).RequireInternalKey().RequireSuperadmin().WithTags("ConceptTags");
     }
 }
 

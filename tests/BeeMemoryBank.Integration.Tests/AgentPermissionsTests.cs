@@ -18,6 +18,13 @@ namespace BeeMemoryBank.Integration.Tests;
 ///   - user management endpoints
 ///   - agent management endpoints
 ///
+/// The answer is 404, not the 403 these originally asserted. An agent presents a bee_ key and no
+/// internal key, and the REST admin surface is not published to keyless callers at all
+/// (PublicSurface) — so the request is refused before it reaches the handler that would have said
+/// "forbidden". That is the stronger answer: an agent should not be able to tell which of these
+/// endpoints exist. What matters to these tests is unchanged — an agent cannot unlock the vault,
+/// create a user, or mint another agent — so they assert exactly that, at whichever layer stops it.
+///
 /// NOTE: These tests are written but not run until explicitly requested.
 /// Run with: dotnet test --filter "FullyQualifiedName~AgentPermissionsTests"
 /// </summary>
@@ -106,29 +113,29 @@ public class AgentPermissionsTests : IAsyncLifetime
     // ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Agent_CannotCall_SessionLock_Returns403()
+    public async Task Agent_CannotCall_SessionLock_IsRefused()
     {
         var apiKey = await CreateTestAgentAsync();
         using var agentClient = CreateAgentClient(apiKey);
 
         var resp = await agentClient.PostAsJsonAsync("/api/session/lock", new { });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
-    public async Task Agent_CannotCall_SessionUnlock_Returns403()
+    public async Task Agent_CannotCall_SessionUnlock_IsRefused()
     {
         var apiKey = await CreateTestAgentAsync();
         using var agentClient = CreateAgentClient(apiKey);
 
         var resp = await agentClient.PostAsJsonAsync("/api/session/unlock", new { password = Password });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
-    public async Task Agent_CannotCreateUser_Returns403()
+    public async Task Agent_CannotCreateUser_IsRefused()
     {
         var apiKey = await CreateTestAgentAsync();
         using var agentClient = CreateAgentClient(apiKey);
@@ -141,40 +148,40 @@ public class AgentPermissionsTests : IAsyncLifetime
             role = "user"
         });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
-    public async Task Agent_CannotDeleteUser_Returns403()
+    public async Task Agent_CannotDeleteUser_IsRefused()
     {
         var apiKey = await CreateTestAgentAsync();
         using var agentClient = CreateAgentClient(apiKey);
 
         var resp = await agentClient.DeleteAsync("/api/users/1");
 
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
-    public async Task Agent_CannotCreateAgent_Returns403()
+    public async Task Agent_CannotCreateAgent_IsRefused()
     {
         var apiKey = await CreateTestAgentAsync();
         using var agentClient = CreateAgentClient(apiKey);
 
         var resp = await agentClient.PostAsJsonAsync("/api/agents", new { name = "another-agent" });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
-    public async Task Agent_CannotDeleteAgent_Returns403()
+    public async Task Agent_CannotDeleteAgent_IsRefused()
     {
         var apiKey = await CreateTestAgentAsync();
         using var agentClient = CreateAgentClient(apiKey);
 
         var resp = await agentClient.DeleteAsync("/api/agents/1");
 
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -193,11 +200,15 @@ public class AgentPermissionsTests : IAsyncLifetime
             await userRepo.UpdateAsync(owner);
         }
 
-        // Act: agent attempts an MCP call
+        // Act: agent attempts an MCP call. Deliberately /mcp and not a REST path — the REST surface
+        // is no longer reachable by a keyless caller at all (it answers 404 before auth runs), which
+        // would make this test pass without ever exercising the deactivated-owner check it is about.
         using var agentClient = CreateAgentClient(apiKey);
-        var resp = await agentClient.GetAsync("/api/articles");
+        var resp = await agentClient.PostAsync("/mcp", new StringContent(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
+            System.Text.Encoding.UTF8, "application/json"));
 
-        // Assert: blocked with 401
+        // Assert: the key is rejected because its owner is gone
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 

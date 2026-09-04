@@ -10,7 +10,7 @@
 | `BMB_API_URL` | Web | Internal API URL (e.g., `http://localhost:5300`) |
 | `BMB_INTERNAL_KEY` | API, Web | Shared secret for Web→API authentication. Every request from Web to API must carry this key in the `X-Internal-Key` header. **In Docker:** `docker-entrypoint.sh` auto-generates and exports the key before starting both processes — you do not need to set it manually. **From source (separate processes):** you must set it explicitly and pass the same value to both API and Web (see below). The API refuses to start in Production if the key is missing. |
 | `BMB_AUDIT_RETENTION_DAYS` | API | Optional. How long to keep `tbl_audit_log` rows. Default `90`. Set to `0` to disable pruning entirely. The pruning service runs ~24 h after process start and once a day after; it skips when the session is locked (no operator present to react to anomalies) and writes a meta-audit row recording the deletion so the prune itself shows up in the audit trail. |
-| `BMB_TRUSTED_PROXIES` | API, Web | **Set this whenever a reverse proxy (including Docker port publishing) sits in front of the node.** Comma-separated IP addresses and/or CIDR networks whose `X-Forwarded-For` header is believed — e.g. `172.16.0.0/12` for the Docker bridge range. Without it every per-IP rate limit keys on the proxy's own address, so all clients share one bucket: a single anonymous caller can exhaust the sync-challenge budget and stall synchronization for the whole mesh, or the login budget for every user at once. Only one hop is trusted (`ForwardLimit = 1`), and an unparsable entry is logged and ignored rather than failing startup. Trust here is transitive — anything that can reach the port from a listed address can claim any client IP — so name the proxy or its network and nothing wider. |
+| `BMB_TRUSTED_PROXIES` | API, Web | **Set this whenever a reverse proxy (including Docker port publishing) sits in front of the node.** Comma- or whitespace-separated IP addresses and/or CIDR networks whose `X-Forwarded-For` header is believed — e.g. `172.16.0.0/12` for the Docker bridge range. Without it every per-IP rate limit keys on the proxy's own address, so all clients share one bucket: a single anonymous caller can exhaust the sync-challenge budget and stall synchronization for the whole mesh, or the login budget for every user at once. Only one hop is trusted (`ForwardLimit = 1`), and an unparsable entry is logged and ignored rather than failing startup. Trust here is transitive — anything that can reach the port from a listed address can claim any client IP — so name the proxy or its network and nothing wider. Both processes announce what they ended up trusting on startup — `[forwarded-headers] Trusting X-Forwarded-For from: …`, or a line saying nothing is configured — so check the log after changing this rather than assuming it took. |
 | `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS` | API, Web | Optional, `true`/unset. Believe `X-Forwarded-For` from loopback. For a proxy sharing the host with the node (the desktop app sets this itself). Independent of `BMB_TRUSTED_PROXIES`; either or both may be set. Not sufficient under Docker — published-port traffic arrives on the bridge interface, never on loopback. |
 
 ## Example Node Setup (Docker)
@@ -47,24 +47,35 @@ Only the following endpoints should be publicly accessible:
 
 Everything else (including `/api/articles`) should be restricted to trusted IPs or localhost.
 
-**How the application enforces this — and where it does NOT:** most non-public endpoints require the
-`X-Internal-Key` header matching `BMB_INTERNAL_KEY` and return `403 Forbidden` without it (`/api/init/reset`,
-for example). But several endpoints deliberately skip that check because they must be callable before a
-session exists, and those are genuinely unauthenticated if the port is reachable:
+**How the application enforces this.** The node keeps its own list of what a caller without
+`BMB_INTERNAL_KEY` may reach — `PublicSurface` in the source, covering `/mcp`, `/api/sync/*`,
+`POST /api/join`, the snapshot-file and restore-progress routes, `/health` and `GET /api/version`.
+Anything else answers `404` to a keyless caller: not `403`, because "this endpoint exists but you may
+not use it" is itself worth knowing to someone probing your node. The web UI and the desktop tray
+present the internal key and are unaffected.
 
-- `POST /api/session/unlock` — returns `401` on a wrong master password, i.e. it *processes* the attempt.
-  Exposed publicly this is a master-password oracle, and a correct guess unlocks the vault **globally, for
-  every user and agent on the node**, not just for the caller.
-- `GET /api/session/status` — returns `200` and leaks whether the vault is currently unlocked.
-- `POST /api/join` — master password grants mesh membership.
+This matters because several endpoints deliberately skip the internal-key check — they have to be
+callable before a session exists — and before the node enforced its own list, a mistake in the proxy
+configuration was the only thing between them and the internet:
 
-So the proxy path-filter is **not** merely defense-in-depth for these routes; it is the only thing standing
-in front of them. Restrict the API port to loopback and expose only `/mcp`, `/api/sync` and `/api/join`
-through the proxy, over TLS.
+- `POST /api/session/unlock` — *processes* a master-password attempt, and a correct guess unlocks the
+  vault **globally, for every user and agent on the node**, not just for the caller.
+- `GET /api/session/status` — leaks whether the vault is currently unlocked.
+- `POST /api/join` — master password grants mesh membership. This one is published on purpose; see the
+  Trust Model section of [SECURITY.md](../SECURITY.md) for what a joined node can then do.
 
-A node that receives a network-wide snapshot restore also needs `GET /api/snapshots/restore/{id}/file`
+**Keep the proxy path-filter anyway.** It is now the outer of two layers rather than the only one, and
+it is the layer that stops the request before it reaches the application at all. Restrict the API port
+to loopback and forward only `/mcp`, `/api/sync`, `/api/join` and `/api/snapshots/restore` over TLS.
+
+A node that receives a network-wide snapshot restore needs `GET /api/snapshots/restore/{id}/file`
 forwarded (Bearer-authenticated with a sync token, like the rest of `/api/sync`). Without it the
 restore initiator can publish the event but no peer can fetch the snapshot.
+
+**Escape hatch.** `BMB_PUBLIC_SURFACE=off` disables the node-side gate if a deployment turns out to
+need an endpoint the list does not know about. It is meant for a bad afternoon, not as a setting — the
+startup log says which state the node is in. If you need it, please report which endpoint, so it can be
+published properly instead.
 
 ## Resetting a Node
 
@@ -72,7 +83,9 @@ Wiping a node back to first-run Setup — every article, folder, user, key and s
 available two ways. Both require the master password as confirmation; the password is verified
 *without* unlocking the vault, so a rejected attempt leaves nothing open.
 
-- **Web UI:** `/Admin` → *Reset This Node*. Superadmin only.
+- **Web UI:** `/Admin` → *Reset This Node*. Superadmin only, and a human superadmin at that: the
+  endpoint behind it also refuses agent bearer tokens, so a superadmin's MCP agent cannot wipe the
+  node on its owner's behalf.
 - **Host CLI:** `bmb init reset --master-password '<password>' --yes` — for when nobody can sign in
   any more (every superadmin account lost, or the Web layer itself broken). Under Docker:
   `docker exec -it <container> dotnet /app/cli/bmb.dll init reset --master-password '<password>' --yes`
@@ -80,6 +93,12 @@ available two ways. Both require the master password as confirmation; the passwo
 Both write an append-only line to `<data>/reset-audit.log` before starting, because the wipe deletes
 `tbl_audit_log` along with everything else — a record kept only inside the database could never
 survive the event it describes.
+
+**Restart the node after a CLI reset.** The CLI is a separate process operating on the same data
+directory: it clears the tables, but the still-running API keeps the in-memory state it built from
+the vault that no longer exists — its unlocked session (and therefore the old Master DEK) and its
+process-wide caches. The Web UI path has no such gap, since it resets the very process serving it.
+So under Docker, restart the container after the `docker exec` above, before opening `/Setup`.
 
 > Earlier versions offered this from a *"Node out-of-sync? Reset & rejoin"* form on the anonymous
 > Login page, and through an unauthenticated `POST /api-proxy/init/reset`. Both are gone: with the

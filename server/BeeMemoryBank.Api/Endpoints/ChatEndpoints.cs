@@ -23,8 +23,9 @@ namespace BeeMemoryBank.Api.Endpoints;
 ///
 /// Group is gated by <see cref="RequireInternalKeyExtensions.RequireInternalKey(RouteGroupBuilder)"/>
 /// (internal-key check) the same as every other protected group. Within it:
-///  - Key CRUD + model-catalogue WRITES additionally require <c>X-User-Role == superadmin</c>
-///    (mirrors <c>SnapshotEndpoints</c>).
+///  - Key CRUD, the admin model-catalogue views and the node-wide settings additionally carry
+///    <c>.RequireSuperadmin()</c> (the shared <see cref="SuperadminEndpointFilter"/>, visible at
+///    the registration site rather than restated at the top of each handler).
 ///  - Any endpoint that encrypts/decrypts a key checks <c>session.IsUnlocked</c> first and
 ///    returns <c>409 {"error":"Vault is locked"}</c> when locked (encrypt needs the master DEK —
 ///    see plan §6 "Phase 0 acceptance made realistic").
@@ -94,10 +95,8 @@ public static partial class ChatEndpoints
         // ── API keys (superadmin-only; create decrypts the DEK path → also needs unlocked) ──
 
         group.MapPost("/keys", async (CreateChatKeyRequest req, ChatSettingsRepository repo,
-            SessionService session, HttpContext ctx) =>
+            SessionService session) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             // Encrypts under the master DEK → needs an unlocked vault.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
@@ -126,26 +125,20 @@ public static partial class ChatEndpoints
             // Returned exactly once; thereafter only key_prefix is exposed.
             return Results.Created($"/api/chat/keys/{key.Id}",
                 new ChatKeyCreatedResponse(key.Id, key.Label, key.KeyPrefix, plaintextKey));
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
-        group.MapGet("/keys", async (ChatSettingsRepository repo, HttpContext ctx) =>
+        group.MapGet("/keys", async (ChatSettingsRepository repo) =>
         {
             // Listing never decrypts — only key_prefix is exposed. Still superadmin-only.
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             var keys = await repo.ListAsync();
             return Results.Ok(keys.Select(k => new ChatKeyResponse(
                 k.Id, k.Label, k.KeyPrefix, k.Enabled, k.Priority,
                 k.LastUsedAt, k.LastError, k.DisabledUntil, k.CreatedAt)));
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapPatch("/keys/{id:guid}", async (Guid id, UpdateChatKeyRequest req,
-            ChatSettingsRepository repo, HttpContext ctx) =>
+            ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             var existing = await repo.GetByIdAsync(id);
             if (existing == null)
                 return Results.NotFound(new ErrorResponse($"Chat key {id} not found"));
@@ -153,24 +146,18 @@ public static partial class ChatEndpoints
             // Metadata only — no crypto, so no IsUnlocked gate.
             await repo.UpdateMetadataAsync(id, req.Label, req.Enabled, req.Priority);
             return Results.Ok();
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
-        group.MapDelete("/keys/{id:guid}", async (Guid id, ChatSettingsRepository repo, HttpContext ctx) =>
+        group.MapDelete("/keys/{id:guid}", async (Guid id, ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             await repo.DeleteKeyAsync(id);
             return Results.NoContent();
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         // ── Model catalogue (writes superadmin; listing enabled models open to authenticated users) ──
 
-        group.MapPost("/models", async (CreateChatModelRequest req, ChatSettingsRepository repo, HttpContext ctx) =>
+        group.MapPost("/models", async (CreateChatModelRequest req, ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             if (string.IsNullOrWhiteSpace(req.ModelId))
                 return Results.Json(new ErrorResponse("ModelId is required"), statusCode: 400);
             // An OpenRouter model slug is always a clean "provider/model-name" string and never
@@ -198,7 +185,7 @@ public static partial class ChatEndpoints
             };
             await repo.CreateAsync(model);
             return Results.Created($"/api/chat/models/{model.Id}", ToModelResponse(model));
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         // Plan §1: "listing enabled models for the per-conversation picker is available to any
         // authenticated user." Authenticated = internal-key check (group filter). No role gate.
@@ -208,63 +195,52 @@ public static partial class ChatEndpoints
             return Results.Ok(models.Select(ToModelResponse));
         });
 
-        group.MapDelete("/models/{id:guid}", async (Guid id, ChatSettingsRepository repo, HttpContext ctx) =>
+        group.MapDelete("/models/{id:guid}", async (Guid id, ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             await repo.DeleteModelAsync(id);
             return Results.NoContent();
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         // Admin catalogue view: ALL models (enabled + disabled) so the AI settings UI can list and
         // re-enable disabled entries. Superadmin-only. (GET /models above returns enabled-only and
         // is open to any authenticated user, for the per-conversation picker.)
-        group.MapGet("/models/all", async (ChatSettingsRepository repo, HttpContext ctx) =>
+        group.MapGet("/models/all", async (ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             var models = await repo.ListAllModelsAsync();
             return Results.Ok(models.Select(ToModelResponse));
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         // Updates a model's three capability booleans (admin catalogue edit dialog). Superadmin-only.
         // No crypto → no IsUnlocked gate.
         group.MapPatch("/models/{id:guid}", async (Guid id, UpdateChatModelRequest req,
-            ChatSettingsRepository repo, HttpContext ctx) =>
+            ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
             if (req.ContextWindow is not null and <= 0)
                 return Results.Json(new ErrorResponse("Context window must be a positive number of tokens."), statusCode: 400);
 
             await repo.UpdateModelMetadataAsync(id, req.IsText, req.IsVision, req.IsImageGen, req.ContextWindow);
             return Results.Ok();
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         // Pinned default models: three nullable GUIDs in chat_settings. Each dropdown's "Default"
         // option maps to null (use oldest-with-property); picking a specific model pins it.
         // Superadmin-only.
-        group.MapGet("/settings/defaults", async (ChatSettingsRepository repo, HttpContext ctx) =>
+        group.MapGet("/settings/defaults", async (ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             var (textId, visionId, imageGenId) = await repo.GetDefaultModelIdsAsync();
             return Results.Ok(new { defaultTextModelId = textId, defaultVisionModelId = visionId, defaultImageGenModelId = imageGenId });
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapPatch("/settings/defaults", async (UpdateChatDefaultsRequest req,
-            ChatSettingsRepository repo, HttpContext ctx) =>
+            ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             await repo.SetDefaultModelIdsAsync(req.DefaultTextModelId, req.DefaultVisionModelId, req.DefaultImageGenModelId);
             return Results.Ok(new { defaultTextModelId = req.DefaultTextModelId, defaultVisionModelId = req.DefaultVisionModelId, defaultImageGenModelId = req.DefaultImageGenModelId });
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
+        // Not RequireSuperadmin, deliberately: the rule is per-caller, not per-role — a user may
+        // only ever waive their OWN confirmation, which the filter cannot express.
+        //
         // Auto-approve writes (opt-in, PER-USER — M1 fix): when enabled, the streaming tool loop
         // executes THIS caller's write tool calls immediately instead of pausing for a human
         // Allow/Deny. ACL, the destructive-op cap, and audit tagging still apply in full — only the
@@ -298,24 +274,18 @@ public static partial class ChatEndpoints
         // Allow AI chat for users: node-wide kill switch. When off, no one except superadmins
         // can use the AI chat feature (web UI), regardless of each user's individual "Can use AI
         // chat" setting. Per-user settings are preserved while this is off. Superadmin-only.
-        group.MapGet("/settings/chat-enabled", async (ChatSettingsRepository repo, HttpContext ctx) =>
+        group.MapGet("/settings/chat-enabled", async (ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             var enabled = await repo.GetChatGloballyEnabledAsync();
             return Results.Ok(new { chatGloballyEnabled = enabled });
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         group.MapPatch("/settings/chat-enabled", async (UpdateChatEnabledRequest req,
-            ChatSettingsRepository repo, HttpContext ctx) =>
+            ChatSettingsRepository repo) =>
         {
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
-
             await repo.SetChatGloballyEnabledAsync(req.Enabled);
             return Results.Ok(new { chatGloballyEnabled = req.Enabled });
-        });
+        }).RequireSuperadmin().RequireNonAgent();
 
         // Effective TEXT model (read-only). Open to ANY authenticated caller (group-level
         // internal-key check only — no role gate): the chat page shows the model name in the

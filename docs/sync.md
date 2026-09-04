@@ -8,6 +8,43 @@ Synchronization allows you to have a copy of the knowledge base on multiple devi
 
 **Model:** Event Sourcing. Every operation (creating/editing/deleting an article, adding a node, commenting) is recorded as an event in a linear log. Nodes exchange events over HTTP.
 
+## Trust Model
+
+Worth reading before you invite a second node. The security-policy version of the same facts is in
+[SECURITY.md](../SECURITY.md#trust-model).
+
+**A node joins by presenting the master password.** `POST /api/join` tries it against every
+password-bearing key slot on the bootstrap node and, when one opens that belongs to an active
+superadmin (or to a legacy pre-user-table `password` slot), hands back the wrapped Master DEK and a
+copy of the whitelist. There is no invite token and no approval step — the password is the whole
+gate.
+
+**A joined node is written to the whitelist as a superadmin.** `JoinEndpoints` creates the entry
+with `is_superadmin = 1`, and the `whitelist_add` event carries that bit to every other node, so the
+flag is uniform across the mesh. `EventApplier` checks it before applying `whitelist_add`,
+`whitelist_revoke`, `whitelist_update`, `hard_delete` and `restore_network`; an event of one of
+those types signed by a peer without the flag is rejected with `UnauthorizedAccessException`.
+
+**So every replica is a peer with authority over the network, not a passive copy.** Concretely, any
+node on the mesh can:
+
+- **Revoke another peer** — `ApplyWhitelistRevokeAsync` flips the target's row to `Status = "R"` on
+  every node that receives the event. A node ignores a revoke aimed at itself, so the revoked peer
+  keeps its own data; it just stops being accepted anywhere else.
+- **Hard-delete an article or folder everywhere** — `hard_delete` routes to
+  `HardDeleteService.ApplyRemoteAsync`, which physically purges the rows and deletes the `.enc`
+  media files. It is not a tombstone and there is nothing to restore from afterwards.
+- **Restore the whole network from its own snapshot** — see "Network-Wide Snapshot Restore" below.
+  Peers with `auto_accept_restore` apply it unattended.
+
+Nothing in the API or the Admin UI clears `is_superadmin` after a join, so a peer cannot be demoted
+to content-only; the only remedy is revoking it. And because each node decides from *its own*
+whitelist row, a revoke only binds the nodes the revoke event actually reaches.
+
+**One further consequence for the event log itself:** payloads are plaintext JSON. A peer that only
+ever authenticates and pulls still learns every article title, tree path and tag name in the vault,
+even though bodies stay encrypted — see [encryption.md](encryption.md#what-is-not-encrypted-by-design).
+
 ## How It Works in Practice
 
 ```

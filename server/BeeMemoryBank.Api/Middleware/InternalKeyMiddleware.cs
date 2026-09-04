@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using BeeMemoryBank.Core.Models;
 
 namespace BeeMemoryBank.Api.Middleware;
 
@@ -25,18 +24,5 @@ public static class InternalKeyValidator
         return CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(providedKey),
             Encoding.UTF8.GetBytes(expectedKey));
-    }
-
-    /// <summary>
-    /// Combined gate: must hold both `BMB_INTERNAL_KEY` (or be loopback) AND advertise the
-    /// expected role via `X-User-Role`. The role header is operator-asserted, so we must
-    /// NEVER honor it without the prior internal-key check — otherwise any client could
-    /// claim superadmin. By exposing the two checks as a single helper we make it
-    /// structurally hard to do a "role check only" by accident.
-    /// </summary>
-    public static bool ValidateInternalAndRole(HttpContext ctx, string expectedRole = UserRoles.Superadmin)
-    {
-        if (!Validate(ctx)) return false;
-        return ctx.Request.Headers["X-User-Role"].FirstOrDefault() == expectedRole;
     }
 }

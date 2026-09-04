@@ -15,18 +15,21 @@ public static class RemoteAccountEndpoints
 {
     public static void MapRemoteAccountEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/remote-accounts").WithTags("RemoteAccount").RequireInternalKey();
+        // Remote accounts are node-wide configuration: any guest could otherwise list
+        // owner-configured mirrors, delete subscriptions, or mount a foreign owner's folder under
+        // their own writable tree. Restrict the whole surface to superadmin until per-user
+        // ownership is added (security review 2026-05-25). Stated once on the group — it used to
+        // be the same comment plus the same header compare copy-pasted into all seven handlers.
+        // RequireNonAgent alongside the role gate, to keep the reach these routes had before it.
+        // The old check compared X-User-Role directly, which no agent ever sends, so every agent
+        // was refused; CallerIdentity gives an agent its owner's role, so the filter alone would
+        // hand a superadmin's MCP agent the ability to mint and delete credentials for other
+        // people's nodes. Same pairing, and the same reason, as /api/keys.
+        var group = app.MapGroup("/api/remote-accounts").WithTags("RemoteAccount")
+            .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 
-        group.MapGet("/", async (HttpContext ctx, RemoteAccountService svc) =>
+        group.MapGet("/", async (RemoteAccountService svc) =>
         {
-            // Remote accounts are node-wide configuration: any guest could
-            // otherwise list owner-configured mirrors, delete subscriptions, or
-            // mount a foreign owner's folder under their own writable tree.
-            // Restrict the whole surface to superadmin until per-user ownership
-            // is added (security review 2026-05-25).
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != BeeMemoryBank.Core.Models.UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Superadmin role required."), statusCode: 403);
-
             var list = await svc.ListAccountsAsync();
             return Results.Ok(list.Select(a => new
             {
@@ -42,15 +45,8 @@ public static class RemoteAccountEndpoints
             }));
         });
 
-        group.MapPost("/", async (CreateRemoteAccountRequest req, HttpContext ctx, RemoteAccountService svc, SessionService session) =>
+        group.MapPost("/", async (CreateRemoteAccountRequest req, RemoteAccountService svc, SessionService session) =>
         {
-            // Remote accounts are node-wide configuration: any guest could
-            // otherwise list owner-configured mirrors, delete subscriptions, or
-            // mount a foreign owner's folder under their own writable tree.
-            // Restrict the whole surface to superadmin until per-user ownership
-            // is added (security review 2026-05-25).
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != BeeMemoryBank.Core.Models.UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Superadmin role required."), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(req.BaseUrl) || string.IsNullOrWhiteSpace(req.Username))
@@ -67,28 +63,14 @@ public static class RemoteAccountEndpoints
             }
         });
 
-        group.MapDelete("/{id:guid}", async (Guid id, HttpContext ctx, RemoteAccountService svc) =>
+        group.MapDelete("/{id:guid}", async (Guid id, RemoteAccountService svc) =>
         {
-            // Remote accounts are node-wide configuration: any guest could
-            // otherwise list owner-configured mirrors, delete subscriptions, or
-            // mount a foreign owner's folder under their own writable tree.
-            // Restrict the whole surface to superadmin until per-user ownership
-            // is added (security review 2026-05-25).
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != BeeMemoryBank.Core.Models.UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Superadmin role required."), statusCode: 403);
             await svc.DeleteAccountAsync(id);
             return Results.NoContent();
         });
 
-        group.MapGet("/{id:guid}/accessible", async (Guid id, HttpContext ctx, RemoteAccountService svc, SessionService session) =>
+        group.MapGet("/{id:guid}/accessible", async (Guid id, RemoteAccountService svc, SessionService session) =>
         {
-            // Remote accounts are node-wide configuration: any guest could
-            // otherwise list owner-configured mirrors, delete subscriptions, or
-            // mount a foreign owner's folder under their own writable tree.
-            // Restrict the whole surface to superadmin until per-user ownership
-            // is added (security review 2026-05-25).
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != BeeMemoryBank.Core.Models.UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Superadmin role required."), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             try
@@ -106,28 +88,14 @@ public static class RemoteAccountEndpoints
             }
         });
 
-        group.MapGet("/{id:guid}/subscriptions", async (Guid id, HttpContext ctx, RemoteAccountService svc) =>
+        group.MapGet("/{id:guid}/subscriptions", async (Guid id, RemoteAccountService svc) =>
         {
-            // Remote accounts are node-wide configuration: any guest could
-            // otherwise list owner-configured mirrors, delete subscriptions, or
-            // mount a foreign owner's folder under their own writable tree.
-            // Restrict the whole surface to superadmin until per-user ownership
-            // is added (security review 2026-05-25).
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != BeeMemoryBank.Core.Models.UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Superadmin role required."), statusCode: 403);
             var subs = await svc.ListSubscriptionsForAccountAsync(id);
             return Results.Ok(subs);
         });
 
-        group.MapPost("/subscriptions", async (AddRemoteSubscriptionRequest req, HttpContext ctx, RemoteAccountService svc, SessionService session) =>
+        group.MapPost("/subscriptions", async (AddRemoteSubscriptionRequest req, RemoteAccountService svc, SessionService session) =>
         {
-            // Remote accounts are node-wide configuration: any guest could
-            // otherwise list owner-configured mirrors, delete subscriptions, or
-            // mount a foreign owner's folder under their own writable tree.
-            // Restrict the whole surface to superadmin until per-user ownership
-            // is added (security review 2026-05-25).
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != BeeMemoryBank.Core.Models.UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Superadmin role required."), statusCode: 403);
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             if (string.IsNullOrWhiteSpace(req.MountPath))
@@ -144,15 +112,8 @@ public static class RemoteAccountEndpoints
             }
         });
 
-        group.MapDelete("/subscriptions/{id:guid}", async (Guid id, HttpContext ctx, RemoteAccountService svc) =>
+        group.MapDelete("/subscriptions/{id:guid}", async (Guid id, RemoteAccountService svc) =>
         {
-            // Remote accounts are node-wide configuration: any guest could
-            // otherwise list owner-configured mirrors, delete subscriptions, or
-            // mount a foreign owner's folder under their own writable tree.
-            // Restrict the whole surface to superadmin until per-user ownership
-            // is added (security review 2026-05-25).
-            if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != BeeMemoryBank.Core.Models.UserRoles.Superadmin)
-                return Results.Json(new ErrorResponse("Superadmin role required."), statusCode: 403);
             await svc.DeleteSubscriptionAsync(id);
             return Results.NoContent();
         });
