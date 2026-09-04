@@ -52,6 +52,20 @@ That split already exists and is already enforced: `EventApplier.ApplyAsync` has
 right. What is wrong is the default: `JoinEndpoints` sets `IsSuperadmin = true` for every node that
 joins with the master password. A phone that joined to read notes has the same power as the server.
 
+**Review checkpoint for item 20 — two directions, only one of them changes.** `IsSuperadmin = true`
+appears on both sides of a join and they mean opposite things:
+
+- **Host side** (`JoinEndpoints`, the `else` branch that creates the row for the node that just
+  joined): "the node that joined me may change cluster state." This is the one that must become
+  `false`.
+- **Joining side** (`InitEndpoints` ~line 309, `NodeSetupService` ~line 228, and the CLI join): "the
+  node I just joined is a superadmin, from my point of view." This must stay `true` — the joining
+  node has to accept whitelist and hard-delete events from the server that admitted it, or it is
+  cut off from the mesh it just entered.
+
+Flipping both would leave a fresh node refusing control events from its own bootstrap server.
+Verify this specifically before merging item 20.
+
 **Decision (item 20):** a joining node becomes an ordinary content peer. Promotion to superadmin
 becomes an explicit act by an existing superadmin, through the whitelist endpoint that already
 exists and already announces the change to the mesh. Nodes that have already joined keep whatever
@@ -120,15 +134,22 @@ that no longer opens, and it must not be discoverable only by a user hitting it 
 `RewrapTally`: rewrapped / already-on-new-key / unreadable, surfaced in the completion message the
 operator already reads, with the unreadable rows named.
 
+The projection matrix has its own pass, sealed directly under the master DEK rather than under a
+per-row DEK, and it had the same flaw one table over — `tbl_projection_matrix` is replicated too.
+Fixed the same way, except that a matrix readable under neither key is a hard error with a message
+saying what to do: it is derived from the articles, so it must be dropped and re-embedded, which
+costs time rather than data.
+
+`EventLogger` also stopped writing a hardcoded `DekEpoch: 1` into every article event regardless of
+the node's actual generation. Nothing read it, so nothing was visibly broken — but a field that is
+always wrong is worse than an absent one, and the first reader to trust it inherits a silent bug.
+
 ### Deliberately not done tonight
 
 - **A `dek_epoch` column on the DEK-bearing rows.** The tidier long-term design: the rewrapper would
   look the epoch up instead of trial-decrypting. It touches every writer, and two agents are in
   those files tonight. Trial-decrypt is self-correcting and needs no migration, so it is the correct
   thing to land first regardless.
-- **The real epoch in the event payload.** `EventLogger` writes a hardcoded `DekEpoch: 1` and no
-  applier reads it. Harmless once the rewrapper no longer assumes, but the payload should stop
-  lying; it also makes the "arrived from a newer epoch" log line truthful.
 - **Barrier semantics for heavy events.** `PeerDekRotationApplier`, `EventApplier.Restore` and
   `DekRotationService.AutoAccept` apply through fire-and-forget `Task.Run` while the pull loop keeps
   applying the next events. That is the mechanism that produces the race in the first place. Fixing
