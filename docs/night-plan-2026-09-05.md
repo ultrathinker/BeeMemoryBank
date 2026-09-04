@@ -197,8 +197,20 @@ test fail, restore the fix, watch it pass — and to say so plainly if a test pa
 ## Follow-ups recorded, not scheduled
 
 - ACL-drift guardrail across the sync path and the remote-subscription path (above).
-- `WhitelistRevokeBackfill` is dead code: its own docstring says it runs on every startup, but
-  nothing in the tree constructs or calls it.
+- **`WhitelistRevokeBackfill` is dead code, and migration 021 made that matter.** Its docstring
+  claimed it runs on every startup; nothing constructs it. Corrected in the file so the comment
+  stops asserting a heal that does not happen.
+
+  The reason it now needs a decision rather than a shrug: whitelist rows carry a version as of 021,
+  and legacy revoked rows sit at version 0 — which loses to any incoming `whitelist_add`. So the
+  ghost-node resurrection this class was written to prevent is exactly what a stale add produces
+  against those rows today. Running the backfill fixes them, because it stamps the version along
+  with the event. It also emits real revoke events to every peer, which is an outward-facing action
+  on live data and belongs in a session with somebody watching — not in a startup path firing
+  unattended, and not tonight under the no-production rule.
+
+  Worth deciding early: the exposure is on any vault old enough to carry rows revoked by the
+  original join bug.
 - `tests/BeeMemoryBank.Integration.Tests` is intermittently flaky and the cause is **not yet
   established**. Across five runs, two produced failures and three were clean; the failing tests
   differed each time (`SnapshotRestoreSessionTests`, then `SnapshotRoundTripTests` plus

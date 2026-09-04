@@ -11,10 +11,27 @@ namespace BeeMemoryBank.Sync;
 /// event. The result: the revocation never propagated via sync, and peers that
 /// replayed history from scratch would see the ghost nodes re-activated.
 ///
-/// This bootstrapper runs on every startup. It finds every tbl_whitelist row that is
-/// revoked but has no corresponding whitelist_revoke event, and emits one via the
-/// EventLogger (properly signed by the current node's Ed25519 key with a fresh
-/// lamport timestamp). Once run, subsequent invocations are no-ops.
+/// It finds every tbl_whitelist row that is revoked but has no corresponding whitelist_revoke
+/// event, and emits one via the EventLogger (properly signed by the current node's Ed25519 key with
+/// a fresh lamport timestamp). Once run, subsequent invocations are no-ops.
+///
+/// <para>
+/// <b>NOTHING CALLS THIS.</b> The line above used to say it "runs on every startup"; it does not,
+/// and has not for as long as the current tree goes back — no type constructs it and
+/// <c>ApiStartupTasks</c> runs a different bootstrapper. Said plainly here because a comment
+/// claiming a heal happens automatically is worse than no comment: it stops the next reader from
+/// checking.
+/// </para>
+///
+/// <para>
+/// Wiring it up is a real decision, not an oversight to quietly correct, and it got MORE
+/// consequential with migration 021. Whitelist rows now carry a version, and legacy revoked rows
+/// sit at version 0 — which loses to any incoming <c>whitelist_add</c>, so exactly the ghost-node
+/// resurrection this class was written to prevent is what a stale add now produces against those
+/// rows. Running the backfill fixes them (it stamps the version alongside the event). But it also
+/// emits real revoke events to every peer, and that is an outward-facing action on live data that
+/// belongs in a session where somebody is watching, not in a startup path that fires unattended.
+/// </para>
 ///
 /// Semantically correct: the local node is the authority for its own whitelist, so
 /// "this node revokes this ghost right now" is a valid assertion.
