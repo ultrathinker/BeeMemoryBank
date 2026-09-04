@@ -145,13 +145,25 @@ public static class JoinEndpoints
                     Status = "A",
                     CreatedAt = now,
                     UpdatedAt = now,
-                    // Trust-on-join: a peer that successfully joined via /api/join (provided the
-                    // master password — proves they belong to the team vault) is implicitly trusted
-                    // as a Superadmin in the team-vault model. Admin can later demote via UI if a
-                    // peer should be limited to read/write only. Without this, the gate I added in
-                    // EventApplier (gemini #1/#2/#3) would block ALL legitimate cross-node sync of
-                    // whitelist/hard-delete/restore events between joined peers.
-                    IsSuperadmin = true
+                    // Content-only by default: a node that joins with the master password proves
+                    // it belongs to the vault, nothing more. is_superadmin is a SEPARATE grant —
+                    // authority over cluster state (EventApplier's requiresSuperadmin gate:
+                    // whitelist_add/revoke/update, hard_delete, restore_network,
+                    // master_password_changed), not over content. Every joined peer can still
+                    // create/update/delete articles and have that sync normally; that path is
+                    // never gated on this flag.
+                    //
+                    // Before this changed, every joiner got is_superadmin = 1, so a phone joined
+                    // only to read notes could revoke any other peer, hard-delete content
+                    // network-wide, or trigger a destructive restore. Promotion is now a separate,
+                    // deliberate act: PUT /api/whitelist/{nodeId}/superadmin (WhitelistEndpoints.cs)
+                    // emits its own whitelist_update so the whole mesh agrees on it.
+                    //
+                    // Consequence: a peer that joined through a non-superadmin relay cannot
+                    // originate whitelist/hard-delete/restore events that other nodes will accept
+                    // until an existing superadmin promotes it — see docs/sync.md#trust-model and
+                    // SECURITY.md#trust-model for which workflows that affects.
+                    IsSuperadmin = false
                 };
                 // Log first so the row carries the version of the add the mesh is told about;
                 // otherwise this row starts at version 0 and any later event beats it, including

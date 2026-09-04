@@ -19,31 +19,40 @@ superadmin (or to a legacy pre-user-table `password` slot), hands back the wrapp
 copy of the whitelist. There is no invite token and no approval step — the password is the whole
 gate.
 
-**A joined node is written to the whitelist as a superadmin.** `JoinEndpoints` creates the entry
-with `is_superadmin = 1`, and the `whitelist_add` event carries that bit to every other node, so the
-flag is uniform across the mesh. `EventApplier` checks it before applying `whitelist_add`,
-`whitelist_revoke`, `whitelist_update`, `hard_delete` and `restore_network`; an event of one of
-those types signed by a peer without the flag is rejected with `UnauthorizedAccessException`.
+**A joined node is written to the whitelist content-only.** `JoinEndpoints` creates the entry with
+`is_superadmin = 0` — mesh *membership* (proven by the master password) and cluster-state
+*authority* are separate grants. `EventApplier` checks the flag before applying `whitelist_add`,
+`whitelist_revoke`, `whitelist_update`, `hard_delete`, `restore_network` and
+`master_password_changed`; an event of one of those types signed by a peer without the flag is
+rejected with `UnauthorizedAccessException`. Article/folder/comment events are never gated on it —
+a content-only peer syncs exactly like any other.
 
-**So every replica is a peer with authority over the network, not a passive copy.** Concretely, any
-node on the mesh can:
+**So a joined replica starts as a passive copy for cluster state, and an active one only for
+content.** Only a node whose `is_superadmin` bit is set on the *receiving* node's own whitelist row
+can:
 
 - **Revoke another peer** — `ApplyWhitelistRevokeAsync` flips the target's row to `Status = "R"` on
-  every node that receives the event. A node ignores a revoke aimed at itself, so the revoked peer
-  keeps its own data; it just stops being accepted anywhere else.
+  every node that receives and accepts the event. A node ignores a revoke aimed at itself, so the
+  revoked peer keeps its own data; it just stops being accepted anywhere else.
 - **Hard-delete an article or folder everywhere** — `hard_delete` routes to
   `HardDeleteService.ApplyRemoteAsync`, which physically purges the rows and deletes the `.enc`
   media files. It is not a tombstone and there is nothing to restore from afterwards.
 - **Restore the whole network from its own snapshot** — see "Network-Wide Snapshot Restore" below.
   Peers with `auto_accept_restore` apply it unattended.
 
-A peer *can* be demoted to content-only: `PUT /api/whitelist/{nodeId}/superadmin` clears
-`is_superadmin` and the new value rides in a `whitelist_update` event. Because each node decides
-from *its own* whitelist row, both a demotion and a revoke only bind the nodes the event actually
+Before this changed, `JoinEndpoints` wrote every new peer in with `is_superadmin = 1` ("trust on
+join"), so completing the join handshake was enough on its own to gain all three powers above —
+without one write to a database you own. Content-only is now the default; authority is granted the
+same deliberate way it can be taken away: `PUT /api/whitelist/{nodeId}/superadmin` sets or clears
+`is_superadmin`, and the new value rides in a `whitelist_update` event. Because each node decides
+from *its own* whitelist row, a promotion or a demotion only binds the nodes the event actually
 reaches — and a peer running a build from before this field existed deserialises the payload
-without it and keeps honouring the demoted node's cluster-state events. The demoted node is also
-not informed (it holds no whitelist row for itself), so it goes on emitting events that every
-other node rejects.
+without it and leaves the row exactly as it was (still content-only for a new join on that build,
+still whatever it already was for an older one). The affected node is also not informed of a
+change made about it elsewhere (it holds no whitelist row for itself), so a node that thinks it
+became a superadmin, or that lost the role, may go on emitting cluster-state events that every
+other node quietly rejects. See "Initial Join: Snapshot-Based Bootstrap" below for the one place a
+node's authority *is* inferred rather than announced: the immediate node a joiner dials into.
 
 **One further consequence for the event log itself:** payloads are plaintext JSON. A peer that only
 ever authenticates and pulls still learns every article title, tree path and tag name in the vault,
@@ -394,6 +403,20 @@ tails events from that point onward.
    - `X-BMB-Snapshot-Producer`: producer's node ID
    - `X-BMB-Snapshot-Signature`: Ed25519 signature (base64)
 4. Verify the signature against the producer's public key (from whitelist).
+
+   **Step 1's whitelist rows are where the two trust decisions in this handshake are made, and
+   they are not the same decision.** The producer decides what it thinks of *this* joiner — always
+   content-only, `is_superadmin = 0`, per the trust model above. The joiner decides what it thinks
+   of the *producer* — trusted on first use, `is_superadmin = 1` — because the producer's own
+   authority never travels in this response at all: a node is never in its own whitelist (see
+   `EventApplier.ApplyWhitelistAddAsync`'s self-skip), so there is nothing for the joiner to read
+   the producer's real status from even if it wanted to defer the decision. The operator already
+   made this call by typing the producer's URL and the master password that secures the whole
+   vault; that is the trust anchor a fresh mesh bootstraps from, and it is why a single-node vault's
+   founding node can administer a newly joined second device without an extra promotion step. It
+   does not extend any further: if the joiner later relays a THIRD node's join, that third node
+   still starts content-only exactly as this one did, and the joiner's own belief about the
+   producer has no bearing on what any other real node in the mesh believes about the joiner.
 5. Import selected data tables only: `tbl_folder`, `tbl_article`, `tbl_article_body`,
    `tbl_concept_tag`, `tbl_article_concept_tag`, `tbl_concept_tag_edge`, `tbl_media`,
    `tbl_tombstone`, `tbl_conflict_version`, `tbl_projection_matrix`.
