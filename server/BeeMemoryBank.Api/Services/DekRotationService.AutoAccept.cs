@@ -172,7 +172,7 @@ public partial class DekRotationService
             // Base64 straight off the payload — the decoded copy was cleared above, and these are
             // what LazySlotRewrapService needs to walk this rotation after compaction removes the
             // event they arrived in.
-            var (agentsDeleted, recoveryDeleted) = await RewrapDestructiveCoreAsync(
+            var (agentsDeleted, recoveryDeleted, _) = await RewrapDestructiveCoreAsync(
                 oldDek, newDek, payload.NewDekEpoch, commitEvent.EventId.ToString(),
                 isInitiator: false,
                 chainEncryptedNewDekB64: payload.EncryptedNewDek,

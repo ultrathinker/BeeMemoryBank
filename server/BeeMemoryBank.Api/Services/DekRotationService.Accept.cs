@@ -231,7 +231,7 @@ public partial class DekRotationService
             // first time after a rotation goes through the same lazy walk, and the initiator is
             // also the node that compacts immediately afterwards, which is what deletes the events
             // the walk used to read.
-            var (agentsDeleted, _) = await RewrapDestructiveCoreAsync(
+            var (agentsDeleted, _, _) = await RewrapDestructiveCoreAsync(
                 oldDek, newDek, payload.NewDekEpoch, commitEventId,
                 isInitiator: true, initiatorSlot.SlotId, newEncDek, newIv,
                 chainEncryptedNewDekB64: payload.EncryptedNewDek,

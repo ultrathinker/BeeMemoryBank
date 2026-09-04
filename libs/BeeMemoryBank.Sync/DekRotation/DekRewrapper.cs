@@ -6,6 +6,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
+using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Sync.DekRotation;
 
@@ -28,7 +29,7 @@ public static class DekRewrapper
     private static void Report(Action<DekRotationFlowStep, int, string>? progress,
         DekRotationFlowStep step, int pct, string message) => progress?.Invoke(step, pct, message);
 
-    public static async Task<(int agentsDeleted, int slotsDeleted)> RewrapAllAsync(
+    public static async Task<(int agentsDeleted, int slotsDeleted, RewrapTally tally)> RewrapAllAsync(
         DbConnectionFactory connFactory,
         SessionService sessionService,
         byte[] oldDek, byte[] newDek, int newEpoch, string commitEventId,
@@ -38,10 +39,12 @@ public static class DekRewrapper
         byte[]? newWrappedSlotIv = null,
         string? chainEncryptedNewDekB64 = null,
         string? chainIvB64 = null,
-        Action<DekRotationFlowStep, int, string>? progress = null)
+        Action<DekRotationFlowStep, int, string>? progress = null,
+        Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         int agentsDeleted = 0;
         int slotsDeleted = 0;
+        var tally = new RewrapTally();
 
         Report(progress, DekRotationFlowStep.ReWrappingPerItem, 20,
             isInitiator ? "Re-wrapping article bodies..." : "Auto-accept: re-wrapping article bodies...");
@@ -50,23 +53,23 @@ public static class DekRewrapper
         using var tx = conn.BeginTransaction();
         try
         {
-            ReWrapTableAsync(conn, tx, "tbl_article_body", "article_id", "encrypted_dek", "dek_iv", oldDek, newDek);
+            tally.Add(ReWrapTableAsync(conn, tx, "tbl_article_body", "article_id", "encrypted_dek", "dek_iv", oldDek, newDek, logger: logger));
             Report(progress, DekRotationFlowStep.ReWrappingPerItem, 35,
                 isInitiator ? "Re-wrapping article versions..." : "Auto-accept: re-wrapping article versions...");
 
             // aadIdColumn = "article_id": version/conflict rows are keyed by their own GUID but
             // carry a copy of the ARTICLE's wrapped DEK, so the AAD is the article's.
-            ReWrapTableAsync(conn, tx, "tbl_article_version", "id", "encrypted_dek", "dek_iv", oldDek, newDek,
-                aadIdColumn: "article_id");
+            tally.Add(ReWrapTableAsync(conn, tx, "tbl_article_version", "id", "encrypted_dek", "dek_iv", oldDek, newDek,
+                aadIdColumn: "article_id", logger: logger));
             Report(progress, DekRotationFlowStep.ReWrappingPerItem, 50,
                 isInitiator ? "Re-wrapping conflict versions..." : "Auto-accept: re-wrapping conflict versions...");
 
-            ReWrapTableAsync(conn, tx, "tbl_conflict_version", "id", "encrypted_dek", "dek_iv", oldDek, newDek,
-                aadIdColumn: "article_id");
+            tally.Add(ReWrapTableAsync(conn, tx, "tbl_conflict_version", "id", "encrypted_dek", "dek_iv", oldDek, newDek,
+                aadIdColumn: "article_id", logger: logger));
             Report(progress, DekRotationFlowStep.ReWrappingPerItem, 65,
                 isInitiator ? "Re-wrapping media..." : "Auto-accept: re-wrapping media...");
 
-            ReWrapTableAsync(conn, tx, "tbl_media", "id", "encrypted_dek", "dek_iv", oldDek, newDek);
+            tally.Add(ReWrapTableAsync(conn, tx, "tbl_media", "id", "encrypted_dek", "dek_iv", oldDek, newDek, logger: logger));
 
             Report(progress, DekRotationFlowStep.ReWrappingPerItem, 70,
                 isInitiator ? "Re-wrapping projection matrix..." : "Auto-accept: re-wrapping projection matrix...");
@@ -168,10 +171,27 @@ public static class DekRewrapper
         var completedMsg = isInitiator
             ? $"DEK rotation completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Agents invalidated: {agentsDeleted}."
             : $"DEK rotation auto-accept completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Agents invalidated: {agentsDeleted}. Recovery slots removed: {slotsDeleted}.";
-        Report(progress, DekRotationFlowStep.Completed, 100, completedMsg);
-        
+        // Rows that survived the rotation without being rotated are said out loud, in the same
+        // message the operator already reads, rather than left in a log they have no reason to
+        // open. "AlreadyOnNewKey" is routine and healthy — it is the peer race, correctly handled.
+        // "Unreadable" is not: each one is an article or media item that no longer opens.
+        if (tally.AlreadyOnNewKey > 0)
+            completedMsg += $" Rows already on the new key: {tally.AlreadyOnNewKey}.";
+        if (tally.Unreadable > 0)
+            completedMsg += $" UNREADABLE ROWS: {tally.Unreadable} ({string.Join(", ", tally.UnreadableExamples)})"
+                          + " — these need manual recovery.";
 
-        return (agentsDeleted, slotsDeleted);
+        Report(progress, DekRotationFlowStep.Completed, 100, completedMsg);
+
+        if (tally.Unreadable > 0)
+        {
+            logger?.LogError(
+                "DEK rotation to epoch {Epoch} finished with {Count} unreadable row(s): {Examples}. "
+                + "The rotation itself succeeded — these rows opened under neither the old nor the new master key.",
+                newEpoch, tally.Unreadable, string.Join(", ", tally.UnreadableExamples));
+        }
+
+        return (agentsDeleted, slotsDeleted, tally);
     }
 
     /// <summary>
@@ -268,7 +288,7 @@ public static class DekRewrapper
     /// which is correct only where the row IS the entity (tbl_article_body, tbl_media). Version and
     /// conflict rows must pass "article_id" — see <see cref="BuildPerRowAadForTable"/>.
     /// </param>
-    internal static void ReWrapTableAsync(
+    internal static RewrapTally ReWrapTableAsync(
         System.Data.IDbConnection conn,
         System.Data.IDbTransaction tx,
         string tableName,
@@ -277,8 +297,10 @@ public static class DekRewrapper
         string dekIvColumn,
         byte[] oldDek,
         byte[] newDek,
-        string? aadIdColumn = null)
+        string? aadIdColumn = null,
+        Microsoft.Extensions.Logging.ILogger? logger = null)
     {
+        var tally = new RewrapTally();
         aadIdColumn ??= pkColumn;
         // Roadmap p7: keyset pagination instead of OFFSET. SQLite scans+discards rows on
         // OFFSET, making each batch progressively slower (O(n²) for the whole rewrap). Keyset
@@ -295,6 +317,7 @@ public static class DekRewrapper
 
             var rows = conn.Query<dynamic>(sql, new { limit = batchSize, lastPk }, tx).ToList();
             if (rows.Count == 0) break;
+
 
             foreach (var row in rows)
             {
@@ -314,7 +337,44 @@ public static class DekRewrapper
                 // good. Rotation is the one place that must preserve v0.
                 var isLegacyV0 = encDek.Length == 48;
                 var aad = BuildPerRowAadForTable(tableName, aadId, encDek);
-                var plainDek = DekManager.UnwrapDek(encDek, dekIv, oldDek, aad);
+
+                // A row that does not unwrap under the OLD DEK used to throw straight out of this
+                // loop, roll the whole rotation back, and do it again on every retry — leaving the
+                // node permanently unable to finish the rotation, with wiping and re-joining as the
+                // only way out. That is not a hypothetical: it is the expected outcome whenever a
+                // peer ships an article written AFTER the rotation but BEFORE this node applied it.
+                // The body arrives with its DEK already wrapped under the NEW master key, and this
+                // loop then insists on opening it with the old one.
+                //
+                // So the failure of one row must not be able to destroy the node. Try the old key
+                // (the normal case), then the new one (the row raced ahead of us and is already
+                // where it needs to be — leave it alone), and only if NEITHER opens it treat the row
+                // as unreadable: record it, and carry on. Rolling back forever protects nothing —
+                // the rows that could be rotated stay unrotated too, and the operator gets a node
+                // that cannot be recovered rather than one article that cannot be read.
+                byte[]? plainDek = TryUnwrap(encDek, dekIv, oldDek, aad);
+                if (plainDek == null)
+                {
+                    if (TryUnwrap(encDek, dekIv, newDek, aad) is { } already)
+                    {
+                        Array.Clear(already, 0, already.Length);
+                        tally.AlreadyOnNewKey++;
+                        lastPk = pk;
+                        continue;
+                    }
+
+                    // Readable under neither key. Nothing this routine can do will help, and it is
+                    // the operator who has to know: name the row so it can be found.
+                    tally.Unreadable++;
+                    tally.UnreadableExamples.Add($"{tableName}:{pk}");
+                    logger?.LogError(
+                        "DEK rotation: {Table} row {Pk} could not be unwrapped with either the old or the new master key. "
+                        + "The rotation continues; this row stays unreadable and needs manual recovery.",
+                        tableName, pk);
+                    lastPk = pk;
+                    continue;
+                }
+
                 try
                 {
                     var (newEnc, newIv) = isLegacyV0
@@ -324,6 +384,7 @@ public static class DekRewrapper
                         $"UPDATE [{tableName}] SET [{dekColumn}] = @enc, [{dekIvColumn}] = @iv WHERE [{pkColumn}] = @pk",
                         new { enc = newEnc, iv = newIv, pk },
                         tx);
+                    tally.Rewrapped++;
                 }
                 finally
                 {
@@ -333,5 +394,68 @@ public static class DekRewrapper
                 lastPk = pk;
             }
         }
+
+        return tally;
+    }
+
+    /// <summary>
+    /// Unwraps with <paramref name="candidateDek"/>, or returns null if that key is not the one this
+    /// row was sealed under.
+    ///
+    /// <para>
+    /// A failed unwrap is an authentication-tag mismatch, which is AES-GCM working correctly, not an
+    /// error condition — so it is caught rather than propagated. Only the cryptographic failures are
+    /// swallowed: anything else (a malformed row, a disposed key) still throws, because those mean
+    /// the caller's assumptions are broken rather than "wrong key".
+    /// </para>
+    /// </summary>
+    private static byte[]? TryUnwrap(byte[] encDek, byte[] dekIv, byte[] candidateDek, byte[]? aad)
+    {
+        try
+        {
+            return DekManager.UnwrapDek(encDek, dekIv, candidateDek, aad);
+        }
+        catch (System.Security.Cryptography.AuthenticationTagMismatchException)
+        {
+            return null;
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            // Some platforms surface a tag mismatch as the base type rather than the specific one.
+            return null;
+        }
+    }
+}
+
+/// <summary>
+/// What one table's rewrap actually did. Counted rather than inferred, because "the rotation
+/// finished" and "every row came with it" are different statements and an operator needs the second
+/// one: a row left behind is an article that no longer opens, and it must not be discoverable only
+/// by a user hitting it months later.
+/// </summary>
+public sealed class RewrapTally
+{
+    /// <summary>Rows opened with the old key and re-sealed under the new one — the normal path.</summary>
+    public int Rewrapped { get; set; }
+
+    /// <summary>
+    /// Rows already sealed under the new key. These arrived from a peer that had applied the
+    /// rotation before this node did; they are already where they need to be and were left alone.
+    /// </summary>
+    public int AlreadyOnNewKey { get; set; }
+
+    /// <summary>Rows that opened under neither key. Each one is an article or media item that stays unreadable.</summary>
+    public int Unreadable { get; set; }
+
+    /// <summary>Identifiers of unreadable rows, for the operator to chase. Capped by what is worth logging.</summary>
+    public List<string> UnreadableExamples { get; } = [];
+
+    public void Add(RewrapTally other)
+    {
+        Rewrapped += other.Rewrapped;
+        AlreadyOnNewKey += other.AlreadyOnNewKey;
+        Unreadable += other.Unreadable;
+        foreach (var e in other.UnreadableExamples)
+            if (UnreadableExamples.Count < 20) UnreadableExamples.Add(e);
     }
 }

@@ -19,7 +19,7 @@ public partial class DekRotationService
     /// to exactly the same code every other host now runs.
     /// </para>
     /// </summary>
-    private Task<(int agentsDeleted, int slotsDeleted)> RewrapDestructiveCoreAsync(
+    private Task<(int agentsDeleted, int slotsDeleted, RewrapTally tally)> RewrapDestructiveCoreAsync(
         byte[] oldDek, byte[] newDek, int newEpoch, string commitEventId,
         bool isInitiator,
         int? initiatorSlotId = null,

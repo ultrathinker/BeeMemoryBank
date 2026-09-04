@@ -131,7 +131,7 @@ public sealed class PeerDekRotationApplier(
             // LazySlotRewrapService needs to walk this rotation later, and the decoded copy above
             // has already been cleared by this point. Storing them locally is what keeps a user's
             // key slot re-wrappable after compaction removes the event they came from.
-            var (agentsDeleted, recoveryDeleted) = await DekRewrapper.RewrapAllAsync(
+            var (agentsDeleted, recoveryDeleted, _) = await DekRewrapper.RewrapAllAsync(
                 connFactory, sessionService,
                 oldDek, newDek, payload.NewDekEpoch, commitEvent.EventId.ToString(),
                 isInitiator: false,
