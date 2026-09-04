@@ -120,16 +120,20 @@ public static class WhitelistEndpoints
             if (entry.IsSuperadmin == req.IsSuperadmin)
                 return Results.Ok(WhitelistEntryResponse.From(entry));
 
+            // Tell the rest of the mesh FIRST, and write the row with the version that event
+            // carried. Each node enforces the flag from its OWN whitelist row — EventApplier checks
+            // it before accepting hard_delete, restore_network and whitelist changes — so a
+            // demotion that reaches only this node leaves the peer just as powerful everywhere
+            // else. A node that is offline picks it up on catch-up, and compares it against a row
+            // that now agrees with what was announced.
+            var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: null, displayName: null,
+                isSuperadmin: req.IsSuperadmin);
+
             entry.IsSuperadmin = req.IsSuperadmin;
             entry.UpdatedAt = DateTime.UtcNow;
+            entry.LamportTs = version.LamportTs;
+            entry.SourceNodeId = version.SourceNodeId;
             await repo.UpdateAsync(entry);
-
-            // Tell the rest of the mesh. Each node enforces the flag from its OWN whitelist row —
-            // EventApplier checks it before accepting hard_delete, restore_network and whitelist
-            // changes — so a demotion that reaches only this node leaves the peer just as powerful
-            // everywhere else. A node that is offline picks it up on catch-up.
-            await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: null, displayName: null,
-                isSuperadmin: req.IsSuperadmin);
             eventLogger.SignalSync();
 
             var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
@@ -201,13 +205,16 @@ public static class WhitelistEndpoints
             if (conflict != null)
                 return Results.BadRequest(new ErrorResponse($"URL is already used by node {conflict.DisplayName}"));
 
-            // 5. Update
+            // 5. Sync event first — it mints the version the row has to carry, so that a peer's
+            //    concurrent address change is judged against what this node actually announced.
+            var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, newUrl, null);
+
+            // 6. Update
             entry.ApiAddress = newUrl;
             entry.UpdatedAt = DateTime.UtcNow;
+            entry.LamportTs = version.LamportTs;
+            entry.SourceNodeId = version.SourceNodeId;
             await repo.UpdateAsync(entry);
-
-            // 6. Sync event
-            await eventLogger.LogWhitelistUpdateAsync(nodeId, newUrl, null);
 
             return Results.Ok(WhitelistEntryResponse.From(entry));
         });
@@ -275,8 +282,10 @@ public static class WhitelistEndpoints
             if (entry == null || entry.Status != "A")
                 return Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
 
-            await repo.RevokeAsync(nodeId);
-            await eventLogger.LogWhitelistRevokeAsync(nodeId);
+            // Log first: the revoke's version is what a later whitelist_add is compared against,
+            // and an add issued BEFORE this revoke must lose that comparison.
+            var version = await eventLogger.LogWhitelistRevokeAsync(nodeId);
+            await repo.RevokeAsync(nodeId, version);
 
             return Results.NoContent();
         });

@@ -15,6 +15,31 @@ public class WhitelistEntry
     public DateTime? DeletedAt { get; set; }
 
     /// <summary>
+    /// The version of the write that produced this row, in the same (Lamport, node) shape every
+    /// other replicated row carries — read together as a <see cref="RowVersion"/>.
+    ///
+    /// <para>
+    /// This table was the last replicated one without it, and the gap was not cosmetic: whitelist
+    /// add, revoke and update applied in arrival order, so a stale <c>whitelist_add</c> from a peer
+    /// that had been offline during a revoke put the revoked node back into the mesh on arrival,
+    /// silently. See migration 021 for the full account.
+    /// </para>
+    ///
+    /// <para>
+    /// Zero and null mean "written before this column existed" — <see cref="RowVersion.Of"/> reads
+    /// the null node id as <see cref="Guid.Empty"/>, which sorts below every real one, so such a row
+    /// loses to any attributed write.
+    /// </para>
+    /// </summary>
+    public long LamportTs { get; set; }
+
+    /// <inheritdoc cref="LamportTs"/>
+    public Guid? SourceNodeId { get; set; }
+
+    /// <summary>This row's version as one value, for handing to <see cref="RowVersion"/>-shaped APIs.</summary>
+    public RowVersion Version => RowVersion.Of(LamportTs, SourceNodeId);
+
+    /// <summary>
     /// True if this peer is authorized to issue cluster-state-modifying sync events:
     /// whitelist add/revoke, hard-delete, restore_network. Default false. (Wave 2:
     /// gemini #1 / #2 / #3 — privilege escalation prevention.)

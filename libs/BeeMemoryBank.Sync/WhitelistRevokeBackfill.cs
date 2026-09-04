@@ -22,7 +22,8 @@ namespace BeeMemoryBank.Sync;
 public class WhitelistRevokeBackfill(
     DbConnectionFactory dbFactory,
     INodeIdentityRepository nodeRepo,
-    IEventLogger eventLogger)
+    IEventLogger eventLogger,
+    IWhitelistRepository whitelistRepo)
 {
     public async Task<int> RunIfNeededAsync()
     {
@@ -60,7 +61,13 @@ public class WhitelistRevokeBackfill(
         {
             if (!Guid.TryParse(nodeIdStr, out var targetNodeId))
                 continue;
-            await eventLogger.LogWhitelistRevokeAsync(targetNodeId);
+            // Stamp the row with the version of the event we just published. These rows were
+            // revoked before this node logged revoke events at all, so they sit at version 0 —
+            // which loses to every add, including one issued before the revocation. Announcing the
+            // revoke without also versioning the row would leave exactly the hole this backfill
+            // exists to close, just moved one step later.
+            var version = await eventLogger.LogWhitelistRevokeAsync(targetNodeId);
+            await whitelistRepo.SetVersionAsync(targetNodeId, version);
         }
 
         return orphanNodeIds.Count;

@@ -129,8 +129,10 @@ public partial class StatusPage : ContentPage
                 using var scope = _services.CreateScope();
                 var whitelist = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
                 var eventLogger = scope.ServiceProvider.GetRequiredService<IEventLogger>();
-                await whitelist.RevokeAsync(entry.NodeId);
-                await eventLogger.LogWhitelistRevokeAsync(entry.NodeId);
+                // Log first, then stamp the row with that version — see WhitelistEndpoints for
+                // why the order matters (a stale add must lose to this revoke).
+                var version = await eventLogger.LogWhitelistRevokeAsync(entry.NodeId);
+                await whitelist.RevokeAsync(entry.NodeId, version);
             });
             await LoadPeersAsync();
         }
@@ -189,10 +191,12 @@ public partial class StatusPage : ContentPage
                 using var scope = _services.CreateScope();
                 var whitelist = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
                 var eventLogger = scope.ServiceProvider.GetRequiredService<IEventLogger>();
+                var version = await eventLogger.LogWhitelistUpdateAsync(entry.NodeId, newUrl, null);
                 entry.ApiAddress = newUrl;
                 entry.UpdatedAt = DateTime.UtcNow;
+                entry.LamportTs = version.LamportTs;
+                entry.SourceNodeId = version.SourceNodeId;
                 await whitelist.UpdateAsync(entry);
-                await eventLogger.LogWhitelistUpdateAsync(entry.NodeId, newUrl, null);
             });
             await DisplayAlert("Success", $"URL for {entry.DisplayName} updated to {newUrl}", "OK");
             await LoadPeersAsync();

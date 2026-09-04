@@ -34,9 +34,19 @@ public interface IEventLogger
     /// before and callers don't need to call this at all.
     /// </summary>
     void SignalSync();
-    Task LogWhitelistAddAsync(WhitelistEntry entry);
-    Task LogWhitelistRevokeAsync(Guid nodeId);
-    Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null);
+    /// <summary>
+    /// Logs a whitelist add/revoke/update and returns the <see cref="RowVersion"/> it published.
+    /// The caller stamps that same version onto <c>tbl_whitelist</c>, for the reason spelled out on
+    /// <see cref="IWhitelistRepository.RevokeAsync"/>: the row is what a later event is compared
+    /// against, so a row carrying some earlier write's version answers that comparison wrongly.
+    /// </summary>
+    Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry);
+
+    /// <inheritdoc cref="LogWhitelistAddAsync"/>
+    Task<RowVersion> LogWhitelistRevokeAsync(Guid nodeId);
+
+    /// <inheritdoc cref="LogWhitelistAddAsync"/>
+    Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null);
     Task LogCommentCreateAsync(Comment comment);
     Task LogCommentDeleteAsync(Guid commentId);
     Task LogFolderCreateAsync(Folder folder);

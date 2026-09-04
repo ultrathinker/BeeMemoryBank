@@ -153,8 +153,13 @@ public static class JoinEndpoints
                     // whitelist/hard-delete/restore events between joined peers.
                     IsSuperadmin = true
                 };
+                // Log first so the row carries the version of the add the mesh is told about;
+                // otherwise this row starts at version 0 and any later event beats it, including
+                // one that predates the join.
+                var version = await eventLogger.LogWhitelistAddAsync(entry);
+                entry.LamportTs = version.LamportTs;
+                entry.SourceNodeId = version.SourceNodeId;
                 await whitelistRepo.CreateAsync(entry);
-                await eventLogger.LogWhitelistAddAsync(entry);
             }
 
             // 5. Return this node's identity + key slot + the full whitelist (for bootstrap of the new node)

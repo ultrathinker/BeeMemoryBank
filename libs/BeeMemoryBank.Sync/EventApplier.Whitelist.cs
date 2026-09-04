@@ -21,9 +21,32 @@ public partial class EventApplier
         var localIdentity = await nodeIdentityRepo.GetAsync();
         if (localIdentity != null && p.NodeId == localIdentity.NodeId) return;
 
+        var incoming = new RowVersion(evt.LamportTs, evt.NodeId);
+
         var existing = await whitelistRepo.GetByNodeIdAsync(p.NodeId, includeDeleted: true);
         if (existing != null)
         {
+            // The row is only touched by an add that actually supersedes what produced it.
+            //
+            // This is the gate that mattered: the re-activation below used to run on ANY add for a
+            // revoked peer, with no regard for when that add was issued. An admin revokes a
+            // compromised node; a peer that was offline at the time still holds the older
+            // whitelist_add for it and delivers it on catch-up; the revoked node is back in the
+            // mesh, and the revoking admin sees it active again with nothing to distinguish "my
+            // revoke was undone" from "my revoke never applied".
+            //
+            // Deliberately plain LWW rather than a special "revoke always wins" rule: re-adding a
+            // peer you previously revoked is a real workflow the UI offers, so revoke has to be
+            // undoable — by a NEWER add. That is exactly what this comparison allows and what the
+            // old code could not distinguish.
+            if (!ConflictResolver.IncomingWins(existing.Version, incoming))
+            {
+                logger.LogInformation(
+                    "WhitelistAdd for {NodeId} dropped: row version ({RowTs}, {RowNode}) wins over event ({EventTs}, {EventNode})",
+                    p.NodeId, existing.LamportTs, existing.SourceNodeId, evt.LamportTs, evt.NodeId);
+                return;
+            }
+
             // If previously revoked, re-activate — but NEVER replace the Ed25519 public key.
             // The key is bound to NodeId at first registration. Replacing it via a stale/replayed
             // WhitelistAdd event would allow node impersonation with a compromised old key.
@@ -35,6 +58,8 @@ public partial class EventApplier
                 existing.IsSuperadmin = p.IsSuperadmin;
                 existing.Status = "A";
                 existing.UpdatedAt = DateTime.UtcNow;
+                existing.LamportTs = incoming.LamportTs;
+                existing.SourceNodeId = incoming.SourceNodeId;
                 await whitelistRepoWrite.UpdateAsync(existing);
             }
             return;
@@ -51,7 +76,9 @@ public partial class EventApplier
             IsSuperadmin = p.IsSuperadmin,
             Status = "A",
             CreatedAt = now,
-            UpdatedAt = now
+            UpdatedAt = now,
+            LamportTs = incoming.LamportTs,
+            SourceNodeId = incoming.SourceNodeId
         });
     }
 
@@ -65,7 +92,21 @@ public partial class EventApplier
 
         var existing = await whitelistRepo.GetByNodeIdAsync(p.NodeId, includeDeleted: true);
         if (existing == null || existing.Status != "A") return;
-        await whitelistRepoWrite.RevokeAsync(p.NodeId);
+
+        // A revoke older than the row's current version loses, same as everywhere else — an add
+        // that came after this revoke was issued is the newer decision, and re-revoking on its
+        // arrival would undo it. The row is then stamped with the revoke's own version so the
+        // stale-add gate above compares against the revoke, not the write before it.
+        var incoming = new RowVersion(evt.LamportTs, evt.NodeId);
+        if (!ConflictResolver.IncomingWins(existing.Version, incoming))
+        {
+            logger.LogInformation(
+                "WhitelistRevoke for {NodeId} dropped: row version ({RowTs}, {RowNode}) wins over event ({EventTs}, {EventNode})",
+                p.NodeId, existing.LamportTs, existing.SourceNodeId, evt.LamportTs, evt.NodeId);
+            return;
+        }
+
+        await whitelistRepoWrite.RevokeAsync(p.NodeId, incoming);
     }
 
     private async Task ApplyWhitelistUpdateAsync(SyncEvent evt)
@@ -78,6 +119,18 @@ public partial class EventApplier
 
         var existing = await whitelistRepo.GetByNodeIdAsync(p.NodeId, includeDeleted: true);
         if (existing == null || existing.Status != "A") return;
+
+        // Without this, two admins renaming the same peer (or moving its address) resolved to
+        // whichever event happened to arrive last, and the nodes then disagreed about a row nothing
+        // ever recompares.
+        var incoming = new RowVersion(evt.LamportTs, evt.NodeId);
+        if (!ConflictResolver.IncomingWins(existing.Version, incoming))
+        {
+            logger.LogInformation(
+                "WhitelistUpdate for {NodeId} dropped: row version ({RowTs}, {RowNode}) wins over event ({EventTs}, {EventNode})",
+                p.NodeId, existing.LamportTs, existing.SourceNodeId, evt.LamportTs, evt.NodeId);
+            return;
+        }
 
         if (p.ApiAddress != null) existing.ApiAddress = p.ApiAddress;
         if (p.DisplayName != null) existing.DisplayName = p.DisplayName;
@@ -108,6 +161,8 @@ public partial class EventApplier
         }
 
         existing.UpdatedAt = DateTime.UtcNow;
+        existing.LamportTs = incoming.LamportTs;
+        existing.SourceNodeId = incoming.SourceNodeId;
 
         await whitelistRepoWrite.UpdateAsync(existing);
     }

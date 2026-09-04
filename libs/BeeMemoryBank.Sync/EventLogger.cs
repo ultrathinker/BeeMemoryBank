@@ -101,7 +101,7 @@ public class EventLogger(
         return new RowVersion(lamportTs, identity.NodeId);
     }
 
-    public async Task LogWhitelistAddAsync(WhitelistEntry entry)
+    public async Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -117,9 +117,11 @@ public class EventLogger(
 
         await AppendEventAsync(identity, EventTypes.WhitelistAdd, null, lamportTs,
             JsonSerializer.Serialize(payload));
+
+        return new RowVersion(lamportTs, identity.NodeId);
     }
 
-    public async Task LogWhitelistRevokeAsync(Guid nodeId)
+    public async Task<RowVersion> LogWhitelistRevokeAsync(Guid nodeId)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -129,9 +131,11 @@ public class EventLogger(
 
         await AppendEventAsync(identity, EventTypes.WhitelistRevoke, null, lamportTs,
             JsonSerializer.Serialize(payload));
+
+        return new RowVersion(lamportTs, identity.NodeId);
     }
 
-    public async Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null)
+    public async Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -141,6 +145,8 @@ public class EventLogger(
 
         await AppendEventAsync(identity, EventTypes.WhitelistUpdate, null, lamportTs,
             JsonSerializer.Serialize(payload));
+
+        return new RowVersion(lamportTs, identity.NodeId);
     }
 
     public async Task LogCommentCreateAsync(Comment comment)

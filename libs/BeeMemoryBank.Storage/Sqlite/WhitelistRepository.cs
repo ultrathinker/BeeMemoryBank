@@ -26,7 +26,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 deleted_at                 AS DeletedAt,
                 auto_accept_restore        AS AutoAcceptRestore,
                 auto_accept_dek_rotation   AS AutoAcceptDekRotation,
-                is_superadmin              AS IsSuperadmin
+                is_superadmin              AS IsSuperadmin,
+                lamport_ts                 AS LamportTs,
+                source_node_id             AS SourceNodeId
               FROM tbl_whitelist WHERE node_id = @nodeId"
             : @"SELECT
                 node_id                    AS NodeId,
@@ -40,7 +42,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 deleted_at                 AS DeletedAt,
                 auto_accept_restore        AS AutoAcceptRestore,
                 auto_accept_dek_rotation   AS AutoAcceptDekRotation,
-                is_superadmin              AS IsSuperadmin
+                is_superadmin              AS IsSuperadmin,
+                lamport_ts                 AS LamportTs,
+                source_node_id             AS SourceNodeId
               FROM tbl_whitelist WHERE node_id = @nodeId COLLATE NOCASE AND status = 'A'";
         return await conn.QuerySingleOrDefaultAsync<WhitelistEntry>(sql, new { nodeId });
     }
@@ -61,7 +65,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 deleted_at                 AS DeletedAt,
                 auto_accept_restore        AS AutoAcceptRestore,
                 auto_accept_dek_rotation   AS AutoAcceptDekRotation,
-                is_superadmin              AS IsSuperadmin
+                is_superadmin              AS IsSuperadmin,
+                lamport_ts                 AS LamportTs,
+                source_node_id             AS SourceNodeId
               FROM tbl_whitelist WHERE status = 'A' ORDER BY (substr(display_name,1,1)='_') DESC, display_name")).ToList();
     }
 
@@ -70,8 +76,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_whitelist
-              (node_id, display_name, ed25519_public_key, api_address, can_generate_embeddings, status, created_at, updated_at, is_superadmin)
-              VALUES (@NodeId, @DisplayName, @Ed25519PublicKey, @ApiAddress, @CanGenerateEmbeddings, @Status, @CreatedAt, @UpdatedAt, @IsSuperadmin)",
+              (node_id, display_name, ed25519_public_key, api_address, can_generate_embeddings, status, created_at, updated_at, is_superadmin, lamport_ts, source_node_id)
+              VALUES (@NodeId, @DisplayName, @Ed25519PublicKey, @ApiAddress, @CanGenerateEmbeddings, @Status, @CreatedAt, @UpdatedAt, @IsSuperadmin, @LamportTs, @SourceNodeId)",
             new
             {
                 entry.NodeId,
@@ -82,7 +88,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 entry.Status,
                 entry.CreatedAt,
                 entry.UpdatedAt,
-                IsSuperadmin = entry.IsSuperadmin ? 1 : 0
+                IsSuperadmin = entry.IsSuperadmin ? 1 : 0,
+                entry.LamportTs,
+                entry.SourceNodeId
             });
     }
 
@@ -97,7 +105,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                   status = @Status,
                   can_generate_embeddings = @CanGenerateEmbeddings,
                   is_superadmin = @IsSuperadmin,
-                  updated_at = @UpdatedAt
+                  updated_at = @UpdatedAt,
+                  lamport_ts = @LamportTs,
+                  source_node_id = @SourceNodeId
               WHERE node_id = @NodeId",
             new
             {
@@ -108,18 +118,32 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 entry.Status,
                 entry.CanGenerateEmbeddings,
                 IsSuperadmin = entry.IsSuperadmin ? 1 : 0,
-                entry.UpdatedAt
+                entry.UpdatedAt,
+                entry.LamportTs,
+                entry.SourceNodeId
             });
     }
 
-    public async Task RevokeAsync(Guid nodeId)
+    public async Task RevokeAsync(Guid nodeId, RowVersion version)
+    {
+        using var conn = OpenConnection();
+        // The version lands on the row in the same statement that revokes, because the row IS what
+        // a later whitelist_add is judged against — see this method's interface doc.
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_whitelist
+              SET status = 'R', deleted_at = @now, updated_at = @now,
+                  lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+              WHERE node_id = @nodeId",
+            new { nodeId, now = DateTime.UtcNow, lamportTs = version.LamportTs, sourceNodeId = version.SourceNodeId });
+    }
+
+    public async Task SetVersionAsync(Guid nodeId, RowVersion version)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
-            @"UPDATE tbl_whitelist
-              SET status = 'R', deleted_at = @now, updated_at = @now
-              WHERE node_id = @nodeId",
-            new { nodeId, now = DateTime.UtcNow });
+            @"UPDATE tbl_whitelist SET lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+              WHERE node_id = @nodeId COLLATE NOCASE",
+            new { nodeId, lamportTs = version.LamportTs, sourceNodeId = version.SourceNodeId });
     }
 
     public async Task<bool> GetAutoAcceptRestoreAsync(string nodeId)
