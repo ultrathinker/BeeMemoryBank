@@ -39,10 +39,17 @@ covers what that one doesn't.
   needs a `[Description]` attribute, or `McpToolRegistry` silently skips it when it builds the
   parameter schema — which quietly defeats the "reject unknown parameter name" check that
   `McpParameterValidationMiddleware` depends on.
-- **Access is folder-scoped, not all-or-nothing.** An agent key can be restricted to a folder
-  subtree and/or marked read-only; violating that throws `ReadOnlyAccessException` /
-  `UnauthorizedAccessException`. Any new write path needs to catch and translate those the same
-  way the existing tools do — don't let them surface as a generic 500.
+- **Access is folder-scoped, not all-or-nothing — and an agent's scope is its OWNER's.** An agent
+  key carries no access rules of its own. It resolves to a `tbl_agent` row, and
+  `CallerScopeMiddleware` builds the scope from `GetFullAccessInfoAsync(ownerUserId)`: the owning
+  user's allow-list, deny-list and read-only paths, nothing per-agent. There is no folder field and
+  no read-only flag on `tbl_agent`. So "restrict this agent to /Public, read-only" is done by
+  restricting (or creating) the user it belongs to. Two consequences worth knowing: an agent owned
+  by a superadmin has no restrictions at all, and an agent whose owner is missing (legacy row, or
+  the owner was deleted) fails closed to deny-everything rather than open. Violating a deny or a
+  read-only path throws `ReadOnlyAccessException` / `UnauthorizedAccessException`; any new write
+  path needs to catch and translate those the same way the existing tools do — don't let them
+  surface as a generic 500.
 
 ## Non-obvious invariants (found the hard way — don't rediscover these)
 

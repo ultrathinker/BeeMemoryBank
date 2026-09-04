@@ -27,6 +27,7 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         "/api/sync/authenticate",
         "/api/join",
         "/api/snapshots/restore/progress",
+        "/api/dek-rotation/progress",
     ];
 
     private static readonly HashSet<string> SyncTokenRoutes =
@@ -486,6 +487,13 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         // Anonymous on purpose so the locked splash screen can poll it; the handler strips
         // everything but a coarse status for callers without the internal key.
         "GET /api/snapshots/restore/progress",
+
+        // The rotation counterpart, on the same terms and for the same screen: the Login page has
+        // to be able to say "a rotation is running" before anyone has signed in, which is before
+        // any role exists to gate on. The handler answers a bucketed step and a percentage to
+        // everyone who is not a superadmin -- no event id, no error text. This is the ONLY route
+        // under /api/dek-rotation that is not superadmin-gated; the rest of the group still is.
+        "GET /api/dek-rotation/progress",
 
         // Read-only mirrors served to ANOTHER person's node, authenticated by a bmbrt_ remote
         // token issued to it. A remote token is never superadmin, so these can never be gated on

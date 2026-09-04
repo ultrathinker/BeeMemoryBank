@@ -119,10 +119,46 @@ public static class DekRotationEndpoints
             }
         });
 
-        group.MapGet("/progress", (DekRotationService svc) =>
+        // NOT on the superadmin group, and the only route here that is not. The locked Login
+        // screen shows a "rotation in progress" banner, and it polls this before anyone has
+        // signed in — so the request arrives with the Web layer's internal key but no user role,
+        // and the group's RequireSuperadmin returned 403 for every one of them. The banner has
+        // rendered nothing since that gate was added.
+        //
+        // Two detail levels, exactly like GET /api/snapshots/restore/progress next door: a
+        // superadmin gets the full payload its polling loop needs, and everyone else gets a
+        // bucketed step and a percentage. The event id and the error text stay behind the gate —
+        // error messages are where filesystem paths and internals leak, and an anonymous observer
+        // has no business fingerprinting a node by them.
+        app.MapGet("/api/dek-rotation/progress", (DekRotationService svc, HttpContext ctx) =>
         {
-            return Results.Ok(svc.GetProgress());
-        });
+            var p = svc.GetProgress();
+
+            if (CallerIdentity.Extract(ctx).IsSuperadmin)
+                return Results.Ok(p);
+
+            // Same FIELD NAMES and the same capitalisation as the full payload, deliberately: the
+            // Login page reads currentStep and compares it against "Idle" / "Completed" / "Failed"
+            // to decide whether to show the banner at all. A payload shaped {status, percentage},
+            // or one spelling the buckets in lower case, would deserialise into a null step that
+            // matches none of those three — and an idle node would show a rotation banner forever.
+            // A subset of the same shape needs no special case on the client.
+            var step = p.CurrentStep switch
+            {
+                DekRotationFlowStep.Idle => "Idle",
+                DekRotationFlowStep.Completed => "Completed",
+                DekRotationFlowStep.Failed => "Failed",
+                _ => "InProgress"
+            };
+
+            return Results.Ok(new
+            {
+                currentStep = step,
+                percentageComplete = p.PercentageComplete
+            });
+        })
+        .WithTags("DekRotation")
+        .WithMetadata(new SkipInternalKey());
 
         // Same fire-and-forget treatment as /accept (roadmap p4) — auto-accept is also
         // potentially long-running on large vaults.

@@ -90,6 +90,16 @@ The HTTP `/accept` returns 202 immediately and the work runs in the background; 
 
 **Crash recovery.** A startup sweep marks any rotation row stuck in `Committing` from THIS node as `Failed`. Peer-originated `Committing` rows are left in place to be retried by a hook in the next successful unlock (`RetryPendingAutoAcceptsAsync`). `Proposed` rows older than 24h are auto-cancelled.
 
+### What rotation does not protect against
+
+Read this before relying on rotation for the first reason listed above (suspected compromise of the current DEK).
+
+**An attacker who holds the old DEK derives every later one, given any copy of the database taken after the rotation.** The new DEK is wrapped under the *old* DEK and shipped inside the `dek_rotation_commit` payload — and `tbl_event.payload` is plaintext JSON, replicated to every node (see [docs/encryption.md](docs/encryption.md#what-is-not-encrypted-by-design)). So whoever has DEK₁ plus a later `beememorybank.db`, a local backup, or a pulled page of events reads `encrypted_new_dek`, unwraps it with DEK₁, and has DEK₂ — then DEK₃ from the next commit, and so on. Rotation therefore defends only against an attacker who holds the old key and never sees the log again, which is close to the attacker the old key already defended you from. Compaction eventually removes the commit rows, but that is a side effect of an unrelated mechanism, not a security boundary.
+
+The fix is per-peer envelopes (convert each whitelist entry's Ed25519 key to X25519 and wrap the new DEK once per active peer), so that only a node still whitelisted *and* holding its identity key can unwrap it. Until that exists, treat a rotation as key hygiene, not as containment of a leaked DEK. If the DEK is genuinely believed to have leaked, the containing action is revoking the peers you no longer trust *and* rotating, on the understanding that anyone holding both the old key and a later database copy is not shut out by the rotation alone.
+
+**A rotation is also not safe on a mesh where anyone writes during it** — see the `dek_epoch` note in [docs/encryption.md](docs/encryption.md); a peer that receives a post-rotation article before it applies the rotation cannot afterwards apply that rotation at all.
+
 ## Trust Model
 
 Read this before you invite a second node onto your network. See also [docs/sync.md](docs/sync.md#trust-model)
@@ -104,6 +114,8 @@ The new peer is stored with `is_superadmin = 1`, and that bit travels to every o
 - **Revoke any other peer.** A `whitelist_revoke` event it signs is applied by every node that receives it. A node never revokes *itself* on a remote event, so the revoked peer keeps its own copy of the vault — but every other node stops accepting its events, which is the same thing as being cut out.
 - **Hard-delete content network-wide.** `hard_delete` is not a tombstone: on every peer it physically purges the article (or the whole folder subtree) from the database and deletes the matching `.enc` media files from disk. Nothing is left to restore from except a snapshot taken beforehand.
 - **Initiate a network-wide restore.** A `restore_network` event replaces the vault on every peer with the initiator's snapshot. Peers with `tbl_whitelist.auto_accept_restore` set apply it unattended; the rest queue it for an admin, and rejecting it permanently disconnects them from the originator's timeline (wipe-and-rejoin to come back). Online DEK rotation propagates through the same peer-acceptance mechanism.
+
+A node's Ed25519 identity key is pinned to its NodeId at join and there is no way to rotate it: every peer verifies signatures against the public key stored in its own whitelist row, and nothing accepts a replacement for an existing NodeId. So if a node's *identity* key is believed compromised — as distinct from the master password or the DEK — the only remedy is a new NodeId, which means wiping that node and rejoining it. Revoking the old NodeId is what stops the compromised key being useful; it does not give the machine a way back under the same identity.
 
 A peer can be demoted without being cut off: `PUT /api/whitelist/{nodeId}/superadmin` (Admin → Trusted Nodes) clears `is_superadmin`, and the flag travels in a `whitelist_update` event so the whole mesh agrees. A demoted peer keeps syncing content and loses the three powers above. Two limits are worth knowing. Each node enforces the flag from *its own* whitelist row, so a demotion that reaches only some nodes is only a demotion on those nodes — and a node running a build older than this feature ignores the flag entirely. The demoted node itself is not told: it has no whitelist row for itself, so its own UI still offers actions that every other node will now reject. Revoking (`DELETE /api/whitelist/{nodeId}`) remains the answer for a peer you no longer want syncing at all.
 

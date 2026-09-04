@@ -88,6 +88,12 @@ public static class PublicSurface
         // handler already strips everything but a coarse status for callers without the key.
         new("GET", "/api/snapshots/restore/progress"),
 
+        // DEK-rotation progress, for the same screen and on the same terms: the Login page has to
+        // be able to say "a rotation is running" before anyone has signed in. The handler answers
+        // a bucketed step and a percentage to everyone who is not a superadmin — no event id, no
+        // error text. Every other /api/dek-rotation route stays superadmin-only.
+        new("GET", "/api/dek-rotation/progress"),
+
         // ── Remote accounts (read-only mirrors on someone else's node) ──────
         // Designed to be called BY another person's node using a bmbrt_ token it was issued, so
         // they cannot require the internal key either. Note that being listed here does not
