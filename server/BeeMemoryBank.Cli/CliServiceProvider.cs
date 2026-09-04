@@ -31,6 +31,10 @@ public static class CliServiceProvider
             .AddOnnxEmbeddings(dataPath)
             .AddSync()
             .AddSingleton<IActorProvider>(new CliActorProvider())
+            // `bmb init reset` shares Core's NodeResetService with the API endpoint so the two
+            // cannot drift on what "wipe" means. No INodeResetHook here — chat.db is an Api-side
+            // concern and does not exist for CLI-only deployments.
+            .AddScoped(sp => ActivatorUtilities.CreateInstance<Core.Services.NodeResetService>(sp, dataPath))
             .BuildServiceProvider();
 
         using (var scope = services.CreateScope())

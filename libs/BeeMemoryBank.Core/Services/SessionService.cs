@@ -63,10 +63,63 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         }
     }
 
+    /// <summary>
+    /// Proves that <paramref name="password"/> opens a key slot this node accepts for unlocking
+    /// (superadmin "user" slot, recovery, or legacy "password" slot) WITHOUT unlocking the shared
+    /// session. For re-authentication before a dangerous operation (node reset, snapshot restore,
+    /// whitelist revoke) — those used to call <see cref="UnlockAsync"/> as a password check, which
+    /// left the vault unlocked for every user and agent as a side effect of merely asking, even when
+    /// the operation itself then failed. Same candidate-slot policy and the same "wrong password and
+    /// not-permitted slot are indistinguishable" property as the real unlock; the derived DEK is wiped
+    /// before returning.
+    /// </summary>
+    public async Task<bool> VerifyMasterPasswordAsync(string password)
+    {
+        await _unlockSemaphore.WaitAsync();
+        try
+        {
+            var dek = await TryDeriveAuthorizedMasterDekAsync(password);
+            if (dek == null) return false;
+            Array.Clear(dek);
+            return true;
+        }
+        finally
+        {
+            _unlockSemaphore.Release();
+        }
+    }
+
     private async Task<bool> UnlockCoreAsync(string password)
     {
         LastMigrationResult = null;
 
+        var dek = await TryDeriveAuthorizedMasterDekAsync(password);
+        if (dek == null) return false;
+
+        lock (_lock)
+        {
+            if (_masterDek != null) Array.Clear(_masterDek);
+            _masterDek = dek;
+        }
+
+        if (scopeFactory != null)
+        {
+            using var scope = scopeFactory.CreateScope();
+            var migration = scope.ServiceProvider.GetRequiredService<LegacyPasswordSlotMigrationService>();
+            LastMigrationResult = await migration.MigrateIfNeededAsync();
+        }
+        TriggerPostUnlockCatchUp();
+        return true;
+    }
+
+    /// <summary>
+    /// Walks every password-bearing key slot and returns the master DEK the first matching,
+    /// permitted slot unwraps — or null when no slot accepts the password. The caller owns the
+    /// returned buffer and must wipe it. Shared by <see cref="UnlockCoreAsync"/> (which installs it
+    /// as the session key) and <see cref="VerifyMasterPasswordAsync"/> (which only wants the yes/no).
+    /// </summary>
+    private async Task<byte[]?> TryDeriveAuthorizedMasterDekAsync(string password)
+    {
         var slots = await keySlotRepo.GetAllAsync();
         var trySlots = slots.Where(s => s.Salt != null && s.ArgonMemory.HasValue).ToList();
 
@@ -199,22 +252,8 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                     continue;
                 }
 
-                lock (_lock)
-                {
-                    if (_masterDek != null) Array.Clear(_masterDek);
-                    _masterDek = currentCandidate;
-                }
-
-                if (scopeFactory != null)
-                {
-                    using var scope = scopeFactory.CreateScope();
-                    var migration = scope.ServiceProvider.GetRequiredService<LegacyPasswordSlotMigrationService>();
-                    LastMigrationResult = await migration.MigrateIfNeededAsync();
-                }
-                TriggerPostUnlockCatchUp();
-
                 Array.Clear(kek, 0, kek.Length);
-                return true;
+                return currentCandidate;
             }
             catch
             {
@@ -223,7 +262,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                 throw;
             }
         }
-        return false;
+        return null;
     }
 
     public void UnlockWithDek(byte[] masterDek)

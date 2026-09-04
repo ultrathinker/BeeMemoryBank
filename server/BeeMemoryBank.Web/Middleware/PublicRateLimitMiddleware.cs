@@ -13,13 +13,16 @@ namespace BeeMemoryBank.Web.Middleware;
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// <c>POST /Login</c> — ordinary sign-in, plus (via named handlers on the same page) the
-/// <c>Reset</c> handler, which WIPES THE NODE on a correct master password, and
-/// <c>ContinueWithoutBackup</c>, which also verifies one. All three are anonymous by necessity:
-/// they exist for people who cannot authenticate yet.
+/// <c>POST /Login</c> — ordinary sign-in, plus (via a named handler on the same page)
+/// <c>ContinueWithoutBackup</c>, which verifies the master password. Both are anonymous by
+/// necessity: they exist for people who cannot authenticate yet.
 /// </description></item>
 /// <item><description>
-/// <c>POST /api-proxy/init/reset</c> — the same node wipe, reachable directly.
+/// <c>POST /Admin?handler=ResetNode</c> — WIPES THE NODE on a correct master password. Not
+/// anonymous (the page is superadmin-only), but throttled anyway: the master password is a second
+/// credential in front of a destructive action, and a hijacked admin session must not get unlimited
+/// guesses at it. The two anonymous vectors onto this same wipe — <c>/Login?handler=Reset</c> and
+/// <c>/api-proxy/init/reset</c> — are gone.
 /// </description></item>
 /// </list>
 ///
@@ -51,12 +54,12 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
         var path = RateLimitPath.Normalize(context.Request.Path.Value);
 
         // Classification lives in RateLimitPath so it can be unit-tested: both mistakes possible
-        // here are silent ones. /Login carries three handlers and they are not equally dangerous —
-        // the default signs in, ?handler=Reset WIPES THE NODE on a correct master password.
+        // here are silent ones. The same page serves several handlers and they are not equally
+        // dangerous — on /Admin the default POST is routine config, ?handler=ResetNode WIPES THE NODE.
         //
-        // The bucket key is the ROUTE CLASS, not the path. Both reset vectors perform the identical
-        // wipe, so keying them separately handed an attacker 5 attempts on /Login?handler=Reset
-        // plus another 5 on /api-proxy/init/reset — double the budget the limiter exists to impose.
+        // The bucket key is the ROUTE CLASS, not the path, so any future second vector onto the same
+        // destructive action shares one budget instead of doubling it — which is what happened while
+        // /Login?handler=Reset and /api-proxy/init/reset were two doors to the identical wipe.
         var route = RateLimitPath.Classify(path, context.Request.Query["handler"]);
         var (limiter, label, keySuffix) = route switch
         {
@@ -95,14 +98,15 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
     /// </summary>
     /// <remarks>
     /// A failed Razor login re-renders the page as 200 with an error message; only success
-    /// redirects (to the return URL, or to /Setup after a reset). So for /Login a 3xx is the only
-    /// success signal and 200 explicitly is not. The proxy reset endpoint is a plain API route:
-    /// 200 on success, 400 on a wrong password.
+    /// redirects (to the return URL). So for /Login a 3xx is the only success signal and 200
+    /// explicitly is not. The Admin reset handler always redirects — to /Setup on success, back to
+    /// /Admin with an <c>err</c> query value on a wrong password — so a status code cannot tell the
+    /// two apart, and its bucket is deliberately never reset: five wipe attempts per 15 minutes is
+    /// already far above what a legitimate admin needs.
     /// </remarks>
     private static bool IsSuccess(string path, int statusCode) => path switch
     {
         RateLimitPath.LoginPath => statusCode is >= 300 and < 400,
-        RateLimitPath.ResetProxyPath => statusCode is >= 200 and < 300,
         _ => false
     };
 }

@@ -28,11 +28,15 @@
 # takes every proxied route down with them.
 #
 # Proxy configuration: forward ONLY these paths to the API port, everything else to the Web port.
-#   /mcp        -> API   (MCP for AI agents; Bearer-token auth at the application level)
-#   /api/sync   -> API   (node-to-node synchronization, Ed25519-authenticated)
-#   /api/join   -> API   (join protocol)
-#   /           -> Web
+#   /mcp                          -> API  (MCP for AI agents; Bearer-token auth at the application level)
+#   /api/sync                     -> API  (node-to-node synchronization, Ed25519-authenticated)
+#   /api/join                     -> API  (join protocol)
+#   /api/snapshots/restore/*/file -> API  (network-wide restore; sync-token authenticated)
+#   /                             -> Web
 # See docs/deployment.md ("Reverse Proxy — What Is Exposed") for the full rationale.
+#
+# The proxy must also pass X-Forwarded-For (mod_proxy and nginx do by default) and the node must be
+# told to believe it — see BMB_TRUSTED_PROXIES below.
 
 services:
   bmb:
@@ -52,6 +56,13 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - BMB_DATA_PATH=/app/data
       - BMB_ONNX_MODEL_PATH=/app/data/model.onnx
+      # Whose X-Forwarded-For to believe. REQUIRED for any proxied deployment: Docker's published
+      # port DNATs through the bridge, so without this every external client appears to the node as
+      # the bridge gateway (172.x.0.1) and they all share ONE rate-limit bucket — meaning a single
+      # anonymous caller can exhaust the /api/sync/challenge budget and stall synchronization for
+      # every peer, or the login budget for every user. Covers the default Docker bridge ranges;
+      # narrow it to this stack's own network if you know its subnet.
+      - BMB_TRUSTED_PROXIES=172.16.0.0/12
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5300/health"]
       interval: 30s

@@ -29,7 +29,14 @@ public static class RemoteAuthEndpoints
 
             var user = await userRepo.GetByUsernameAsync(req.Username);
             if (user is null || !user.IsActive)
+            {
+                // Same Argon2id cost as a real account, so response time does not distinguish
+                // "no such user" / "deactivated" from "wrong password". See
+                // UserService.BurnPasswordVerification — this endpoint is reachable from other
+                // nodes by design, which makes the oracle remotely measurable.
+                UserService.BurnPasswordVerification(req.Password);
                 return Results.Json(new ErrorResponse("Invalid credentials"), statusCode: 401);
+            }
 
             if (!UserService.VerifyPassword(req.Password, user.PasswordHash))
                 return Results.Json(new ErrorResponse("Invalid credentials"), statusCode: 401);

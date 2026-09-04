@@ -308,11 +308,15 @@ public class ProbeTests : IAsyncLifetime
     /// </summary>
     private sealed class ProbeWebAppFactory : BmbWebApplicationFactory
     {
-        private readonly HttpMessageHandler _outboundHandler;
-
         public ProbeWebAppFactory(HttpMessageHandler outboundHandler)
         {
-            _outboundHandler = outboundHandler;
+            // Route EVERY outbound client, not just the default unnamed one: probe-relay fetches
+            // its target through a named, redirect-disabled client (see
+            // SyncEndpoints.NoRedirectClientName), and a routing rule that covered only
+            // AddHttpClient(string.Empty) silently let that one open a real socket to a hostname
+            // that exists solely in TestRoutingHandler's table — the probe then reported
+            // "Unreachable" for a target the test had wired up as reachable.
+            RouteOutboundHttpThrough(outboundHandler);
         }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -320,9 +324,6 @@ public class ProbeTests : IAsyncLifetime
             base.ConfigureWebHost(builder);
             builder.ConfigureServices(services =>
             {
-                services.AddHttpClient(string.Empty)
-                    .ConfigurePrimaryHttpMessageHandler(() => _outboundHandler);
-
                 // The real IPublicHostValidator does a genuine DNS lookup, but this test's
                 // "node-a"/"node-b" hostnames only exist inside TestRoutingHandler's in-memory
                 // routing table (no real DNS record) — swap in a stub that treats every host as

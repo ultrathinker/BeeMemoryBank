@@ -81,24 +81,6 @@ public static class MiscProxyEndpoints
             return Results.NoContent();
         }).RequireAuthorization();
 
-        // POST /api-proxy/init/reset — INTENTIONALLY ANONYMOUS (no RequireAuthorization).
-        // Purpose: lockout / forgotten-password recovery. When an admin is locked out of the
-        // vault (forgotten master password) they cannot authenticate, so this route must be
-        // reachable from the locked /Login screen to wipe-and-rejoin the node.
-        // The REAL security control is API-side: POST /api/init/reset requires the master
-        // password in the body (SessionService.UnlockAsync) and refuses if it is wrong. The
-        // Web layer adds nothing here — it only forwards the master password. Keeping this
-        // route anonymous is deliberate; do not add RequireAuthorization without breaking
-        // the only recovery path for a forgotten master password.
-        app.MapPost("/api-proxy/init/reset", async (HttpContext ctx, ApiClient api) =>
-        {
-            var req = await ctx.Request.ReadFromJsonAsync<ResetProxyRequest>();
-            if (req == null || string.IsNullOrWhiteSpace(req.MasterPassword))
-                return Results.BadRequest(new { error = "masterPassword required" });
-            var (ok, err) = await api.ResetNodeAsync(req.MasterPassword);
-            return ok ? Results.Ok() : Results.BadRequest(err);
-        });
-
         app.MapGet("/api-proxy/maintenance", async (ApiClient api) =>
         {
             var unlocked = await api.IsUnlockedAsync();

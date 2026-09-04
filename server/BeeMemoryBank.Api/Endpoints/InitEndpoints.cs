@@ -410,185 +410,38 @@ public static class InitEndpoints
             }
         });
 
+        // Superadmin AND non-agent, on top of the group's internal-key gate. This is the most
+        // destructive call in the product; it used to be reachable anonymously through the Web port
+        // with the master password as the only credential — i.e. a public password oracle whose
+        // reward for a correct guess was wiping the node. The wipe itself lives in NodeResetService
+        // (shared with `bmb init reset`, the host-only path for when nobody can sign in any more).
+        //
+        // RequireNonAgent matters because a superadmin's MCP agent inherits its owner's
+        // IsSuperadmin flag by design (see AgentAuthMiddleware). Destroying the node is not
+        // something an agent should ever be able to do on its owner's behalf.
         group.MapPost("/reset", async (
             ResetRequest req,
             HttpContext ctx,
-            SessionService session,
-            INodeIdentityRepository nodeRepo,
-            DbConnectionFactory connFactory,
-            MaintenanceModeService maintenance,
-            Services.ChatDbConnectionFactory chatDbConnFactory,
-            ILoggerFactory loggerFactory) =>
+            NodeResetService resetService) =>
         {
-            var logger = loggerFactory.CreateLogger("BeeMemoryBank.Api.InitEndpoints.Reset");
-
-            var identity = await nodeRepo.GetAsync();
-            if (identity == null)
-                return Results.BadRequest(new ErrorResponse("Node is not initialized — nothing to reset"));
-
-            var unlockOk = await session.UnlockAsync(req.MasterPassword);
-            if (!unlockOk)
-                return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
-
-            var dataPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH") ?? "/app/data";
-
-            // AUDIT: this is the single most destructive operation in the product, and the wipe
-            // below deletes tbl_audit_log along with everything else — a record that lived only
-            // inside beememorybank.db could never survive the event it describes. Write a durable
-            // trail BEFORE touching anything: an append-only file in the data directory (which the
-            // wipe never touches — it's outside the SQLite file entirely) plus a Warning-level
-            // structured log line so it also reaches whatever log sink/aggregator this deployment
-            // has configured (journald, `docker logs`, a file sink, ...). Best-effort — a failure to
-            // record the trail must never block the reset itself, or the audit mechanism becomes a
-            // new way to lock an admin out of resetting a compromised node.
-            var resetAt = DateTime.UtcNow;
-            var remoteIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            var initiatedBy = "api remote_ip=" + (ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown");
             try
             {
-                var auditLine = $"{resetAt:O} node_reset old_node_id={identity.NodeId} " +
-                    $"old_display_name=\"{identity.DisplayName}\" old_node_created_at={identity.CreatedAt:O} " +
-                    $"remote_ip={remoteIp}{Environment.NewLine}";
-                File.AppendAllText(Path.Combine(dataPath, "reset-audit.log"), auditLine);
+                var result = await resetService.ResetAsync(req.MasterPassword, initiatedBy, ctx.RequestAborted);
+                return result.Outcome switch
+                {
+                    NodeResetOutcome.NotInitialized =>
+                        Results.BadRequest(new ErrorResponse("Node is not initialized — nothing to reset")),
+                    NodeResetOutcome.InvalidPassword =>
+                        Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403),
+                    _ => Results.Ok(new { success = true, message = "Node reset — go to /Setup to rejoin" }),
+                };
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Failed to write reset-audit.log (continuing with the reset)");
-            }
-            logger.LogWarning(
-                "NODE RESET initiated: old_node_id={NodeId} old_display_name={DisplayName} remote_ip={RemoteIp}",
-                identity.NodeId, identity.DisplayName, remoteIp);
-
-            maintenance.Enter("Resetting node...");
-            session.Lock();
-
-            try
-            {
-                using var conn = connFactory.CreateConnection();
-                using (var pragmaOff = conn.CreateCommand())
-                {
-                    pragmaOff.CommandText = "PRAGMA foreign_keys = OFF";
-                    pragmaOff.ExecuteNonQuery();
-                }
-                using (var tx = conn.BeginTransaction())
-                {
-                    // Enumerate every real content table from the LIVE schema instead of
-                    // hand-maintaining a list here. A hand list silently rots: it can name a table
-                    // that never existed (this used to list "tbl_agent_access", wrapped in an empty
-                    // catch — invisible) and, worse, it can OMIT a table a later migration added —
-                    // which is exactly how tbl_remote_api_token was left out, handing a pre-reset
-                    // bmbrt_ remote token a live read path into the NEW vault once /Setup reassigns
-                    // its user_id. Excluded on purpose:
-                    //   - sqlite_%      — SQLite's own internal bookkeeping tables.
-                    //   - fts_%         — FTS5 index tables and their shadow tables (fts_article,
-                    //                     fts_article_data, ...). AFTER INSERT/UPDATE/DELETE triggers
-                    //                     on tbl_article/tbl_folder/tbl_concept_tag (see
-                    //                     005_fts5_metadata_index.sql) keep these in sync, so
-                    //                     clearing the content tables below empties them too as a
-                    //                     side effect — writing to an FTS5 shadow table directly is
-                    //                     unsupported and unnecessary.
-                    //   - tbl_migration — migration-applied bookkeeping. Wiping it would make
-                    //                     MigrationRunner try to re-run every migration against a
-                    //                     schema that (structurally) still exists — harmless in
-                    //                     principle (CREATE TABLE "already exists" is treated as
-                    //                     idempotent) but pointless and only slows down recovery.
-                    var tablesToWipe = new List<string>();
-                    using (var listCmd = conn.CreateCommand())
-                    {
-                        listCmd.Transaction = tx;
-                        listCmd.CommandText = @"
-                            SELECT name FROM sqlite_master
-                            WHERE type = 'table'
-                              AND name NOT LIKE 'sqlite_%'
-                              AND name NOT LIKE 'fts_%'
-                              AND name <> 'tbl_migration'
-                            ORDER BY name";
-                        using var reader = listCmd.ExecuteReader();
-                        while (reader.Read())
-                            tablesToWipe.Add(reader.GetString(0));
-                    }
-
-                    foreach (var table in tablesToWipe)
-                    {
-                        using var delCmd = conn.CreateCommand();
-                        delCmd.Transaction = tx;
-                        // tbl_role is the one deliberate exception: DELETE FROM would take the two
-                        // seeded system roles (superadmin/user) with it, and nothing re-seeds them
-                        // (migrations only run once — 009_custom_roles.sql's INSERT OR IGNORE is a
-                        // no-op on a second run). Every other table is cleared unconditionally.
-                        delCmd.CommandText = table == "tbl_role"
-                            ? "DELETE FROM tbl_role WHERE is_system = 0"
-                            : $"DELETE FROM [{table}]";
-                        try
-                        {
-                            delCmd.ExecuteNonQuery();
-                        }
-                        catch (Exception ex)
-                        {
-                            // Visible now instead of an empty catch — a failure here means the reset
-                            // did NOT fully clear that table, which is exactly what an admin relying
-                            // on "go to /Setup to rejoin" being a truly clean slate needs to know.
-                            logger.LogWarning(ex, "Reset: failed to clear table {Table}", table);
-                        }
-                    }
-                    tx.Commit();
-                }
-                using (var pragmaOn = conn.CreateCommand())
-                {
-                    pragmaOn.CommandText = "PRAGMA foreign_keys = ON";
-                    pragmaOn.ExecuteNonQuery();
-                }
-
-                var mediaDir = Path.Combine(dataPath, "media");
-                if (Directory.Exists(mediaDir))
-                    foreach (var f in Directory.GetFiles(mediaDir, "*.enc")) File.Delete(f);
-
-                using (var vacuumCmd = conn.CreateCommand())
-                {
-                    vacuumCmd.CommandText = "VACUUM";
-                    vacuumCmd.ExecuteNonQuery();
-                }
-
-                // chat.db sits in the same data directory and holds this node's AI-chat history —
-                // conversation transcripts and tool-result JSON that can include decrypted article
-                // bodies the AI read during a turn (see McpResponseManager / ChatEndpoints). None of
-                // that belongs to the NEW vault created after this reset, so clear it too. Best-effort
-                // in its own try/catch: a chat.db failure must never abort or appear to partially
-                // undo the vault wipe above, which has already committed. chat_model/chat_settings
-                // are left alone — they're node-local operational config (the configured model
-                // catalogue, the global chat toggle), not vault content.
-                try
-                {
-                    using var chatConn = chatDbConnFactory.CreateConnection();
-                    using var chatTx = chatConn.BeginTransaction();
-                    foreach (var chatTable in new[] { "chat_attachment", "chat_message", "chat_conversation", "chat_api_key" })
-                    {
-                        using var chatDel = chatConn.CreateCommand();
-                        chatDel.Transaction = chatTx;
-                        chatDel.CommandText = $"DELETE FROM [{chatTable}]";
-                        chatDel.ExecuteNonQuery();
-                    }
-                    chatTx.Commit();
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Reset: failed to clear chat.db conversation history (non-fatal)");
-                }
-
-                // The folder-ACL cache is process-wide and keyed by (database, user id). The
-                // database path does not change across a reset but the user ids do — they restart
-                // at 1 — so a node re-initialized inside the cache TTL would hand the new account
-                // the wiped account's permissions.
-                FolderAccessService.InvalidateAll();
-
-                maintenance.Exit();
-                return Results.Ok(new { success = true, message = "Node reset — go to /Setup to rejoin" });
-            }
-            catch (Exception ex)
-            {
-                maintenance.Exit();
                 return Results.Json(new ErrorResponse($"Reset failed: {ex.Message}"), statusCode: 500);
             }
-        });
+        }).RequireSuperadmin().RequireNonAgent();
     }
 
     private sealed record JoinResponseDto(

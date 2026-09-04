@@ -21,26 +21,38 @@ public enum RateLimitedRoute
 public static class RateLimitPath
 {
     public const string LoginPath = "/login";
-    public const string ResetProxyPath = "/api-proxy/init/reset";
+    public const string AdminPath = "/admin";
 
     /// <summary>
     /// Which throttling class a Web request falls into. Pure and testable, because the two
     /// mistakes possible here are both silent: send a destructive route to the permissive budget,
     /// or give two vectors onto the same destructive action a budget each.
+    ///
+    /// <para>
+    /// The node wipe used to be reachable from the anonymous Login screen and through an anonymous
+    /// <c>/api-proxy/init/reset</c> route, so it needed its own budget on both. It now lives only on
+    /// the superadmin-only Admin page; the budget stays as brute-force protection on the master
+    /// password an already-signed-in caller must still supply, but an anonymous visitor can no
+    /// longer reach it at all.
+    /// </para>
     /// </summary>
     /// <param name="handlerValues">
     /// Every value of the <c>handler</c> query parameter, not a joined string. Razor dispatches on
-    /// the FIRST value, so "?handler=Reset&amp;handler=x" runs the node wipe — while a joined
-    /// "Reset,x" compares unequal to "Reset" and would fall through to the sign-in budget. Any
-    /// value matching wins: erring toward the stricter limiter only ever costs an attacker.
+    /// the FIRST value, so "?handler=ResetNode&amp;handler=x" runs the node wipe — while a joined
+    /// "ResetNode,x" compares unequal and would fall through to an unthrottled path. Any value
+    /// matching wins: erring toward the stricter limiter only ever costs an attacker.
     /// </param>
     public static RateLimitedRoute Classify(string normalizedPath, IEnumerable<string?>? handlerValues)
     {
-        if (normalizedPath == ResetProxyPath) return RateLimitedRoute.NodeReset;
+        bool IsHandler(string name) =>
+            handlerValues?.Any(v => string.Equals(v, name, StringComparison.OrdinalIgnoreCase)) == true;
+
+        if (normalizedPath == AdminPath)
+            return IsHandler("ResetNode") ? RateLimitedRoute.NodeReset : RateLimitedRoute.None;
+
         if (normalizedPath != LoginPath) return RateLimitedRoute.None;
 
-        bool isReset = handlerValues?.Any(v => string.Equals(v, "Reset", StringComparison.OrdinalIgnoreCase)) == true;
-        return isReset ? RateLimitedRoute.NodeReset : RateLimitedRoute.Login;
+        return RateLimitedRoute.Login;
     }
 
     /// <summary>

@@ -98,22 +98,4 @@ public class LoginModel(ApiClient api) : PageModel
             ReturnUrl = "/Tree";
         return LocalRedirect(string.IsNullOrEmpty(ReturnUrl) ? "/Tree" : ReturnUrl);
     }
-
-    public async Task<IActionResult> OnPostResetAsync(string masterPassword)
-    {
-        if (string.IsNullOrWhiteSpace(masterPassword))
-        {
-            ErrorMessage = "Master password required";
-            RestoreProgress = await api.GetRestoreProgressAsync();
-            DekRotationProgress = await api.GetDekRotationProgressAsync();
-            return Page();
-        }
-        var (ok, err) = await api.ResetNodeAsync(masterPassword);
-        if (ok)
-            return Redirect("/Setup?msg=Node+reset+complete");
-        ErrorMessage = err ?? "Reset failed";
-        RestoreProgress = await api.GetRestoreProgressAsync();
-        DekRotationProgress = await api.GetDekRotationProgressAsync();
-        return Page();
-    }
 }

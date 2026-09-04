@@ -59,6 +59,19 @@ public class SyncTokenStore
         return true;
     }
 
+    /// <summary>
+    /// Drops every issued challenge and bearer token. Called when the node is wiped: the whitelist
+    /// that authorized these tokens is gone, but a token is validated against this in-memory table
+    /// alone (<see cref="TryValidateToken"/> does not re-check the whitelist), so a peer that
+    /// authenticated shortly before the reset could otherwise keep pulling from the NEW vault until
+    /// its hour-long token expired.
+    /// </summary>
+    public void Clear()
+    {
+        _challenges.Clear();
+        _tokens.Clear();
+    }
+
     public void CleanupExpired()
     {
         var now = DateTime.UtcNow;

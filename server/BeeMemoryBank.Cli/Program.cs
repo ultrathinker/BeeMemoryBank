@@ -25,6 +25,20 @@ initCmd.SetHandler(async (data, name, password) =>
 {
     Environment.Exit(await InitCommand.HandleAsync(data, name, password));
 }, dataOption, initNameOpt, initPasswordOpt);
+
+// bmb init reset — host-only node wipe. The web UI has the same operation on the superadmin-only
+// Admin page; this is the fallback for when nobody can sign in any more.
+var resetPasswordOpt = new Option<string>("--master-password", "Master password (confirmation)") { IsRequired = true };
+var resetYesOpt = new Option<bool>("--yes", "Confirm the wipe. Without it the command refuses to run.");
+var resetCmd = new Command("reset", "Wipe this node back to first-run Setup (DESTRUCTIVE)");
+resetCmd.AddOption(resetPasswordOpt);
+resetCmd.AddOption(resetYesOpt);
+resetCmd.SetHandler(async (data, password, yes) =>
+{
+    Environment.Exit(await InitCommand.ResetAsync(data, password, yes));
+}, dataOption, resetPasswordOpt, resetYesOpt);
+initCmd.AddCommand(resetCmd);
+
 root.AddCommand(initCmd);
 
 // ─── bmb join ──────────────────────────────────────────────────────────────

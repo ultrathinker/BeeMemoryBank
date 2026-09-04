@@ -650,4 +650,41 @@ public class UserServiceTests : TestFixture
         (deny, allow, _) = await FolderAccess.GetFullAccessInfoAsync(bob.Id);
         FolderAccessService.IsAccessDenied(deny, allow, "/HR").Should().BeTrue();
     }
+
+    // ─── Username enumeration ───────────────────────────────────────────────
+
+    /// <summary>
+    /// A missing account used to return in microseconds while a wrong password for a real one cost
+    /// a full Argon2id derivation (~100ms at the configured parameters). That gap is a remote
+    /// username oracle: an attacker learns which accounts exist without producing a single failed
+    /// login for a real user, then spends the whole login budget on names that are known to work.
+    ///
+    /// The assertion is deliberately coarse — a hard timing bound would be flaky on shared CI —
+    /// but the failure it guards against is not subtle: the unpadded path is two to three orders
+    /// of magnitude faster, so requiring the missing-user path to stay within the same order as
+    /// the wrong-password path catches a regression while tolerating an overloaded machine.
+    /// </summary>
+    [Fact]
+    public async Task Authenticate_MissingUser_CostsTheSameOrderOfWorkAsAWrongPassword()
+    {
+        await CreateRegularUserAsync(); // "bob", a real account with a real hash
+
+        // Warm up: first call pays the one-off dummy-hash generation and JIT.
+        await Users.AuthenticateAsync("nobody-warmup", "whatever");
+        await Users.AuthenticateAsync("bob", "wrongPassword1");
+
+        var wrongPassword = await MeasureAsync(() => Users.AuthenticateAsync("bob", "wrongPassword1"));
+        var missingUser = await MeasureAsync(() => Users.AuthenticateAsync("no-such-user", "wrongPassword1"));
+
+        missingUser.Should().BeGreaterThan(wrongPassword / 10,
+            "a missing account must not answer an order of magnitude faster than a wrong password — " +
+            "that difference is what makes usernames enumerable from outside");
+    }
+
+    private static async Task<double> MeasureAsync(Func<Task<User?>> action)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        (await action()).Should().BeNull();
+        return sw.Elapsed.TotalMilliseconds;
+    }
 }

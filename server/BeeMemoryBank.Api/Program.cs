@@ -69,6 +69,8 @@ builder.Services.AddMemoryCache();
 builder.Services.AddOnnxEmbeddings(dataPath);
 builder.Services.AddSync();
 builder.Services.AddSingleton<SyncTokenStore>();
+// Per-node, not per-process: see SyncChallengeRateLimiter.
+builder.Services.AddSingleton<BeeMemoryBank.Api.Endpoints.SyncEndpoints.SyncChallengeRateLimiter>();
 builder.Services.AddSingleton<BeeMemoryBank.Api.Services.IPublicHostValidator, BeeMemoryBank.Api.Services.DnsPublicHostValidator>();
 // BMB_SYNC_INTERVAL_SECONDS: override scheduler tick (default 60s). Useful for tests with
 // fast iteration; set to e.g. 5 to push/pull every 5s. Production should leave it unset.
@@ -112,6 +114,14 @@ builder.Services.AddMdnsAnnouncer(o =>
 builder.Services.AddHttpClient();
 builder.Services.AddTransient<HttpClient>(sp =>
     sp.GetRequiredService<IHttpClientFactory>().CreateClient());
+
+// Named client for outbound requests to a caller-supplied URL, where the ONLY thing standing
+// between us and an internal address is a check on the host we were given. The default handler
+// follows redirects, so a host that passes that check can 302 the request onto loopback or a
+// metadata endpoint and the check is bypassed. Used by /api/sync/probe-relay; mirrors the same
+// hardening on OpenRouterClient (below) and ChatEndpoints' ImageFetchClient.
+builder.Services.AddHttpClient(BeeMemoryBank.Api.Endpoints.SyncEndpoints.NoRedirectClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpContextAccessor();
 
 // Route CallerScope through HttpContext.Items so it survives child DI scopes.
@@ -169,6 +179,10 @@ builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncSc
 builder.Services.AddHostedService<BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor>();
 builder.Services.AddScoped<ZipExportService>();
 builder.Services.AddScoped<CompactionService>();
+// Node reset lives in Core so the API endpoint and `bmb init reset` share one definition of
+// "wipe"; the Api contributes chat.db cleanup through the hook interface.
+builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<BeeMemoryBank.Core.Services.NodeResetService>(sp, dataPath));
+builder.Services.AddScoped<BeeMemoryBank.Core.Services.INodeResetHook, ApiStateResetHook>();
 builder.Services.AddSingleton<SnapshotJoinCache>();
 var mediaDir = Path.Combine(dataPath, "media");
 Directory.CreateDirectory(mediaDir);

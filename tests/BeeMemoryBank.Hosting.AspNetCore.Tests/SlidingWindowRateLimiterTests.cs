@@ -135,51 +135,58 @@ public class RateLimitRouteClassificationTests
     public void PlainLoginIsTheLoginBudget()
         => RateLimitPath.Classify("/login", null).Should().Be(RateLimitedRoute.Login);
 
-    [Fact]
-    public void TheProxyResetRouteIsTheResetBudget()
-        => RateLimitPath.Classify("/api-proxy/init/reset", null).Should().Be(RateLimitedRoute.NodeReset);
-
     [Theory]
-    [InlineData("Reset")]
-    [InlineData("reset")]
-    [InlineData("RESET")]
-    public void TheLoginResetHandlerIsTheResetBudget(string handler)
-        => RateLimitPath.Classify("/login", [handler]).Should().Be(RateLimitedRoute.NodeReset);
+    [InlineData("ResetNode")]
+    [InlineData("resetnode")]
+    [InlineData("RESETNODE")]
+    public void TheAdminResetHandlerIsTheResetBudget(string handler)
+        => RateLimitPath.Classify("/admin", [handler]).Should().Be(RateLimitedRoute.NodeReset);
 
     /// <summary>
-    /// The bypass: Razor dispatches on the FIRST handler value, so this really does run the node
-    /// wipe. Reading the joined "Reset,x" instead of the individual values compared unequal to
-    /// "Reset" and quietly dropped the request into the sign-in budget — four times the attempts,
-    /// with any successful login on the same address clearing the bucket.
+    /// The bypass: Razor dispatches on the FIRST handler value, so a request carrying the reset
+    /// handler among several really does run the node wipe. Reading the joined "ResetNode,x"
+    /// instead of the individual values compares unequal and would drop the request out of the
+    /// reset budget entirely.
     /// </summary>
     [Fact]
     public void ARepeatedHandlerParameterCannotEscapeTheResetBudget()
     {
-        RateLimitPath.Classify("/login", ["Reset", "anything"]).Should().Be(RateLimitedRoute.NodeReset);
-        RateLimitPath.Classify("/login", ["anything", "Reset"]).Should().Be(RateLimitedRoute.NodeReset);
+        RateLimitPath.Classify("/admin", ["ResetNode", "anything"]).Should().Be(RateLimitedRoute.NodeReset);
+        RateLimitPath.Classify("/admin", ["anything", "ResetNode"]).Should().Be(RateLimitedRoute.NodeReset);
     }
 
     [Fact]
-    public void OtherHandlersStayOnTheLoginBudget()
+    public void OtherLoginHandlersStayOnTheLoginBudget()
         => RateLimitPath.Classify("/login", ["ContinueWithoutBackup"]).Should().Be(RateLimitedRoute.Login);
+
+    /// <summary>
+    /// The Admin page carries many handlers and only one of them is destructive; throttling the
+    /// rest would rate-limit ordinary administration.
+    /// </summary>
+    [Fact]
+    public void OtherAdminHandlersAreNotThrottled()
+    {
+        RateLimitPath.Classify("/admin", ["CreateSnapshot"]).Should().Be(RateLimitedRoute.None);
+        RateLimitPath.Classify("/admin", null).Should().Be(RateLimitedRoute.None);
+    }
+
+    /// <summary>
+    /// The two anonymous doors onto the node wipe — a form on the locked Login page and an
+    /// unauthenticated Web proxy route — are gone; the operation lives on the superadmin-only Admin
+    /// page. Pinned here because "it is still reachable, just unclassified" is the silent failure
+    /// this whole class exists to prevent.
+    /// </summary>
+    [Fact]
+    public void TheFormerAnonymousResetVectors_AreNoLongerRoutes()
+    {
+        RateLimitPath.Classify("/login", ["Reset"]).Should().Be(RateLimitedRoute.Login);
+        RateLimitPath.Classify("/api-proxy/init/reset", null).Should().Be(RateLimitedRoute.None);
+    }
 
     [Fact]
     public void UnrelatedPathsAreNotThrottled()
     {
         RateLimitPath.Classify("/tree", null).Should().Be(RateLimitedRoute.None);
-        RateLimitPath.Classify("/loginx", ["Reset"]).Should().Be(RateLimitedRoute.None);
-    }
-
-    /// <summary>
-    /// Both reset vectors must share ONE bucket. Keyed by path they got 5 attempts each, doubling
-    /// the budget the limiter exists to impose — so classification, not the path, has to be what
-    /// the key is derived from.
-    /// </summary>
-    [Fact]
-    public void BothResetVectorsClassifyIdentically()
-    {
-        var viaLogin = RateLimitPath.Classify("/login", ["Reset"]);
-        var viaProxy = RateLimitPath.Classify("/api-proxy/init/reset", null);
-        viaLogin.Should().Be(viaProxy).And.Be(RateLimitedRoute.NodeReset);
+        RateLimitPath.Classify("/adminx", ["ResetNode"]).Should().Be(RateLimitedRoute.None);
     }
 }

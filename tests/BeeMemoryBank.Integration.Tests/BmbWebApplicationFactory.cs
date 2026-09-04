@@ -6,8 +6,10 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
 
@@ -20,6 +22,13 @@ namespace BeeMemoryBank.Integration.Tests;
 public class BmbWebApplicationFactory : WebApplicationFactory<Program>
 {
     private const string TestInternalKey = "test-internal-key-for-integration";
+
+    /// <summary>
+    /// Exposed for tests that build their own client (e.g. an agent bearer client) and still need to
+    /// clear the internal-key gate, so what they assert is the endpoint's own rule rather than the
+    /// missing header.
+    /// </summary>
+    public const string InternalKeyForTests = TestInternalKey;
 
     private readonly string _tempDir =
         Path.Combine(Path.GetTempPath(), "bmb_integration_" + Guid.NewGuid().ToString("N"));
@@ -50,14 +59,41 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
         builder.UseSetting("BeeMemoryBank:DataPath", _tempDir);
         Environment.SetEnvironmentVariable("BMB_INTERNAL_KEY", TestInternalKey);
 
+        // TestServer synthesizes requests in-process, so Connection.RemoteIpAddress is null unless
+        // a test sets it. Real deployments never look like that: the API's only local caller is the
+        // Web layer over loopback, which RateLimitMiddleware deliberately exempts (browser traffic
+        // is throttled a hop earlier, per real client IP, by the Web layer's own limiter). Present
+        // loopback so the harness exercises that same shape; a null address is treated as an
+        // unidentifiable remote peer and throttled, which is correct in production but would just
+        // make whole test classes exhaust the login budget between each other.
+        builder.ConfigureServices(services =>
+            services.AddSingleton<IStartupFilter, LoopbackRemoteIpStartupFilter>());
+
         if (_outboundHandler is { } handler)
         {
-            builder.ConfigureServices(services =>
-            {
+            // ConfigureTestServices, NOT ConfigureServices: the latter runs BEFORE the app's own
+            // registrations in minimal hosting, so any client the app configures a primary handler
+            // for (e.g. the redirect-disabled "no-redirect" client used by /api/sync/probe-relay)
+            // would overwrite this routing afterwards and quietly open a real socket instead. Test
+            // services run last and therefore win for every client, named or not.
+            builder.ConfigureTestServices(services =>
                 services.ConfigureAll<HttpClientFactoryOptions>(o =>
-                    o.HttpMessageHandlerBuilderActions.Add(b => b.PrimaryHandler = handler));
-            });
+                    o.HttpMessageHandlerBuilderActions.Add(b => b.PrimaryHandler = handler)));
         }
+    }
+
+    /// <summary>Stamps loopback onto every request before the app pipeline runs. See ConfigureWebHost.</summary>
+    private sealed class LoopbackRemoteIpStartupFilter : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use(async (ctx, nextMiddleware) =>
+            {
+                ctx.Connection.RemoteIpAddress ??= System.Net.IPAddress.Loopback;
+                await nextMiddleware();
+            });
+            next(app);
+        };
     }
 
     public new HttpClient CreateClient()

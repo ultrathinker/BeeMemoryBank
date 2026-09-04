@@ -89,13 +89,38 @@ public class UserService(
     public async Task<User?> AuthenticateAsync(string username, string password)
     {
         var user = await userRepo.GetByUsernameAsync(username);
-        if (user == null) return null;
+        if (user == null)
+        {
+            // Burn the same Argon2id work an existing account would have cost before answering.
+            // Without it, "no such user" returns in microseconds while a wrong password for a real
+            // account takes hundreds of milliseconds — a timing oracle that enumerates valid
+            // usernames from outside with no failed-login trail, which is exactly the input a
+            // targeted password-guessing campaign wants.
+            BurnPasswordVerification(password);
+            return null;
+        }
 
         if (!VerifyPassword(password, user.PasswordHash)) return null;
 
         await userRepo.UpdateLastLoginAsync(user.Id);
         return user;
     }
+
+    /// <summary>
+    /// Runs one password verification against a fixed dummy hash and discards the result, so a
+    /// caller cannot tell "this account does not exist" from "wrong password" by how long the
+    /// answer took. The hash is a real Argon2id record over a random password nobody holds,
+    /// generated once per process — using a constant literal would make the work identical but is
+    /// no cheaper, and generating it lazily keeps this file free of a checked-in credential-shaped
+    /// blob that future readers would have to reason about.
+    /// </summary>
+    public static void BurnPasswordVerification(string password)
+    {
+        _ = VerifyPassword(password, DummyPasswordHash.Value);
+    }
+
+    private static readonly Lazy<string> DummyPasswordHash =
+        new(() => HashPassword(Convert.ToHexString(SecureRandom.GetBytes(32))), isThreadSafe: true);
 
     /// <summary>
     /// Throws unless some OTHER active superadmin would still hold a key slot after this user

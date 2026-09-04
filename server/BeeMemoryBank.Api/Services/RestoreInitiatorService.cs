@@ -278,7 +278,11 @@ public class RestoreInitiatorService : IRestoreInitiator
         _maintenance.Enter("Network-wide snapshot restore in progress (continue without backup)…");
         try
         {
-            if (!await _sessionService.UnlockAsync(masterPassword))
+            // Re-authenticate; unlock only if the vault is actually locked (the apply needs the DEK).
+            var passwordOk = _sessionService.IsUnlocked
+                ? await _sessionService.VerifyMasterPasswordAsync(masterPassword)
+                : await _sessionService.UnlockAsync(masterPassword);
+            if (!passwordOk)
                 throw new UnauthorizedAccessException("Invalid master password.");
 
             // Stay unlocked through ExecuteDownloadAndApplyAsync — the apply path needs the

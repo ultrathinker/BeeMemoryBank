@@ -1445,6 +1445,36 @@
         </sl-button>
     </div>
 
+    <!-- Reset node -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="exclamation-octagon"></sl-icon> Reset This Node</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Wipes every article, folder, user, key and sync-state row on this node and returns it to
+            the first-run Setup screen, ready to initialize a new vault or join a different network.
+            Other nodes are not affected — but this node loses its identity, so it rejoins as a new
+            one. Use it when the sync status says "Snapshot required", or when repurposing the node.
+        </p>
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>This cannot be undone.</strong> If this node holds the only copy of anything,
+            take a snapshot first.
+        </sl-alert>
+        <form method="post" asp-page-handler="ResetNode"
+              onsubmit="return confirm('This will DELETE all local articles, folders, users, keys, and sync state on this node. Proceed?');">
+            @Html.AntiForgeryToken()
+            <sl-input name="masterPassword" type="password" required password-toggle
+                      label="Master password (confirmation)" placeholder="required to confirm"
+                      style="margin-bottom:12px;"></sl-input>
+            <sl-button type="submit" variant="danger" size="small">
+                <sl-icon slot="prefix" name="trash"></sl-icon> Wipe this node
+            </sl-button>
+        </form>
+        <p class="text-muted text-sm" style="margin-top:12px;">
+            Locked out and unable to sign in at all? Run <code>bmb init reset</code> on the host
+            instead — see <em>docs/deployment.md</em>.
+        </p>
+    </div>
+
     @if (Model.OsAutoUnlockSupported)
     {
         <h3 style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> OS Auto-Unlock</h3>

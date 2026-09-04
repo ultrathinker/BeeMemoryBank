@@ -288,6 +288,25 @@ public class AdminModel(ApiClient api) : PageModel
             : RedirectToPage(new { err = err ?? "Failed to disable OS auto-unlock." });
     }
 
+    /// <summary>
+    /// Wipes this node back to the pre-Setup state. Lives here — behind the page's
+    /// <c>[Authorize(Roles = "superadmin")]</c> — rather than on the anonymous Login screen where it
+    /// used to sit: the master password was the only credential, so an unauthenticated visitor could
+    /// grind it and, on a correct guess, destroy the node. The password is still required as
+    /// re-authentication (the API verifies it without unlocking the vault); a locked-out admin with
+    /// no way to sign in uses `bmb init reset` on the host instead — see docs/deployment.md.
+    /// </summary>
+    public async Task<IActionResult> OnPostResetNodeAsync(string masterPassword)
+    {
+        if (string.IsNullOrWhiteSpace(masterPassword))
+            return RedirectToPage(new { err = "Master password is required to reset the node." });
+
+        var (ok, err) = await api.ResetNodeAsync(masterPassword);
+        return ok
+            ? Redirect("/Setup?msg=Node+reset+complete")
+            : RedirectToPage(new { err = err ?? "Reset failed" });
+    }
+
     private async Task LoadDataAsync()
     {
         var tasks = new Task[]

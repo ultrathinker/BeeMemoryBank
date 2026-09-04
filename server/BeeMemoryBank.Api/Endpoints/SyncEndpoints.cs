@@ -16,6 +16,13 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static class SyncEndpoints
 {
+    /// <summary>
+    /// Named <see cref="IHttpClientFactory"/> client with redirects disabled, registered in
+    /// Program.cs. Used by /api/sync/probe-relay, whose target URL comes from a peer.
+    /// </summary>
+    public const string NoRedirectClientName = "no-redirect";
+
+
     // JSON options for deserializing peer-to-peer relay responses. Matches the API's global
     // ConfigureHttpJsonOptions (web defaults + JsonStringEnumConverter) so enum-typed relay
     // DTOs round-trip correctly — HttpContent.ReadFromJsonAsync uses plain web defaults by
@@ -33,7 +40,19 @@ public static class SyncEndpoints
     // and the Web layer's public-endpoint limiter use, keyed per-IP like RateLimitMiddleware — a
     // generous budget, since this endpoint is legitimately hit once per sync cycle by every peer in
     // the mesh, each from a different IP with its own independent bucket.
-    private static readonly SlidingWindowRateLimiter ChallengeLimiter = new(30, TimeSpan.FromMinutes(1));
+    //
+    // Resolved from DI (registered as a singleton in Program.cs) rather than held in a `static`
+    // field: a static makes the budget PROCESS-wide, so two nodes hosted in one process share it.
+    // That is not just a test-harness detail — it made the integration suite intermittently 429 on
+    // an unrelated test — it is the same shape as a node whose own budget can be consumed by
+    // something that is not its peer. The bucket belongs to the node, so it lives in the node's
+    // container.
+    public sealed class SyncChallengeRateLimiter
+    {
+        private readonly SlidingWindowRateLimiter _limiter = new(30, TimeSpan.FromMinutes(1));
+
+        public bool TryAcquire(string key) => _limiter.TryAcquire(key);
+    }
 
     // M5a: sized to comfortably fit a single legitimate event — MediaService's 20MB max file size,
     // base64-expanded (~4/3x, ~27MB), plus JSON envelope overhead for the rest of the SyncEvent's
@@ -71,13 +90,15 @@ public static class SyncEndpoints
         app.MapPost("/api/sync/challenge", async (
             HttpContext ctx,
             SyncTokenStore store,
+            SyncChallengeRateLimiter challengeLimiter,
             INodeIdentityRepository nodeRepo) =>
         {
-            // L9: per-IP throttle — see ChallengeLimiter's doc comment. Uses the raw connection IP,
-            // same as RateLimitMiddleware, not the GDPR-masked one MaskIp produces for logging (that
-            // would bucket a whole /24 together and let one IP in a subnet exhaust another's budget).
+            // L9: per-IP throttle — see SyncChallengeRateLimiter's doc comment. Uses the raw
+            // connection IP, same as RateLimitMiddleware, not the GDPR-masked one MaskIp produces
+            // for logging (that would bucket a whole /24 together and let one IP in a subnet
+            // exhaust another's budget).
             var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            if (!ChallengeLimiter.TryAcquire(ip))
+            if (!challengeLimiter.TryAcquire(ip))
                 return Results.StatusCode(429);
 
             var identity = await nodeRepo.GetAsync();
@@ -845,7 +866,12 @@ public static class SyncEndpoints
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
             cts.CancelAfter(TimeSpan.FromSeconds(15));
 
-            var http = httpClientFactory.CreateClient();
+            // Redirects disabled: IsPublicHostAsync validated the host we were GIVEN, and the
+            // default handler would happily follow a 302 from that host onto loopback, a private
+            // address, or a cloud metadata endpoint — turning a reachability probe into a blind
+            // SSRF whose result (the status code) comes back to the peer that asked. A 3xx is
+            // reported as-is instead, which is also the honest answer to "is this URL reachable".
+            var http = httpClientFactory.CreateClient(NoRedirectClientName);
             try
             {
                 using var resp = await http.GetAsync(target, cts.Token);
@@ -869,11 +895,14 @@ public static class SyncEndpoints
                 var category = ClassifyHttpError(ex);
                 logger.LogInformation("Probe-relay: target {Url} unreachable ({Category}): {Msg}",
                     target, category, ex.Message);
+                // Category only, never ex.Message: this runs on OUR node on behalf of a peer, and
+                // the exception text can name our internal resolver, proxy or certificate chain.
+                // The category is what the wizard actually renders; the full text stays in our log.
                 return Results.Ok(new SyncProbeRelayResponse(
                     Reachable: false,
                     HttpStatusCode: null,
                     ErrorCategory: category,
-                    ErrorDetail: ex.Message));
+                    ErrorDetail: null));
             }
         }).WithTags("Sync");
     }

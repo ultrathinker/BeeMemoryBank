@@ -91,13 +91,15 @@ public static class WhitelistEndpoints
             HttpContext ctx) =>
         {
 
-            // 1. Verify master password
+            // 1. Re-authenticate. The whitelist_update event below is signed with the node identity
+            // key, which needs the master DEK — so the vault must already be open, like the sibling
+            // endpoints. This used to unlock the shared session with the supplied password when
+            // locked (and skip the password entirely when not), turning a URL edit into a hidden
+            // unlock path. Now the password is a plain re-authentication in both states.
             if (!session.IsUnlocked)
-            {
-                var unlocked = await session.UnlockAsync(req.Password);
-                if (!unlocked)
-                    return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
-            }
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+            if (!await session.VerifyMasterPasswordAsync(req.Password))
+                return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
 
             var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
             if (entry == null || entry.Status != "A")

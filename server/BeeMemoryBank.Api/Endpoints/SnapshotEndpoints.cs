@@ -75,7 +75,13 @@ public static class SnapshotEndpoints
             if (ctx.Request.Headers["X-User-Role"].FirstOrDefault() != UserRoles.Superadmin)
                 return Results.Json(new ErrorResponse("Forbidden — superadmin only"), statusCode: 403);
 
-            var unlockOk = await session.UnlockAsync(req.MasterPassword);
+            // Re-authenticate. Only unlock the shared session when it is actually locked — an
+            // encrypted snapshot needs the master DEK to apply, and the restore path locks again
+            // when it is done. Calling UnlockAsync unconditionally (as this used to) also fired the
+            // post-unlock catch-up tasks on an already-open vault for no reason.
+            var unlockOk = session.IsUnlocked
+                ? await session.VerifyMasterPasswordAsync(req.MasterPassword)
+                : await session.UnlockAsync(req.MasterPassword);
             if (!unlockOk)
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
 
@@ -92,7 +98,18 @@ public static class SnapshotEndpoints
             try
             {
                 maintenance.Enter("Restoring from snapshot...");
-                session.Lock();
+
+                // The session stays UNLOCKED across both steps below, and is locked afterwards in
+                // the finally. Locking here (as this used to) broke the two things that follow, in
+                // ways that only show up on the paths nobody exercises in a test:
+                //   • CreateAsync encrypts the snapshot DB only while the session is unlocked, so
+                //     the pre-restore safety backup — a full copy of the vault — was written to
+                //     disk in the clear.
+                //   • RestoreAsync → DecryptDbIfNeededAsync throws outright on an encrypted
+                //     snapshot when the session is locked, and CreateAsync encrypts by default —
+                //     so restoring an ordinary admin-made snapshot could not succeed at all.
+                // Locking AFTER is still required: the restore swaps the database file, and the
+                // master DEK held in memory belongs to the vault that was just replaced.
 
                 if (req.CreateBackupFirst)
                 {
@@ -106,18 +123,22 @@ public static class SnapshotEndpoints
                 await svc.RestoreAsync(req.FileName, standaloneMode: req.StandaloneMode);
                 logger.LogInformation("Restore completed successfully");
 
-                maintenance.Exit();
                 return Results.Ok(new { success = true, backupFileName });
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Restore failed for {FileName}", req.FileName);
-                maintenance.Exit();
                 return Results.Json(
                     new ErrorResponse(backupFileName != null
                         ? $"Restore failed. A backup was saved as {backupFileName}. Check server logs for details."
                         : "Restore failed. No backup was created. Check server logs for details."),
                     statusCode: 500);
+            }
+            finally
+            {
+                // Whatever happened, do not carry the old vault's key into whatever is on disk now.
+                session.Lock();
+                maintenance.Exit();
             }
         });
 

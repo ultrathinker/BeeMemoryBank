@@ -10,6 +10,8 @@
 | `BMB_API_URL` | Web | Internal API URL (e.g., `http://localhost:5300`) |
 | `BMB_INTERNAL_KEY` | API, Web | Shared secret for Web→API authentication. Every request from Web to API must carry this key in the `X-Internal-Key` header. **In Docker:** `docker-entrypoint.sh` auto-generates and exports the key before starting both processes — you do not need to set it manually. **From source (separate processes):** you must set it explicitly and pass the same value to both API and Web (see below). The API refuses to start in Production if the key is missing. |
 | `BMB_AUDIT_RETENTION_DAYS` | API | Optional. How long to keep `tbl_audit_log` rows. Default `90`. Set to `0` to disable pruning entirely. The pruning service runs ~24 h after process start and once a day after; it skips when the session is locked (no operator present to react to anomalies) and writes a meta-audit row recording the deletion so the prune itself shows up in the audit trail. |
+| `BMB_TRUSTED_PROXIES` | API, Web | **Set this whenever a reverse proxy (including Docker port publishing) sits in front of the node.** Comma-separated IP addresses and/or CIDR networks whose `X-Forwarded-For` header is believed — e.g. `172.16.0.0/12` for the Docker bridge range. Without it every per-IP rate limit keys on the proxy's own address, so all clients share one bucket: a single anonymous caller can exhaust the sync-challenge budget and stall synchronization for the whole mesh, or the login budget for every user at once. Only one hop is trusted (`ForwardLimit = 1`), and an unparsable entry is logged and ignored rather than failing startup. Trust here is transitive — anything that can reach the port from a listed address can claim any client IP — so name the proxy or its network and nothing wider. |
+| `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS` | API, Web | Optional, `true`/unset. Believe `X-Forwarded-For` from loopback. For a proxy sharing the host with the node (the desktop app sets this itself). Independent of `BMB_TRUSTED_PROXIES`; either or both may be set. Not sufficient under Docker — published-port traffic arrives on the bridge interface, never on loopback. |
 
 ## Example Node Setup (Docker)
 
@@ -59,6 +61,30 @@ session exists, and those are genuinely unauthenticated if the port is reachable
 So the proxy path-filter is **not** merely defense-in-depth for these routes; it is the only thing standing
 in front of them. Restrict the API port to loopback and expose only `/mcp`, `/api/sync` and `/api/join`
 through the proxy, over TLS.
+
+A node that receives a network-wide snapshot restore also needs `GET /api/snapshots/restore/{id}/file`
+forwarded (Bearer-authenticated with a sync token, like the rest of `/api/sync`). Without it the
+restore initiator can publish the event but no peer can fetch the snapshot.
+
+## Resetting a Node
+
+Wiping a node back to first-run Setup — every article, folder, user, key and sync-state row — is
+available two ways. Both require the master password as confirmation; the password is verified
+*without* unlocking the vault, so a rejected attempt leaves nothing open.
+
+- **Web UI:** `/Admin` → *Reset This Node*. Superadmin only.
+- **Host CLI:** `bmb init reset --master-password '<password>' --yes` — for when nobody can sign in
+  any more (every superadmin account lost, or the Web layer itself broken). Under Docker:
+  `docker exec -it <container> dotnet /app/cli/BeeMemoryBank.Cli.dll init reset --master-password '<password>' --yes`
+
+Both write an append-only line to `<data>/reset-audit.log` before starting, because the wipe deletes
+`tbl_audit_log` along with everything else — a record kept only inside the database could never
+survive the event it describes.
+
+> Earlier versions offered this from a *"Node out-of-sync? Reset & rejoin"* form on the anonymous
+> Login page, and through an unauthenticated `POST /api-proxy/init/reset`. Both are gone: with the
+> master password as the only credential, anyone who could load the login screen could grind it and,
+> on a correct guess, destroy the node.
 
 ## Deployment Procedure (Docker)
 
