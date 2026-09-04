@@ -32,8 +32,9 @@ public sealed record CallerIdentity(int? UserId, int? AgentId, string? ViaAgentN
         else if (InternalKeyValidator.Validate(ctx))
         {
             // Web proxy request — trust forwarded X-User-Id / X-User-Role headers ONLY when
-            // the request carried a valid internal key (or originated from localhost with no
-            // key configured). Without this gate, any external caller could spoof
+            // the request carried a valid internal key. (It used to also accept a loopback
+            // caller on a node with no key configured; that fallback is gone — see
+            // InternalKeyValidator.) Without this gate, any external caller could spoof
             // X-User-Role: superadmin on endpoints that don't individually invoke
             // InternalKeyValidator (notably /mcp) and inherit superadmin scope.
             var userIdHeader = ctx.Request.Headers["X-User-Id"].FirstOrDefault();

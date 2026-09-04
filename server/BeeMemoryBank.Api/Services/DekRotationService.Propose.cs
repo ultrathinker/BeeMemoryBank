@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -21,12 +22,15 @@ public partial class DekRotationService
 {
     public async Task<Guid> ProposeRotationAsync(string masterPassword, int? initiatorUserId = null)
     {
+        // ConflictException, not a bare InvalidOperationException: /api/dek-rotation/propose has to
+        // answer 409 for "already running" and 400 for every other refusal, and it used to decide
+        // that with Message.Contains("in progress") — one reworded sentence away from a 400.
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
-            throw new InvalidOperationException("Another rotation is in progress.");
+            throw new ConflictException("Another rotation is in progress.");
         try
         {
             if (!_sessionService.IsUnlocked)
-                throw new InvalidOperationException("Session is locked. Unlock first.");
+                throw new SessionLockedException("Session is locked. Unlock first.");
 
             using var scope = _scopeFactory.CreateScope();
             var userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -42,7 +46,7 @@ public partial class DekRotationService
             // confusing the UI and the state machine. Surfaced by p9 integration test.
             var pendingCommitting = await stateRepo.GetByStateAsync(DekRotationState.Committing);
             if (pendingCommitting.Count > 0)
-                throw new InvalidOperationException("Another rotation is in progress (pending Accept).");
+                throw new ConflictException("Another rotation is in progress (pending Accept).");
 
             // (The big try-catch comment moved to AcceptCommitCoreAsync where it actually
             // applies — Propose doesn't have the same Failed-state-leak risk because it runs

@@ -36,6 +36,9 @@ public record UpdateWhitelistEntryRequest(
 
 public record ChangeNodeAddressRequest(string NewApiAddress, string Password);
 
+/// <summary>Promote or demote a peer. See PUT /api/whitelist/{nodeId}/superadmin.</summary>
+public record SetPeerSuperadminRequest(bool IsSuperadmin);
+
 public record SemanticSearchRequest(string Query, int TopK = 10);
 
 /// <summary>

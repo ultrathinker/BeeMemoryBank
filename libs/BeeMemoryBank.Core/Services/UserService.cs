@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
@@ -313,12 +314,15 @@ public class UserService(
                 await userRepo.DeleteAsync(userId, releasedUsername);
                 return;
             }
-            catch (InvalidOperationException ex) when (ex.Message == "username_conflict" && attempt < 2)
+            catch (UsernameConflictException)
             {
-                // retry with a different suffix
+                // The random suffix collided with an already-released username; try another one.
+                // The last attempt must NOT let the repository's exception escape: it would reach
+                // the client as a 409 naming a `_del_xxx` username the caller never asked for.
+                if (attempt == 2) break;
             }
         }
-        throw new InvalidOperationException("Failed to release username after 3 attempts. Please try again.");
+        throw new ConflictException("Failed to release username after 3 attempts. Please try again.");
     }
 
     /// <returns>

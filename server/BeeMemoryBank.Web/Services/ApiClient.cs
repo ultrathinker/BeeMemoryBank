@@ -110,6 +110,23 @@ public partial class ApiClient(HttpClient http)
         await http.SendAsync(request);
     }
 
+    /// <summary>
+    /// What can undo a Lock on this node: the superadmin-owned agent keys that re-unlock the
+    /// process on their next request, plus whether OS auto-unlock is on. Returns null when the
+    /// API cannot answer, so the caller can stay silent rather than promise "nothing can".
+    /// </summary>
+    public async Task<LockImpactDto?> GetLockImpactAsync()
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<LockImpactDto>("/api/session/lock-impact", JsonOpts);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task<bool> IsUnlockedAsync()
     {
         var resp = await http.GetFromJsonAsync<SessionStatusDto>("/api/session/status", JsonOpts);

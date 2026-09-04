@@ -81,9 +81,49 @@ public partial class EventApplier
 
         if (p.ApiAddress != null) existing.ApiAddress = p.ApiAddress;
         if (p.DisplayName != null) existing.DisplayName = p.DisplayName;
+
+        if (p.IsSuperadmin is { } isSuperadmin)
+        {
+            // A node may not promote itself. In practice the superadmin gate in ApplyAsync gets
+            // there first — a demoted peer is no longer superadmin here, so its whitelist_update is
+            // refused outright before this code runs, and a peer that IS still superadmin promoting
+            // itself is a no-op. So this branch is unreachable today, and it is written down rather
+            // than left out because the gate and this rule protect different things: the gate asks
+            // "may this node change cluster state at all", and demotion is precisely the operation
+            // that answers no. If the gate is ever relaxed — an "ordinary peers may rename
+            // themselves" feature is the obvious way — regaining authority must not come with it.
+            //
+            // Demoting itself stays allowed: giving up your own privileges needs no protection, and
+            // refusing it would block the legitimate "this node is stepping down" case.
+            if (evt.NodeId == p.NodeId && isSuperadmin && !existing.IsSuperadmin)
+            {
+                logger.LogWarning(
+                    "Ignoring self-promotion: node {NodeId} sent a whitelist_update raising its own is_superadmin",
+                    evt.NodeId);
+            }
+            else
+            {
+                existing.IsSuperadmin = isSuperadmin;
+            }
+        }
+
         existing.UpdatedAt = DateTime.UtcNow;
 
         await whitelistRepoWrite.UpdateAsync(existing);
+    }
+
+    private async Task ApplyMasterPasswordChangedAsync(SyncEvent evt)
+    {
+        var p = Deserialize<MasterPasswordChangedPayload>(evt.Payload);
+
+        // Nothing to rewrap: the event carries no key material by design (see the payload). All we
+        // can do — and all we should do — is remember that this node is now out of step, so the
+        // admin UI can say so and an admin can enter the new password here too.
+        await nodeIdentityRepo.SetMasterPasswordNoticeAsync(p.ChangedAt, p.NodeName);
+
+        logger.LogWarning(
+            "Master password was changed on node {NodeName} at {ChangedAt}. This node still accepts the OLD password, including at its own /api/join, until an admin changes it here.",
+            p.NodeName, p.ChangedAt);
     }
 
     private async Task ApplyCommentCreateAsync(SyncEvent evt)

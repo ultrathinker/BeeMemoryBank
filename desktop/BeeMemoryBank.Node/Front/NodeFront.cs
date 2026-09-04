@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.DependencyInjection;
 using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Forwarder;
+using Yarp.ReverseProxy.Transforms;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Core.Services.Acme;
 using BeeMemoryBank.Hosting;
@@ -227,8 +228,43 @@ public class NodeFront
         };
 
         services.AddReverseProxy()
-            .LoadFromMemory(routes, clusters);
+            .LoadFromMemory(routes, clusters)
+            // Strip the node's own trust headers off every INBOUND request, on every route, before
+            // it is forwarded. Nothing outside this process may set them: X-Internal-Key is the
+            // secret that makes a caller "the node itself", and the API honours X-User-Id /
+            // X-User-Role / X-User-DisplayName only from a caller that presented it. Until now the
+            // front passed request headers through untouched, so a client's own copies travelled to
+            // the API and were rejected there and only there — the entire defence was that the key
+            // is random and required.
+            //
+            // That is one check away from a full authentication bypass, and it is precisely the
+            // shape that made InternalKeyValidator's deleted "trust any loopback caller" fallback
+            // dangerous: restore that fallback and every proxied request arrives at the API from
+            // 127.0.0.1, carrying whatever role the client asked for. Removing the headers here
+            // means the front never forwards the question at all.
+            //
+            // Only the Api cluster needs this in principle — but it is applied to every route
+            // deliberately: the Web layer reads no such header today, and a rule with an exception
+            // is a rule someone has to re-derive when a route is added.
+            .AddTransforms(context =>
+            {
+                foreach (var header in StrippedInboundIdentityHeaders)
+                    context.AddRequestHeaderRemove(header);
+            });
     }
+
+    /// <summary>
+    /// Headers the front removes from every inbound request before proxying. See the transform in
+    /// <see cref="RegisterServices"/> for why. Public so the test that asserts the stripping walks
+    /// the same list the proxy does, rather than a hand-copied one that can drift.
+    /// </summary>
+    public static readonly string[] StrippedInboundIdentityHeaders =
+    [
+        "X-Internal-Key",
+        "X-User-Id",
+        "X-User-Role",
+        "X-User-DisplayName",
+    ];
 
     /// <summary>
     /// Translates a <see cref="PublicSurface"/> pattern into YARP's route syntax. The two notations

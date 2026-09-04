@@ -24,6 +24,19 @@ public interface INodeIdentityRepository
     Task SetSessionSettingsAsync(int expireHours, bool slidingExpiration);
 
     /// <summary>
+    /// The pending "the master password was changed somewhere else" notice, or null when this node
+    /// is in step with the mesh. Key slots are node-local, so a password change on one node leaves
+    /// every other node still accepting the old password — see migration 018.
+    /// </summary>
+    Task<(DateTime ChangedAt, string ByNode)?> GetMasterPasswordNoticeAsync();
+
+    /// <summary>Records the notice. <paramref name="byNode"/> is a display name, for the operator.</summary>
+    Task SetMasterPasswordNoticeAsync(DateTime changedAt, string byNode);
+
+    /// <summary>Clears the notice — called when this node's own password is changed.</summary>
+    Task ClearMasterPasswordNoticeAsync();
+
+    /// <summary>
     /// Admin-configurable product name for the web header / tab title, or null when the node
     /// has never set one (the caller then falls back to <see cref="Models.Branding.DefaultName"/>).
     /// Node-local: never synced, so each installation can brand itself independently.

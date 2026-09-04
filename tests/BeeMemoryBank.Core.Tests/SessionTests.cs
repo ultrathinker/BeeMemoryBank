@@ -37,9 +37,13 @@ public class SessionTests : TestFixture
     [Fact]
     public async Task GetMasterDek_WhenLocked_Throws()
     {
-        // Session is locked
+        // Session is locked.
+        // SessionLockedException, not the base InvalidOperationException: the API maps this type to
+        // 403 (the same status every endpoint's own IsUnlocked pre-check returns) while a plain
+        // InvalidOperationException still means 409. Callers used to tell the two apart by reading
+        // the message, so asserting the base type here would let that come back unnoticed.
         var act = () => Session.GetMasterDek();
-        act.Should().Throw<InvalidOperationException>();
+        act.Should().Throw<BeeMemoryBank.Core.Exceptions.SessionLockedException>();
     }
 
     [Fact]

@@ -372,6 +372,250 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
             "may call it. Gate it with .RequireSuperadmin(), or list it in UserAllowedMutations.");
     }
 
+    // ── Role guardrail, read side ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Every GET a caller on the built-in <c>user</c> role IS allowed to reach. Same contract as
+    /// <see cref="UserAllowedMutations"/>: a new GET that is neither gated nor listed here turns
+    /// <see cref="Every_ReadEndpoint_IsSuperadminGated_UnlessExplicitlyAllowed"/> red.
+    ///
+    /// Reads need the list far more than mutations do — most of this API exists to be read by
+    /// ordinary users — so the value of the test is not the size of the allow-list but that adding
+    /// to it is a deliberate act. <c>GET /api/users</c> and the three <c>GET /api/whitelist</c>
+    /// routes sat in this category silently until someone went looking.
+    /// </summary>
+    private static readonly HashSet<string> UserAllowedReads =
+    [
+        // Content and the tree it lives in. Which articles and folders come back is decided
+        // per-folder by the ACL inside the handler, not by the caller's role.
+        "GET /api/articles/",
+        "GET /api/articles/{id:guid}",
+        "GET /api/articles/{id:guid}/content",
+        "GET /api/articles/{id:guid}/edit-content",
+        "GET /api/articles/{id:guid}/versions",
+        "GET /api/articles/{id:guid}/versions/{versionNumber:int}",
+        "GET /api/articles/{id:guid}/concept-tags",
+        "GET /api/articles/{id:guid}/related",
+        "GET /api/articles/{articleId:guid}/media",
+        "GET /api/media/{id:guid}",
+        "GET /api/tree",
+        "GET /api/tree/children",
+        "GET /api/folders/search",
+        "GET /api/folders/download",
+
+        // "What am I allowed to do here?" — the UI asks this to decide which buttons to draw. The
+        // answer is about the caller themselves, and refusing it would just make the UI guess.
+        "GET /api/access/readonly-paths",
+        "GET /api/access/folder-permissions",
+
+        // Search and the concept-tag graph, both ACL-filtered per caller.
+        "GET /api/search",
+        "GET /api/concept-tags",
+        "GET /api/concept-tags/graph",
+        "GET /api/concept-tags/graph/home",
+        "GET /api/concept-tags/graph/search",
+        "GET /api/concept-tags/graph/neighbors",
+        "GET /api/concept-tags/{name}/articles",
+
+        // Personal annotations and history over content the caller can already see.
+        "GET /api/comments",
+        "GET /api/favorites/",
+        "GET /api/activity",
+
+        // A one-shot token minted by POST /api/downloads/prepare, which is itself user-allowed.
+        // The token is the authorization; a role check here would add nothing.
+        "GET /api/downloads/{token}",
+
+        // Conditional, so not expressible as a filter: everyone lists their OWN agents, and only
+        // a superadmin widens it with ?all=true (checked inside the handler).
+        "GET /api/agents/",
+
+        // Self-service. The subject is the caller's own forwarded X-User-Id, never a chosen
+        // target. /me/stamp in particular is revalidated on every Web request for every signed-in
+        // user — gating it would sign out everyone who is not a superadmin.
+        "GET /api/users/me/stamp",
+        "GET /api/chat/settings/auto-approve",
+
+        // Chat, for a user who has chat access: their own conversations, messages and attachments
+        // (ownership is checked in the handler), plus the two read-only bits the composer renders.
+        // Reachability is additionally gated per-user by ChatAccessEndpointFilter — which is why
+        // several of these answer 403 here anyway, for a reason that is not the role gate.
+        "GET /api/chat/access",
+        "GET /api/chat/conversations",
+        "GET /api/chat/conversations/{id:guid}/messages",
+        "GET /api/chat/attachments/{id:guid}",
+        "GET /api/chat/home-pinned",
+        "GET /api/chat/settings/effective-text-model",
+        // Enabled models only, for the per-conversation picker — the sibling /models/all, which
+        // includes disabled entries and is the admin catalogue, IS superadmin.
+        "GET /api/chat/models",
+
+        // Node-wide facts the browser needs before it knows who the visitor is: the product name
+        // in the header, whether the vault is unlocked, whether the node is set up at all.
+        "GET /api/branding/",
+        "GET /api/session/status",
+        "GET /api/init/status",
+        "GET /api/version",
+
+        // Cookie lifetime and sliding-expiration flag. Cannot be gated: the Web layer reads it
+        // from a middleware that runs on the FIRST request the process sees, to configure
+        // CookieAuthenticationOptions — that request is often an anonymous visitor on /Login, who
+        // has no role header at all, and gating it would silently pin every node to the default
+        // 48h. The values are a policy setting, not a secret; writing them is superadmin.
+        "GET /api/session/settings",
+
+        // Polled by the sync UI to decide whether to refresh; returns a count, no topology.
+        "GET /api/sync/ping",
+    ];
+
+    /// <summary>
+    /// Reads whose authorization is not role-based, so "403 for role=user" is the wrong question.
+    /// Kept apart from <see cref="UserAllowedReads"/> for the same reason
+    /// <see cref="NonRoleGatedMutations"/> is: the two reasons must not get conflated.
+    /// </summary>
+    private static readonly HashSet<string> NonRoleGatedReads =
+    [
+        // Peer-to-peer sync. Anonymous by necessity (a peer has no internal key and no user), or
+        // authenticated by the Ed25519-handshake bearer token.
+        "GET /api/sync/identity",
+        "GET /api/sync/sentinel",
+        "GET /api/sync/events",
+        "GET /api/sync/snapshot/for-join",
+        "GET /api/snapshots/restore/{eventId}/file",
+
+        // Anonymous on purpose so the locked splash screen can poll it; the handler strips
+        // everything but a coarse status for callers without the internal key.
+        "GET /api/snapshots/restore/progress",
+
+        // Read-only mirrors served to ANOTHER person's node, authenticated by a bmbrt_ remote
+        // token issued to it. A remote token is never superadmin, so these can never be gated on
+        // the role — see RemoteAuthEndpoints.
+        "GET /api/folders/accessible",
+        "GET /api/folders/by-path/snapshot",
+        "GET /api/articles/{id:guid}/version",
+    ];
+
+    /// <summary>
+    /// The read counterpart of <see cref="Every_MutatingEndpoint_IsSuperadminGated_UnlessExplicitlyAllowed"/>:
+    /// calls every GET under /api/ (plus /node/) as a real, active caller on the built-in
+    /// <c>user</c> role and requires 403 unless the route is listed above.
+    ///
+    /// <para>Both halves of the mutation test are kept — metadata AND a live 403 — and for reads
+    /// the pairing matters MORE, not less. A GET has several honest ways to answer 403 that have
+    /// nothing to do with the caller's role: a locked session, a folder ACL denial, the chat-access
+    /// filter. Asserting only the status code would let a completely ungated listing pass because
+    /// the vault happened to be locked. Asserting only the metadata would let a route that declares
+    /// the gate but never reaches it pass. Together they say: the gate is declared at the
+    /// registration site, and it is the thing that answered.</para>
+    ///
+    /// <para>The one real asymmetry with the mutation test is the failure mode: a GET binds route
+    /// values and query strings rather than a body, so the 400-before-the-filter trap shows up as a
+    /// missing required query parameter instead of an unbindable body. It is reported the same
+    /// way — named, never skipped.</para>
+    /// </summary>
+    [Fact]
+    public async Task Every_ReadEndpoint_IsSuperadminGated_UnlessExplicitlyAllowed()
+    {
+        int userId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            userId = await userRepo.CreateAsync(new User
+            {
+                Username = "guardrail-regular-reader",
+                DisplayName = "Guardrail Regular Reader",
+                Role = UserRoles.User,
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        using var client = _factory.Server.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Internal-Key", BmbWebApplicationFactory.InternalKeyForTests);
+        client.DefaultRequestHeaders.Add("X-User-Role", UserRoles.User);
+        client.DefaultRequestHeaders.Add("X-User-Id", userId.ToString());
+
+        var dataSource = _factory.Services.GetRequiredService<EndpointDataSource>();
+        var failures = new List<string>();
+
+        foreach (var endpoint in dataSource.Endpoints.OfType<RouteEndpoint>())
+        {
+            var pattern = endpoint.RoutePattern.RawText;
+            if (pattern == null || !(pattern.StartsWith("/api/") || pattern.StartsWith("/node/")))
+                continue;
+
+            var methods = endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods;
+            if (methods?.Contains("GET") != true)
+                continue;
+
+            var key = $"GET {pattern}";
+            if (UserAllowedReads.Contains(key) || NonRoleGatedReads.Contains(key))
+                continue;
+            if (PublicRoutes.Contains(pattern) || SyncTokenRoutes.Contains(pattern))
+                continue;
+
+            if (endpoint.Metadata.GetMetadata<RequiresSuperadmin>() is null)
+            {
+                failures.Add($"{key} has no .RequireSuperadmin() on it. A new read endpoint must " +
+                             "declare its role requirement: add .RequireSuperadmin() at the " +
+                             "registration site, or add the route to UserAllowedReads (or " +
+                             "NonRoleGatedReads) with a comment saying why a regular user may " +
+                             "read it.");
+            }
+
+            HttpResponseMessage response;
+            try
+            {
+                response = await client.GetAsync(BuildReadProbeUrl(pattern));
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{key} threw {ex.GetType().Name}: {ex.Message}");
+                continue;
+            }
+
+            if (response.StatusCode == HttpStatusCode.Forbidden)
+                continue;
+
+            var reason = response.StatusCode switch
+            {
+                HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed =>
+                    "the request never reached the handler — fix the URL this test builds for it",
+                HttpStatusCode.BadRequest =>
+                    "the request failed model binding, which happens BEFORE endpoint filters run — " +
+                    "give the route its required query parameters in BuildReadProbeUrl so the gate " +
+                    "is actually exercised",
+                _ => "a caller on the 'user' role must not get past the superadmin gate",
+            };
+            failures.Add($"{key} returned {(int)response.StatusCode} {response.StatusCode} for a " +
+                         $"caller on the '{UserRoles.User}' role, expected 403 — {reason}.");
+        }
+
+        // The reason string carries the whole list on purpose: BeEmpty renders only the FIRST item
+        // of the collection, and one run of this test routinely turns up several routes at once.
+        failures.Should().BeEmpty(
+            "every read endpoint must decide, at its registration site, whether a regular user may " +
+            "call it. Gate it with .RequireSuperadmin(), or list it in UserAllowedReads. All " +
+            $"{failures.Count} finding(s):{Environment.NewLine}" +
+            string.Join(Environment.NewLine, failures.Select(f => "  - " + f)));
+    }
+
+    /// <summary>
+    /// GET counterpart of <see cref="BuildProbe"/>. A GET binds route values and the query string,
+    /// so the only way to trip binding is a required non-nullable <c>[FromQuery]</c> parameter —
+    /// those routes are spelled out here so the superadmin filter, not the binder, is what answers.
+    /// </summary>
+    private static string BuildReadProbeUrl(string pattern)
+    {
+        var url = SubstituteRouteParams(pattern);
+        return pattern switch
+        {
+            "/api/folders/download" or "/api/access/folder-permissions" => url + "?path=/",
+            "/api/concept-tags/graph/neighbors" => url + "?tag=probe",
+            _ => url,
+        };
+    }
+
     /// <summary>
     /// Builds a request that gets past minimal-API parameter binding, so the superadmin filter is
     /// the thing that answers. A bare <c>{}</c> deserializes into every request DTO in the API

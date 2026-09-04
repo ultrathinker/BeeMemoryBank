@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -30,7 +31,7 @@ public partial class DekRotationService
     public async Task AcceptCommitAsync(string commitEventId, string masterPassword, int? initiatorUserId = null)
     {
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
-            throw new InvalidOperationException("Another rotation is in progress.");
+            throw new ConflictException("Another rotation is in progress.");
         try
         {
             await HeavyOperationLock.Instance.WaitAsync();

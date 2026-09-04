@@ -84,7 +84,11 @@ public record WhitelistEntryDto(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     bool AutoAcceptRestore = false,
-    bool AutoAcceptDekRotation = false);
+    bool AutoAcceptDekRotation = false,
+    bool IsSuperadmin = false);
+
+/// <summary>Whether another node changed the master password while this one kept the old slot.</summary>
+public record MasterPasswordNoticeDto(bool IsStale, DateTime? ChangedAt, string? ChangedByNode);
 
 public record NodeIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
 
@@ -94,6 +98,16 @@ public record NodeIdentityDto(Guid NodeId, string DisplayName, string Ed25519Pub
 public record AgentDto(int Id, string Name, string? Description, string KeyPrefix, DateTime CreatedAt, DateTime? LastAccessedAt, long RequestCount, int OwnerUserId = 0, string? OwnerName = null, bool CanAutoUnlock = false);
 
 public record AgentCreatedDto(int Id, string Name, string ApiKey, bool CanAutoUnlock = false);
+
+// GET /api/session/lock-impact — what can put the master DEK back after a Lock. Agents are the
+// superadmin-owned keys that re-unlock the process on their next request; OsAutoUnlockEnabled is
+// the separate startup-only mechanism, which undoes a restart rather than a Lock.
+public record LockImpactDto(
+    List<AutoUnlockAgentDto> Agents,
+    bool OsAutoUnlockEnabled,
+    bool OsAutoUnlockSupported);
+
+public record AutoUnlockAgentDto(int Id, string Name, int OwnerUserId, string? OwnerName);
 
 public record ErrorDto(string Error);
 

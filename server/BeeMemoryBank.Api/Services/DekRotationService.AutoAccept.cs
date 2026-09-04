@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -68,12 +69,12 @@ public partial class DekRotationService
     public async Task AutoAcceptCommitAsync(SyncEvent commitEvent)
     {
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
-            throw new InvalidOperationException("Another rotation is in progress.");
+            throw new ConflictException("Another rotation is in progress.");
 
         try
         {
             if (!_sessionService.IsUnlocked)
-                throw new InvalidOperationException("Session is locked; auto-accept requires unlocked session.");
+                throw new SessionLockedException("Session is locked; auto-accept requires unlocked session.");
 
             var payload = JsonSerializer.Deserialize<DekRotationCommitPayload>(commitEvent.Payload, JsonOpts)
                 ?? throw new InvalidOperationException("Failed to deserialize commit payload.");

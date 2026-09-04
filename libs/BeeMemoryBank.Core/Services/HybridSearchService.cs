@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 
@@ -103,7 +104,7 @@ public class HybridSearchService(
     {
         if (!session.IsUnlocked)
         {
-            throw new InvalidOperationException("Session is locked.");
+            throw new SessionLockedException("Session is locked.");
         }
     }
 }

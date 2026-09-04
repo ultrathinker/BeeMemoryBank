@@ -7,9 +7,9 @@ namespace BeeMemoryBank.Api.Middleware;
 ///
 /// <para>Runs first, before rate limiting and before agent auth: a path that is not published has
 /// no business consuming a rate-limit slot, touching the session, or reaching a handler at all.
-/// The one thing it must run AFTER is forwarded-headers processing, because deciding whether a
-/// caller is "internal" can depend on its address — see <c>InternalKeyValidator.Validate</c>, which
-/// falls back to trusting loopback when <c>BMB_INTERNAL_KEY</c> is unset.</para>
+/// "Internal" is decided purely by the key — <c>InternalKeyValidator.Validate</c> no longer has a
+/// trust-any-loopback-caller fallback, so this gate's answer does not depend on the caller's
+/// address at all, and only the log line below reads it.</para>
 ///
 /// <para>404, not 403: the answer for a keyless caller must be the same whether or not the endpoint
 /// exists, or the node hands anyone who can reach it a map of its own version and feature set.</para>

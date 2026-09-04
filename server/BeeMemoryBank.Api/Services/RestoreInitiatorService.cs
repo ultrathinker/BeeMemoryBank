@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -153,7 +154,7 @@ public class RestoreInitiatorService : IRestoreInitiator
             {
                 await _snapshotService.CreateAsync(filterSecrets: false, sign: false);
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("disk space"))
+            catch (InsufficientDiskSpaceException)
             {
                 await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Failed, "Insufficient disk space for backup");
                 _currentStep = RestoreFlowStep.NeedsAdminDecision;
@@ -170,7 +171,7 @@ public class RestoreInitiatorService : IRestoreInitiator
                 // newly restored slots.
                 _sessionService.Lock();
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("Insufficient disk space"))
+            catch (InsufficientDiskSpaceException ex)
             {
                 // Disk-space failures during apply (extract + ATTACH need ~2x snapshot size)
                 // get the same NeedsAdminDecision treatment as backup-time disk failures so the

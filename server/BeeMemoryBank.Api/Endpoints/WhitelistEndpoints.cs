@@ -14,14 +14,24 @@ public static class WhitelistEndpoints
 {
     public static void MapWhitelistEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/whitelist").WithTags("Whitelist").RequireInternalKey();
-
-        // The five mutating routes below are RequireSuperadmin. Only the two auto-accept toggles
-        // asserted that before the endpoint-filter sweep; FOUND then: editing a peer's stored URL
-        // and revoking a peer outright were reachable by ANY signed-in user with an unlocked
-        // session. Both reshape this node's sync topology, so both belong behind the same gate.
-        // The three GETs are deliberately left open to any authenticated caller — the Nodes page
-        // renders them for everyone, and they expose no key material.
+        // Superadmin for the WHOLE group, reads included.
+        //
+        // The five mutating routes asserted that first (only the two auto-accept toggles did
+        // before the endpoint-filter sweep; editing a peer's stored URL and revoking a peer
+        // outright were reachable by ANY signed-in user with an unlocked session, and both
+        // reshape this node's sync topology).
+        //
+        // The three GETs followed. Their old comment claimed "the Nodes page renders them for
+        // everyone" — there is no Nodes page: the only renderer is Admin.cshtml, which is
+        // [Authorize(Roles = "superadmin")], and the only other caller is that page's own
+        // sync-status poll. So no ordinary user ever saw this data through the UI, while the API
+        // handed it to any of them who asked: every peer's node id, display name and — the part
+        // that matters — its api_address, an internal URL of someone else's machine. That is a
+        // map of the private network this node syncs with, and it is exactly what an attacker who
+        // has compromised one low-privilege account wants next. Key material was never in here,
+        // but "no key material" was the wrong test.
+        var group = app.MapGroup("/api/whitelist").WithTags("Whitelist")
+            .RequireInternalKey().RequireSuperadmin();
 
         group.MapGet("/sync-status", async (HttpContext ctx, ISyncPositionRepository syncRepo, ISyncPushPositionRepository pushRepo) =>
         {
@@ -84,7 +94,51 @@ public static class WhitelistEndpoints
 
             await repo.UpdateAsync(entry);
             return Results.Ok(WhitelistEntryResponse.From(entry));
-        }).RequireSuperadmin();
+        });
+
+        // PUT /api/whitelist/{nodeId}/superadmin — promote or demote a peer
+        group.MapPut("/{nodeId:guid}/superadmin", async (
+            Guid nodeId,
+            SetPeerSuperadminRequest req,
+            IWhitelistRepository repo,
+            IEventLogger eventLogger,
+            SessionService session,
+            IAuditLogRepository auditRepo,
+            HttpContext ctx) =>
+        {
+            // Every node that joins with the master password arrives as a superadmin, because a
+            // join grants full trust — and until now there was no way back. A peer you stopped
+            // trusting could only be revoked outright, which also stops it receiving content; there
+            // was nothing between "full member of the mesh" and "cut off". This is that step.
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+
+            var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
+            if (entry == null || entry.Status != "A")
+                return Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
+
+            if (entry.IsSuperadmin == req.IsSuperadmin)
+                return Results.Ok(WhitelistEntryResponse.From(entry));
+
+            entry.IsSuperadmin = req.IsSuperadmin;
+            entry.UpdatedAt = DateTime.UtcNow;
+            await repo.UpdateAsync(entry);
+
+            // Tell the rest of the mesh. Each node enforces the flag from its OWN whitelist row —
+            // EventApplier checks it before accepting hard_delete, restore_network and whitelist
+            // changes — so a demotion that reaches only this node leaves the peer just as powerful
+            // everywhere else. A node that is offline picks it up on catch-up.
+            await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: null, displayName: null,
+                isSuperadmin: req.IsSuperadmin);
+            eventLogger.SignalSync();
+
+            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
+            await auditRepo.LogAsync("whitelist", nodeId.ToString(),
+                req.IsSuperadmin ? "peer_promoted" : "peer_demoted", "web",
+                $"Peer {entry.DisplayName} {(req.IsSuperadmin ? "promoted to" : "demoted from")} superadmin by user {actor}");
+
+            return Results.Ok(WhitelistEntryResponse.From(entry));
+        }).RequireSuperadmin().RequireNonAgent();
 
         // PUT /api/whitelist/{nodeId}/address — change node URL with validation
         group.MapPut("/{nodeId:guid}/address", async (
@@ -156,7 +210,7 @@ public static class WhitelistEndpoints
             await eventLogger.LogWhitelistUpdateAsync(nodeId, newUrl, null);
 
             return Results.Ok(WhitelistEntryResponse.From(entry));
-        }).RequireSuperadmin();
+        });
 
         // PUT /api/whitelist/{nodeId}/auto-accept-restore — toggle auto-accept restore
         group.MapPut("/{nodeId:guid}/auto-accept-restore", async (
@@ -180,7 +234,7 @@ public static class WhitelistEndpoints
 
             await repo.SetAutoAcceptRestoreAsync(nodeId.ToString(), req.AutoAccept);
             return Results.Ok(new { success = true, autoAccept = req.AutoAccept });
-        }).RequireSuperadmin();
+        });
 
         // PUT /api/whitelist/{nodeId}/auto-accept-dek-rotation — toggle auto-accept DEK rotation
         group.MapPut("/{nodeId:guid}/auto-accept-dek-rotation", async (
@@ -204,7 +258,7 @@ public static class WhitelistEndpoints
 
             await repo.SetAutoAcceptDekRotationAsync(nodeId.ToString(), req.AutoAccept);
             return Results.Ok(new { success = true, autoAccept = req.AutoAccept });
-        }).RequireSuperadmin();
+        });
 
         // DELETE /api/whitelist/{nodeId} — revoke access (requires unlock)
         group.MapDelete("/{nodeId:guid}", async (
@@ -225,6 +279,6 @@ public static class WhitelistEndpoints
             await eventLogger.LogWhitelistRevokeAsync(nodeId);
 
             return Results.NoContent();
-        }).RequireSuperadmin();
+        });
     }
 }

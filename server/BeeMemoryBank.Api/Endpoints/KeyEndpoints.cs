@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Services;
@@ -23,13 +24,55 @@ public static class KeyEndpoints
         var group = app.MapGroup("/api/keys").WithTags("Keys")
             .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 
-        group.MapPost("/change-password", async (ChangePasswordRequest req, KeyManagementService svc, SessionService session, HttpContext ctx) =>
+        group.MapPost("/change-password", async (
+            ChangePasswordRequest req,
+            KeyManagementService svc,
+            SessionService session,
+            IEventLogger eventLogger,
+            INodeIdentityRepository nodeRepo,
+            IWhitelistRepository whitelistRepo,
+            HttpContext ctx) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword);
-            return Results.Ok();
+
+            // This node is now in step with itself again, whatever a peer told us earlier.
+            await nodeRepo.ClearMasterPasswordNoticeAsync();
+
+            // Key slots are node-local: this rewrapped THIS node's slot and nothing else. Every
+            // peer still accepts the old password, including at its own /api/join, which is how a
+            // stranger becomes a full member of the mesh. Tell them, so each can say so to its own
+            // admin — the event deliberately carries no key material, so the new password has to be
+            // typed on each node by a human.
+            var peers = await whitelistRepo.GetAllActiveAsync();
+            if (peers.Count > 0)
+            {
+                await eventLogger.LogMasterPasswordChangedAsync();
+                eventLogger.SignalSync();
+            }
+
+            return Results.Ok(new ChangePasswordResponse(
+                PeerCount: peers.Count,
+                Message: peers.Count == 0
+                    ? "Master password changed."
+                    : $"Master password changed on this node only. {peers.Count} other node(s) still " +
+                      "accept the OLD password, including at their own join endpoint — change it on each " +
+                      "of them as well. Note that changing the password does not evict a node that already " +
+                      "holds the master key: that needs revoking the peer and rotating the DEK."));
+        });
+
+        // GET /api/keys/password-notice — has the password been changed on another node?
+        group.MapGet("/password-notice", async (INodeIdentityRepository nodeRepo) =>
+        {
+            // Read separately from the change endpoint because it answers a question about the
+            // PAST: a peer changed the password while this node was running or offline, and this
+            // node still accepts the old one. Nothing clears it but changing the password here.
+            var notice = await nodeRepo.GetMasterPasswordNoticeAsync();
+            return Results.Ok(notice is null
+                ? new MasterPasswordNoticeResponse(false, null, null)
+                : new MasterPasswordNoticeResponse(true, notice.Value.ChangedAt, notice.Value.ByNode));
         });
 
         group.MapPost("/add-recovery", async (KeyManagementService svc, SessionService session, HttpContext ctx) =>

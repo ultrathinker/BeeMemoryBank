@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
@@ -40,11 +41,15 @@ public partial class SnapshotService
                 var tempDriveInfo = new DriveInfo(Path.GetPathRoot(Path.GetTempPath())!);
                 var snapshotsDriveInfo = new DriveInfo(Path.GetPathRoot(SnapshotsDir)!);
                 var requiredBytes = dbSize * 2;
+                // Typed, not a message the caller has to recognise: the network-restore flow routes
+                // a disk-space refusal to a "continue without a backup?" admin prompt and every
+                // other refusal to a plain failure. It used to tell them apart with
+                // Message.Contains("disk space"), which made this literal a wire contract.
                 if (tempDriveInfo.AvailableFreeSpace < requiredBytes)
-                    throw new InvalidOperationException(
+                    throw new InsufficientDiskSpaceException(
                         $"Insufficient disk space for snapshot: need ~{requiredBytes / (1024 * 1024)}MB in {tempDriveInfo.Name}, have {tempDriveInfo.AvailableFreeSpace / (1024 * 1024)}MB");
                 if (snapshotsDriveInfo.AvailableFreeSpace < requiredBytes)
-                    throw new InvalidOperationException(
+                    throw new InsufficientDiskSpaceException(
                         $"Insufficient disk space for snapshot: need ~{requiredBytes / (1024 * 1024)}MB in {snapshotsDriveInfo.Name}, have {snapshotsDriveInfo.AvailableFreeSpace / (1024 * 1024)}MB");
             }
         }

@@ -145,7 +145,11 @@ public partial class EventApplier(
             || evt.EventType == EventTypes.WhitelistRevoke
             || evt.EventType == EventTypes.WhitelistUpdate
             || evt.EventType == EventTypes.HardDelete
-            || evt.EventType == EventTypes.RestoreNetwork;
+            || evt.EventType == EventTypes.RestoreNetwork
+            // Not cluster-state, but it raises a security notice in the admin UI. A peer that could
+            // plant one at will could nag an operator into re-entering the master password, which
+            // is a decent phishing primitive; only nodes already trusted with everything may.
+            || evt.EventType == EventTypes.MasterPasswordChanged;
         if (requiresSuperadmin && !node.IsSuperadmin)
         {
             logger.LogWarning(
@@ -238,6 +242,9 @@ public partial class EventApplier(
                 break;
             case EventTypes.DekRotationCommit:
                 await ApplyDekRotationCommitAsync(evt);
+                break;
+            case EventTypes.MasterPasswordChanged:
+                await ApplyMasterPasswordChangedAsync(evt);
                 break;
             default:
                 // Skip unknown event types (forward compatibility)

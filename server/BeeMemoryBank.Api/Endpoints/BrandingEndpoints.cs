@@ -12,8 +12,7 @@ public static class BrandingEndpoints
     public static void MapBrandingEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/branding").WithTags("Branding").RequireInternalKey();
-        // Renaming the product is an operator action. An agent bearer token must not reach it even
-        // on a loopback-trusted (no internal key configured) development node.
+        // Renaming the product is an operator action, and an agent bearer token must not reach it.
         group.AddEndpointFilter<RequireNonAgentFilter>();
 
         // GET /api/branding — readable by any internal caller, including the Web layer rendering

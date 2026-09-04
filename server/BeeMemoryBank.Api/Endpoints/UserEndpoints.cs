@@ -16,18 +16,27 @@ public static class UserEndpoints
         var group = app.MapGroup("/api/users").WithTags("Users").RequireInternalKey();
         group.AddEndpointFilter<RequireNonAgentFilter>();
 
+        // The node's whole roster — username, display name, role, last login, chat access — for
+        // every active user. It answered any signed-in caller until now, which handed a regular
+        // user the list of who the superadmins are and when each of them last signed in: a
+        // ready-made target list for password guessing. Nothing loses access by gating it, because
+        // the only consumers are already superadmin-only (the Users and Admin pages, and the
+        // /api-proxy/users route that backs them).
         group.MapGet("/", async (IUserRepository repo, HttpContext ctx) =>
         {
             var users = await repo.ListActiveAsync();
             return Results.Ok(users.Select(u => new UserListItemResponse(
                 u.Id, u.Username, u.DisplayName, u.Role, u.CreatedAt, u.LastLoginAt, u.ChatAccess)));
-        });
+        }).RequireSuperadmin();
 
         // GET /api/users/me/stamp — returns this caller's node-local security stamp.
         // Used by the Web layer's OnValidatePrincipal to revoke stale cookies after an
         // identity-affecting change (password/role change, deletion). The forwarded
         // X-User-Id identifies the caller; the group's RequireInternalKey filter already
         // authenticated the internal key, and RequireNonAgentFilter blocks agents.
+        // Deliberately NOT RequireSuperadmin, unlike the listing above: the subject is always the
+        // caller, and every signed-in user's cookie is revalidated through here on every request —
+        // gating it would sign out everyone who is not a superadmin.
         group.MapGet("/me/stamp", async (HttpContext ctx, IUserRepository repo) =>
         {
             var userIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();

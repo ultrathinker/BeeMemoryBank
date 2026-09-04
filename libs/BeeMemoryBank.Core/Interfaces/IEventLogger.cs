@@ -24,7 +24,7 @@ public interface IEventLogger
     void SignalSync();
     Task LogWhitelistAddAsync(WhitelistEntry entry);
     Task LogWhitelistRevokeAsync(Guid nodeId);
-    Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName);
+    Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null);
     Task LogCommentCreateAsync(Comment comment);
     Task LogCommentDeleteAsync(Guid commentId);
     Task LogFolderCreateAsync(Folder folder);
@@ -38,4 +38,10 @@ public interface IEventLogger
     Task LogMediaLinkAsync(Guid mediaId, Guid articleId, long lamportTs);
     Task LogHardDeleteAsync(string entityType, string entityIdentifier);
     Task LogSnapshotCheckpointAsync(long cpSeq, int eventsRemoved, string snapshotFileName, string snapshotSha256, string? prevCheckpointSha256, DateTime producedAt);
+
+    /// <summary>
+    /// Tells peers the master password changed here, so they can say they are out of step. Carries
+    /// no key material — see MasterPasswordChangedPayload for why that is the whole design.
+    /// </summary>
+    Task LogMasterPasswordChangedAsync();
 }

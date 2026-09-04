@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -33,7 +34,7 @@ public class EmbeddingProjectionService(
             // message for the genuinely-uninitialized case; a present-but-unverifiable matrix is
             // not an error here, the next unlocked pass will check it.
             if (stored != null) return;
-            throw new InvalidOperationException("Session is locked. Unlock to initialize the projection matrix.");
+            throw new SessionLockedException("Session is locked. Unlock to initialize the projection matrix.");
         }
 
         if (stored != null && CanDecrypt(stored)) return; // already initialized and readable
@@ -121,7 +122,7 @@ public class EmbeddingProjectionService(
     public async Task ProjectArticleAsync(Article article, string plaintext)
     {
         if (!session.IsUnlocked)
-            throw new InvalidOperationException("Session is locked.");
+            throw new SessionLockedException("Session is locked.");
 
         // Never embed a protected article's body — it's an opaque passphrase-encrypted blob. Clear
         // the pending flag with an empty projection so the background processor stops retrying it;

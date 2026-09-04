@@ -110,6 +110,60 @@ public static class SessionEndpoints
         group.MapGet("/status", (SessionService session) =>
             Results.Ok(new SessionStatusResponse(session.IsUnlocked))).WithMetadata(new SkipInternalKey());
 
+        // GET /api/session/lock-impact — what would undo the Lock above, for the UI to state
+        // before the click. Lock is advisory (SECURITY.md, "Trust Model"): it wipes the master
+        // DEK, but an agent key owned by a superadmin carries its own wrapped copy, and
+        // AgentAuthMiddleware unwraps it and re-unlocks the whole process on that key's NEXT
+        // request — with a live MCP client attached, seconds later. Nothing in the interface said
+        // so, which made Lock look stronger than it is.
+        //
+        // OS auto-unlock is reported alongside but is a DIFFERENT mechanism, not a second flavour
+        // of the same one: OsAutoUnlockService is attempted once, at API startup, so it undoes a
+        // RESTART of a locked node rather than a Lock inside a running process. The two are
+        // reported separately so the UI can keep them apart too.
+        //
+        // RequireNonAgent as well as RequireSuperadmin, matching /lock itself and /api/keys/*: a
+        // superadmin's agent inherits its owner's IsSuperadmin flag by design (it is how an agent
+        // reads what its owner can read), so the superadmin gate alone would let a leaked bee_ key
+        // enumerate every other key that opens this vault, and who owns it — a shopping list, and
+        // one this endpoint exists precisely to help revoke. The answer would also be stale on
+        // arrival: reaching this handler over a bee_ token means the middleware already used that
+        // token to unlock the session it is being asked about.
+        group.MapGet("/lock-impact", async (HttpContext ctx, IAgentRepository agentRepo, IUserRepository userRepo) =>
+        {
+            var owners = (await userRepo.ListActiveAsync()).ToDictionary(u => u.Id);
+
+            var agents = (await agentRepo.ListActiveAsync())
+                .Where(a => a.CanAutoUnlock)
+                // An agent whose owner has been deactivated or deleted is refused with 401 before
+                // the unlock is even attempted, so it can no longer undo a Lock and must not be
+                // counted here. OwnerUserId <= 0 is the pre-migration-004 legacy shape: that path
+                // skips owner resolution entirely and still auto-unlocks, so it does count.
+                .Where(a => a.OwnerUserId <= 0 || owners.ContainsKey(a.OwnerUserId))
+                .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(a => new AutoUnlockAgentItem(
+                    a.Id,
+                    a.Name,
+                    a.OwnerUserId,
+                    owners.TryGetValue(a.OwnerUserId, out var owner)
+                        ? owner.DisplayName ?? owner.Username
+                        : null))
+                .ToList();
+
+            // Resolved from RequestServices rather than declared as a handler parameter for the
+            // reason spelled out in AutoUnlockEndpoints: the service is only registered on
+            // Windows, and minimal-API binding would silently infer [FromBody] for it elsewhere.
+            var osEnabled = false;
+            if (OperatingSystem.IsWindows())
+            {
+                var osSvc = ctx.RequestServices.GetService<OsAutoUnlockService>();
+                if (osSvc != null)
+                    osEnabled = await osSvc.IsEnabledAsync();
+            }
+
+            return Results.Ok(new LockImpactResponse(agents, osEnabled, OperatingSystem.IsWindows()));
+        }).RequireSuperadmin().RequireNonAgent();
+
         // Admin-configurable web login cookie lifetime (Web project applies these to its
         // own CookieAuthenticationOptions — see BeeWebCookie config in Web's Program.cs).
         // Bearer-token (agent) access never touches this cookie at all, so it is intentionally

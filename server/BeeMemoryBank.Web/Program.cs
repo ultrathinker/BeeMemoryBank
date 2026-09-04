@@ -26,12 +26,24 @@ var builder = Directory.Exists(publishedWwwroot)
 
 builder.Services.AddLoopbackForwardedHeaders(builder.Configuration);
 
+// Same data directory the rest of the node uses, resolved exactly the way the API's Program.cs
+// resolves it (config key, then BMB_DATA_PATH, then ./data) so both processes land on one
+// directory — under Docker that is the /app/data volume mount.
+var dataPath = builder.Configuration["BeeMemoryBank:DataPath"]
+    ?? Environment.GetEnvironmentVariable("BMB_DATA_PATH")
+    ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
+
+// Keep the data-protection key ring with the rest of the node's state instead of wherever the
+// framework decides to put it — otherwise every antiforgery token and auth cookie minted before
+// a restart (or a container recreation) is rejected after it. Deliberately NOT encrypted with the
+// master DEK — that would deadlock the login page, which has to render while the vault is still
+// locked — and not DPAPI-wrapped; AddPersistedDataProtection carries the full reasoning.
+builder.Services.AddPersistedDataProtection(dataPath, "BeeMemoryBank.Web");
+
 // Auto-resolve BMB_INTERNAL_KEY from shared key file if not set (non-Docker / local dev).
 // API generates the file; Web reads it.
 if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY")))
 {
-    var dataPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH")
-        ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
     var keyFile = Path.Combine(dataPath, ".internal-key");
     if (File.Exists(keyFile))
     {

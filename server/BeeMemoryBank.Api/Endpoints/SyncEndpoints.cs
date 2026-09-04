@@ -573,7 +573,8 @@ public static class SyncEndpoints
                 peerNewerProtocol = peerNewerProtocolState.HasNewerProtocol,
                 nodes = nodeStatuses
             });
-        }).RequireInternalKey().WithTags("Sync");
+        // Network topology — peer node ids, display names and, in /status, their API addresses. Every browser consumer already reaches it through an /api-proxy route that requires the superadmin role, so this only stops a signed-in user calling the API directly.
+        }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
 
         // ─── Ping (lightweight check if new events exist) ────────────────────────
         app.MapGet("/api/sync/ping", async (
@@ -649,7 +650,8 @@ public static class SyncEndpoints
             }
 
             return Results.Ok(new DeliveryStatusResponse(identity?.NodeId, invisibleMode.IsInvisible, statuses));
-        }).RequireInternalKey().WithTags("Sync");
+        // Network topology — peer node ids, display names and, in /status, their API addresses. Every browser consumer already reaches it through an /api-proxy route that requires the superadmin role, so this only stops a signed-in user calling the API directly.
+        }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
 
         // ─── Quarantined events (M5c operator visibility) ───────────────────────
         // Events that have repeatedly failed to apply during pull — see SyncEventQuarantine's doc
@@ -665,7 +667,8 @@ public static class SyncEndpoints
         {
             var entries = await SyncEventQuarantine.ListAllAsync(quarantineRepo);
             return Results.Ok(entries);
-        }).RequireInternalKey().WithTags("Sync");
+        // Network topology — peer node ids, display names and, in /status, their API addresses. Every browser consumer already reaches it through an /api-proxy route that requires the superadmin role, so this only stops a signed-in user calling the API directly.
+        }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
 
         // ─── Clear / retry a quarantined event (M5 follow-up: operator-triggered) ────
         // Deletes the tracking row so the event's failure streak starts fresh (FailureCount back

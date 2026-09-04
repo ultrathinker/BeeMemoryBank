@@ -177,6 +177,65 @@ public class NodeFrontTests : IAsyncDisposable
         homeRes!.Server.Should().Be("web");
     }
 
+    /// <summary>
+    /// The front must not forward a client's own copy of the node's trust headers. X-Internal-Key
+    /// is what makes a caller "the node itself" to the Api, and X-User-Id / X-User-Role /
+    /// X-User-DisplayName are honoured only from a caller that presented it — so if the front
+    /// relays an attacker's versions, the only thing standing between the internet and a
+    /// self-declared superadmin is that the Api rejects the key. Checked on both clusters, and on
+    /// a request that also carries an ordinary header, to prove the transform removes these
+    /// specifically rather than filtering headers wholesale.
+    /// </summary>
+    [Fact]
+    public async Task InboundIdentityHeaders_AreStrippedBeforeForwarding()
+    {
+        static IResult EchoHeaders(HttpContext ctx, string server) => Results.Ok(new
+        {
+            server,
+            seen = NodeFront.StrippedInboundIdentityHeaders
+                .Where(h => ctx.Request.Headers.ContainsKey(h))
+                .ToArray(),
+            passenger = ctx.Request.Headers["X-Passenger"].ToString(),
+        });
+
+        var apiStub = await StartStubServerAsync(app =>
+            app.MapGet("/api/sync/all", (HttpContext ctx) => EchoHeaders(ctx, "api")));
+
+        var webStub = await StartStubServerAsync(app =>
+            app.MapFallback((HttpContext ctx) => EchoHeaders(ctx, "web")));
+
+        var dummyChildren = new Dictionary<string, ReadyFileInfo>
+        {
+            { "Api", new ReadyFileInfo(111, apiStub.Urls.ToList(), "BeeMemoryBank.Api", "1.0.0", DateTime.UtcNow) },
+            { "Web", new ReadyFileInfo(222, webStub.Urls.ToList(), "BeeMemoryBank.Web", "1.0.0", DateTime.UtcNow) }
+        };
+
+        var (_, proxyUrl) = await StartProxyServerAsync(apiStub.Urls.First(), webStub.Urls.First(), dummyChildren);
+        using var client = new HttpClient();
+
+        // "/api/sync/all" reaches the Api cluster, "/some-web-page" the Web catch-all.
+        foreach (var (path, expectedServer) in new[] { ("/api/sync/all", "api"), ("/some-web-page", "web") })
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{proxyUrl}{path}");
+            request.Headers.Add("X-Internal-Key", "stolen-or-guessed");
+            request.Headers.Add("X-User-Id", "1");
+            request.Headers.Add("X-User-Role", "superadmin");
+            request.Headers.Add("X-User-DisplayName", "Not Really An Admin");
+            request.Headers.Add("X-Passenger", "keep-me");
+
+            var response = await client.SendAsync(request);
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var echo = await response.Content.ReadFromJsonAsync<HeaderEchoResponse>();
+            echo.Should().NotBeNull();
+            echo!.Server.Should().Be(expectedServer);
+            echo.Seen.Should().BeEmpty(
+                $"the front must forward none of its own trust headers on the {expectedServer} route");
+            echo.Passenger.Should().Be("keep-me",
+                "only the identity headers are removed — other headers still travel");
+        }
+    }
+
     [Fact]
     public async Task NodeEndpoints_AreGuardedByLoopbackClientCheck()
     {
@@ -272,5 +331,12 @@ public class NodeFrontTests : IAsyncDisposable
     {
         public string? Server { get; set; }
         public long Size { get; set; }
+    }
+
+    private class HeaderEchoResponse
+    {
+        public string? Server { get; set; }
+        public string[] Seen { get; set; } = [];
+        public string? Passenger { get; set; }
     }
 }

@@ -129,13 +129,13 @@ public class EventLogger(
             JsonSerializer.Serialize(payload));
     }
 
-    public async Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName)
+    public async Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
 
         var lamportTs = clock.Tick();
-        var payload = new WhitelistUpdatePayload(NodeId: nodeId, ApiAddress: apiAddress, DisplayName: displayName);
+        var payload = new WhitelistUpdatePayload(NodeId: nodeId, ApiAddress: apiAddress, DisplayName: displayName, IsSuperadmin: isSuperadmin);
 
         await AppendEventAsync(identity, EventTypes.WhitelistUpdate, null, lamportTs,
             JsonSerializer.Serialize(payload));
@@ -316,6 +316,20 @@ public class EventLogger(
 
         await AppendEventAsync(identity, EventTypes.HardDelete, null, lamportTs,
             JsonSerializer.Serialize(payload), entityIdentifier);
+    }
+
+    public async Task LogMasterPasswordChangedAsync()
+    {
+        var identity = await nodeRepo.GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
+
+        var lamportTs = clock.Tick();
+        var payload = new MasterPasswordChangedPayload(
+            ChangedAt: DateTime.UtcNow,
+            NodeName: identity.DisplayName);
+
+        await AppendEventAsync(identity, EventTypes.MasterPasswordChanged, null, lamportTs,
+            JsonSerializer.Serialize(payload));
     }
 
     public async Task LogSnapshotCheckpointAsync(long cpSeq, int eventsRemoved, string snapshotFileName, string snapshotSha256, string? prevCheckpointSha256, DateTime producedAt)

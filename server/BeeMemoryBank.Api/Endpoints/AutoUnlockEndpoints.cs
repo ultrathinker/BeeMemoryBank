@@ -9,9 +9,15 @@ public static class AutoUnlockEndpoints
 {
     public static void MapAutoUnlockEndpoints(this WebApplication app)
     {
+        // Superadmin for the whole group, including the read: /status answers "does this node open
+        // its own vault on boot without a password", which is reconnaissance for anyone deciding
+        // whether getting onto the machine is worth the effort. Its enable/disable siblings were
+        // already superadmin; the read was not, and the only consumer is the Admin page. RequireNonAgent
+        // for the same reason /api/keys carries it — a leaked agent key must not be able to enumerate,
+        // or change, what opens this vault.
         var group = app.MapGroup("/api/keys/auto-unlock")
             .WithTags("Keys")
-            .RequireInternalKey();
+            .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 
         // GET /api/keys/auto-unlock/status  — returns whether the feature is enabled
         //

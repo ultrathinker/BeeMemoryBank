@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -39,6 +40,18 @@ public partial class ApiClient
     }
 
     // ─── Whitelist (sync nodes) ───────────────────────────────────────────────
+
+    /// <summary>Promote or demote a peer. Every joined node starts as a superadmin.</summary>
+    public async Task<(bool Ok, string? Error)> SetPeerSuperadminAsync(Guid nodeId, bool isSuperadmin)
+    {
+        var resp = await http.PutAsJsonAsync($"/api/whitelist/{nodeId}/superadmin",
+            new { isSuperadmin });
+        return resp.IsSuccessStatusCode ? (true, null) : (false, await ReadErrorAsync(resp));
+    }
+
+    /// <summary>Has the master password been changed on another node while this one kept its slot?</summary>
+    public async Task<MasterPasswordNoticeDto?> GetMasterPasswordNoticeAsync() =>
+        await http.GetFromJsonAsync<MasterPasswordNoticeDto>("/api/keys/password-notice", JsonOpts);
 
     public async Task<List<WhitelistEntryDto>?> GetWhitelistAsync() =>
         await http.GetFromJsonAsync<List<WhitelistEntryDto>>("/api/whitelist", JsonOpts);

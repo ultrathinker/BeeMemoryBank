@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -88,7 +89,7 @@ public partial class DekRotationService : IDekRotationApplier
     public async Task CancelAsync(string eventId)
     {
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
-            throw new InvalidOperationException("Cannot cancel \u2014 rotation flow is actively executing.");
+            throw new ConflictException("Cannot cancel \u2014 rotation flow is actively executing.");
         try
         {
             using var scope = _scopeFactory.CreateScope();

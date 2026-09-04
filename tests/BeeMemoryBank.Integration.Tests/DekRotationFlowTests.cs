@@ -329,7 +329,9 @@ public class DekRotationFlowTests : IAsyncLifetime
         var body1 = await propose1.Content.ReadFromJsonAsync<JsonElement>();
         var commitEventId = body1.GetProperty("commitEventId").GetGuid().ToString();
 
-        // Second propose while first is in Committing state → 409
+        // Second propose while first is in Committing state → 409. This is the end-to-end half of
+        // ExceptionStatusMapTests: the endpoint reaches 409 because the service threw a
+        // ConflictException, not because its message happened to contain "in progress".
         var propose2 = await _client.PostAsJsonAsync("/api/dek-rotation/propose",
             new { masterPassword = Password });
         propose2.StatusCode.Should().Be(HttpStatusCode.Conflict);

@@ -803,13 +803,19 @@ public class McpAclTests : IAsyncLifetime
     {
         _scopeHolder.Scope = SystemCallerScope.Instance;
         var ctx = new DefaultHttpContext();
-        // InternalKeyValidator checks BMB_INTERNAL_KEY env var first (and in
-        // a parallel test run another test may have set it), then falls back
-        // to loopback. Set BOTH so we are deterministic regardless of env.
+        // InternalKeyValidator has no loopback fallback any more: an X-Internal-Key matching
+        // BMB_INTERNAL_KEY is the only way to be an internal caller, and only an internal caller's
+        // forwarded X-User-Role is honoured. This class builds its own services rather than a
+        // BmbWebApplicationFactory, so nothing here guarantees the variable is set — adopt the
+        // shared test key when it is not, instead of depending on another test class having run.
         ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Loopback;
         var envKey = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
-        if (!string.IsNullOrEmpty(envKey))
-            ctx.Request.Headers["X-Internal-Key"] = envKey;
+        if (string.IsNullOrEmpty(envKey))
+        {
+            envKey = BmbWebApplicationFactory.InternalKeyForTests;
+            Environment.SetEnvironmentVariable("BMB_INTERNAL_KEY", envKey);
+        }
+        ctx.Request.Headers["X-Internal-Key"] = envKey;
         ctx.Request.Headers["X-User-Id"] = "1";
         ctx.Request.Headers["X-User-Role"] = "superadmin";
         _httpContextAccessor.HttpContext = ctx;

@@ -5,6 +5,23 @@
     ViewData["Title"] = "Admin";
 }
 
+@* Key slots are node-local, so a password change on one node leaves every other node accepting
+   the OLD password — including at its own join endpoint, which is what grants mesh membership.
+   The notice is set by the master_password_changed sync event and cleared by changing the
+   password here; it carries no key material, which is why a human has to close the gap. *@
+@if (Model.MasterPasswordNotice is { IsStale: true } notice)
+{
+    <sl-alert variant="warning" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="key"></sl-icon>
+        <strong>This node still uses the old master password.</strong><br />
+        It was changed on <strong>@(notice.ChangedByNode ?? "another node")</strong>
+        @(notice.ChangedAt.HasValue ? $"on {notice.ChangedAt.Value.ToLocalTime():g}" : "").
+        Until you change it here too, this node keeps accepting the old password — including at its
+        own join endpoint, which is how a new node becomes a full member of the network.
+        Change it under <em>Master Key</em> below.
+    </sl-alert>
+}
+
 <partial name="_Sidebar" />
 
 <div id="page-content">
@@ -309,6 +326,12 @@
                                 {
                                     <sl-badge variant="primary" pill style="margin-left:4px;">embeddings</sl-badge>
                                 }
+                                @if (entry.IsSuperadmin && !isSelf)
+                                {
+                                    <sl-tooltip content="This peer can revoke other peers, hard-delete content across the whole network, and restore every node from its own snapshot. Every node that joined with the master password starts this way." placement="top">
+                                        <sl-badge variant="warning" pill style="margin-left:4px;">superadmin</sl-badge>
+                                    </sl-tooltip>
+                                }
                             </td>
                             <td>
                                 @if (!isSelf)
@@ -357,6 +380,19 @@
                                         data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress"
                                         onclick="openChangeUrl(this.dataset.nodeId, this.dataset.nodeName, this.dataset.currentUrl)">
                                     </sl-icon-button>
+                                    @* Demotion is the step between "full member of the mesh" and "cut off":
+                                       revoking also stops the peer receiving content it may still need. *@
+                                    <form method="post" asp-page-handler="SetPeerSuperadmin" style="display:inline;">
+                                        <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                        <input type="hidden" name="isSuperadmin" value="@((!entry.IsSuperadmin).ToString().ToLower())" />
+                                        <sl-icon-button
+                                            name="@(entry.IsSuperadmin ? "shield-slash" : "shield-check")"
+                                            label="@(entry.IsSuperadmin ? "Demote from superadmin" : "Promote to superadmin")"
+                                            data-node-name="@entry.DisplayName"
+                                            data-demote="@(entry.IsSuperadmin.ToString().ToLower())"
+                                            onclick="return confirmSuperadminChange(this)">
+                                        </sl-icon-button>
+                                    </form>
                                     <form method="post" asp-page-handler="RevokeNode" style="display:inline;">
                                         <input type="hidden" name="nodeId" value="@entry.NodeId" />
                                         <sl-icon-button name="trash" label="Revoke"
@@ -1375,6 +1411,38 @@
             an already-connected agent — can access your data while you're away.
             Think of it as pulling the key out of the lock and taking it with you.
         </p>
+        @* What will actually undo this lock, stated before the click rather than discovered
+           afterwards. A superadmin-owned agent key carries its own wrapped copy of the master key
+           and re-unlocks the whole node on its very next request — often seconds later, if an MCP
+           client is connected. OS auto-unlock is a separate mechanism that only runs at startup,
+           so it gets its own line. A null LockImpact means the API did not answer: say nothing
+           rather than promise safety. *@
+        @if (Model.LockImpact != null)
+        {
+            var reopeners = Model.LockImpact.Agents;
+            <p class="text-muted text-sm" style="margin-bottom:12px;">
+                @if (reopeners.Count > 0)
+                {
+                    <text>
+                        @reopeners.Count agent @(reopeners.Count == 1 ? "key" : "keys") can unlock this node
+                        again on @(reopeners.Count == 1 ? "its" : "their") next request:
+                        @string.Join(", ", reopeners.Select(a => a.OwnerName != null ? $"{a.Name} ({a.OwnerName})" : a.Name)).
+                        Revoke a key in the Agents list above if the lock has to hold.
+                    </text>
+                }
+                else
+                {
+                    <text>Nothing can auto-unlock this node — no agent key here carries the master key.</text>
+                }
+            </p>
+            @if (Model.LockImpact.OsAutoUnlockEnabled)
+            {
+                <p class="text-muted text-sm" style="margin-bottom:12px;">
+                    OS auto-unlock is enabled, so restarting this node opens the vault again without a
+                    password. It does not undo a lock while the node keeps running.
+                </p>
+            }
+        }
         <sl-button variant="warning" size="small" href="/Lock"
             onclick="return confirm('Lock the server? The decryption key will be cleared from memory. All users will need to re-authenticate to access encrypted content.')">
             <sl-icon slot="prefix" name="lock"></sl-icon> Lock Server
@@ -1918,6 +1986,23 @@
 </div>
 
 <script>
+// Spell out the consequence rather than asking "are you sure": the operator is choosing between
+// two states of a peer's authority, and the words are the only place that difference exists.
+function confirmSuperadminChange(btn) {
+    var name = btn.dataset.nodeName;
+    var demoting = btn.dataset.demote === 'true';
+    var message = demoting
+        ? 'Demote "' + name + '"?
+
+It will no longer be able to revoke peers, hard-delete content across the network, or restore every node from its own snapshot. It keeps syncing content as usual.'
+        : 'Promote "' + name + '" to superadmin?
+
+It will be able to revoke any peer, hard-delete content on every node, and restore the whole network from its own snapshot.';
+    if (!confirm(message)) return false;
+    btn.closest('form').submit();
+    return false;
+}
+
 function confirmAutoAcceptToggle(switchEl) {
     var nodeId = switchEl.dataset.nodeId;
     var nodeName = switchEl.dataset.nodeName;

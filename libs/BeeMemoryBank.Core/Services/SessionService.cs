@@ -1,5 +1,6 @@
 using System.Security;
 using System.Security.Cryptography;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
@@ -495,7 +496,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         lock (_lock)
         {
             if (_masterDek == null)
-                throw new InvalidOperationException("Session is locked. Call UnlockAsync first.");
+                throw new SessionLockedException("Session is locked. Call UnlockAsync first.");
             return (byte[])_masterDek.Clone();
         }
     }
@@ -512,7 +513,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     {
         var candidates = GetCandidateDeks();
         if (candidates.Length == 0)
-            throw new InvalidOperationException("Session is locked.");
+            throw new SessionLockedException("Session is locked.");
 
         Exception? lastError = null;
         try

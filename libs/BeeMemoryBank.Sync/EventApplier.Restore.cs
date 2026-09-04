@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -149,7 +150,7 @@ public partial class EventApplier
                 {
                     await dekRotationApplier.AutoAcceptCommitAsync(evt);
                 }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("Session is locked"))
+                catch (SessionLockedException)
                 {
                     logger.LogInformation(
                         "DEK rotation auto-accept skipped for event {EventId}: session is locked, waiting for manual accept",

@@ -49,6 +49,30 @@ public record RecoveryKeyResponse(string RecoveryKey);
 /// <param name="Supported">Whether the current platform supports OS auto-unlock (Windows only).</param>
 public record AutoUnlockStatusResponse(bool Enabled, bool Supported);
 
+/// <summary>
+/// Response for GET /api/session/lock-impact — everything on this node that can put the master
+/// DEK back after a Lock, so the operator sees the consequence before pressing the button.
+/// </summary>
+/// <param name="Agents">
+/// Active agent keys that carry a wrapped master DEK and whose owner is still active, i.e. the
+/// ones AgentAuthMiddleware will use to re-unlock the process on their very next request.
+/// Empty means no key can do that.
+/// </param>
+/// <param name="OsAutoUnlockEnabled">
+/// Whether the os_auto_unlock slot is active. A DIFFERENT mechanism from the agent keys above:
+/// OsAutoUnlockService is attempted once at API startup, so it undoes a RESTART, not a Lock
+/// inside a running process.
+/// </param>
+/// <param name="OsAutoUnlockSupported">Whether this platform supports OS auto-unlock (Windows only).</param>
+public record LockImpactResponse(
+    List<AutoUnlockAgentItem> Agents,
+    bool OsAutoUnlockEnabled,
+    bool OsAutoUnlockSupported);
+
+/// <summary>One agent key that can wake this node by itself. No key material is exposed —
+/// name and owner are what an operator needs to decide which one to revoke.</summary>
+public record AutoUnlockAgentItem(int Id, string Name, int OwnerUserId, string? OwnerName);
+
 public record ErrorResponse(string Error);
 
 public record FolderInfoResponse(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt, bool IsSystem = false, bool IsRemote = false)
@@ -127,6 +151,18 @@ public record RoleResponse(
     string Name, string DisplayName, string? Description, bool IsSystem, string BasePolicy,
     int UserCount, int RuleCount, DateTime CreatedAt, DateTime UpdatedAt);
 
+/// <summary>
+/// Result of POST /api/keys/change-password. The message is shown to the admin verbatim: a password
+/// change is node-local, and staying quiet about that was the actual defect.
+/// </summary>
+public record ChangePasswordResponse(int PeerCount, string Message);
+
+/// <summary>
+/// Whether another node changed the master password while this one kept the old slot. See
+/// migration 018 — key slots are node-local, so this gap is real and invisible without a notice.
+/// </summary>
+public record MasterPasswordNoticeResponse(bool IsStale, DateTime? ChangedAt, string? ChangedByNode);
+
 public record WhitelistEntryResponse(
     Guid NodeId,
     string DisplayName,
@@ -137,7 +173,10 @@ public record WhitelistEntryResponse(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     bool AutoAcceptRestore,
-    bool AutoAcceptDekRotation)
+    bool AutoAcceptDekRotation,
+    // Exposed so the Nodes page can show which peers hold cluster-modifying authority, and offer
+    // to take it away. Every peer that joined with the master password has it.
+    bool IsSuperadmin = false)
 {
     public static WhitelistEntryResponse From(BeeMemoryBank.Core.Models.WhitelistEntry e) => new(
         e.NodeId,
@@ -149,7 +188,8 @@ public record WhitelistEntryResponse(
         e.CreatedAt,
         e.UpdatedAt,
         e.AutoAcceptRestore,
-        e.AutoAcceptDekRotation);
+        e.AutoAcceptDekRotation,
+        e.IsSuperadmin);
 }
 
 public enum RestoreFlowStep

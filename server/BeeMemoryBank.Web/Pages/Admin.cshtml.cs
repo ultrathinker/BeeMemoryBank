@@ -15,6 +15,7 @@ public class AdminModel(ApiClient api) : PageModel
 
     public NodeIdentityDto? Identity { get; set; }
     public List<WhitelistEntryDto>? Whitelist { get; set; }
+    public MasterPasswordNoticeDto? MasterPasswordNotice { get; set; }
     public Dictionary<Guid, DateTime>? NodeSyncStatus { get; set; }
     public List<SnapshotDto>? Snapshots { get; set; }
     public List<AgentDto>? Agents { get; set; }
@@ -30,6 +31,13 @@ public class AdminModel(ApiClient api) : PageModel
 
     public bool OsAutoUnlockEnabled { get; set; }
     public bool OsAutoUnlockSupported { get; set; }
+
+    /// <summary>
+    /// What can put the master DEK back after a Lock (GET /api/session/lock-impact). Null when
+    /// the API could not answer — the Lock card then says nothing rather than claiming the node
+    /// is safe.
+    /// </summary>
+    public LockImpactDto? LockImpact { get; set; }
 
     public string? CurrentVersion { get; set; }
     public JsonElement? UpdateStatus { get; set; }
@@ -89,6 +97,16 @@ public class AdminModel(ApiClient api) : PageModel
         return ok
             ? RedirectToPage(new { msg = "Update state machine has been reset." })
             : RedirectToPage(new { err = "Failed to reset update state machine." });
+    }
+
+    public async Task<IActionResult> OnPostSetPeerSuperadminAsync(Guid nodeId, bool isSuperadmin)
+    {
+        var (ok, error) = await api.SetPeerSuperadminAsync(nodeId, isSuperadmin);
+        return ok
+            ? RedirectToPage(new { msg = isSuperadmin
+                ? "Peer promoted to superadmin."
+                : "Peer demoted. It can no longer revoke peers, hard-delete content or restore the network." })
+            : RedirectToPage(new { err = error ?? "Failed to change peer authority" });
     }
 
     public async Task<IActionResult> OnPostRevokeNodeAsync(Guid nodeId)
@@ -313,6 +331,7 @@ public class AdminModel(ApiClient api) : PageModel
         {
             api.GetIdentityAsync().ContinueWith(t => Identity = t.Result),
             api.GetWhitelistAsync().ContinueWith(t => Whitelist = t.Result),
+            api.GetMasterPasswordNoticeAsync().ContinueWith(t => MasterPasswordNotice = t.Result),
             api.GetNodeSyncStatusAsync().ContinueWith(t => NodeSyncStatus = t.Result),
             api.GetSnapshotsAsync().ContinueWith(t => Snapshots = t.Result),
             api.GetAgentsAsync(all: true).ContinueWith(t => Agents = t.Result),
@@ -325,6 +344,7 @@ public class AdminModel(ApiClient api) : PageModel
             api.GetServerVersionAsync().ContinueWith(t => CurrentVersion = t.Result),
             api.GetUpdateStatusAsync().ContinueWith(t => UpdateStatus = t.Result),
             api.GetSearchMetricsAsync().ContinueWith(t => SearchMetrics = t.Result),
+            api.GetLockImpactAsync().ContinueWith(t => LockImpact = t.Result),
             api.GetAutoUnlockStatusAsync().ContinueWith(t =>
             {
                 OsAutoUnlockEnabled = t.Result.Enabled;

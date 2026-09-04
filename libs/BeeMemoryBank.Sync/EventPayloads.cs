@@ -26,6 +26,7 @@ public static class EventTypes
     public const string RestoreNetwork = "restore_network";
     public const string DekRotationProposed = "dek_rotation_proposed";
     public const string DekRotationCommit = "dek_rotation_commit";
+    public const string MasterPasswordChanged = "master_password_changed";
 }
 
 /// <summary>Payload for network-wide snapshot restore feature.</summary>
@@ -116,6 +117,24 @@ public record ArticleDeletePayload(
     [property: JsonPropertyName("deleted_at")] DateTime DeletedAt
 );
 
+/// <summary>
+/// Announces that the master password was changed on the originating node — and carries NOTHING
+/// else, deliberately.
+///
+/// <para>Key slots are node-local, so this event cannot rewrap anything on the receiver: doing that
+/// would need a slot wrapped under a KEK derived from the new password, i.e. key material on the
+/// wire. The choice was made the other way round. What travels is the fact and the time, and an
+/// admin then enters the new password on each node by hand — the only way a local slot gets
+/// rewrapped without the password ever leaving the machine it was typed on.</para>
+///
+/// <para>Until they do, that node still accepts the old password, including at its own /api/join.
+/// That is exactly why silence was the wrong default.</para>
+/// </summary>
+public record MasterPasswordChangedPayload(
+    [property: JsonPropertyName("changed_at")]   DateTime ChangedAt,
+    [property: JsonPropertyName("node_name")]    string NodeName
+);
+
 /// <summary>Payload for adding a node to the whitelist.</summary>
 public record WhitelistAddPayload(
     [property: JsonPropertyName("node_id")]          Guid NodeId,
@@ -137,11 +156,16 @@ public record WhitelistRevokePayload(
     [property: JsonPropertyName("node_id")] Guid NodeId
 );
 
-/// <summary>Payload for updating a node in the whitelist (e.g. URL change).</summary>
+/// <summary>Payload for updating a node in the whitelist (e.g. URL change, demotion).</summary>
 public record WhitelistUpdatePayload(
     [property: JsonPropertyName("node_id")]      Guid NodeId,
     [property: JsonPropertyName("api_address")]  string? ApiAddress,
-    [property: JsonPropertyName("display_name")] string? DisplayName
+    [property: JsonPropertyName("display_name")] string? DisplayName,
+    // NULLABLE, unlike the bool on WhitelistAddPayload, and for the mirror image of the reason
+    // documented there. Here null means "this event says nothing about the flag", so a sender that
+    // predates demotion — and omits the field entirely — leaves it untouched instead of silently
+    // demoting every peer it renames. Only an explicit true/false changes anything.
+    [property: JsonPropertyName("is_superadmin")] bool? IsSuperadmin = null
 );
 
 /// <summary>Payload for comment creation (supports both plaintext and encrypted).</summary>

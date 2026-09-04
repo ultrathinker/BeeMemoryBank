@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -52,7 +53,7 @@ public sealed class PeerDekRotationApplier(
             // stays Committing and SessionService replays it through RetryPendingAutoAcceptsAsync
             // on the next unlock.
             if (!sessionService.IsUnlocked)
-                throw new InvalidOperationException("Session is locked; auto-accept requires unlocked session.");
+                throw new SessionLockedException("Session is locked; auto-accept requires unlocked session.");
 
             var payload = JsonSerializer.Deserialize<DekRotationCommitPayload>(commitEvent.Payload, JsonOpts)
                 ?? throw new InvalidOperationException("Failed to deserialize commit payload.");

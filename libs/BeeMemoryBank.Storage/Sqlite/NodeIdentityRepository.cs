@@ -92,6 +92,45 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
         return row is null ? (48, true) : (row.ExpireHours, row.SlidingExpiration);
     }
 
+    public async Task<(DateTime ChangedAt, string ByNode)?> GetMasterPasswordNoticeAsync()
+    {
+        using var conn = OpenConnection();
+        var row = await conn.QuerySingleOrDefaultAsync<MasterPasswordNoticeRow>(
+            @"SELECT master_password_changed_elsewhere_at AS ChangedAt,
+                     master_password_changed_by_node      AS ByNode
+              FROM tbl_node_identity LIMIT 1");
+        if (row?.ChangedAt is null) return null;
+        return (DateTime.Parse(row.ChangedAt, null, System.Globalization.DateTimeStyles.RoundtripKind),
+                row.ByNode ?? "another node");
+    }
+
+    public async Task SetMasterPasswordNoticeAsync(DateTime changedAt, string byNode)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_node_identity
+              SET master_password_changed_elsewhere_at = @changedAt,
+                  master_password_changed_by_node      = @byNode
+              WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+            new { changedAt = changedAt.ToString("O"), byNode });
+    }
+
+    public async Task ClearMasterPasswordNoticeAsync()
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_node_identity
+              SET master_password_changed_elsewhere_at = NULL,
+                  master_password_changed_by_node      = NULL
+              WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)");
+    }
+
+    private sealed class MasterPasswordNoticeRow
+    {
+        public string? ChangedAt { get; set; }
+        public string? ByNode { get; set; }
+    }
+
     public async Task SetSessionSettingsAsync(int expireHours, bool slidingExpiration)
     {
         using var conn = OpenConnection();

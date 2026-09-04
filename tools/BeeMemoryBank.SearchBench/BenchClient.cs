@@ -8,9 +8,10 @@ namespace BeeMemoryBank.SearchBench;
 
 /// <summary>
 /// Thin HTTP client over a running <c>BeeMemoryBank.Api</c> instance. Sends the <c>X-Internal-Key</c>
-/// header the Api's <c>RequireInternalKey</c> gate expects (the harness generates the key and sets
-/// it as <c>BMB_INTERNAL_KEY</c> on the child process, so loopback bypass is intentionally NOT in
-/// play — the harness authenticates explicitly, exactly like the Web proxy does).
+/// header the Api's <c>RequireInternalKey</c> gate expects: the harness generates the key, sets it
+/// as <c>BMB_INTERNAL_KEY</c> on the child process, and then authenticates explicitly with it,
+/// exactly like the Web proxy does. There is no other way in — <c>InternalKeyValidator</c> has no
+/// loopback fallback.
 /// </summary>
 internal sealed class BenchClient : IDisposable
 {

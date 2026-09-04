@@ -2,6 +2,7 @@ using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -58,7 +59,7 @@ public static class DekRotationEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 403);
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("in progress"))
+            catch (ConflictException ex)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }

@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
@@ -189,10 +190,13 @@ public partial class SnapshotService
             // Need space to extract payload.sqlite + media, plus some buffer
             var requiredBytes = snapSize * 2;
             
+            // Typed for the same reason as the create-path check: RestoreInitiatorService turns a
+            // disk-space refusal into a NeedsAdminDecision step and everything else into a plain
+            // Failed, and it must not decide that by reading this string.
             if (tempDriveInfo.AvailableFreeSpace < requiredBytes)
-                throw new InvalidOperationException($"Insufficient disk space in temp for restore: need ~{requiredBytes / (1024 * 1024)}MB");
+                throw new InsufficientDiskSpaceException($"Insufficient disk space in temp for restore: need ~{requiredBytes / (1024 * 1024)}MB");
             if (dataDriveInfo.AvailableFreeSpace < requiredBytes)
-                throw new InvalidOperationException($"Insufficient disk space in data for restore: need ~{requiredBytes / (1024 * 1024)}MB");
+                throw new InsufficientDiskSpaceException($"Insufficient disk space in data for restore: need ~{requiredBytes / (1024 * 1024)}MB");
         }
         catch (ArgumentException) { /* DriveInfo can fail on unusual paths */ }
         catch (DriveNotFoundException) { }

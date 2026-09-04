@@ -18,6 +18,11 @@ public class WhitelistEntry
     /// True if this peer is authorized to issue cluster-state-modifying sync events:
     /// whitelist add/revoke, hard-delete, restore_network. Default false. (Wave 2:
     /// gemini #1 / #2 / #3 — privilege escalation prevention.)
+    ///
+    /// <para>Set on every node that joins with the master password, since a join grants full
+    /// trust. It can be cleared again from Admin → Nodes, which emits a whitelist_update carrying
+    /// the new value so the whole mesh agrees; a peer can never RAISE its own flag through that
+    /// event, only an existing superadmin peer can promote it.</para>
     /// </summary>
     public bool IsSuperadmin { get; set; }
 }

@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using Dapper;
@@ -78,7 +79,12 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-            throw new InvalidOperationException("username_conflict");
+            // The caller retries this with a fresh suffix, so it needs to recognise it — but the
+            // message used to BE the signal ("username_conflict"), which meant the one message an
+            // operator could actually see, when all the retries ran out, was that machine token.
+            // The type carries the signal now; the message is for humans.
+            throw new UsernameConflictException(
+                $"Username '{releasedUsername}' is already taken.", ex);
         }
     }
 
