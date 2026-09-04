@@ -1,0 +1,33 @@
+-- Keeps the DEK-rotation chain reachable after the event log that carried it is compacted away.
+--
+-- When a peer auto-applies a rotation it deliberately preserves its users' key slots, still wrapped
+-- under the OLD DEK, and re-wraps each one lazily at that user's next login: LazySlotRewrapService
+-- walks the Applied rotations in order, unwrapping the next DEK with the previous one, until the
+-- candidate matches the current sentinel.
+--
+-- It walked that chain by reading each rotation's dek_rotation_commit event back out of tbl_event.
+-- Those rows do not last. CompactionService deletes every event at or below the checkpoint except
+-- snapshot_checkpoint, the initiator runs a compaction automatically right after its own rotation,
+-- and 1500 events pass on their own soon enough. Once the commit row is gone the walk cannot start,
+-- reachedTarget stays false, and that user can never unlock that node again -- with a log line
+-- ("could not reach current sentinel through Applied rotation chain") and no way back short of a
+-- restore. The availability half of a mechanism whose confidentiality half is documented in
+-- SECURITY.md under "What rotation does not protect against".
+--
+-- So the chain gets its own home, on the node that needs it, in a local table nothing compacts:
+-- tbl_dek_rotation_state is never synced and is stripped from join packages (SnapshotTables), and
+-- these two columns are written in the SAME transaction that marks a rotation Applied, so a row
+-- that claims Applied always carries what the walk needs.
+--
+-- No new exposure. This is byte-for-byte the material that was already sitting in tbl_event in the
+-- clear on this very node -- it is the new DEK wrapped under the old one, which is exactly the
+-- property SECURITY.md warns about. Copying it into a local table neither adds nor removes that;
+-- fixing it is the per-peer-envelope work, not this migration. Base64 TEXT rather than BLOB to
+-- match the payload's own encoding, so the value round-trips without a second representation.
+--
+-- Nullable, because rotations applied before this migration have no copy and never will. The
+-- service falls back to tbl_event for those, which is exactly as (un)reliable as it was before --
+-- no worse for old rotations, correct for every new one.
+
+ALTER TABLE tbl_dek_rotation_state ADD COLUMN chain_encrypted_new_dek TEXT;
+ALTER TABLE tbl_dek_rotation_state ADD COLUMN chain_iv                TEXT;

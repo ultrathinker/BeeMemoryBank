@@ -36,6 +36,8 @@ public static class DekRewrapper
         int? initiatorSlotId = null,
         byte[]? newWrappedSlotDek = null,
         byte[]? newWrappedSlotIv = null,
+        string? chainEncryptedNewDekB64 = null,
+        string? chainIvB64 = null,
         Action<DekRotationFlowStep, int, string>? progress = null)
     {
         int agentsDeleted = 0;
@@ -122,10 +124,33 @@ public static class DekRewrapper
             // Mark Applied INSIDE the rotation tx. If the process crashes between
             // tx.Commit() and the swap, the DB+state agree (Applied + new sentinel);
             // the startup sweep won't mark this as Failed.
+            //
+            // The chain material rides along in the SAME statement, and that is the point of
+            // writing it here rather than anywhere else: LazySlotRewrapService walks the Applied
+            // rotations to re-wrap a user's slot at their next login, and a row that says Applied
+            // without the material to walk past it is the state that locks that user out. One
+            // statement, so the two facts cannot disagree.
+            //
+            // It used to read the same values back from the dek_rotation_commit event in
+            // tbl_event. Compaction deletes those (the initiator compacts right after rotating),
+            // and once the row is gone the walk cannot start and the user can never unlock this
+            // node again. tbl_dek_rotation_state is local, never synced, and nothing compacts it.
+            // See migration 020, including why copying this material here adds no exposure that
+            // tbl_event did not already have.
             await conn.ExecuteAsync(
-                @"UPDATE tbl_dek_rotation_state SET state = @state, applied_at = @now, updated_at = @now
-                  WHERE event_id = @eventId",
-                new { state = DekRotationState.Applied.ToString().ToUpperInvariant(), now = DateTime.UtcNow.ToString("O"), eventId = commitEventId },
+                @"UPDATE tbl_dek_rotation_state
+                     SET state = @state, applied_at = @now, updated_at = @now,
+                         chain_encrypted_new_dek = COALESCE(@chainDek, chain_encrypted_new_dek),
+                         chain_iv                = COALESCE(@chainIv,  chain_iv)
+                   WHERE event_id = @eventId",
+                new
+                {
+                    state = DekRotationState.Applied.ToString().ToUpperInvariant(),
+                    now = DateTime.UtcNow.ToString("O"),
+                    eventId = commitEventId,
+                    chainDek = chainEncryptedNewDekB64,
+                    chainIv = chainIvB64
+                },
                 tx);
 
             tx.Commit();

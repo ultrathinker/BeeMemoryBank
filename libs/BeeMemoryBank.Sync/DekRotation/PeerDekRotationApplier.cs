@@ -127,10 +127,16 @@ public sealed class PeerDekRotationApplier(
                 Array.Clear(encNewDekBytes, 0, encNewDekBytes.Length);
             }
 
+            // The base64 strings straight off the payload, not the decoded bytes: they are what
+            // LazySlotRewrapService needs to walk this rotation later, and the decoded copy above
+            // has already been cleared by this point. Storing them locally is what keeps a user's
+            // key slot re-wrappable after compaction removes the event they came from.
             var (agentsDeleted, recoveryDeleted) = await DekRewrapper.RewrapAllAsync(
                 connFactory, sessionService,
                 oldDek, newDek, payload.NewDekEpoch, commitEvent.EventId.ToString(),
-                isInitiator: false);
+                isInitiator: false,
+                chainEncryptedNewDekB64: payload.EncryptedNewDek,
+                chainIvB64: payload.Iv);
 
             completed = true;
             logger.LogInformation(

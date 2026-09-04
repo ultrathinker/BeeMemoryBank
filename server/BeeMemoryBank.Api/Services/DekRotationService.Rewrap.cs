@@ -24,12 +24,15 @@ public partial class DekRotationService
         bool isInitiator,
         int? initiatorSlotId = null,
         byte[]? newWrappedSlotDek = null,
-        byte[]? newWrappedSlotIv = null)
+        byte[]? newWrappedSlotIv = null,
+        string? chainEncryptedNewDekB64 = null,
+        string? chainIvB64 = null)
     {
         return DekRewrapper.RewrapAllAsync(
             _connFactory, _sessionService,
             oldDek, newDek, newEpoch, commitEventId,
             isInitiator, initiatorSlotId, newWrappedSlotDek, newWrappedSlotIv,
+            chainEncryptedNewDekB64, chainIvB64,
             progress: (step, pct, msg) =>
             {
                 _progress.Update(step, pct, msg);

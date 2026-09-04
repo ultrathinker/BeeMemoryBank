@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
@@ -270,6 +271,98 @@ public class DekRotationFlowTests : IAsyncLifetime
         return await PollProgressAsync(
             step => step == DekRotationFlowStep.Completed,
             timeout: TimeSpan.FromSeconds(60));
+    }
+
+    [Fact]
+    public async Task LazyRewrap_StillWalksTheChainAfterTheCommitEventIsCompactedAway()
+    {
+        // The lockout this closes. A peer that auto-applies a rotation keeps its users' key slots
+        // wrapped under the OLD DEK and re-wraps each one lazily at that user's next login, by
+        // walking the Applied rotations and unwrapping the next DEK with the previous one. Each
+        // link was read out of the dek_rotation_commit event in tbl_event — and those rows do not
+        // last: compaction deletes everything at or below the checkpoint, and the initiator
+        // compacts automatically right after rotating. Once the row was gone the walk could not
+        // start, reachedTarget stayed false, and that user could never unlock that node again.
+        //
+        // Deleting the commit event outright is exactly what compaction does to it.
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        var slotRepo = _factory.Services.GetRequiredService<IKeySlotRepository>();
+        var session = _factory.Services.GetRequiredService<SessionService>();
+
+        // Capture the PRE-rotation DEK: it is what a peer's untouched slot still unwraps to, and
+        // therefore where the walk has to start from.
+        var slotBefore = (await slotRepo.GetAllAsync()).Single(x => x.SlotType == "user");
+        var kek = KeyDerivation.DeriveKek(
+            Password, slotBefore.Salt!,
+            slotBefore.ArgonMemory!.Value, slotBefore.ArgonIterations!.Value, slotBefore.ArgonParallelism!.Value);
+        var preRotationDek = MasterKeyManager.UnwrapMasterDek(slotBefore.EncryptedMasterDek, slotBefore.IV, kek);
+
+        var proposeResp = await _client.PostAsJsonAsync("/api/dek-rotation/propose",
+            new { masterPassword = Password });
+        proposeResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var proposeBody = await proposeResp.Content.ReadFromJsonAsync<JsonElement>();
+        var commitEventId = proposeBody.GetProperty("commitEventId").GetGuid().ToString();
+
+        var acceptResp = await _client.PostAsJsonAsync("/api/dek-rotation/accept",
+            new { commitEventId, masterPassword = Password });
+        acceptResp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        (await PollProgressAsync(step => step == DekRotationFlowStep.Completed,
+            timeout: TimeSpan.FromSeconds(60)))
+            .Should().BeTrue("rotation should complete within timeout");
+
+        // The link is on the state row, written in the same statement that marked the rotation
+        // Applied — so a row claiming Applied can never be one the walk cannot get past.
+        byte[] currentSentinel;
+        using (var conn = connFactory.CreateConnection())
+        {
+            var row = await conn.QuerySingleAsync<ChainRow>(
+                @"SELECT chain_encrypted_new_dek AS Enc, chain_iv AS Iv, state AS State
+                  FROM tbl_dek_rotation_state WHERE event_id = @id COLLATE NOCASE",
+                new { id = commitEventId });
+
+            row.State.Should().Be("APPLIED");
+            row.Enc.Should().NotBeNullOrEmpty("the chain link must be stored locally, not only in the event log");
+            row.Iv.Should().NotBeNullOrEmpty();
+
+            // BLOB, not text — MasterKeyManager.ComputeSentinel writes raw bytes.
+            currentSentinel = await conn.ExecuteScalarAsync<byte[]>(
+                "SELECT sentinel_value FROM tbl_node_identity") ?? [];
+
+            // Now do what compaction does to it.
+            var deleted = await conn.ExecuteAsync(
+                "DELETE FROM tbl_event WHERE event_id = @id COLLATE NOCASE", new { id = commitEventId });
+            deleted.Should().Be(1, "the commit event must actually have been there to delete");
+        }
+
+        currentSentinel.Should().NotBeEmpty();
+
+        // A slot still holding the pre-rotation DEK must reach the current sentinel with the event
+        // log gone. Before migration 020 this returned Success=false and the user was locked out.
+        var rewrap = _factory.Services.GetRequiredService<ILazySlotRewrapService>();
+        var slotAfter = (await slotRepo.GetAllAsync()).Single(x => x.SlotType == "user");
+
+        LazyRewrapResult result;
+        try
+        {
+            result = await rewrap.TryRewrapAsync(slotAfter, kek, preRotationDek, currentSentinel);
+        }
+        finally
+        {
+            Array.Clear(preRotationDek);
+            Array.Clear(kek);
+        }
+
+        result.Success.Should().BeTrue(
+            "the rotation chain must stay walkable from the local state row after compaction has " +
+            "removed the commit event it originally came from");
+    }
+
+    private sealed class ChainRow
+    {
+        public string? Enc { get; set; }
+        public string? Iv { get; set; }
+        public string State { get; set; } = "";
     }
 
     [Fact]

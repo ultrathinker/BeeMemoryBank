@@ -226,9 +226,16 @@ public partial class DekRotationService
         {
             var (newEncDek, newIv) = MasterKeyManager.WrapMasterDek(newDek, localKek);
 
+            // The initiator stores the chain material too. Its own slot is re-wrapped right here
+            // so it never needs the chain itself — but a user who logs in on THIS node for the
+            // first time after a rotation goes through the same lazy walk, and the initiator is
+            // also the node that compacts immediately afterwards, which is what deletes the events
+            // the walk used to read.
             var (agentsDeleted, _) = await RewrapDestructiveCoreAsync(
                 oldDek, newDek, payload.NewDekEpoch, commitEventId,
-                isInitiator: true, initiatorSlot.SlotId, newEncDek, newIv);
+                isInitiator: true, initiatorSlot.SlotId, newEncDek, newIv,
+                chainEncryptedNewDekB64: payload.EncryptedNewDek,
+                chainIvB64: payload.Iv);
 
             var auditRepo = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
             await auditRepo.LogAsync(
