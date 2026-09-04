@@ -49,28 +49,59 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     public async Task<List<Folder>> GetChildrenAsync(string? parentPath)
     {
         using var conn = OpenConnection();
-        IEnumerable<Folder> result;
+        var parameters = new DynamicParameters();
+
+        // Folder-visibility ACL (deny/allow prefixes PLUS ancestor stubs) pushed into SQL instead
+        // of the in-memory _holder.Scope.FilterFolders(...) pass this used to do after fetching
+        // every child row.
+        var visibilityPredicate = _holder.Scope.BuildFolderVisibilityPredicate("f.path", "acl");
+        var aclClause = visibilityPredicate != null ? $"AND ({visibilityPredicate.Sql}) " : "";
+        if (visibilityPredicate != null)
+            foreach (var (key, value) in visibilityPredicate.Parameters)
+                parameters.Add(key, value);
+
+        string sql;
         if (parentPath == null)
         {
-            result = await conn.QueryAsync<Folder>(
-                $"SELECT {SelectCols} FROM tbl_folder f WHERE f.parent_path IS NULL AND f.status = 'A' ORDER BY (substr(f.name,1,1)='_') DESC, f.name",
-                null);
+            sql = $"SELECT {SelectCols} FROM tbl_folder f WHERE f.parent_path IS NULL AND f.status = 'A' {aclClause}ORDER BY (substr(f.name,1,1)='_') DESC, f.name";
         }
         else
         {
-            result = await conn.QueryAsync<Folder>(
-                $"SELECT {SelectCols} FROM tbl_folder f WHERE f.parent_path = @parentPath AND f.status = 'A' ORDER BY (substr(f.name,1,1)='_') DESC, f.name",
-                new { parentPath });
+            sql = $"SELECT {SelectCols} FROM tbl_folder f WHERE f.parent_path = @parentPath AND f.status = 'A' {aclClause}ORDER BY (substr(f.name,1,1)='_') DESC, f.name";
+            parameters.Add("parentPath", parentPath);
         }
-        return _holder.Scope.FilterFolders(result.ToList());
+
+        var result = await conn.QueryAsync<Folder>(sql, parameters);
+        return result.ToList();
     }
 
-    public async Task<List<Folder>> GetAllActiveAsync()
+    public async Task<List<Folder>> GetAllActiveAsync(string? pathPrefix = null)
     {
         using var conn = OpenConnection();
-        var folders = (await conn.QueryAsync<Folder>(
-            $"SELECT {SelectCols} FROM tbl_folder f WHERE f.status = 'A' ORDER BY f.path")).ToList();
-        return _holder.Scope.FilterFolders(folders);
+        var parameters = new DynamicParameters();
+
+        // Same ACL pushdown as GetChildrenAsync above -- see its comment.
+        var visibilityPredicate = _holder.Scope.BuildFolderVisibilityPredicate("f.path", "acl");
+        var aclClause = visibilityPredicate != null ? $"AND ({visibilityPredicate.Sql}) " : "";
+        if (visibilityPredicate != null)
+            foreach (var (key, value) in visibilityPredicate.Parameters)
+                parameters.Add(key, value);
+
+        // Optional subtree narrowing, mirroring ArticleRepository.ListAsync's own treePath
+        // handling: null/"/" means the whole vault (pre-existing unbounded contract), anything
+        // else additionally restricts to that folder and its descendants.
+        var subtreeClause = "";
+        if (!string.IsNullOrEmpty(pathPrefix) && pathPrefix != "/")
+        {
+            subtreeClause = "AND (f.path = @pathPrefix OR f.path LIKE @pathPrefixLike ESCAPE '\\') ";
+            var escapedPrefix = pathPrefix.TrimEnd('/').Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "/%";
+            parameters.Add("pathPrefix", pathPrefix);
+            parameters.Add("pathPrefixLike", escapedPrefix);
+        }
+
+        var sql = $"SELECT {SelectCols} FROM tbl_folder f WHERE f.status = 'A' {subtreeClause}{aclClause}ORDER BY f.path";
+        var folders = (await conn.QueryAsync<Folder>(sql, parameters)).ToList();
+        return folders;
     }
 
     public async Task<int> CountAsync()

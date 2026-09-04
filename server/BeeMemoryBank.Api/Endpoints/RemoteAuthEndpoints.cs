@@ -81,23 +81,36 @@ public static class RemoteAuthEndpoints
                 return Results.Json(new ErrorResponse("Owner session is locked"), statusCode: 423);
 
             var folders = await folderRepo.GetAllActiveAsync();
-            var articles = await articleRepo.ListAsync();
 
             HashSet<string> denyPaths = [], allowPaths = [], roPaths = [];
             if (!isSuperadmin)
                 (denyPaths, allowPaths, roPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
 
-            var result = folders
+            var visibleFolders = folders
                 .Where(f => isSuperadmin || !FolderAccessService.IsAccessDenied(denyPaths, allowPaths, f.Path))
                 .Where(f => f.RemoteSubscriptionId == null) // only local-original folders are mirrorable
-                .Select(f => new
+                .ToList();
+
+            // Per-folder article count via a SQL COUNT(*) scoped to each folder's own subtree
+            // (ArticleRepository.CountAsync), instead of loading every article in the vault into
+            // memory (articleRepo.ListAsync() with no filter) just to re-count them here. Ambient
+            // CallerScopeHolder.Scope was set by CallerScopeMiddleware from this same
+            // userId/isSuperadmin (see its own ACL resolution), so CountAsync's SQL-pushed ACL
+            // predicate applies the exact same deny/allow rules the old in-memory
+            // articles.Count(...) implicitly got from ListAsync()'s own ambient-scope filtering —
+            // this reproduces the prior counts exactly, not just "a reasonable count".
+            var folderCounts = new List<(Folder Folder, int Count)>();
+            foreach (var f in visibleFolders)
+                folderCounts.Add((f, await articleRepo.CountAsync(f.Path)));
+
+            var result = folderCounts
+                .Select(fc => new
                 {
-                    id = f.Id,
-                    path = f.Path,
-                    name = f.Name,
-                    isReadOnly = !isSuperadmin && FolderAccessService.IsReadOnlyForCaller(roPaths, f.Path),
-                    articleCount = articles.Count(a => (a.TreePath ?? "/") == f.Path
-                                                    || (a.TreePath ?? "/").StartsWith(f.Path.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase))
+                    id = fc.Folder.Id,
+                    path = fc.Folder.Path,
+                    name = fc.Folder.Name,
+                    isReadOnly = !isSuperadmin && FolderAccessService.IsReadOnlyForCaller(roPaths, fc.Folder.Path),
+                    articleCount = fc.Count
                 })
                 .OrderBy(f => f.path)
                 .ToList();

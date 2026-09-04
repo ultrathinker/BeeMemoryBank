@@ -27,6 +27,11 @@ public sealed class SystemCallerScope : ICallerScope
     // share one constant fingerprint. Collapsing every full-access caller onto the same key is safe
     // AND maximizes cache sharing among them.
     public string ReadScopeFingerprint => "sys";
+
+    // No ACL at all -- every row already passes, so no WHERE clause is needed.
+    public AclSqlPredicate? BuildReadAclPredicate(string pathExpr, string paramPrefix) => null;
+
+    public AclSqlPredicate? BuildFolderVisibilityPredicate(string pathExpr, string paramPrefix) => null;
 }
 
 /// <summary>
@@ -55,6 +60,15 @@ public sealed class DenyAllScope : ICallerScope
     // Two deny-all callers both see nothing, so they share one constant fingerprint. Sharing is
     // safe because the shared (empty) result is identical for both.
     public string ReadScopeFingerprint => "denyall";
+
+    private static readonly Dictionary<string, object?> NoParameters = new();
+
+    // "1 = 0" -- nothing is ever visible, matching FilterArticles/FilterFolders' unconditional [].
+    public AclSqlPredicate? BuildReadAclPredicate(string pathExpr, string paramPrefix) =>
+        new("1 = 0", NoParameters);
+
+    public AclSqlPredicate? BuildFolderVisibilityPredicate(string pathExpr, string paramPrefix) =>
+        new("1 = 0", NoParameters);
 }
 
 public sealed class HttpCallerScope : ICallerScope
@@ -123,6 +137,12 @@ public sealed class HttpCallerScope : ICallerScope
     // how many ACL paths a caller carries; the hash input is order-independent (sets are sorted) so
     // two scopes built with differently-ordered but equivalent sets hash identically.
     public string ReadScopeFingerprint => _readScopeFingerprint;
+
+    public AclSqlPredicate? BuildReadAclPredicate(string pathExpr, string paramPrefix) =>
+        IsSuperadmin ? null : FolderAccessService.BuildReadAclPredicate(_denyPaths, _allowPaths, pathExpr, paramPrefix);
+
+    public AclSqlPredicate? BuildFolderVisibilityPredicate(string pathExpr, string paramPrefix) =>
+        IsSuperadmin ? null : FolderAccessService.BuildFolderVisibilityPredicate(_denyPaths, _allowPaths, pathExpr, paramPrefix);
 
     private static string ComputeReadScopeFingerprint(bool isSuperadmin, HashSet<string> denyPaths, HashSet<string> allowPaths)
     {

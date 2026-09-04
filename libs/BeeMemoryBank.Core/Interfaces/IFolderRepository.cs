@@ -7,7 +7,18 @@ public interface IFolderRepository
     Task<Folder?> GetByIdAsync(Guid id, bool includeDeleted = false);
     Task<Folder?> GetByPathAsync(string path);
     Task<List<Folder>> GetChildrenAsync(string? parentPath);  // null = root-level folders
-    Task<List<Folder>> GetAllActiveAsync();
+
+    /// <summary>
+    /// Lists active folders, optionally scoped to one subtree. Folder-visibility ACL filtering
+    /// (deny/allow prefix rules, PLUS ancestor "stubs" of an allowed subtree — see
+    /// <see cref="Interfaces.ICallerScope.BuildFolderVisibilityPredicate"/>) is pushed into the SQL
+    /// WHERE clause instead of a full unbounded load followed by an in-memory
+    /// <c>_holder.Scope.FilterFolders(...)</c> pass. <paramref name="pathPrefix"/> null or "/"
+    /// (the default) means the whole vault, matching the pre-existing unbounded contract exactly;
+    /// a non-root value additionally restricts to that folder and its descendants, mirroring
+    /// <see cref="IArticleRepository.ListAsync"/>'s own treePath narrowing.
+    /// </summary>
+    Task<List<Folder>> GetAllActiveAsync(string? pathPrefix = null);
     Task<int> CountAsync();
     Task CreateAsync(Folder folder);
     Task UpdateAsync(Folder folder);

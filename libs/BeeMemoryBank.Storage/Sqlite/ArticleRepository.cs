@@ -69,32 +69,83 @@ public class ArticleRepository(
         return await conn.QuerySingleOrDefaultAsync<Article>(sql, new { id });
     }
 
-    public async Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null)
+    public async Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null, int? limit = null, int offset = 0)
     {
         using var conn = OpenConnection();
-        string sql;
-        object? param;
+        var (whereClause, parameters) = BuildListWhereClause(treePath, updatedAfter);
+
+        var orderBy = treePath == "/"
+            ? "ORDER BY (substr(a.title,1,1)='_') DESC, a.title"
+            : "ORDER BY f.path, (substr(a.title,1,1)='_') DESC, a.title";
+        var sql = $"SELECT {SelectCols} {FromClause} {whereClause}{orderBy}";
+
+        // Pagination applied by the database (LIMIT/OFFSET), not after a full fetch. offset is
+        // only meaningful together with a non-null limit -- an offset-only caller still gets the
+        // whole unbounded result, matching TreeService.GetTreePathsAsync's own forgiving contract.
+        if (limit.HasValue)
+        {
+            sql += " LIMIT @limit OFFSET @offset";
+            parameters.Add("limit", limit.Value);
+            parameters.Add("offset", offset);
+        }
+
+        var articles = (await conn.QueryAsync<Article>(sql, parameters)).ToList();
+        return articles;
+    }
+
+    /// <summary>
+    /// Count-only companion to <see cref="ListAsync"/>, for a caller that needs "how many rows
+    /// match" (e.g. a pagination response's <c>total</c>/<c>truncated</c> fields) WITHOUT
+    /// hydrating every matching row just to call <c>.Count</c> on the result -- which would defeat
+    /// the entire point of paginating in the first place. Same WHERE clause (treePath/updatedAfter
+    /// narrowing + ACL predicate) as <see cref="ListAsync"/>, no SELECT columns, no ORDER BY, no
+    /// LIMIT/OFFSET.
+    /// </summary>
+    public async Task<int> CountAsync(string? treePath = null, DateTime? updatedAfter = null)
+    {
+        using var conn = OpenConnection();
+        var (whereClause, parameters) = BuildListWhereClause(treePath, updatedAfter);
+        return await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*) FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id {whereClause}", parameters);
+    }
+
+    /// <summary>Shared WHERE-clause builder for <see cref="ListAsync"/> and <see cref="CountAsync"/> --
+    /// see ListAsync's own comments for why ACL filtering and treePath narrowing both live in SQL.</summary>
+    private (string WhereClause, DynamicParameters Parameters) BuildListWhereClause(string? treePath, DateTime? updatedAfter)
+    {
+        var parameters = new DynamicParameters();
+        parameters.Add("updatedAfter", updatedAfter);
         var updatedAfterClause = updatedAfter.HasValue ? "AND a.updated_at > @updatedAfter " : "";
 
+        // ACL filtering pushed into the WHERE clause instead of a full load + in-memory
+        // _holder.Scope.FilterArticles(...) -- the whole point of this method at large-vault
+        // scale. Deny/allow prefix rules translate 1:1 to SQL "= .. OR LIKE 'prefix%'" predicates
+        // (see FolderAccessService.BuildReadAclPredicate); SuperAdmin/System scope returns null
+        // here and the ACL clause is skipped entirely, exactly like FilterArticles' own early
+        // return for an unrestricted scope.
+        var aclPredicate = _holder.Scope.BuildReadAclPredicate("COALESCE(f.path, '/')", "acl");
+        var aclClause = aclPredicate != null ? $"AND ({aclPredicate.Sql}) " : "";
+        if (aclPredicate != null)
+            foreach (var (key, value) in aclPredicate.Parameters)
+                parameters.Add(key, value);
+
+        string whereClause;
         if (treePath == null)
         {
-            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' {updatedAfterClause}ORDER BY f.path, (substr(a.title,1,1)='_') DESC, a.title";
-            param = new { updatedAfter };
+            whereClause = $"WHERE a.status = 'A' {updatedAfterClause}{aclClause}";
         }
         else if (treePath == "/")
         {
-            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND (f.path = '/' OR a.folder_id IS NULL) {updatedAfterClause}ORDER BY (substr(a.title,1,1)='_') DESC, a.title";
-            param = new { updatedAfter };
+            whereClause = $"WHERE a.status = 'A' AND (f.path = '/' OR a.folder_id IS NULL) {updatedAfterClause}{aclClause}";
         }
         else
         {
-            sql = $"SELECT {SelectCols} {FromClause} WHERE a.status = 'A' AND (f.path = @treePath OR f.path LIKE @prefix ESCAPE '\\') {updatedAfterClause}ORDER BY f.path, (substr(a.title,1,1)='_') DESC, a.title";
+            whereClause = $"WHERE a.status = 'A' AND (f.path = @treePath OR f.path LIKE @prefix ESCAPE '\\') {updatedAfterClause}{aclClause}";
             var escapedPrefix = treePath.TrimEnd('/').Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "/%";
-            param = new { treePath, prefix = escapedPrefix, updatedAfter };
+            parameters.Add("treePath", treePath);
+            parameters.Add("prefix", escapedPrefix);
         }
 
-        var articles = (await conn.QueryAsync<Article>(sql, param)).ToList();
-        return _holder.Scope.FilterArticles(articles);
+        return (whereClause, parameters);
     }
 
     public async Task<List<Article>> SearchAsync(string query)

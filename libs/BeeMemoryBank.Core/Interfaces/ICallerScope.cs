@@ -38,4 +38,37 @@ public interface ICallerScope
     // paths are deliberately excluded: they affect write-denial, never the set of rows a search
     // returns. Used by SearchQueryCache (WP-17) to build an ACL-safe cache key.
     string ReadScopeFingerprint { get; }
+
+    /// <summary>
+    /// Builds a parameterized SQL boolean expression equivalent to <c>!IsAccessDenied(path)</c>
+    /// for every row whose path is given by the SQL expression <paramref name="pathExpr"/> (e.g.
+    /// <c>"a.tree_path"</c> or <c>"COALESCE(f.path, '/')"</c>) — letting deny/allow-prefix ACL
+    /// filtering run IN the database instead of loading every row and filtering in memory
+    /// (<see cref="FilterArticles"/>). Returns <see langword="null"/> when no predicate is needed
+    /// at all (every row already passes — SuperAdmin/System scope, or an HttpCallerScope with
+    /// empty deny AND allow sets): callers must simply omit the AND clause in that case, not AND
+    /// against an empty string.
+    ///
+    /// <para>
+    /// <paramref name="paramPrefix"/> namespaces every bound parameter name this generates, so
+    /// multiple calls inside one query (e.g. one for a folder-path column, one for an
+    /// article-tree-path column in the same UNION) never collide — pass a distinct prefix per
+    /// call site when a single query touches more than one path column.
+    /// </para>
+    ///
+    /// <para>
+    /// Read-only paths are NOT part of this predicate — exactly like <see cref="IsAccessDenied"/>,
+    /// read-only-ness affects write-denial, never which rows a read returns.
+    /// </para>
+    /// </summary>
+    AclSqlPredicate? BuildReadAclPredicate(string pathExpr, string paramPrefix);
+
+    /// <summary>
+    /// Same idea as <see cref="BuildReadAclPredicate"/>, but for FOLDER paths specifically: also
+    /// true for an ancestor "stub" of an allowed subtree (see <see cref="IsNavigable"/> and
+    /// <see cref="FilterFolders"/>) — shown so an AllowList caller can navigate down to their
+    /// allowed subtree, even though the ancestor path itself may not individually pass the ACL.
+    /// Returns <see langword="null"/> under the same conditions as <see cref="BuildReadAclPredicate"/>.
+    /// </summary>
+    AclSqlPredicate? BuildFolderVisibilityPredicate(string pathExpr, string paramPrefix);
 }
