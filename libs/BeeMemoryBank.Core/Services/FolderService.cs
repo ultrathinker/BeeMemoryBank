@@ -300,13 +300,22 @@ public class FolderService(
         // version of one subfolder still wins for that subfolder instead of being flattened by a
         // coarse subtree delete. ListSoftDeletedByCascadeOpIdAsync returns exactly the rows this
         // op just marked (id and path), so the events describe what actually happened.
+        //
+        // Each folder's row is then stamped with the version of its OWN event. The bulk
+        // SoftDeleteByPathPrefixAsync above cannot do it: it runs before any event exists, and the
+        // ticks are per folder. Without the stamp every row in the cascade keeps whatever version
+        // its last rename left behind, and the applier's already-deleted branch — which compares an
+        // incoming delete against tbl_folder.lamport_ts — answers with a number describing a
+        // rename that happened at an unrelated time.
         foreach (var cascaded in await folderRepo.ListSoftDeletedByCascadeOpIdAsync(cascadeOpId, folder.Path))
         {
             if (cascaded.Id == folderId) continue; // logged below as the named folder
-            await eventLogger.LogFolderDeleteAsync(cascaded.Id, cascaded.Path, deletedAt);
+            var cascadedVersion = await eventLogger.LogFolderDeleteAsync(cascaded.Id, cascaded.Path, deletedAt);
+            await folderRepo.SetDeleteVersionAsync(cascaded.Id, cascadedVersion);
         }
 
-        await eventLogger.LogFolderDeleteAsync(folderId, folder.Path, deletedAt);
+        var namedVersion = await eventLogger.LogFolderDeleteAsync(folderId, folder.Path, deletedAt);
+        await folderRepo.SetDeleteVersionAsync(folderId, namedVersion);
     }
 
     // Single source of truth in TreePathCanonicalizer — rejects "." / ".."

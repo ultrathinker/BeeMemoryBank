@@ -206,9 +206,14 @@ public class RemoteEventApplier(
             return; // require manual intervention rather than silent mass delete
         }
 
+        // These rows mirror another node's content and are not replicated onward, so no event is
+        // written for them — but they still sit in replicated tables, so they still need a version
+        // a comparison can be made against. A fresh local tick is the honest one: this node did
+        // just decide, now, that the row is gone.
+        var identity = await nodeRepo.GetAsync();
         foreach (var orphan in existingArticlesBySubId.Where(kv => !seenArticleOriginIds.Contains(kv.Key)).Select(kv => kv.Value))
         {
-            await articleRepo.SoftDeleteAsync(orphan.Id);
+            await articleRepo.SoftDeleteAsync(orphan.Id, RowVersion.Of(clock.Tick(), identity?.NodeId));
         }
         foreach (var orphan in existingBySubId
                      .Where(kv => !seenFolderOriginIds.Contains(kv.Key))
@@ -216,6 +221,7 @@ public class RemoteEventApplier(
                      .OrderByDescending(f => f.Path.Length))
         {
             await folderRepo.SoftDeleteAsync(orphan.Id, DateTime.UtcNow);
+            await folderRepo.SetDeleteVersionAsync(orphan.Id, RowVersion.Of(clock.Tick(), identity?.NodeId));
         }
     }
 

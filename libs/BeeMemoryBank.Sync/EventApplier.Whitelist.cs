@@ -191,8 +191,9 @@ public partial class EventApplier
         if (existing != null)
         {
             // Alive row: LWW
-            var existingNodeId = existing.SourceNodeId ?? Guid.Empty;
-            if (!ConflictResolver.IncomingWins(existing.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+            if (!ConflictResolver.IncomingWins(
+                    RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
+                    new RowVersion(evt.LamportTs, evt.NodeId)))
                 return;
             // LWW-wins must update CONTENT too — old code only bumped lamport, leaving stale
             // text/ciphertext attached to a newer timestamp. Future comparisons would see
@@ -242,15 +243,22 @@ public partial class EventApplier
 
         if (existing.DeletedAt != null)
         {
-            // Already soft-deleted — keep the higher lamport
-            if (evt.LamportTs > (existing.DeleteLamportTs ?? 0))
+            // Already soft-deleted — keep the winning delete, not merely the higher lamport.
+            // tbl_comment stores delete_node_id alongside delete_lamport_ts precisely so this
+            // comparison can be made the same way as every other one; it just was not using it.
+            if (ConflictResolver.IncomingWins(
+                    RowVersion.Of(existing.DeleteLamportTs ?? 0, existing.DeleteNodeId),
+                    new RowVersion(evt.LamportTs, evt.NodeId)))
+            {
                 await commentRepo.SoftDeleteAsync(p.CommentId, evt.LamportTs, evt.NodeId);
+            }
             return;
         }
 
         // Alive comment: LWW
-        var existingNodeId = existing.SourceNodeId ?? Guid.Empty;
-        if (!ConflictResolver.IncomingWins(existing.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+        if (!ConflictResolver.IncomingWins(
+                RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
+                new RowVersion(evt.LamportTs, evt.NodeId)))
             return; // Delete loses to existing create
 
         // Delete wins: soft-delete

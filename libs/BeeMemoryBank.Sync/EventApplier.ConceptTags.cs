@@ -72,8 +72,9 @@ public partial class EventApplier
         var existing = await mediaRepo.GetByIdAsync(p.MediaId, includeDeleted: true);
         if (existing == null) return;
         if (existing.ArticleId != null) return;
-        var existingNodeId = existing.SourceNodeId ?? Guid.Empty;
-        if (!ConflictResolver.IncomingWins(existing.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+        if (!ConflictResolver.IncomingWins(
+                RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
+                new RowVersion(evt.LamportTs, evt.NodeId)))
             return;
         await mediaRepo.LinkOrphansToArticleAsync(new[] { p.MediaId }, p.ArticleId, evt.LamportTs, evt.NodeId);
     }

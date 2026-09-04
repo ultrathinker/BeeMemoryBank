@@ -17,8 +17,9 @@ public partial class EventApplier
         if (existing != null)
         {
             // Already exists — apply LWW: incoming wins if its timestamp is newer
-            var existingNodeId = existing.SourceNodeId ?? Guid.Empty;
-            if (!ConflictResolver.IncomingWins(existing.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+            if (!ConflictResolver.IncomingWins(
+                    RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
+                    new RowVersion(evt.LamportTs, evt.NodeId)))
                 return; // local wins, skip
 
             existing.Path = p.Path;
@@ -65,8 +66,9 @@ public partial class EventApplier
         }
 
         // LWW check
-        var existingNodeId = folder.SourceNodeId ?? Guid.Empty;
-        if (!ConflictResolver.IncomingWins(folder.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+        if (!ConflictResolver.IncomingWins(
+                RowVersion.Of(folder.LamportTs, folder.SourceNodeId),
+                new RowVersion(evt.LamportTs, evt.NodeId)))
             return; // local wins, skip
 
         await folderRepo.RenamePathAsync(p.OldPath, p.NewPath, p.FolderId, evt.LamportTs, evt.NodeId, p.UpdatedAt);
@@ -89,7 +91,14 @@ public partial class EventApplier
 
         if (folder.Status == "D")
         {
-            if (evt.LamportTs > folder.LamportTs)
+            // Already deleted: advance the tombstone metadata only if this delete actually
+            // supersedes the recorded one. Through the comparator, not a bare `>`, so two nodes
+            // that deleted the same folder at the same Lamport tick agree on which delete the row
+            // ends up attributed to — otherwise the row's source_node_id depends on arrival order,
+            // and a later event comparing against it gets a different answer on each node.
+            if (ConflictResolver.IncomingWins(
+                    RowVersion.Of(folder.LamportTs, folder.SourceNodeId),
+                    new RowVersion(evt.LamportTs, evt.NodeId)))
             {
                 folder.LamportTs = evt.LamportTs;
                 folder.SourceNodeId = evt.NodeId;
@@ -100,8 +109,9 @@ public partial class EventApplier
         }
 
         // LWW check: skip stale delete events (matches pattern in ApplyFolderRenameAsync)
-        var existingNodeId = folder.SourceNodeId ?? Guid.Empty;
-        if (!ConflictResolver.IncomingWins(folder.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+        if (!ConflictResolver.IncomingWins(
+                RowVersion.Of(folder.LamportTs, folder.SourceNodeId),
+                new RowVersion(evt.LamportTs, evt.NodeId)))
             return;
 
         // H5: detach articles BEFORE marking the folder deleted, not after. ClearFolderIdUnscopedAsync is a
@@ -114,6 +124,9 @@ public partial class EventApplier
         // status still 'A', so the retry re-runs this whole method and completes it.
         await articleRepo.ClearFolderIdUnscopedAsync(p.FolderId);
         await folderRepo.SoftDeleteAsync(p.FolderId, p.DeletedAt);
+        // Same reason as the article path: the already-deleted branch at the top of this method
+        // compares against this row's version, so it has to be the delete's, not the last rename's.
+        await folderRepo.SetDeleteVersionAsync(p.FolderId, new RowVersion(evt.LamportTs, evt.NodeId));
         await folderAccess.InvalidateCacheForFolderAsync(p.FolderId);
     }
 
@@ -124,8 +137,9 @@ public partial class EventApplier
         var existing = await mediaRepo.GetByIdAsync(p.MediaId, includeDeleted: true);
         if (existing != null)
         {
-            var existingNodeId = existing.SourceNodeId ?? Guid.Empty;
-            if (!ConflictResolver.IncomingWins(existing.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+            if (!ConflictResolver.IncomingWins(
+                    RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
+                    new RowVersion(evt.LamportTs, evt.NodeId)))
                 return;
             // Media ciphertext is immutable; only advance LWW metadata so later
             // delete events with stale timestamps are rejected correctly.
@@ -170,8 +184,9 @@ public partial class EventApplier
         if (existing == null || existing.Status == "D") return;
 
         // LWW check: skip stale delete events
-        var existingNodeId = existing.SourceNodeId ?? Guid.Empty;
-        if (!ConflictResolver.IncomingWins(existing.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+        if (!ConflictResolver.IncomingWins(
+                RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
+                new RowVersion(evt.LamportTs, evt.NodeId)))
             return;
 
         await mediaRepo.SoftDeleteAsync(p.MediaId);

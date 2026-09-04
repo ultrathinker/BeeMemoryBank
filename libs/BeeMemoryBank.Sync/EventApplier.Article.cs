@@ -50,10 +50,26 @@ public partial class EventApplier
         // Tombstone gate: article was deleted before; LWW vs delete's lamport.
         // Wave 2 audit: claude-A #2 (zombie article from out-of-order CREATE-after-DELETE).
         var tombstone = await tombstoneRepo.GetByEntityIdAsync(articleId);
-        if (tombstone != null && tombstone.LamportTs >= evt.LamportTs)
+        // Through the one comparator, with the tombstone's own node id — not a bare `>=`.
+        //
+        // The bare version dropped the event whenever the timestamps merely TIED, and a tie is not
+        // the rare case: two nodes that were in sync and each write once produce the same Lamport
+        // number every time. A delete on A and an edit on B, both at L=11, therefore resolved one
+        // way here (tombstone always wins) and the other way in the delete path below (which does
+        // use the tiebreak) — so the article ended alive on one node and gone on the other, for
+        // half of all node-id pairs, deterministically. Neither node ever reconciles it: both
+        // believe they applied the newest write.
+        //
+        // tbl_tombstone has carried source_node_id since the Wave 2 rerun; only this gate was not
+        // reading it.
+        if (tombstone != null &&
+            !ConflictResolver.IncomingWins(
+                RowVersion.Of(tombstone.LamportTs, tombstone.SourceNodeId),
+                new RowVersion(evt.LamportTs, evt.NodeId)))
         {
-            logger.LogInformation("ArticleCreate {ArticleId} dropped: tombstone lamport={Tombstone} >= event lamport={Event}",
-                articleId, tombstone.LamportTs, evt.LamportTs);
+            logger.LogInformation(
+                "ArticleCreate {ArticleId} dropped: tombstone version ({TombstoneTs}, {TombstoneNode}) wins over event ({EventTs}, {EventNode})",
+                articleId, tombstone.LamportTs, tombstone.SourceNodeId, evt.LamportTs, evt.NodeId);
             return;
         }
 
@@ -142,10 +158,16 @@ public partial class EventApplier
         var p = Deserialize<ArticleEventPayload>(evt.Payload);
 
         var tombstone = await tombstoneRepo.GetByEntityIdAsync(articleId);
-        if (tombstone != null && tombstone.LamportTs >= evt.LamportTs)
+        // Same rule as the create gate above, and it has to be the same or the two disagree about
+        // the same pair of events depending only on which one arrived.
+        if (tombstone != null &&
+            !ConflictResolver.IncomingWins(
+                RowVersion.Of(tombstone.LamportTs, tombstone.SourceNodeId),
+                new RowVersion(evt.LamportTs, evt.NodeId)))
         {
-            logger.LogInformation("ArticleUpdate {ArticleId} dropped: tombstone lamport={T} >= event lamport={E}",
-                articleId, tombstone.LamportTs, evt.LamportTs);
+            logger.LogInformation(
+                "ArticleUpdate {ArticleId} dropped: tombstone version ({TombstoneTs}, {TombstoneNode}) wins over event ({EventTs}, {EventNode})",
+                articleId, tombstone.LamportTs, tombstone.SourceNodeId, evt.LamportTs, evt.NodeId);
             return;
         }
 
@@ -157,8 +179,12 @@ public partial class EventApplier
             return;
         }
 
-        var existingNodeId = existing.SourceNodeId ?? Guid.Empty;
-        if (ConflictResolver.IncomingWins(existing.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+        // Named once because the conflict-version row below has to record the SAME version this
+        // comparison just ruled against — that row is how a human recovers the losing body, and it
+        // is worthless if its (lamport, node) does not match what actually lost.
+        var existingVersion = RowVersion.Of(existing.LamportTs, existing.SourceNodeId);
+
+        if (ConflictResolver.IncomingWins(existingVersion, new RowVersion(evt.LamportTs, evt.NodeId)))
         {
             // Incoming event wins — save current as conflict_version (with metadata for recovery).
             // Deliberately OUTSIDE the transaction below and BEFORE it: IConflictVersionRepository
@@ -175,8 +201,8 @@ public partial class EventApplier
                 {
                     Id = Guid.NewGuid(),
                     ArticleId = existing.Id,
-                    SourceNodeId = existingNodeId,
-                    LamportTs = existing.LamportTs,
+                    SourceNodeId = existingVersion.SourceNodeId,
+                    LamportTs = existingVersion.LamportTs,
                     Ciphertext = existingBody.Ciphertext,
                     IV = existingBody.IV,
                     EncryptedDek = existingBody.EncryptedDek,
@@ -292,13 +318,37 @@ public partial class EventApplier
             });
             return;
         }
-        if (existing.Status != "A") return;
+        if (existing.Status != "A")
+        {
+            // Already deleted — but by WHICH delete? Two nodes deleting the same article
+            // independently each apply the other's delete to a row that is already 'D'. Returning
+            // here unconditionally (what this used to do) left each node attributing the row to
+            // its own delete, so the two disagreed about its version forever; a later event at the
+            // same Lamport then resolved differently on each of them. Run the same comparison as
+            // everywhere else and converge on the delete that wins it.
+            var recorded = RowVersion.Of(existing.LamportTs, existing.SourceNodeId);
+            var arriving = new RowVersion(evt.LamportTs, evt.NodeId);
+            if (ConflictResolver.IncomingWins(recorded, arriving))
+            {
+                await tombstoneRepo.CreateAsync(new Tombstone
+                {
+                    ArticleId = articleId,
+                    CreatedAt = p.DeletedAt,
+                    ExpiresAt = p.DeletedAt.AddDays(60),
+                    LamportTs = evt.LamportTs,
+                    SourceNodeId = evt.NodeId
+                });
+                await articleRepo.SetDeleteVersionAsync(articleId, arriving);
+            }
+            return;
+        }
 
         // LWW check: only delete + tombstone if incoming event wins over existing state.
         // A stale delete that loses LWW must NOT create a tombstone — otherwise it would
         // block recreation of an article ID that was never actually deleted (60-day TTL).
-        var existingNodeId = existing.SourceNodeId ?? Guid.Empty;
-        if (!ConflictResolver.IncomingWins(existing.LamportTs, existingNodeId, evt.LamportTs, evt.NodeId))
+        if (!ConflictResolver.IncomingWins(
+                RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
+                new RowVersion(evt.LamportTs, evt.NodeId)))
             return;
 
         // H5: tombstone BEFORE soft-delete, not after. TombstoneRepository.CreateAsync is an
@@ -318,6 +368,9 @@ public partial class EventApplier
             LamportTs = evt.LamportTs,
             SourceNodeId = evt.NodeId
         });
-        await articleRepo.SoftDeleteAsync(articleId);
+        // The row carries the delete's version, not the last edit's — otherwise a peer update
+        // older than this delete still wins ApplyArticleUpdateCoreAsync's comparison and resurrects
+        // the article. The tombstone above guards the create path; this guards the update path.
+        await articleRepo.SoftDeleteAsync(articleId, new RowVersion(evt.LamportTs, evt.NodeId));
     }
 }

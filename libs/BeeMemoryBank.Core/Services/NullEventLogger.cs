@@ -11,7 +11,7 @@ public sealed class NullEventLogger : IEventLogger
 {
     public Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags, IDbTransaction? transaction = null) => Task.CompletedTask;
     public Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags, IDbTransaction? transaction = null) => Task.CompletedTask;
-    public Task LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null) => Task.CompletedTask;
+    public Task<RowVersion> LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null) => Task.FromResult(default(RowVersion));
     public void SignalSync() { }
     public Task LogWhitelistAddAsync(WhitelistEntry entry) => Task.CompletedTask;
     public Task LogWhitelistRevokeAsync(Guid nodeId) => Task.CompletedTask;
@@ -21,7 +21,7 @@ public sealed class NullEventLogger : IEventLogger
     public Task LogCommentDeleteAsync(Guid commentId) => Task.CompletedTask;
     public Task LogFolderCreateAsync(Folder folder) => Task.CompletedTask;
     public Task LogFolderRenameAsync(Guid folderId, string oldPath, string newPath, string newName, string? newParentPath, long lamportTs, DateTime updatedAt) => Task.CompletedTask;
-    public Task LogFolderDeleteAsync(Guid folderId, string path, DateTime deletedAt) => Task.CompletedTask;
+    public Task<RowVersion> LogFolderDeleteAsync(Guid folderId, string path, DateTime deletedAt) => Task.FromResult(default(RowVersion));
     public Task LogMediaCreateAsync(Media media, byte[] ciphertext, System.Data.IDbTransaction? transaction = null) => Task.CompletedTask;
     public Task LogMediaDeleteAsync(Guid mediaId) => Task.CompletedTask;
     public Task LogConceptTagRenameAsync(string oldName, string newName) => Task.CompletedTask;

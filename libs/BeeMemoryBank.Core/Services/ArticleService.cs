@@ -447,8 +447,13 @@ public partial class ArticleService(
             try
             {
                 await mediaRepo.SoftDeleteByArticleIdAsync(id, tx);
-                await articleRepo.SoftDeleteAsync(id, tx);
-                await eventLogger.LogDeleteAsync(id, tx);
+                // Log first, delete second: the log mints the version and the row has to carry
+                // exactly it. Deleting first would mean inventing a version here and hoping the
+                // logger picked the same one — which is the bug this ordering removes, not a
+                // hypothetical. Both writes are inside the caller's transaction, so nothing is
+                // observable in between.
+                var version = await eventLogger.LogDeleteAsync(id, tx);
+                await articleRepo.SoftDeleteAsync(id, version, tx);
 
                 tx.Commit();
             }

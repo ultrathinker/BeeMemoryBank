@@ -31,7 +31,32 @@ public interface IArticleRepository
     /// </summary>
     Task CreateAsync(Article article, IDbTransaction? transaction = null);
     Task UpdateAsync(Article article, IDbTransaction? transaction = null);
-    Task SoftDeleteAsync(Guid id, IDbTransaction? transaction = null);
+    /// <summary>
+    /// Marks the article deleted AND stamps <paramref name="version"/> onto the row.
+    ///
+    /// <para>
+    /// The version is not optional and not derived here, because a soft-deleted row is still a
+    /// replicated row: the applier compares incoming creates and updates against
+    /// <c>tbl_article.lamport_ts</c>/<c>source_node_id</c>. Leaving those at the last EDIT's
+    /// version — which is what this method used to do — means a peer edit older than the delete
+    /// still wins the comparison and flips the row back to 'A'.
+    /// </para>
+    /// </summary>
+    Task SoftDeleteAsync(Guid id, RowVersion version, IDbTransaction? transaction = null);
+
+    /// <summary>
+    /// Stamps <paramref name="version"/> onto a row that is already deleted, for when a SECOND
+    /// delete of the same article turns out to supersede the one already recorded.
+    ///
+    /// <para>
+    /// Two nodes deleting the same article independently is ordinary (two people tidying the same
+    /// page), and each applies the other's delete against a row that is already 'D'. Without this,
+    /// each keeps its own delete's version and the two rows disagree — so a later create or edit
+    /// at the same Lamport is judged against a different node id on each node and lands on one but
+    /// not the other. Converging on the winning delete is what stops that.
+    /// </para>
+    /// </summary>
+    Task SetDeleteVersionAsync(Guid id, RowVersion version);
 
     /// <summary>
     /// Invalidates the process-wide embedding vector cache. Call exactly once, after a transaction

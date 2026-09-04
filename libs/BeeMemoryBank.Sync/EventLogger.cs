@@ -87,7 +87,7 @@ public class EventLogger(
             JsonSerializer.Serialize(payload), transaction: transaction);
     }
 
-    public async Task LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null)
+    public async Task<RowVersion> LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -97,6 +97,8 @@ public class EventLogger(
 
         await AppendEventAsync(identity, EventTypes.ArticleDelete, articleId, lamportTs,
             JsonSerializer.Serialize(payload), transaction: transaction);
+
+        return new RowVersion(lamportTs, identity.NodeId);
     }
 
     public async Task LogWhitelistAddAsync(WhitelistEntry entry)
@@ -207,7 +209,7 @@ public class EventLogger(
             JsonSerializer.Serialize(payload), newPath);
     }
 
-    public async Task LogFolderDeleteAsync(Guid folderId, string path, DateTime deletedAt)
+    public async Task<RowVersion> LogFolderDeleteAsync(Guid folderId, string path, DateTime deletedAt)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -220,6 +222,8 @@ public class EventLogger(
 
         await AppendEventAsync(identity, EventTypes.FolderDelete, null, lamportTs,
             JsonSerializer.Serialize(payload), path);
+
+        return new RowVersion(lamportTs, identity.NodeId);
     }
 
     public async Task LogMediaCreateAsync(Media media, byte[] ciphertext, IDbTransaction? transaction = null)

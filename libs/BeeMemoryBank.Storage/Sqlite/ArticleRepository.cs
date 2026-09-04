@@ -366,7 +366,19 @@ public class ArticleRepository(
         }
     }
 
-    public async Task SoftDeleteAsync(Guid id, System.Data.IDbTransaction? transaction = null)
+    public async Task SetDeleteVersionAsync(Guid id, RowVersion version)
+    {
+        using var conn = OpenConnection();
+        // AND status = 'D': only ever annotates a row that is already gone. No ACL check — the
+        // caller is the sync applier writing the version of an event it already authenticated,
+        // and this writes nothing a reader can see beyond the version columns.
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_article SET lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+               WHERE id = @id AND status = 'D'",
+            new { id, lamportTs = version.LamportTs, sourceNodeId = version.SourceNodeId });
+    }
+
+    public async Task SoftDeleteAsync(Guid id, RowVersion version, System.Data.IDbTransaction? transaction = null)
     {
         if (transaction != null)
         {
@@ -379,8 +391,11 @@ public class ArticleRepository(
             }
             var now = UtcNow();
             await transaction.Connection!.ExecuteAsync(
-                "UPDATE tbl_article SET status = 'D', deleted_at = @now, updated_at = @now WHERE id = @id AND status = 'A'",
-                new { id, now }, transaction);
+                @"UPDATE tbl_article
+                     SET status = 'D', deleted_at = @now, updated_at = @now,
+                         lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+                   WHERE id = @id AND status = 'A'",
+                new { id, now, lamportTs = version.LamportTs, sourceNodeId = version.SourceNodeId }, transaction);
             return;
         }
 
@@ -407,8 +422,11 @@ public class ArticleRepository(
 
         var nowTs = UtcNow();
         await conn.ExecuteAsync(
-            "UPDATE tbl_article SET status = 'D', deleted_at = @now, updated_at = @now WHERE id = @id AND status = 'A'",
-            new { id, now = nowTs }, tx);
+            @"UPDATE tbl_article
+                 SET status = 'D', deleted_at = @now, updated_at = @now,
+                     lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+               WHERE id = @id AND status = 'A'",
+            new { id, now = nowTs, lamportTs = version.LamportTs, sourceNodeId = version.SourceNodeId }, tx);
 
         tx.Commit();
     }

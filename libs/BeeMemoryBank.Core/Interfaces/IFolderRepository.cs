@@ -12,6 +12,25 @@ public interface IFolderRepository
     Task CreateAsync(Folder folder);
     Task UpdateAsync(Folder folder);
     Task SoftDeleteAsync(Guid id, DateTime deletedAt, Guid? cascadeOpId = null);
+
+    /// <summary>
+    /// Stamps the version of the delete that took this folder down onto the already-'D' row.
+    ///
+    /// <para>
+    /// Separate from <see cref="SoftDeleteAsync"/> because a folder delete cascades: the subtree
+    /// goes down in one bulk UPDATE, but each folder is then announced as its own event with its
+    /// own Lamport tick, so each row's version is only known after its event is written. The row
+    /// must carry it — the applier's already-deleted branch compares an incoming delete against
+    /// <c>tbl_folder.lamport_ts</c>, and a row still holding the version of its last RENAME
+    /// answers that comparison with a number that has nothing to do with the delete.
+    /// </para>
+    ///
+    /// <para>
+    /// Unscoped by design: the caller has already passed the write-ACL check that produced the
+    /// delete, and this only writes version columns on a row that is already gone.
+    /// </para>
+    /// </summary>
+    Task SetDeleteVersionAsync(Guid id, RowVersion version);
     /// <summary>Soft-deletes all sub-folders whose path starts with the given prefix.</summary>
     Task<int> SoftDeleteByPathPrefixAsync(string pathPrefix, DateTime deletedAt, Guid? cascadeOpId = null);
 

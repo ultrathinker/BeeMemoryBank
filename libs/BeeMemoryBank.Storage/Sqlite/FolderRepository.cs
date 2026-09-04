@@ -202,6 +202,18 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         tx.Commit();
     }
 
+    public async Task SetDeleteVersionAsync(Guid id, RowVersion version)
+    {
+        using var conn = OpenConnection();
+        // AND status = 'D': this only ever annotates a row the caller just deleted. If the row is
+        // somehow active again, the delete lost and its version must not be written over the
+        // winner's.
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_folder SET lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+               WHERE id = @id AND status = 'D'",
+            new { id, lamportTs = version.LamportTs, sourceNodeId = version.SourceNodeId });
+    }
+
     public async Task<int> SoftDeleteByPathPrefixAsync(string pathPrefix, DateTime deletedAt, Guid? cascadeOpId = null)
     {
         if (_holder.Scope.IsAccessDenied(pathPrefix))

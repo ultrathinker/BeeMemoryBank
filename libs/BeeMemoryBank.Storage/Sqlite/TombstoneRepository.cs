@@ -19,10 +19,23 @@ public class TombstoneRepository(DbConnectionFactory factory) : BaseRepository(f
                 source_node_id = excluded.source_node_id
               WHERE excluded.lamport_ts > tbl_tombstone.lamport_ts
                  OR (excluded.lamport_ts = tbl_tombstone.lamport_ts
-                     AND excluded.source_node_id IS NOT NULL
-                     AND tbl_tombstone.source_node_id IS NOT NULL
-                     AND excluded.source_node_id > tbl_tombstone.source_node_id)",
-            tombstone);
+                     AND COALESCE(excluded.source_node_id, @EmptyNodeId)
+                       > COALESCE(tbl_tombstone.source_node_id, @EmptyNodeId))",
+            new
+            {
+                tombstone.ArticleId,
+                tombstone.CreatedAt,
+                tombstone.ExpiresAt,
+                tombstone.LamportTs,
+                tombstone.SourceNodeId,
+                // COALESCE rather than the previous pair of IS NOT NULL guards: those made the
+                // upsert refuse a tie against a tombstone written before source tracking existed,
+                // so one node kept the unattributed row and its peer took the attributed one — the
+                // two then answered the create gate differently for the same event. Guid.Empty is
+                // how RowVersion.Of reads a missing node id, and it sorts below every real one, so
+                // this is the same rule the comparator applies, expressed in SQL.
+                EmptyNodeId = Guid.Empty
+            });
     }
 
     public async Task<bool> ExistsAsync(Guid articleId)
