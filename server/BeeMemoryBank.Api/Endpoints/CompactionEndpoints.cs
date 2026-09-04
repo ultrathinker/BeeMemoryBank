@@ -37,7 +37,7 @@ public static class CompactionEndpoints
             // as a malformed-request error, and so did a missing node identity. CompactionService
             // now throws typed exceptions and ExceptionStatusMap turns them into 409 / 400 / 409
             // respectively, in the one place those pairs are asserted.
-            var result = await svc.ExecuteAsync(req.ExplicitCp, req.Reason);
+            var result = await svc.ExecuteAsync(req.ExplicitCp, req.Reason, req.AcceptCuttingOffPeers);
             return Results.Ok(result);
         });
 

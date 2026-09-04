@@ -501,6 +501,28 @@ public class ArticleRepository(
         return await conn.ExecuteAsync("UPDATE tbl_article SET index_pending = 1 WHERE status = 'A'");
     }
 
+    // Unscoped by name (see interface doc comment for why that's safe here): a bare id list, no
+    // LIMIT, backing SearchService.SearchWebContentAsync's completeness check. The partial index
+    // idx_article_index_pending (migration 006) covers exactly this WHERE clause, so this is an
+    // index-only lookup regardless of vault size -- it costs the same whether zero or a few
+    // thousand rows are pending, which is what lets the caller check completeness on every
+    // uncached content query without reintroducing an O(vault) cost on the common (fully caught
+    // up) path.
+    public async Task<List<Guid>> GetIndexPendingIdsUnscopedAsync(int limit)
+    {
+        // LIMIT, because the caller's decision is not "how many are pending" but "is the backlog
+        // small enough to scan individually". After TriggerFullRebuildAsync every article in the
+        // vault carries index_pending = 1, and reading 100k ids to discover that would cost more
+        // than the answer is worth — and the Dapper `IN @ids` expansion downstream would blow
+        // SQLite's parameter limit trying to use them. The caller asks for one more than its cap
+        // and treats a full result as "too many, use the linear scan instead".
+        using var conn = OpenConnection();
+        var ids = await conn.QueryAsync<Guid>(
+            "SELECT id FROM tbl_article WHERE status = 'A' AND index_pending = 1 LIMIT @limit",
+            new { limit });
+        return ids.ToList();
+    }
+
     // Unscoped by name, matching MarkAllIndexPendingUnscopedAsync above. Only reachable from
     // EmbeddingProjectionService's matrix-recovery path, itself driven by the background
     // PendingEmbeddingProcessor (SystemCallerScope).

@@ -20,8 +20,14 @@ public static class SearchEndpoints
             if (content && !session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session must be unlocked for content search"), statusCode: 403);
 
+            // content=true now goes through the ranked BM25 index (SearchWebContentAsync), falling
+            // back to a linear scan only for the (normally empty) set of articles the background
+            // indexer hasn't caught up on yet — see that method's doc comment. The old always-linear
+            // SearchWithContentAsync is unchanged and still available for any other caller that
+            // wants it, but this endpoint no longer decrypts the entire vault on every uncached
+            // content query.
             var results = content
-                ? await svc.SearchWithContentAsync(q)
+                ? await svc.SearchWebContentAsync(q)
                 : await svc.SearchAsync(q);
 
             var folders = results.Folders;

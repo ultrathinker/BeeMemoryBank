@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync;
+using Dapper;
 using FluentAssertions;
 using Xunit;
 
@@ -127,6 +128,65 @@ public class HardDeleteSyncTests : IAsyncLifetime
         (await _nodeB.ArticleRepo.GetByIdAsync(a1.Id)).Should().BeNull();
         (await _nodeB.ArticleRepo.GetByIdAsync(a2.Id)).Should().BeNull();
         (await _nodeB.ArticleRepo.GetByIdAsync(a3.Id)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task QueuedUpdateAfterHardDeleteFolder_DoesNotResurrectArticleOrFolder()
+    {
+        // Reproduces the folder-purge resurrection bug directly, by driving a real queued edit
+        // through the real applier -- not just by asserting that audit rows got written.
+        //
+        // Node roles are deliberately the same shape as the already-passing
+        // UpdateAfterHardDelete_IsIgnored test above (deleter = the node that already received the
+        // article via sync; the queued update comes from the ORIGINAL creator, applied at the
+        // deleter). That is not an arbitrary choice: LamportClock.Update(remoteTs) sets
+        // local = max(local, remoteTs) + 1 on every applied event, so a node that has already
+        // received-and-applied an article's create event is always at least one tick ahead of that
+        // article's creator. IsHardDeletedAsync's gate ("lamport_ts >= evt.LamportTs") depends on
+        // the purge's timestamp being >= the resurrecting event's timestamp, and only this ordering
+        // guarantees that deterministically -- creator-deletes/receiver-edits (the mirror image)
+        // can fail the gate on lamport-ordering grounds alone, with or without this fix, because two
+        // nodes that never synced with each other have no real-time ordering to agree on. That is a
+        // pre-existing property of the gate design (see EventLogRepository.IsHardDeletedAsync), not
+        // something this test is trying to prove; what THIS test isolates is the actual bug: before
+        // the fix, a folder purge never wrote a row keyed by the article's own GUID at all, so the
+        // gate had literally nothing to compare against, regardless of timestamps.
+        //
+        // 1. Create an article under /Clients/Acme on NodeA, sync it to NodeB.
+        var article = await _nodeA.ArticleService.CreateAsync("Target", "/Clients/Acme", new List<string>(), "Secret");
+        foreach (var e in await _nodeA.EventLogRepo.GetAfterSequenceAsync(0))
+            await _nodeB.ApplyFromAsync(_nodeA, e);
+        (await _nodeB.ArticleRepo.GetByIdAsync(article.Id)).Should().NotBeNull();
+
+        // 2. NodeB hard-deletes the whole /Clients/Acme folder, purging the article.
+        await _nodeB.HardDeleteService.DeleteFolderAsync("/Clients/Acme", 1, null, CancellationToken.None);
+        (await _nodeB.ArticleRepo.GetByIdAsync(article.Id)).Should().BeNull();
+
+        // 3. NodeA, unaware of the purge, updates the article and queues the resulting event.
+        await _nodeA.ArticleService.UpdateAsync(article.Id, title: "Edited, Unaware Of Purge");
+        var updateEvent = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Last();
+        updateEvent.EventType.Should().Be(EventTypes.ArticleUpdate);
+
+        // 4. NodeA's queued update finally reaches NodeB and gets applied.
+        await _nodeB.ApplyFromAsync(_nodeA, updateEvent);
+
+        // 5. Before the fix in HardDeleteService.PurgeFolderSubtreeAsync: a folder purge only ever
+        // wrote ONE audit row, keyed by the folder's PATH ("/Clients/Acme") -- never by this
+        // article's own GUID, which is what EventEntityId.Derive uses as an ordinary article
+        // event's entity id (see EventEntityId.cs). IsHardDeletedAsync's
+        // "entity_identifier = @entityId" lookup could therefore never match, NodeA's update sailed
+        // through the gate in EventApplier.ApplyAsync, and ApplyArticleUpdateCoreAsync -- finding
+        // no existing row for the article -- fell back to ApplyArticleCreateCoreAsync, which
+        // recreated the article AND re-vivified the folder via its own EnsureExistsAsync call.
+        // "Hard delete" wasn't a delete at all for an article whose folder was purged instead of
+        // the article itself.
+        (await _nodeB.ArticleRepo.GetByIdAsync(article.Id)).Should()
+            .BeNull("the purged article must not be resurrected by a peer's queued edit");
+
+        using var conn = _nodeB.Factory.CreateConnection();
+        var folderCount = await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM tbl_folder WHERE path = @path", new { path = "/Clients/Acme" });
+        folderCount.Should().Be(0, "the purged folder must not be re-vivified by the same resurrection attempt");
     }
 
     private class ConcreteFixture : SyncTestFixture { }

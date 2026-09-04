@@ -36,7 +36,14 @@ public sealed class SearchMetrics
     /// <summary>Search-type label for <see cref="SearchService.SearchAsync"/> (metadata-only search).</summary>
     public const string MetadataSearch = "metadata";
 
-    /// <summary>Search-type label for <see cref="SearchService.SearchWithContentAsync"/> (body-content scan).</summary>
+    /// <summary>
+    /// Search-type label for body-content search generally: both
+    /// <see cref="SearchService.SearchWebContentAsync"/> (the web path's index-first search, with a
+    /// pending-only linear fallback) and <see cref="SearchService.SearchWithContentAsync"/> (the
+    /// always-complete-but-slower full linear scan it falls back on / that other callers still use
+    /// directly) record under this same label — from the admin dashboard's point of view both answer
+    /// the same question ("how is content search performing"), just via different internal paths.
+    /// </summary>
     public const string ContentSearch = "content";
 
     /// <summary>Search-type label for <see cref="Storage.Sqlite.ArticleRepository.SearchByEmbeddingAsync"/> (semantic/vector search).</summary>

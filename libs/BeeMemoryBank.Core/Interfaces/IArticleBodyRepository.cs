@@ -7,6 +7,26 @@ public interface IArticleBodyRepository
 {
     Task<EncryptedArticleBody?> GetByArticleIdAsync(Guid articleId);
     Task<List<EncryptedArticleBody>> GetAllActiveAsync();
+
+    /// <summary>
+    /// Batch fetch of active bodies restricted to <paramref name="articleIds"/>, pushed into the
+    /// SQL WHERE clause rather than filtered after the fact -- the primitive
+    /// <see cref="BeeMemoryBank.Core.Services.SearchService.SearchWebContentAsync"/> uses for its
+    /// "restricted to just the pending article ids" fallback scan: unlike
+    /// <see cref="StreamActiveAsync"/> (which walks and blob-reads every active body in the vault),
+    /// this only ever touches <c>tbl_blob</c> rows for the ids the caller actually asked for, which
+    /// is the entire point of the fallback -- a handful of pending ids must cost a handful of blob
+    /// reads, not a full-vault scan.
+    /// <para>
+    /// Deliberately a plain buffered list (like <see cref="IArticleRepository.GetByIdsAsync"/>),
+    /// not a streamed <c>IAsyncEnumerable</c>: the streaming/bounded-channel machinery in
+    /// <c>StreamActiveAsync</c> exists specifically to avoid materializing an UNKNOWN, vault-sized
+    /// active set in memory. Here the caller already knows the exact (id-bounded) set it's asking
+    /// for before the call is made, so there is nothing open-ended to bound. Returns an empty list
+    /// without touching the database when <paramref name="articleIds"/> is empty.
+    /// </para>
+    /// </summary>
+    Task<List<EncryptedArticleBody>> GetByArticleIdsAsync(IReadOnlyCollection<Guid> articleIds);
     Task UpsertAsync(EncryptedArticleBody body, IDbTransaction? transaction = null);
     /// <summary>
     /// Streams all active article bodies over a single, long-lived SQLite connection.

@@ -109,6 +109,22 @@ public interface IArticleRepository
     /// <c>SearchIndexLifecycleService.TriggerFullRebuildAsync</c> (background, SystemCallerScope).
     /// </summary>
     Task<int> MarkAllIndexPendingUnscopedAsync();
+
+    /// <summary>
+    /// Returns the bare ids of every active article still awaiting search-index ingestion
+    /// (index_pending = 1) -- with NO batch limit, unlike <see cref="GetIndexPendingAsync"/> (which
+    /// is deliberately batch-capped for <c>PendingIndexProcessor</c>'s incremental background work).
+    /// <see cref="SearchService.SearchWebContentAsync"/> needs the FULL backlog, not one batch of
+    /// it, to know exactly which articles the ranked BM25 index cannot yet be trusted for.
+    ///
+    /// "Unscoped": no caller-scope check of its own, same convention as the other
+    /// <c>*IndexPendingUnscopedAsync</c>/<c>*IndexPendingAsync</c> members on this interface --
+    /// but note this one only ever hands out bare <see cref="Guid"/> values, never row content, and
+    /// its one caller intersects the result with its own caller-visible id set (via
+    /// <c>ListAsync</c>/<c>FilterArticles</c>) before any article body is touched, so the missing
+    /// check here is closed before any ciphertext is read, not merely skipped.
+    /// </summary>
+    Task<List<Guid>> GetIndexPendingIdsUnscopedAsync(int limit);
     Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10);
 
     /// <summary>WP-15: chunk-based semantic search — see <c>ArticleRepository.SearchByChunkEmbeddingAsync</c>'s doc comment.</summary>

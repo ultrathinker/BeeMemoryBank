@@ -48,6 +48,29 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
               WHERE a.status = 'A'")).ToList();
     }
 
+    public async Task<List<EncryptedArticleBody>> GetByArticleIdsAsync(IReadOnlyCollection<Guid> articleIds)
+    {
+        // Short-circuit before opening a connection at all -- Dapper's `IN @articleIds` expansion
+        // of an empty collection degrades to a syntactically-invalid "IN ()", so this is not just an
+        // optimization, it avoids a SQL error on the "nothing to fetch" case the search-service
+        // caller hits whenever the pending set happens to be empty for this caller after ACL
+        // filtering.
+        if (articleIds.Count == 0) return [];
+
+        using var conn = OpenConnection();
+        // Same INNER-JOIN-on-blob contract as GetAllActiveAsync above: a body whose ciphertext blob
+        // is missing is skipped rather than surfaced with a null Ciphertext.
+        return (await conn.QueryAsync<EncryptedArticleBody>(
+            @"SELECT b.article_id AS ArticleId,
+                     bl.data AS Ciphertext,
+                     b.iv AS IV, b.encrypted_dek AS EncryptedDek, b.dek_iv AS DekIV
+              FROM tbl_article_body b
+              JOIN tbl_article a ON a.id = b.article_id
+              JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
+              WHERE a.status = 'A' AND b.article_id IN @articleIds",
+            new { articleIds })).ToList();
+    }
+
     /// <summary>
     /// Streams active article bodies over a single connection using an unbuffered
     /// <see cref="DbDataReader"/>. The connection stays open for the lifetime of the

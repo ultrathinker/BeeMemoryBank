@@ -26,6 +26,11 @@ public abstract class TestFixture : IAsyncLifetime
     protected SearchService SearchService { get; private set; } = null!;
     protected CallerScopeHolder ScopeHolder { get; private set; } = null!;
 
+    // Exposed so tests can drive index_pending directly (e.g. ClearIndexPendingUnscopedAsync) to
+    // simulate PendingIndexProcessor's progress without actually running that background service --
+    // see SearchIndexedContentTests' own IndexBuilder-exposure comment for the same rationale.
+    protected IArticleRepository ArticleRepo { get; private set; } = null!;
+
     // WP-12: the exact IndexBuilder instance SearchService.SearchIndexedContentAsync queries.
     // Exposed so tests can feed it content directly (bypassing PendingIndexProcessor, which this
     // fixture does not run) to exercise the ranked-search integration end to end.
@@ -42,6 +47,7 @@ public abstract class TestFixture : IAsyncLifetime
         ScopeHolder = new CallerScopeHolder();
 
         var articleRepo = new ArticleRepository(Factory, ScopeHolder);
+        ArticleRepo = articleRepo;
         var bodyRepo = new ArticleBodyRepository(Factory);
         var keySlotRepo = new KeySlotRepository(Factory);
         var nodeRepo = new NodeIdentityRepository(Factory);

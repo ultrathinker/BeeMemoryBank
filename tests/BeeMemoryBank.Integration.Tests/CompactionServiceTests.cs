@@ -210,6 +210,63 @@ public class CompactionServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithExplicitCp_StillRefusesToStrandAPeer()
+    {
+        // The hole this closes: the peer-safety check lived only in PreviewAsync, and
+        // ExecuteCoreAsync consulted it only through preview.ProposedCp. Passing an explicit
+        // checkpoint therefore skipped it completely — and the explicit checkpoint is exactly what
+        // an operator reaches for when the Compact button is greyed out, so the bypass was on the
+        // likeliest path to the case the check exists for. Peers were stranded silently.
+        await InsertEventsAsync(5000);
+
+        var strandedPeer = Guid.NewGuid();
+        await InsertWhitelistPeerAsync(strandedPeer, "PeerLeftBehind");
+        await _syncPushPosRepo.UpsertAsync(new SyncPushPosition
+        {
+            RemoteNodeId = strandedPeer,
+            LastPushedSeq = 100,          // 4900 events behind head — far past the 1500 keep-count
+            PushedAt = DateTime.UtcNow
+        });
+
+        var act = () => _compactionService.ExecuteAsync(explicitCp: 2000, reason: "should refuse");
+
+        // ConflictException, so the endpoint answers 409: the request is well-formed and the
+        // caller can retry once the peer catches up or is revoked.
+        var ex = await act.Should().ThrowAsync<ConflictException>();
+        ex.WithMessage("*would be cut off*");
+        ex.WithMessage($"*{strandedPeer}*", "the operator has to know WHICH machine is about to be stranded");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithAcceptCuttingOffPeers_ProceedsAnyway()
+    {
+        // The deliberate exit from the deadlock. Without it one phone that has been off for a week
+        // blocks every compaction forever, tbl_event grows without bound, and the operator's only
+        // remedy is revoking a peer they still want.
+        await InsertEventsAsync(5000);
+
+        var strandedPeer = Guid.NewGuid();
+        await InsertWhitelistPeerAsync(strandedPeer, "PeerLeftBehind");
+        await _syncPushPosRepo.UpsertAsync(new SyncPushPosition
+        {
+            RemoteNodeId = strandedPeer,
+            LastPushedSeq = 100,
+            PushedAt = DateTime.UtcNow
+        });
+
+        var result = await _compactionService.ExecuteAsync(
+            explicitCp: 2000, reason: "operator accepted", acceptCuttingOffPeers: true);
+
+        result.EventsDeleted.Should().BeGreaterThan(0);
+
+        // And the preview still says who was at risk, so the override is an informed one rather
+        // than a flag that makes the problem invisible.
+        var preview = await _compactionService.PreviewAsync();
+        preview.AtRiskPeers.Should().NotBeNull();
+        preview.AtRiskPeers!.Should().Contain(strandedPeer);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ParallelCalls_SecondThrows()
     {
         await InsertEventsAsync(5000);

@@ -413,6 +413,7 @@ internal sealed class FailingArticleBodyRepository(IArticleBodyRepository inner)
 
     public Task<EncryptedArticleBody?> GetByArticleIdAsync(Guid articleId) => inner.GetByArticleIdAsync(articleId);
     public Task<List<EncryptedArticleBody>> GetAllActiveAsync() => inner.GetAllActiveAsync();
+    public Task<List<EncryptedArticleBody>> GetByArticleIdsAsync(IReadOnlyCollection<Guid> articleIds) => inner.GetByArticleIdsAsync(articleIds);
     public IAsyncEnumerable<EncryptedArticleBody> StreamActiveAsync(CancellationToken cancellationToken = default) => inner.StreamActiveAsync(cancellationToken);
     public Task<int> PurgeForDeletedArticlesOlderThanAsync(DateTime cutoff) => inner.PurgeForDeletedArticlesOlderThanAsync(cutoff);
 }

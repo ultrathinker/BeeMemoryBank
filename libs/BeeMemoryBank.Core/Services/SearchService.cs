@@ -28,6 +28,29 @@ public class SearchService(
     private const string MethodSearch = nameof(SearchAsync);
     private const string MethodSearchWithContent = nameof(SearchWithContentAsync);
 
+    // Same reasoning as the two constants above, extended to the index-first web content-search
+    // path added alongside them: SearchWebContentAsync's result set (ranked-index matches, plus a
+    // pending-only linear-scan top-up) is not guaranteed to match SearchWithContentAsync's (a full
+    // linear scan) article-for-article ordering, even though both search the same corpus, so they
+    // must not share a cache slot either.
+    private const string MethodSearchWebContent = nameof(SearchWebContentAsync);
+
+    /// <summary>
+    /// How many index_pending articles the web content search will scan individually before giving
+    /// up on the restricted fallback and running the ordinary linear scan instead.
+    ///
+    /// <para>Two failure modes sit on either side of this number. Below it, scanning the backlog
+    /// one article at a time is far cheaper than decrypting the vault. Above it — the state every
+    /// article is in immediately after a full index rebuild — the "restricted" scan IS the
+    /// full-vault scan, only without the bounded-channel pipeline that path has for streaming that
+    /// much ciphertext, and with an `IN` list long enough to exceed SQLite's parameter limit.</para>
+    ///
+    /// <para>2000 is chosen as roughly the largest backlog a five-minute processor interval
+    /// produces under normal write load, so ordinary editing stays on the cheap path and only a
+    /// genuine rebuild crosses over.</para>
+    /// </summary>
+    private const int MaxRestrictedFallbackIds = 2000;
+
     // WP-12: the same tokenizer/stemmer pipeline IndexBuilder uses at ingestion (see
     // IndexBuilder.TokenizeAndStem) -- a query must go through the identical pipeline so its stems
     // exactly match the stemmed dictionary IndexBuilder.SearchRanked looks up against. Stateless and
@@ -181,32 +204,12 @@ public class SearchService(
                 {
                     await foreach (var body in channel.Reader.ReadAllAsync())
                     {
-                        try
-                        {
-                            // Skip articles already matched by the metadata (title/tag) search.
-                            if (matchedIds.Contains(body.ArticleId))
-                                continue;
+                        // Skip articles already matched by the metadata (title/tag) search.
+                        if (matchedIds.Contains(body.ArticleId))
+                            continue;
 
-                            var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
-                            var dekAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(body.ArticleId.ToByteArray()).ToArray() : null;
-                            var bodyAad = isV1 ? "bmb-art-body"u8.ToArray().Concat(body.ArticleId.ToByteArray()).ToArray() : null;
-                            var articleDek = DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, dekAad);
-                            var plaintext = ArticleEncryptor.Decrypt(body.Ciphertext, body.IV, articleDek, bodyAad);
-                            Array.Clear(articleDek);
-
-                            // Protected bodies are opaque BMBENC1 blobs — never full-text-search them
-                            // (we have no passphrase here, and matching base64 would be meaningless).
-                            if (ProtectedContentCodec.IsProtected(plaintext))
-                                continue;
-
-                            if (plaintext.Contains(query, StringComparison.OrdinalIgnoreCase))
-                                bodyMatchIds.Add(body.ArticleId);
-                        }
-                        catch // AUDIT NOTE: Intentional — a corrupt or incompatible encrypted body
-                        {    // (e.g., re-encrypted with a different DEK after key rotation) must not
-                        }    // break search for all other articles. Per-item isolation is preserved:
-                             // the catch lives inside the worker, so one bad body can't fault the
-                             // whole parallel pipeline.
+                        if (BodyMatchesQuery(body, masterDek, query))
+                            bodyMatchIds.Add(body.ArticleId);
                     }
                 });
             }
@@ -252,24 +255,66 @@ public class SearchService(
     }
 
     /// <summary>
+    /// Decrypts one article body and reports whether its plaintext contains <paramref name="query"/>
+    /// (case-insensitively). Factored out of the worker loop above so <see cref="SearchWebContentAsync"/>'s
+    /// pending-only fallback scan below can share the exact same DEK-unwrap/AAD/protected-content
+    /// logic instead of drifting out of sync with a second copy of it.
+    /// </summary>
+    /// <param name="masterDek">
+    /// Caller-owned DEK snapshot. Read-only here (never mutated or cleared) -- clearing it once
+    /// every decrypt attempt across a batch has finished is the caller's responsibility, exactly as
+    /// it was before this was extracted into its own method.
+    /// </param>
+    private static bool BodyMatchesQuery(EncryptedArticleBody body, byte[] masterDek, string query)
+    {
+        try
+        {
+            var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
+            var dekAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(body.ArticleId.ToByteArray()).ToArray() : null;
+            var bodyAad = isV1 ? "bmb-art-body"u8.ToArray().Concat(body.ArticleId.ToByteArray()).ToArray() : null;
+            var articleDek = DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, dekAad);
+            var plaintext = ArticleEncryptor.Decrypt(body.Ciphertext, body.IV, articleDek, bodyAad);
+            Array.Clear(articleDek);
+
+            // Protected bodies are opaque BMBENC1 blobs — never full-text-search them
+            // (we have no passphrase here, and matching base64 would be meaningless).
+            if (ProtectedContentCodec.IsProtected(plaintext))
+                return false;
+
+            return plaintext.Contains(query, StringComparison.OrdinalIgnoreCase);
+        }
+        catch // AUDIT NOTE: Intentional — a corrupt or incompatible encrypted body (e.g.,
+        {     // re-encrypted with a different DEK after key rotation) must not break search for
+              // all other articles. Every call site isolates this per-item, so one bad body can
+              // never fault a whole parallel batch.
+            return false;
+        }
+    }
+
+    /// <summary>
     /// WP-12: ranked full-text search over <see cref="BeeMemoryBank.Search.Indexing.IndexBuilder"/>'s
-    /// in-memory inverted index -- a new, additive search capability, independent of
-    /// <see cref="SearchWithContentAsync"/>'s existing linear body scan above, which this method does
-    /// NOT replace, wire into, or otherwise change the behavior of.
+    /// in-memory inverted index. Originally an additive, standalone capability independent of
+    /// <see cref="SearchWithContentAsync"/>'s linear body scan; now also the primary source
+    /// <see cref="SearchWebContentAsync"/> composes into the web content-search path (see that
+    /// method's own remarks for how completeness is verified before trusting the index alone).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Why this is not wired into <see cref="SearchWithContentAsync"/> yet.</b>
+    /// <b>Why this was not wired into the web content-search path when it was first built.</b>
     /// <c>PendingIndexProcessor</c> (WP-11) indexes articles into <paramref name="indexBuilder"/>'s
     /// backing <c>IndexBuilder</c> progressively in the background (<c>index_pending</c>), so at any
     /// given moment some articles may not yet be reflected in it. Silently making this the primary
-    /// search path today could make search return *fewer* correct results than the existing
-    /// always-complete-but-slower linear scan -- a regression a user might not notice until they go
-    /// looking for something specific that just has not been indexed yet. Deciding when/how to cut
-    /// over (e.g. only once a completeness signal says the index is fully caught up) is a follow-up
-    /// decision for the maintainer, out of this WP's scope -- mirroring how WP-07 built FTS wiring
-    /// for metadata search without touching the separate body-scan path either. This method exists so
-    /// a future work package or the maintainer can wire it in once ready.
+    /// search path without a completeness check could make search return *fewer* correct results
+    /// than the existing always-complete-but-slower linear scan -- a regression a user might not
+    /// notice until they go looking for something specific that just has not been indexed yet.
+    /// <see cref="SearchWebContentAsync"/> is what closes that gap: it consults
+    /// <c>IArticleRepository.GetIndexPendingIdsUnscopedAsync</c> (backed by the indexed
+    /// <c>index_pending</c> column) and only trusts this method's results alone once that backlog is
+    /// empty, falling back to a linear scan restricted to just the still-pending ids otherwise. This
+    /// method itself is unchanged by that -- it still has no opinion on completeness and simply
+    /// returns whatever the index currently knows, which is exactly why it remains directly usable
+    /// on its own too (e.g. by <c>HybridSearchService</c>'s MCP-facing keyword mode, where a
+    /// momentarily-incomplete index has always been an accepted tradeoff for tool-call latency).
     /// </para>
     /// <para>
     /// <b>Pipeline.</b> Tokenizes+stems <paramref name="query"/> with the exact same
@@ -316,6 +361,191 @@ public class SearchService(
         filtered.Sort((a, b) => rankByArticleId[a.Id].CompareTo(rankByArticleId[b.Id]));
 
         return filtered;
+    }
+
+    /// <summary>
+    /// The web content-search path (<c>content=true</c> on <c>GET /api/search</c>): serves body
+    /// matches from <see cref="SearchIndexedContentAsync"/>'s ranked BM25 index instead of
+    /// <see cref="SearchWithContentAsync"/>'s full linear decrypt-every-body scan, falling back to a
+    /// linear scan ONLY for the (normally empty, or small) set of articles the background indexer
+    /// has not caught up on yet -- see <see cref="SearchWebContentUncachedAsync"/> for exactly how
+    /// that fallback is scoped. <see cref="SearchWithContentAsync"/> itself is untouched by this and
+    /// remains available as the always-complete-but-slower fallback for any other caller that still
+    /// wants it.
+    /// </summary>
+    /// <remarks>
+    /// Same cache/metrics wrapper shape as <see cref="SearchAsync"/>/<see cref="SearchWithContentAsync"/>
+    /// above -- single-flight + TTL cache under its own <see cref="MethodSearchWebContent"/> slot, and
+    /// the same elapsed-time/coarse-result-count-only metrics recording (still under the shared
+    /// <see cref="SearchMetrics.ContentSearch"/> label: from the admin dashboard's point of view this
+    /// is still "content search", just computed differently underneath).
+    /// </remarks>
+    public async Task<SearchResults> SearchWebContentAsync(string query)
+    {
+        ThrowIfQueryTooLong(query);
+
+        var sw = metrics is null ? null : Stopwatch.StartNew();
+        var result = await queryCache.ExecuteAsync(
+            MethodSearchWebContent,
+            query,
+            scopeHolder.Scope.ReadScopeFingerprint,
+            () => SearchWebContentUncachedAsync(query));
+        if (metrics is not null)
+        {
+            sw!.Stop();
+            metrics.Record(SearchMetrics.ContentSearch, sw.Elapsed,
+                result.Folders.Count + result.Articles.Count);
+        }
+        return result;
+    }
+
+    private async Task<SearchResults> SearchWebContentUncachedAsync(string query)
+    {
+        // Metadata (title/tag) matching is identical to SearchWithContentAsync's — unaffected by
+        // where content matches come from below.
+        var foldersTask = folderRepo.SearchAsync(query);
+        var metadataTask = articleRepo.SearchAsync(query);
+        var byIdTask = articleRepo.SearchByIdPartialAsync(query.Trim());
+        await Task.WhenAll(foldersTask, metadataTask, byIdTask);
+
+        var folderResults = await foldersTask;
+        var metadataResults = await metadataTask;
+        MergeById(metadataResults, await byIdTask);
+
+        // Same locked-session contract as SearchWithContentAsync: no body-derived results at all
+        // while locked, metadata-only. The ranked index itself needs no live decryption to query (it
+        // holds term postings, never ciphertext or plaintext), but the invariant this preserves is a
+        // product one, not a technical one -- a locked session must not surface ANY result that was
+        // ever derived from a body's plaintext, full stop, so the same guard applies here too.
+        if (!session.IsUnlocked)
+            return new SearchResults(folderResults, metadataResults);
+
+        var matchedIds = new HashSet<Guid>(metadataResults.Select(a => a.Id));
+
+        // Primary source: the ranked BM25 index. topK: int.MaxValue rather than the 20-result
+        // default other SearchIndexedContentAsync callers use -- SearchRanked already bounds its
+        // own candidate set to however many documents satisfy the implicit-AND query (see its own
+        // doc comment), so there is no separate "top N" cap layered on top here, matching
+        // SearchWithContentAsync's own uncapped "every matching article" contract exactly.
+        List<Article> rankedMatches = await SearchIndexedContentAsync(query, int.MaxValue);
+        var contentMatches = new List<Article>(rankedMatches.Count);
+        foreach (Article a in rankedMatches)
+        {
+            if (matchedIds.Add(a.Id))
+                contentMatches.Add(a);
+        }
+
+        // The completeness check: index_pending flags exactly which active articles
+        // PendingIndexProcessor has not yet folded into the index. Zero means the ranked results
+        // above are already the complete answer and nothing else runs.
+        //
+        // Do NOT assume zero is the common case. PendingIndexProcessor wakes on a five-minute
+        // timer, so on a vault with twenty people writing, something is almost always within five
+        // minutes of its last save and the backlog is rarely empty during working hours. That is
+        // why the fallback below has to stay genuinely cheap rather than merely rare: it is on the
+        // hot path most of the day, not an edge case.
+        //
+        // The cap is the other half. After TriggerFullRebuildAsync every article is pending at
+        // once, and a "restricted" scan over all of them is the full-vault scan this method exists
+        // to avoid — with the added failure of a Dapper `IN` list past SQLite's parameter limit.
+        // Past the cap the honest answer is the linear path, which has a bounded-channel pipeline
+        // built for exactly that size of job. Asking for one more than the cap is what makes
+        // "there are more than this" answerable without reading them.
+        List<Guid> pendingIds = await articleRepo.GetIndexPendingIdsUnscopedAsync(MaxRestrictedFallbackIds + 1);
+
+        if (pendingIds.Count > MaxRestrictedFallbackIds)
+            return await SearchWithContentUncachedAsync(query);
+
+        if (pendingIds.Count > 0)
+        {
+            List<Article> pendingMatches = await ScanPendingArticlesAsync(query, pendingIds, matchedIds);
+            contentMatches.AddRange(pendingMatches);
+        }
+
+        metadataResults.AddRange(contentMatches);
+        return new SearchResults(folderResults, metadataResults);
+    }
+
+    /// <summary>
+    /// The "restricted to just the pending article ids" fallback: decrypts and substring-matches
+    /// ONLY the articles <paramref name="pendingIds"/> names (further narrowed to what the caller
+    /// can actually see, and to what the ranked-index pass hasn't already matched), never the whole
+    /// active-body set the way <see cref="SearchWithContentUncachedAsync"/> does. This is the
+    /// difference that keeps a query cheap while a handful of rows are still index_pending, instead
+    /// of silently degrading back to a full-vault scan the moment even one row is behind.
+    /// </summary>
+    /// <param name="pendingIds">
+    /// The GLOBAL, unscoped index_pending backlog from <c>GetIndexPendingIdsUnscopedAsync</c> -- may
+    /// include articles this caller cannot see at all, which is why this method still resolves its
+    /// own caller-visible id set below before touching any ciphertext (same M11 principle
+    /// <see cref="SearchWithContentUncachedAsync"/> already applies to its own, much larger, scan).
+    /// </param>
+    private async Task<List<Article>> ScanPendingArticlesAsync(
+        string query, List<Guid> pendingIds, HashSet<Guid> matchedIds)
+    {
+        // Visibility is resolved from the BACKLOG, not from the vault. The obvious way to write
+        // this is ListAsync() into a HashSet and test membership — but ListAsync() reads every
+        // visible article row, so on a 100k vault that reintroduces an O(vault) step on the very
+        // path built to remove one, and (see the caller) that path runs most of the working day
+        // rather than rarely.
+        //
+        // GetByIdsAsync answers the same question over the pending ids alone, and it applies the
+        // caller's folder scope itself (ArticleRepository.GetByIdsAsync ends in
+        // FilterArticles), so what comes back IS the visible subset — no second filter needed and
+        // none implied.
+        var candidateIds = pendingIds.Where(id => !matchedIds.Contains(id)).ToList();
+        if (candidateIds.Count == 0)
+            return [];
+
+        var visible = await articleRepo.GetByIdsAsync(candidateIds);
+        if (visible.Count == 0)
+            return [];
+
+        var idsToScan = visible.Select(a => a.Id).ToList();
+
+        // The SQL-level id filter (not a stream-then-skip) is what actually restricts the blob reads
+        // -- see GetByArticleIdsAsync's own doc comment for why that distinction matters here.
+        List<EncryptedArticleBody> bodies = await bodyRepo.GetByArticleIdsAsync(idsToScan);
+        if (bodies.Count == 0)
+            return [];
+
+        // One DEK snapshot shared read-only across the parallel decrypt pass below, cleared exactly
+        // once after every task has finished with it -- same pattern (and the same reason) as
+        // SearchWithContentUncachedAsync's own masterDek handling.
+        var masterDek = session.GetMasterDek();
+        var matchedPendingIds = new ConcurrentBag<Guid>();
+        try
+        {
+            // A plain Parallel.ForEachAsync over the already-materialized (and, by construction,
+            // backlog-sized rather than vault-sized) list is deliberately simpler than
+            // SearchWithContentUncachedAsync's bounded-channel producer/consumer pipeline: that
+            // pipeline's whole purpose is to avoid materializing an UNKNOWN, potentially vault-sized
+            // sequence in memory ahead of decryption, which does not apply here -- `bodies` is
+            // already a small, known-size, already-in-memory list by the time this runs.
+            var options = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1)
+            };
+            await Parallel.ForEachAsync(bodies, options, (body, _) =>
+            {
+                if (BodyMatchesQuery(body, masterDek, query))
+                    matchedPendingIds.Add(body.ArticleId);
+                return ValueTask.CompletedTask;
+            });
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+
+        if (matchedPendingIds.IsEmpty)
+            return [];
+
+        // The rows are already in hand from the visibility resolution above and already scoped,
+        // so the matched subset is selected rather than re-queried. Re-hydrating here would be a
+        // second scope-filtered round trip for rows this method loaded a moment ago.
+        var matched = matchedPendingIds.ToHashSet();
+        return visible.Where(a => matched.Contains(a.Id)).ToList();
     }
 
     private static List<string> TokenizeAndStemQuery(string? query)

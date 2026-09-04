@@ -21,9 +21,33 @@ public class CompactionService(
     DbConnectionFactory connFactory,
     ILogger<CompactionService> logger)
 {
-    // Count-based target: we want to keep exactly this many most-recent events after compaction.
-    // Peer safety: no peer may be more than TARGET_KEEP_COUNT events behind head (else they'd be cut off).
-    private const int TARGET_KEEP_COUNT = 1500;
+    /// <summary>
+    /// How many of the most recent events survive a compaction, and therefore also how far a peer
+    /// may fall behind before compacting would cut it off. 1500 by default; override with
+    /// <c>BMB_COMPACTION_KEEP_COUNT</c>.
+    ///
+    /// <para>It is a setting rather than a constant because the two things it controls pull in
+    /// opposite directions and the right balance depends on the mesh. Too low and a peer that is
+    /// offline for a long weekend has to wipe and rejoin — with ~20 writers, 1500 events is a day
+    /// or two. Too high and <c>tbl_event</c> never shrinks. Neither answer is right for every
+    /// deployment, and an operator whose phone keeps getting cut off should be able to raise this
+    /// rather than being told the number is compiled in.</para>
+    ///
+    /// <para>Floored at 100: below that the log stops being a usable sync window at all, and a
+    /// typo (or a stray <c>0</c>) would silently turn every compaction into a mesh-wide
+    /// wipe-and-rejoin. An unparseable or out-of-range value falls back to the default and is not
+    /// an error — same shape as BMB_AUDIT_RETENTION_DAYS.</para>
+    /// </summary>
+    private static int TargetKeepCount
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("BMB_COMPACTION_KEEP_COUNT");
+            return int.TryParse(raw, out var v) && v >= 100 ? v : DefaultKeepCount;
+        }
+    }
+
+    private const int DefaultKeepCount = 1500;
     // Shared with SnapshotService.ApplyNetworkRestoreAsync / RestoreAsync — both flows
     // bulk-rewrite tbl_event and must not interleave.
     private static readonly SemaphoreSlim _executeLock = HeavyOperationLock.Instance;
@@ -54,13 +78,13 @@ public class CompactionService(
         }
 
         // Already at or below target — nothing to compact.
-        if (totalEvents <= TARGET_KEEP_COUNT)
+        if (totalEvents <= TargetKeepCount)
         {
             return new CompactionPreview(
                 HeadSeq: headSeq, MinSeq: minSeq.Value, TotalEvents: totalEvents,
                 ActivePeerCount: allPeers.Count,
                 ProposedCp: 0, CanCompact: false,
-                Reason: $"Log already has {totalEvents} events — target keep-count is {TARGET_KEEP_COUNT}, so nothing to remove.",
+                Reason: $"Log already has {totalEvents} events — target keep-count is {TargetKeepCount}, so nothing to remove.",
                 Warnings: warnings, PeerPositions: peerPositions,
                 EventsToDelete: 0, EventsRemaining: totalEvents);
         }
@@ -68,14 +92,22 @@ public class CompactionService(
         var syncedPeers = allPeers.Where(p => p.LastPushedSeq != null).ToList();
         var neverSyncedPeers = allPeers.Where(p => p.LastPushedSeq == null).ToList();
 
-        // Peer-safety check: every synced peer must be WITHIN the last TARGET_KEEP_COUNT events
+        // Peer-safety check: every synced peer must be WITHIN the last TargetKeepCount events
         // of head — otherwise compaction would cut them off. Count = events with seq > peer_pos.
+        //
+        // The result is collected here rather than recomputed later. The "is anyone at risk?"
+        // decision below used to re-run this same COUNT for every peer inside a LINQ predicate,
+        // via .GetAwaiter().GetResult() — sync-over-async on a request thread, and twice the
+        // queries, to answer a question this loop had already answered.
+        var atRiskPeers = new List<Guid>();
+
         foreach (var peer in syncedPeers)
         {
             var peerBehindCount = await eventLogRepo.CountEventsAfterSequenceAsync(peer.LastPushedSeq!.Value);
-            if (peerBehindCount >= TARGET_KEEP_COUNT)
+            if (peerBehindCount >= TargetKeepCount)
             {
-                warnings.Add($"Peer {peer.NodeId} is {peerBehindCount} operations behind — would be cut off (target keep-count is {TARGET_KEEP_COUNT}). Wait for it to sync or revoke.");
+                atRiskPeers.Add(peer.NodeId);
+                warnings.Add($"Peer {peer.NodeId} is {peerBehindCount} operations behind — would be cut off (target keep-count is {TargetKeepCount}). Wait for it to sync, raise BMB_COMPACTION_KEEP_COUNT, revoke it, or compact with acceptCuttingOffPeers.");
             }
             if (peer.PushedAt != null && (DateTime.UtcNow - peer.PushedAt.Value).TotalDays > 14)
             {
@@ -85,33 +117,29 @@ public class CompactionService(
 
         foreach (var ns in neverSyncedPeers)
         {
-            warnings.Add($"Peer {ns.NodeId} is in whitelist but has never synced — would be cut off if compaction proceeds. Wait for it to sync or revoke.");
+            atRiskPeers.Add(ns.NodeId);
+            warnings.Add($"Peer {ns.NodeId} is in whitelist but has never synced — would be cut off if compaction proceeds. Wait for it to sync, revoke it, or compact with acceptCuttingOffPeers.");
         }
 
-        // Any peer that would be cut off => refuse compaction
-        var anyPeerAtRisk = syncedPeers.Any(p => {
-            var peerBehind = eventLogRepo.CountEventsAfterSequenceAsync(p.LastPushedSeq!.Value).GetAwaiter().GetResult();
-            return peerBehind >= TARGET_KEEP_COUNT;
-        }) || neverSyncedPeers.Count > 0;
-
-        if (anyPeerAtRisk)
+        if (atRiskPeers.Count > 0)
         {
             return new CompactionPreview(
                 HeadSeq: headSeq, MinSeq: minSeq.Value, TotalEvents: totalEvents,
                 ActivePeerCount: allPeers.Count,
                 ProposedCp: 0, CanCompact: false,
-                Reason: $"At least one peer would be cut off (they are more than {TARGET_KEEP_COUNT} operations behind, or have never synced). See warnings.",
+                Reason: $"{atRiskPeers.Count} peer(s) would be cut off (more than {TargetKeepCount} operations behind, or never synced). See warnings.",
                 Warnings: warnings, PeerPositions: peerPositions,
-                EventsToDelete: 0, EventsRemaining: totalEvents);
+                EventsToDelete: 0, EventsRemaining: totalEvents,
+                AtRiskPeers: atRiskPeers);
         }
 
-        // Count-based compute: delete oldest (totalEvents - TARGET_KEEP_COUNT) events.
+        // Count-based compute: delete oldest (totalEvents - TargetKeepCount) events.
         // proposedCp = sequence_num of the Nth oldest event (= highest seq we'll delete).
-        var eventsToDelete = totalEvents - TARGET_KEEP_COUNT;
+        var eventsToDelete = totalEvents - TargetKeepCount;
         var cpAtRank = await eventLogRepo.GetSequenceAtRankAsync(eventsToDelete);
         if (cpAtRank == null)
         {
-            // Shouldn't happen (we checked totalEvents > TARGET_KEEP_COUNT above), but be defensive.
+            // Shouldn't happen (we checked totalEvents > TargetKeepCount above), but be defensive.
             return new CompactionPreview(
                 HeadSeq: headSeq, MinSeq: minSeq.Value, TotalEvents: totalEvents,
                 ActivePeerCount: allPeers.Count,
@@ -125,12 +153,13 @@ public class CompactionService(
             HeadSeq: headSeq, MinSeq: minSeq.Value, TotalEvents: totalEvents,
             ActivePeerCount: allPeers.Count,
             ProposedCp: cpAtRank.Value, CanCompact: true,
-            Reason: $"Keep the {TARGET_KEEP_COUNT} most recent operations, delete the rest.",
+            Reason: $"Keep the {TargetKeepCount} most recent operations, delete the rest.",
             Warnings: warnings, PeerPositions: peerPositions,
-            EventsToDelete: eventsToDelete, EventsRemaining: TARGET_KEEP_COUNT);
+            EventsToDelete: eventsToDelete, EventsRemaining: TargetKeepCount);
     }
 
-    public async Task<CompactionResult> ExecuteAsync(long? explicitCp = null, string reason = "manual")
+    public async Task<CompactionResult> ExecuteAsync(
+        long? explicitCp = null, string reason = "manual", bool acceptCuttingOffPeers = false)
     {
         // ConflictException, not a bare InvalidOperationException: "someone else is already doing
         // this" is a 409 the caller can retry, while everything else ExecuteAsync refuses is a bad
@@ -142,7 +171,7 @@ public class CompactionService(
 
         try
         {
-            return await ExecuteCoreAsync(explicitCp, reason);
+            return await ExecuteCoreAsync(explicitCp, reason, acceptCuttingOffPeers);
         }
         finally
         {
@@ -150,9 +179,39 @@ public class CompactionService(
         }
     }
 
-    private async Task<CompactionResult> ExecuteCoreAsync(long? explicitCp, string reason)
+    private async Task<CompactionResult> ExecuteCoreAsync(
+        long? explicitCp, string reason, bool acceptCuttingOffPeers)
     {
         var preview = await PreviewAsync();
+
+        // The peer-safety check runs on EVERY path, not only when the caller lets the preview
+        // choose the checkpoint. It used to live in PreviewAsync alone, and ExecuteCoreAsync
+        // consulted it only through preview.ProposedCp — so a caller passing an explicit cp
+        // sailed straight past it and stranded peers with nothing logged and nothing said. The
+        // explicit-cp path is exactly the one an operator reaches for when the button is greyed
+        // out, which made it the likeliest way to hit the case the check exists for.
+        //
+        // acceptCuttingOffPeers is the only way through, and it is deliberately not a no-op alias
+        // for "use an explicit cp": a dormant phone otherwise blocks every compaction forever, so
+        // there has to be a documented exit — but one that names what it is doing in the log.
+        var atRisk = preview.AtRiskPeers ?? [];
+        if (atRisk.Count > 0)
+        {
+            if (!acceptCuttingOffPeers)
+                throw new ConflictException(
+                    $"{atRisk.Count} peer(s) would be cut off by this compaction: " +
+                    string.Join(", ", atRisk) + ". Wait for them to sync, raise " +
+                    "BMB_COMPACTION_KEEP_COUNT, revoke them, or repeat with acceptCuttingOffPeers.");
+
+            logger.LogWarning(
+                "Compaction proceeding with acceptCuttingOffPeers: {Count} peer(s) will be unable to " +
+                "resume from their last position and must wipe and rejoin — {Peers}",
+                atRisk.Count, string.Join(", ", atRisk));
+        }
+
+        // ProposedCp is 0 when the preview refused, so an override has to supply the checkpoint
+        // itself; the range guards below turn a missing one into a clear 400 rather than a
+        // confusing attempt to compact to sequence zero.
         var cp = explicitCp ?? preview.ProposedCp;
 
         // ArgumentException: an out-of-range explicitCp is the caller's parameter being wrong,
@@ -257,12 +316,29 @@ public class CompactionService(
     }
 }
 
+/// <param name="AtRiskPeers">
+/// Peers that this compaction would cut off — behind by more than the keep-count, or never synced.
+/// Non-empty means <c>CanCompact</c> is false unless the caller explicitly accepts it. Named
+/// individually rather than counted, because "which machine am I about to strand" is the question
+/// an operator actually has to answer before overriding.
+/// </param>
 public record CompactionPreview(
     long HeadSeq, long MinSeq, int TotalEvents, int ActivePeerCount,
     long ProposedCp, bool CanCompact, string Reason,
     List<string> Warnings, List<PeerPosition> PeerPositions,
-    int EventsToDelete, int EventsRemaining);
+    int EventsToDelete, int EventsRemaining,
+    List<Guid>? AtRiskPeers = null);
 
 public record PeerPosition(Guid NodeId, long LastSequenceNum, DateTime UpdatedAt);
 public record CompactionResult(long CpAfter, int EventsDeleted, string SnapshotFileName);
-public record CompactionRequest(long? ExplicitCp = null, string Reason = "manual");
+/// <param name="AcceptCuttingOffPeers">
+/// Proceed even though the preview says peers would be stranded. Off by default, and it exists for
+/// a deadlock that had no exit: one phone that has been off for a week blocks every compaction, so
+/// <c>tbl_event</c> grows without bound and nobody can do anything about it but revoke the phone.
+///
+/// <para>It also closes a hole rather than opening one. The peer check lived only in
+/// <c>PreviewAsync</c>, so passing an explicit checkpoint skipped it entirely and stranded peers
+/// with no warning at all. ExecuteAsync now runs the same check on every path; this flag is the
+/// only way past it, and it is recorded in the log line with the list of peers it stranded.</para>
+/// </param>
+public record CompactionRequest(long? ExplicitCp = null, string Reason = "manual", bool AcceptCuttingOffPeers = false);
