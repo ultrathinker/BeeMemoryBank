@@ -62,6 +62,25 @@ public partial class EventApplier(
         var node = await whitelistRepo.GetByNodeIdAsync(evt.NodeId);
         if (node == null)
         {
+            // "No ACTIVE row" covers two situations that must not be treated alike, and
+            // GetByNodeIdAsync filters on status = 'A', so both arrive here as null. Look again
+            // including revoked rows to tell them apart.
+            //
+            // Never heard of this node  -> deferrable: in a mesh the whitelist_add can easily
+            //   arrive after an event it authorized, and once it lands the same event applies.
+            // Known but REVOKED         -> permanent, and deliberately so. An admin revoking a peer
+            //   is an answer, not a missing precondition. Deferring would keep the revoked node's
+            //   backlog alive for the whole retry budget and let it apply in full if the peer were
+            //   re-added inside that window — quietly resurrecting writes the revocation was meant
+            //   to discard.
+            var revoked = await whitelistRepo.GetByNodeIdAsync(evt.NodeId, includeDeleted: true);
+            if (revoked != null)
+            {
+                logger.LogWarning("Event {EventId} ({Type}) rejected: originator {NodeId} is revoked",
+                    evt.EventId, evt.EventType, evt.NodeId);
+                throw new UnauthorizedAccessException($"Node {evt.NodeId} is revoked.");
+            }
+
             logger.LogWarning("Event {EventId} ({Type}) rejected: originator {NodeId} not in local whitelist (relay drop? or whitelist_add still in flight)",
                 evt.EventId, evt.EventType, evt.NodeId);
             throw new OriginatorNotWhitelistedException(evt.NodeId);

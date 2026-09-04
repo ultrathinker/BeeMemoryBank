@@ -45,4 +45,27 @@ public class SyncFailureClassifierTests
     public void NotSupportedException_UnknownProtocolVersion_IsPermanent() =>
         SyncFailureClassifier.Classify(new NotSupportedException("Unknown protocol version: 99"))
             .Should().Be(SyncFailureKind.Permanent);
+
+    /// <summary>
+    /// A revoked peer is an ANSWER, not a missing precondition, and must not be deferred.
+    ///
+    /// <para>
+    /// Both "never heard of this node" and "this node is revoked" reach the same branch, because
+    /// the whitelist lookup filters on status = 'A' and returns null for either. Treating them
+    /// alike would keep a revoked node's backlog alive for the whole deferred budget and let it
+    /// apply in full if the peer were re-added inside that window — resurrecting exactly the writes
+    /// the revocation was meant to discard.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void RevokedOriginator_IsPermanent_NotDeferred()
+    {
+        // The revoked branch throws the plain base type; only the never-seen branch throws the
+        // deferrable subclass.
+        SyncFailureClassifier.Classify(new UnauthorizedAccessException("Node x is revoked."))
+            .Should().Be(SyncFailureKind.Permanent);
+
+        SyncFailureClassifier.Classify(new OriginatorNotWhitelistedException(Guid.NewGuid()))
+            .Should().Be(SyncFailureKind.Deferred);
+    }
 }
