@@ -62,9 +62,9 @@ public partial class EventApplier(
         var node = await whitelistRepo.GetByNodeIdAsync(evt.NodeId);
         if (node == null)
         {
-            logger.LogWarning("Event {EventId} ({Type}) rejected: originator {NodeId} not in local whitelist (relay drop?)",
+            logger.LogWarning("Event {EventId} ({Type}) rejected: originator {NodeId} not in local whitelist (relay drop? or whitelist_add still in flight)",
                 evt.EventId, evt.EventType, evt.NodeId);
-            throw new UnauthorizedAccessException($"Node {evt.NodeId} is not in the whitelist.");
+            throw new OriginatorNotWhitelistedException(evt.NodeId);
         }
 
         var sigPayload = EventSignature.BuildPayload(evt);

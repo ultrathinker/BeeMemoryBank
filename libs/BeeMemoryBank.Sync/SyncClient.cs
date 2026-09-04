@@ -163,19 +163,21 @@ public class SyncClient(
                     // M5c: a genuinely broken event (bad signature, whitelist ordering, any other
                     // permanent failure) used to stop the WHOLE page here, every cycle, forever —
                     // the cursor never moved past it, so no event after it in this page (or any
-                    // later pull) ever got a chance either. Once the SAME event has failed
-                    // QuarantineThreshold times in a row, treat it as permanently skipped instead:
-                    // advance past it and keep going, rather than wedging the entire pull behind
-                    // one bad event. A merely transient failure (network blip, momentarily-locked
-                    // local DB) hasn't built up a streak yet and still gets the old
-                    // stop-and-retry-from-here behavior.
-                    var quarantined = await SyncEventQuarantine.RecordFailureAsync(quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex.Message);
+                    // later pull) ever got a chance either. Once the SAME event has exhausted its
+                    // budget (SyncEventQuarantine.IsQuarantined — a handful of attempts for a
+                    // permanent failure, hours for a deferred one: originator not yet whitelisted,
+                    // blob not yet transported, DEK rotation predecessor not yet applied — see
+                    // SyncFailureClassifier), treat it as skipped instead: advance past it and keep
+                    // going, rather than wedging the entire pull behind one event. A failure still
+                    // within its budget hasn't built up enough of a streak yet and still gets the
+                    // old stop-and-retry-from-here behavior.
+                    var quarantined = await SyncEventQuarantine.RecordFailureAsync(quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex);
                     if (quarantined)
                     {
                         logger.LogError(ex,
-                            "QUARANTINED event {Seq} ({EventId}, {Type}) after {N} consecutive failures — " +
+                            "QUARANTINED event {Seq} ({EventId}, {Type}) — exhausted its retry budget, " +
                             "skipping permanently. See GET /api/sync/quarantine.",
-                            evt.SequenceNum, evt.EventId, evt.EventType, SyncEventQuarantine.QuarantineThreshold);
+                            evt.SequenceNum, evt.EventId, evt.EventType);
                         lastApplied = evt.SequenceNum;
                         droppedCount++;
                         continue;

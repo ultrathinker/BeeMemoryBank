@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Sync;
 /// event.
 /// </summary>
 public sealed class BlobMissingException(string hash)
-    : InvalidOperationException($"Referenced blob {hash} is not in the local blob store.")
+    : InvalidOperationException($"Referenced blob {hash} is not in the local blob store."), IDeferrableSyncFailure
 {
     public string Hash { get; } = hash;
 }
