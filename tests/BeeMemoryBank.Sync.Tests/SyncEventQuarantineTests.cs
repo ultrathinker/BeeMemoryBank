@@ -1,3 +1,5 @@
+using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using FluentAssertions;
@@ -144,5 +146,166 @@ public class SyncEventQuarantineTests : IAsyncLifetime
         // the automatic clear-on-success path) must not throw.
         var act = async () => await SyncEventQuarantine.ClearFailureAsync(_node.QuarantineRepo, Guid.NewGuid());
         await act.Should().NotThrowAsync();
+    }
+
+    // ───────────────────── Night-7: permanent vs. deferred ─────────────────────
+
+    /// <summary>
+    /// The core night-7 fix, exercised end to end through the real EventApplier throw site: a node
+    /// that has not yet received the originating node's whitelist_add rejects its events with
+    /// OriginatorNotWhitelistedException, which SyncFailureClassifier marks Deferred. Recording
+    /// that failure MORE times than the OLD five-attempt permanent threshold must still leave the
+    /// event unquarantined — the whole point is that this failure must not be dropped on the same
+    /// schedule as a forged signature — and once the precondition (the whitelist_add) actually
+    /// arrives, the identical event applies cleanly.
+    /// </summary>
+    [Fact]
+    public async Task DeferredFailure_OriginatorNotWhitelisted_SurvivesPastOldThreshold_ThenSucceeds()
+    {
+        var nodeA = new ConcreteFixture();
+        await nodeA.InitializeAsync();
+        await nodeA.InitService.InitializeAsync("admin", "NodeA", "passwordA");
+        await nodeA.Session.UnlockAsync("passwordA");
+
+        var nodeB = new ConcreteFixture();
+        await nodeB.InitializeAsync();
+        await nodeB.InitService.InitializeAsync("admin", "NodeB", "passwordB");
+        await nodeB.Session.UnlockAsync("passwordB");
+
+        // Deliberately no whitelist entry for NodeA on NodeB yet — models a whitelist_add that is
+        // still propagating across the mesh when NodeA's own event arrives first.
+        await nodeA.ArticleService.CreateAsync("A", "/", new List<string>(), "x");
+        var evt = (await nodeA.EventLogRepo.GetAfterSequenceAsync(0))[0];
+
+        bool quarantined = false;
+        var attempts = SyncEventQuarantine.QuarantineThreshold + 3; // past the OLD permanent threshold
+        for (var i = 0; i < attempts; i++)
+        {
+            var act = () => nodeB.ApplyFromAsync(nodeA, evt);
+            var thrown = await act.Should().ThrowAsync<OriginatorNotWhitelistedException>();
+            quarantined = await SyncEventQuarantine.RecordFailureAsync(
+                nodeB.QuarantineRepo, evt.EventId, evt.EventType, evt.NodeId, thrown.Which);
+        }
+
+        quarantined.Should().BeFalse(
+            "a deferred failure must not be quarantined merely for crossing the old 5-attempt permanent threshold");
+
+        var entry = (await SyncEventQuarantine.ListAllAsync(nodeB.QuarantineRepo))
+            .Should().ContainSingle(e => e.EventId == evt.EventId).Subject;
+        entry.DeferredFailureCount.Should().Be(attempts);
+        entry.PermanentFailureCount.Should().Be(0);
+        entry.Quarantined.Should().BeFalse();
+
+        // The precondition arrives: NodeB's admin (or a later sync from a third peer) adds NodeA
+        // to the whitelist.
+        var identityA = (await nodeA.NodeRepo.GetAsync())!;
+        var now = DateTime.UtcNow;
+        await nodeB.WhitelistRepo.CreateAsync(new WhitelistEntry
+        {
+            NodeId = identityA.NodeId,
+            DisplayName = identityA.DisplayName,
+            Ed25519PublicKey = identityA.Ed25519PublicKey,
+            Status = "A",
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+
+        var result = await nodeB.ApplyFromAsync(nodeA, evt);
+        result.Should().Be(EventApplyResult.Applied);
+
+        await nodeA.DisposeAsync();
+        await nodeB.DisposeAsync();
+    }
+
+    /// <summary>
+    /// The other half of the same fix: a genuinely permanent failure (a tampered signature) must
+    /// NOT get the deferred event's long leash. It is still quarantined at exactly the original
+    /// QuarantineThreshold, unaffected by the new deferred budget existing at all.
+    /// </summary>
+    [Fact]
+    public async Task PermanentFailure_BadSignature_StillQuarantinedAtOriginalThreshold()
+    {
+        var nodeA = new ConcreteFixture();
+        await nodeA.InitializeAsync();
+        await nodeA.InitService.InitializeAsync("admin", "NodeA", "passwordA");
+        await nodeA.Session.UnlockAsync("passwordA");
+
+        var nodeB = new ConcreteFixture();
+        await nodeB.InitializeAsync();
+        await nodeB.InitService.InitializeAsync("admin", "NodeB", "passwordB");
+        await nodeB.Session.UnlockAsync("passwordB");
+
+        var identityA = (await nodeA.NodeRepo.GetAsync())!;
+        var now = DateTime.UtcNow;
+        await nodeB.WhitelistRepo.CreateAsync(new WhitelistEntry
+        {
+            NodeId = identityA.NodeId,
+            DisplayName = identityA.DisplayName,
+            Ed25519PublicKey = identityA.Ed25519PublicKey,
+            Status = "A",
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+
+        await nodeA.ArticleService.CreateAsync("A", "/", new List<string>(), "x");
+        var evt = (await nodeA.EventLogRepo.GetAfterSequenceAsync(0))[0];
+        evt.Signature[0] ^= 0xFF; // tamper — a bad signature never becomes valid by waiting
+
+        bool quarantined = false;
+        for (var i = 0; i < SyncEventQuarantine.QuarantineThreshold; i++)
+        {
+            var act = () => nodeB.ApplyFromAsync(nodeA, evt);
+            var thrown = await act.Should().ThrowAsync<InvalidDataException>();
+            quarantined = await SyncEventQuarantine.RecordFailureAsync(
+                nodeB.QuarantineRepo, evt.EventId, evt.EventType, evt.NodeId, thrown.Which);
+        }
+
+        quarantined.Should().BeTrue("a genuinely bad signature must still be quarantined promptly");
+
+        var entry = (await SyncEventQuarantine.ListAllAsync(nodeB.QuarantineRepo))
+            .Should().ContainSingle(e => e.EventId == evt.EventId).Subject;
+        entry.PermanentFailureCount.Should().Be(SyncEventQuarantine.QuarantineThreshold);
+        entry.DeferredFailureCount.Should().Be(0);
+        entry.Quarantined.Should().BeTrue();
+
+        await nodeA.DisposeAsync();
+        await nodeB.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Pure-function coverage of the deferred budget itself (SyncEventQuarantine.IsQuarantined):
+    /// it is judged by wall-clock time elapsed since the FIRST failure, not by attempt count — see
+    /// DeferredQuarantineBudget's own remarks for why. Constructing the entry directly, rather than
+    /// waiting six real hours, is the only practical way to exercise "the budget eventually runs
+    /// out and the event becomes permanent" (the brief's requirement #4).
+    /// </summary>
+    [Fact]
+    public void IsQuarantined_DeferredBudgetExhausted_BecomesQuarantined()
+    {
+        var now = DateTime.UtcNow;
+        var entry = new SyncQuarantineEntry(
+            EventId: Guid.NewGuid(), EventType: "article_update", OriginNodeId: Guid.NewGuid(),
+            PermanentFailureCount: 0, DeferredFailureCount: 3,
+            FirstFailedAtUtc: now - SyncEventQuarantine.DeferredQuarantineBudget - TimeSpan.FromMinutes(1),
+            LastFailedAtUtc: now - TimeSpan.FromMinutes(1),
+            LastError: "blob missing", LastFailureKind: SyncFailureKind.Deferred);
+
+        SyncEventQuarantine.IsQuarantined(entry, now).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsQuarantined_DeferredWithinBudget_EvenWithManyAttempts_NotYetQuarantined()
+    {
+        var now = DateTime.UtcNow;
+        // Many attempts (well past the OLD permanent threshold) but still well inside the
+        // wall-clock budget — attempt count alone must not trigger quarantine for a deferred entry.
+        var entry = new SyncQuarantineEntry(
+            EventId: Guid.NewGuid(), EventType: "article_update", OriginNodeId: Guid.NewGuid(),
+            PermanentFailureCount: 0, DeferredFailureCount: 500,
+            FirstFailedAtUtc: now - TimeSpan.FromHours(1),
+            LastFailedAtUtc: now,
+            LastError: "blob missing", LastFailureKind: SyncFailureKind.Deferred);
+
+        SyncEventQuarantine.IsQuarantined(entry, now).Should().BeFalse();
     }
 }

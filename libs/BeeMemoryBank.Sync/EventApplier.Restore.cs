@@ -118,8 +118,7 @@ public partial class EventApplier
             logger.LogWarning(
                 "DEK_ROTATION_COMMIT {CommitId} from {NodeId} references unknown ProposedEventId {ProposedId}; deferring (will retry on next sync pull when PROPOSED arrives, or fail permanently if it never does).",
                 evt.EventId, evt.NodeId, payload.ProposedEventId);
-            throw new InvalidOperationException(
-                $"DEK_ROTATION_COMMIT references missing ProposedEventId {payload.ProposedEventId}; deferring until PROPOSED is delivered.");
+            throw new DekRotationPredecessorMissingException(payload.ProposedEventId);
         }
 
         var nowIso = DateTime.UtcNow.ToString("O");

@@ -1,0 +1,31 @@
+-- Splits tbl_sync_quarantine's single failure_count budget into two, because the fixed
+-- five-consecutive-failures threshold (SyncEventQuarantine.QuarantineThreshold) was written
+-- assuming every apply failure is permanent — a bad Ed25519 signature, malformed JSON, an
+-- undecodable payload. In practice several common failures are not: the originating node's
+-- whitelist_add has not arrived yet (so the signature/superadmin gate rejects an event that will
+-- verify fine once it does), the blob an article/media event references has not been transported
+-- yet, or a DEK_ROTATION_COMMIT arrives before the PROPOSED it commits. All three resolve
+-- themselves within minutes to hours as the rest of the mesh catches up. Counting them against the
+-- same five-strikes budget as a forged signature meant a perfectly recoverable write got dropped
+-- — silently, forever — about five sync cycles (roughly five minutes at the default interval, far
+-- less under push-triggered near-realtime sync) after it first failed.
+--
+-- failure_count keeps its name and meaning (it already only ever counted what is now called a
+-- "permanent" failure, so nothing here needs to migrate its existing values) and becomes the
+-- PERMANENT counter; deferred_failure_count is new and tracks the OTHER kind separately, so a
+-- string of deferred failures can never push an event over the permanent threshold. The decision
+-- of which counter a given attempt increments is made once, in code
+-- (BeeMemoryBank.Sync.SyncFailureClassifier, from the exception the apply attempt threw), not
+-- stored as a per-row flag — same reasoning as the original table comment gives for not storing
+-- "is_quarantined": the rule can change without a migration.
+--
+-- last_failure_kind mirrors the classification of the MOST RECENT attempt only. It drives the
+-- deferred budget, which is judged by wall-clock time elapsed since first_failed_at_utc rather
+-- than by attempt count (see SyncEventQuarantine.DeferredQuarantineBudget for why: push-triggered
+-- sync can retry an event many times within a single minute under active use, so an attempt-count
+-- budget "generous" enough to span hours at the default 60-second interval could instead be spent
+-- in minutes). DEFAULT 'permanent' backfills every pre-existing row correctly, since deferred
+-- classification did not exist before this migration — every failure recorded so far really was
+-- counted as, and behaved as, permanent.
+ALTER TABLE tbl_sync_quarantine ADD COLUMN deferred_failure_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tbl_sync_quarantine ADD COLUMN last_failure_kind TEXT NOT NULL DEFAULT 'permanent';
