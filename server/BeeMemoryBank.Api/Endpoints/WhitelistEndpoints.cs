@@ -106,10 +106,12 @@ public static class WhitelistEndpoints
             IAuditLogRepository auditRepo,
             HttpContext ctx) =>
         {
-            // Every node that joins with the master password arrives as a superadmin, because a
-            // join grants full trust — and until now there was no way back. A peer you stopped
-            // trusting could only be revoked outright, which also stops it receiving content; there
-            // was nothing between "full member of the mesh" and "cut off". This is that step.
+            // A node that joins with the master password now arrives content-only (JoinEndpoints.cs):
+            // it can sync articles but has no say over cluster state. This endpoint is how a node
+            // gets that authority — an explicit, deliberate act by an existing superadmin — and also
+            // how it is taken away again without cutting the peer off from content entirely. Before
+            // demotion existed, "no longer trust this peer with cluster state" meant revoking it
+            // outright, which also stopped it receiving content; this is the step in between.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 

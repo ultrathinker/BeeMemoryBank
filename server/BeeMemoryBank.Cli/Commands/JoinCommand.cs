@@ -214,7 +214,16 @@ public static class JoinCommand
             ApiAddress = remoteUrl.TrimEnd('/'),
             Status = "A",
             CreatedAt = now,
-            UpdatedAt = now
+            UpdatedAt = now,
+            // Trust-on-first-use of the bootstrap node, not "trust-on-join": this node never has a
+            // whitelist row for itself (see EventApplier's "a node must never be in its own
+            // whitelist"), so its own is_superadmin status cannot travel in the join response —
+            // there is nothing to read it from. The operator vouched for this specific node by
+            // typing its URL and the master password that secures the whole vault; that is the
+            // trust anchor a fresh mesh has to bootstrap from. This is orthogonal to (and does not
+            // reintroduce) the default this node itself receives from /api/join, which is always
+            // content-only until an existing superadmin explicitly promotes it.
+            IsSuperadmin = true
         };
         await whitelistRepo.CreateAsync(remoteEntry);
 

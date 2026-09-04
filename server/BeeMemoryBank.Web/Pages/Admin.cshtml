@@ -337,7 +337,7 @@
                                 }
                                 @if (entry.IsSuperadmin && !isSelf)
                                 {
-                                    <sl-tooltip content="This peer can revoke other peers, hard-delete content across the whole network, and restore every node from its own snapshot. Every node that joined with the master password starts this way." placement="top">
+                                    <sl-tooltip content="This peer can revoke other peers, hard-delete content across the whole network, and restore every node from its own snapshot. New joins no longer start this way — this peer was explicitly promoted, or joined before that change." placement="top">
                                         <sl-badge variant="warning" pill style="margin-left:4px;">superadmin</sl-badge>
                                     </sl-tooltip>
                                 }

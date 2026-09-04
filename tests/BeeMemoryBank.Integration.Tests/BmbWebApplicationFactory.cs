@@ -223,9 +223,10 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
             Status = "A",
             CreatedAt = now,
             UpdatedAt = now,
-            // Mirror prod /api/init/join: trust-on-join → Superadmin in local whitelist.
-            // Without this, EventApplier blocks legitimate cross-node sync of whitelist/
-            // hard-delete/restore events. (Wave 2 mitigation for gemini #1/#2/#3.)
+            // Mirrors JoinCommand.cs / NodeSetupService.cs / InitEndpoints.cs's own join flow:
+            // trust-on-first-use of the bootstrap node (the operator vouched for it by using its
+            // master password), independent of the content-only default a fresh joiner itself now
+            // gets from /api/join. See SECURITY.md#trust-model.
             IsSuperadmin = true
         });
     }
