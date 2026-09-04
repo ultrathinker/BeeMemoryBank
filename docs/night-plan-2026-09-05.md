@@ -210,6 +210,29 @@ test fail, restore the fix, watch it pass — and to say so plainly if a test pa
   passed with the fix reverted; that is the failure mode these instructions exist to prevent, and it
   self-reported it.
 
+- **Item 13 (agent, reviewed and merged, `1e962b31`).** Scoped deliberately away from what the
+  original finding proposed. Making Storage's write methods `internal` would have meant a mechanical
+  sweep of 83 direct call sites, and deciding which of those *should* move behind a service is
+  judgement, not mechanics — not something to land unattended. A guardrail test delivers the same
+  protection: write methods are discovered by reflecting on the current `I*Repository` interfaces
+  (not a hardcoded name list, so it survives the repository changes item 10 is making), call sites
+  are found by source scan, and anything outside Core that is not in an explicit allow-list fails
+  the test with a message naming the file, the line and the two ways to resolve it. Verified here
+  by injecting a violation and reading the failure.
+
+  **Two real bugs it surfaced, of exactly the class already fixed once (folder deleted only locally,
+  tags that never propagated), both still open:**
+
+  1. `WhitelistEndpoints.cs` — `PUT /api/whitelist/{nodeId}` edits DisplayName / ApiAddress /
+     CanGenerateEmbeddings and never logs an event, unlike its siblings `/superadmin` and `/address`
+     in the same file. A rename through this route appears never to reach the mesh.
+  2. `JoinEndpoints.cs` — the re-join-with-same-key branch updates DisplayName / ApiAddress with no
+     event, unlike the new-peer branch three lines below it.
+
+  Not fixed in that task by instruction (enumerate, classify, guard — nothing else), and not fixed
+  immediately because item 20 was live in both files. They are allow-listed at call-site granularity
+  so the guardrail passes today, each entry flagged SUSPICIOUS inline with the gap named.
+
 ## Queued after those
 
 13 (repositories reachable from the API layer), 16 (media into the blob store by hash),
