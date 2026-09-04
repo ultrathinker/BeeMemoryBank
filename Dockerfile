@@ -23,7 +23,7 @@ RUN dotnet publish server/BeeMemoryBank.Web/BeeMemoryBank.Web.csproj \
 # The CLI is the break-glass path: `bmb init reset` wipes a node back to first-run Setup when
 # nobody can sign in to the web UI any more (every superadmin account lost, or the Web layer
 # broken). That is precisely the situation where you cannot install anything either, so it has to
-# already be inside the image — `docker exec … dotnet /app/cli/BeeMemoryBank.Cli.dll init reset`.
+# already be inside the image — `docker exec … dotnet /app/cli/bmb.dll init reset`.
 RUN dotnet publish server/BeeMemoryBank.Cli/BeeMemoryBank.Cli.csproj \
     -c Release -o /app/cli
 

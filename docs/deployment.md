@@ -75,7 +75,7 @@ available two ways. Both require the master password as confirmation; the passwo
 - **Web UI:** `/Admin` → *Reset This Node*. Superadmin only.
 - **Host CLI:** `bmb init reset --master-password '<password>' --yes` — for when nobody can sign in
   any more (every superadmin account lost, or the Web layer itself broken). Under Docker:
-  `docker exec -it <container> dotnet /app/cli/BeeMemoryBank.Cli.dll init reset --master-password '<password>' --yes`
+  `docker exec -it <container> dotnet /app/cli/bmb.dll init reset --master-password '<password>' --yes`
 
 Both write an append-only line to `<data>/reset-audit.log` before starting, because the wipe deletes
 `tbl_audit_log` along with everything else — a record kept only inside the database could never
