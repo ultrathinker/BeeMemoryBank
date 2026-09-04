@@ -28,6 +28,12 @@ public static class ObsidianImportEndpoints
                 var report = await importService.ImportAsync(stream, ctx.RequestAborted);
                 return Results.Ok(report);
             }
+            catch (ZipExtractionLimitException ex)
+            {
+                // The upload is at fault, not the node - and the message names the offending file,
+                // so it has to reach the operator rather than being flattened into a 500.
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 400);
+            }
             catch (Exception ex)
             {
                 return Results.Json(new ErrorResponse($"Import failed: {ex.Message}"), statusCode: 500);

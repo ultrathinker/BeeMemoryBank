@@ -18,18 +18,6 @@ public partial class SnapshotService
     private const string DbFileName = "beememorybank.db";
     private const string ManifestFileName = "manifest.json";
 
-    private static readonly string[] SecretTables =
-    [
-        "tbl_node_identity", "tbl_session", "tbl_agent", "tbl_agent_access",
-        "tbl_sync_position", "tbl_sync_push_position", "tbl_compaction_log", "tbl_event",
-        "tbl_key_slot", "tbl_user", "tbl_folder_acl_entry", "tbl_audit_log",
-        "tbl_hard_delete_audit"
-        // NOTE: tbl_projection_matrix is intentionally INCLUDED in the snapshot:
-        // the matrix is shared across nodes with the same master DEK so that
-        // concept-tag embeddings remain compatible. Each node's DEK wraps the
-        // same plaintext matrix on all peers.
-    ];
-
     private const string DbEncryptionMagicV1 = "BMBDB1";
     private const string DbEncryptionMagicV2 = "BMBDB2";
     private const int DbEncryptionOverheadV1 = 6 + 12 + 16;

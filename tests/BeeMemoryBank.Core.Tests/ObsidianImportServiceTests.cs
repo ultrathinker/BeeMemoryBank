@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using SixLabors.ImageSharp;
 using BeeMemoryBank.Core.Services;
@@ -15,6 +16,7 @@ public class ObsidianImportServiceTests : IAsyncLifetime
     private InitializationService InitService { get; set; } = null!;
     private ArticleService ArticleService { get; set; } = null!;
     private MediaService MediaService { get; set; } = null!;
+    private IFolderRepository FolderRepo { get; set; } = null!;
     private ObsidianImportService ImportService { get; set; } = null!;
     private string TempMediaDir { get; set; } = "";
 
@@ -51,6 +53,7 @@ public class ObsidianImportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullEventLogger(),
             new MediaStorageOptions(TempMediaDir), Factory);
 
+        FolderRepo = folderRepo;
         ImportService = new ObsidianImportService(ArticleService, MediaService);
 
         await InitService.InitializeAsync("admin", "TestNode", "password");
@@ -266,5 +269,92 @@ public class ObsidianImportServiceTests : IAsyncLifetime
         var report = await ImportService.ImportAsync(zip, CancellationToken.None);
 
         report.ArticlesCreated.Should().Be(1);
+    }
+
+    // ---- Decompression-bomb ceilings ---------------------------------------------------------
+
+    [Fact]
+    public async Task EntryExpandingPastPerEntryCeiling_RefusesImport_AndWritesNothing()
+    {
+        var archive = ZipBombFixtures.BuildArchive(zip =>
+        {
+            ZipBombFixtures.AddText(zip, "ok.md", "A perfectly ordinary note.");
+            ZipBombFixtures.AddFiller(zip, "bomb.md", megabytes: 65);
+        });
+        archive.Length.Should().BeLessThan(2 * ZipBombFixtures.OneMb,
+            "the upload has to stay small enough to pass the endpoint size limit - that is what makes it a bomb");
+
+        var foldersBefore = await FolderRepo.CountAsync();
+        using var zipStream = new MemoryStream(archive);
+
+        var act = () => ImportService.ImportAsync(zipStream, CancellationToken.None);
+        (await act.Should().ThrowAsync<ZipExtractionLimitException>())
+            .WithMessage("*bomb.md*64 MB*");
+
+        // The healthy "ok.md" is gone too: the archive is refused as a whole, before the first write.
+        (await ArticleService.ListAsync()).Should().BeEmpty();
+        (await FolderRepo.CountAsync()).Should().Be(foldersBefore);
+    }
+
+    [Fact]
+    public async Task ManyLegalSizedEntries_TrippingTheAggregateCeiling_RefusesImport_AndWritesNothing()
+    {
+        // 34 x 63 MB: every single entry is under the per-entry ceiling, so only the running
+        // total across the archive can catch this shape.
+        const int entryCount = 34;
+        var archive = ZipBombFixtures.BuildArchive(zip =>
+        {
+            for (var i = 0; i < entryCount; i++)
+                ZipBombFixtures.AddFiller(zip, $"note{i:00}.md", megabytes: 63);
+        });
+
+        var foldersBefore = await FolderRepo.CountAsync();
+        using var zipStream = new MemoryStream(archive);
+
+        var act = () => ImportService.ImportAsync(zipStream, CancellationToken.None);
+        (await act.Should().ThrowAsync<ZipExtractionLimitException>())
+            .WithMessage("*in total*");
+
+        (await ArticleService.ListAsync()).Should().BeEmpty();
+        (await FolderRepo.CountAsync()).Should().Be(foldersBefore);
+    }
+
+    [Fact]
+    public async Task ForgedDeclaredLength_IsNotBelievedOverTheBytesActuallyRead()
+    {
+        var archive = ZipBombFixtures.BuildArchive(zip =>
+            ZipBombFixtures.AddFiller(zip, "liar.md", megabytes: 65, level: CompressionLevel.NoCompression));
+        ZipBombFixtures.ForgeDeclaredUncompressedSize(archive, declaredBytes: 1024);
+
+        var (declared, _) = ZipBombFixtures.DeclaredSizeOf(archive, "liar.md");
+        declared.Should().Be(1024,
+            "the fixture must really lie, otherwise this test would pass against a Length-based check too");
+
+        var foldersBefore = await FolderRepo.CountAsync();
+        using var zipStream = new MemoryStream(archive);
+
+        var act = () => ImportService.ImportAsync(zipStream, CancellationToken.None);
+        (await act.Should().ThrowAsync<ZipExtractionLimitException>())
+            .WithMessage("*liar.md*");
+
+        (await ArticleService.ListAsync()).Should().BeEmpty();
+        (await FolderRepo.CountAsync()).Should().Be(foldersBefore);
+    }
+
+    [Fact]
+    public async Task NoteLargerThanOneReadBuffer_StillImportsByteForByte()
+    {
+        // Guards the other half of the change: reading through the bounding stream must not
+        // truncate at a buffer edge or mangle a multi-byte character split across two chunks.
+        var body = string.Concat(Enumerable.Range(0, 3000)
+            .Select(i => $"line {i}: произвольный текст с юникодом — {i * 7}\n"));
+        Encoding.UTF8.GetByteCount(body).Should().BeGreaterThan(81920 * 2);
+
+        using var zip = BuildZip(("big.md", body));
+        var report = await ImportService.ImportAsync(zip, CancellationToken.None);
+
+        report.ArticlesCreated.Should().Be(1);
+        var articles = await ArticleService.ListAsync(report.RootFolderPath);
+        (await ArticleService.GetContentAsync(articles[0].Id)).Should().Be(body);
     }
 }

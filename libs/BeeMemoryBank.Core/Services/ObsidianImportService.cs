@@ -46,35 +46,38 @@ public partial class ObsidianImportService(
 
         var imageIndex = BuildImageIndex(entries, report);
 
+        // Decompression-bomb guard. This runs before the first CreateAsync below, because the
+        // import writes article by article: discovering an over-sized entry half-way through
+        // would leave a partial "Imported from Obsidian" tree behind for the operator to clean up.
+        await ZipEntryReader.PreflightAsync(EntriesThatWillBeRead(entries, imageIndex), ct);
+        var reader = new ZipEntryReader();
+
         foreach (var entry in entries)
         {
             ct.ThrowIfCancellationRequested();
             var normalized = Normalize(entry.FullName);
-            if (!normalized.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) continue;
-            if (entry.Length == 0) continue;
+            if (!IsReadableMarkdown(entry, normalized)) continue;
 
             var relativeDir = GetRelativeDir(normalized, topDir);
             var treePath = relativeDir.Length > 0 ? $"{rootPath}/{relativeDir}" : rootPath;
 
             try
             {
-                string body;
-                using (var stream = entry.Open())
-                using (var reader = new StreamReader(stream, Encoding.UTF8))
-                {
-                    body = await reader.ReadToEndAsync(ct);
-                }
+                var body = await reader.ReadTextAsync(entry, ct);
 
                 var stripped = StripFrontmatter(body, out var rawFrontmatter);
                 var title = ExtractTitle(rawFrontmatter) ?? Path.GetFileNameWithoutExtension(entry.Name);
 
                 var perArticleUploaded = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
-                var rewritten = await RewriteEmbedsAsync(stripped, imageIndex, perArticleUploaded, report, ct);
+                var rewritten = await RewriteEmbedsAsync(stripped, imageIndex, perArticleUploaded, reader, report, ct);
 
                 await articleService.CreateAsync(title, treePath, [], rewritten);
                 report.ArticlesCreated++;
             }
             catch (OperationCanceledException) { throw; }
+            // Not a problem with one note — the archive itself is hostile or broken. Degrading it
+            // to a per-file warning would let the rest of the import carry on chewing through it.
+            catch (ZipExtractionLimitException) { throw; }
             catch (Exception ex)
             {
                 report.Warnings.Add($"Failed to import '{normalized}': {ex.Message}");
@@ -83,6 +86,23 @@ public partial class ObsidianImportService(
 
         return report;
     }
+
+    /// <summary>
+    /// A zero <see cref="ZipArchiveEntry.Length"/> is the archive's own claim, but acting on it
+    /// only ever SKIPS an entry, so a lie here costs a note, not memory.
+    /// </summary>
+    private static bool IsReadableMarkdown(ZipArchiveEntry entry, string normalizedName) =>
+        normalizedName.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && entry.Length != 0;
+
+    /// <summary>
+    /// Every entry <see cref="ImportAsync"/> may open: the notes it turns into articles, plus the
+    /// images they can embed. Anything else in the vault is never decompressed, so it is neither
+    /// a bomb risk nor a reason to refuse the import.
+    /// </summary>
+    private static IEnumerable<ZipArchiveEntry> EntriesThatWillBeRead(
+        List<ZipArchiveEntry> entries, Dictionary<string, ZipArchiveEntry> imageIndex) =>
+        entries.Where(e => IsReadableMarkdown(e, Normalize(e.FullName)))
+            .Concat(imageIndex.Values);
 
     private static string Normalize(string fullName) => fullName.Replace('\\', '/');
 
@@ -181,6 +201,7 @@ public partial class ObsidianImportService(
         string body,
         Dictionary<string, ZipArchiveEntry> imageIndex,
         Dictionary<string, Guid> uploadedByEntryPath,
+        ZipEntryReader reader,
         ObsidianImportReport report,
         CancellationToken ct)
     {
@@ -191,7 +212,7 @@ public partial class ObsidianImportService(
             var raw = match.Groups[1].Value.Trim();
             var fileName = Path.GetFileName(raw.Replace('\\', '/'));
             var alt = Path.GetFileNameWithoutExtension(fileName);
-            var replacement = await ProcessEmbedAsync(fileName, alt, imageIndex, uploadedByEntryPath, report, ct);
+            var replacement = await ProcessEmbedAsync(fileName, alt, imageIndex, uploadedByEntryPath, reader, report, ct);
             replacements.Add((match, replacement));
         }
 
@@ -201,7 +222,7 @@ public partial class ObsidianImportService(
             var path = match.Groups[2].Value;
             var fileName = Uri.UnescapeDataString(Path.GetFileName(path));
             var effectiveAlt = string.IsNullOrEmpty(alt) ? Path.GetFileNameWithoutExtension(fileName) : alt;
-            var replacement = await ProcessEmbedAsync(fileName, effectiveAlt, imageIndex, uploadedByEntryPath, report, ct);
+            var replacement = await ProcessEmbedAsync(fileName, effectiveAlt, imageIndex, uploadedByEntryPath, reader, report, ct);
             replacements.Add((match, replacement));
         }
 
@@ -225,6 +246,7 @@ public partial class ObsidianImportService(
         string alt,
         Dictionary<string, ZipArchiveEntry> imageIndex,
         Dictionary<string, Guid> uploadedByEntryPath,
+        ZipEntryReader reader,
         ObsidianImportReport report,
         CancellationToken ct)
     {
@@ -243,13 +265,7 @@ public partial class ObsidianImportService(
 
         if (!uploadedByEntryPath.TryGetValue(imageEntry.FullName, out var mediaId))
         {
-            byte[] bytes;
-            using (var stream = imageEntry.Open())
-            using (var ms = new MemoryStream())
-            {
-                await stream.CopyToAsync(ms, ct);
-                bytes = ms.ToArray();
-            }
+            var bytes = await reader.ReadBytesAsync(imageEntry, ct);
 
             var contentType = ExtensionToContentType.GetValueOrDefault(ext, "image/png");
 

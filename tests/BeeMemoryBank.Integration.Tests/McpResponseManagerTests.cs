@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -34,6 +36,26 @@ public class McpResponseManagerTests
     {
         var ctx = new DefaultHttpContext();
         ctx.Items["AuthAgent"] = new Agent { Id = agentId };
+        accessor.HttpContext = ctx;
+    }
+
+    /// <summary>
+    /// An agent whose owner user resolved — the shape AgentAuthMiddleware actually produces
+    /// post-migration-004 (both AuthAgent and a pre-built CallerIdentity carrying the owner).
+    /// </summary>
+    private static void ActAsAgentWithOwner(HttpContextAccessor accessor, int agentId, int ownerUserId, bool ownerIsSuperadmin = false)
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.Items["AuthAgent"] = new Agent { Id = agentId };
+        ctx.Items["CallerIdentity"] = new CallerIdentity(ownerUserId, agentId, $"agent-{agentId}", ownerIsSuperadmin);
+        accessor.HttpContext = ctx;
+    }
+
+    /// <summary>A human caller (web UI through the internal-key proxy), no agent involved.</summary>
+    private static void ActAsUser(HttpContextAccessor accessor, int userId, bool isSuperadmin = false)
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.Items["CallerIdentity"] = new CallerIdentity(userId, AgentId: null, ViaAgentName: null, isSuperadmin);
         accessor.HttpContext = ctx;
     }
 
@@ -329,6 +351,121 @@ public class McpResponseManagerTests
 
         using var doc = JsonDocument.Parse(result);
         doc.RootElement.GetProperty("error").GetString().Should().Contain("locked");
+    }
+
+    // ── S6 fix: a spooled continuation is readable only by the caller that produced it ────────
+
+    [Fact]
+    public void Continue_ByTheAgentThatSpooledIt_StillReturnsTheContent()
+    {
+        var (manager, accessor, _, _) = NewManager();
+        ActAsAgent(accessor, agentId: 1);
+        manager.TrySetMaxTokens(McpResponseManager.MinTokens, out _);
+        var response = new string('a', McpResponseManager.MinTokens * 6);
+
+        var (guid, _) = TruncateAndExtract(manager, response);
+
+        manager.Continue(guid, 0, ignoreLimit: true).Should().Be(response);
+    }
+
+    [Fact]
+    public void Continue_ByADifferentAgent_IsByteIdenticalToAGuidThatNeverExisted()
+    {
+        // The finding: the guid was the only thing needed to read a spooled response back, so any
+        // agent that learned one (they travel through tool results, transcripts and logs) could
+        // read content its own folder ACL denies it — the original call's ACL is applied once,
+        // never re-applied on the way out. The two assertions below are the fix AND its
+        // discretion requirement: agent 2 must not be able to tell "someone else's guid" from
+        // "no such guid", or bee_continue becomes an oracle for which guids exist.
+        var (manager, accessor, _, _) = NewManager();
+        ActAsAgent(accessor, agentId: 1);
+        manager.TrySetMaxTokens(McpResponseManager.MinTokens, out _);
+        var secret = "SECRET-" + new string('a', McpResponseManager.MinTokens * 6);
+        var (guid, _) = TruncateAndExtract(manager, secret);
+
+        ActAsAgent(accessor, agentId: 2);
+        var stolen = manager.Continue(guid, 0, ignoreLimit: true);
+        var neverExisted = manager.Continue(Guid.NewGuid().ToString("N"), 0, ignoreLimit: true);
+
+        stolen.Should().NotContain("SECRET-");
+        stolen.Should().Be(neverExisted);
+        JsonDocument.Parse(stolen).RootElement.GetProperty("error").GetString()
+            .Should().Contain("not found or expired");
+    }
+
+    [Fact]
+    public void Continue_ByTheAgentsOwnerUser_IsRefused()
+    {
+        // An agent key can be scoped to a folder subtree and/or read-only independently of the
+        // human who owns it, so "same owner" is not "same access". Binding to the owner user
+        // instead of the agent would also let one agent read a sibling agent's responses.
+        var (manager, accessor, _, _) = NewManager();
+        ActAsAgentWithOwner(accessor, agentId: 7, ownerUserId: 42);
+        manager.TrySetMaxTokens(McpResponseManager.MinTokens, out _);
+        var (guid, _) = TruncateAndExtract(manager, new string('a', McpResponseManager.MinTokens * 6));
+
+        ActAsUser(accessor, userId: 42);
+
+        manager.Continue(guid, 0, ignoreLimit: true).Should().Contain("not found or expired");
+    }
+
+    [Fact]
+    public void Continue_BySuperadmin_IsRefused_ThereIsNoAdminBypass()
+    {
+        // Deliberate: ownership is "whose response is this", not a privilege level. A superadmin
+        // who wants the content re-runs the tool under their own identity — which re-applies the
+        // ACL — instead of reading a blob that was authorized for someone else's scope.
+        var (manager, accessor, _, _) = NewManager();
+        ActAsAgent(accessor, agentId: 3);
+        manager.TrySetMaxTokens(McpResponseManager.MinTokens, out _);
+        var (guid, _) = TruncateAndExtract(manager, new string('a', McpResponseManager.MinTokens * 6));
+
+        ActAsUser(accessor, userId: 1, isSuperadmin: true);
+
+        manager.Continue(guid, 0, ignoreLimit: true).Should().Contain("not found or expired");
+    }
+
+    [Fact]
+    public void Continue_EnvelopeWrittenByAnOlderBuild_WithNoOwner_IsRefused()
+    {
+        // Files spooled before this fix name no owner. "Belongs to nobody" must read as
+        // unreadable rather than readable-by-anyone; the 24h expiry clears them out anyway.
+        var (manager, accessor, _, dataPath) = NewManager();
+        ActAsAgent(accessor, agentId: 1);
+        manager.TrySetMaxTokens(McpResponseManager.MinTokens, out _);
+        var (guid, _) = TruncateAndExtract(manager, new string('a', McpResponseManager.MinTokens * 6));
+
+        var tempFile = Path.Combine(dataPath, "temp", $"{guid}.json");
+        var node = JsonNode.Parse(File.ReadAllText(tempFile))!.AsObject();
+        node.Remove("Owner");
+        File.WriteAllText(tempFile, node.ToJsonString());
+
+        manager.Continue(guid, 0, ignoreLimit: true).Should().Contain("not found or expired");
+    }
+
+    [Fact]
+    public void Continue_OwnerTagRewrittenOnDisk_FailsTheAeadTag_ContentIsNotServed()
+    {
+        // The owner is bound into the AES-GCM AAD, not merely stored beside the ciphertext:
+        // otherwise anyone able to write to the temp directory could re-address another caller's
+        // file to themselves and have the server (which holds the DEK they don't) decrypt it.
+        var (manager, accessor, _, dataPath) = NewManager();
+        ActAsAgent(accessor, agentId: 1);
+        manager.TrySetMaxTokens(McpResponseManager.MinTokens, out _);
+        var secret = "SECRET-" + new string('a', McpResponseManager.MinTokens * 6);
+        var (guid, _) = TruncateAndExtract(manager, secret);
+
+        var tempFile = Path.Combine(dataPath, "temp", $"{guid}.json");
+        var node = JsonNode.Parse(File.ReadAllText(tempFile))!.AsObject();
+        node["Owner"] = "agent:2";
+        File.WriteAllText(tempFile, node.ToJsonString());
+
+        ActAsAgent(accessor, agentId: 2);
+        var result = manager.Continue(guid, 0, ignoreLimit: true);
+
+        result.Should().NotContain("SECRET-");
+        JsonDocument.Parse(result).RootElement.GetProperty("error").GetString()
+            .Should().Contain("Could not decrypt");
     }
 
     private static (string guid, int offset) TruncateAndExtract(McpResponseManager manager, string response)

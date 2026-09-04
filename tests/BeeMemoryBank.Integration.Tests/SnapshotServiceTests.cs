@@ -100,6 +100,89 @@ public class SnapshotServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CreateAsync_WithFilterSecrets_LeavesNothingInTablesNobodyClassified()
+    {
+        // The filter used to be a deny-list: name the secrets, ship everything else. Tables added
+        // by later migrations were therefore shipped WITH THEIR CONTENTS to every joining node
+        // because no one went back to add them — including tokens this node issued to remote
+        // accounts and the wrapped key for its search index. Now anything outside
+        // SnapshotTables.Replicated is emptied, so this asserts on the tables that were leaking
+        // rather than on the mechanism.
+        // Seed the tables first, or "it came out empty" proves nothing: they start empty.
+        SeedLocalOnlyRows();
+
+        var info = await _service.CreateAsync(filterSecrets: true);
+        var extractDir = await ExtractSnapshotToTempDirAsync(_service.GetSnapshotPath(info.FileName));
+        try
+        {
+            using var conn = new SqliteConnection(
+                $"Data Source={Path.Combine(extractDir, "beememorybank.db")};Pooling=False");
+            conn.Open();
+
+            string[] mustBeEmpty = ["tbl_remote_api_token", "tbl_favorite"];
+
+            foreach (var table in mustBeEmpty)
+            {
+                using var existsCmd = conn.CreateCommand();
+                existsCmd.CommandText =
+                    $"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'";
+                if (Convert.ToInt64(existsCmd.ExecuteScalar()) == 0) continue; // not in this schema yet
+
+                using var countCmd = conn.CreateCommand();
+                countCmd.CommandText = $"SELECT COUNT(*) FROM [{table}]";
+                Convert.ToInt64(countCmd.ExecuteScalar()).Should().Be(0,
+                    $"{table} is node-local and must not travel to a peer");
+            }
+
+            // The schema itself has to survive: the receiving node never re-runs migrations after
+            // an import, so a dropped table would be missing there forever.
+            using var schemaCmd = conn.CreateCommand();
+            schemaCmd.CommandText =
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tbl_remote_api_token'";
+            Convert.ToInt64(schemaCmd.ExecuteScalar()).Should().Be(1,
+                "emptied, not dropped — see SnapshotTables.StrippedByDropping for what is dropped and why");
+
+            // And the content a peer actually joined for is still there.
+            using var contentCmd = conn.CreateCommand();
+            contentCmd.CommandText = "SELECT COUNT(*) FROM tbl_article";
+            Convert.ToInt64(contentCmd.ExecuteScalar()).Should().BeGreaterThan(0);
+        }
+        finally
+        {
+            Directory.Delete(extractDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Puts a row in each table this test claims gets stripped, plus the article that must survive.
+    /// Written as raw SQL because the fixture has repositories, not services — and because the
+    /// point is the table contents, not how they got there.
+    /// </summary>
+    private void SeedLocalOnlyRows()
+    {
+        var now = DateTime.UtcNow.ToString("O");
+        using var conn = _factory.CreateConnection();
+
+        void Exec(string sql)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
+
+        Exec($"INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) " +
+             $"VALUES ('{Guid.NewGuid()}', 'Replicated content', '/', 'A', '{now}', '{now}')");
+        Exec($"INSERT INTO tbl_user (username, password_hash, display_name, role, created_at) " +
+             $"VALUES ('seed', 'hash', 'Seed', 'user', '{now}')");
+        Exec($"INSERT INTO tbl_remote_api_token (id, user_id, token_hash, label, created_at, expires_at) " +
+             $"VALUES ('{Guid.NewGuid()}', (SELECT id FROM tbl_user WHERE username = 'seed'), " +
+             $"'deadbeef', 'seed token', '{now}', '{now}')");
+        Exec($"INSERT INTO tbl_favorite (user_id, article_id, created_at) " +
+             $"VALUES ((SELECT id FROM tbl_user WHERE username = 'seed'), " +
+             $"(SELECT id FROM tbl_article LIMIT 1), '{now}')");
+    }
+
+    [Fact]
     public async Task CreateAsync_WithSign_ProducesValidSignatureFile()
     {
         var info = await _service.CreateAsync(sign: true);

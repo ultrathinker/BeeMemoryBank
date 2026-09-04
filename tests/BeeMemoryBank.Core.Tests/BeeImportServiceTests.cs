@@ -299,4 +299,96 @@ public class BeeImportServiceTests : IAsyncLifetime
         (await ArticleService.ListAsync(report.RootFolderPath))
             .Should().ContainSingle(a => a.TreePath == report.RootFolderPath && a.Title == "Ideas");
     }
+
+    // ---- Decompression-bomb ceilings ---------------------------------------------------------
+
+    private static byte[] BuildBeeArchive(BeeExportManifest manifest, Action<ZipArchive> addPayload) =>
+        ZipBombFixtures.BuildArchive(zip =>
+        {
+            ZipBombFixtures.AddText(zip, ".bmb-manifest.json", JsonSerializer.Serialize(manifest, ManifestJsonOpts));
+            addPayload(zip);
+        });
+
+    [Fact]
+    public async Task ArticleFileExpandingPastPerEntryCeiling_RefusesImport_BeforeTheFirstFolderIsCreated()
+    {
+        var manifest = new BeeExportManifest
+        {
+            SourceFolderName = "Bomb",
+            Folders = ["", "Sub"],
+            Articles = [new BeeExportManifestArticle { File = "boom.md", Title = "Boom", Tags = [] }]
+        };
+        var archive = BuildBeeArchive(manifest, zip => ZipBombFixtures.AddFiller(zip, "boom.md", megabytes: 65));
+        archive.Length.Should().BeLessThan(2 * ZipBombFixtures.OneMb);
+
+        var foldersBefore = await FolderRepo.CountAsync();
+        using var zipStream = new MemoryStream(archive);
+
+        var act = () => ImportService.ImportAsync(zipStream, "/", CancellationToken.None);
+        (await act.Should().ThrowAsync<ZipExtractionLimitException>())
+            .WithMessage("*boom.md*64 MB*");
+
+        // Folders are the FIRST thing this import writes - before a single article is read - so an
+        // untouched folder table is what proves the refusal beat every database write, not just
+        // the article ones.
+        (await FolderRepo.CountAsync()).Should().Be(foldersBefore);
+        (await FolderRepo.GetByPathAsync("/Bomb")).Should().BeNull();
+        (await ArticleService.ListAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ManyLegalSizedArticles_TrippingTheAggregateCeiling_RefusesImport_AndWritesNothing()
+    {
+        const int articleCount = 34;   // 34 x 63 MB - each entry legal on its own, 2.1 GB together
+        var manifest = new BeeExportManifest
+        {
+            SourceFolderName = "Bomb",
+            Folders = [""],
+            Articles = [.. Enumerable.Range(0, articleCount).Select(i =>
+                new BeeExportManifestArticle { File = $"note{i:00}.md", Title = $"Note {i}", Tags = [] })]
+        };
+        var archive = BuildBeeArchive(manifest, zip =>
+        {
+            for (var i = 0; i < articleCount; i++)
+                ZipBombFixtures.AddFiller(zip, $"note{i:00}.md", megabytes: 63);
+        });
+
+        var foldersBefore = await FolderRepo.CountAsync();
+        using var zipStream = new MemoryStream(archive);
+
+        var act = () => ImportService.ImportAsync(zipStream, "/", CancellationToken.None);
+        (await act.Should().ThrowAsync<ZipExtractionLimitException>())
+            .WithMessage("*in total*");
+
+        (await FolderRepo.CountAsync()).Should().Be(foldersBefore);
+        (await ArticleService.ListAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ForgedDeclaredLength_IsNotBelievedOverTheBytesActuallyRead()
+    {
+        var manifest = new BeeExportManifest
+        {
+            SourceFolderName = "Bomb",
+            Folders = [""],
+            Articles = [new BeeExportManifestArticle { File = "liar.md", Title = "Liar", Tags = [] }]
+        };
+        var archive = BuildBeeArchive(manifest, zip =>
+            ZipBombFixtures.AddFiller(zip, "liar.md", megabytes: 65, level: CompressionLevel.NoCompression));
+        ZipBombFixtures.ForgeDeclaredUncompressedSize(archive, declaredBytes: 1024);
+
+        var (declared, _) = ZipBombFixtures.DeclaredSizeOf(archive, "liar.md");
+        declared.Should().Be(1024,
+            "the fixture must really lie, otherwise this test would pass against a Length-based check too");
+
+        var foldersBefore = await FolderRepo.CountAsync();
+        using var zipStream = new MemoryStream(archive);
+
+        var act = () => ImportService.ImportAsync(zipStream, "/", CancellationToken.None);
+        (await act.Should().ThrowAsync<ZipExtractionLimitException>())
+            .WithMessage("*liar.md*");
+
+        (await FolderRepo.CountAsync()).Should().Be(foldersBefore);
+        (await ArticleService.ListAsync()).Should().BeEmpty();
+    }
 }

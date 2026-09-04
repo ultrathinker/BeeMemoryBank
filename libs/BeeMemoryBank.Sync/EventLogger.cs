@@ -353,7 +353,11 @@ public class EventLogger(
             LamportTs = lamportTs,
             EventType = eventType,
             ArticleId = articleId,
-            EntityId = entityId ?? articleId?.ToString(),
+            // Derived, never supplied: the same rule the receiving side applies in EventApplier,
+            // so what we write locally and what a peer reconstructs from the signed fields cannot
+            // drift apart. The entityId parameter stays only as the caller's declaration of intent
+            // — it is cross-checked below.
+            EntityId = EventEntityId.Derive(eventType, articleId, payloadJson),
             Payload = payloadJson,
             Signature = [],
             ProtocolVersion = SyncProtocolVersion.Current,
@@ -362,6 +366,15 @@ public class EventLogger(
             ActorName = actorProvider.ActorName,
             ViaAgentName = actorProvider.ViaAgentName
         };
+
+        // A caller that names an entity the payload does not is writing an event whose identity a
+        // peer will reconstruct differently — the hard-delete gate would then key on one value here
+        // and another there. That is a bug in the caller, and a silent one, so refuse it at the
+        // source rather than shipping an event nobody can agree about.
+        if (entityId != null && entityId != evt.EntityId)
+            throw new InvalidOperationException(
+                $"Event of type {eventType} was given entity id '{entityId}', but its signed fields " +
+                $"derive '{evt.EntityId ?? "(none)"}'. Put the identifier in the payload instead.");
 
         var sigPayload = EventSignature.BuildPayload(evt);
         if (identity.Ed25519PrivateKeyV == 0)

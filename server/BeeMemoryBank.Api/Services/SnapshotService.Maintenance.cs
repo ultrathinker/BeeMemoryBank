@@ -88,67 +88,68 @@ public partial class SnapshotService
         pragmaCmd.CommandText = "PRAGMA foreign_keys = OFF;";
         pragmaCmd.ExecuteNonQuery();
 
-        foreach (var table in SecretTables)
+        // Allow-list, not deny-list. Enumerate what is actually IN this database and decide about
+        // each table, so a table added by a future migration is stripped by default instead of
+        // shipping to peers because nobody remembered to add it to a list of secrets. That default
+        // had already leaked several: tbl_remote_api_token (tokens we issued to remote accounts),
+        // tbl_search_index_key, tbl_dek_rotation_state — none of them ever named as secret, all of
+        // them travelling to every joiner with their contents intact.
+        var presentTables = new List<string>();
+        using (var listCmd = conn.CreateCommand())
         {
+            listCmd.CommandText =
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
+            using var reader = listCmd.ExecuteReader();
+            while (reader.Read()) presentTables.Add(reader.GetString(0));
+        }
+
+        var keep = new HashSet<string>(
+            SnapshotTables.Replicated.Concat(SnapshotTables.SchemaMeta), StringComparer.OrdinalIgnoreCase);
+        var drop = new HashSet<string>(SnapshotTables.StrippedByDropping, StringComparer.OrdinalIgnoreCase);
+
+        // Two tables are neither fully kept nor fully cleared — they are filtered row by row just
+        // below. They have to skip the blanket pass, or it empties them first and leaves the
+        // careful version with nothing to do.
+        var filteredByRow = new HashSet<string>(
+            ["tbl_whitelist", "tbl_role"], StringComparer.OrdinalIgnoreCase);
+
+        foreach (var table in presentTables)
+        {
+            if (keep.Contains(table) || filteredByRow.Contains(table)) continue;
+
+            // FTS shadow tables belong to a virtual table that lives in the receiving node's own
+            // schema; they are rebuilt there and are meaningless in transit. Dropping them
+            // individually would also corrupt the virtual table they back, so leave them to be
+            // emptied along with everything else... except that emptying a shadow table directly
+            // is equally unsound. Skip them entirely: they carry a copy of content that is already
+            // being replicated, never anything a peer should not have.
+            if (table.StartsWith("fts_", StringComparison.OrdinalIgnoreCase)
+                || table.Contains("_fts", StringComparison.OrdinalIgnoreCase)) continue;
+
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"DROP TABLE IF EXISTS [{table}]";
+            // DROP for the tables whose ABSENCE marks this archive as a peer package (see
+            // SnapshotTables.StrippedByDropping — RestoreAsync refuses an archive with no key
+            // slots, and an empty one would defeat that check). Everything else is emptied so the
+            // receiving node keeps a schema it will never recreate on its own.
+            cmd.CommandText = drop.Contains(table)
+                ? $"DROP TABLE IF EXISTS [{table}]"
+                : $"DELETE FROM [{table}]";
             cmd.ExecuteNonQuery();
         }
 
-        using var delCmd = conn.CreateCommand();
-        delCmd.CommandText = "DELETE FROM tbl_whitelist WHERE status != 'A'";
-        delCmd.ExecuteNonQuery();
+        // Kept from the old hand-written pass because it is narrower than "empty the table":
+        // a joiner legitimately inherits the ACTIVE whitelist so it knows who its peers are, but
+        // revoked and pending rows are this node's own history and say nothing useful there.
+        using var whitelistCmd = conn.CreateCommand();
+        whitelistCmd.CommandText = "DELETE FROM tbl_whitelist WHERE status != 'A'";
+        whitelistCmd.ExecuteNonQuery();
 
-        // Roles and their folder rules are node-local like tbl_user, so they must not travel to a
-        // peer either. They are cleared rather than added to SecretTables because that list DROPS
-        // its tables: tbl_migration is not stripped, so a node restored from such an archive would
-        // believe migration 009 had run while the tables were gone, and nothing recreates schema
-        // after a restore. Emptying keeps the schema intact and still strips the data.
-        // The two seeded system roles are kept — every user row references one by name, and
-        // FolderAccessService fails closed on a role it cannot resolve.
-        using var roleAclCmd = conn.CreateCommand();
-        roleAclCmd.CommandText = "DELETE FROM tbl_role_folder_acl_entry";
-        try { roleAclCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-009 archive */ }
-
+        // Likewise narrower: the two seeded system roles stay, because every user row references a
+        // role by name and FolderAccessService fails closed on one it cannot resolve. Custom roles
+        // are node-local and go.
         using var roleCmd = conn.CreateCommand();
         roleCmd.CommandText = "DELETE FROM tbl_role WHERE is_system = 0";
         try { roleCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-009 archive */ }
-
-        // Favorites are per-user and node-local, and tbl_user is DROPPED above — leaving the rows
-        // would both ship one node's personal bookmarks to a peer and strand them against user ids
-        // that no longer exist there. Emptied rather than dropped for the same schema reason as the
-        // role tables above.
-        using var favoriteCmd = conn.CreateCommand();
-        favoriteCmd.CommandText = "DELETE FROM tbl_favorite";
-        try { favoriteCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-011 archive */ }
-
-        // The sync quarantine is this node's own failure bookkeeping: which events it could not
-        // apply, and the raw exception text explaining why. Shipping it to a joiner both leaks our
-        // internal paths and diagnostics through last_error and pre-poisons the joiner against
-        // events it has never actually tried to apply. Emptied rather than dropped for the same
-        // schema reason as the role/favorite tables above.
-        using var quarantineCmd = conn.CreateCommand();
-        quarantineCmd.CommandText = "DELETE FROM tbl_sync_quarantine";
-        try { quarantineCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-013 archive */ }
-
-        // L10: tbl_remote_account holds THIS node's wrapped bearer tokens for OTHER people's nodes
-        // (remote-subscription "read-only mirror" feature) — encrypted_token is wrapped with our
-        // own master DEK, so a joining node that later unlocks the vault (which it's fully trusted
-        // with) could otherwise decrypt and use credentials to accounts on completely unrelated
-        // third-party nodes it was never given access to. Emptied rather than dropped — same schema
-        // reason as the role/favorite tables above: nothing in the join flow recreates this table,
-        // so DROP TABLE would leave a joiner's schema silently missing it forever. Child rows in
-        // tbl_remote_subscription (mount path, folder path, sync cursor — no credentials, but still
-        // node-local config pointing at a relationship the joiner shouldn't inherit) are deleted
-        // first since FK enforcement is OFF for this whole method (see PRAGMA above) and won't
-        // cascade the delete on its own.
-        using var remoteSubCmd = conn.CreateCommand();
-        remoteSubCmd.CommandText = "DELETE FROM tbl_remote_subscription";
-        try { remoteSubCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-existing-feature archive */ }
-
-        using var remoteAccountCmd = conn.CreateCommand();
-        remoteAccountCmd.CommandText = "DELETE FROM tbl_remote_account";
-        try { remoteAccountCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-existing-feature archive */ }
 
         using var vacuumCmd = conn.CreateCommand();
         vacuumCmd.CommandText = "VACUUM";

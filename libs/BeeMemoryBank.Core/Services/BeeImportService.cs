@@ -68,14 +68,20 @@ public partial class BeeImportService(
                 "Use \"Import from Obsidian\" for Obsidian vaults instead.");
         }
 
-        BeeExportManifest manifest;
-        using (var stream = manifestEntry.Open())
-        using (var reader = new StreamReader(stream, Encoding.UTF8))
-        {
-            var json = await reader.ReadToEndAsync(ct);
-            manifest = JsonSerializer.Deserialize<BeeExportManifest>(json, ManifestJsonOpts)
-                ?? throw new InvalidOperationException("Could not parse .bmb-manifest.json.");
-        }
+        // Bounded from the very first read: the manifest is the one entry that has to be
+        // decompressed before we know anything about the rest of the archive, so an unbounded read
+        // here would be a bomb that lands ahead of every other check.
+        var reader = new ZipEntryReader();
+        var json = await reader.ReadTextAsync(manifestEntry, ct);
+        var manifest = JsonSerializer.Deserialize<BeeExportManifest>(json, ManifestJsonOpts)
+            ?? throw new InvalidOperationException("Could not parse .bmb-manifest.json.");
+
+        var imageIndex = BuildImageIndex(archive.Entries.ToList(), report);
+
+        // Decompression-bomb guard, deliberately ahead of the folder creation below: this import
+        // writes incrementally (folders first, then article by article), so a limit hit part-way
+        // through would leave a half-restored subtree at the destination.
+        await ZipEntryReader.PreflightAsync(EntriesThatWillBeRead(archive, manifest, imageIndex), ct);
 
         destinationPath = TreePathCanonicalizer.Canonicalize(
             string.IsNullOrWhiteSpace(destinationPath) ? "/" : destinationPath);
@@ -115,8 +121,6 @@ public partial class BeeImportService(
             if (!existedBefore) report.FoldersCreated++;
         }
 
-        var imageIndex = BuildImageIndex(archive.Entries.ToList(), report);
-
         foreach (var manifestArticle in manifest.Articles)
         {
             ct.ThrowIfCancellationRequested();
@@ -137,26 +141,25 @@ public partial class BeeImportService(
                 continue;
             }
 
-            string body;
-            using (var stream = entry.Open())
-            using (var reader = new StreamReader(stream, Encoding.UTF8))
-            {
-                body = await reader.ReadToEndAsync(ct);
-            }
+            var body = await reader.ReadTextAsync(entry, ct);
 
             var relDir = GetDirOf(manifestArticle.File);
             var treePath = relDir.Length > 0 ? JoinPath(rootPath, relDir) : rootPath;
 
             var uploadedByEntryPath = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
-            var rewritten = await RewriteImageRefsAsync(body, imageIndex, uploadedByEntryPath, report, ct);
+            var rewritten = await RewriteImageRefsAsync(body, imageIndex, uploadedByEntryPath, reader, report, ct);
 
             try
             {
                 var created = await articleService.CreateAsync(manifestArticle.Title, treePath, manifestArticle.Tags, rewritten);
                 report.ArticlesCreated++;
-                await ImportAttachmentsAsync(archive, manifestArticle, created.Id, report, ct);
+                await ImportAttachmentsAsync(archive, manifestArticle, created.Id, reader, report, ct);
             }
             catch (OperationCanceledException) { throw; }
+            // An attachment read that blows the ceiling means the archive is hostile or corrupt,
+            // not that this one article failed — don't let it be filed away as a warning while the
+            // loop carries on decompressing the rest.
+            catch (ZipExtractionLimitException) { throw; }
             catch (Exception ex)
             {
                 report.Warnings.Add($"Failed to import '{manifestArticle.File}': {ex.Message}");
@@ -164,6 +167,29 @@ public partial class BeeImportService(
         }
 
         return report;
+    }
+
+    /// <summary>
+    /// Every entry <see cref="ImportAsync"/> may open, so the preflight measures exactly what the
+    /// import would decompress and no more: a stray oversized file the manifest never references
+    /// is never read, and must not be a reason to refuse an otherwise valid export. The manifest
+    /// itself is absent because it has already been read under the same ceiling.
+    /// </summary>
+    private static IEnumerable<ZipArchiveEntry> EntriesThatWillBeRead(
+        ZipArchive archive, BeeExportManifest manifest, Dictionary<string, ZipArchiveEntry> imageIndex)
+    {
+        foreach (var article in manifest.Articles)
+        {
+            if (article.Protected) continue;
+            if (archive.GetEntry(article.File) is { } entry) yield return entry;
+
+            foreach (var name in article.Attachments)
+            {
+                if (archive.GetEntry($"attachments/{name}") is { } attachment) yield return attachment;
+            }
+        }
+
+        foreach (var image in imageIndex.Values) yield return image;
     }
 
     private static string GetDirOf(string zipRelativePath)
@@ -216,6 +242,7 @@ public partial class BeeImportService(
         string body,
         Dictionary<string, ZipArchiveEntry> imageIndex,
         Dictionary<string, Guid> uploadedByEntryPath,
+        ZipEntryReader reader,
         BeeImportReport report,
         CancellationToken ct)
     {
@@ -227,7 +254,7 @@ public partial class BeeImportService(
             var path = match.Groups[2].Value;
             var fileName = Uri.UnescapeDataString(Path.GetFileName(path));
             var effectiveAlt = string.IsNullOrEmpty(alt) ? Path.GetFileNameWithoutExtension(fileName) : alt;
-            var replacement = await ProcessImageAsync(fileName, effectiveAlt, imageIndex, uploadedByEntryPath, report, ct);
+            var replacement = await ProcessImageAsync(fileName, effectiveAlt, imageIndex, uploadedByEntryPath, reader, report, ct);
             replacements.Add((match, replacement));
         }
 
@@ -250,6 +277,7 @@ public partial class BeeImportService(
         string alt,
         Dictionary<string, ZipArchiveEntry> imageIndex,
         Dictionary<string, Guid> uploadedByEntryPath,
+        ZipEntryReader reader,
         BeeImportReport report,
         CancellationToken ct)
     {
@@ -261,13 +289,7 @@ public partial class BeeImportService(
 
         if (!uploadedByEntryPath.TryGetValue(imageEntry.FullName, out var mediaId))
         {
-            byte[] bytes;
-            using (var stream = imageEntry.Open())
-            using (var ms = new MemoryStream())
-            {
-                await stream.CopyToAsync(ms, ct);
-                bytes = ms.ToArray();
-            }
+            var bytes = await reader.ReadBytesAsync(imageEntry, ct);
 
             var ext = Path.GetExtension(fileName);
             var contentType = ExtensionToContentType.GetValueOrDefault(ext, "image/png");
@@ -297,7 +319,8 @@ public partial class BeeImportService(
     /// the newly-created article's ID rather than via the orphan-then-scan-body flow images use.
     /// </summary>
     private async Task ImportAttachmentsAsync(
-        ZipArchive archive, BeeExportManifestArticle manifestArticle, Guid articleId, BeeImportReport report, CancellationToken ct)
+        ZipArchive archive, BeeExportManifestArticle manifestArticle, Guid articleId, ZipEntryReader reader,
+        BeeImportReport report, CancellationToken ct)
     {
         foreach (var name in manifestArticle.Attachments)
         {
@@ -309,13 +332,7 @@ public partial class BeeImportService(
                 continue;
             }
 
-            byte[] bytes;
-            using (var stream = entry.Open())
-            using (var ms = new MemoryStream())
-            {
-                await stream.CopyToAsync(ms, ct);
-                bytes = ms.ToArray();
-            }
+            var bytes = await reader.ReadBytesAsync(entry, ct);
 
             var ext = Path.GetExtension(name);
             var contentType = ExtensionToContentType.GetValueOrDefault(ext, "application/octet-stream");

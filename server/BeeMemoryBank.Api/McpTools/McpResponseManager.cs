@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using Microsoft.AspNetCore.Http;
@@ -15,11 +15,12 @@ namespace BeeMemoryBank.Api.McpTools;
 /// </summary>
 /// <remarks>
 /// This service is registered as a process-wide singleton (it owns the on-disk temp-file store
-/// bee_continue reads from across separate requests), but the max-tokens LIMIT itself is kept
-/// per-caller (keyed off HttpContext.Items["AuthAgent"], set by AgentAuthMiddleware for the
-/// current request). A single shared int field here would mean one agent raising its limit via
-/// bee_set_max_tokens silently changes what every other concurrently connected agent's calls
-/// return too -- that was a real bug, not just a surprising default.
+/// bee_continue reads from across separate requests), but everything it holds is keyed per-caller
+/// (see <see cref="CurrentCallerKey"/>, resolved from the identity of the request in flight). For
+/// the max-tokens LIMIT, a single shared int field here would mean one agent raising its limit
+/// via bee_set_max_tokens silently changes what every other concurrently connected agent's calls
+/// return too -- that was a real bug, not just a surprising default. For the spooled responses
+/// themselves the same key decides who may read one back at all -- see <see cref="Continue"/>.
 /// </remarks>
 /// <remarks>
 /// SECURITY: the content overflowing max_tokens is routinely a full decrypted article body (e.g.
@@ -35,19 +36,28 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
 {
     private static readonly TimeSpan TempFileExpiry = TimeSpan.FromHours(24);
 
-    // Constant AAD for the on-disk continuation store (distinct from every other AAD tag used
-    // elsewhere in the codebase, so a ciphertext saved here can never be mistaken for/reused as
-    // one from another encrypted-at-rest store even though they all share the master DEK).
+    // Constant AAD prefix for the on-disk continuation store (distinct from every other AAD tag
+    // used elsewhere in the codebase, so a ciphertext saved here can never be mistaken for/reused
+    // as one from another encrypted-at-rest store even though they all share the master DEK).
     private static readonly byte[] ContinuationAad = "bmb-mcp-continuation-v1"u8.ToArray();
+
+    // The owner tag is bound into the AAD, not just stored beside the ciphertext: otherwise
+    // anyone who can write to the temp directory could copy another caller's file, rewrite its
+    // Owner field to their own key, and have the server (which holds the DEK they don't) decrypt
+    // it for them. With the owner in the AAD that rewrite fails the GCM tag check instead.
+    private static byte[] AadFor(string owner) => [.. ContinuationAad, .. Encoding.UTF8.GetBytes(owner)];
 
     // On-disk envelope for one continuation file. Property names are serialized as-is (no
     // camelCase policy applied here -- this file is never read by anything except this class).
-    private sealed record TempFileEnvelope(string IvB64, string CiphertextB64);
+    // Owner is the caller key (see CurrentCallerKey) of whoever spooled the response; a file
+    // written by an older build has no Owner and deserializes to null, which reads as "belongs
+    // to nobody" and is therefore unreadable -- correct, and self-healing within the 24h expiry.
+    private sealed record TempFileEnvelope(string IvB64, string CiphertextB64, string Owner);
 
     public const int MinTokens = 1000;
     public const int MaxTokensCeiling = 100_000;
     private const int DefaultMaxTokens = 10_000;
-    private const string UnauthenticatedCallerKey = "unauthenticated";
+    private const string SystemCallerKey = "sys";
 
     private readonly string _tempPath = EnsureTempPath(dataPath);
     private readonly ConcurrentDictionary<string, int> _maxTokensByCaller = new();
@@ -59,15 +69,37 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
         return path;
     }
 
-    // Every MCP tool call arrives as its own HTTP request carrying its own bearer token, so
-    // HttpContext.Items["AuthAgent"] (set fresh per-request by AgentAuthMiddleware) reliably
-    // identifies which agent is calling right now. Requests that never resolved to an agent
-    // (no token, or a bmbrt_ remote token, which doesn't reach the MCP tools at all) share one
-    // fallback bucket -- there's no narrower identity to key on for those.
-    private string CurrentCallerKey =>
-        httpContextAccessor.HttpContext?.Items.TryGetValue("AuthAgent", out var obj) == true && obj is Agent agent
-            ? $"agent:{agent.Id}"
-            : UnauthenticatedCallerKey;
+    /// <summary>
+    /// Stable identity of whoever is calling right now: <c>agent:{id}</c>, <c>user:{id}</c>, or
+    /// <c>sys</c>. Keys both the per-caller max-tokens limit and the ownership of a spooled
+    /// continuation (see <see cref="Continue"/>).
+    /// </summary>
+    /// <remarks>
+    /// Every MCP tool call arrives as its own HTTP request carrying its own bearer token, and
+    /// AgentAuthMiddleware resolves it per-request, so <see cref="CallerIdentity.Extract"/> is an
+    /// accurate answer for the call in flight. The agent id wins over its owner user id on
+    /// purpose: an agent key can be restricted to a folder subtree and/or read-only independently
+    /// of the human who owns it, so two agents of one owner are two different access scopes and
+    /// must not share a bucket. Callers with no identity at all -- in-process/system use (no
+    /// HttpContext) and anonymous HTTP requests -- share "sys"; CallerScopeMiddleware hands an
+    /// anonymous request a deny-all ACL scope, so nothing it can spool is anyone else's content.
+    /// </remarks>
+    private string CurrentCallerKey
+    {
+        get
+        {
+            var ctx = httpContextAccessor.HttpContext;
+            if (ctx is null)
+                return SystemCallerKey;
+
+            var caller = CallerIdentity.Extract(ctx);
+            if (caller.AgentId is { } agentId)
+                return $"agent:{agentId}";
+            if (caller.UserId is { } userId)
+                return $"user:{userId}";
+            return SystemCallerKey;
+        }
+    }
 
     public int MaxTokens => _maxTokensByCaller.GetValueOrDefault(CurrentCallerKey, DefaultMaxTokens);
 
@@ -98,7 +130,7 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
             return response;
 
         var guid = Guid.NewGuid().ToString("N");
-        SaveTempFile(guid, response);
+        SaveTempFile(guid, response, CurrentCallerKey);
         CleanupExpiredFiles();
 
         if (IsJsonResponse(response))
@@ -149,11 +181,35 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
             return JsonSerializer.Serialize(new { error = "Invalid continuation guid." });
 
         var filePath = Path.Combine(_tempPath, $"{guid}.json");
-        if (!File.Exists(filePath))
-            return JsonSerializer.Serialize(new
-            {
-                error = "Continuation file not found or expired (24h). Re-run the original tool call."
-            });
+
+        TempFileEnvelope? envelope = null;
+        try
+        {
+            if (File.Exists(filePath))
+                envelope = JsonSerializer.Deserialize<TempFileEnvelope>(File.ReadAllText(filePath, Encoding.UTF8));
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            envelope = null;
+        }
+
+        // SECURITY: a continuation belongs to the caller that produced it, and to nobody else.
+        // The guid travels through tool results, transcripts and logs, so treating it as a bearer
+        // capability means any agent that sees or guesses one reads a spooled response in full --
+        // typically a decrypted article body from folders its own key is denied, since the ACL was
+        // applied once when the original tool ran and is never re-applied on the way back out.
+        // Superadmins get NO exception: this is not a privilege level but "whose response is
+        // this", and an admin who wants the content re-runs the tool under their own identity.
+        // Do not add a bypass here.
+        //
+        // A mismatch answers with exactly the unknown-guid response below -- a distinct error (or
+        // a different one for the locked-vault / corrupt-file cases, which is why this runs before
+        // both) would turn bee_continue into an oracle for "does this guid exist". An envelope too
+        // damaged to name an owner is answered the same way for the same reason; both messages
+        // tell the caller to re-run the original tool call, so nothing is lost.
+        var callerKey = CurrentCallerKey;
+        if (envelope is null || !string.Equals(envelope.Owner, callerKey, StringComparison.Ordinal))
+            return NotFoundResponse();
 
         // The file holds ciphertext under the master DEK -- decrypting needs an unlocked session,
         // same invariant every other content-touching MCP path relies on. Degrade gracefully
@@ -168,17 +224,14 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
         var masterDek = session.GetMasterDek();
         try
         {
-            var envelopeJson = File.ReadAllText(filePath, Encoding.UTF8);
-            var envelope = JsonSerializer.Deserialize<TempFileEnvelope>(envelopeJson);
-            if (envelope is null)
-                return JsonSerializer.Serialize(new { error = "Continuation file is corrupt. Re-run the original tool call." });
-
             fullContent = ArticleEncryptor.Decrypt(
                 Convert.FromBase64String(envelope.CiphertextB64),
                 Convert.FromBase64String(envelope.IvB64),
-                masterDek, ContinuationAad);
+                masterDek, AadFor(callerKey));
         }
-        catch (Exception ex) when (ex is CryptographicException or FormatException or JsonException)
+        // ArgumentNullException covers an envelope that parsed but is missing a field (its
+        // owner already checked out, so this is a damaged file, not an access attempt).
+        catch (Exception ex) when (ex is CryptographicException or FormatException or ArgumentNullException)
         {
             // Most likely cause: the master DEK rotated between the save and this read, so the
             // old ciphertext no longer unwraps under the current DEK. Whatever the cause, this is
@@ -226,6 +279,16 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
     }
 
     /// <summary>
+    /// The single answer for "you cannot read this guid" -- unknown, expired, unreadable, or
+    /// owned by someone else. One method so the four stay literally identical; splitting them
+    /// back apart is what would leak which of the four actually happened.
+    /// </summary>
+    private static string NotFoundResponse() => JsonSerializer.Serialize(new
+    {
+        error = "Continuation file not found or expired (24h). Re-run the original tool call."
+    });
+
+    /// <summary>
     /// Always states the exact remaining token cost instead of just listing both APIs -- a hint
     /// that hands the caller a number lets it decide in one step; a hint that just lists "call
     /// bee_continue, or try ignoreLimit" makes it guess and often re-ask.
@@ -247,12 +310,13 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
     }
 
     /// <summary>Encrypts <paramref name="content"/> under the master DEK and writes the envelope
-    /// to disk. No-op when the session is locked -- there is no DEK to encrypt with, and writing
-    /// the plaintext instead is exactly the bug this class exists to not have. The caller
-    /// (<see cref="ProcessResponse"/>) still returns its inline truncated preview either way; a
-    /// bee_continue call against a guid that was never actually saved reports "not found", which
-    /// is the truth.</summary>
-    private void SaveTempFile(string guid, string content)
+    /// to disk, stamped with <paramref name="owner"/> -- the only caller key that will ever be
+    /// allowed to read it back. No-op when the session is locked -- there is no DEK to encrypt
+    /// with, and writing the plaintext instead is exactly the bug this class exists to not have.
+    /// The caller (<see cref="ProcessResponse"/>) still returns its inline truncated preview
+    /// either way; a bee_continue call against a guid that was never actually saved reports
+    /// "not found", which is the truth.</summary>
+    private void SaveTempFile(string guid, string content, string owner)
     {
         if (!session.IsUnlocked)
             return;
@@ -261,9 +325,9 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
         var masterDek = session.GetMasterDek();
         try
         {
-            var (ciphertext, iv) = ArticleEncryptor.Encrypt(content, masterDek, ContinuationAad);
+            var (ciphertext, iv) = ArticleEncryptor.Encrypt(content, masterDek, AadFor(owner));
             var envelope = JsonSerializer.Serialize(new TempFileEnvelope(
-                Convert.ToBase64String(iv), Convert.ToBase64String(ciphertext)));
+                Convert.ToBase64String(iv), Convert.ToBase64String(ciphertext), owner));
             File.WriteAllText(Path.Combine(_tempPath, $"{guid}.json"), envelope, Encoding.UTF8);
         }
         finally

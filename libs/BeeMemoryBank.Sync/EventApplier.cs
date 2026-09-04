@@ -78,8 +78,26 @@ public partial class EventApplier(
         evt.ActorName = node.DisplayName ?? $"node:{evt.NodeId.ToString()[..8]}";
         evt.ActorType = "remote-peer";
 
+        // Same treatment for EntityId, and for the same reason: it rides along on the wire but is
+        // not covered by the signature, so a relaying peer can rewrite it on an event that still
+        // verifies. See EventEntityId for the full argument — the short version is that the
+        // hard-delete gate below looks entities up by this value, so an attacker who can blank it
+        // resurrects deleted content, and one who can point it at a hard-deleted id makes innocent
+        // events vanish. Derive it from the signed fields instead of believing the sender.
+        var transportedEntityId = evt.EntityId;
+        evt.EntityId = EventEntityId.Derive(evt);
+        if (!string.IsNullOrEmpty(transportedEntityId) && transportedEntityId != evt.EntityId)
+        {
+            // Not an error: an older peer may legitimately have computed this differently, and the
+            // derived value is authoritative either way. Worth a line in the log, because a
+            // mismatch is also exactly what tampering looks like.
+            logger.LogWarning(
+                "Event {EventId} ({Type}) from {NodeId} carried entity id {Transported}, using derived {Derived}",
+                evt.EventId, evt.EventType, evt.NodeId, transportedEntityId, evt.EntityId ?? "(none)");
+        }
+
         // Hard-delete gate: if entity was hard-deleted at this or later timestamp, skip.
-        var identifier = evt.EntityId ?? evt.ArticleId?.ToString();
+        var identifier = evt.EntityId;
         if (evt.EventType != EventTypes.HardDelete && !string.IsNullOrEmpty(identifier))
         {
             if (await eventLogRepo.IsHardDeletedAsync(identifier, evt.LamportTs))

@@ -203,7 +203,10 @@ public partial class DekRotationService
                     NodeId = identity.NodeId,
                     LamportTs = commitLamportTs,
                     EventType = EventTypes.DekRotationCommit,
-                    EntityId = proposedEventId.ToString(),
+                    // Same value as proposedEventId.ToString(), but taken through the shared rule:
+                    // a peer reconstructs EntityId from the signed payload (EntityId itself is not
+                    // signed), so the two must never be written independently. See EventEntityId.
+                    EntityId = EventEntityId.Derive(EventTypes.DekRotationCommit, null, commitPayloadJson),
                     Payload = commitPayloadJson,
                     Signature = [],
                     ProtocolVersion = 1,
