@@ -46,14 +46,15 @@ public class ChatMcpToolContractParityTests
 
     // MCP-only parameters that chat deliberately does NOT expose, curated explicitly so any OTHER
     // (undocumented) name/type/required-ness drift still fails ParameterContract_MatchesBetweenMcpAndChat
-    // below. Both are scale-oriented pagination/delta params (bee_list_articles.updatedAfter lets an
-    // agent fetch just what changed since its last call; bee_get_tree.depth/limit/offset page a huge
-    // tree) added for large vaults -- chat's tool surface is deliberately smaller and has no use for
-    // either. If one of these is ever added to chat too, remove it from here so the name/type/required
+    // below. All are scale-oriented pagination/delta params (bee_list_articles.updatedAfter lets an
+    // agent fetch just what changed since its last call; bee_list_articles.limit/offset and
+    // bee_get_tree.depth/limit/offset page a huge result set instead of loading it all) added for
+    // large vaults -- chat's tool surface is deliberately smaller and has no use for any of them.
+    // If one of these is ever added to chat too, remove it from here so the name/type/required
     // check below actually compares it.
     private static readonly Dictionary<string, string[]> KnownMcpOnlyExtraParams = new(StringComparer.Ordinal)
     {
-        ["bee_list_articles"] = ["updatedAfter"],
+        ["bee_list_articles"] = ["updatedAfter", "limit", "offset"],
         ["bee_get_tree"] = ["depth", "limit", "offset"],
     };
 

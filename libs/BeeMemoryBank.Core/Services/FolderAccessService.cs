@@ -322,4 +322,130 @@ public class FolderAccessService
         }
         return ancestors;
     }
+
+    /// <summary>
+    /// SQL translation of <see cref="IsAccessDenied"/>'s negation (i.e. "this row is visible"),
+    /// built entirely from the same <paramref name="denyPaths"/>/<paramref name="allowPaths"/>
+    /// sets <see cref="IsAccessDenied"/> reads — see <see cref="ICallerScope.BuildReadAclPredicate"/>
+    /// for the full contract (null return, param-prefix namespacing, read-only exclusion).
+    ///
+    /// <para>
+    /// A prefix of exactly "/" is <see cref="MatchesAnyPrefix"/>'s own universal-match special
+    /// case (matches EVERY path, not just paths under "/") — mirrored here by short-circuiting
+    /// instead of emitting a LIKE pattern for it: a deny row of "/" makes the whole predicate an
+    /// unconditional "1 = 0" (deny always wins, no allow row can override it); an allow row of "/"
+    /// makes the allow side unconditionally satisfied, i.e. treated as if allowPaths were empty.
+    /// </para>
+    /// </summary>
+    public static AclSqlPredicate? BuildReadAclPredicate(
+        HashSet<string> denyPaths, HashSet<string> allowPaths, string pathExpr, string paramPrefix)
+    {
+        if (denyPaths.Count == 0 && allowPaths.Count == 0)
+            return null; // matches FilterArticles/FilterFolders' own early return: no restriction at all.
+
+        if (denyPaths.Any(p => p == "/"))
+            return new AclSqlPredicate("1 = 0", new Dictionary<string, object?>());
+
+        var parameters = new Dictionary<string, object?>();
+        var denyClause = BuildPrefixMatchClause(denyPaths, pathExpr, paramPrefix + "d", parameters);
+
+        var allowIsUniversal = allowPaths.Any(p => p == "/");
+        var allowClause = (allowPaths.Count > 0 && !allowIsUniversal)
+            ? BuildPrefixMatchClause(allowPaths, pathExpr, paramPrefix + "a", parameters)
+            : null;
+
+        var parts = new List<string>();
+        if (denyClause != null) parts.Add($"NOT ({denyClause})");
+        if (allowClause != null) parts.Add($"({allowClause})");
+
+        if (parts.Count == 0) return null; // both sides ended up unconditional -- no restriction.
+
+        return new AclSqlPredicate(string.Join(" AND ", parts), parameters);
+    }
+
+    /// <summary>
+    /// FOLDER-specific variant of <see cref="BuildReadAclPredicate"/>: also matches an ancestor
+    /// "stub" of an allowed subtree, mirroring <see cref="ICallerScope.IsNavigable"/> /
+    /// <see cref="FilterFolders"/> exactly — see <see cref="ICallerScope.BuildFolderVisibilityPredicate"/>.
+    /// </summary>
+    public static AclSqlPredicate? BuildFolderVisibilityPredicate(
+        HashSet<string> denyPaths, HashSet<string> allowPaths, string pathExpr, string paramPrefix)
+    {
+        var aclPredicate = BuildReadAclPredicate(denyPaths, allowPaths, pathExpr, paramPrefix);
+
+        // Ancestor stubs only ever exist when there is an allow-list to compute them from (see
+        // HttpCallerScope's own _ancestors field) -- without one, this collapses to the plain ACL
+        // predicate, same as IsNavigable does when _ancestors is empty.
+        if (allowPaths.Count == 0)
+            return aclPredicate;
+
+        var ancestors = ComputeAncestors(allowPaths);
+        if (ancestors.Count == 0)
+            return aclPredicate;
+
+        // aclPredicate is null here only when BOTH sides ended up unconditional (allowPaths'
+        // only entry is "/" and denyPaths is empty) -- i.e. genuinely unrestricted, matching
+        // IsAccessDenied's own always-false result in that case, so there is nothing an ancestor
+        // clause could add. Keep returning null (no filter at all) rather than needlessly
+        // widening it.
+        if (aclPredicate == null)
+            return null;
+
+        var parameters = new Dictionary<string, object?>(aclPredicate.Parameters);
+        var ancestorTerms = new List<string>();
+        var i = 0;
+        foreach (var ancestor in ancestors)
+        {
+            var name = $"{paramPrefix}anc{i}";
+            parameters[name] = ancestor;
+            // COLLATE NOCASE: ancestors are exact-path matches (not prefixes), and the ACL engine
+            // compares paths with OrdinalIgnoreCase (see MatchesAnyPrefix) -- SQL's default "="
+            // is BINARY (case-sensitive), which could otherwise fail to match a case-differing
+            // duplicate and wrongly WITHHOLD a stub the in-memory filter would have shown. Read
+            // visibility is never widened by this (NOCASE only makes the match agree with the
+            // ordinal-ignore-case reference more often, never less).
+            ancestorTerms.Add($"{pathExpr} = @{name} COLLATE NOCASE");
+            i++;
+        }
+
+        return new AclSqlPredicate($"(({aclPredicate.Sql}) OR ({string.Join(" OR ", ancestorTerms)}))", parameters);
+    }
+
+    private static string? BuildPrefixMatchClause(
+        HashSet<string> prefixes, string pathExpr, string paramPrefix, Dictionary<string, object?> parameters)
+    {
+        if (prefixes.Count == 0) return null;
+
+        var terms = new List<string>();
+        var i = 0;
+        foreach (var prefix in prefixes)
+        {
+            // The universal "/" prefix is handled by the caller before this is ever reached (it
+            // collapses the whole clause to unconditional true/false in one direction) -- a
+            // literal "/" here would otherwise need its own LIKE pattern for "descendant of root",
+            // which is a much narrower (wrong) test than "matches everything".
+            if (prefix == "/") continue;
+
+            var exactParam = $"{paramPrefix}{i}";
+            var likeParam = $"{paramPrefix}{i}_like";
+            parameters[exactParam] = prefix;
+            parameters[likeParam] = EscapeLike(prefix.TrimEnd('/')) + "/%";
+            // COLLATE NOCASE on the exact match only: see BuildFolderVisibilityPredicate's own
+            // comment on why -- LIKE already case-folds ASCII by default (SQLite's built-in
+            // behavior, independent of any COLLATE clause), so it needs no extra annotation here.
+            terms.Add($"({pathExpr} = @{exactParam} COLLATE NOCASE OR {pathExpr} LIKE @{likeParam} ESCAPE '\\')");
+            i++;
+        }
+
+        return terms.Count == 0 ? null : string.Join(" OR ", terms);
+    }
+
+    /// <summary>
+    /// Escapes the LIKE wildcards "%" and "_" (and the escape character itself) so a folder path
+    /// segment is matched literally rather than as a pattern. Mirrors
+    /// <c>FolderRepository.EscapeLike</c>/<c>HardDeleteService.EscapeLike</c> exactly; every LIKE
+    /// built from this must declare <c>ESCAPE '\'</c>.
+    /// </summary>
+    private static string EscapeLike(string s) =>
+        s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }

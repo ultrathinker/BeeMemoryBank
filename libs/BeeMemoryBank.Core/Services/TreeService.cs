@@ -86,10 +86,17 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
         int offset = 0)
     {
         // Same fetch + scope semantics as the legacy BeeReadTools.GetTree inline implementation:
-        // articles are path-filtered at the repo, folders come back as the full active set. Both
-        // repos apply CallerScopeHolder filtering ambiently — do not re-filter here.
+        // both articles and folders are path-filtered (subtree prefix) AND ACL-filtered directly
+        // in SQL now (see ArticleRepository.ListAsync / FolderRepository.GetAllActiveAsync) rather
+        // than fetching the whole vault and filtering here — this is the fix for "a scoped or
+        // restricted bee_get_tree call still materialized every row in the vault". The
+        // PathFilterMatches re-check below stays in place regardless: it is the pre-existing,
+        // authoritative subtree filter (its own StartsWith-based semantics), and re-applying it to
+        // an already-narrowed result is a cheap no-op that keeps this method's observable behavior
+        // byte-for-byte unchanged even if the SQL-side prefix match and the C# one ever disagreed
+        // on some edge case.
         var articles = await articleRepo.ListAsync(path);
-        var folders = await folderRepo.GetAllActiveAsync();
+        var folders = await folderRepo.GetAllActiveAsync(path);
 
         var articlesByPath = articles
             .GroupBy(a => a.TreePath)

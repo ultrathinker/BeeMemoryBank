@@ -467,8 +467,17 @@ public partial class ArticleService(
         eventLogger.SignalSync();
     }
 
-    /// <summary>List of article metadata, optionally filtered by tree path and/or a strict updatedAfter cutoff.</summary>
-    public Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null) => articleRepo.ListAsync(treePath, updatedAfter);
+    /// <summary>
+    /// List of article metadata, optionally filtered by tree path and/or a strict updatedAfter
+    /// cutoff. ACL filtering and (when <paramref name="limit"/> is given) pagination both run in
+    /// SQL — see <see cref="IArticleRepository.ListAsync"/>.
+    /// </summary>
+    public Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null, int? limit = null, int offset = 0)
+        => articleRepo.ListAsync(treePath, updatedAfter, limit, offset);
+
+    /// <summary>Count-only companion to <see cref="ListAsync"/> — see <see cref="IArticleRepository.CountAsync"/>.</summary>
+    public Task<int> CountAsync(string? treePath = null, DateTime? updatedAfter = null)
+        => articleRepo.CountAsync(treePath, updatedAfter);
 
     /// <summary>Moves an article to another folder (tree_path only, no content re-signing).</summary>
     public Task MoveAsync(Guid id, string newPath) => UpdateAsync(id, treePath: newPath);

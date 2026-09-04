@@ -14,7 +14,27 @@ public interface IArticleRepository
     /// UnauthorizedAccessException on deny). Do NOT expose to HTTP endpoints.
     /// </summary>
     Task<Article?> GetByIdUnfilteredAsync(Guid id, bool includeDeleted = false);
-    Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null);
+
+    /// <summary>
+    /// Lists active articles, optionally scoped to a tree path and/or an updatedAfter cutoff.
+    /// ACL filtering (deny/allow prefix rules) and, when <paramref name="limit"/> is given,
+    /// pagination both happen IN the SQL query itself (LIMIT/OFFSET, and the caller-scope's
+    /// <see cref="Interfaces.ICallerScope.BuildReadAclPredicate"/> pushed into the WHERE clause) —
+    /// not a full unbounded load followed by an in-memory filter/Skip/Take. This is what lets a
+    /// "give me the first page" caller avoid materializing every article in the vault.
+    /// <paramref name="limit"/> null (the default) means unbounded, matching the pre-pagination
+    /// contract exactly; <paramref name="offset"/> is only applied together with a non-null
+    /// <paramref name="limit"/> (offset alone, with no limit, still returns everything — same
+    /// forgiving contract <c>TreeService.GetTreePathsAsync</c> already uses).
+    /// </summary>
+    Task<List<Article>> ListAsync(string? treePath = null, DateTime? updatedAfter = null, int? limit = null, int offset = 0);
+
+    /// <summary>
+    /// Count-only companion to <see cref="ListAsync"/> (same treePath/updatedAfter narrowing and
+    /// ACL predicate, no row hydration) — for a caller that only needs "how many match" (e.g. a
+    /// pagination response's total/truncated fields) without fetching every row just to measure it.
+    /// </summary>
+    Task<int> CountAsync(string? treePath = null, DateTime? updatedAfter = null);
 
     /// <summary>
     /// Every method here (and on the other article-write repositories:

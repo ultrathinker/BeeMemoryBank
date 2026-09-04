@@ -54,10 +54,19 @@ public class BeeReadTools(
         "The treePath filter matches articles whose TreePath equals (or is a descendant of) the given path. " +
         "Omit treePath to list everything. For a tree-structured view with empty folders, use bee_get_tree. " +
         "Optional updatedAfter (ISO-8601) restricts results to articles whose updatedAt is strictly greater — " +
-        "pass the max updatedAt from your previous call to get just the delta.")]
+        "pass the max updatedAt from your previous call to get just the delta.\n" +
+        "SCALE: against a large vault this can return tens of thousands of entries. Pass 'limit' " +
+        "(+ 'offset' to page further) to fetch one page at a time instead of everything at once — " +
+        "pagination is applied by the database, so a limited call is cheap regardless of vault size. " +
+        "When 'limit' or 'offset' is supplied, the response is an object " +
+        "{ articles: [...], limit, offset, total, truncated } instead of a bare array (more remain " +
+        "while offset + articles.length < total, or while truncated=true). Omitting both keeps the " +
+        "legacy bare-array response.")]
     public async Task<string> ListArticles(
         [Description("Tree path filter, e.g. '/Work' or '/Work/Dev'. Omit to list all articles.")] string? treePath = null,
-        [Description("ISO-8601 timestamp. Return only articles whose updatedAt is strictly greater (>) than this. Pass the max updatedAt from your previous bee_list_articles call to get just the delta since then.")] string? updatedAfter = null)
+        [Description("ISO-8601 timestamp. Return only articles whose updatedAt is strictly greater (>) than this. Pass the max updatedAt from your previous bee_list_articles call to get just the delta since then.")] string? updatedAfter = null,
+        [Description("Max number of articles to return. null = no pagination (return all matching articles). Use with 'offset' to page through large result sets.")] int? limit = null,
+        [Description("Number of matching articles to skip before the returned page (for pagination). Only meaningful together with 'limit'. Default 0.")] int offset = 0)
     {
         DateTime? parsedUpdatedAfter = null;
         if (updatedAfter != null)
@@ -72,9 +81,12 @@ public class BeeReadTools(
             }
         }
 
-        var articles = await articleService.ListAsync(treePath, parsedUpdatedAfter);
+        var appliedLimit = limit.HasValue ? Math.Max(1, limit.Value) : (int?)null;
+        var appliedOffset = Math.Max(0, offset);
 
-        var json = JsonSerializer.Serialize(articles.Select(a => new
+        var articles = await articleService.ListAsync(treePath, parsedUpdatedAfter, appliedLimit, appliedOffset);
+
+        var articleEntries = articles.Select(a => new
         {
             id = a.Id,
             title = a.Title,
@@ -82,7 +94,27 @@ public class BeeReadTools(
             status = a.Status,
             createdAt = a.CreatedAt,
             updatedAt = a.UpdatedAt
-        }), JsonOpts);
+        });
+
+        string json;
+        if (limit.HasValue || offset != 0)
+        {
+            // CountAsync is a SQL COUNT(*) against the same WHERE clause -- no row hydration --
+            // so the "more remain" check stays cheap regardless of vault size.
+            var total = await articleService.CountAsync(treePath, parsedUpdatedAfter);
+            json = JsonSerializer.Serialize(new
+            {
+                articles = articleEntries,
+                limit = appliedLimit,
+                offset = appliedOffset,
+                total,
+                truncated = appliedOffset + articles.Count < total
+            }, JsonOpts);
+        }
+        else
+        {
+            json = JsonSerializer.Serialize(articleEntries, JsonOpts);
+        }
         return responseManager.ProcessResponse(json);
     }
 
