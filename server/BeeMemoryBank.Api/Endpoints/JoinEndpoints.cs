@@ -128,9 +128,18 @@ public static class JoinEndpoints
                         new ErrorResponse("Node with this NodeId is already registered with a different public key"),
                         statusCode: 403);
 
+                // A re-join with the same key can change the peer's display name or address, and
+                // that has to reach the mesh like any other whitelist change. This branch used to
+                // write the row and log nothing — unlike the new-peer branch just below it — so a
+                // node that moved to a new URL and re-joined stayed reachable only from the node it
+                // re-joined through. Found by the repository-write guardrail.
+                var version = await eventLogger.LogWhitelistUpdateAsync(req.NodeId, apiAddress, req.DisplayName);
+
                 existing.DisplayName = req.DisplayName;
                 existing.ApiAddress = apiAddress;
                 existing.UpdatedAt = DateTime.UtcNow;
+                existing.LamportTs = version.LamportTs;
+                existing.SourceNodeId = version.SourceNodeId;
                 await whitelistRepo.UpdateAsync(existing);
             }
             else

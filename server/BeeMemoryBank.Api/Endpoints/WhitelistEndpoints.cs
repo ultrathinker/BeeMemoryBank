@@ -73,6 +73,7 @@ public static class WhitelistEndpoints
             Guid nodeId,
             UpdateWhitelistEntryRequest req,
             IWhitelistRepository repo,
+            IEventLogger eventLogger,
             SessionService session,
             HttpContext ctx) =>
         {
@@ -90,9 +91,19 @@ public static class WhitelistEndpoints
             // stored value also travels to other nodes, so keep the table itself clean.
             if (req.ApiAddress != null) entry.ApiAddress = req.ApiAddress.Trim().TrimEnd('/');
             if (req.CanGenerateEmbeddings.HasValue) entry.CanGenerateEmbeddings = req.CanGenerateEmbeddings.Value;
-            entry.UpdatedAt = DateTime.UtcNow;
 
+            // Tell the mesh, and stamp the row with the version that event published — the same
+            // shape the /superadmin and /address handlers below already use. This route used to
+            // write the row and log nothing, so renaming a peer or changing its address here was a
+            // purely local edit: every other node kept the old values forever, with nothing to
+            // indicate the change had not travelled. Found by the repository-write guardrail.
+            var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, entry.ApiAddress, entry.DisplayName);
+
+            entry.UpdatedAt = DateTime.UtcNow;
+            entry.LamportTs = version.LamportTs;
+            entry.SourceNodeId = version.SourceNodeId;
             await repo.UpdateAsync(entry);
+            eventLogger.SignalSync();
             return Results.Ok(WhitelistEntryResponse.From(entry));
         });
 

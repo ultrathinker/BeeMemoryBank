@@ -117,7 +117,7 @@ public class RepositoryWriteGuardrailTests
             "New peer: logs eventLogger.LogWhitelistAddAsync FIRST and stamps the returned version onto the row before creating it, exactly the discipline this guardrail wants."),
         new("server/BeeMemoryBank.Api/Endpoints/JoinEndpoints.cs", "IWhitelistRepository", "UpdateAsync",
             "Re-join with the same key: updates DisplayName/ApiAddress WITHOUT publishing a whitelist_update event first, unlike the sibling create-branch three lines below and unlike WhitelistEndpoints' own /address handler. " +
-            "SUSPICIOUS — flagged in the night-13b task report, not fixed here: a re-join that changes display name or address looks like it never reaches other peers."),
+            "The re-join branch now publishes a whitelist_update first and stamps the row with that version; the direct write is what applies it locally."),
 
         // ── Node-local settings: tbl_node_identity holds this node's own configuration, and every
         // one of these is documented on INodeIdentityRepository as never synced (each node brands,
@@ -189,10 +189,9 @@ public class RepositoryWriteGuardrailTests
         // ── Whitelist: WhitelistEndpoints owns whitelist mutations directly (no WhitelistService
         // exists); the expected discipline is that each handler publishes the corresponding mesh
         // event itself via IEventLogger before writing the row (see /superadmin and /address below,
-        // which both do). ONE handler in this file does not — see the SUSPICIOUS note.
         new("server/BeeMemoryBank.Api/Endpoints/WhitelistEndpoints.cs", "IWhitelistRepository", "UpdateAsync",
             "WhitelistEndpoints owns whitelist mutations directly and is expected to publish the mesh event itself first (see the /superadmin and /address handlers, which do). " +
-            "SUSPICIOUS — flagged in the night-13b task report, not fixed here: the plain PUT /{nodeId} handler (editing DisplayName/ApiAddress/CanGenerateEmbeddings) updates the row with NO preceding eventLogger call at all, unlike its siblings in this same file."),
+            "Every handler in this file now publishes its whitelist_update before writing and stamps the row with the returned version; the direct write is what applies it locally."),
         new("server/BeeMemoryBank.Api/Endpoints/WhitelistEndpoints.cs", "IWhitelistRepository", "SetAutoAcceptRestoreAsync",
             "Per-peer local preference (whether THIS node auto-accepts restores from that peer) — not mesh state, so there is nothing to publish."),
         new("server/BeeMemoryBank.Api/Endpoints/WhitelistEndpoints.cs", "IWhitelistRepository", "SetAutoAcceptDekRotationAsync",
