@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework></TargetFramework>
@@ -42,6 +42,16 @@
     <PackageReference Include="Xamarin.AndroidX.Biometric" />
     <PackageReference Include="Xamarin.AndroidX.Work.Runtime" />
     <PackageReference Include="Markdig" />
+    <!-- BeeMemoryBank.Storage references SQLitePCLRaw.lib.e_sqlite3 directly, to force the native
+         SQLite above the vulnerable 2.1.11 (CVE-2025-6965). That package ships desktop RIDs only
+         — the Android build lives in the separate SQLitePCLRaw.lib.e_sqlite3.android AAR — but
+         the RID graph lets android-arm64 fall back to linux-arm64, so without this line NuGet
+         hands this app a GLIBC libe_sqlite3.so (NEEDED: libc.so.6, ld-linux-aarch64.so.1). It
+         wins the packaging race, the correct AAR copy is dropped as a duplicate (warning XA4301),
+         and the app dies on launch with a TypeInitializationException out of
+         Microsoft.Data.Sqlite.SqliteConnection — dlopen cannot resolve glibc on bionic. The
+         managed assets are still wanted; only the native ones are wrong here. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" ExcludeAssets="native;runtime" />
   </ItemGroup>
 
   <ItemGroup>
