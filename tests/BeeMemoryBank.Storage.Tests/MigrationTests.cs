@@ -244,4 +244,93 @@ public class MigrationTests : IAsyncLifetime
         (await repo.GetByIdAsync(superadminAgentId))!.CanAutoUnlock.Should().BeTrue(
             "an ACTIVE superadmin agent is untouched by this migration");
     }
+
+    // ───────────── 017: blob store contract ─────────────
+    //
+    // Recreates the state a node is in right before 017 runs — inline `ciphertext` columns still
+    // present alongside tbl_blob — by re-adding the columns to a fully migrated schema and deleting
+    // 017's tbl_migration row, then re-runs the runner exactly as an upgrading node would.
+
+    [Fact]
+    public async Task Migration017_DropsInlineColumns_WhenEveryRowHasItsBlob()
+    {
+        var bytes = new byte[] { 1, 2, 3 };
+        await ArrangePre017StateAsync(bodyBytes: bytes, blobPresent: true);
+
+        await _runner.RunMigrationsAsync();
+
+        using var conn = _factory.CreateConnection();
+        (await ColumnsOfAsync(conn, "tbl_article_body")).Should().NotContain("ciphertext");
+        (await ColumnsOfAsync(conn, "tbl_article_version")).Should().NotContain("ciphertext");
+        // The bytes are still reachable through the hash, and the index DROP COLUMN must keep
+        // survived (agy's review flagged the create/copy/rename variant for losing it).
+        var stored = await conn.QuerySingleAsync<byte[]>(
+            "SELECT bl.data FROM tbl_article_body b JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash");
+        stored.Should().Equal(bytes);
+        (await conn.QueryAsync<string>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tbl_article_version'"))
+            .Should().Contain("idx_article_version_article");
+    }
+
+    [Fact]
+    public async Task Migration017_RefusesToDrop_WhenARowWouldLoseItsOnlyCopy()
+    {
+        await ArrangePre017StateAsync(bodyBytes: [9, 9, 9], blobPresent: false);
+
+        var act = () => _runner.RunMigrationsAsync();
+        // The guard is a NOT NULL constraint violation — a constraint error, which the runner never
+        // treats as idempotent — so the migration fails and the node does not start.
+        await act.Should().ThrowAsync<Microsoft.Data.Sqlite.SqliteException>();
+
+        using var conn = _factory.CreateConnection();
+        (await ColumnsOfAsync(conn, "tbl_article_body")).Should().Contain("ciphertext",
+            "the transaction rolled back; the inline copy is still the only copy and must survive");
+        (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_migration WHERE version = 17")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Migration017_VacuumsAfterCommit_ReclaimingFreedPages()
+    {
+        await ArrangePre017StateAsync(bodyBytes: [1], blobPresent: true);
+        using (var conn = _factory.CreateConnection())
+        {
+            // Leave a large hole in the file: freelist pages that only VACUUM gives back.
+            await conn.ExecuteAsync("CREATE TABLE tbl_junk (x BLOB)");
+            await conn.ExecuteAsync("INSERT INTO tbl_junk VALUES (@x)", new { x = new byte[512 * 1024] });
+            await conn.ExecuteAsync("DROP TABLE tbl_junk");
+            (await conn.ExecuteScalarAsync<long>("PRAGMA freelist_count")).Should().BeGreaterThan(0);
+        }
+
+        await _runner.RunMigrationsAsync();
+
+        using var check = _factory.CreateConnection();
+        (await check.ExecuteScalarAsync<long>("PRAGMA freelist_count")).Should().Be(0,
+            "the runner must VACUUM after a migration carrying the bmb:vacuum-after marker");
+    }
+
+    private async Task ArrangePre017StateAsync(byte[] bodyBytes, bool blobPresent)
+    {
+        using var conn = _factory.CreateConnection();
+        var now = DateTime.UtcNow.ToString("o");
+        await conn.ExecuteAsync("ALTER TABLE tbl_article_body ADD COLUMN ciphertext BLOB");
+        await conn.ExecuteAsync("ALTER TABLE tbl_article_version ADD COLUMN ciphertext BLOB");
+
+        var articleId = Guid.NewGuid().ToString();
+        await conn.ExecuteAsync(
+            "INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) VALUES (@id, 'X', '/', 'A', @now, @now)",
+            new { id = articleId, now });
+        var hash = await conn.ExecuteScalarAsync<string>("SELECT sha256(@b)", new { b = bodyBytes });
+        if (blobPresent)
+            await conn.ExecuteAsync(
+                "INSERT INTO tbl_blob (hash, data, size, created_at) VALUES (@hash, @b, length(@b), @now)",
+                new { hash, b = bodyBytes, now });
+        await conn.ExecuteAsync(
+            @"INSERT INTO tbl_article_body (article_id, ciphertext, ciphertext_hash, iv, encrypted_dek, dek_iv)
+              VALUES (@articleId, @b, @hash, X'00', X'00', X'00')",
+            new { articleId, b = bodyBytes, hash });
+
+        await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 17");
+    }
+
+    private static async Task<List<string>> ColumnsOfAsync(System.Data.IDbConnection conn, string table) =>
+        (await conn.QueryAsync<string>($"SELECT name FROM pragma_table_info('{table}')")).ToList();
 }

@@ -188,7 +188,10 @@ public class JoinWithSnapshotTests : IAsyncLifetime
             fkOff.ExecuteNonQuery();
 
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "INSERT OR IGNORE INTO tbl_article_body (article_id, ciphertext, iv, encrypted_dek, dek_iv) VALUES (@Id, @Body, @Iv, @Dek, @DekIv)";
+            // Bodies live in tbl_blob since migration 017; the body row only carries the hash.
+            cmd.CommandText = "INSERT OR IGNORE INTO tbl_blob (hash, data, size, created_at) VALUES (sha256(@Body), @Body, length(@Body), @Now); " +
+                              "INSERT OR IGNORE INTO tbl_article_body (article_id, ciphertext_hash, iv, encrypted_dek, dek_iv) VALUES (@Id, sha256(@Body), @Iv, @Dek, @DekIv)";
+            var now = cmd.CreateParameter(); now.ParameterName = "Now"; now.Value = DateTime.UtcNow.ToString("o"); cmd.Parameters.Add(now);
             var id = cmd.CreateParameter(); id.ParameterName = "Id"; id.Value = Guid.NewGuid(); cmd.Parameters.Add(id);
             var body = cmd.CreateParameter(); body.ParameterName = "Body"; body.Value = new byte[] { 0xFF }; cmd.Parameters.Add(body);
             var iv = cmd.CreateParameter(); iv.ParameterName = "Iv"; iv.Value = new byte[12]; cmd.Parameters.Add(iv);
@@ -271,8 +274,8 @@ public class JoinWithSnapshotTests : IAsyncLifetime
             new { Id = articleId, Title = "Test Article", Path = "/Test", Status = "A", EmbeddingPending = false, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
 
         await conn.ExecuteAsync(
-            "INSERT INTO tbl_article_body (article_id, ciphertext, iv, encrypted_dek, dek_iv) VALUES (@Id, @Body, @Iv, @Dek, @DekIv)",
-            new { Id = articleId, Body = new byte[] { 1, 2, 3 }, Iv = new byte[12], Dek = new byte[48], DekIv = new byte[12] });
+            "INSERT INTO tbl_blob (hash, data, size, created_at) VALUES (sha256(@Body), @Body, length(@Body), @Now); INSERT INTO tbl_article_body (article_id, ciphertext_hash, iv, encrypted_dek, dek_iv) VALUES (@Id, sha256(@Body), @Iv, @Dek, @DekIv)",
+            new { Id = articleId, Body = new byte[] { 1, 2, 3 }, Iv = new byte[12], Dek = new byte[48], DekIv = new byte[12], Now = DateTime.UtcNow.ToString("o") });
     }
 
     private async Task InsertProducerProjectionMatrixAsync()

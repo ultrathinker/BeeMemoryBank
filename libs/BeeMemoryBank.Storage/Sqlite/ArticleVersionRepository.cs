@@ -57,7 +57,7 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
         var row = await conn.QuerySingleOrDefaultAsync(
             @"SELECT v.id AS Id, v.article_id AS ArticleId, v.version_number AS VersionNumber,
                      v.title AS Title, v.tree_path AS TreePath,
-                     COALESCE(bl.data, v.ciphertext) AS Ciphertext,
+                     bl.data AS Ciphertext,
                      v.iv AS IV, v.encrypted_dek AS EncryptedDek, v.dek_iv AS DekIV,
                      v.updated_by AS UpdatedBy, v.created_at AS CreatedAt
               FROM tbl_article_version v
@@ -74,7 +74,8 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
             VersionNumber = (int)(long)row.VersionNumber,
             Title = (string)row.Title,
             TreePath = (string)row.TreePath,
-            Ciphertext = (byte[])row.Ciphertext,
+            Ciphertext = (byte[]?)row.Ciphertext
+                ?? throw new InvalidOperationException($"Version {row.Id} of article {articleId} has no ciphertext blob in tbl_blob."),
             IV = (byte[])row.IV,
             EncryptedDek = (byte[])row.EncryptedDek,
             DekIV = (byte[])row.DekIV,
@@ -93,7 +94,7 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
         var row = await conn.QuerySingleOrDefaultAsync(
             @"SELECT v.id AS Id, v.article_id AS ArticleId, v.version_number AS VersionNumber,
                      v.title AS Title, v.tree_path AS TreePath,
-                     COALESCE(bl.data, v.ciphertext) AS Ciphertext,
+                     bl.data AS Ciphertext,
                      v.iv AS IV, v.encrypted_dek AS EncryptedDek, v.dek_iv AS DekIV,
                      v.updated_by AS UpdatedBy, v.created_at AS CreatedAt
               FROM tbl_article_version v
@@ -111,7 +112,8 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
             VersionNumber = (int)(long)row.VersionNumber,
             Title = (string)row.Title,
             TreePath = (string)row.TreePath,
-            Ciphertext = (byte[])row.Ciphertext,
+            Ciphertext = (byte[]?)row.Ciphertext
+                ?? throw new InvalidOperationException($"Version {row.Id} of article {articleId} has no ciphertext blob in tbl_blob."),
             IV = (byte[])row.IV,
             EncryptedDek = (byte[])row.EncryptedDek,
             DekIV = (byte[])row.DekIV,
@@ -153,8 +155,8 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
 
             await conn.ExecuteAsync(
                 @"INSERT INTO tbl_article_version
-                  (id, article_id, version_number, title, tree_path, ciphertext, ciphertext_hash, iv, encrypted_dek, dek_iv, updated_by, created_at)
-                  VALUES (@Id, @ArticleId, @VersionNumber, @Title, @TreePath, @Ciphertext, @CiphertextHash, @IV, @EncryptedDek, @DekIV, @UpdatedBy, @CreatedAt)",
+                  (id, article_id, version_number, title, tree_path, ciphertext_hash, iv, encrypted_dek, dek_iv, updated_by, created_at)
+                  VALUES (@Id, @ArticleId, @VersionNumber, @Title, @TreePath, @CiphertextHash, @IV, @EncryptedDek, @DekIV, @UpdatedBy, @CreatedAt)",
                 new
                 {
                     CiphertextHash = hash,
@@ -163,7 +165,6 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
                     version.VersionNumber,
                     version.Title,
                     version.TreePath,
-                    version.Ciphertext,
                     version.IV,
                     version.EncryptedDek,
                     version.DekIV,

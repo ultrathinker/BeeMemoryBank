@@ -18,6 +18,11 @@ public class SnapshotJoinClient
 
     private static readonly string[] ImportTables =
     [
+        // tbl_blob FIRST: tbl_article_body addresses its ciphertext by hash into it (since
+        // migration 016; the inline column is gone since 017). Import the rows before anything
+        // that refers to them so a crash mid-import can never leave bodies whose bytes are
+        // absent — SnapshotService.NetworkRestore keeps the same order for the same reason.
+        "tbl_blob",
         "tbl_folder", "tbl_article", "tbl_article_body", "tbl_concept_tag",
         "tbl_article_concept_tag", "tbl_concept_tag_edge", "tbl_media",
         "tbl_tombstone", "tbl_conflict_version", "tbl_projection_matrix"

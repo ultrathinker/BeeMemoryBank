@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -110,6 +111,15 @@ public class SnapshotJoinClientTests : IAsyncLifetime
             var importedTitle = await conn.QuerySingleAsync<string>(
                 "SELECT title FROM tbl_article WHERE id = @Id", new { Id = articleId });
             importedTitle.Should().Be("Mobile-join article");
+
+            // The body must be READABLE, not just present: since migration 017 the body row holds
+            // only a hash and the bytes live in tbl_blob, which the import has to bring along too.
+            // A row whose blob did not make the trip is an article that opens as an error.
+            var importedBody = await new ArticleBodyRepository(joinerFactory).GetByArticleIdAsync(articleId);
+            importedBody.Should().NotBeNull();
+            importedBody!.Ciphertext.Should().NotBeEmpty();
+            BlobHash.Compute(importedBody.Ciphertext).Should().Be(
+                await conn.QuerySingleAsync<string>("SELECT ciphertext_hash FROM tbl_article_body WHERE article_id = @Id", new { Id = articleId }));
 
             // "the resulting node can then sync": prove the identity /api/join registered is
             // recognized for a SECOND, independent challenge/authenticate round, not just the

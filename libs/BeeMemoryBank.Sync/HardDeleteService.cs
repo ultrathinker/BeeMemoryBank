@@ -59,9 +59,10 @@ public class HardDeleteService(
                     a.status AS Status,
                     a.created_at AS CreatedAt,
                     a.updated_at AS UpdatedAt,
-                    COALESCE(length(b.ciphertext), 0) AS Size
+                    COALESCE(bl.size, 0) AS Size
                 FROM tbl_article a
                 LEFT JOIN tbl_article_body b ON a.id = b.article_id
+                LEFT JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
                 WHERE 1=1 {statusFilter} {articleSearch}
             )
             ORDER BY Path ASC, Type ASC

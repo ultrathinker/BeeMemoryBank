@@ -249,7 +249,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
 
         using var conn2 = _bFactory.CreateConnection();
         var body = await conn2.QuerySingleOrDefaultAsync<byte[]>(
-            "SELECT ciphertext FROM tbl_article_body WHERE article_id = @id", new { id = article.Id });
+            "SELECT bl.data FROM tbl_article_body b JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash WHERE b.article_id = @id", new { id = article.Id });
         body.Should().NotBeNull("the body must exist after the healed retry — no permanently torn article");
         (await conn2.ExecuteScalarAsync<int>("SELECT count(*) FROM tbl_conflict_version WHERE article_id = @id", new { id = article.Id }))
             .Should().Be(0, "ApplyArticleCreateCoreAsync has no existing row to snapshot on a create, unlike update");
@@ -340,7 +340,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
 
         using var conn = _bFactory.CreateConnection();
         var storedCiphertext = await conn.QuerySingleAsync<byte[]>(
-            "SELECT ciphertext FROM tbl_article_body WHERE article_id = @id", new { id = article.Id });
+            "SELECT bl.data FROM tbl_article_body b JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash WHERE b.article_id = @id", new { id = article.Id });
         storedCiphertext.Should().BeEquivalentTo(
             await CiphertextOfAsync(updatePayload),
             "the healed retry must store the UPDATED body ('Body B'), not the stale pre-update one");

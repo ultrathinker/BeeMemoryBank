@@ -107,8 +107,8 @@ public class BlobRepositoryTests : IAsyncLifetime
         var articleId = await InsertArticleAsync();
         using (var conn = _factory.CreateConnection())
             await conn.ExecuteAsync(
-                @"INSERT INTO tbl_article_body (article_id, ciphertext, ciphertext_hash, iv, encrypted_dek, dek_iv)
-                  VALUES (@articleId, X'010203', @h, X'00', X'00', X'00')", new { articleId, h });
+                @"INSERT INTO tbl_article_body (article_id, ciphertext_hash, iv, encrypted_dek, dek_iv)
+                  VALUES (@articleId, @h, X'00', X'00', X'00')", new { articleId, h });
 
         (await _repo.SweepUnreferencedAsync(DateTime.UtcNow.AddHours(-2))).Should().Be(0);
         (await _repo.GetAsync(h)).Should().NotBeNull();
@@ -122,8 +122,8 @@ public class BlobRepositoryTests : IAsyncLifetime
         var articleId = await InsertArticleAsync();
         using (var conn = _factory.CreateConnection())
             await conn.ExecuteAsync(
-                @"INSERT INTO tbl_article_version (id, article_id, version_number, title, tree_path, ciphertext, ciphertext_hash, iv, encrypted_dek, dek_iv, created_at)
-                  VALUES (@id, @articleId, 1, 't', '/', X'040506', @h, X'00', X'00', X'00', @now)",
+                @"INSERT INTO tbl_article_version (id, article_id, version_number, title, tree_path, ciphertext_hash, iv, encrypted_dek, dek_iv, created_at)
+                  VALUES (@id, @articleId, 1, 't', '/', @h, X'00', X'00', X'00', @now)",
                 new { id = Guid.NewGuid().ToString(), articleId, h, now = DateTime.UtcNow.ToString("o") });
 
         (await _repo.SweepUnreferencedAsync(DateTime.UtcNow.AddHours(-2))).Should().Be(0);

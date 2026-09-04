@@ -12,13 +12,13 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
     public async Task<EncryptedArticleBody?> GetByArticleIdAsync(Guid articleId)
     {
         using var conn = OpenConnection();
-        return await conn.QuerySingleOrDefaultAsync<EncryptedArticleBody>(
-            // COALESCE(blob, inline): during the expand phase both are populated, and rows written
-            // before migration 016 have only the inline column. Reading the blob first means the
-            // contract migration can drop the inline column without touching this query again.
+        var body = await conn.QuerySingleOrDefaultAsync<EncryptedArticleBody>(
+            // The bytes live in tbl_blob (migration 017 dropped the inline column). LEFT JOIN so a
+            // row whose blob is gone still surfaces — as a clear error below, not as a silent
+            // "no body" that a caller might treat as an empty article.
             @"SELECT
                 b.article_id  AS ArticleId,
-                COALESCE(bl.data, b.ciphertext) AS Ciphertext,
+                bl.data       AS Ciphertext,
                 b.iv          AS IV,
                 b.encrypted_dek AS EncryptedDek,
                 b.dek_iv      AS DekIV
@@ -26,18 +26,25 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
               LEFT JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
               WHERE b.article_id = @articleId",
             new { articleId });
+        if (body is { Ciphertext: null })
+            throw new InvalidOperationException(
+                $"Article {articleId} has a body row but its ciphertext blob is missing from tbl_blob.");
+        return body;
     }
 
     public async Task<List<EncryptedArticleBody>> GetAllActiveAsync()
     {
         using var conn = OpenConnection();
+        // INNER JOIN on the blob: a body whose bytes are gone is skipped rather than handed out
+        // with a null ciphertext — these bulk readers (search indexing, rewrap) should carry on
+        // past one broken row, and GetByArticleIdAsync is where that row reports itself.
         return (await conn.QueryAsync<EncryptedArticleBody>(
             @"SELECT b.article_id AS ArticleId,
-                     COALESCE(bl.data, b.ciphertext) AS Ciphertext,
+                     bl.data AS Ciphertext,
                      b.iv AS IV, b.encrypted_dek AS EncryptedDek, b.dek_iv AS DekIV
               FROM tbl_article_body b
               JOIN tbl_article a ON a.id = b.article_id
-              LEFT JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
+              JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
               WHERE a.status = 'A'")).ToList();
     }
 
@@ -57,11 +64,11 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
         await using (conn.ConfigureAwait(false))
         {
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"SELECT b.article_id, COALESCE(bl.data, b.ciphertext),
+            cmd.CommandText = @"SELECT b.article_id, bl.data,
                                        b.iv, b.encrypted_dek, b.dek_iv
                                 FROM tbl_article_body b
                                 JOIN tbl_article a ON a.id = b.article_id
-                                LEFT JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
+                                JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
                                 WHERE a.status = 'A'";
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -95,19 +102,15 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
                 new { hash, data = body.Ciphertext, size = body.Ciphertext.LongLength,
                       createdAt = DateTime.UtcNow.ToString("o") }, transaction);
 
-            // Expand phase: the inline ciphertext is still written so the previous binary keeps
-            // working against a migrated database. Migration 017 drops the column and this
-            // parameter with it.
             await conn.ExecuteAsync(
-                @"INSERT INTO tbl_article_body (article_id, ciphertext, ciphertext_hash, iv, encrypted_dek, dek_iv)
-                  VALUES (@ArticleId, @Ciphertext, @CiphertextHash, @IV, @EncryptedDek, @DekIV)
+                @"INSERT INTO tbl_article_body (article_id, ciphertext_hash, iv, encrypted_dek, dek_iv)
+                  VALUES (@ArticleId, @CiphertextHash, @IV, @EncryptedDek, @DekIV)
                   ON CONFLICT (article_id) DO UPDATE SET
-                    ciphertext      = excluded.ciphertext,
                     ciphertext_hash = excluded.ciphertext_hash,
                     iv              = excluded.iv,
                     encrypted_dek   = excluded.encrypted_dek,
                     dek_iv          = excluded.dek_iv",
-                new { body.ArticleId, body.Ciphertext, CiphertextHash = hash,
+                new { body.ArticleId, CiphertextHash = hash,
                       body.IV, body.EncryptedDek, body.DekIV }, transaction);
         }
         finally

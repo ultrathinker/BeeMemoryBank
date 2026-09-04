@@ -157,8 +157,21 @@ public class MigrationRunner
                     await connection.ExecuteAsync("PRAGMA foreign_keys = ON");
                 }
             }
+
+            // A migration that frees a lot of space (dropping a column that held every article
+            // body, say) leaves the pages on SQLite's freelist — the file does not shrink until
+            // VACUUM rewrites it, and VACUUM cannot run inside a transaction, so it cannot be a
+            // statement of the migration itself. The migration opts in with a marker comment and
+            // the rewrite happens here, once, right after its transaction has committed. Doubles
+            // disk usage for its duration and takes seconds per hundred MB; on a migration that
+            // just shed a third of the file that is the right trade.
+            if (sql.Contains(VacuumAfterMarker, StringComparison.Ordinal))
+                await connection.ExecuteAsync("VACUUM");
         }
     }
+
+    /// <summary>Put this in a comment in a migration to have the runner VACUUM after it commits.</summary>
+    public const string VacuumAfterMarker = "bmb:vacuum-after";
 
     /// <summary>
     /// Extracts the numeric version prefix from an embedded resource name.

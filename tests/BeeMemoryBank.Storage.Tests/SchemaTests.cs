@@ -85,11 +85,14 @@ public class SchemaTests : IAsyncLifetime
         var encDek = new byte[] { 7, 8, 9 };
         var dekIv = new byte[] { 10, 11, 12 };
 
+        // Since migration 017 the body row carries only the hash; the bytes are in tbl_blob.
         await conn.ExecuteAsync(
-            "INSERT INTO tbl_article_body (article_id, ciphertext, iv, encrypted_dek, dek_iv) VALUES (@articleId, @ciphertext, @iv, @encDek, @dekIv)",
-            new { articleId, ciphertext, iv, encDek, dekIv });
+            @"INSERT INTO tbl_blob (hash, data, size, created_at) VALUES (sha256(@ciphertext), @ciphertext, length(@ciphertext), @now);
+              INSERT INTO tbl_article_body (article_id, ciphertext_hash, iv, encrypted_dek, dek_iv) VALUES (@articleId, sha256(@ciphertext), @iv, @encDek, @dekIv)",
+            new { articleId, ciphertext, iv, encDek, dekIv, now });
 
-        var stored = await conn.QuerySingleAsync<byte[]>("SELECT ciphertext FROM tbl_article_body WHERE article_id = @articleId", new { articleId });
+        var stored = await conn.QuerySingleAsync<byte[]>(
+            "SELECT bl.data FROM tbl_article_body b JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash WHERE b.article_id = @articleId", new { articleId });
         stored.Should().Equal(ciphertext);
     }
 
