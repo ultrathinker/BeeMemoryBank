@@ -118,6 +118,12 @@ public class NodeFrontTests : IAsyncDisposable
             
             app.MapGet("/health", (HttpContext ctx) => 
                 Results.Ok(new { server = "api", route = "health" }));
+
+            // Fallback so "the front sent this to the API" is observable for paths this stub does
+            // not model — the front routes by which process OWNS a prefix, not by which handlers
+            // happen to exist behind it.
+            app.MapFallback((HttpContext ctx) =>
+                Results.Ok(new { server = "api", path = ctx.Request.Path.Value }));
         });
 
         var webStub = await StartStubServerAsync(app =>
@@ -162,14 +168,22 @@ public class NodeFrontTests : IAsyncDisposable
         var healthRes = await client.GetFromJsonAsync<DummyResponse>($"{proxyUrl}/health");
         healthRes!.Server.Should().Be("api");
 
-        // 6. GET /api/join -> falls through to Web (404/fallback)
+        // 6. GET /api/join -> Api. The front routes by ownership: the API process owns /api, so a
+        // wrong method on a real path is the API's answer to give (405 in the real server), not a
+        // silent hand-off to the web catch-all that renders a 404 page instead. The stub answers
+        // through its fallback, which is enough to show where the request went.
         var joinGetRes = await client.GetFromJsonAsync<DummyResponse>($"{proxyUrl}/api/join");
-        joinGetRes!.Server.Should().Be("web");
-        joinGetRes.Path.Should().Be("/api/join");
+        joinGetRes!.Server.Should().Be("api",
+            "the API owns this path and answers for the method itself");
 
-        // 7. GET /api/users -> falls through to Web (unexposed API endpoint)
+        // 7. GET /api/users -> Api, even though it is not in PublicSurface. Routing and
+        // authorisation are separate questions and this test pins the separation: the front
+        // decides WHICH PROCESS serves a path, and PublicSurfaceMiddleware inside the API decides
+        // whether a caller without the internal key may have it (404 if not). Deriving the routing
+        // table from PublicSurface conflated the two, and the moment PublicSurface got more precise
+        // about /api/sync/**, the front stopped routing the sync admin endpoints anywhere at all.
         var usersRes = await client.GetFromJsonAsync<DummyResponse>($"{proxyUrl}/api/users");
-        usersRes!.Server.Should().Be("web");
+        usersRes!.Server.Should().Be("api");
         usersRes.Path.Should().Be("/api/users");
 
         // 8. Other web path -> Web
@@ -234,6 +248,56 @@ public class NodeFrontTests : IAsyncDisposable
             echo.Passenger.Should().Be("keep-me",
                 "only the identity headers are removed — other headers still travel");
         }
+    }
+
+    [Fact]
+    public async Task NodeUpdateRoute_KeepsInboundIdentityHeaders()
+    {
+        // The one documented exception to the strip above, and it needs its own test because the
+        // stripping test only exercises /api/** and the web catch-all -- which is exactly why the
+        // regression that broke the desktop tray's update check went unnoticed: the front removed
+        // the tray's X-Internal-Key, the API then saw an anonymous caller, and PublicSurface
+        // answered 404 for a route it does not publish. The tray reads that key from the file next
+        // to the database, so on this loopback-only route it is a credential, not a claim to be
+        // discarded. See NodeFront.NodeUpdateRouteId.
+        static IResult EchoHeaders(HttpContext ctx, string server) => Results.Ok(new
+        {
+            server,
+            seen = NodeFront.StrippedInboundIdentityHeaders
+                .Where(h => ctx.Request.Headers.ContainsKey(h))
+                .ToArray(),
+            passenger = ctx.Request.Headers["X-Passenger"].ToString(),
+        });
+
+        var apiStub = await StartStubServerAsync(app =>
+            app.MapGet("/node/update/status", (HttpContext ctx) => EchoHeaders(ctx, "api")));
+
+        var webStub = await StartStubServerAsync(app =>
+            app.MapFallback((HttpContext ctx) => EchoHeaders(ctx, "web")));
+
+        var dummyChildren = new Dictionary<string, ReadyFileInfo>
+        {
+            { "Api", new ReadyFileInfo(111, apiStub.Urls.ToList(), "BeeMemoryBank.Api", "1.0.0", DateTime.UtcNow) },
+            { "Web", new ReadyFileInfo(222, webStub.Urls.ToList(), "BeeMemoryBank.Web", "1.0.0", DateTime.UtcNow) }
+        };
+
+        var (_, proxyUrl) = await StartProxyServerAsync(apiStub.Urls.First(), webStub.Urls.First(), dummyChildren);
+        using var client = new HttpClient();
+
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{proxyUrl}/node/update/status");
+        request.Headers.Add("X-Internal-Key", "the-tray-read-this-from-the-key-file");
+        request.Headers.Add("X-User-Role", "superadmin");
+        request.Headers.Add("X-Passenger", "keep-me");
+
+        var response = await client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "the request comes from loopback, which is the only place this route accepts");
+
+        var echo = await response.Content.ReadFromJsonAsync<HeaderEchoResponse>();
+        echo.Should().NotBeNull();
+        echo!.Server.Should().Be("api", "/node/update/** is routed to the Api cluster, not the web catch-all");
+        echo.Seen.Should().BeEquivalentTo(["X-Internal-Key", "X-User-Role"],
+            "this route forwards the tray's own credentials instead of stripping them");
     }
 
     [Fact]

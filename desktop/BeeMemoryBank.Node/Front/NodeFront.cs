@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.DependencyInjection;
 using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Forwarder;
+using Yarp.ReverseProxy.Model;
 using Yarp.ReverseProxy.Transforms;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Core.Services.Acme;
@@ -158,36 +159,45 @@ public class NodeFront
             }
         });
 
-        // Which paths reach the API rather than the Web UI. Built from PublicSurface — the same
-        // list the API itself enforces — rather than hand-written here, because it WAS hand-written
-        // here and diverged: the Apache configuration on a server deployment published
-        // /api/snapshots/restore, this table did not, and a network-wide restore therefore could
-        // not seed a desktop node. Two lists of "what is public", neither reviewed when an
-        // endpoint moves, is the whole problem PublicSurface exists to end.
+        // Which paths reach the API rather than the Web UI. This is a ROUTING table, and routing
+        // is a different question from authorisation: "which of the two processes serves this
+        // path" versus "may a caller without the internal key reach it". They were briefly the
+        // same list, built from PublicSurface, and the moment PublicSurface got more precise —
+        // listing the peer sync routes individually instead of publishing /api/sync/** wholesale —
+        // the front stopped routing /api/sync/status and its neighbours to the API at all. They
+        // fell through to the web catch-all and 404'd, with nothing in the security model asking
+        // for that.
         //
-        // YARP matches literal paths and {**catch-all} segments, so a PublicSurface "**" tail
-        // becomes "{**rest}" and a "{param}" segment becomes a named YARP parameter.
-        var routes = PublicSurface.Entries
-            .Select((entry, index) => new RouteConfig
+        // So the front routes by ownership, which is a fact about the deployment and does not
+        // move: the API process owns everything under /api, /mcp and /health, plus /node/update.
+        // The API's own PublicSurfaceMiddleware then decides who may actually reach each path, in
+        // the one place that decision belongs. This is still not a hand-maintained copy of a
+        // security list — it is four prefixes that change only if a whole surface moves between
+        // processes.
+        //
+        // (What the shared list DID fix stays fixed: the earlier hand-written table missed
+        // /api/snapshots/restore, so a network-wide restore could not seed a desktop node. A
+        // prefix cannot miss a route inside it.)
+        var apiOwnedPrefixes = new[]
+        {
+            "/api/{**rest}",
+            "/mcp",
+            "/mcp/{**rest}",
+            "/health",
+            // Requires the internal key, so it is deliberately NOT in PublicSurface — and is
+            // exactly why routing cannot be derived from that list. See the transform in
+            // RegisterServices and the loopback check in MapEndpoints.
+            "/node/update/{**rest}",
+        };
+
+        var routes = apiOwnedPrefixes
+            .Select((pattern, index) => new RouteConfig
             {
-                RouteId = $"api-public-{index}",
+                RouteId = pattern.StartsWith("/node/update", StringComparison.Ordinal)
+                    ? NodeUpdateRouteId
+                    : $"api-owned-{index}",
                 ClusterId = "Api",
-                Match = new RouteMatch
-                {
-                    Path = ToYarpPattern(entry.Pattern),
-                    Methods = entry.Method is null ? null : new[] { entry.Method }
-                },
-                Order = 1
-            })
-            .Append(new RouteConfig
-            {
-                // Not in PublicSurface on purpose: /node/update/* requires the internal key, so it
-                // is not public — but it is served by the API, and without this route it falls
-                // through to the web catch-all and 404s. Routing and authorisation are separate
-                // questions, and this is the one route where the answers differ.
-                RouteId = "api-node-update",
-                ClusterId = "Api",
-                Match = new RouteMatch { Path = "/node/update/{**rest}" },
+                Match = new RouteMatch { Path = pattern },
                 Order = 1
             })
             .Append(new RouteConfig
@@ -248,6 +258,22 @@ public class NodeFront
             // is a rule someone has to re-derive when a route is added.
             .AddTransforms(context =>
             {
+                // ONE exception, and it is the reason the rule above says "every route" rather
+                // than "the Api cluster": /node/update/* is the desktop tray talking to its own
+                // node, and the tray authenticates by sending the internal key it read from the
+                // key file next to the database. Stripping it there did not close a hole, it
+                // removed the tray's only credential -- the update check answered 404 (the key is
+                // gone, so PublicSurface sees an anonymous caller and the path is not public) and
+                // ProfileSwitchService.IsUpdateApplyingAsync, which fails open on any non-success,
+                // stopped guarding profile switches during an update apply.
+                //
+                // Safe because the route is loopback-only (see the check in MapEndpoints): a
+                // caller who can reach it can already read the key file itself, so accepting the
+                // header adds no authority it does not have. Every other route keeps the strip,
+                // including everything reachable from outside this machine.
+                if (string.Equals(context.Route.RouteId, NodeUpdateRouteId, StringComparison.Ordinal))
+                    return;
+
                 foreach (var header in StrippedInboundIdentityHeaders)
                     context.AddRequestHeaderRemove(header);
             });
@@ -258,6 +284,13 @@ public class NodeFront
     /// <see cref="RegisterServices"/> for why. Public so the test that asserts the stripping walks
     /// the same list the proxy does, rather than a hand-copied one that can drift.
     /// </summary>
+    /// <summary>
+    /// Route id of the tray's own <c>/node/update/*</c> passthrough. Named rather than repeated as
+    /// a literal because three places have to agree on it: the route, the transform that does NOT
+    /// strip identity headers from it, and the loopback check that makes that exemption safe.
+    /// </summary>
+    public const string NodeUpdateRouteId = "api-node-update";
+
     public static readonly string[] StrippedInboundIdentityHeaders =
     [
         "X-Internal-Key",
@@ -265,16 +298,6 @@ public class NodeFront
         "X-User-Role",
         "X-User-DisplayName",
     ];
-
-    /// <summary>
-    /// Translates a <see cref="PublicSurface"/> pattern into YARP's route syntax. The two notations
-    /// differ only in their wildcards: "**" tails become "{**rest}", and "{name}" segments pass
-    /// through unchanged since YARP already understands them.
-    /// </summary>
-    private static string ToYarpPattern(string pattern) =>
-        pattern.EndsWith("/**", StringComparison.Ordinal)
-            ? pattern[..^2] + "{**rest}"
-            : pattern;
 
     /// <summary>
     /// Maps direct endpoints (including loopback-only /node/* status endpoints) and reverse proxy middleware.
@@ -323,7 +346,26 @@ public class NodeFront
         });
 
         // Map the YARP reverse proxy to route other incoming requests
-        endpoints.MapReverseProxy();
+        endpoints.MapReverseProxy(proxyPipeline =>
+        {
+            // The half of the /node/update/* exemption that makes it safe. That route is the one
+            // place the front forwards a caller's own X-Internal-Key and X-User-Role instead of
+            // removing them, so it must not be reachable from anywhere but this machine. 404
+            // rather than 403: an off-machine caller learns nothing about whether the route exists,
+            // matching what PublicSurface answers for everything else it does not publish.
+            proxyPipeline.Use(async (context, next) =>
+            {
+                var routeId = context.GetReverseProxyFeature().Route.Config.RouteId;
+                if (string.Equals(routeId, NodeUpdateRouteId, StringComparison.Ordinal)
+                    && !LoopbackIpMatcher.IsLoopback(context.Connection.RemoteIpAddress))
+                {
+                    context.Response.StatusCode = StatusCodes.Status404NotFound;
+                    return;
+                }
+
+                await next();
+            });
+        });
     }
 
     /// <summary>

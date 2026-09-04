@@ -267,7 +267,12 @@ Cancels a proposed or committing rotation before the destructive phase completes
 
 A monotonic integer in `tbl_node_identity` (starts at 1, incremented on each rotation). Purpose:
 
-- **Replay shield:** each sync event payload carries `dek_epoch`. Receivers can detect and drop stale events encrypted with a previous DEK.
+- **Replay shield — NOT IMPLEMENTED.** The field exists in `ArticleEventPayload` and
+  `MediaEventPayload`, but `EventLogger` writes the literal `1` into it on every event and no
+  applier reads it. Nothing today detects an event encrypted under a different epoch than the
+  receiver's, which is why a peer that receives a post-rotation article before it applies the
+  rotation stores a DEK it cannot later unwrap. Treat this bullet as a design intent, not a
+  property of the running system.
 - **Progress indicator:** the UI shows "Epoch 3 → 4" during rotation.
 
 ### Sentinel and `VerifySentinel`

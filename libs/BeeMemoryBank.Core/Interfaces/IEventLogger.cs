@@ -43,5 +43,5 @@ public interface IEventLogger
     /// Tells peers the master password changed here, so they can say they are out of step. Carries
     /// no key material — see MasterPasswordChangedPayload for why that is the whole design.
     /// </summary>
-    Task LogMasterPasswordChangedAsync();
+    Task LogMasterPasswordChangedAsync(DateTime changedAt);
 }

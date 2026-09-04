@@ -1,0 +1,23 @@
+-- When THIS node last changed its own master password. Completes migration 018.
+--
+-- 018 gave a node somewhere to record "a peer changed the master password, and I am still on the
+-- old one". It had no counterpart for "and I have since changed mine", so the applier set the
+-- notice on every master_password_changed event it saw, including events describing a change the
+-- operator had already mirrored here. Following the workflow the banner itself prescribes —
+-- change it on A, then B, then C — left A and B permanently warning about a gap that was closed,
+-- because each later change re-flagged every earlier node.
+--
+-- This column decides the half of that which is decidable. An incoming notice older than this
+-- node's own last change describes a state this node has already moved past — the offline case,
+-- where a peer's event arrives after an admin has already changed the password here by hand — and
+-- is dropped.
+--
+-- The other half is NOT decidable from timestamps and is deliberately not attempted here: when a
+-- peer changes its password AFTER this node did, nothing in the event says whether it changed to
+-- the same password or a different one. Only the operator knows, so the banner is dismissible
+-- (POST /api/keys/password-notice/dismiss) rather than pretending a clock can answer it. Putting
+-- a verifier for the password in the event would answer it, and is rejected on purpose: the event
+-- log is plaintext and replicated to every peer, which is the last place to publish anything
+-- derived from the master password.
+
+ALTER TABLE tbl_node_identity ADD COLUMN master_password_changed_locally_at TEXT;

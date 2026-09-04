@@ -14,7 +14,6 @@ public class BeeWriteTools(
     BeeMemoryBank.Core.Interfaces.IArticleRepository articleRepo,
     FolderService folderSvc,
     CopyService copySvc,
-    ConceptTagService conceptTagSvc,
     CallerScopeHolder scopeHolder,
     ILogger<BeeWriteTools> logger,
     McpResponseManager responseManager)
@@ -81,9 +80,14 @@ public class BeeWriteTools(
         try
         {
             var mergedTags = tags ?? [];
-            var article = await articleService.CreateAsync(title, treePath, [], content);
-            if (mergedTags.Count > 0)
-                await conceptTagSvc.SetForArticleAsync(article.Id, mergedTags);
+            // Tags go INTO the create, not after it. ArticleService writes the article row, its
+            // tags and the article_create event in one transaction, and the event payload's
+            // ConceptTags is read back inside that transaction — so tags applied afterwards were
+            // never in the payload and never reached a peer. Worse, the next article_update from
+            // any other node carried that node's tag-less view, and ApplyArticleUpdateCore calls
+            // SetForArticleAsync with it, wiping the tags locally too. That is why tags set
+            // through an agent "sometimes vanish".
+            var article = await articleService.CreateAsync(title, treePath, mergedTags, content);
             var result = $"Created article {article.Id}: {article.Title} in {article.TreePath}";
             if (content.Length > LargeContentThreshold)
                 result += $"\n\n💡 Large content ({content.Length} chars). If this came from a file on disk, " +
@@ -127,11 +131,11 @@ public class BeeWriteTools(
 
         try
         {
-            await articleService.UpdateAsync(id, title, treePath, null, content);
-            if (tags != null)
-            {
-                await conceptTagSvc.SetForArticleAsync(id, tags);
-            }
+            // Same as bee_save_article: tags must travel in the article_update payload, which
+            // means passing them to the service rather than setting them in a second call the
+            // event knows nothing about. null still means "leave the tags alone" — UpdateAsync
+            // treats a null tag list as no change, exactly as the old two-step did.
+            await articleService.UpdateAsync(id, title, treePath, tags, content);
             return $"Updated article {id}";
         }
         catch (UnauthorizedAccessException ex)
@@ -304,7 +308,12 @@ public class BeeWriteTools(
                 return $"Error: folder '{path}' is not empty: {string.Join(" and ", parts)}. Move or delete them first.";
             }
 
-            await folderRepo.SoftDeleteAsync(folder.Id, DateTime.UtcNow);
+            // FolderService.DeleteAsync, not the repository. The repository call carries the ACL
+            // check and nothing else: it emits no folder_delete event, so the folder vanished here
+            // and lived on every peer forever, and it skips EnsureDeletableAsync, so an agent
+            // could delete a reserved system folder that happened to be empty. The service is the
+            // only place that does both.
+            await folderSvc.DeleteAsync(folder.Id);
             return $"Deleted folder '{path}'";
         }
         catch (UnauthorizedAccessException ex)

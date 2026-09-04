@@ -41,6 +41,14 @@ public static class KeyEndpoints
             // This node is now in step with itself again, whatever a peer told us earlier.
             await nodeRepo.ClearMasterPasswordNoticeAsync();
 
+            // ...and remember WHEN, so a peer's event about an older change does not raise the
+            // banner again. The SAME instant goes into the event below, not two calls to UtcNow:
+            // the applier's guard is `incoming <= local`, so if our own event carried a later
+            // timestamp than what we recorded, an echo of it coming back through a relay peer
+            // would raise the banner on the very node that made the change.
+            var changedAt = DateTime.UtcNow;
+            await nodeRepo.SetMasterPasswordChangedLocallyAtAsync(changedAt);
+
             // Key slots are node-local: this rewrapped THIS node's slot and nothing else. Every
             // peer still accepts the old password, including at its own /api/join, which is how a
             // stranger becomes a full member of the mesh. Tell them, so each can say so to its own
@@ -49,7 +57,7 @@ public static class KeyEndpoints
             var peers = await whitelistRepo.GetAllActiveAsync();
             if (peers.Count > 0)
             {
-                await eventLogger.LogMasterPasswordChangedAsync();
+                await eventLogger.LogMasterPasswordChangedAsync(changedAt);
                 eventLogger.SignalSync();
             }
 
@@ -68,11 +76,31 @@ public static class KeyEndpoints
         {
             // Read separately from the change endpoint because it answers a question about the
             // PAST: a peer changed the password while this node was running or offline, and this
-            // node still accepts the old one. Nothing clears it but changing the password here.
+            // node still accepts the old one. It is cleared by changing the password here, or by
+            // an admin dismissing it below.
             var notice = await nodeRepo.GetMasterPasswordNoticeAsync();
             return Results.Ok(notice is null
                 ? new MasterPasswordNoticeResponse(false, null, null)
                 : new MasterPasswordNoticeResponse(true, notice.Value.ChangedAt, notice.Value.ByNode));
+        });
+
+        // POST /api/keys/password-notice/dismiss — "I have handled this."
+        //
+        // The notice exists because a peer announced a password change and this node cannot tell
+        // whether that change matches its own. Migration 019 filters the half that IS decidable
+        // (an announcement older than this node's own last change). The other half is not: when a
+        // peer changes AFTER this node did, the event says nothing about WHICH password it moved
+        // to, so "the admin is working through the mesh, and this is node 1 hearing about node 3"
+        // and "someone changed the password on a machine I do not control" are the same event.
+        //
+        // Only the operator knows which it was, so they say so. Without this the warning was
+        // permanent for every node but the last one changed — following the exact procedure the
+        // banner prescribes left it on screen forever, which is how a real warning becomes
+        // furniture nobody reads.
+        group.MapPost("/password-notice/dismiss", async (INodeIdentityRepository nodeRepo) =>
+        {
+            await nodeRepo.ClearMasterPasswordNoticeAsync();
+            return Results.Ok(new MasterPasswordNoticeResponse(false, null, null));
         });
 
         group.MapPost("/add-recovery", async (KeyManagementService svc, SessionService session, HttpContext ctx) =>

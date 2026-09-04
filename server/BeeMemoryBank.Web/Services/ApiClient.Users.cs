@@ -12,11 +12,33 @@ public partial class ApiClient
 {
     // ─── Keys ─────────────────────────────────────────────────────────────────
 
-    public async Task<bool> ChangePasswordAsync(string oldPassword, string newPassword)
+    /// <summary>
+    /// Changes THIS node's master password and returns what the API says actually happened.
+    ///
+    /// <para>Named "Master" rather than plain "ChangePassword" so it is not confused with the
+    /// per-user password routes under /api/users, which live in the same file and mean something
+    /// entirely different. It returns the message, not a bare bool, because the message is the
+    /// point: key slots are node-local, so a successful change leaves every peer still accepting
+    /// the old password — including at its own join endpoint — and the API names how many.</para>
+    /// </summary>
+    public async Task<(bool Ok, string? Message)> ChangeMasterPasswordAsync(string oldPassword, string newPassword)
     {
         var resp = await http.PostAsync("/api/keys/change-password",
             Body(new { oldPassword, newPassword }));
-        return resp.IsSuccessStatusCode;
+        if (!resp.IsSuccessStatusCode)
+            return (false, null);
+
+        try
+        {
+            var body = await resp.Content.ReadFromJsonAsync<ChangeMasterPasswordDto>(JsonOpts);
+            return (true, body?.Message);
+        }
+        catch
+        {
+            // Changed successfully but the body did not parse. Do not turn a password change that
+            // actually happened into a reported failure over a response shape.
+            return (true, null);
+        }
     }
 
     /// <summary>

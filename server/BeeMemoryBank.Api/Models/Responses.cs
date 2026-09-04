@@ -73,7 +73,23 @@ public record LockImpactResponse(
 /// name and owner are what an operator needs to decide which one to revoke.</summary>
 public record AutoUnlockAgentItem(int Id, string Name, int OwnerUserId, string? OwnerName);
 
-public record ErrorResponse(string Error);
+/// <summary>
+/// An error the caller can read two ways. <c>Error</c> is prose for a human; <c>Code</c> is the
+/// machine-readable half, and it exists because the Web layer was branching on the prose — an
+/// endpoint reworded by one word changed the Login page's behaviour across a process boundary,
+/// the same failure mode the typed exceptions fixed inside the API. Null on every response that
+/// nothing needs to distinguish programmatically; add a code only when a caller actually branches
+/// on it, so the set stays small enough to be a contract.
+/// </summary>
+public record ErrorResponse(string Error, string? Code = null);
+
+/// <summary>The <see cref="ErrorResponse.Code"/> values callers are allowed to branch on.</summary>
+public static class ErrorCodes
+{
+    /// <summary>The vault is locked, so a non-superadmin cannot be logged in. The Login page
+    /// shows its "ask an administrator to unlock" state on this.</summary>
+    public const string SessionLocked = "session_locked";
+}
 
 public record FolderInfoResponse(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt, bool IsSystem = false, bool IsRemote = false)
 {

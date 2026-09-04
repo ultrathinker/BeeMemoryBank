@@ -2,6 +2,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using System.Security.Cryptography;
 using System.Text;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -131,8 +132,13 @@ public class CompactionService(
 
     public async Task<CompactionResult> ExecuteAsync(long? explicitCp = null, string reason = "manual")
     {
+        // ConflictException, not a bare InvalidOperationException: "someone else is already doing
+        // this" is a 409 the caller can retry, while everything else ExecuteAsync refuses is a bad
+        // request. The endpoint used to map every InvalidOperationException to 400, so a second
+        // operator pressing Compact was told their request was malformed. Same distinction
+        // DekRotationService.ProposeRotationAsync makes for the same reason.
         if (!await _executeLock.WaitAsync(0))
-            throw new InvalidOperationException("Another compaction is already in progress");
+            throw new ConflictException("Another compaction is already in progress");
 
         try
         {
@@ -149,10 +155,13 @@ public class CompactionService(
         var preview = await PreviewAsync();
         var cp = explicitCp ?? preview.ProposedCp;
 
+        // ArgumentException: an out-of-range explicitCp is the caller's parameter being wrong,
+        // which is a 400 — distinct from the 409 above and from the 409 that a genuine state
+        // problem (no node identity) produces further down.
         if (cp <= preview.MinSeq)
-            throw new InvalidOperationException($"Cannot compact to {cp} — current min is {preview.MinSeq}");
+            throw new ArgumentException($"Cannot compact to {cp} — current min is {preview.MinSeq}");
         if (cp > preview.HeadSeq)
-            throw new InvalidOperationException($"Cannot compact to {cp} — current head is {preview.HeadSeq}");
+            throw new ArgumentException($"Cannot compact to {cp} — current head is {preview.HeadSeq}");
 
         logger.LogInformation("Generating compaction snapshot at CP={Cp}", cp);
         var snap = await snapshotService.CreateAsync(

@@ -1458,8 +1458,15 @@ $(function () {
 
 function updateSyncModal() {
     fetch('/api-proxy/sync/delivery-status')
-        .then(function (r) { return r.json(); })
+        .then(function (r) {
+            // Bail out, and stop the 3s re-poll at the bottom of this function, on any non-success.
+            // The proxy route is superadmin-only; for anyone else this can never succeed, and
+            // r.json() on the access-denied page's HTML throws into a catch that hides the reason.
+            if (!r.ok) return null;
+            return r.json();
+        })
         .then(function (data) {
+            if (!data) return;
             var content = document.getElementById('syncModalContent');
             if (!content || !data.nodes) return;
 

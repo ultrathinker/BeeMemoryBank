@@ -37,6 +37,16 @@ public interface INodeIdentityRepository
     Task ClearMasterPasswordNoticeAsync();
 
     /// <summary>
+    /// When this node last changed its own master password, or null if it never has (or the node
+    /// predates migration 019). Read by the applier to drop a peer notice that describes a change
+    /// this node has already moved past.
+    /// </summary>
+    Task<DateTime?> GetMasterPasswordChangedLocallyAtAsync();
+
+    /// <summary>Records that this node changed its own master password at <paramref name="at"/>.</summary>
+    Task SetMasterPasswordChangedLocallyAtAsync(DateTime at);
+
+    /// <summary>
     /// Admin-configurable product name for the web header / tab title, or null when the node
     /// has never set one (the caller then falls back to <see cref="Models.Branding.DefaultName"/>).
     /// Node-local: never synced, so each installation can brand itself independently.

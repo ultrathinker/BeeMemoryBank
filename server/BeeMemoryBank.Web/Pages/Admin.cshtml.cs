@@ -99,6 +99,29 @@ public class AdminModel(ApiClient api) : PageModel
             : RedirectToPage(new { err = "Failed to reset update state machine." });
     }
 
+    public async Task<IActionResult> OnPostChangeMasterPasswordAsync(string oldPassword, string newPassword)
+    {
+        if (string.IsNullOrEmpty(oldPassword) || string.IsNullOrEmpty(newPassword))
+            return RedirectToPage(new { err = "Both the current and the new master password are required." });
+
+        var (ok, message) = await api.ChangeMasterPasswordAsync(oldPassword, newPassword);
+
+        // The API's own sentence is shown verbatim, not replaced with a generic "done": it names
+        // how many peers are still on the old password, which is the fact the operator has to act
+        // on and the reason this endpoint returns prose at all.
+        return ok
+            ? RedirectToPage(new { msg = message ?? "Master password changed on this node." })
+            : RedirectToPage(new { err = "Failed to change the master password. Check the current password and that the vault is unlocked." });
+    }
+
+    public async Task<IActionResult> OnPostDismissPasswordNoticeAsync()
+    {
+        var ok = await api.DismissMasterPasswordNoticeAsync();
+        return ok
+            ? RedirectToPage(new { msg = "Password notice dismissed. It will reappear if another node reports a change after this one." })
+            : RedirectToPage(new { err = "Failed to dismiss the password notice." });
+    }
+
     public async Task<IActionResult> OnPostSetPeerSuperadminAsync(Guid nodeId, bool isSuperadmin)
     {
         var (ok, error) = await api.SetPeerSuperadminAsync(nodeId, isSuperadmin);

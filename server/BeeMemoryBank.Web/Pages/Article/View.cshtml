@@ -413,6 +413,13 @@ else
     </sl-dialog>
 }
 
+@* Sync delivery status is superadmin-only at the API (/api/sync/delivery-status names every
+   peer and its address), and the proxy route enforces the same role. Rendering the toast for
+   everyone meant a regular user who saved an article got a widget that could only ever fail —
+   its retry loop polled a 403 every five seconds until they navigated away. Same claim check the
+   layout's sync widget uses. *@
+@if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+{
 <div id="syncToast" class="sync-toast" style="display:none;">
     <div class="sync-toast-content">
         <span class="sync-toast-label">Syncing</span>
@@ -424,6 +431,7 @@ else
     <div id="syncModalContent" class="sync-modal-content">Loading...</div>
     <sl-button slot="footer" variant="primary" onclick="document.getElementById('syncModal').hide()">Close</sl-button>
 </sl-dialog>
+}
 
 <script>
 (function() {
@@ -1092,8 +1100,16 @@ else
     function updateSyncToast() {
         if (!polling) return;
         fetch('/api-proxy/sync/delivery-status')
-            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                // Stop, don't retry, on anything that is not a success. A 403 (not a superadmin)
+                // or a redirect to the access-denied page is a permanent answer — retrying it
+                // every five seconds is a loop that can only ever fail, and r.json() on the HTML
+                // it returns throws into the catch below, which is what used to keep it going.
+                if (!r.ok) { polling = false; return null; }
+                return r.json();
+            })
             .then(function(data) {
+                if (!data) return;
                 var circles = document.getElementById('syncToastCircles');
                 if (!circles || !data.nodes) return;
                 circles.innerHTML = data.nodes.map(function(n) {

@@ -1,4 +1,5 @@
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -182,7 +183,11 @@ public class CompactionServiceTests : IAsyncLifetime
 
         var act = () => _compactionService.ExecuteAsync(explicitCp: 2000, reason: "should fail");
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
+        // ArgumentException, so the endpoint answers 400: the caller named a checkpoint that is
+        // out of range. Asserted by type, not just by message, because the type is what decides
+        // the status code — and it must stay distinct from the ConflictException below, which is
+        // the retryable 409.
+        await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*current min*");
     }
 
@@ -215,7 +220,11 @@ public class CompactionServiceTests : IAsyncLifetime
         var task2 = Task.Run(() => _compactionService.ExecuteAsync(explicitCp: 2000, reason: "second"));
 
         Func<Task> act = async () => await task2;
-        var ex = await act.Should().ThrowAsync<InvalidOperationException>();
+        // ConflictException specifically: a collision with a running compaction is a 409 the
+        // operator can retry, and this used to arrive as 400 because the endpoint flattened every
+        // InvalidOperationException. ConflictException derives from it, so asserting the base
+        // type here would pass even if the fix were reverted.
+        var ex = await act.Should().ThrowAsync<ConflictException>();
         ex.WithMessage("*Another compaction is already in progress*");
 
         await task1;

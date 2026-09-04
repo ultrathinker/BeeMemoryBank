@@ -90,6 +90,10 @@ public record WhitelistEntryDto(
 /// <summary>Whether another node changed the master password while this one kept the old slot.</summary>
 public record MasterPasswordNoticeDto(bool IsStale, DateTime? ChangedAt, string? ChangedByNode);
 
+/// <summary>Reply from POST /api/keys/change-password. <c>Message</c> is operator-facing prose
+/// naming how many peers are still on the old password; it is shown verbatim.</summary>
+public record ChangeMasterPasswordDto(int PeerCount, string Message);
+
 public record NodeIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
 
 // CanAutoUnlock: true only for an agent owned by a superadmin (see AGENTS.md H6 fix). Such a key

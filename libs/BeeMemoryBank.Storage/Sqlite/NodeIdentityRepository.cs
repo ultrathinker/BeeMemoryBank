@@ -125,6 +125,26 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
               WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)");
     }
 
+    public async Task<DateTime?> GetMasterPasswordChangedLocallyAtAsync()
+    {
+        using var conn = OpenConnection();
+        var value = await conn.ExecuteScalarAsync<string?>(
+            "SELECT master_password_changed_locally_at FROM tbl_node_identity LIMIT 1");
+        return value is null
+            ? null
+            : DateTime.Parse(value, null, System.Globalization.DateTimeStyles.RoundtripKind);
+    }
+
+    public async Task SetMasterPasswordChangedLocallyAtAsync(DateTime at)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_node_identity
+              SET master_password_changed_locally_at = @at
+              WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+            new { at = at.ToString("O") });
+    }
+
     private sealed class MasterPasswordNoticeRow
     {
         public string? ChangedAt { get; set; }

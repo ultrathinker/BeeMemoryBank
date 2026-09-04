@@ -91,7 +91,9 @@ public static class SessionEndpoints
             else
             {
                 if (!isUnlocked)
-                    return Results.Json(new ErrorResponse("Server is locked. Contact administrator."), statusCode: 403);
+                    return Results.Json(
+                        new ErrorResponse("Server is locked. Contact administrator.", ErrorCodes.SessionLocked),
+                        statusCode: 403);
             }
 
             var migratedSynthetic = session.LastMigrationResult?.Migrated == true

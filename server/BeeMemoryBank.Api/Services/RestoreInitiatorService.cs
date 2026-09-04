@@ -96,6 +96,27 @@ public class RestoreInitiatorService : IRestoreInitiator
             throw new InvalidOperationException("Another restore is already in progress on this node.");
         }
 
+        // A locked node cannot do any of what follows: the pre-restore backup needs the master DEK
+        // to encrypt itself, and so does the apply. Leave the row Pending and stop — that is
+        // precisely the state RetryPendingRestoresAsync sweeps after an unlock, and its own comment
+        // already calls Pending "arrived while session was locked, never started".
+        //
+        // Before this check the flow ran anyway and died at the backup, and the outer handler
+        // turned that into Failed, which nothing ever retries. An Android peer with auto-accept on
+        // is locked most of the time, so for those nodes this was the ordinary path: the restore
+        // failed quietly and only re-initiating from the originator could revive it.
+        //
+        // Released explicitly rather than through the try/finally below, because this returns
+        // before the block that owns that finally.
+        if (!_sessionService.IsUnlocked)
+        {
+            _logger.LogInformation(
+                "Restore event {EventId} arrived while the vault is locked — leaving it Pending for the post-unlock sweep.",
+                eventId);
+            _executeLock.Release();
+            return;
+        }
+
         using var scope = _scopeFactory.CreateScope();
         var stateRepo = scope.ServiceProvider.GetRequiredService<IRestoreEventStateRepository>();
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();

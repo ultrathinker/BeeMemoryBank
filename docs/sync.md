@@ -37,9 +37,13 @@ node on the mesh can:
 - **Restore the whole network from its own snapshot** — see "Network-Wide Snapshot Restore" below.
   Peers with `auto_accept_restore` apply it unattended.
 
-Nothing in the API or the Admin UI clears `is_superadmin` after a join, so a peer cannot be demoted
-to content-only; the only remedy is revoking it. And because each node decides from *its own*
-whitelist row, a revoke only binds the nodes the revoke event actually reaches.
+A peer *can* be demoted to content-only: `PUT /api/whitelist/{nodeId}/superadmin` clears
+`is_superadmin` and the new value rides in a `whitelist_update` event. Because each node decides
+from *its own* whitelist row, both a demotion and a revoke only bind the nodes the event actually
+reaches — and a peer running a build from before this field existed deserialises the payload
+without it and keeps honouring the demoted node's cluster-state events. The demoted node is also
+not informed (it holds no whitelist row for itself), so it goes on emitting events that every
+other node rejects.
 
 **One further consequence for the event log itself:** payloads are plaintext JSON. A peer that only
 ever authenticates and pulls still learns every article title, tree path and tag name in the vault,

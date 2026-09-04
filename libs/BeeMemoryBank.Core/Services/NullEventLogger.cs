@@ -16,7 +16,7 @@ public sealed class NullEventLogger : IEventLogger
     public Task LogWhitelistAddAsync(WhitelistEntry entry) => Task.CompletedTask;
     public Task LogWhitelistRevokeAsync(Guid nodeId) => Task.CompletedTask;
     public Task LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null) => Task.CompletedTask;
-    public Task LogMasterPasswordChangedAsync() => Task.CompletedTask;
+    public Task LogMasterPasswordChangedAsync(DateTime changedAt) => Task.CompletedTask;
     public Task LogCommentCreateAsync(Comment comment) => Task.CompletedTask;
     public Task LogCommentDeleteAsync(Guid commentId) => Task.CompletedTask;
     public Task LogFolderCreateAsync(Folder folder) => Task.CompletedTask;

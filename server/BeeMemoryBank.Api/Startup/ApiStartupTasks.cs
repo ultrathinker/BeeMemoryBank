@@ -28,7 +28,12 @@ public static class ApiStartupTasks
 {
     public static async Task RunBeeApiStartupTasksAsync(this WebApplication app, string dataPath)
     {
-app.UseLoopbackForwardedHeaders();
+// NOTE: UseLoopbackForwardedHeaders() is deliberately NOT called here. It belongs to the pipeline,
+// not to the startup tasks, and Program.cs calls it immediately before this method -- exactly
+// where the pre-split file had it. The split briefly had it in both places, registering two
+// ForwardedHeadersMiddleware instances: with ForwardLimit = 1 each, two passes consume two hops
+// whenever the first one is itself a trusted proxy, which is the shape a spoofed X-Forwarded-For
+// needs to survive.
 
 // BMB_READY_FILE: signals startup completion to a parent orchestrator (bmbd) by writing
 // {pid, urls, applicationName, version, startupTimeUtc} once Kestrel has bound its actual

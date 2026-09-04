@@ -32,15 +32,13 @@ public static class CompactionEndpoints
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
-            try
-            {
-                var result = await svc.ExecuteAsync(req.ExplicitCp, req.Reason);
-                return Results.Ok(result);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return Results.BadRequest(new ErrorResponse(ex.Message));
-            }
+            // No local catch. This used to flatten every InvalidOperationException to 400, which
+            // meant "another compaction is already in progress" — a retryable collision — arrived
+            // as a malformed-request error, and so did a missing node identity. CompactionService
+            // now throws typed exceptions and ExceptionStatusMap turns them into 409 / 400 / 409
+            // respectively, in the one place those pairs are asserted.
+            var result = await svc.ExecuteAsync(req.ExplicitCp, req.Reason);
+            return Results.Ok(result);
         });
 
         group.MapGet("/checkpoints", async (DbConnectionFactory connFactory) =>

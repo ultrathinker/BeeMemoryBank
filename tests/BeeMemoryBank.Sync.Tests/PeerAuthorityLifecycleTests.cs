@@ -116,7 +116,7 @@ public class PeerAuthorityLifecycleTests : IAsyncLifetime
     [Fact]
     public async Task APasswordChangeElsewhere_LeavesAReadableNoticeAndNoKeyMaterial()
     {
-        await _nodeA.EventLogger.LogMasterPasswordChangedAsync();
+        await _nodeA.EventLogger.LogMasterPasswordChangedAsync(DateTime.UtcNow);
         var evt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Last();
 
         // The payload is the whole design decision: the alternative was shipping a slot wrapped
@@ -131,6 +131,49 @@ public class PeerAuthorityLifecycleTests : IAsyncLifetime
         var notice = await _nodeB.NodeRepo.GetMasterPasswordNoticeAsync();
         notice.Should().NotBeNull("NodeB still accepts the old password and has to be able to say so");
         notice!.Value.ByNode.Should().Be("NodeA");
+    }
+
+    [Fact]
+    public async Task APasswordChangeOlderThanThisNodesOwn_RaisesNoNotice()
+    {
+        // The offline case, and the only half of the ping-pong a clock can decide. NodeA changed
+        // its password at T1 and NodeB was unreachable; the admin walked over and changed NodeB by
+        // hand at T2; NodeA's event only reaches NodeB now. Before migration 019 NodeB raised the
+        // banner anyway, telling the admin to do the thing they had just done.
+        var changedOnA = DateTime.UtcNow.AddMinutes(-30);
+        await _nodeA.EventLogger.LogMasterPasswordChangedAsync(changedOnA);
+        var evt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Last();
+
+        await _nodeB.NodeRepo.SetMasterPasswordChangedLocallyAtAsync(changedOnA.AddMinutes(10));
+
+        await _nodeB.ApplyFromAsync(_nodeA, evt);
+
+        (await _nodeB.NodeRepo.GetMasterPasswordNoticeAsync())
+            .Should().BeNull("NodeB changed its own password after the change this event describes");
+    }
+
+    [Fact]
+    public async Task APasswordChangeNewerThanThisNodesOwn_StillRaisesTheNotice()
+    {
+        // The half that is NOT decidable, pinned so nobody "fixes" it into silence later. NodeB
+        // changed its password first; NodeA changed later. Nothing in the event says whether NodeA
+        // moved to the same password NodeB is on or a different one, so the only safe answer is to
+        // warn and let the operator dismiss it. Suppressing this would hide a real "someone changed
+        // the master password on a machine you do not control".
+        await _nodeB.NodeRepo.SetMasterPasswordChangedLocallyAtAsync(DateTime.UtcNow.AddMinutes(-30));
+
+        await _nodeA.EventLogger.LogMasterPasswordChangedAsync(DateTime.UtcNow);
+        var evt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0)).Last();
+
+        await _nodeB.ApplyFromAsync(_nodeA, evt);
+
+        var notice = await _nodeB.NodeRepo.GetMasterPasswordNoticeAsync();
+        notice.Should().NotBeNull();
+        notice!.Value.ByNode.Should().Be("NodeA");
+
+        // ...and dismissing it is what clears it, since no later event will.
+        await _nodeB.NodeRepo.ClearMasterPasswordNoticeAsync();
+        (await _nodeB.NodeRepo.GetMasterPasswordNoticeAsync()).Should().BeNull();
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────

@@ -116,6 +116,26 @@ public partial class EventApplier
     {
         var p = Deserialize<MasterPasswordChangedPayload>(evt.Payload);
 
+        // A notice older than this node's own last password change describes a gap that is
+        // already closed: the peer changed at T1, this node was offline or was changed by hand at
+        // T2 > T1, and the event only arrives now. Raising the banner for it would tell the admin
+        // to redo something they have already done.
+        //
+        // The opposite order — a peer changing AFTER this node did — is deliberately NOT filtered.
+        // Nothing in the event says whether the peer moved to the same password or a different
+        // one, so a timestamp cannot tell "the operator is working through the mesh" from "someone
+        // changed the password on a machine I do not control". The banner is raised and the admin
+        // dismisses it (POST /api/keys/password-notice/dismiss); see migration 019 for why a
+        // password verifier in the payload is not the answer.
+        var localChangedAt = await nodeIdentityRepo.GetMasterPasswordChangedLocallyAtAsync();
+        if (localChangedAt.HasValue && p.ChangedAt <= localChangedAt.Value)
+        {
+            logger.LogInformation(
+                "Ignoring master_password_changed from {NodeName} at {ChangedAt}: this node changed its own master password later, at {LocalChangedAt}.",
+                p.NodeName, p.ChangedAt, localChangedAt.Value);
+            return;
+        }
+
         // Nothing to rewrap: the event carries no key material by design (see the payload). All we
         // can do — and all we should do — is remember that this node is now out of step, so the
         // admin UI can say so and an admin can enter the new password here too.

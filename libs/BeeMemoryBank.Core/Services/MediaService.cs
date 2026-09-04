@@ -1,6 +1,8 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Processing;
@@ -17,8 +19,14 @@ public class MediaService(
     ILamportClock clock,
     IEventLogger eventLogger,
     MediaStorageOptions options,
-    IDbConnectionFactory connFactory)
+    IDbConnectionFactory connFactory,
+    // Optional and last so the many direct constructions in tests keep compiling; DI supplies the
+    // real one. Only used to report a media row whose file is gone, which is not a normal state
+    // and must not pass silently.
+    ILogger<MediaService>? logger = null)
 {
+    private readonly ILogger<MediaService> logger = logger ?? NullLogger<MediaService>.Instance;
+
     private static readonly HashSet<string> AllowedContentTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"
@@ -201,7 +209,35 @@ public class MediaService(
                 return null;
         }
 
-        var ciphertext = await File.ReadAllBytesAsync(Path.Combine(options.MediaDir, $"{id}.enc"));
+        // A media row whose .enc file is gone must degrade to "not found" (the endpoint's 404),
+        // not to a 500. The two are reachable states, both from outside this node: a snapshot
+        // restore or a join that brought the database across without the media directory, and an
+        // event applied while MediaStorageOptions was not configured, which writes the row and no
+        // file. Reading it blind threw FileNotFoundException, which nothing catches and
+        // ExceptionStatusMap does not recognise — every broken image on the page became a server
+        // error in the log, hiding the one fact an operator needs, which media is missing.
+        var filePath = Path.Combine(options.MediaDir, $"{id}.enc");
+        if (!File.Exists(filePath))
+        {
+            this.logger.LogWarning(
+                "Media {MediaId} ({FileName}) has a row but no file at {Path} — serving 404. " +
+                "This node's media directory is incomplete; the bytes exist only on a peer that " +
+                "still has them.", id, media.FileName, filePath);
+            return null;
+        }
+
+        byte[] ciphertext;
+        try
+        {
+            ciphertext = await File.ReadAllBytesAsync(filePath);
+        }
+        catch (IOException ex)
+        {
+            // Deleted between the check and the read, or unreadable. Same answer, still logged:
+            // an unreadable file is an operational fact, not a caller error.
+            this.logger.LogWarning(ex, "Media {MediaId} could not be read from {Path}", id, filePath);
+            return null;
+        }
 
         try
         {

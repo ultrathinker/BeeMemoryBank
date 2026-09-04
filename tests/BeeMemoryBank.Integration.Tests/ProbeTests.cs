@@ -72,8 +72,14 @@ public class ProbeTests : IAsyncLifetime
 
     /// <summary>
     /// Full flow: NodeA probes its own candidate URL. NodeA authenticates to NodeB,
-    /// NodeB relays a fetch to NodeA's /api/sync/ping (gets 403 — no internal key on
-    /// the bare relay fetch, but ANY http response proves reachability).
+    /// NodeB relays a fetch to NodeA's /api/sync/ping. The relay carries no internal key, so the
+    /// answer is 404 — /api/sync/ping is internal-key-gated and therefore NOT in PublicSurface,
+    /// and PublicSurfaceMiddleware answers 404 for everything it does not publish. It used to be
+    /// 403, back when PublicSurface published /api/sync/** wholesale and the request reached
+    /// RequireInternalKey; that wildcard was the small existence oracle this test now pins closed.
+    ///
+    /// Either way the probe works: ANY http response proves reachability, which is all this
+    /// endpoint is asking.
     /// </summary>
     [Fact]
     public async Task Probe_ReachableUrl_ReportsReachable()
@@ -85,7 +91,8 @@ public class ProbeTests : IAsyncLifetime
         body.GetProperty("outcome").GetString().Should().Be("Reachable");
         body.GetProperty("peerNodeId").GetString().Should().Be(_nodeBId.ToString());
         body.GetProperty("peerDisplayName").GetString().Should().Be("NodeB");
-        body.GetProperty("targetHttpStatusCode").GetInt32().Should().Be(403);
+        body.GetProperty("targetHttpStatusCode").GetInt32().Should().Be(404,
+            "the relay fetch has no internal key and /api/sync/ping is not published to keyless callers");
         body.GetProperty("errorCategory").GetString().Should().Be("None");
     }
 

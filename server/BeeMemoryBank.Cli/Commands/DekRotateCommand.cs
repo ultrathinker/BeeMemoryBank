@@ -10,6 +10,24 @@ public static class DekRotateCommand
     {
         var url = Environment.GetEnvironmentVariable("BMB_API_URL") ?? "http://localhost:5300";
         var key = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
+
+        // Fall back to the key file in the data directory, the way SnapshotCommand already does.
+        // This used to be optional: InternalKeyValidator trusted any loopback caller when no key
+        // was configured, so `bmb dek-rotate` run on the host worked with no key at all. That
+        // fallback is gone (it was one misconfiguration away from an authentication bypass), and
+        // without this the command gets a bare 404 from PublicSurface -- an error that says
+        // nothing about the missing key.
+        if (string.IsNullOrEmpty(key))
+        {
+            var dataPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bmb", "data");
+            var keyFile = Path.Combine(dataPath, ".internal-key");
+            if (File.Exists(keyFile))
+            {
+                try { key = File.ReadAllText(keyFile).Trim(); } catch { /* unreadable: fall through keyless */ }
+            }
+        }
+
         var http = new HttpClient { BaseAddress = new Uri(url) };
         if (timeout.HasValue)
             http.Timeout = timeout.Value;

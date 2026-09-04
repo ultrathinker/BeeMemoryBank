@@ -87,16 +87,24 @@ public partial class ApiClient(HttpClient http)
         {
             var body = await resp.Content.ReadAsStringAsync();
             string error;
+            string? code = null;
             try
             {
                 var errorDoc = JsonDocument.Parse(body);
                 error = errorDoc.RootElement.GetProperty("error").GetString() ?? "Login failed";
+                if (errorDoc.RootElement.TryGetProperty("code", out var codeProp))
+                    code = codeProp.GetString();
             }
             catch
             {
                 error = "Login failed";
             }
-            var isLocked = resp.StatusCode == System.Net.HttpStatusCode.Forbidden && error.Contains("locked");
+            // The API says which refusal this is in `code`; the message text is for the user, not
+            // for us. The text match stays as a fallback only because Web and Api are separate
+            // containers in the docker deployment and can briefly run different builds during a
+            // rolling restart — an Api that predates ErrorCodes sends no code at all.
+            var isLocked = resp.StatusCode == System.Net.HttpStatusCode.Forbidden
+                && (code == "session_locked" || (code == null && error.Contains("locked")));
             return new LoginResult(false, error, isLocked, null, null, null, null, null, null);
         }
         var result = await resp.Content.ReadFromJsonAsync<LoginResponse>(JsonOpts);
@@ -108,6 +116,17 @@ public partial class ApiClient(HttpClient http)
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/session/lock");
 
         await http.SendAsync(request);
+    }
+
+    /// <summary>
+    /// Clears this node's "a peer changed the master password" banner. The operator is asserting
+    /// that the announced change is one they made, which no timestamp on the event can establish
+    /// — see POST /api/keys/password-notice/dismiss.
+    /// </summary>
+    public async Task<bool> DismissMasterPasswordNoticeAsync()
+    {
+        var resp = await http.PostAsync("/api/keys/password-notice/dismiss", content: null);
+        return resp.IsSuccessStatusCode;
     }
 
     /// <summary>

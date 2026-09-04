@@ -19,6 +19,15 @@
         Until you change it here too, this node keeps accepting the old password — including at its
         own join endpoint, which is how a new node becomes a full member of the network.
         Change it under <em>Master Key</em> below.
+        @* Dismissal is the honest answer to a question the event cannot answer. The peer announced
+           a change; nothing in the announcement says whether it moved to the same password this
+           node is already on. Without this the warning survived the operator doing exactly what it
+           asked, on every node but the last one they touched. *@
+        <form method="post" asp-page-handler="DismissPasswordNotice" style="margin-top:10px;">
+            <sl-button type="submit" size="small" variant="warning" outline>
+                Already changed here — dismiss
+            </sl-button>
+        </form>
     </sl-alert>
 }
 
@@ -1400,6 +1409,45 @@
         </form>
     </sl-dialog>
 
+    @* Master password.
+
+       This section is what the out-of-step banner at the top of the page tells the operator to
+       use, and until now it did not exist: POST /api/keys/change-password had no caller in the
+       web app, none in the CLI and none on mobile, so the only way to change a master password
+       was curl with the internal key. A warning that names an action the product cannot perform
+       is worse than no warning.
+
+       Not a dialog: the consequences are long enough to need reading, and they are the whole
+       point of the screen. *@
+    <h3 style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> Master Password</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:560px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            The master password unwraps this node's copy of the vault key. Changing it re-wraps
+            <strong>this node's key slot only</strong> — key slots are never synced and are stripped
+            from join packages, so every other node keeps accepting the old password, including at
+            its own join endpoint. Change it on each node separately; the others are told that it
+            happened, but no key material crosses the wire, so a human has to type it there too.
+        </p>
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            A password change does <strong>not</strong> evict a node or an agent that already holds
+            the vault key. That needs revoking the peer and rotating the DEK.
+        </p>
+        <form method="post" asp-page-handler="ChangeMasterPassword" style="display:flex;flex-direction:column;gap:12px;">
+            <sl-input name="oldPassword" type="text" inputmode="text" autocomplete="off"
+                      class="bmb-secret" data-1p-ignore data-lpignore="true" required
+                      label="Current master password"></sl-input>
+            <sl-input name="newPassword" type="text" inputmode="text" autocomplete="off"
+                      class="bmb-secret" data-1p-ignore data-lpignore="true" required
+                      label="New master password"></sl-input>
+            <div>
+                <sl-button type="submit" variant="warning"
+                    onclick="return confirm('Change the master password on THIS node? Other nodes keep accepting the old one until you change it there too.')">
+                    <sl-icon slot="prefix" name="key"></sl-icon> Change master password
+                </sl-button>
+            </div>
+        </form>
+    </div>
+
     <!-- Lock Server -->
     <h3 style="margin-bottom:12px;"><sl-icon name="lock"></sl-icon> Lock Server</h3>
     <div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
@@ -1991,13 +2039,15 @@
 function confirmSuperadminChange(btn) {
     var name = btn.dataset.nodeName;
     var demoting = btn.dataset.demote === 'true';
+    // The blank line between the question and the consequence is the two-character escape
+    // sequence, not a real line break in the source: a literal newline inside a
+    // single-quoted JS string is a SyntaxError, and the browser discards the WHOLE script
+    // block on one -- which took the demote button, the auto-accept toggles, change-URL and
+    // every snapshot control on this page down with it, silently and with no server-side
+    // symptom at all.
     var message = demoting
-        ? 'Demote "' + name + '"?
-
-It will no longer be able to revoke peers, hard-delete content across the network, or restore every node from its own snapshot. It keeps syncing content as usual.'
-        : 'Promote "' + name + '" to superadmin?
-
-It will be able to revoke any peer, hard-delete content on every node, and restore the whole network from its own snapshot.';
+        ? 'Demote "' + name + '"?\n\nIt will no longer be able to revoke peers, hard-delete content across the network, or restore every node from its own snapshot. It keeps syncing content as usual.'
+        : 'Promote "' + name + '" to superadmin?\n\nIt will be able to revoke any peer, hard-delete content on every node, and restore the whole network from its own snapshot.';
     if (!confirm(message)) return false;
     btn.closest('form').submit();
     return false;

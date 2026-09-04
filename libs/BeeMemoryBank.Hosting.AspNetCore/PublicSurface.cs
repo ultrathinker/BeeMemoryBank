@@ -51,7 +51,30 @@ public static class PublicSurface
         // Every one of these is authenticated by the sync handshake (Ed25519 challenge-response
         // issuing a bearer token), not by the internal key. A peer is by definition a caller that
         // does not have our internal key.
-        new(null, "/api/sync/**"),
+        //
+        // Listed one by one rather than as "/api/sync/**", because that subtree is not uniform:
+        // /api/sync/{status,ping,invisible,delivery-status,quarantine,quarantine/{id},probe} are
+        // RequireInternalKey (most also RequireSuperadmin) operator routes that happen to share
+        // the prefix. Publishing the wildcard let a keyless caller reach them and collect a 401
+        // where every other unpublished path answers 404 — a small existence oracle, and exactly
+        // the distinction the "404, not 403" rule at the top of this file exists to remove.
+        //
+        // The cost of an explicit list is that a NEW peer route has to be added here or peers get
+        // a 404. That is the intended failure direction: forgetting makes sync visibly stop, while
+        // forgetting under the wildcard silently published an admin route.
+        new("GET", "/api/sync/identity"),
+        new("GET", "/api/sync/sentinel"),
+        new("POST", "/api/sync/challenge"),
+        new("POST", "/api/sync/authenticate"),
+        // GET pulls a page of events, POST receives a push. Same path, both peer-facing.
+        new(null, "/api/sync/events"),
+        new("GET", "/api/sync/snapshot/for-join"),
+        new("POST", "/api/sync/report-position"),
+        new("POST", "/api/sync/blobs"),
+        new("POST", "/api/sync/blobs/check"),
+        new("POST", "/api/sync/blobs/get"),
+        // A peer asking us to probe a third node's reachability on its behalf.
+        new("POST", "/api/sync/probe-relay"),
 
         // Joining a network. Authorised by the master password inside the handler; a joining node
         // has nothing else to present.

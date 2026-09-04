@@ -318,14 +318,20 @@ public class EventLogger(
             JsonSerializer.Serialize(payload), entityIdentifier);
     }
 
-    public async Task LogMasterPasswordChangedAsync()
+    /// <param name="changedAt">
+    /// The instant the caller recorded as this node's own last password change. Passed in rather
+    /// than read from the clock here so the two agree exactly: the receiving applier drops a
+    /// notice whose ChangedAt is at or before the recipient's own last change, and a second
+    /// UtcNow would make this node's broadcast strictly later than what it stored about itself.
+    /// </param>
+    public async Task LogMasterPasswordChangedAsync(DateTime changedAt)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
 
         var lamportTs = clock.Tick();
         var payload = new MasterPasswordChangedPayload(
-            ChangedAt: DateTime.UtcNow,
+            ChangedAt: changedAt,
             NodeName: identity.DisplayName);
 
         await AppendEventAsync(identity, EventTypes.MasterPasswordChanged, null, lamportTs,
