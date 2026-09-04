@@ -1,5 +1,6 @@
-using BeeMemoryBank.Core.Interfaces;
+﻿using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
 using Dapper;
 using System.Data.Common;
 using System.Runtime.CompilerServices;
@@ -12,13 +13,18 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
     {
         using var conn = OpenConnection();
         return await conn.QuerySingleOrDefaultAsync<EncryptedArticleBody>(
+            // COALESCE(blob, inline): during the expand phase both are populated, and rows written
+            // before migration 016 have only the inline column. Reading the blob first means the
+            // contract migration can drop the inline column without touching this query again.
             @"SELECT
-                article_id  AS ArticleId,
-                ciphertext  AS Ciphertext,
-                iv          AS IV,
-                encrypted_dek AS EncryptedDek,
-                dek_iv      AS DekIV
-              FROM tbl_article_body WHERE article_id = @articleId",
+                b.article_id  AS ArticleId,
+                COALESCE(bl.data, b.ciphertext) AS Ciphertext,
+                b.iv          AS IV,
+                b.encrypted_dek AS EncryptedDek,
+                b.dek_iv      AS DekIV
+              FROM tbl_article_body b
+              LEFT JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
+              WHERE b.article_id = @articleId",
             new { articleId });
     }
 
@@ -26,10 +32,12 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
     {
         using var conn = OpenConnection();
         return (await conn.QueryAsync<EncryptedArticleBody>(
-            @"SELECT b.article_id AS ArticleId, b.ciphertext AS Ciphertext,
+            @"SELECT b.article_id AS ArticleId,
+                     COALESCE(bl.data, b.ciphertext) AS Ciphertext,
                      b.iv AS IV, b.encrypted_dek AS EncryptedDek, b.dek_iv AS DekIV
               FROM tbl_article_body b
               JOIN tbl_article a ON a.id = b.article_id
+              LEFT JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
               WHERE a.status = 'A'")).ToList();
     }
 
@@ -49,9 +57,11 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
         await using (conn.ConfigureAwait(false))
         {
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"SELECT b.article_id, b.ciphertext, b.iv, b.encrypted_dek, b.dek_iv
+            cmd.CommandText = @"SELECT b.article_id, COALESCE(bl.data, b.ciphertext),
+                                       b.iv, b.encrypted_dek, b.dek_iv
                                 FROM tbl_article_body b
                                 JOIN tbl_article a ON a.id = b.article_id
+                                LEFT JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash
                                 WHERE a.status = 'A'";
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -74,15 +84,31 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
         var conn = transaction?.Connection ?? OpenConnection();
         try
         {
+            // The blob goes in FIRST and in the same transaction as the row that references it.
+            // Order matters for the garbage collector: it only ever sees a blob that is already
+            // referenced, or one younger than its grace period. INSERT OR IGNORE because the hash
+            // is the identity — re-saving identical ciphertext is a no-op, not a conflict.
+            var hash = BlobHash.Compute(body.Ciphertext);
             await conn.ExecuteAsync(
-                @"INSERT INTO tbl_article_body (article_id, ciphertext, iv, encrypted_dek, dek_iv)
-                  VALUES (@ArticleId, @Ciphertext, @IV, @EncryptedDek, @DekIV)
+                @"INSERT OR IGNORE INTO tbl_blob (hash, data, size, created_at)
+                  VALUES (@hash, @data, @size, @createdAt)",
+                new { hash, data = body.Ciphertext, size = body.Ciphertext.LongLength,
+                      createdAt = DateTime.UtcNow.ToString("o") }, transaction);
+
+            // Expand phase: the inline ciphertext is still written so the previous binary keeps
+            // working against a migrated database. Migration 017 drops the column and this
+            // parameter with it.
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_article_body (article_id, ciphertext, ciphertext_hash, iv, encrypted_dek, dek_iv)
+                  VALUES (@ArticleId, @Ciphertext, @CiphertextHash, @IV, @EncryptedDek, @DekIV)
                   ON CONFLICT (article_id) DO UPDATE SET
-                    ciphertext    = excluded.ciphertext,
-                    iv            = excluded.iv,
-                    encrypted_dek = excluded.encrypted_dek,
-                    dek_iv        = excluded.dek_iv",
-                body, transaction);
+                    ciphertext      = excluded.ciphertext,
+                    ciphertext_hash = excluded.ciphertext_hash,
+                    iv              = excluded.iv,
+                    encrypted_dek   = excluded.encrypted_dek,
+                    dek_iv          = excluded.dek_iv",
+                new { body.ArticleId, body.Ciphertext, CiphertextHash = hash,
+                      body.IV, body.EncryptedDek, body.DekIV }, transaction);
         }
         finally
         {

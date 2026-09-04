@@ -1,4 +1,4 @@
-using BeeMemoryBank.Core.Services;
+﻿using BeeMemoryBank.Core.Services;
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -62,6 +62,11 @@ public partial class SnapshotService
 
             var importTables = new[]
             {
+                // tbl_blob FIRST: article bodies and versions address their ciphertext by hash into
+                // this table since migration 016. Import it after them and there is a window where
+                // a body row resolves to nothing; omit it entirely and every article read on the
+                // restored node returns empty content while looking perfectly healthy.
+                "tbl_blob",
                 "tbl_folder", "tbl_article", "tbl_article_body", "tbl_concept_tag",
                 "tbl_article_concept_tag", "tbl_concept_tag_edge", "tbl_media",
                 "tbl_tombstone", "tbl_conflict_version", "tbl_projection_matrix"
@@ -252,6 +257,11 @@ public partial class SnapshotService
 
             var importTables = new[]
             {
+                // tbl_blob FIRST: article bodies and versions address their ciphertext by hash into
+                // this table since migration 016. Import it after them and there is a window where
+                // a body row resolves to nothing; omit it entirely and every article read on the
+                // restored node returns empty content while looking perfectly healthy.
+                "tbl_blob",
                 "tbl_folder", "tbl_article", "tbl_article_body", "tbl_concept_tag",
                 "tbl_article_concept_tag", "tbl_concept_tag_edge", "tbl_media",
                 "tbl_tombstone", "tbl_conflict_version", "tbl_projection_matrix",

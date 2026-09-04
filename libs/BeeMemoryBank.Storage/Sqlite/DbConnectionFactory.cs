@@ -64,6 +64,18 @@ public class DbConnectionFactory : IDbConnectionFactory, IDisposable
         cmd.ExecuteNonQuery();
         connection.CreateFunction("unicode_contains", (string? text, string? search) =>
             text != null && search != null && text.Contains(search, StringComparison.OrdinalIgnoreCase));
+        // Content addressing for tbl_blob. SQLite ships no hash function, and migration 016 has to
+        // key existing article bodies and versions by the hash of their ciphertext to fold the
+        // duplicates together — that is not expressible in plain SQL, and this project runs
+        // migrations only through the app, so registering the function here is the way to keep the
+        // migration a .sql file like every other one. Deterministic and pure, as SQLite requires of
+        // a function usable in an index or a constraint.
+        //
+        // Returns lowercase hex rather than a BLOB so hashes stay greppable in a sqlite3 shell and
+        // compare as ordinary TEXT — the volume is 64 bytes per row against bodies measured in
+        // kilobytes, so the encoding overhead is irrelevant here.
+        connection.CreateFunction("sha256", (byte[]? data) =>
+            data == null ? null : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)).ToLowerInvariant());
         return connection;
     }
 

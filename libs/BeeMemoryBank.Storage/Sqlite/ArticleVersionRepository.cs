@@ -1,6 +1,7 @@
-using System.Data;
+﻿using System.Data;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Core.Services;
 using Dapper;
 
@@ -54,12 +55,14 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
             return null;
 
         var row = await conn.QuerySingleOrDefaultAsync(
-            @"SELECT id AS Id, article_id AS ArticleId, version_number AS VersionNumber,
-                     title AS Title, tree_path AS TreePath,
-                     ciphertext AS Ciphertext, iv AS IV, encrypted_dek AS EncryptedDek, dek_iv AS DekIV,
-                     updated_by AS UpdatedBy, created_at AS CreatedAt
-              FROM tbl_article_version
-              WHERE article_id = @articleId AND version_number = @versionNumber",
+            @"SELECT v.id AS Id, v.article_id AS ArticleId, v.version_number AS VersionNumber,
+                     v.title AS Title, v.tree_path AS TreePath,
+                     COALESCE(bl.data, v.ciphertext) AS Ciphertext,
+                     v.iv AS IV, v.encrypted_dek AS EncryptedDek, v.dek_iv AS DekIV,
+                     v.updated_by AS UpdatedBy, v.created_at AS CreatedAt
+              FROM tbl_article_version v
+              LEFT JOIN tbl_blob bl ON bl.hash = v.ciphertext_hash
+              WHERE v.article_id = @articleId AND v.version_number = @versionNumber",
             new { articleId, versionNumber });
 
         if (row == null) return null;
@@ -88,13 +91,15 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
             return null;
 
         var row = await conn.QuerySingleOrDefaultAsync(
-            @"SELECT id AS Id, article_id AS ArticleId, version_number AS VersionNumber,
-                     title AS Title, tree_path AS TreePath,
-                     ciphertext AS Ciphertext, iv AS IV, encrypted_dek AS EncryptedDek, dek_iv AS DekIV,
-                     updated_by AS UpdatedBy, created_at AS CreatedAt
-              FROM tbl_article_version
-              WHERE article_id = @articleId AND created_at > @baselineAt
-              ORDER BY created_at ASC LIMIT 1",
+            @"SELECT v.id AS Id, v.article_id AS ArticleId, v.version_number AS VersionNumber,
+                     v.title AS Title, v.tree_path AS TreePath,
+                     COALESCE(bl.data, v.ciphertext) AS Ciphertext,
+                     v.iv AS IV, v.encrypted_dek AS EncryptedDek, v.dek_iv AS DekIV,
+                     v.updated_by AS UpdatedBy, v.created_at AS CreatedAt
+              FROM tbl_article_version v
+              LEFT JOIN tbl_blob bl ON bl.hash = v.ciphertext_hash
+              WHERE v.article_id = @articleId AND v.created_at > @baselineAt
+              ORDER BY v.created_at ASC LIMIT 1",
             new { articleId, baselineAt });
 
         if (row == null) return null;
@@ -137,12 +142,22 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
         {
             if (!await IsArticleAccessibleAsync(conn, version.ArticleId, transaction))
                 throw new UnauthorizedAccessException($"Write access denied for version on article {version.ArticleId}");
+            // Blob first, same transaction — see ArticleBodyRepository.UpsertAsync for why the
+            // order is what keeps the collector from sweeping a blob that is about to be used.
+            var hash = BlobHash.Compute(version.Ciphertext);
+            await conn.ExecuteAsync(
+                @"INSERT OR IGNORE INTO tbl_blob (hash, data, size, created_at)
+                  VALUES (@hash, @data, @size, @createdAt)",
+                new { hash, data = version.Ciphertext, size = version.Ciphertext.LongLength,
+                      createdAt = DateTime.UtcNow.ToString("o") }, transaction);
+
             await conn.ExecuteAsync(
                 @"INSERT INTO tbl_article_version
-                  (id, article_id, version_number, title, tree_path, ciphertext, iv, encrypted_dek, dek_iv, updated_by, created_at)
-                  VALUES (@Id, @ArticleId, @VersionNumber, @Title, @TreePath, @Ciphertext, @IV, @EncryptedDek, @DekIV, @UpdatedBy, @CreatedAt)",
+                  (id, article_id, version_number, title, tree_path, ciphertext, ciphertext_hash, iv, encrypted_dek, dek_iv, updated_by, created_at)
+                  VALUES (@Id, @ArticleId, @VersionNumber, @Title, @TreePath, @Ciphertext, @CiphertextHash, @IV, @EncryptedDek, @DekIV, @UpdatedBy, @CreatedAt)",
                 new
                 {
+                    CiphertextHash = hash,
                     version.Id,
                     version.ArticleId,
                     version.VersionNumber,
