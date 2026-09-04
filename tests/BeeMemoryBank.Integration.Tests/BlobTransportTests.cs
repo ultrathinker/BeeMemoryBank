@@ -143,27 +143,37 @@ public class BlobTransportTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Upload_StoresUnderRealHash_WrongClaimCannotShadowContent()
+    public async Task Upload_WrongClaimIsRejected_CorrectClaimIsStoredAndServed()
     {
         var token = await AuthNodeOnServerAsync(_nodeB, _clientA);
         var data = new byte[] { 1, 2, 3, 4, 5 };
         var realHash = BlobHash.Compute(data);
         var claimed = new string('f', 64);
 
-        var resp = await PostAsync(_clientA, token, "/api/sync/blobs", new
+        // Wrong claim: nothing is stored — not under the claim, not under the real hash either.
+        var bad = await PostAsync(_clientA, token, "/api/sync/blobs", new
         {
             blobs = new[] { new { hash = claimed, data = Convert.ToBase64String(data) } }
         });
-        resp.EnsureSuccessStatusCode();
-        var result = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
-        result.GetProperty("stored").GetInt32().Should().Be(1);
+        bad.EnsureSuccessStatusCode();
+        var badResult = await bad.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        badResult.GetProperty("stored").GetInt32().Should().Be(0);
+        badResult.GetProperty("rejected").GetInt32().Should().Be(1);
 
         using var scope = _nodeA.Services.CreateScope();
         var blobs = scope.ServiceProvider.GetRequiredService<IBlobRepository>();
         (await blobs.GetAsync(claimed)).Should().BeNull("the claimed address must stay empty");
+        (await blobs.GetAsync(realHash)).Should().BeNull("rejected bytes are not kept under any address");
+
+        // Correct claim: stored, and check/get agree with the store.
+        var good = await PostAsync(_clientA, token, "/api/sync/blobs", new
+        {
+            blobs = new[] { new { hash = realHash, data = Convert.ToBase64String(data) } }
+        });
+        good.EnsureSuccessStatusCode();
+        (await good.Content.ReadFromJsonAsync<JsonElement>(JsonOpts)).GetProperty("stored").GetInt32().Should().Be(1);
         (await blobs.GetAsync(realHash)).Should().BeEquivalentTo(data);
 
-        // And check/get agree with the store.
         var check = await PostAsync(_clientA, token, "/api/sync/blobs/check", new { hashes = new[] { claimed, realHash } });
         var missing = (await check.Content.ReadFromJsonAsync<JsonElement>(JsonOpts)).GetProperty("missing").EnumerateArray().Select(x => x.GetString()).ToList();
         missing.Should().Equal(claimed);

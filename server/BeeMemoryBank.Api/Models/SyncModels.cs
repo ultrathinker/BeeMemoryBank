@@ -42,10 +42,8 @@ public record SyncBlob(string Hash, string Data);
 public record SyncBlobBatch(List<SyncBlob> Blobs);
 
 /// <summary>
-/// Response of POST /api/sync/blobs. Rejected counts items whose base64 was malformed — a blob
-/// whose bytes hash to something other than the claimed hash is not rejected, it is stored under
-/// its real hash (see BlobRepository.StoreAsync), so it can never shadow the content an event
-/// actually asked for.
+/// Response of POST /api/sync/blobs. Rejected counts items whose base64 was malformed, that were
+/// empty, or whose bytes do not hash to the claimed hash — those are not stored at all.
 /// </summary>
 public record SyncBlobStoreResult(int Stored, int Rejected);
 

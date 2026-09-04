@@ -106,6 +106,15 @@ public class SyncClient(
             logger.LogWarning("Remote node {NodeId} has a newer protocol version ({RemoteVersion} > {LocalVersion}). Skipping pull-and-apply.",
                 remoteIdentity.NodeId, remoteIdentity.ProtocolVersion, SyncProtocolVersion.Current);
             peerNewerProtocolState.HasNewerProtocol = true;
+
+            // Still tell the peer where we stand. Its compaction refuses to run while any active
+            // peer looks far behind, and "far behind" is judged from the position we last
+            // reported — a node that stops reporting because it cannot apply newer events would
+            // otherwise freeze the peer's event log at its old cursor for as long as it stays on
+            // the old protocol. (The protocol-1 build that predates this line has exactly that
+            // problem against a protocol-2 server; nothing here can fix it retroactively.)
+            var stale = await syncPositionRepo.GetAsync(remoteIdentity.NodeId);
+            await ReportPositionAsync(http, remoteApiBase, token, stale?.LastSequenceNum ?? 0, ct);
         }
         else
         {

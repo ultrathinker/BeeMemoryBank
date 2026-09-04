@@ -229,22 +229,12 @@ public class SnapshotJoinClient
         {
             foreach (var table in ImportTables)
             {
-                using var checkCmd = conn.CreateCommand();
-                checkCmd.Transaction = tx;
-                checkCmd.CommandText = "SELECT COUNT(*) FROM snap.sqlite_master WHERE type='table' AND name=@t";
-                var p = checkCmd.CreateParameter();
-                p.ParameterName = "t";
-                p.Value = table;
-                checkCmd.Parameters.Add(p);
-                var exists = Convert.ToInt64(checkCmd.ExecuteScalar());
-                if (exists == 0) continue;
-
+                if (!SnapshotTableImport.SnapshotHasTable(conn, tx, table)) continue;
                 try
                 {
-                    using var importCmd = conn.CreateCommand();
-                    importCmd.Transaction = tx;
-                    importCmd.CommandText = $"INSERT OR IGNORE INTO [{table}] SELECT * FROM snap.[{table}]";
-                    importCmd.ExecuteNonQuery();
+                    // By column name, not SELECT * — see SnapshotTableImport for why the positional
+                    // form breaks (or, worse, silently scrambles) across schema versions.
+                    SnapshotTableImport.CopyTable(conn, tx, table, orIgnore: true);
                 }
                 catch (Exception ex)
                 {
@@ -252,6 +242,7 @@ public class SnapshotJoinClient
                         $"Failed to import table [{table}] from snapshot: {ex.Message}", ex);
                 }
             }
+            SnapshotTableImport.AdoptLegacyInlineCiphertext(conn, tx);
 
             using (var fkCheckCmd = conn.CreateCommand())
             {

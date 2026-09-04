@@ -69,7 +69,7 @@ internal static class BlobTransport
                 break;
             }
 
-            await UploadAsync(http, baseUrl, token, batch, ct);
+            await UploadWithSplitAsync(http, baseUrl, token, batch, logger, ct);
             shipped += batch.Count;
             foreach (var b in batch) remaining.Remove(b.Hash);
         }
@@ -116,18 +116,38 @@ internal static class BlobTransport
                         baseUrl, pending.Count, pending.First());
                     break;
                 }
+                var progressed = false;
                 foreach (var blob in got)
                 {
-                    // Stored under what the bytes hash to — StoreAsync computes it itself — so a
-                    // peer sending wrong bytes for a hash can only ever store them under a hash no
-                    // event asked for. The event's own lookup then misses, which is the safe
-                    // outcome. Log the discrepancy so a misbehaving peer is at least visible.
-                    var actual = await blobRepo.StoreAsync(blob.Data);
-                    if (!string.Equals(actual, blob.Hash, StringComparison.Ordinal))
-                        logger.LogWarning("Blob transport: peer {Base} sent bytes hashing to {Actual} under {Claimed}",
-                            baseUrl, actual, blob.Hash);
+                    // Only what we asked for counts. A peer answering with hashes we did not request
+                    // (or with the same one over and over) must not keep this loop alive, and bytes
+                    // whose real hash differs from the claim are dropped rather than stored — storing
+                    // them under their real hash would only leave garbage for the collector, and the
+                    // claimed hash stays unresolved either way so the event fails safe.
+                    if (!pending.Contains(blob.Hash))
+                    {
+                        logger.LogWarning("Blob transport: peer {Base} returned unrequested blob {Hash}; ignoring", baseUrl, blob.Hash);
+                        continue;
+                    }
+                    if (!BlobHash.Matches(blob.Hash, blob.Data))
+                    {
+                        logger.LogWarning("Blob transport: peer {Base} sent bytes that do not hash to {Claimed}; dropping", baseUrl, blob.Hash);
+                        pending.Remove(blob.Hash);
+                        unavailable++;
+                        progressed = true;
+                        continue;
+                    }
+                    await blobRepo.StoreAsync(blob.Data);
                     pending.Remove(blob.Hash);
                     fetched++;
+                    progressed = true;
+                }
+                if (!progressed)
+                {
+                    unavailable += pending.Count;
+                    logger.LogWarning("Blob transport: peer {Base} made no progress on {Count} requested blob(s); giving up on them this cycle",
+                        baseUrl, pending.Count);
+                    break;
                 }
             }
         }
@@ -150,8 +170,17 @@ internal static class BlobTransport
         return body?.Missing ?? [];
     }
 
-    private static async Task UploadAsync(
-        HttpClient http, string baseUrl, string token, List<StoredBlob> blobs, CancellationToken ct)
+    /// <summary>
+    /// Uploads a batch; on 413 halves it and retries, the same safety net PushChunkWithSplitAsync
+    /// gives events. A single blob the peer still rejects as too large is logged and skipped — the
+    /// event referencing it will then be skipped by the peer and surface as a push stall, which is
+    /// the existing signal for "this cannot be delivered" — rather than failing the whole sync
+    /// cycle every time, which would block every other event to that peer behind one oversized
+    /// blob. MediaService caps files at 20MB (~27MB base64), under the 32MB request cap, so this
+    /// only fires on a configuration mismatch between the two nodes.
+    /// </summary>
+    private static async Task UploadWithSplitAsync(
+        HttpClient http, string baseUrl, string token, List<StoredBlob> blobs, ILogger logger, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/sync/blobs");
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
@@ -159,7 +188,23 @@ internal static class BlobTransport
             new BlobBatchDto(blobs.Select(b => new BlobDto(b.Hash, Convert.ToBase64String(b.Data))).ToList()),
             options: JsonOpts);
         using var resp = await http.SendAsync(req, ct);
-        resp.EnsureSuccessStatusCode();
+        if (resp.StatusCode != System.Net.HttpStatusCode.RequestEntityTooLarge)
+        {
+            resp.EnsureSuccessStatusCode();
+            return;
+        }
+
+        if (blobs.Count == 1)
+        {
+            logger.LogError(
+                "Blob transport: peer {Base} rejected blob {Hash} ({Bytes} bytes) as too large even alone; " +
+                "skipping it — the event referencing it cannot be delivered until the size caps agree.",
+                baseUrl, blobs[0].Hash, blobs[0].Data.Length);
+            return;
+        }
+        var mid = blobs.Count / 2;
+        await UploadWithSplitAsync(http, baseUrl, token, blobs[..mid], logger, ct);
+        await UploadWithSplitAsync(http, baseUrl, token, blobs[mid..], logger, ct);
     }
 
     private static async Task<List<StoredBlob>> DownloadAsync(

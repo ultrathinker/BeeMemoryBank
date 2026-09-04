@@ -15,20 +15,39 @@ public class BlobRepository(DbConnectionFactory factory) : BaseRepository(factor
 
     public async Task<string> StoreAsync(byte[] data, System.Data.IDbTransaction? transaction = null)
     {
-        var hash = BlobHash.Compute(data);
         var conn = transaction?.Connection ?? OpenConnection();
         try
         {
-            await conn.ExecuteAsync(
-                @"INSERT OR IGNORE INTO tbl_blob (hash, data, size, created_at)
-                  VALUES (@hash, @data, @size, @createdAt)",
-                new { hash, data, size = data.LongLength, createdAt = UtcNow() }, transaction);
-            return hash;
+            return await StoreOnAsync(conn, transaction, data);
         }
         finally
         {
             if (transaction == null) conn.Dispose();
         }
+    }
+
+    /// <summary>
+    /// The one statement that puts bytes into tbl_blob — ArticleBodyRepository and
+    /// ArticleVersionRepository call this too, so the row-referencing tables and the store never
+    /// disagree on how a blob is written.
+    ///
+    /// On conflict the row is kept but its created_at is REFRESHED. That restarts the garbage
+    /// collector's grace period for a blob that is being adopted again: a blob stored hours ago,
+    /// since orphaned (its article deleted, its events compacted), is re-referenced by a new save of
+    /// identical ciphertext. With a plain INSERT OR IGNORE its created_at would stay old, and a
+    /// sweep landing between this statement and the row that references it — possible whenever the
+    /// caller passes no transaction — would delete a blob about to be needed. With the refresh it
+    /// is young again and immune for the full grace period.
+    /// </summary>
+    internal static async Task<string> StoreOnAsync(System.Data.IDbConnection conn, System.Data.IDbTransaction? transaction, byte[] data)
+    {
+        var hash = BlobHash.Compute(data);
+        await conn.ExecuteAsync(
+            @"INSERT INTO tbl_blob (hash, data, size, created_at)
+              VALUES (@hash, @data, @size, @createdAt)
+              ON CONFLICT (hash) DO UPDATE SET created_at = excluded.created_at",
+            new { hash, data, size = data.LongLength, createdAt = UtcNow() }, transaction);
+        return hash;
     }
 
     public async Task<byte[]?> GetAsync(string hash)

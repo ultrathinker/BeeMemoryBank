@@ -93,14 +93,9 @@ public class ArticleBodyRepository(DbConnectionFactory factory) : BaseRepository
         {
             // The blob goes in FIRST and in the same transaction as the row that references it.
             // Order matters for the garbage collector: it only ever sees a blob that is already
-            // referenced, or one younger than its grace period. INSERT OR IGNORE because the hash
-            // is the identity — re-saving identical ciphertext is a no-op, not a conflict.
-            var hash = BlobHash.Compute(body.Ciphertext);
-            await conn.ExecuteAsync(
-                @"INSERT OR IGNORE INTO tbl_blob (hash, data, size, created_at)
-                  VALUES (@hash, @data, @size, @createdAt)",
-                new { hash, data = body.Ciphertext, size = body.Ciphertext.LongLength,
-                      createdAt = DateTime.UtcNow.ToString("o") }, transaction);
+            // referenced, or one younger than its grace period (StoreOnAsync refreshes the age of a
+            // blob that already exists, which is what keeps that true for a re-adopted one).
+            var hash = await BlobRepository.StoreOnAsync(conn, transaction, body.Ciphertext);
 
             await conn.ExecuteAsync(
                 @"INSERT INTO tbl_article_body (article_id, ciphertext_hash, iv, encrypted_dek, dek_iv)

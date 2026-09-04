@@ -211,8 +211,69 @@ public class SyncClientTests : IAsyncLifetime
         result.Should().Be(0);
         _peerNewerProtocolState.HasNewerProtocol.Should().BeTrue();
         _mockHandler.CallLog.Should().NotContain(s => s.StartsWith("GET") && s.Contains("/api/sync/events"));
-        _mockHandler.CallLog.Should().NotContain(s => s.StartsWith("POST") && s.Contains("/api/sync/report-position"));
+        // Our position is still reported: the peer's compaction gate reads it, and a node that
+        // stopped reporting because it cannot apply newer events would freeze the peer's log.
+        _mockHandler.CallLog.Should().Contain(s => s.StartsWith("POST") && s.Contains("/api/sync/report-position"));
         _mockHandler.CallLog.Should().Contain(s => s.StartsWith("POST") && s.Contains("/api/sync/events")); // push still happens
+    }
+
+    /// <summary>
+    /// A peer answering /api/sync/blobs/get with hashes we never asked for (or the same one over
+    /// and over) must not keep BlobTransport asking forever — the loop gives up on that group
+    /// after a round with no progress, and the sync cycle finishes.
+    /// </summary>
+    [Fact]
+    public async Task SyncWith_PeerReturnsUnrequestedBlobs_FetchLoopTerminates()
+    {
+        var referenced = new string('a', 64);
+        var unrelated = new string('b', 64);
+        _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                nodeId = _remoteNodeId, displayName = "Remote",
+                ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+                protocolVersion = SyncProtocolVersion.Current
+            }), Encoding.UTF8, "application/json")
+        });
+        // One pulled event naming a blob we do not have. Its signature will not verify (the remote
+        // is not whitelisted here) — irrelevant: the blob fetch happens before any apply.
+        _mockHandler.MapRoute("/api/sync/events", req => req.Method == HttpMethod.Get
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new[]
+                {
+                    new
+                    {
+                        eventId = Guid.NewGuid(), nodeId = _remoteNodeId, lamportTs = 1, sequenceNum = 1,
+                        eventType = EventTypes.ArticleCreate, articleId = Guid.NewGuid(),
+                        payload = $$"""{"title":"x","ciphertext":null,"ciphertext_sha256":"{{referenced}}"}""",
+                        signature = Convert.ToBase64String(new byte[64]), protocolVersion = 2, createdAt = DateTime.UtcNow
+                    }
+                }), Encoding.UTF8, "application/json")
+            }
+            : new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 }), Encoding.UTF8, "application/json")
+            });
+        int getCalls = 0;
+        _mockHandler.MapRoute("/api/sync/blobs/get", _ =>
+        {
+            getCalls++;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    blobs = new[] { new { hash = unrelated, data = Convert.ToBase64String(new byte[] { 1 }) } }
+                }), Encoding.UTF8, "application/json")
+            };
+        });
+
+        var run = _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+        var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(30)));
+        finished.Should().BeSameAs(run, "the blob fetch loop must terminate when the peer makes no progress");
+        await run;
+        getCalls.Should().Be(1);
     }
 
     [Fact]

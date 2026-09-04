@@ -475,10 +475,19 @@ public static class SyncEndpoints
                 catch (FormatException) { rejected++; continue; }
                 if (data.Length == 0) { rejected++; continue; }
 
-                var actual = await blobRepo.StoreAsync(data);
-                if (!string.Equals(actual, blob.Hash, StringComparison.Ordinal))
-                    logger.LogWarning("Peer {NodeId} uploaded bytes hashing to {Actual} under claimed hash {Claimed}",
-                        nodeId, actual, blob.Hash);
+                // Bytes that do not hash to the claim are rejected outright, not stored under their
+                // real hash: no signed event will ever ask for that address, so keeping them would
+                // only hand the collector garbage, and counting them as stored would tell the
+                // pusher its event is deliverable when it is not. (StoreAsync hashes the bytes
+                // itself regardless, so even a bug here could not plant content at a wrong address.)
+                if (!BlobHash.Matches(blob.Hash, data))
+                {
+                    logger.LogWarning("Peer {NodeId} uploaded bytes that do not hash to claimed {Claimed}; rejected",
+                        nodeId, blob.Hash);
+                    rejected++;
+                    continue;
+                }
+                await blobRepo.StoreAsync(data);
                 stored++;
             }
             return Results.Ok(new SyncBlobStoreResult(stored, rejected));

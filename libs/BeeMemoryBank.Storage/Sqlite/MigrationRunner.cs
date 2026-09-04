@@ -166,7 +166,14 @@ public class MigrationRunner
             // disk usage for its duration and takes seconds per hundred MB; on a migration that
             // just shed a third of the file that is the right trade.
             if (sql.Contains(VacuumAfterMarker, StringComparison.Ordinal))
-                await connection.ExecuteAsync("VACUUM");
+            {
+                // Best effort. The migration itself has committed; failing to reclaim space (no
+                // room for VACUUM's temporary copy on a full phone, say) is not a reason to refuse
+                // to start — and since the tbl_migration row is already written, a throw here would
+                // only crash this one launch without ever being retried anyway.
+                try { await connection.ExecuteAsync("VACUUM"); }
+                catch (SqliteException) { }
+            }
         }
     }
 

@@ -146,12 +146,7 @@ public class ArticleVersionRepository(DbConnectionFactory factory, CallerScopeHo
                 throw new UnauthorizedAccessException($"Write access denied for version on article {version.ArticleId}");
             // Blob first, same transaction — see ArticleBodyRepository.UpsertAsync for why the
             // order is what keeps the collector from sweeping a blob that is about to be used.
-            var hash = BlobHash.Compute(version.Ciphertext);
-            await conn.ExecuteAsync(
-                @"INSERT OR IGNORE INTO tbl_blob (hash, data, size, created_at)
-                  VALUES (@hash, @data, @size, @createdAt)",
-                new { hash, data = version.Ciphertext, size = version.Ciphertext.LongLength,
-                      createdAt = DateTime.UtcNow.ToString("o") }, transaction);
+            var hash = await BlobRepository.StoreOnAsync(conn, transaction, version.Ciphertext);
 
             await conn.ExecuteAsync(
                 @"INSERT INTO tbl_article_version

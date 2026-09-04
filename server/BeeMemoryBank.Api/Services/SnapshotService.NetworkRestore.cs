@@ -94,22 +94,13 @@ public partial class SnapshotService
                 {
                     foreach (var table in importTables)
                     {
-                        using var checkCmd = conn.CreateCommand();
-                        checkCmd.Transaction = tx;
-                        checkCmd.CommandText = "SELECT COUNT(*) FROM snap.sqlite_master WHERE type='table' AND name=@t";
-                        var p = checkCmd.CreateParameter();
-                        p.ParameterName = "t";
-                        p.Value = table;
-                        checkCmd.Parameters.Add(p);
-                        var exists = Convert.ToInt64(checkCmd.ExecuteScalar());
-                        if (exists == 0) continue;
-
+                        if (!SnapshotTableImport.SnapshotHasTable(conn, tx, table)) continue;
                         try
                         {
-                            using var importCmd = conn.CreateCommand();
-                            importCmd.Transaction = tx;
-                            importCmd.CommandText = $"INSERT OR IGNORE INTO [{table}] SELECT * FROM snap.[{table}]";
-                            importCmd.ExecuteNonQuery();
+                            // By column name, not SELECT * — see SnapshotTableImport for why a
+                            // snapshot from another schema version makes the positional form
+                            // either fail or silently scramble encryption fields.
+                            SnapshotTableImport.CopyTable(conn, tx, table, orIgnore: true);
                         }
                         catch (Exception ex)
                         {
@@ -117,6 +108,7 @@ public partial class SnapshotService
                                 $"Failed to import table [{table}] from snapshot: {ex.Message}", ex);
                         }
                     }
+                    SnapshotTableImport.AdoptLegacyInlineCiphertext(conn, tx);
 
                     using (var fkCheckCmd = conn.CreateCommand())
                     {
@@ -290,23 +282,19 @@ public partial class SnapshotService
                 {
                     foreach (var table in importTables)
                     {
-                        using var checkCmd = conn.CreateCommand();
-                        checkCmd.Transaction = tx;
-                        checkCmd.CommandText = "SELECT COUNT(*) FROM snap.sqlite_master WHERE type='table' AND name=@t";
-                        checkCmd.Parameters.Add(new SqliteParameter("t", table));
-                        var exists = Convert.ToInt64(checkCmd.ExecuteScalar());
-                        if (exists == 0) continue;
+                        if (!SnapshotTableImport.SnapshotHasTable(conn, tx, table)) continue;
 
                         using var delCmd = conn.CreateCommand();
                         delCmd.Transaction = tx;
                         delCmd.CommandText = $"DELETE FROM [{table}]";
                         delCmd.ExecuteNonQuery();
 
-                        using var importCmd = conn.CreateCommand();
-                        importCmd.Transaction = tx;
-                        importCmd.CommandText = $"INSERT INTO [{table}] SELECT * FROM snap.[{table}]";
-                        importCmd.ExecuteNonQuery();
+                        // By column name, not SELECT * — a restore point taken under an older schema
+                        // (a pre-016 snapshot still has the inline ciphertext column) must not map
+                        // positionally into today's tables. See SnapshotTableImport.
+                        SnapshotTableImport.CopyTable(conn, tx, table, orIgnore: false);
                     }
+                    SnapshotTableImport.AdoptLegacyInlineCiphertext(conn, tx);
 
                     // Node-local tables that reference an imported one are NOT in importTables:
                     // they belong to this node and must survive the restore. But the import above
