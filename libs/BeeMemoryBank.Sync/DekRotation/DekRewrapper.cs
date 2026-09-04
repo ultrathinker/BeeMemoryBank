@@ -222,7 +222,29 @@ public static class DekRewrapper
 
             // UnwrapVersioned, not UnwrapDek: the payload is the serialized matrix (hundreds of
             // KB), not a 32-byte DEK, so UnwrapDek's exact-length dispatch would reject it.
-            var plainMatrix = DekManager.UnwrapVersioned(enc, iv, oldDek);
+            //
+            // Same old-key/new-key question as the per-row DEKs above, and for the same reason:
+            // tbl_projection_matrix is a replicated table, so a peer that rotated first can ship a
+            // matrix already sealed under the new key. Unwrapping that with the old one throws, and
+            // because this pass runs INSIDE the rotation transaction the throw takes the whole
+            // rotation with it — permanently, on every retry. A matrix already where it needs to be
+            // is simply left alone.
+            byte[]? plainMatrix = TryUnwrapVersioned(enc, iv, oldDek);
+            if (plainMatrix == null)
+            {
+                if (TryUnwrapVersioned(enc, iv, newDek) is { } already)
+                {
+                    Array.Clear(already, 0, already.Length);
+                    continue;
+                }
+
+                // Readable under neither key. The matrix is a derived artifact — it can be rebuilt
+                // from the articles — so losing it costs re-embedding time, not data. That is worth
+                // far less than the node, which is what aborting here would cost.
+                throw new InvalidOperationException(
+                    $"The projection matrix (row {id}) could not be unwrapped with either the old or the new master key. "
+                    + "It must be dropped and rebuilt; the rotation cannot re-seal it.");
+            }
             try
             {
                 var (newEnc, newIv) = DekManager.WrapDek(plainMatrix, newDek);
@@ -409,6 +431,22 @@ public static class DekRewrapper
     /// the caller's assumptions are broken rather than "wrong key".
     /// </para>
     /// </summary>
+    /// <summary>
+    /// <see cref="TryUnwrap"/> for the versioned (non-fixed-length) payloads — see its doc for why a
+    /// failed unwrap is a normal answer here rather than an error.
+    /// </summary>
+    private static byte[]? TryUnwrapVersioned(byte[] enc, byte[] iv, byte[] candidateDek)
+    {
+        try
+        {
+            return DekManager.UnwrapVersioned(enc, iv, candidateDek);
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return null;
+        }
+    }
+
     private static byte[]? TryUnwrap(byte[] encDek, byte[] dekIv, byte[] candidateDek, byte[]? aad)
     {
         try

@@ -150,4 +150,52 @@ public class DekRotationRaceTests : SyncTestFixture
         payload.DekEpoch.Should().Be(4, "the event must say which master-DEK generation sealed the DEK it carries");
     }
 
+    /// <summary>
+    /// The projection matrix is sealed directly under the master DEK rather than under a per-row
+    /// DEK, so it needs its own pass — and that pass had the same flaw. <c>tbl_projection_matrix</c>
+    /// is replicated, so a peer that rotated first can ship a matrix already sealed under the new
+    /// key; unwrapping it with the old one threw, and because the pass runs inside the rotation
+    /// transaction, the throw took the whole rotation with it on every retry.
+    /// </summary>
+    [Fact]
+    public async Task ProjectionMatrixAlreadyOnTheNewKey_DoesNotAbortTheRotation()
+    {
+        await InitService.InitializeAsync("admin", "TestNode", "password");
+        await Session.UnlockAsync("password");
+
+        await ArticleService.CreateAsync("Any", "/", [], "body");
+
+        var oldDek = Session.GetMasterDek();
+        var newDek = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+
+        // A matrix sealed under the NEW key, exactly as a peer that rotated first would send it.
+        var matrix = System.Security.Cryptography.RandomNumberGenerator.GetBytes(4096);
+        // WrapDek emits the v1 framing UnwrapVersioned reads, and has no length restriction on
+        // write — which is exactly how the real matrix is sealed.
+        var (enc, iv) = DekManager.WrapDek(matrix, newDek);
+        using (var conn = Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync("DELETE FROM tbl_projection_matrix");
+            await conn.ExecuteAsync(
+                "INSERT INTO tbl_projection_matrix (encrypted_matrix, iv, created_at) VALUES (@enc, @iv, @now)",
+                new { enc, iv, now = DateTime.UtcNow.ToString("O") });
+        }
+
+        var act = async () => await DekRewrapper.RewrapAllAsync(
+            Factory, Session,
+            oldDek: oldDek, newDek: newDek,
+            newEpoch: 2, commitEventId: Guid.NewGuid().ToString(),
+            isInitiator: false);
+
+        await act.Should().NotThrowAsync("a matrix already on the new key is where it needs to be, not a reason to abort");
+
+        // And it was left alone rather than double-wrapped: it still opens under the new key.
+        using (var conn = Factory.CreateConnection())
+        {
+            var row = await conn.QuerySingleAsync<dynamic>(
+                "SELECT encrypted_matrix AS enc, iv AS iv FROM tbl_projection_matrix");
+            var roundTripped = DekManager.UnwrapVersioned((byte[])row.enc, (byte[])row.iv, newDek);
+            roundTripped.Should().Equal(matrix);
+        }
+    }
 }
