@@ -39,6 +39,27 @@ public partial class EventApplier
             // peer you previously revoked is a real workflow the UI offers, so revoke has to be
             // undoable — by a NEWER add. That is exactly what this comparison allows and what the
             // old code could not distinguish.
+            // A revoked row that predates versioning cannot be compared, and must not lose by
+            // default. Rows revoked before migration 021 sit at Lamport 0, so ANY incoming add
+            // outranks them arithmetically — which would let a stale add from a peer that never
+            // heard about the revocation put a revoked, possibly compromised, node back into the
+            // mesh. Nothing in the row says whether the revoke was newer, so the safe reading of
+            // "unknown" is that it was.
+            //
+            // This is not a dead end for the admin who genuinely wants the node back: adding a peer
+            // locally writes the row directly with a fresh version, and that path is untouched. Only
+            // a REMOTE add against an unversioned revocation is refused — which is exactly the
+            // shape wanted, since a local admin action is a decision and an arriving old event is
+            // not.
+            if (existing.Status == "R" && existing.LamportTs == 0)
+            {
+                logger.LogWarning(
+                    "WhitelistAdd for {NodeId} refused: the local row is revoked and predates row versioning, "
+                    + "so the revoke cannot be compared against this event. Re-add the node locally if it should return.",
+                    p.NodeId);
+                return;
+            }
+
             if (!ConflictResolver.IncomingWins(existing.Version, incoming))
             {
                 logger.LogInformation(

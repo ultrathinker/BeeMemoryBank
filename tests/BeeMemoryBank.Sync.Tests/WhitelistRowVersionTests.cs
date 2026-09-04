@@ -244,5 +244,45 @@ public class WhitelistRowVersionTests : IAsyncLifetime
         finalA.Version.Should().Be(expected);
     }
 
+    /// <summary>
+    /// A row revoked before migration 021 sits at Lamport 0, so ANY incoming add outranks it
+    /// arithmetically. That must not be enough to bring the node back: nothing in the row says
+    /// whether the revoke was newer than the add, and the safe reading of "unknown" is that it was —
+    /// otherwise a peer that never heard about a revocation can undo it just by being out of date.
+    ///
+    /// <para>
+    /// The refusal is deliberately narrow: only a REMOTE add is blocked. An admin re-adding the node
+    /// locally writes the row with a fresh version and is unaffected, which is the distinction that
+    /// matters — a local action is a decision, an arriving old event is not.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task RemoteAdd_CannotResurrectARevocationThatPredatesVersioning()
+    {
+        // A legacy row: revoked, no version, exactly as migration 021's DEFAULT 0 leaves it.
+        var now = DateTime.UtcNow;
+        await _nodeB.WhitelistRepo.CreateAsync(new WhitelistEntry
+        {
+            NodeId = PeerC,
+            DisplayName = "PeerC",
+            Ed25519PublicKey = new byte[32],
+            Status = "R",
+            CreatedAt = now,
+            UpdatedAt = now,
+            LamportTs = 0,
+            SourceNodeId = null
+        });
+
+        // A perfectly ordinary add from a trusted superadmin peer, at any version at all.
+        await AddPeerCAsync(_nodeA);
+        var add = LastEventOfType(await _nodeA.EventLogRepo.GetAfterSequenceAsync(0), EventTypes.WhitelistAdd);
+        add.LamportTs.Should().BeGreaterThan(0, "the incoming add outranks the unversioned row arithmetically");
+
+        await _nodeB.ApplyFromAsync(_nodeA, add);
+
+        var onB = await _nodeB.WhitelistRepo.GetByNodeIdAsync(PeerC, includeDeleted: true);
+        onB!.Status.Should().Be("R", "an unversioned revocation must not be undone by a remote add");
+    }
+
     private sealed class ConcreteFixture : SyncTestFixture { }
 }
