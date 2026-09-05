@@ -71,20 +71,6 @@ public class CallerScopeHolder
             await work();
     }
 
-    /// <inheritdoc cref="RunAsSystemAsync{T}(Func{Task{T}})"/>
-    public T RunAsSystem<T>(Func<T> work)
-    {
-        using (ElevateToSystem())
-            return work();
-    }
-
-    /// <inheritdoc cref="RunAsSystemAsync{T}(Func{Task{T}})"/>
-    public void RunAsSystem(Action work)
-    {
-        using (ElevateToSystem())
-            work();
-    }
-
     /// <summary>
     /// Restores the previous <see cref="CallerScopeHolder.Scope"/> on dispose.
     ///
