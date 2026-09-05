@@ -1,0 +1,60 @@
+# Two-node test mesh: test1 and test2, syncing with each other over the compose network.
+#
+# This is a THROWAWAY environment with a well-known master password. It must never be reachable
+# from outside the host — every published port below is bound to 127.0.0.1 on purpose. Reach it
+# from another machine with an SSH tunnel, not by publishing these ports:
+#
+#   ssh -N -L 5011:127.0.0.1:5011 -L 5012:127.0.0.1:5012 \
+#          -L 5013:127.0.0.1:5013 -L 5014:127.0.0.1:5014 Hetzner
+#
+# The project name is pinned so a `docker compose down -v` run from this directory can only ever
+# address bmb-test. It cannot touch the `hetzner` project that runs the real node on the same host.
+name: bmb-test
+
+x-node: &node
+  image: bmb-test:latest
+  restart: unless-stopped
+  environment:
+    ASPNETCORE_ENVIRONMENT: Production
+    BMB_DATA_PATH: /app/data
+    # One shared copy of the 118 MB model, mounted read-only into both nodes rather than
+    # duplicated into each data volume.
+    BMB_ONNX_MODEL_PATH: /models/model.onnx
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:5300/health"]
+    interval: 30s
+    timeout: 5s
+    start_period: 30s
+    retries: 3
+  # Hard caps. The host has 2 cores and also runs the owner's real node; a runaway test must not
+  # be able to starve it. Two nodes at 0.5 CPU each leave a full core free.
+  cpus: 0.5
+  mem_limit: 2g
+
+services:
+  test1:
+    <<: *node
+    container_name: test1
+    ports:
+      - "127.0.0.1:5011:5301"   # Web
+      - "127.0.0.1:5013:5300"   # API + /mcp
+    volumes:
+      - test1-data:/app/data
+      - ./models:/models:ro
+
+  test2:
+    <<: *node
+    container_name: test2
+    ports:
+      - "127.0.0.1:5012:5301"   # Web
+      - "127.0.0.1:5014:5300"   # API + /mcp
+    volumes:
+      - test2-data:/app/data
+      - ./models:/models:ro
+    depends_on:
+      test1:
+        condition: service_healthy
+
+volumes:
+  test1-data:
+  test2-data:
