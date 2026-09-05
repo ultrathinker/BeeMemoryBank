@@ -338,11 +338,8 @@ public class FolderService(
         // reality), not the caller's own read access, so it has to run against the TRUE,
         // unfiltered folder set. Same scope-swap pattern as FolderRepository.EnsureExistsCoreAsync's
         // ancestor-stub lookup.
-        List<Folder> all;
-        using (scopeHolder.ElevateToSystem())
-        {
-            all = await folderRepo.GetAllActiveAsync();
-        }
+        // Must run against the TRUE, unfiltered folder set (see above) — bounded to this read.
+        var all = await scopeHolder.RunAsSystemAsync(() => folderRepo.GetAllActiveAsync());
 
         var prefix = path.TrimEnd('/') + "/";
         var blocker = all.FirstOrDefault(f =>

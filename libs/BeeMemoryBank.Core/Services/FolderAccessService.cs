@@ -76,7 +76,7 @@ public class FolderAccessService
         var readOnlyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var holder = _serviceProvider.GetRequiredService<CallerScopeHolder>();
-        using (holder.ElevateToSystem())
+        await holder.RunAsSystemAsync(async () =>
         {
             var user = await userRepo.GetByIdAsync(userId.Value);
 
@@ -123,7 +123,7 @@ public class FolderAccessService
                         denyPaths.Add(DenyEverything);
                 }
             }
-        }
+        });
 
         _cache[cacheKey] = (denyPaths, allowPaths, readOnlyPaths, DateTime.UtcNow);
         return (denyPaths, allowPaths, readOnlyPaths);

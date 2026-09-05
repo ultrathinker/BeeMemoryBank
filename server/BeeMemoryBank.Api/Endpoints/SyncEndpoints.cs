@@ -397,81 +397,82 @@ public static class SyncEndpoints
                 return Results.BadRequest(new ErrorResponse("Batch too large (max 2000 events)"));
 
             // Sync peers are trusted — bypass per-user ACL guards that CallerScopeMiddleware
-            // sets to an empty AllowList for non-user/non-agent requests. Scoped to this handler
-            // rather than left switched on for the rest of the request: nothing user-facing runs
-            // after this today, but an elevation with no matching restore is one refactor away
-            // from being one.
-            using var systemScope = scopeHolder.ElevateToSystem();
-
+            // sets to an empty AllowList for non-user/non-agent requests. Bounded to the apply loop
+            // via RunAsSystemAsync: the elevated region is exactly this delegate, so it cannot leak
+            // onto user-facing work after the handler — the risk the old handler-wide `using`
+            // elevation warned was "one refactor away".
             var logger = loggerFactory.CreateLogger("SyncEndpoints");
             int applied = 0, skipped = 0, dropped = 0;
             long? lastAppliedSeq = null;
-            foreach (var evt in events)
+            await scopeHolder.RunAsSystemAsync(async () =>
             {
-                try
+                foreach (var evt in events)
                 {
-                    var result = await applier.ApplyAsync(evt);
-                    if (result == EventApplyResult.SilentlyDropped)
-                    {
-                        dropped++;
-                        lastAppliedSeq = evt.SequenceNum;
-                    }
-                    else
-                    {
-                        applied++;
-                        lastAppliedSeq = evt.SequenceNum;
-                    }
-                    // Applied (or deliberately dropped) cleanly — forget any failure streak the
-                    // quarantine was tracking for this event from an earlier push, so an event that
-                    // recovers (its dependency finally arrived) is not left looking quarantined.
-                    // Mirrors the pull path (SyncClient's apply loop). Isolated in its own try: a
-                    // quarantine-store hiccup must never turn a successfully-applied event into the
-                    // outer catch's skipped-and-recorded-failure path.
                     try
                     {
-                        await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, evt.EventId);
+                        var result = await applier.ApplyAsync(evt);
+                        if (result == EventApplyResult.SilentlyDropped)
+                        {
+                            dropped++;
+                            lastAppliedSeq = evt.SequenceNum;
+                        }
+                        else
+                        {
+                            applied++;
+                            lastAppliedSeq = evt.SequenceNum;
+                        }
+                        // Applied (or deliberately dropped) cleanly — forget any failure streak the
+                        // quarantine was tracking for this event from an earlier push, so an event that
+                        // recovers (its dependency finally arrived) is not left looking quarantined.
+                        // Mirrors the pull path (SyncClient's apply loop). Isolated in its own try: a
+                        // quarantine-store hiccup must never turn a successfully-applied event into the
+                        // outer catch's skipped-and-recorded-failure path.
+                        try
+                        {
+                            await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, evt.EventId);
+                        }
+                        catch (Exception clearEx)
+                        {
+                            logger.LogWarning(clearEx,
+                                "Failed to clear quarantine streak for applied event {EventId}", evt.EventId);
+                        }
                     }
-                    catch (Exception clearEx)
+                    catch (Exception ex)
                     {
-                        logger.LogWarning(clearEx,
-                            "Failed to clear quarantine streak for applied event {EventId}", evt.EventId);
+                        // A pushed event that fails to apply was previously only logged and counted as
+                        // skipped, leaving no persistent trace: a permanently-broken push (bad
+                        // signature, an unmet dependency that never arrives, ...) was invisible to the
+                        // operator and silently re-pushed every cycle. Record the failure through the
+                        // SAME quarantine the pull path uses, so it surfaces in GET /api/sync/quarantine
+                        // once it exhausts its retry budget. This does NOT change what the receiver does
+                        // with the event — it is always skipped-and-continue here — only that the
+                        // failure is now tracked and visible.
+                        //
+                        // The quarantine write is itself wrapped: recording is best-effort observability
+                        // and must not abort the whole batch (the pre-quarantine behaviour was a bare
+                        // LogWarning, which could not throw) if the quarantine store is momentarily
+                        // unavailable.
+                        bool quarantined = false;
+                        try
+                        {
+                            quarantined = await SyncEventQuarantine.RecordFailureAsync(
+                                quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex);
+                        }
+                        catch (Exception recordEx)
+                        {
+                            logger.LogError(recordEx,
+                                "Failed to record quarantine for failed event {EventId}", evt.EventId);
+                        }
+                        if (quarantined)
+                            logger.LogError(ex,
+                                "QUARANTINED pushed event {EventId} of type {EventType} — exhausted its " +
+                                "retry budget. See GET /api/sync/quarantine.", evt.EventId, evt.EventType);
+                        else
+                            logger.LogWarning(ex, "Skipped event {EventId} of type {EventType}", evt.EventId, evt.EventType);
+                        skipped++;
                     }
                 }
-                catch (Exception ex)
-                {
-                    // A pushed event that fails to apply was previously only logged and counted as
-                    // skipped, leaving no persistent trace: a permanently-broken push (bad
-                    // signature, an unmet dependency that never arrives, ...) was invisible to the
-                    // operator and silently re-pushed every cycle. Record the failure through the
-                    // SAME quarantine the pull path uses, so it surfaces in GET /api/sync/quarantine
-                    // once it exhausts its retry budget. This does NOT change what the receiver does
-                    // with the event — it is always skipped-and-continue here — only that the
-                    // failure is now tracked and visible.
-                    //
-                    // The quarantine write is itself wrapped: recording is best-effort observability
-                    // and must not abort the whole batch (the pre-quarantine behaviour was a bare
-                    // LogWarning, which could not throw) if the quarantine store is momentarily
-                    // unavailable.
-                    bool quarantined = false;
-                    try
-                    {
-                        quarantined = await SyncEventQuarantine.RecordFailureAsync(
-                            quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex);
-                    }
-                    catch (Exception recordEx)
-                    {
-                        logger.LogError(recordEx,
-                            "Failed to record quarantine for failed event {EventId}", evt.EventId);
-                    }
-                    if (quarantined)
-                        logger.LogError(ex,
-                            "QUARANTINED pushed event {EventId} of type {EventType} — exhausted its " +
-                            "retry budget. See GET /api/sync/quarantine.", evt.EventId, evt.EventType);
-                    else
-                        logger.LogWarning(ex, "Skipped event {EventId} of type {EventType}", evt.EventId, evt.EventType);
-                    skipped++;
-                }
-            }
+            });
             return Results.Ok(new SyncApplyResult(applied, skipped, lastAppliedSeq, dropped));
         }).WithTags("Sync");
 

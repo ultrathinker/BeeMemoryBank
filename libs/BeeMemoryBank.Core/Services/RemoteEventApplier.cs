@@ -26,8 +26,10 @@ public class RemoteEventApplier(
 {
     public async Task ApplySnapshotAsync(RemoteSubscription sub, RemoteSnapshot snap)
     {
-        using var _ = scopeHolder.ElevateToSystem();
-        await ApplyInternalAsync(sub, snap);
+        // The whole snapshot apply is system-owned (inbound rows carry remote_subscription_id,
+        // a hard refusal for any non-system caller). Bounded to this delegate so the elevation
+        // cannot outlive the apply.
+        await scopeHolder.RunAsSystemAsync(() => ApplyInternalAsync(sub, snap));
     }
 
     private async Task ApplyInternalAsync(RemoteSubscription sub, RemoteSnapshot snap)

@@ -474,26 +474,28 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         // Auto-creating a missing ancestor stub: bypass the repo-level write
         // guard by swapping scope to System for the Create call. The leaf
         // creation has already been authorized at the endpoint level.
-        using var _ = _holder.ElevateToSystem();
         var now = DateTime.UtcNow;
-        try
+        await _holder.RunAsSystemAsync(async () =>
         {
-            await CreateAsync(new Folder
+            try
             {
-                Id = Guid.NewGuid(),
-                Path = path,
-                Name = GetLastSegment(path),
-                ParentPath = parentPath,
-                Status = "A",
-                LamportTs = 0,
-                SourceNodeId = sourceNodeId,
-                CreatedAt = now,
-                UpdatedAt = now
-            });
-        }
-        catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
-        {
-        }
+                await CreateAsync(new Folder
+                {
+                    Id = Guid.NewGuid(),
+                    Path = path,
+                    Name = GetLastSegment(path),
+                    ParentPath = parentPath,
+                    Status = "A",
+                    LamportTs = 0,
+                    SourceNodeId = sourceNodeId,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                });
+            }
+            catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
+            {
+            }
+        });
     }
 
     public async Task<List<Guid>> ListIdsByPathPrefixAsync(string pathPrefix)

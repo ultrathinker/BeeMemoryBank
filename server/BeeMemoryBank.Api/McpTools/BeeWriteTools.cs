@@ -291,13 +291,10 @@ public class BeeWriteTools(
             // nothing can navigate to it any more). Swap to System scope for JUST this read; the
             // caller's own authorization to perform the delete is still enforced separately, by
             // folderRepo.SoftDeleteAsync's ACL check on `path` itself below.
-            List<Folder> children;
-            List<Article> articles;
-            using (scopeHolder.ElevateToSystem())
-            {
-                children = await folderRepo.GetChildrenAsync(path);
-                articles = await articleService.ListAsync(path);
-            }
+            // Read the TRUE contents (see above) — bounded to this read; the caller's own
+            // authorization to delete `path` is still enforced separately below.
+            var (children, articles) = await scopeHolder.RunAsSystemAsync(async () =>
+                (await folderRepo.GetChildrenAsync(path), await articleService.ListAsync(path)));
             if (children.Count > 0 || articles.Count > 0)
             {
                 // Report both counts in one message so the caller sees the full picture,

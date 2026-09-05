@@ -49,6 +49,43 @@ public class CallerScopeHolder
     public ScopeElevation ElevateToSystem() => new(this, SystemCallerScope.Instance);
 
     /// <summary>
+    /// Runs <paramref name="work"/> with the caller scope temporarily set to
+    /// <see cref="SystemCallerScope"/>, restoring the caller's real scope when it completes OR
+    /// throws. This is the explicit, leak-proof form of elevation and the one production code must
+    /// use: the elevated region is exactly the delegate body, so — unlike a <c>using</c>-scoped
+    /// <see cref="ElevateToSystem"/> block — a later control-flow change cannot silently widen it to
+    /// cover user-facing work, and there is no disposable a refactor can drop. Keep the delegate as
+    /// small as the genuinely system-owned work requires (replaying a peer's events, resolving a
+    /// user's own ACL rows, bootstrapping system folders).
+    /// </summary>
+    public async Task<T> RunAsSystemAsync<T>(Func<Task<T>> work)
+    {
+        using (ElevateToSystem())
+            return await work();
+    }
+
+    /// <inheritdoc cref="RunAsSystemAsync{T}(Func{Task{T}})"/>
+    public async Task RunAsSystemAsync(Func<Task> work)
+    {
+        using (ElevateToSystem())
+            await work();
+    }
+
+    /// <inheritdoc cref="RunAsSystemAsync{T}(Func{Task{T}})"/>
+    public T RunAsSystem<T>(Func<T> work)
+    {
+        using (ElevateToSystem())
+            return work();
+    }
+
+    /// <inheritdoc cref="RunAsSystemAsync{T}(Func{Task{T}})"/>
+    public void RunAsSystem(Action work)
+    {
+        using (ElevateToSystem())
+            work();
+    }
+
+    /// <summary>
     /// Restores the previous <see cref="CallerScopeHolder.Scope"/> on dispose.
     ///
     /// <para>A sealed class rather than a struct on purpose. A struct can be copied — passed by

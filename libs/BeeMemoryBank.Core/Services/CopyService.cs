@@ -203,26 +203,28 @@ public class CopyService(
 
     private async Task RollbackAsync(List<Guid> articles, List<Guid> folders, List<Guid> media)
     {
-        // Elevate to the system scope so the cleanup is not blocked by ACL
-        // (these IDs were created by us in this call, so we own them logically).
-        using var _ = scopeHolder.ElevateToSystem();
-
-        foreach (var mediaId in media)
+        // Cleanup runs as System so ACL does not block it (these IDs were created by us in this
+        // call, so we own them logically). Bounded to this delegate so the elevation cannot outlive
+        // the rollback.
+        await scopeHolder.RunAsSystemAsync(async () =>
         {
-            try { await mediaService.DeleteAsync(mediaId); }
-            catch { /* best effort — already cleaned up, or other failure */ }
-        }
-        foreach (var articleId in articles)
-        {
-            try { await articleService.DeleteAsync(articleId); }
-            catch { }
-        }
-        // Delete folders deepest-first so children clear before parents.
-        foreach (var folderId in folders.AsEnumerable().Reverse())
-        {
-            try { await folderService.DeleteAsync(folderId); }
-            catch { }
-        }
+            foreach (var mediaId in media)
+            {
+                try { await mediaService.DeleteAsync(mediaId); }
+                catch { /* best effort — already cleaned up, or other failure */ }
+            }
+            foreach (var articleId in articles)
+            {
+                try { await articleService.DeleteAsync(articleId); }
+                catch { }
+            }
+            // Delete folders deepest-first so children clear before parents.
+            foreach (var folderId in folders.AsEnumerable().Reverse())
+            {
+                try { await folderService.DeleteAsync(folderId); }
+                catch { }
+            }
+        });
     }
 
     private async Task<string> ResolveTitleCollision(string title, string targetFolderPath)

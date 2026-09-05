@@ -184,6 +184,56 @@ public class ScopeElevationTests
             "full-vault access to whatever runs next on the same scope store");
     }
 
+    /// <summary>
+    /// The stronger rule after the elevation refactor: production code elevates ONLY through
+    /// <see cref="CallerScopeHolder.RunAsSystem"/>/<c>RunAsSystemAsync</c>, whose elevated region is
+    /// exactly the delegate body and therefore cannot be widened by a later control-flow change to
+    /// cover user-facing work. The raw <see cref="CallerScopeHolder.ElevateToSystem"/> disposable —
+    /// the building block those helpers are implemented on — must appear only inside
+    /// <c>CallerScopeHolder.cs</c> itself. This pins the invariant so a new ambient
+    /// <c>using var _ = holder.ElevateToSystem();</c> cannot reappear at a call site unnoticed.
+    /// </summary>
+    [Fact]
+    public void ProductionCodeElevatesOnlyThroughRunAsSystem()
+    {
+        var repoRoot = FindRepoRoot();
+        var searchRoots = new[] { "libs", "server", "desktop", "mobile" }
+            .Select(d => Path.Combine(repoRoot, d))
+            .Where(Directory.Exists);
+
+        var directElevation = new Regex(@"\.ElevateToSystem\s*\(", RegexOptions.Compiled);
+
+        var offenders = new List<string>();
+        var filesScanned = 0;
+        foreach (var root in searchRoots)
+        {
+            foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+            {
+                if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") ||
+                    file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+                    continue;
+
+                // CallerScopeHolder defines ElevateToSystem and the RunAsSystem(Async) helpers
+                // built on it — the one place the raw primitive legitimately appears.
+                if (Path.GetFileName(file) == "CallerScopeHolder.cs") continue;
+
+                filesScanned++;
+                var text = File.ReadAllText(file);
+                var relative = Path.GetRelativePath(repoRoot, file);
+                foreach (Match m in directElevation.Matches(text))
+                    offenders.Add($"{relative} (offset {m.Index})");
+            }
+        }
+
+        filesScanned.Should().BeGreaterThan(100,
+            "the scan must actually be walking the production source tree");
+
+        offenders.Should().BeEmpty(
+            "production code must elevate via CallerScopeHolder.RunAsSystem/RunAsSystemAsync, whose " +
+            "elevated region is bounded to the delegate; a raw ElevateToSystem() using-block can be " +
+            "widened by a later refactor to cover user-facing work after the intended section");
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

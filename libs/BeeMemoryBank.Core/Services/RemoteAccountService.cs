@@ -166,7 +166,7 @@ public class RemoteAccountService(
         // is delegated.)
         folderRepo.ThrowIfWriteDenied(mountPath);
 
-        using (scopeHolder.ElevateToSystem())
+        await scopeHolder.RunAsSystemAsync(async () =>
         {
             var existingLocal = await folderRepo.GetByPathAsync(mountPath);
             if (existingLocal == null)
@@ -203,7 +203,7 @@ public class RemoteAccountService(
                 }
                 await folderRepo.CreateAsync(stakeOut);
             }
-        }
+        });
         return sub;
     }
 
