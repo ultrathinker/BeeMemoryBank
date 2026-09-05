@@ -195,11 +195,12 @@ public partial class SnapshotService
                 }
 
                 // Now stagingPath has the fully-prepared DB (snapshot data + new local identity).
-                // Atomically replace the live DB. ClearAllPools releases any pooled connections
-                // so the OS isn't holding the file open during the move.
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-                await Task.Delay(200);
-                File.Move(stagingPath, dbPath, overwrite: true);
+                // Atomically replace the live DB, retrying past transient pooled-handle locks —
+                // see SwapDbFileWithRetryAsync for why clear-then-swap must be one gesture.
+                await SwapDbFileWithRetryAsync(
+                    () => File.Move(stagingPath, dbPath, overwrite: true),
+                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools,
+                    _logger);
 
                 // Atomic media swap after DB swap
                 var mediaDirR = Path.Combine(_dataPath, "media");
@@ -247,9 +248,10 @@ public partial class SnapshotService
                         File.Copy(f, Path.Combine(mediaStagingDirNs, Path.GetFileName(f)), overwrite: true);
                 }
 
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-                await Task.Delay(200);
-                File.Copy(extractedDb, dbPath, overwrite: true);
+                await SwapDbFileWithRetryAsync(
+                    () => File.Copy(extractedDb, dbPath, overwrite: true),
+                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools,
+                    _logger);
 
                 var mediaDirNs = Path.Combine(_dataPath, "media");
                 var mediaOldDirNs = Path.Combine(_dataPath, "media.old");
@@ -306,6 +308,48 @@ public partial class SnapshotService
                 catch (Exception ex) { _logger?.LogWarning(ex, "Failed to delete restore temp dir {TempDir}", tempDir); }
             }
             HeavyOperationLock.Instance.Release();
+        }
+    }
+
+    /// <summary>
+    /// Replaces the live database file, tolerating the transient Windows lock a pooled background
+    /// reader can hold on it. Microsoft.Data.Sqlite keeps a connection's physical handle open in the
+    /// pool after <c>Dispose</c>, so even an idle background reader (sync scheduler, search-index
+    /// read, WAL checkpoint) keeps the file open — and <c>File.Move</c>/<c>File.Copy</c> over a file
+    /// another handle has open throws <see cref="UnauthorizedAccessException"/> /
+    /// <see cref="IOException"/>. <c>ClearAllPools</c> force-closes those handles, but a
+    /// <c>CreateConnection</c> the instant after re-locks the file, so the swap has to land in the
+    /// freed window: clear the pool and swap with nothing in between, and retry with backoff. In
+    /// normal operation the next background open is seconds away, so a retry wins immediately; the
+    /// old single-shot <c>ClearAllPools + 200&#160;ms delay + swap</c> lost that race ~1-in-N on a
+    /// busy node and surfaced as a bare 500. Reproduced deterministically under concurrent DB load.
+    /// <para>Seams (<paramref name="clearPools"/>, <paramref name="delay"/>) exist so the retry
+    /// logic is unit-tested without real files or timing — see SnapshotFileSwapRetryTests.</para>
+    /// </summary>
+    internal static async Task SwapDbFileWithRetryAsync(
+        Action swap,
+        Action clearPools,
+        Microsoft.Extensions.Logging.ILogger? logger = null,
+        int maxAttempts = 10,
+        Func<int, Task>? delay = null)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            // Clear immediately before the swap, with nothing between them, so File.Move lands in
+            // the instant the file is free rather than after a re-lock window.
+            clearPools();
+            try
+            {
+                swap();
+                return;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException && attempt < maxAttempts)
+            {
+                logger?.LogWarning(ex,
+                    "Database file swap blocked (file still held open); attempt {Attempt}/{Max}, retrying",
+                    attempt, maxAttempts);
+                await (delay?.Invoke(attempt) ?? Task.Delay(50 * attempt));
+            }
         }
     }
 }
