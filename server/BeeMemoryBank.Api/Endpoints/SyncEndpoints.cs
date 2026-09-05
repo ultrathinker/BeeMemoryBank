@@ -424,8 +424,18 @@ public static class SyncEndpoints
                     // Applied (or deliberately dropped) cleanly — forget any failure streak the
                     // quarantine was tracking for this event from an earlier push, so an event that
                     // recovers (its dependency finally arrived) is not left looking quarantined.
-                    // Mirrors the pull path (SyncClient's apply loop).
-                    await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, evt.EventId);
+                    // Mirrors the pull path (SyncClient's apply loop). Isolated in its own try: a
+                    // quarantine-store hiccup must never turn a successfully-applied event into the
+                    // outer catch's skipped-and-recorded-failure path.
+                    try
+                    {
+                        await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, evt.EventId);
+                    }
+                    catch (Exception clearEx)
+                    {
+                        logger.LogWarning(clearEx,
+                            "Failed to clear quarantine streak for applied event {EventId}", evt.EventId);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -437,8 +447,22 @@ public static class SyncEndpoints
                     // once it exhausts its retry budget. This does NOT change what the receiver does
                     // with the event — it is always skipped-and-continue here — only that the
                     // failure is now tracked and visible.
-                    var quarantined = await SyncEventQuarantine.RecordFailureAsync(
-                        quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex);
+                    //
+                    // The quarantine write is itself wrapped: recording is best-effort observability
+                    // and must not abort the whole batch (the pre-quarantine behaviour was a bare
+                    // LogWarning, which could not throw) if the quarantine store is momentarily
+                    // unavailable.
+                    bool quarantined = false;
+                    try
+                    {
+                        quarantined = await SyncEventQuarantine.RecordFailureAsync(
+                            quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex);
+                    }
+                    catch (Exception recordEx)
+                    {
+                        logger.LogError(recordEx,
+                            "Failed to record quarantine for failed event {EventId}", evt.EventId);
+                    }
                     if (quarantined)
                         logger.LogError(ex,
                             "QUARANTINED pushed event {EventId} of type {EventType} — exhausted its " +

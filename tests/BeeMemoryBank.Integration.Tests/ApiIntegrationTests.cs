@@ -351,6 +351,41 @@ public class ApiIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Whitelist_BackfillRevokes_NeverEmitsRevokeForTheSelfNode()
+    {
+        await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password });
+
+        // A revoked whitelist row for THIS node's own id (a historical artifact) must never be
+        // healed: emitting a whitelist_revoke for ourselves would tell every peer to stop trusting
+        // our events — network-wide sync death. The backfill's self-node guard must exclude it.
+        Guid selfId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
+            selfId = (await nodeRepo.GetAsync())!.NodeId;
+            var repo = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
+            await repo.CreateAsync(new WhitelistEntry
+            {
+                NodeId = selfId,
+                DisplayName = "SelfArtifact",
+                Ed25519PublicKey = new byte[32],
+                Status = "R",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                DeletedAt = DateTime.UtcNow,
+                LamportTs = 0,
+                SourceNodeId = null,
+            });
+        }
+
+        var resp = await _client.PostAsync("/api/whitelist/backfill-revokes", null);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("healed").GetInt32().Should().Be(0,
+            "the self-node revoked row must be excluded — never emit a self-revoke");
+    }
+
+    [Fact]
     public async Task Tree_ReturnsKnownPaths()
     {
         await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password });
