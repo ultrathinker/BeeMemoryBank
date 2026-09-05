@@ -113,32 +113,63 @@ public record RestoreNetworkEventPayload(
 );
 
 /// <summary>
+/// One recipient's sealed copy of the new master DEK in a confidential rotation (ADR 0006): the
+/// AES-256-GCM ciphertext (with tag) and its nonce, both base64. Openable only by the node whose
+/// derived X25519 private key was used to build it — see <see cref="DekEnvelope"/>.
+/// </summary>
+public record DekEnvelopeBox(
+    [property: JsonPropertyName("wrapped")] string Wrapped,
+    [property: JsonPropertyName("nonce")]   string Nonce
+);
+
+/// <summary>
+/// The per-peer X25519 envelope set carried by a confidential DEK rotation (ADR 0006). Replaces the
+/// single wrap-under-old-DEK <c>encrypted_new_dek</c>: the new DEK is sealed once per currently-active
+/// peer, so a revoked node — enumerated out of the rotation — never receives an openable copy. The
+/// map is keyed by UPPERCASE node id (the GUID-case trap); each node opens only <c>peers[myNodeId]</c>.
+/// </summary>
+public record DekEnvelopesPayload(
+    [property: JsonPropertyName("ephemeral_pub")] string EphemeralPub,
+    [property: JsonPropertyName("peers")]         Dictionary<string, DekEnvelopeBox> Peers
+);
+
+/// <summary>
 /// Phase 1 of DEK rotation: initiator broadcasts a proposal. Other peers record it as Pending
 /// in tbl_dek_rotation_state but do NOT start rotating yet — they wait for a matching
 /// DekRotationCommit. This split closes the cross-node split-brain window where two concurrent
 /// rotates would both go destructive before noticing each other.
+///
+/// <para>Confidential rotations (ADR 0006) carry <see cref="DekEnvelopes"/> and OMIT
+/// <see cref="EncryptedNewDek"/> / <see cref="Iv"/> — both are therefore nullable. Legacy events
+/// already in tbl_event still carry the old fields and no envelopes; the applier reads whichever is
+/// present.</para>
 /// </summary>
 public record DekRotationProposedPayload(
-    [property: JsonPropertyName("encrypted_new_dek")] string EncryptedNewDek,
-    [property: JsonPropertyName("iv")]                string Iv,
     [property: JsonPropertyName("new_dek_epoch")]     int NewDekEpoch,
     [property: JsonPropertyName("rotation_ts")]       string RotationTs,
     [property: JsonPropertyName("expires_at")]        string ExpiresAt,
-    [property: JsonPropertyName("originator_node_id")] string OriginatorNodeId
+    [property: JsonPropertyName("originator_node_id")] string OriginatorNodeId,
+    [property: JsonPropertyName("encrypted_new_dek")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EncryptedNewDek = null,
+    [property: JsonPropertyName("iv")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]                string? Iv = null,
+    [property: JsonPropertyName("dek_envelopes")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]     DekEnvelopesPayload? DekEnvelopes = null
 );
 
 /// <summary>
 /// Phase 2 of DEK rotation: initiator confirms the proposal won the cross-node tiebreaker
 /// and wants peers to actually apply the rotation. Carries a reference back to the matching
 /// proposed event so receivers can match COMMIT with PROPOSED.
+///
+/// <para>Confidential rotations (ADR 0006) carry <see cref="DekEnvelopes"/> and OMIT
+/// <see cref="EncryptedNewDek"/> / <see cref="Iv"/> — see <see cref="DekRotationProposedPayload"/>.</para>
 /// </summary>
 public record DekRotationCommitPayload(
     [property: JsonPropertyName("proposed_event_id")] string ProposedEventId,
-    [property: JsonPropertyName("encrypted_new_dek")] string EncryptedNewDek,
-    [property: JsonPropertyName("iv")]                string Iv,
     [property: JsonPropertyName("new_dek_epoch")]     int NewDekEpoch,
     [property: JsonPropertyName("rotation_ts")]       string RotationTs,
-    [property: JsonPropertyName("originator_node_id")] string OriginatorNodeId
+    [property: JsonPropertyName("originator_node_id")] string OriginatorNodeId,
+    [property: JsonPropertyName("encrypted_new_dek")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EncryptedNewDek = null,
+    [property: JsonPropertyName("iv")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]                string? Iv = null,
+    [property: JsonPropertyName("dek_envelopes")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]     DekEnvelopesPayload? DekEnvelopes = null
 );
 
 /// <summary>Payload for physical/hard deletion of articles or folders.</summary>

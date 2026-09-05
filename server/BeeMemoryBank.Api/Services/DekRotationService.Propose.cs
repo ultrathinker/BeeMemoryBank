@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -39,6 +40,7 @@ public partial class DekRotationService
             var eventLogRepo = scope.ServiceProvider.GetRequiredService<IEventLogRepository>();
             var clock = scope.ServiceProvider.GetRequiredService<ILamportClock>();
             var stateRepo = scope.ServiceProvider.GetRequiredService<IDekRotationStateRepository>();
+            var whitelistRepo = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
 
             // Guard against starting a new rotation while a previous one is still pending.
             // _executeLock is released between Propose and Accept, so without this DB check a
@@ -116,8 +118,6 @@ public partial class DekRotationService
             var oldDek = _sessionService.GetMasterDek();
             try
             {
-                var (encNewDek, ivNewDek) = MasterKeyManager.WrapMasterDek(newDek, oldDek);
-
                 var identity = await nodeRepo.GetAsync()
                     ?? throw new InvalidOperationException("Node is not initialized.");
 
@@ -135,13 +135,40 @@ public partial class DekRotationService
                 }
                 var newEpoch = currentEpoch + 1;
 
+                // ADR 0006: the COMMIT event id is the rotation id that salts every envelope. Assign
+                // it up front so both the PROPOSED and COMMIT payloads carry the SAME envelope set —
+                // a receiver applies the COMMIT and opens peers[myNodeId] using commitEvent.EventId as
+                // the salt, so the envelopes must be keyed to that id regardless of which event they
+                // ride in.
+                var commitEventId = Guid.NewGuid();
+
+                // Recipients = the currently-active whitelist (status='A') PLUS this initiator node.
+                // That snapshot IS the definition of "who this rotation includes": a revoked peer is
+                // not enumerated and gets no openable envelope, which is exactly what makes the
+                // rotation confidential against a node revoked before it.
+                var activePeers = await whitelistRepo.GetAllActiveAsync();
+                var recipients = new List<DekEnvelope.Recipient>(activePeers.Count + 1)
+                {
+                    new(identity.NodeId, identity.Ed25519PublicKey)
+                };
+                foreach (var peer in activePeers)
+                    recipients.Add(new DekEnvelope.Recipient(peer.NodeId, peer.Ed25519PublicKey));
+
+                var envelopeSet = DekEnvelope.Build(newDek, commitEventId, recipients);
+                var dekEnvelopes = new DekEnvelopesPayload(
+                    envelopeSet.EphemeralPublicKeyB64,
+                    envelopeSet.Peers.ToDictionary(
+                        kv => kv.Key,
+                        kv => new DekEnvelopeBox(kv.Value.WrappedB64, kv.Value.NonceB64)));
+
+                // Confidential rotation: ship the per-peer envelopes and OMIT encrypted_new_dek/iv
+                // (ADR 0006, rollout Option B — new rotations are always confidential).
                 var proposedPayload = new DekRotationProposedPayload(
-                    EncryptedNewDek: Convert.ToBase64String(encNewDek),
-                    Iv: Convert.ToBase64String(ivNewDek),
                     NewDekEpoch: newEpoch,
                     RotationTs: DateTime.UtcNow.ToString("O"),
                     ExpiresAt: DateTime.UtcNow.AddHours(24).ToString("O"),
-                    OriginatorNodeId: identity.NodeId.ToString()
+                    OriginatorNodeId: identity.NodeId.ToString(),
+                    DekEnvelopes: dekEnvelopes
                 );
 
                 var proposedEventId = Guid.NewGuid();
@@ -187,17 +214,16 @@ public partial class DekRotationService
                     UpdatedAt: DateTime.UtcNow.ToString("O")
                 ));
 
-                // MVP: skip quorum — immediately build COMMIT event.
+                // MVP: skip quorum — immediately build COMMIT event. Same envelope set as the
+                // proposal; encrypted_new_dek/iv omitted (ADR 0006).
                 var commitPayload = new DekRotationCommitPayload(
                     ProposedEventId: proposedEventId.ToString(),
-                    EncryptedNewDek: Convert.ToBase64String(encNewDek),
-                    Iv: Convert.ToBase64String(ivNewDek),
                     NewDekEpoch: newEpoch,
                     RotationTs: proposedPayload.RotationTs,
-                    OriginatorNodeId: identity.NodeId.ToString()
+                    OriginatorNodeId: identity.NodeId.ToString(),
+                    DekEnvelopes: dekEnvelopes
                 );
 
-                var commitEventId = Guid.NewGuid();
                 var commitLamportTs = clock.Tick();
                 var commitPayloadJson = JsonSerializer.Serialize(commitPayload, JsonOpts);
 
@@ -243,11 +269,8 @@ public partial class DekRotationService
                     UpdatedAt: DateTime.UtcNow.ToString("O")
                 ));
 
-                // Clear local copies of the new DEK material. AcceptCommitAsync will
-                // re-derive it from the commit event payload.
-                Array.Clear(encNewDek, 0, encNewDek.Length);
-                Array.Clear(ivNewDek, 0, ivNewDek.Length);
-
+                // The new DEK is not kept in the clear anywhere in the synced payload; AcceptCommitAsync
+                // re-derives it by opening this node's own envelope from the commit event.
                 return commitEventId;
             }
             finally

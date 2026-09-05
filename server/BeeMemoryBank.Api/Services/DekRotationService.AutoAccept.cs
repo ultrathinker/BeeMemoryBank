@@ -12,6 +12,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.DekRotation;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -144,6 +145,9 @@ public partial class DekRotationService
     {
         using var scope = _scopeFactory.CreateScope();
         var stateRepo = scope.ServiceProvider.GetRequiredService<IDekRotationStateRepository>();
+        var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
+        var identity = await nodeRepo.GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
 
         _progress.Update(DekRotationFlowStep.Committing, 15, "Auto-accept: decrypting new DEK...", eventId: commitEvent.EventId.ToString());
         _progress.ClearError();
@@ -153,30 +157,24 @@ public partial class DekRotationService
         // Committing and leaked oldDek. (Gemini R3 reviewer of god-class refactor.)
         byte[]? oldDek = null;
         byte[]? newDek = null;
+        string? chainEncB64 = null;
+        string? chainIvB64 = null;
 
         try
         {
-            var encNewDekBytes = Convert.FromBase64String(payload.EncryptedNewDek);
-            var ivBytes = Convert.FromBase64String(payload.Iv);
-
             oldDek = _sessionService.GetMasterDek();
-            try
-            {
-                newDek = MasterKeyManager.UnwrapMasterDek(encNewDekBytes, ivBytes, oldDek);
-            }
-            finally
-            {
-                Array.Clear(encNewDekBytes, 0, encNewDekBytes.Length);
-            }
+            // Confidential rotation: open this node's own envelope; legacy events fall back to
+            // unwrap-under-old-DEK. (ADR 0006.)
+            newDek = DekRotationMaterial.ResolveNewDek(
+                payload, commitEvent.EventId, identity, oldDek, out chainEncB64, out chainIvB64);
 
-            // Base64 straight off the payload — the decoded copy was cleared above, and these are
-            // what LazySlotRewrapService needs to walk this rotation after compaction removes the
-            // event they arrived in.
+            // chainEncB64/chainIvB64 are what LazySlotRewrapService needs to walk this rotation after
+            // compaction removes the event they arrived in — stored node-local, never synced.
             var (agentsDeleted, recoveryDeleted, _) = await RewrapDestructiveCoreAsync(
                 oldDek, newDek, payload.NewDekEpoch, commitEvent.EventId.ToString(),
                 isInitiator: false,
-                chainEncryptedNewDekB64: payload.EncryptedNewDek,
-                chainIvB64: payload.Iv);
+                chainEncryptedNewDekB64: chainEncB64,
+                chainIvB64: chainIvB64);
 
             _logger.LogInformation(
                 "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. Agents={Agents}. RecoverySlots={Recovery}.",

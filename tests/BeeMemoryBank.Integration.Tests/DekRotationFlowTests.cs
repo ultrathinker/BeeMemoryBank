@@ -80,6 +80,23 @@ public class DekRotationFlowTests : IAsyncLifetime
         var proposeBody = await proposeResp.Content.ReadFromJsonAsync<JsonElement>();
         var commitEventId = proposeBody.GetProperty("commitEventId").GetGuid().ToString();
 
+        // ADR 0006: the rotation is confidential. Read the commit event's payload straight from
+        // tbl_event (before accept — the initiator compacts right after) and confirm it ships the
+        // per-peer envelopes and OMITS the wrap-under-old-DEK field entirely.
+        using (var conn = connFactory.CreateConnection())
+        {
+            var payloadJson = await conn.ExecuteScalarAsync<string>(
+                "SELECT payload FROM tbl_event WHERE event_id = @id COLLATE NOCASE AND event_type = 'dek_rotation_commit'",
+                new { id = commitEventId });
+            payloadJson.Should().NotBeNullOrEmpty();
+            using var payloadDoc = JsonDocument.Parse(payloadJson!);
+            payloadDoc.RootElement.TryGetProperty("encrypted_new_dek", out _)
+                .Should().BeFalse("a confidential rotation must not ship the DEK wrapped under the old DEK");
+            payloadDoc.RootElement.TryGetProperty("iv", out _).Should().BeFalse();
+            payloadDoc.RootElement.TryGetProperty("dek_envelopes", out var env).Should().BeTrue();
+            env.GetProperty("peers").EnumerateObject().Should().NotBeEmpty("the initiator gets its own envelope");
+        }
+
         // Accept rotation
         var acceptResp = await _client.PostAsJsonAsync("/api/dek-rotation/accept",
             new { commitEventId, masterPassword = Password });
@@ -132,6 +149,115 @@ public class DekRotationFlowTests : IAsyncLifetime
             var slotCount = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM tbl_key_slot");
             slotCount.Should().Be(1);
         }
+    }
+
+    /// <summary>
+    /// ADR 0006 security property: a rotation is confidential against a party that holds only the
+    /// OLD DEK. With node B enumerated in the active whitelist, rotating on A seals the new DEK once
+    /// per active peer as an X25519 envelope and omits the wrap-under-old-DEK field. B, holding only
+    /// its own identity key, opens its envelope and recovers the exact new master DEK — while the
+    /// event carries no <c>encrypted_new_dek</c> for an old-DEK holder to unwrap at all.
+    /// </summary>
+    [Fact]
+    public async Task ConfidentialRotation_PeerOpensItsEnvelope_ButOldDekAloneCannot()
+    {
+        // A stand-in for a second cluster node: a real Ed25519 identity in the active whitelist.
+        var (peerPub, peerSeed) = Ed25519Signer.GenerateKeyPair();
+        var peerNodeId = Guid.NewGuid();
+
+        var whitelistRepo = _factory.Services.GetRequiredService<IWhitelistRepository>();
+        await whitelistRepo.CreateAsync(new WhitelistEntry
+        {
+            NodeId = peerNodeId,
+            DisplayName = "NodeB",
+            Ed25519PublicKey = peerPub,
+            Status = "A",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+
+        // Seed an article so the "still readable after rotation" invariant is exercised too.
+        var create = await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Confidential",
+            treePath = "/RotationTests",
+            content = "top secret"
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var articleId = (await create.Content.ReadFromJsonAsync<ArticleResponse>())!.Id;
+
+        int originalEpoch;
+        using (var conn = connFactory.CreateConnection())
+            originalEpoch = await conn.ExecuteScalarAsync<int>("SELECT dek_epoch FROM tbl_node_identity");
+
+        // Propose, then capture the commit envelope BEFORE accept (the initiator compacts after).
+        var proposeResp = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
+        proposeResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var commitEventId = (await proposeResp.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("commitEventId").GetGuid();
+
+        string ephemeralPub, wrappedB64, nonceB64;
+        using (var conn = connFactory.CreateConnection())
+        {
+            var payloadJson = await conn.ExecuteScalarAsync<string>(
+                "SELECT payload FROM tbl_event WHERE event_id = @id COLLATE NOCASE AND event_type = 'dek_rotation_commit'",
+                new { id = commitEventId.ToString() });
+            using var doc = JsonDocument.Parse(payloadJson!);
+            var root = doc.RootElement;
+
+            root.TryGetProperty("encrypted_new_dek", out _).Should().BeFalse(
+                "there must be nothing for a holder of only the old DEK to unwrap");
+
+            var env = root.GetProperty("dek_envelopes");
+            ephemeralPub = env.GetProperty("ephemeral_pub").GetString()!;
+            var peers = env.GetProperty("peers");
+
+            // Both the initiator's own node and the enumerated peer B received an envelope.
+            var localNodeId = await conn.ExecuteScalarAsync<string>("SELECT node_id FROM tbl_node_identity");
+            peers.TryGetProperty(localNodeId!.ToUpperInvariant(), out _).Should().BeTrue("the initiator gets its own envelope");
+            peers.TryGetProperty(peerNodeId.ToString().ToUpperInvariant(), out var boxB).Should().BeTrue(
+                "the active peer must be enumerated and sealed for");
+
+            wrappedB64 = boxB.GetProperty("wrapped").GetString()!;
+            nonceB64 = boxB.GetProperty("nonce").GetString()!;
+        }
+
+        // Accept and let the rotation complete.
+        var acceptResp = await _client.PostAsJsonAsync("/api/dek-rotation/accept",
+            new { commitEventId = commitEventId.ToString(), masterPassword = Password });
+        acceptResp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await PollProgressAsync(step => step == DekRotationFlowStep.Completed, TimeSpan.FromSeconds(60)))
+            .Should().BeTrue("rotation should complete");
+
+        using (var conn = connFactory.CreateConnection())
+            (await conn.ExecuteScalarAsync<int>("SELECT dek_epoch FROM tbl_node_identity"))
+                .Should().Be(originalEpoch + 1);
+
+        // B, holding ONLY its identity seed, opens its envelope and recovers the exact new master DEK.
+        var session = _factory.Services.GetRequiredService<SessionService>();
+        var newMasterDek = session.GetMasterDek();
+        try
+        {
+            var opened = DekEnvelope.Open(ephemeralPub, wrappedB64, nonceB64, commitEventId, peerNodeId, peerSeed);
+            opened.Should().Equal(newMasterDek, "peer B derives the same new DEK the initiator rotated to");
+        }
+        finally
+        {
+            Array.Clear(newMasterDek);
+        }
+
+        // A stranger — a valid identity that was NOT in the active set — cannot open B's envelope.
+        var (_, strangerSeed) = Ed25519Signer.GenerateKeyPair();
+        var strangerAttempt = () => DekEnvelope.Open(ephemeralPub, wrappedB64, nonceB64, commitEventId, peerNodeId, strangerSeed);
+        strangerAttempt.Should().Throw<System.Security.Cryptography.CryptographicException>(
+            "only B's identity key opens B's envelope");
+
+        // The article is still readable under the new DEK.
+        var contentResp = await _client.GetAsync($"/api/articles/{articleId}/content");
+        contentResp.EnsureSuccessStatusCode();
+        (await contentResp.Content.ReadFromJsonAsync<ArticleContentResponse>())!.Content.Should().Be("top secret");
     }
 
     /// <summary>

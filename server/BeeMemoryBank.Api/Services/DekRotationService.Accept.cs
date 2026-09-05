@@ -12,6 +12,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.DekRotation;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -122,24 +123,21 @@ public partial class DekRotationService
         // (Found by Gemini R3 reviewer of god-class refactor.)
         byte[]? oldDek = null;
         byte[]? newDek = null;
+        // Node-local chain material for LazySlotRewrap; for a confidential rotation it is computed
+        // by ResolveNewDek (wrap of the opened DEK under oldDek), not taken off the wire.
+        string? chainEncB64 = null;
+        string? chainIvB64 = null;
 
         User initiator;
         BeeMemoryBank.Core.Models.MasterKeyStore initiatorSlot;
         byte[]? localKek = null;
         try
         {
-            var encNewDekBytes = Convert.FromBase64String(payload.EncryptedNewDek);
-            var ivBytes = Convert.FromBase64String(payload.Iv);
-
             oldDek = _sessionService.GetMasterDek();
-            try
-            {
-                newDek = MasterKeyManager.UnwrapMasterDek(encNewDekBytes, ivBytes, oldDek);
-            }
-            finally
-            {
-                Array.Clear(encNewDekBytes, 0, encNewDekBytes.Length);
-            }
+            // Confidential rotation: open this node's own envelope (initiator gets one too). Legacy
+            // events fall back to unwrap-under-old-DEK. (ADR 0006.)
+            newDek = DekRotationMaterial.ResolveNewDek(
+                payload, commitEvent.EventId, identity, oldDek, out chainEncB64, out chainIvB64);
 
             if (initiatorUserId.HasValue)
             {
@@ -234,8 +232,8 @@ public partial class DekRotationService
             var (agentsDeleted, _, _) = await RewrapDestructiveCoreAsync(
                 oldDek, newDek, payload.NewDekEpoch, commitEventId,
                 isInitiator: true, initiatorSlot.SlotId, newEncDek, newIv,
-                chainEncryptedNewDekB64: payload.EncryptedNewDek,
-                chainIvB64: payload.Iv);
+                chainEncryptedNewDekB64: chainEncB64,
+                chainIvB64: chainIvB64);
 
             var auditRepo = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
             await auditRepo.LogAsync(

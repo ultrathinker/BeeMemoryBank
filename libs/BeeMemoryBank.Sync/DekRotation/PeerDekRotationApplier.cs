@@ -107,6 +107,9 @@ public sealed class PeerDekRotationApplier(
     {
         using var scope = scopeFactory.CreateScope();
         var stateRepo = scope.ServiceProvider.GetRequiredService<IDekRotationStateRepository>();
+        var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
+        var identity = await nodeRepo.GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
 
         byte[]? oldDek = null;
         byte[]? newDek = null;
@@ -114,29 +117,22 @@ public sealed class PeerDekRotationApplier(
 
         try
         {
-            var encNewDekBytes = Convert.FromBase64String(payload.EncryptedNewDek);
-            var ivBytes = Convert.FromBase64String(payload.Iv);
-
             oldDek = sessionService.GetMasterDek();
-            try
-            {
-                newDek = MasterKeyManager.UnwrapMasterDek(encNewDekBytes, ivBytes, oldDek);
-            }
-            finally
-            {
-                Array.Clear(encNewDekBytes, 0, encNewDekBytes.Length);
-            }
+            // Confidential rotation: open this node's own envelope; legacy events fall back to
+            // unwrap-under-old-DEK. (ADR 0006.)
+            newDek = DekRotationMaterial.ResolveNewDek(
+                payload, commitEvent.EventId, identity, oldDek, out var chainEncB64, out var chainIvB64);
 
-            // The base64 strings straight off the payload, not the decoded bytes: they are what
-            // LazySlotRewrapService needs to walk this rotation later, and the decoded copy above
-            // has already been cleared by this point. Storing them locally is what keeps a user's
-            // key slot re-wrappable after compaction removes the event they came from.
+            // chainEncB64/chainIvB64 are what LazySlotRewrapService needs to walk this rotation later.
+            // Stored locally (never synced), they keep a user's key slot re-wrappable after compaction
+            // removes the event they came from — for a confidential rotation they are computed from the
+            // opened DEK rather than taken off the wire.
             var (agentsDeleted, recoveryDeleted, _) = await DekRewrapper.RewrapAllAsync(
                 connFactory, sessionService,
                 oldDek, newDek, payload.NewDekEpoch, commitEvent.EventId.ToString(),
                 isInitiator: false,
-                chainEncryptedNewDekB64: payload.EncryptedNewDek,
-                chainIvB64: payload.Iv);
+                chainEncryptedNewDekB64: chainEncB64,
+                chainIvB64: chainIvB64);
 
             completed = true;
             logger.LogInformation(
