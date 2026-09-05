@@ -152,7 +152,27 @@ public partial class DekRotationService
                     new(identity.NodeId, identity.Ed25519PublicKey)
                 };
                 foreach (var peer in activePeers)
+                {
+                    // One malformed active whitelist key must not deny rotation to the whole mesh.
+                    // Validate the birational map up front; a peer whose Ed25519 key will not convert
+                    // is EXCLUDED (it gets no openable envelope and must re-join to catch up) rather
+                    // than allowed to throw out of DekEnvelope.Build and abort every rotation forever.
+                    // The initiator (recipients[0]) is deliberately NOT filtered: if its own key is
+                    // unusable the rotation genuinely cannot proceed, and Build throwing is correct.
+                    try
+                    {
+                        _ = DekEnvelope.Ed25519PublicKeyToX25519PublicKey(peer.Ed25519PublicKey);
+                    }
+                    catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or ArgumentException)
+                    {
+                        _logger.LogError(ex,
+                            "DEK rotation: active whitelist peer {NodeId} has an unusable Ed25519 public key and is "
+                            + "EXCLUDED from this rotation — it will receive no openable envelope and must re-join to "
+                            + "catch up. The rotation proceeds for the remaining peers.", peer.NodeId);
+                        continue;
+                    }
                     recipients.Add(new DekEnvelope.Recipient(peer.NodeId, peer.Ed25519PublicKey));
+                }
 
                 var envelopeSet = DekEnvelope.Build(newDek, commitEventId, recipients);
                 var dekEnvelopes = new DekEnvelopesPayload(

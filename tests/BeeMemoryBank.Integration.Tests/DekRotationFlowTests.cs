@@ -376,6 +376,79 @@ public class DekRotationFlowTests : IAsyncLifetime
         }
     }
 
+    /// <summary>
+    /// Regression for C1: a confidential rotation must be self-perpetuating. The node's own Ed25519
+    /// identity seed is wrapped under the master DEK (v1); ResolveNewDek decrypts it to open this
+    /// node's envelope, and every event signed afterwards decrypts it under the CURRENT DEK. If the
+    /// rotation does not re-wrap the seed to the new DEK, the FIRST rotation still works (the seed is
+    /// under the key it was sealed with) but the SECOND wedges — the seed is under the pre-rotation-1
+    /// DEK while accept now tries to open it under the rotation-1 DEK. This rotates twice and proves
+    /// the seed opens under the current DEK after each.
+    /// </summary>
+    [Fact]
+    public async Task TwoRotationsInARow_KeepTheIdentitySeedUsable()
+    {
+        var create = await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Survives Two Rotations",
+            treePath = "/RotationTests",
+            content = "body that must stay readable"
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var articleId = (await create.Content.ReadFromJsonAsync<ArticleResponse>())!.Id;
+
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        var session = _factory.Services.GetRequiredService<SessionService>();
+
+        // Premise: the node identity must be v1 (DEK-wrapped seed), or this test exercises nothing —
+        // v0 plaintext seeds do not depend on the DEK and were never at risk.
+        (Guid nodeId, byte[] pk, byte[]? iv, int v) ReadIdentity()
+        {
+            using var conn = connFactory.CreateConnection();
+            var row = conn.QuerySingle<dynamic>(
+                @"SELECT node_id AS NodeId, ed25519_private_key AS Pk,
+                         ed25519_private_key_iv AS Iv, ed25519_private_key_v AS V
+                    FROM tbl_node_identity LIMIT 1");
+            return (Guid.Parse((string)row.NodeId), (byte[])row.Pk, row.Iv as byte[], (int)(long)row.V);
+        }
+
+        void AssertSeedOpensUnderCurrentDek(string when)
+        {
+            var (nodeId, pk, iv, v) = ReadIdentity();
+            v.Should().Be(1, $"identity should stay v1 {when}");
+            var dek = session.GetMasterDek();
+            try
+            {
+                // Throws CryptographicException if the seed is not sealed under the current DEK —
+                // that is exactly the C1 brick, surfaced as a test failure instead of a wedged node.
+                var seed = NodeIdentityCrypto.GetDecryptedPrivateKey(pk, iv, v, nodeId, dek);
+                seed.Length.Should().Be(32, $"the identity seed must open under the current DEK {when}");
+                Array.Clear(seed);
+            }
+            finally
+            {
+                Array.Clear(dek);
+            }
+        }
+
+        ReadIdentity().v.Should().Be(1, "test premise: a freshly initialized node stores a v1 identity seed");
+        AssertSeedOpensUnderCurrentDek("before any rotation");
+
+        (await RotateAsync()).Should().BeTrue("the first rotation must complete");
+        AssertSeedOpensUnderCurrentDek("after the first rotation");
+
+        (await RotateAsync()).Should().BeTrue(
+            "the SECOND rotation must complete — this is the C1 regression; without re-wrapping the "
+            + "identity seed it fails to open this node's envelope under the rotation-1 DEK");
+        AssertSeedOpensUnderCurrentDek("after the second rotation");
+
+        // The article body must still open after two rotations.
+        var contentResp = await _client.GetAsync($"/api/articles/{articleId}/content");
+        contentResp.EnsureSuccessStatusCode();
+        (await contentResp.Content.ReadFromJsonAsync<ArticleContentResponse>())!
+            .Content.Should().Be("body that must stay readable");
+    }
+
     /// <summary>Proposes and accepts a rotation; returns whether it reached Completed.</summary>
     private async Task<bool> RotateAsync()
     {

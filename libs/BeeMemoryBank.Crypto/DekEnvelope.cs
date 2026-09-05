@@ -62,34 +62,44 @@ public static class DekEnvelope
         ArgumentNullException.ThrowIfNull(newDek);
         ArgumentNullException.ThrowIfNull(recipients);
 
-        var ephemeralPriv = new X25519PrivateKeyParameters(SecureRandom.GetBytes(CryptoConstants.KeySize), 0);
+        var ephemeralSeed = SecureRandom.GetBytes(CryptoConstants.KeySize);
+        var ephemeralPriv = new X25519PrivateKeyParameters(ephemeralSeed, 0);
         var ephemeralPubB64 = Convert.ToBase64String(ephemeralPriv.GeneratePublicKey().GetEncoded());
 
         var salt = SaltBytes(rotationEventId);
         var peers = new Dictionary<string, Box>(StringComparer.Ordinal);
 
-        foreach (var recipient in recipients)
+        try
         {
-            var nodeKey = NodeKey(recipient.NodeId);
-            if (peers.ContainsKey(nodeKey))
-                continue; // a node id can only appear once — first writer wins.
-
-            var peerX25519Pub = Ed25519PublicKeyToX25519PublicKey(recipient.Ed25519PublicKey);
-            var shared = new byte[CryptoConstants.KeySize];
-            ephemeralPriv.GenerateSecret(new X25519PublicKeyParameters(peerX25519Pub, 0), shared, 0);
-
-            var wrapKey = HKDF.DeriveKey(HashAlgorithmName.SHA256, shared, CryptoConstants.KeySize, salt, InfoBytes(nodeKey));
-            Array.Clear(shared);
-            try
+            foreach (var recipient in recipients)
             {
-                var aad = Encoding.UTF8.GetBytes(nodeKey);
-                var (wrapped, nonce) = AesGcmHelper.Encrypt(wrapKey, newDek, aad);
-                peers[nodeKey] = new Box(Convert.ToBase64String(wrapped), Convert.ToBase64String(nonce));
+                var nodeKey = NodeKey(recipient.NodeId);
+                if (peers.ContainsKey(nodeKey))
+                    continue; // a node id can only appear once — first writer wins.
+
+                var peerX25519Pub = Ed25519PublicKeyToX25519PublicKey(recipient.Ed25519PublicKey);
+                var shared = new byte[CryptoConstants.KeySize];
+                ephemeralPriv.GenerateSecret(new X25519PublicKeyParameters(peerX25519Pub, 0), shared, 0);
+
+                var wrapKey = HKDF.DeriveKey(HashAlgorithmName.SHA256, shared, CryptoConstants.KeySize, salt, InfoBytes(nodeKey));
+                Array.Clear(shared);
+                try
+                {
+                    var aad = Encoding.UTF8.GetBytes(nodeKey);
+                    var (wrapped, nonce) = AesGcmHelper.Encrypt(wrapKey, newDek, aad);
+                    peers[nodeKey] = new Box(Convert.ToBase64String(wrapped), Convert.ToBase64String(nonce));
+                }
+                finally
+                {
+                    Array.Clear(wrapKey);
+                }
             }
-            finally
-            {
-                Array.Clear(wrapKey);
-            }
+        }
+        finally
+        {
+            // The ephemeral private scalar is single-rotation, but clear our copy of the seed once
+            // every envelope is sealed rather than leaving it on the heap until GC.
+            Array.Clear(ephemeralSeed);
         }
 
         return new Set(ephemeralPubB64, peers);

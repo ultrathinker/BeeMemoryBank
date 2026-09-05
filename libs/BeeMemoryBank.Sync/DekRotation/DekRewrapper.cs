@@ -124,6 +124,17 @@ public static class DekRewrapper
                 "UPDATE tbl_node_identity SET sentinel_value = @sentinel, dek_epoch = @epoch",
                 new { sentinel = newSentinel, epoch = newEpoch }, tx);
 
+            // Re-wrap this node's OWN Ed25519 identity seed to the new DEK, in the same
+            // transaction. Without this the seed stays sealed under the pre-rotation DEK forever:
+            // the FIRST rotation still opens it (oldDek is the key it was sealed under), but every
+            // subsequent rotation — and every event signature after this one, which decrypts the
+            // seed under the now-current new DEK — then fails. That is the "confidential rotation
+            // works once, then wedges every v1 node" bug. v=0 rows hold a plaintext seed that does
+            // not depend on the DEK, so they are left untouched. Follows the same never-roll-back
+            // philosophy as the per-row rewrap: a seed that opens under neither key is a node
+            // already broken by a pre-fix rotation, and aborting only makes it unrecoverable.
+            ReWrapNodeIdentitySeed(conn, tx, oldDek, newDek, tally, logger);
+
             // Mark Applied INSIDE the rotation tx. If the process crashes between
             // tx.Commit() and the swap, the DB+state agree (Applied + new sentinel);
             // the startup sweep won't mark this as Failed.
@@ -269,6 +280,88 @@ public static class DekRewrapper
             {
                 Array.Clear(plainMatrix, 0, plainMatrix.Length);
             }
+        }
+    }
+
+    /// <summary>
+    /// Re-wraps the node's own Ed25519 identity seed (tbl_node_identity.ed25519_private_key) from
+    /// the old master DEK to the new one, so the rotation is self-perpetuating: after it, the seed
+    /// opens under the current DEK, which is what the next rotation's <c>ResolveNewDek</c> and every
+    /// post-rotation event signature both require. Only v=1 (DEK-wrapped) rows are touched; v=0
+    /// (legacy plaintext seed) rows do not depend on the DEK.
+    /// <para>
+    /// Runs inside the rotation transaction. A seed that opens under neither key is counted as
+    /// unreadable and logged rather than thrown — a throw here would roll the whole rotation back on
+    /// every retry, the exact lockout the rest of this class was rewritten to avoid.
+    /// </para>
+    /// </summary>
+    internal static void ReWrapNodeIdentitySeed(
+        System.Data.IDbConnection conn, System.Data.IDbTransaction tx,
+        byte[] oldDek, byte[] newDek, RewrapTally tally, Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        var row = conn.QuerySingleOrDefault(
+            @"SELECT node_id AS NodeId, ed25519_private_key AS Pk,
+                     ed25519_private_key_iv AS Iv, ed25519_private_key_v AS V
+                FROM tbl_node_identity LIMIT 1", transaction: tx);
+        if (row is null) return;
+
+        int version = (int)(long)row.V;
+        if (version == 0) return; // plaintext seed, DEK-independent — nothing to re-wrap.
+
+        var nodeIdStr = (string)row.NodeId;
+        var nodeId = Guid.Parse(nodeIdStr);
+        var storedPk = (byte[])row.Pk;
+        var storedIv = row.Iv as byte[];
+
+        void MarkUnreadable(string reason)
+        {
+            tally.Unreadable++;
+            tally.UnreadableExamples.Add("tbl_node_identity:ed25519_private_key");
+            logger?.LogError(
+                "DEK rotation: the node's own Ed25519 identity seed could not be re-wrapped ({Reason}). "
+                + "The rotation continues, but this node cannot sign events or rotate again until its "
+                + "identity seed is restored.", reason);
+        }
+
+        if (storedIv is null)
+        {
+            MarkUnreadable("v1 row missing ed25519_private_key_iv");
+            return;
+        }
+
+        byte[]? seed = null;
+        try
+        {
+            seed = NodeIdentityCrypto.GetDecryptedPrivateKey(storedPk, storedIv, 1, nodeId, oldDek);
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            // Not under the old key. Either a racing path already re-wrapped it to the new key
+            // (idempotent, fine), or it opens under neither (genuinely unrecoverable).
+            try
+            {
+                Array.Clear(NodeIdentityCrypto.GetDecryptedPrivateKey(storedPk, storedIv, 1, nodeId, newDek));
+                return; // already on the new key.
+            }
+            catch (System.Security.Cryptography.CryptographicException)
+            {
+                MarkUnreadable("opened under neither the old nor the new master key");
+                return;
+            }
+        }
+
+        try
+        {
+            var (rewrapped, iv) = NodeIdentityCrypto.EncryptPrivateKey(seed, newDek, nodeId);
+            conn.Execute(
+                @"UPDATE tbl_node_identity
+                     SET ed25519_private_key = @pk, ed25519_private_key_iv = @iv, ed25519_private_key_v = 1
+                   WHERE node_id = @nodeId",
+                new { pk = rewrapped, iv, nodeId = nodeIdStr }, tx);
+        }
+        finally
+        {
+            Array.Clear(seed, 0, seed.Length);
         }
     }
 
