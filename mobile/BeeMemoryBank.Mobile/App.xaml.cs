@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile;
 
@@ -12,8 +13,11 @@ public partial class App : Application
     private readonly FolderBootstrapper _folderBootstrapper;
     private readonly Services.SyncNotificationService _syncNotify;
     private readonly SessionService _session;
+    // Singleton — safe to hold on the singleton App. Used to open a short-lived scope for the
+    // scoped MediaBlobBackfillService in OnStart without capturing it as a captive dependency.
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public App(InitializationService initSvc, MigrationRunner migrationRunner, DbConnectionFactory dbFactory, FolderBootstrapper folderBootstrapper, Services.SyncNotificationService syncNotify, SessionService session)
+    public App(InitializationService initSvc, MigrationRunner migrationRunner, DbConnectionFactory dbFactory, FolderBootstrapper folderBootstrapper, Services.SyncNotificationService syncNotify, SessionService session, IServiceScopeFactory scopeFactory)
     {
         InitializeComponent();
         _initSvc = initSvc;
@@ -22,6 +26,7 @@ public partial class App : Application
         _folderBootstrapper = folderBootstrapper;
         _syncNotify = syncNotify;
         _session = session;
+        _scopeFactory = scopeFactory;
         MainPage = new ContentPage();
     }
 
@@ -43,6 +48,25 @@ public partial class App : Application
         {
             System.Diagnostics.Debug.WriteLine($"Migration error: {ex}");
         }
+
+        // Move any legacy .enc media into the content-addressed blob store and delete the redundant
+        // files (item 16b), mirroring the server's startup task. Fire-and-forget so it never delays
+        // the shell swap; runs in its own scope (MediaBlobBackfillService is scoped) and works on a
+        // locked vault — it only moves ciphertext, no decryption.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var media = scope.ServiceProvider.GetRequiredService<MediaBlobBackfillService>();
+                await media.BackfillAsync();
+                await media.SweepRedundantEncFilesAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Media blob backfill error: {ex}");
+            }
+        });
 
         MainPage = new AppShell();
 
