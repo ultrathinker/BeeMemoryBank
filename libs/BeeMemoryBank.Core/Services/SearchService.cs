@@ -553,6 +553,18 @@ public class SearchService(
         var terms = new List<string>();
         foreach (string token in IndexedSearchTokenizer.Tokenize(query))
         {
+            // Query-time stop-word removal (a deliberate, standard behavior change; see StopWords).
+            // Matched on the SURFACE token -- the tokenizer already normalized it, and this is BEFORE
+            // stemming, which is where a natural-form stop-word list ("the", "и") lines up exactly.
+            // A near-ubiquitous term like "the"/"и" carries almost no ranking signal yet forces a
+            // full-postings walk in the index, so it is dropped from the query entirely. If the whole
+            // query is stop words the result list is empty (every caller short-circuits on Count == 0
+            // -- matching the entire corpus would be useless), which is why nothing is re-indexed.
+            if (StopWords.IsStopWord(token))
+            {
+                continue;
+            }
+
             string stem = IndexedSearchStemmer.Stem(token);
             if (stem.Length > 0)
             {

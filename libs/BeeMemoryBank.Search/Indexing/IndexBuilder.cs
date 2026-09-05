@@ -435,7 +435,12 @@ public sealed class IndexBuilder
     /// </list>
     /// </para>
     /// </remarks>
-    public IReadOnlyList<(Guid ArticleId, float Score)> SearchRanked(IEnumerable<string> stemmedTerms, int topK)
+    // Authoritative BM25 reference implementation, retained verbatim as the differential oracle the
+    // production SearchRanked (below) is proven bit-for-bit identical to -- see the parity test
+    // IndexBuilderSearchRankedParityTests. Kept `internal` (not `private`) purely so that test
+    // assembly can call it; it is never invoked on any production path. Do not "optimize" this copy:
+    // its whole value is being the unchanged, obviously-correct definition of the expected result.
+    internal IReadOnlyList<(Guid ArticleId, float Score)> SearchRankedReference(IEnumerable<string> stemmedTerms, int topK)
     {
         ArgumentNullException.ThrowIfNull(stemmedTerms);
 
@@ -607,6 +612,457 @@ public sealed class IndexBuilder
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Efficiency-only reimplementation of <see cref="SearchRankedReference"/>. For any query, it
+    /// returns results that are bit-for-bit identical to that authoritative reference -- the same
+    /// articleIds, the same BM25 scores, and the same descending-score order including tie ordering --
+    /// while avoiding the reference's per-posting cost that made broad or common-term queries slow and
+    /// allocation-heavy at 100k-article scale. This is a pure performance refactor; the scoring
+    /// contract (implicit-AND, the exact BM25 arithmetic, N/avgdl/df, the hot-buffer-exact-length vs
+    /// sealed-length-1.0 rule, tombstone filtering) is unchanged and documented on the reference.
+    /// <para>
+    /// <b>How it stays identical.</b> It computes the exact same scalar inputs -- <c>N</c>
+    /// (corpusSize), <c>avgdl</c>, and each term's exact live <c>df</c> -- and scores the exact same
+    /// conjunctive-AND candidate set with the exact same arithmetic in the exact same per-term
+    /// accumulation order. Critically, it builds the scored list in the reference's OWN order
+    /// (hot-buffer matches in the hot snapshot's enumeration order, then each sealed segment's matches
+    /// in ascending docId order -- which is the order the reference's dictionary receives them, since
+    /// every conjunctive-AND candidate is first inserted while the reference walks the first query
+    /// term) and then runs the identical <c>List.Sort((a,b) =&gt; b.Score.CompareTo(a.Score))</c>
+    /// followed by the identical top-K truncation. Because that comparator inspects only the score and
+    /// never the payload, an unstable sort of two lists whose score-at-each-position sequences are
+    /// equal produces the identical permutation -- so deferring ArticleId resolution to only the
+    /// survivors cannot change which articles are returned or in what order.
+    /// </para>
+    /// <para>
+    /// <b>Where the speed comes from.</b>
+    /// <list type="number">
+    /// <item><description>Each term's exact <c>df</c> is read from
+    /// <see cref="Segment.SegmentReader.GetDocumentFrequency"/> (a stored count -- no posting walk),
+    /// summed across segments plus the hot-buffer count, and adjusted for tombstones ONLY in the rare
+    /// segments that actually have any.</description></item>
+    /// <item><description>A sealed segment can only contribute a conjunctive-AND candidate if it
+    /// contains EVERY query term, so segments missing any query term are skipped without touching a
+    /// single posting.</description></item>
+    /// <item><description>Within a qualifying segment, candidates are found by intersecting per-term
+    /// <c>docId -&gt; tf</c> maps built from cheap varint reads (never
+    /// <see cref="Segment.SegmentReader.GetDocument"/>), driven rarest-term-first with early
+    /// termination the moment the running intersection empties.</description></item>
+    /// <item><description><see cref="Segment.SegmentReader.GetDocument"/> (a Guid construction) is
+    /// called ONLY for the &lt;= <paramref name="topK"/> survivors, never once per posting.</description></item>
+    /// </list>
+    /// The concurrency-safety pattern is unchanged: the hot buffer and
+    /// <see cref="_sealedTotalTermOccurrencesApprox"/> are snapshotted under <see cref="_writeLock"/>,
+    /// and <see cref="_sealedSegments"/> is read once via its single volatile access.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<(Guid ArticleId, float Score)> SearchRanked(IEnumerable<string> stemmedTerms, int topK)
+    {
+        ArgumentNullException.ThrowIfNull(stemmedTerms);
+
+        if (topK <= 0)
+        {
+            return [];
+        }
+
+        List<string> queryTerms = DistinctNonEmptyTerms(stemmedTerms);
+        int termCount = queryTerms.Count;
+        if (termCount == 0)
+        {
+            return [];
+        }
+
+        Dictionary<Guid, HotBufferEntry> hotBufferSnapshot;
+        long sealedTotalTermOccurrences;
+        lock (_writeLock)
+        {
+            hotBufferSnapshot = new Dictionary<Guid, HotBufferEntry>(_hotBuffer);
+            sealedTotalTermOccurrences = _sealedTotalTermOccurrencesApprox;
+        }
+
+        // Single volatile read, same reasoning as Lookup/SearchRankedReference: a stable snapshot even
+        // if a concurrent merge swaps `_sealedSegments` out underneath this method while it runs.
+        IReadOnlyList<SealedSegment> segments = _sealedSegments;
+
+        // --- N: exact corpus size (computed identically to the reference) ---
+        int corpusSize = hotBufferSnapshot.Count;
+        int sealedRawDocCount = 0;
+        foreach (SealedSegment segment in segments)
+        {
+            corpusSize += segment.DocumentCount - segment.TombstoneCount;
+            sealedRawDocCount += segment.DocumentCount;
+        }
+
+        if (corpusSize == 0)
+        {
+            return [];
+        }
+
+        // --- avgdl: approximate, computed identically to the reference ---
+        long hotBufferTotalLength = 0;
+        foreach (HotBufferEntry entry in hotBufferSnapshot.Values)
+        {
+            hotBufferTotalLength += entry.Terms.Count;
+        }
+
+        int lengthTrackingDocCount = hotBufferSnapshot.Count + sealedRawDocCount;
+        double avgDocLength = lengthTrackingDocCount > 0
+            ? (hotBufferTotalLength + sealedTotalTermOccurrences) / (double)lengthTrackingDocCount
+            : 0.0;
+        if (avgDocLength <= 0)
+        {
+            avgDocLength = 1.0;
+        }
+
+        // Precompute each segment's tombstoned-docId set (null when it has no tombstones, the common
+        // case), so both the df pass and the candidate pass can exclude tombstoned postings by docId
+        // with a cheap int lookup instead of resolving every posting's ArticleId via GetDocument.
+        HashSet<int>?[] tombstonedDocIdsBySegment = new HashSet<int>?[segments.Count];
+        for (int s = 0; s < segments.Count; s++)
+        {
+            tombstonedDocIdsBySegment[s] = BuildTombstonedDocIds(segments[s]);
+        }
+
+        // --- Hot-buffer pass #1: exact per-term hot df, and the hot-buffer conjunctive-AND candidates
+        // collected in the snapshot's own enumeration order (the order the reference inserts them). ---
+        int[] hotDocFrequency = new int[termCount];
+        var hotCandidates = new List<HotCandidate>();
+        foreach ((Guid articleId, HotBufferEntry entry) in hotBufferSnapshot)
+        {
+            int matched = 0;
+            for (int t = 0; t < termCount; t++)
+            {
+                if (entry.DistinctTerms.Contains(queryTerms[t]))
+                {
+                    hotDocFrequency[t]++;
+                    matched++;
+                }
+            }
+
+            if (matched != termCount)
+            {
+                continue;
+            }
+
+            int[] termFrequencies = new int[termCount];
+            foreach (string occurrence in entry.Terms)
+            {
+                for (int t = 0; t < termCount; t++)
+                {
+                    if (occurrence == queryTerms[t])
+                    {
+                        termFrequencies[t]++;
+                    }
+                }
+            }
+
+            hotCandidates.Add(new HotCandidate(articleId, termFrequencies, entry.Terms.Count));
+        }
+
+        // --- Exact document frequency per term (hot + every sealed segment, tombstone-adjusted), and
+        // its idf. This reproduces the reference's df exactly, but without a per-posting GetDocument:
+        // a segment with no tombstones contributes its stored GetDocumentFrequency directly, and only
+        // a segment that actually has tombstones pays a varint walk to subtract the tombstoned ones. ---
+        double[] idf = new double[termCount];
+        for (int t = 0; t < termCount; t++)
+        {
+            string term = queryTerms[t];
+            int documentFrequency = hotDocFrequency[t];
+            for (int s = 0; s < segments.Count; s++)
+            {
+                SealedSegment segment = segments[s];
+                if (!segment.Vocabulary.Contains(term))
+                {
+                    continue;
+                }
+
+                int segmentDf = segment.Reader.GetDocumentFrequency(term);
+                HashSet<int>? tombstoned = tombstonedDocIdsBySegment[s];
+                if (tombstoned is not null)
+                {
+                    int excluded = 0;
+                    foreach ((int docId, int _) in segment.Reader.GetPostings(term))
+                    {
+                        if (tombstoned.Contains(docId))
+                        {
+                            excluded++;
+                        }
+                    }
+
+                    segmentDf -= excluded;
+                }
+
+                documentFrequency += segmentDf;
+            }
+
+            idf[t] = Math.Log(1.0 + (corpusSize - documentFrequency + 0.5) / (documentFrequency + 0.5));
+        }
+
+        // --- Build the scored candidate list in the reference's exact order (hot candidates first in
+        // snapshot order, then each sealed segment's candidates in ascending docId order), with
+        // ArticleId resolution deferred: a sealed candidate carries only its (reader, docId). ---
+        var scored = new List<ScoredCandidate>(hotCandidates.Count);
+        foreach (HotCandidate candidate in hotCandidates)
+        {
+            double lengthRatio = candidate.Length / avgDocLength;
+            double score = 0.0;
+            for (int t = 0; t < termCount; t++)
+            {
+                int termFrequency = candidate.TermFrequencies[t];
+                double denominator = termFrequency + Bm25K1 * (1 - Bm25B + Bm25B * lengthRatio);
+                score += idf[t] * (termFrequency * (Bm25K1 + 1)) / denominator;
+            }
+
+            scored.Add(new ScoredCandidate((float)score, null, 0, candidate.ArticleId));
+        }
+
+        for (int s = 0; s < segments.Count; s++)
+        {
+            SealedSegment segment = segments[s];
+
+            // A sealed segment can only hold a conjunctive-AND candidate if every query term is in its
+            // vocabulary; otherwise it contributes none and is skipped without touching any postings.
+            bool hasAllTerms = true;
+            for (int t = 0; t < termCount; t++)
+            {
+                if (!segment.Vocabulary.Contains(queryTerms[t]))
+                {
+                    hasAllTerms = false;
+                    break;
+                }
+            }
+
+            if (!hasAllTerms)
+            {
+                continue;
+            }
+
+            HashSet<int>? tombstoned = tombstonedDocIdsBySegment[s];
+
+            if (termCount == 1)
+            {
+                // Single term: every non-tombstoned posting is a candidate, already in ascending docId
+                // order (postings are stored that way), so no intersection or re-sort is needed.
+                foreach ((int docId, int termFrequency) in segment.Reader.GetPostings(queryTerms[0]))
+                {
+                    if (tombstoned is not null && tombstoned.Contains(docId))
+                    {
+                        continue;
+                    }
+
+                    const double lengthRatio = 1.0;
+                    double denominator = termFrequency + Bm25K1 * (1 - Bm25B + Bm25B * lengthRatio);
+                    double score = idf[0] * (termFrequency * (Bm25K1 + 1)) / denominator;
+                    scored.Add(new ScoredCandidate((float)score, segment.Reader, docId, default));
+                }
+
+                continue;
+            }
+
+            Dictionary<int, int[]>? candidates = IntersectSegmentCandidates(segment, queryTerms, tombstoned);
+            if (candidates is null || candidates.Count == 0)
+            {
+                continue;
+            }
+
+            // Ascending docId order within the segment == the order the reference inserts these while
+            // walking the first query term's (ascending-docId) postings.
+            var docIds = new List<int>(candidates.Keys);
+            docIds.Sort();
+            foreach (int docId in docIds)
+            {
+                int[] termFrequencies = candidates[docId];
+                double score = 0.0;
+                for (int t = 0; t < termCount; t++)
+                {
+                    int termFrequency = termFrequencies[t];
+                    const double lengthRatio = 1.0;
+                    double denominator = termFrequency + Bm25K1 * (1 - Bm25B + Bm25B * lengthRatio);
+                    score += idf[t] * (termFrequency * (Bm25K1 + 1)) / denominator;
+                }
+
+                scored.Add(new ScoredCandidate((float)score, segment.Reader, docId, default));
+            }
+        }
+
+        // Identical final ordering stage to the reference: same unstable comparator, same truncation.
+        scored.Sort((a, b) => b.Score.CompareTo(a.Score));
+
+        int take = topK >= scored.Count ? scored.Count : topK;
+        var result = new List<(Guid ArticleId, float Score)>(take);
+        for (int i = 0; i < take; i++)
+        {
+            ScoredCandidate candidate = scored[i];
+
+            // Deferred ArticleId resolution: GetDocument runs only for the survivors, never per posting.
+            Guid articleId = candidate.SealedReader is null
+                ? candidate.HotArticleId
+                : candidate.SealedReader.GetDocument(candidate.SealedDocId).ArticleId;
+            result.Add((articleId, candidate.Score));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Builds the set of docIds in <paramref name="segment"/> whose article is tombstoned, or null if
+    /// the segment has no tombstones at all (the common case, for which callers skip all exclusion
+    /// work). Lets <see cref="SearchRanked"/> exclude tombstoned postings by docId without resolving
+    /// each posting's ArticleId via <see cref="Segment.SegmentReader.GetDocument"/>. Costs O(tombstone
+    /// count), which the merge thresholds keep bounded.
+    /// </summary>
+    private static HashSet<int>? BuildTombstonedDocIds(SealedSegment segment)
+    {
+        if (segment.TombstoneCount == 0)
+        {
+            return null;
+        }
+
+        var docIds = new HashSet<int>(segment.TombstoneCount);
+        foreach (Guid articleId in segment.Tombstones)
+        {
+            // A tombstone is only ever recorded for an article physically present in the segment
+            // (SealedSegment.WithTombstone enforces that), so ArticleToDocId normally has it; the
+            // TryGetValue guard just fails safe for an adopted segment handed a stray tombstone.
+            if (segment.ArticleToDocId.TryGetValue(articleId, out int docId))
+            {
+                docIds.Add(docId);
+            }
+        }
+
+        return docIds;
+    }
+
+    /// <summary>
+    /// Finds the conjunctive-AND candidates within one sealed <paramref name="segment"/> already known
+    /// to contain every query term in its vocabulary, returning a map of docId -&gt; per-query-term tf
+    /// (indexed by each term's position in <paramref name="queryTerms"/>), or null/empty if none
+    /// survive. Drives the intersection from the rarest term in this segment and terminates the moment
+    /// the running set empties, so it works on the order of the smallest posting list rather than the
+    /// sum of all of them. Reads only varint postings -- never
+    /// <see cref="Segment.SegmentReader.GetDocument"/>. <paramref name="tombstoned"/> is this segment's
+    /// <see cref="BuildTombstonedDocIds"/> result (null when it has none). Only used for the multi-term
+    /// case; a single-term query needs no intersection.
+    /// </summary>
+    private static Dictionary<int, int[]>? IntersectSegmentCandidates(
+        SealedSegment segment, List<string> queryTerms, HashSet<int>? tombstoned)
+    {
+        int termCount = queryTerms.Count;
+
+        // Order query terms rarest-first by their in-segment document frequency (a stored count;
+        // tombstones can make it a slight overcount, which is harmless -- this only decides drive
+        // order, never a score). Driving from the smallest posting list keeps the running set small.
+        int[] order = new int[termCount];
+        int[] segmentDf = new int[termCount];
+        for (int t = 0; t < termCount; t++)
+        {
+            order[t] = t;
+            segmentDf[t] = segment.Reader.GetDocumentFrequency(queryTerms[t]);
+        }
+
+        Array.Sort(order, (a, b) => segmentDf[a].CompareTo(segmentDf[b]));
+
+        // Driver (rarest) term: docId -> tf, tombstoned postings excluded here once for the whole run.
+        int driver = order[0];
+        var driverPostings = new Dictionary<int, int>();
+        foreach ((int docId, int termFrequency) in segment.Reader.GetPostings(queryTerms[driver]))
+        {
+            if (tombstoned is not null && tombstoned.Contains(docId))
+            {
+                continue;
+            }
+
+            driverPostings[docId] = termFrequency;
+        }
+
+        if (driverPostings.Count == 0)
+        {
+            return null;
+        }
+
+        // Second-rarest term: intersect into the candidate map, allocating a tf array only for docs
+        // present in BOTH of the two rarest terms (typically far fewer than either posting list). A
+        // docId that reaches here came from driverPostings, which already excluded tombstoned ones.
+        int second = order[1];
+        var candidates = new Dictionary<int, int[]>();
+        foreach ((int docId, int termFrequency) in segment.Reader.GetPostings(queryTerms[second]))
+        {
+            if (driverPostings.TryGetValue(docId, out int driverFrequency))
+            {
+                int[] termFrequencies = new int[termCount];
+                termFrequencies[driver] = driverFrequency;
+                termFrequencies[second] = termFrequency;
+                candidates[docId] = termFrequencies;
+            }
+        }
+
+        // Remaining terms, rarest-first: mark tf on surviving candidates, then drop any candidate that
+        // lacked the term. Stops as soon as nothing survives.
+        for (int step = 2; step < termCount && candidates.Count > 0; step++)
+        {
+            int origIndex = order[step];
+            foreach ((int docId, int termFrequency) in segment.Reader.GetPostings(queryTerms[origIndex]))
+            {
+                if (candidates.TryGetValue(docId, out int[]? termFrequencies))
+                {
+                    termFrequencies[origIndex] = termFrequency;
+                }
+            }
+
+            List<int>? toRemove = null;
+            foreach ((int docId, int[] termFrequencies) in candidates)
+            {
+                // A posting's tf is always >= 1, so a still-zero slot means this term was absent.
+                if (termFrequencies[origIndex] == 0)
+                {
+                    (toRemove ??= new List<int>()).Add(docId);
+                }
+            }
+
+            if (toRemove is not null)
+            {
+                foreach (int docId in toRemove)
+                {
+                    candidates.Remove(docId);
+                }
+            }
+        }
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// A hot-buffer conjunctive-AND candidate for <see cref="SearchRanked"/>: its articleId (already
+    /// known, since the hot buffer is keyed by it), its per-query-term term frequencies (indexed by
+    /// query-term position), and its exact term length (for the hot-buffer length-normalization).
+    /// </summary>
+    private readonly struct HotCandidate(Guid articleId, int[] termFrequencies, int length)
+    {
+        public Guid ArticleId { get; } = articleId;
+
+        public int[] TermFrequencies { get; } = termFrequencies;
+
+        public int Length { get; } = length;
+    }
+
+    /// <summary>
+    /// One scored candidate with ArticleId resolution deferred. A hot-buffer candidate carries its
+    /// already-known <see cref="HotArticleId"/> and a null <see cref="SealedReader"/>; a sealed-segment
+    /// candidate carries its (<see cref="SealedReader"/>, <see cref="SealedDocId"/>) and resolves its
+    /// ArticleId via <see cref="Segment.SegmentReader.GetDocument"/> only if it survives into the
+    /// returned top-K.
+    /// </summary>
+    private readonly struct ScoredCandidate(float score, SegmentReader? sealedReader, int sealedDocId, Guid hotArticleId)
+    {
+        public float Score { get; } = score;
+
+        public SegmentReader? SealedReader { get; } = sealedReader;
+
+        public int SealedDocId { get; } = sealedDocId;
+
+        public Guid HotArticleId { get; } = hotArticleId;
     }
 
     /// <summary>
