@@ -53,7 +53,7 @@ public class IndexBuilderSearchRankedParityTests
 
     private static void AssertQueriesIdentical(IndexBuilder builder, IEnumerable<string[]> queries, string scenario)
     {
-        int[] topKs = [1, 2, 3, 5, 10, 1000];
+        int[] topKs = [1, 2, 3, 5, 10, 1000, int.MaxValue];
         foreach (string[] query in queries)
         {
             foreach (int topK in topKs)
@@ -193,7 +193,7 @@ public class IndexBuilderSearchRankedParityTests
             builder.AddOrUpdateDocument(Guid.NewGuid(), Guid.NewGuid(), sb.ToString());
         }
 
-        foreach (int topK in new[] { 1, 5, 17, 50, 500, 5000 })
+        foreach (int topK in new[] { 1, 5, 17, 50, 500, 5000, int.MaxValue })
         {
             AssertIdentical(
                 builder.SearchRanked([broad], topK),
@@ -250,7 +250,7 @@ public class IndexBuilderSearchRankedParityTests
             [selective, common, other],
         ];
 
-        foreach (int topK in new[] { 1, 3, 100 })
+        foreach (int topK in new[] { 1, 3, 100, int.MaxValue })
         {
             foreach (string[] query in representative)
             {
