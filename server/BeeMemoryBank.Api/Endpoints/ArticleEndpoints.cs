@@ -97,9 +97,12 @@ public static class ArticleEndpoints
                     content = BeeMemoryBank.Crypto.ProtectedContentCodec.Wrap(req.Content, req.Passphrase);
                     hint = string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim();
                 }
-                var article = await svc.CreateAsync(req.Title, req.TreePath, [], content, hint);
-                if (req.ConceptTags is { Count: > 0 })
-                    await conceptTagSvc.SetForArticleAsync(article.Id, req.ConceptTags);
+                // Hand the tags to CreateAsync rather than attaching them afterwards. CreateAsync
+                // sets them inside its own transaction and reads them back through it, so the
+                // article_create event carries them to every peer. Setting them after the call
+                // stored them locally and emitted nothing — the article arrived on other nodes
+                // with an empty tag set, permanently.
+                var article = await svc.CreateAsync(req.Title, req.TreePath, req.ConceptTags ?? [], content, hint);
                 return Results.Created($"/api/articles/{article.Id}", ArticleResponse.From(article, req.ConceptTags ?? []));
             }
             catch (UnauthorizedAccessException ex)
@@ -195,17 +198,17 @@ public static class ArticleEndpoints
                 {
                     return Results.Json(new ErrorResponse("Wrong passphrase."), statusCode: 401);
                 }
-                if (req.Title != null || req.TreePath != null)
-                    await svc.UpdateAsync(id, req.Title, req.TreePath, null, null);
+                if (req.Title != null || req.TreePath != null || req.ConceptTags != null)
+                    await svc.UpdateAsync(id, req.Title, req.TreePath, req.ConceptTags, null);
                 // Refresh the cache window so consecutive saves keep working without re-prompting.
                 unlockCache.Remember(CallerKey(ctx), id, passphrase);
             }
             else
             {
-                await svc.UpdateAsync(id, req.Title, req.TreePath, null, req.Content);
+                await svc.UpdateAsync(id, req.Title, req.TreePath, req.ConceptTags, req.Content);
             }
-            if (req.ConceptTags != null)
-                await conceptTagSvc.SetForArticleAsync(id, req.ConceptTags);
+            // Tags go through UpdateAsync (above), never a bare SetForArticleAsync afterwards:
+            // only the service path puts them in the article_update event, and only that reaches peers.
             var article = await svc.GetMetadataAsync(id);
             if (article == null)
                 return Results.NotFound(new ErrorResponse($"Article {id} not found"));

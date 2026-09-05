@@ -137,7 +137,12 @@ public static class ConceptTagEndpoints
                     return Results.Json(new ErrorResponse("This article is in a read-only folder for your user."), statusCode: 403);
             }
 
-            await conceptTagService.SetForArticleAsync(id, req.ConceptTags);
+            // Route through ArticleService, not a bare SetForArticleAsync: only the service writes
+            // the tags and the article_update event in one transaction, with the event payload's
+            // tag set read back inside it. A bare repository write stores them here and tells no
+            // peer — and the next article_update arriving from any other node carries that node's
+            // tag-less view, which ApplyArticleUpdateCore then applies, wiping them locally too.
+            await articleService.UpdateAsync(id, tags: req.ConceptTags);
             var conceptTags = await conceptTagRepo.GetByArticleIdAsync(id);
             return Results.Ok(new { conceptTags });
         }).RequireInternalKey().WithTags("ConceptTags");
