@@ -161,7 +161,15 @@ public partial class EventApplier
             LamportTs = evt.LamportTs,
             SourceNodeId = evt.NodeId,
             CreatedAt = p.CreatedAt,
-            Kind = p.Kind
+            Kind = p.Kind,
+            // Item 16a: carry the ciphertext hash onto the row on the RECEIVING side too, not only
+            // where the media was created. For a protocol-2 event the transport has already put the
+            // blob in this node's store (ResolveCiphertextAsync reads it from there below), so the
+            // row points at a blob that is present; the read path then serves media from the blob
+            // and the GC keeps it alive by this reference after the event is compacted away. Null
+            // for a protocol-1 (inline-ciphertext) event, which has no blob — that row keeps reading
+            // from the .enc file, exactly as before.
+            CiphertextSha256 = p.CiphertextSha256
         };
         if (mediaOptions != null)
         {

@@ -124,5 +124,52 @@ public class MediaLinkEventTests : IAsyncLifetime
         Guid.Parse(linkedArticleId!).Should().Be(otherArticleId);
     }
 
+    /// <summary>
+    /// Item 16a: applying a media_create event on the RECEIVING node must carry the ciphertext hash
+    /// onto the media row, not only where the media was created. Found on the live two-node mesh —
+    /// the synced node could read the media (from its .enc file) but its row hash was null, so it
+    /// got neither the blob read path nor compaction-safety. A protocol-2 event ships the blob
+    /// ahead of itself (ApplyFromAsync mirrors that), so the row points at a blob that is present.
+    /// </summary>
+    [Fact]
+    public async Task MediaCreateEvent_CarriesTheCiphertextHashOntoTheRow_OnTheReceivingNode()
+    {
+        var mediaId = Guid.NewGuid();
+        var ciphertext = System.Text.Encoding.UTF8.GetBytes("item-16a synced media ciphertext");
+        var expectedHash = BlobHash.Compute(ciphertext);
+
+        var media = new Media
+        {
+            Id = mediaId,
+            ArticleId = null,
+            FileName = "att.bin",
+            ContentType = "application/octet-stream",
+            FileSize = ciphertext.Length,
+            EncryptedDek = new byte[32],
+            DekIV = new byte[12],
+            IV = new byte[12],
+            Status = "A",
+            Kind = "attachment",
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        // Node A logs the create (protocol 2: stores the blob, records the hash in the payload,
+        // no inline ciphertext).
+        await _nodeA.EventLogger.LogMediaCreateAsync(media, ciphertext);
+        var createEvt = (await _nodeA.EventLogRepo.GetAfterSequenceAsync(0))
+            .Single(e => e.EventType == "media_create");
+
+        await _nodeB.ApplyFromAsync(_nodeA, createEvt);
+
+        using var conn = _nodeB.Factory.CreateConnection();
+        var rowHash = await conn.QuerySingleOrDefaultAsync<string?>(
+            "SELECT ciphertext_sha256 FROM tbl_media WHERE id = @id",
+            new { id = mediaId.ToString().ToUpperInvariant() });
+        rowHash.Should().Be(expectedHash, "the receiving node stamps the hash from the event payload onto the row");
+
+        var blob = await new BlobRepository(_nodeB.Factory).GetAsync(expectedHash);
+        blob.Should().NotBeNull("the transport put the blob in the receiving node's store, so the row's hash resolves");
+    }
+
     private sealed class ConcreteFixture : SyncTestFixture { }
 }
