@@ -123,6 +123,69 @@ public class MediaBlobBackfillService(
         return new MediaBlobBackfillResult(stored, already, missing);
     }
 
+    /// <summary>
+    /// Item 16b, phase 2: delete the now-redundant <c>.enc</c> files. A file is removed ONLY when
+    /// its media row carries a hash AND that blob is actually present in the store — so the blob is
+    /// always the surviving copy and the last copy of a media is never deleted. A file whose row is
+    /// gone, whose row has no hash, or whose blob is missing is left untouched (a sync pull or the
+    /// orphan sweep deals with those). Idempotent: once the files are gone it finds nothing.
+    ///
+    /// <para>Runs after <see cref="BackfillAsync"/>, which is what guarantees the blob exists for
+    /// every file this could delete.</para>
+    /// </summary>
+    public async Task<int> SweepRedundantEncFilesAsync(CancellationToken ct = default)
+    {
+        if (!Directory.Exists(options.MediaDir))
+            return 0;
+
+        var deleted = 0;
+        foreach (var path in Directory.GetFiles(options.MediaDir, "*.enc"))
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // File name is the lower-case GUID; the row id is stored upper-case — match case-
+            // insensitively. A file that is not a media-id.enc is left alone.
+            if (!Guid.TryParse(Path.GetFileNameWithoutExtension(path), out var id))
+                continue;
+
+            string? hash = null;
+            using (var conn = connFactory.CreateConnection())
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT ciphertext_sha256 FROM tbl_media WHERE id = @id COLLATE NOCASE";
+                AddParam(cmd, "@id", id.ToString());
+                hash = cmd.ExecuteScalar() as string;
+            }
+
+            // No row, or a row still without a hash → keep the file: it may be the only copy.
+            if (string.IsNullOrEmpty(hash))
+                continue;
+
+            // Confirm the blob is really present before removing the file — never delete the last copy.
+            if (!(await blobRepo.GetExistingAsync(new[] { hash })).Contains(hash))
+            {
+                this.logger.LogWarning(
+                    "Media {Id}: row has hash {Hash} but the blob is absent — keeping the .enc file.", id, hash);
+                continue;
+            }
+
+            try
+            {
+                File.Delete(path);
+                deleted++;
+            }
+            catch (IOException ex)
+            {
+                this.logger.LogWarning(ex, "Could not delete redundant .enc file {Path} — will retry next start.", path);
+            }
+        }
+
+        if (deleted > 0)
+            this.logger.LogInformation("Media .enc sweep: deleted {Deleted} redundant file(s) now served from the blob store.", deleted);
+
+        return deleted;
+    }
+
     private static void AddParam(IDbCommand cmd, string name, object value)
     {
         var p = cmd.CreateParameter();

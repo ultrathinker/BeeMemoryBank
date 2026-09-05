@@ -156,28 +156,15 @@ public class MediaService(
             CiphertextSha256 = BlobHash.Compute(ciphertext)
         };
 
-        Directory.CreateDirectory(options.MediaDir);
-        var filePath = Path.Combine(options.MediaDir, $"{media.Id}.enc");
-
-        // Ordering (M10): file first, then the row and its sync event together in ONE transaction.
-        //
-        // The row and the event must be atomic, the same shape EventApplier's article create/update
-        // uses (EventApplier.Article.cs, H5) and for the same reason: a crash between them would
-        // leave media that exists locally and NEVER propagates to peers, with nothing to detect or
-        // retry it.
-        //
-        // The file goes first, before the transaction, because the two failure modes are not
-        // symmetric. A crash after the file write but before the commit leaves an orphaned .enc file
-        // — inert bytes nothing references, cleanable by a sweep. The reverse (committing a row and
-        // an event that reference a file that was never written) is a dangling reference that cannot
-        // self-heal: peers would receive the event, and the local row would point at nothing.
-        // Note the event payload carries the ciphertext itself, so peers are unaffected by the local
-        // file either way.
-        await File.WriteAllBytesAsync(filePath, ciphertext);
-        try
+        // Media ciphertext lives in the content-addressed blob store ONLY (16b) — no .enc file is
+        // written any more. The blob is stored in the SAME transaction as the media row and its
+        // sync event (LogMediaCreateAsync → EnsureBlobAsync), so there is no second store to keep
+        // consistent and no cross-store ordering to get wrong: a crash before the commit leaves
+        // nothing behind, and a commit persists blob + row + event atomically — the same shape
+        // EventApplier's article create/update uses (EventApplier.Article.cs, H5).
+        using (var conn = connFactory.CreateConnection())
+        using (var tx = conn.BeginTransaction())
         {
-            using var conn = connFactory.CreateConnection();
-            using var tx = conn.BeginTransaction();
             try
             {
                 await mediaRepo.CreateAsync(media, tx);
@@ -189,14 +176,6 @@ public class MediaService(
                 try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back */ }
                 throw;
             }
-        }
-        catch
-        {
-            // The transaction rolled back, so there is no row and no event — delete the file we
-            // wrote so a failure leaves nothing behind at all. Best-effort: swallow cleanup failures
-            // so they can't mask the original exception the caller needs to see.
-            try { if (File.Exists(filePath)) File.Delete(filePath); } catch { /* best-effort */ }
-            throw;
         }
 
         eventLogger.SignalSync();

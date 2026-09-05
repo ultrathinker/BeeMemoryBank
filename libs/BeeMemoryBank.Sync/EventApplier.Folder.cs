@@ -162,25 +162,20 @@ public partial class EventApplier
             SourceNodeId = evt.NodeId,
             CreatedAt = p.CreatedAt,
             Kind = p.Kind,
-            // Item 16a: carry the ciphertext hash onto the row on the RECEIVING side too, not only
-            // where the media was created. For a protocol-2 event the transport has already put the
-            // blob in this node's store (ResolveCiphertextAsync reads it from there below), so the
-            // row points at a blob that is present; the read path then serves media from the blob
-            // and the GC keeps it alive by this reference after the event is compacted away. Null
-            // for a protocol-1 (inline-ciphertext) event, which has no blob — that row keeps reading
-            // from the .enc file, exactly as before.
+            // Stamped from the blob store just below, once the bytes are guaranteed to be in it.
             CiphertextSha256 = p.CiphertextSha256
         };
-        if (mediaOptions != null)
-        {
-            // Resolve before touching the disk: a missing blob must fail the whole apply (so the
-            // event is retried once the bytes arrive), not leave a media row without its file.
-            var ciphertext = await ResolveCiphertextAsync(p.CiphertextB64, p.CiphertextSha256);
-            var mediaDir = mediaOptions.MediaDir;
-            Directory.CreateDirectory(mediaDir);
-            var filePath = Path.Combine(mediaDir, $"{p.MediaId}.enc");
-            await File.WriteAllBytesAsync(filePath, ciphertext);
-        }
+
+        // Media ciphertext lives in the content-addressed blob store (16b) — no .enc file is written
+        // any more. Ensure the blob is present and stamp its hash onto the row:
+        //   • protocol-2 event: the transport already shipped the blob, so ResolveCiphertextAsync
+        //     reads it back and StoreAsync is an idempotent no-op returning the same hash;
+        //   • protocol-1 (inline-ciphertext) event: this is where those bytes first enter the blob
+        //     store, and StoreAsync gives the row the hash it was previously missing.
+        // Resolve BEFORE the insert so a not-yet-arrived protocol-2 blob fails the whole apply (the
+        // event is retried once the bytes land) rather than leaving a row that points at nothing.
+        var ciphertext = await ResolveCiphertextAsync(p.CiphertextB64, p.CiphertextSha256);
+        media.CiphertextSha256 = await blobRepo.StoreAsync(ciphertext);
 
         await mediaRepo.CreateAsync(media);
     }

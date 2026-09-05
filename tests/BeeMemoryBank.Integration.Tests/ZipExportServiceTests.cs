@@ -4,6 +4,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -48,8 +49,15 @@ public class ZipExportServiceTests : IAsyncLifetime
 
         _session = new SessionService(keySlotRepo);
         var initService = new InitializationService(nodeRepo, keySlotRepo, userRepo, _factory);
+        // Real EventLogger + BlobRepository so media ciphertext actually lands in the blob store,
+        // the way production does — media has no on-disk .enc home any more (16b), so a NullEventLogger
+        // would leave the bytes nowhere and every media read would 404.
+        var blobRepo = new BlobRepository(_factory);
+        var mediaEventLogger = new EventLogger(nodeRepo, new EventLogRepository(_factory),
+            new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), _session, blobRepo);
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo,
-            new NullLamportClock(), new NullEventLogger(), new MediaStorageOptions(Path.GetTempPath()), _factory);
+            new NullLamportClock(), mediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), _factory,
+            blobRepo: blobRepo);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(), mediaRepo, _folderRepo,
@@ -155,8 +163,12 @@ public class ZipExportServiceTests : IAsyncLifetime
         var otherConceptTagService = new ConceptTagService(otherConceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var otherSession = new SessionService(otherKeySlotRepo);
         var otherInit = new InitializationService(otherNodeRepo, otherKeySlotRepo, otherUserRepo, otherVaultFactory);
+        var otherBlobRepo = new BlobRepository(otherVaultFactory);
+        var otherMediaEventLogger = new EventLogger(otherNodeRepo, new EventLogRepository(otherVaultFactory),
+            new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), otherSession, otherBlobRepo);
         var otherMediaService = new MediaService(otherMediaRepo, otherArticleRepo, otherSession, otherNodeRepo,
-            new NullLamportClock(), new NullEventLogger(), new MediaStorageOptions(Path.GetTempPath()), otherVaultFactory);
+            new NullLamportClock(), otherMediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), otherVaultFactory,
+            blobRepo: otherBlobRepo);
         var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
             otherVersionRepo, new NullActorProvider(), otherConceptTagService, otherVaultFactory);
@@ -218,8 +230,12 @@ public class ZipExportServiceTests : IAsyncLifetime
         var otherConceptTagService = new ConceptTagService(otherConceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var otherSession = new SessionService(otherKeySlotRepo);
         var otherInit = new InitializationService(otherNodeRepo, otherKeySlotRepo, otherUserRepo, otherVaultFactory);
+        var otherBlobRepo = new BlobRepository(otherVaultFactory);
+        var otherMediaEventLogger = new EventLogger(otherNodeRepo, new EventLogRepository(otherVaultFactory),
+            new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), otherSession, otherBlobRepo);
         var otherMediaService = new MediaService(otherMediaRepo, otherArticleRepo, otherSession, otherNodeRepo,
-            new NullLamportClock(), new NullEventLogger(), new MediaStorageOptions(Path.GetTempPath()), otherVaultFactory);
+            new NullLamportClock(), otherMediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), otherVaultFactory,
+            blobRepo: otherBlobRepo);
         var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
             otherVersionRepo, new NullActorProvider(), otherConceptTagService, otherVaultFactory);

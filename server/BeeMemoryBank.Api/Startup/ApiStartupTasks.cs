@@ -245,6 +245,13 @@ if (OperatingSystem.IsWindows())
                 mediaBackfillLogger.LogInformation(
                     "Media blob backfill on startup: {Stored} stored, {Missing} missing file, {Already} already done.",
                     result.Stored, result.MissingFile, result.AlreadyDone);
+
+            // Phase 2: once every media is in the blob store, delete the now-redundant .enc files.
+            // Safe by construction — SweepRedundantEncFilesAsync only removes a file whose blob it
+            // has just confirmed present, so the blob is always the surviving copy.
+            var swept = await svc.SweepRedundantEncFilesAsync();
+            if (swept > 0)
+                mediaBackfillLogger.LogInformation("Media .enc sweep on startup: deleted {Swept} redundant file(s).", swept);
         }
         catch (Exception ex)
         {

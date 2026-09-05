@@ -76,6 +76,15 @@ public class MediaBlobBackfillTests : IAsyncLifetime
     {
         var media = await _media.CreateAsync("f.bin", "application/octet-stream", Payload, articleId: null, isAttachment: true);
         var hash = media.CiphertextSha256!;
+
+        // Plant the .enc file the OLD dual-write code would have left behind: the create path no
+        // longer writes one (16b), so reproduce the legacy shape from the blob's bytes, then strip
+        // the row back to file-only — null hash, no blob.
+        var ciphertext = await _blobs.GetAsync(hash);
+        ciphertext.Should().NotBeNull();
+        Directory.CreateDirectory(_mediaDir);
+        await File.WriteAllBytesAsync(EncPath(media.Id), ciphertext!);
+
         using var conn = _factory.CreateConnection();
         await conn.ExecuteAsync("UPDATE tbl_media SET ciphertext_sha256 = NULL WHERE id = @id", new { id = media.Id });
         await conn.ExecuteAsync("DELETE FROM tbl_blob WHERE hash = @hash", new { hash });
@@ -142,5 +151,57 @@ public class MediaBlobBackfillTests : IAsyncLifetime
         await _media.CreateAsync("f.bin", "application/octet-stream", Payload, articleId: null, isAttachment: true);
 
         (await _backfill.BackfillAsync()).Stored.Should().Be(0);
+    }
+
+    // ── Phase 2: sweeping the now-redundant .enc files ─────────────────────────────────────────
+
+    [Fact]
+    public async Task ARedundantEncFile_WhoseBlobIsPresent_IsDeleted_AndMediaStaysReadable()
+    {
+        // A normal blob-backed media, plus the legacy .enc left beside it (create no longer writes
+        // one, so plant it from the blob bytes).
+        var media = await _media.CreateAsync("f.bin", "application/octet-stream", Payload, articleId: null, isAttachment: true);
+        var ciphertext = await _blobs.GetAsync(media.CiphertextSha256!);
+        await File.WriteAllBytesAsync(EncPath(media.Id), ciphertext!);
+        File.Exists(EncPath(media.Id)).Should().BeTrue();
+
+        var deleted = await _backfill.SweepRedundantEncFilesAsync();
+
+        deleted.Should().Be(1);
+        File.Exists(EncPath(media.Id)).Should().BeFalse("the blob is the surviving copy");
+        (await _media.GetContentAsync(media.Id))!.Value.data.Should().Equal(Payload);
+    }
+
+    [Fact]
+    public async Task AnEncFile_WhoseRowHasNoBlob_IsKept()
+    {
+        // File present, hash null, no blob — the file is the only copy and must survive the sweep.
+        var (id, _) = await CreateLegacyFileOnlyMediaAsync();
+
+        (await _backfill.SweepRedundantEncFilesAsync()).Should().Be(0);
+        File.Exists(EncPath(id)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Backfill_ThenSweep_LeavesMediaBlobOnly_AndReadable()
+    {
+        var (id, _) = await CreateLegacyFileOnlyMediaAsync();
+
+        (await _backfill.BackfillAsync()).Stored.Should().Be(1);
+        (await _backfill.SweepRedundantEncFilesAsync()).Should().Be(1);
+
+        File.Exists(EncPath(id)).Should().BeFalse("backfill stored the blob, so the file is redundant");
+        (await _media.GetContentAsync(id))!.Value.data.Should().Equal(Payload);
+    }
+
+    [Fact]
+    public async Task AStrayEncFile_WithNoMediaRow_IsKept()
+    {
+        var strayId = Guid.NewGuid();
+        Directory.CreateDirectory(_mediaDir);
+        await File.WriteAllBytesAsync(EncPath(strayId), new byte[] { 1, 2, 3 });
+
+        (await _backfill.SweepRedundantEncFilesAsync()).Should().Be(0, "a file with no row is left for the orphan sweep, not this one");
+        File.Exists(EncPath(strayId)).Should().BeTrue();
     }
 }

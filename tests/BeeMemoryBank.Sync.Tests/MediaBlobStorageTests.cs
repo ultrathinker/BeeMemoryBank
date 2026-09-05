@@ -109,7 +109,12 @@ public class MediaBlobStorageTests : IAsyncLifetime
     {
         var media = await CreateAttachmentAsync();
 
-        // Simulate a pre-blob-store row: hash null, but the .enc file present.
+        // Simulate a pre-blob-store (legacy) row: an .enc file left on disk by the old dual-write
+        // code, and a null hash. The create path no longer writes .enc (16b), so the file is
+        // planted here from the blob's bytes to reproduce exactly that legacy shape.
+        var ciphertext = await _blobs.GetAsync(media.CiphertextSha256!);
+        ciphertext.Should().NotBeNull();
+        await File.WriteAllBytesAsync(Path.Combine(_mediaDir, media.Id + ".enc"), ciphertext!);
         using (var conn = _factory.CreateConnection())
             await conn.ExecuteAsync("UPDATE tbl_media SET ciphertext_sha256 = NULL WHERE id = @id",
                 new { id = media.Id });
