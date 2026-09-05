@@ -4,6 +4,8 @@ using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -51,6 +53,32 @@ public static class WhitelistEndpoints
 
             return Results.Ok(latest.Select(kv => new SyncStatusEntry(kv.Key, kv.Value)));
         });
+
+        // POST /api/whitelist/backfill-revokes — heal legacy revoked rows that carry no
+        // whitelist_revoke event. An earlier JoinEndpoints bug set status='R' on stale rows without
+        // emitting the event, so the revocation never propagated and (post-migration-021) a stale
+        // whitelist_add can resurrect the ghost node, since those rows sit at version 0. This emits
+        // the missing, signed revoke event for each and stamps the row version, closing that hole.
+        //
+        // Deliberately operator-triggered, NOT an unattended startup task: it publishes real,
+        // outward-facing revoke events to every peer on live data, so it belongs in a session
+        // where someone is watching (see WhitelistRevokeBackfill's own remarks). Idempotent — once
+        // every revoked row has its event, a second call heals 0 and changes nothing. Needs an
+        // unlocked session because each revoke event is signed with this node's identity key.
+        group.MapPost("/backfill-revokes", async (
+            SessionService session,
+            DbConnectionFactory dbFactory,
+            INodeIdentityRepository nodeRepo,
+            IEventLogger eventLogger,
+            IWhitelistRepository repo) =>
+        {
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+
+            var backfill = new WhitelistRevokeBackfill(dbFactory, nodeRepo, eventLogger, repo);
+            var healed = await backfill.RunIfNeededAsync();
+            return Results.Ok(new { healed });
+        }).RequireNonAgent();
 
         // GET /api/whitelist — list active entries (no unlock required)
         group.MapGet("/", async (HttpContext ctx, IWhitelistRepository repo) =>

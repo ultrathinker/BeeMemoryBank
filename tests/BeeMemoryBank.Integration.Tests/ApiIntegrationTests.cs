@@ -2,6 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -298,6 +301,53 @@ public class ApiIntegrationTests : IAsyncLifetime
         var resp = await _client.GetAsync($"/api/search?q={q}&page={page}&pageSize={pageSize}");
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<SearchResponse>())!;
+    }
+
+    [Fact]
+    public async Task Whitelist_BackfillRevokes_HealsOrphanedRevoke_AndIsIdempotent()
+    {
+        await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password });
+
+        // Reproduce the pre-migration-021 legacy state: a revoked whitelist row (status='R',
+        // version 0) that never got a matching whitelist_revoke event — exactly what the old
+        // JoinEndpoints bug left behind, and what a stale whitelist_add could resurrect.
+        var ghostId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var repo = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
+            await repo.CreateAsync(new WhitelistEntry
+            {
+                NodeId = ghostId,
+                DisplayName = "GhostNode",
+                Ed25519PublicKey = new byte[32],
+                Status = "R",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                DeletedAt = DateTime.UtcNow,
+                LamportTs = 0,
+                SourceNodeId = null,
+            });
+        }
+
+        // First run emits the missing signed revoke event and stamps the row version.
+        var first = await _client.PostAsync("/api/whitelist/backfill-revokes", null);
+        first.EnsureSuccessStatusCode();
+        var firstBody = await first.Content.ReadFromJsonAsync<JsonElement>();
+        firstBody.GetProperty("healed").GetInt32().Should().Be(1);
+
+        // Idempotent: the revoke event now exists, so a second run heals nothing.
+        var second = await _client.PostAsync("/api/whitelist/backfill-revokes", null);
+        second.EnsureSuccessStatusCode();
+        var secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
+        secondBody.GetProperty("healed").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Whitelist_BackfillRevokes_RequiresUnlockedSession()
+    {
+        // Locked: the revoke events are signed with the node identity key, so this must refuse.
+        var resp = await _client.PostAsync("/api/whitelist/backfill-revokes", null);
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     [Fact]
