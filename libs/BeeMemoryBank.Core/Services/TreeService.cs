@@ -12,26 +12,25 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
         // Determine which system-folder roots are empty (no descendants and no
         // direct articles) — they get hidden from the tree to keep the UI quiet
         // until the first time backend code writes into them.
-        HashSet<string> hiddenSystemPaths = [];
+        var hiddenSystemPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!includeEmptySystemFolders)
         {
             var systemRoots = folders.Where(f => f.IsSystem).Select(f => f.Path).ToList();
-            if (systemRoots.Count > 0)
+            foreach (var root in systemRoots)
             {
-                var allArticles = await articleRepo.ListAsync();
-                hiddenSystemPaths = systemRoots
-                    .Where(root =>
-                    {
-                        var prefix = root.TrimEnd('/') + "/";
-                        var hasSubfolder = folders.Any(f => f.Path != root && f.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
-                        var hasArticle = allArticles.Any(a =>
-                        {
-                            var p = a.TreePath ?? "/";
-                            return p == root || p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
-                        });
-                        return !hasSubfolder && !hasArticle;
-                    })
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var prefix = root.TrimEnd('/') + "/";
+                var hasSubfolder = folders.Any(f => f.Path != root && f.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+                if (hasSubfolder) continue;
+
+                // Ask the DB "is there any (visible) article at or under this root?" instead of
+                // loading the ENTIRE vault and scanning it in memory just to answer it for a handful
+                // of system roots. CountAsync pushes the same treePath narrowing and ACL filter into
+                // SQL that ListAsync does (item 10), so this stays correct per-caller while dropping
+                // an O(vault) materialisation from every /api/tree call — the last full-vault load on
+                // that path. Bounded work: one count per system root, and there are only a few.
+                var hasArticle = await articleRepo.CountAsync(root) > 0;
+                if (!hasArticle)
+                    hiddenSystemPaths.Add(root);
             }
         }
 
@@ -194,37 +193,43 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
         var parentPathForQuery = path == "/" ? null : path;
         var childFolders = await folderRepo.GetChildrenAsync(parentPathForQuery);
 
-        var allArticles = await articleRepo.ListAsync();
         // For the system-folder hide check we need EVERY active folder, not just
         // direct siblings — checking inside childFolders alone (gemini round-3
         // bug) would always return false and hide non-empty `_Drafts` whenever
         // its content lives in subfolders rather than directly under it.
         var allFoldersForHide = await folderRepo.GetAllActiveAsync();
-        var folders = childFolders
-            .OrderBy(f => f.Name, UnderscoreFirstComparer.Instance)
-            .Select(f => new FolderInfo
+
+        // Recursive article count per child folder via CountAsync — same at-or-under-prefix
+        // semantics and the same ACL/treePath SQL as ListAsync (item 10), so it stays correct
+        // per-caller while dropping the full-vault materialisation this method used to do on every
+        // /api/tree/children call. Bounded work: one count per child folder at this one level,
+        // never the whole tree.
+        var folders = new List<FolderInfo>();
+        foreach (var f in childFolders.OrderBy(f => f.Name, UnderscoreFirstComparer.Instance))
+        {
+            var articleCount = await articleRepo.CountAsync(f.Path);
+
+            if (f.IsSystem)
             {
-                Id = f.Id,
-                Path = f.Path,
-                Name = f.Name,
-                ArticleCount = allArticles.Count(a =>
-                    NormalizePath(a.TreePath) == f.Path ||
-                    NormalizePath(a.TreePath).StartsWith(f.Path.TrimEnd('/') + "/")),
-                CreatedAt = f.CreatedAt,
-                UpdatedAt = f.UpdatedAt,
-                IsSystem = f.IsSystem,
-                IsRemote = f.RemoteSubscriptionId.HasValue
-            })
-            .Where(f =>
-            {
-                if (!f.IsSystem) return true;
                 // Hide empty system folders (no articles and no sub-folders).
                 var prefix = f.Path.TrimEnd('/') + "/";
                 var hasSub = allFoldersForHide.Any(cf => cf.Path != f.Path
                     && cf.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
-                return f.ArticleCount > 0 || hasSub;
-            })
-            .ToList();
+                if (articleCount == 0 && !hasSub) continue;
+            }
+
+            folders.Add(new FolderInfo
+            {
+                Id = f.Id,
+                Path = f.Path,
+                Name = f.Name,
+                ArticleCount = articleCount,
+                CreatedAt = f.CreatedAt,
+                UpdatedAt = f.UpdatedAt,
+                IsSystem = f.IsSystem,
+                IsRemote = f.RemoteSubscriptionId.HasValue
+            });
+        }
 
         return new TreeChildrenResult
         {
