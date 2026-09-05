@@ -97,6 +97,66 @@ public class TwoNodeSyncTests : IAsyncLifetime
         events!.Should().NotBeEmpty();
     }
 
+    [Fact]
+    public async Task PushEvents_PermanentlyFailingEvent_GetsQuarantinedOnReceiver()
+    {
+        // NodeB authenticates on NodeA and pushes an event that can never apply: it carries NodeB's
+        // (whitelisted, non-revoked) node id so it passes the originator checks, but has a garbage
+        // signature, so EventApplier throws InvalidDataException on every attempt — a permanent
+        // failure. Before receive-side quarantine was wired, such a push was only logged and counted
+        // as skipped, leaving no persistent trace; it must now surface in the same quarantine store
+        // the pull path already uses.
+        var token = await AuthNodeOnServerAsync(_nodeB, _clientA);
+
+        Guid nodeBId;
+        using (var scope = _nodeB.Services.CreateScope())
+        {
+            var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
+            nodeBId = (await nodeRepo.GetAsync())!.NodeId;
+        }
+
+        var badEventId = Guid.NewGuid();
+        var badEvent = new
+        {
+            sequenceNum = 999_999L,
+            eventId = badEventId,
+            nodeId = nodeBId,
+            lamportTs = 1L,
+            eventType = "article_create",
+            payload = "{}",
+            signature = new byte[64], // invalid — never matches NodeB's key
+            protocolVersion = 1,
+            createdAt = DateTime.UtcNow
+        };
+
+        // Push the identical failing event enough times to exhaust its permanent-failure budget.
+        for (int i = 0; i < SyncEventQuarantine.QuarantineThreshold; i++)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, "/api/sync/events")
+            {
+                Content = JsonContent.Create(new[] { badEvent })
+            };
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            var resp = await _clientA.SendAsync(req);
+            resp.EnsureSuccessStatusCode();
+            var result = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+            // Behavior is unchanged: the event is still skipped-and-continue, never applied.
+            result.GetProperty("skipped").GetInt32().Should().Be(1);
+            result.GetProperty("applied").GetInt32().Should().Be(0);
+        }
+
+        // The receiver now holds a persisted quarantine record for the event.
+        using (var scope = _nodeA.Services.CreateScope())
+        {
+            var quarantineRepo = scope.ServiceProvider.GetRequiredService<ISyncQuarantineRepository>();
+            var entries = await SyncEventQuarantine.ListAllAsync(quarantineRepo);
+            var entry = entries.SingleOrDefault(e => e.EventId == badEventId);
+            entry.Should().NotBeNull("a permanently-failing pushed event must be recorded in the receiver's quarantine");
+            entry!.PermanentFailureCount.Should().BeGreaterThanOrEqualTo(SyncEventQuarantine.QuarantineThreshold);
+            entry.Quarantined.Should().BeTrue("it exhausted its permanent-failure retry budget");
+        }
+    }
+
     // ─── SyncClient ──────────────────────────────────────────────────────────
 
     [Fact]

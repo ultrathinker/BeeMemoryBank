@@ -353,6 +353,7 @@ public static class SyncEndpoints
             EventApplier applier,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             CallerScopeHolder scopeHolder,
+            ISyncQuarantineRepository quarantineRepo,
             ILoggerFactory loggerFactory) =>
         {
             if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
@@ -420,10 +421,30 @@ public static class SyncEndpoints
                         applied++;
                         lastAppliedSeq = evt.SequenceNum;
                     }
+                    // Applied (or deliberately dropped) cleanly — forget any failure streak the
+                    // quarantine was tracking for this event from an earlier push, so an event that
+                    // recovers (its dependency finally arrived) is not left looking quarantined.
+                    // Mirrors the pull path (SyncClient's apply loop).
+                    await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, evt.EventId);
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "Skipped event {EventId} of type {EventType}", evt.EventId, evt.EventType);
+                    // A pushed event that fails to apply was previously only logged and counted as
+                    // skipped, leaving no persistent trace: a permanently-broken push (bad
+                    // signature, an unmet dependency that never arrives, ...) was invisible to the
+                    // operator and silently re-pushed every cycle. Record the failure through the
+                    // SAME quarantine the pull path uses, so it surfaces in GET /api/sync/quarantine
+                    // once it exhausts its retry budget. This does NOT change what the receiver does
+                    // with the event — it is always skipped-and-continue here — only that the
+                    // failure is now tracked and visible.
+                    var quarantined = await SyncEventQuarantine.RecordFailureAsync(
+                        quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex);
+                    if (quarantined)
+                        logger.LogError(ex,
+                            "QUARANTINED pushed event {EventId} of type {EventType} — exhausted its " +
+                            "retry budget. See GET /api/sync/quarantine.", evt.EventId, evt.EventType);
+                    else
+                        logger.LogWarning(ex, "Skipped event {EventId} of type {EventType}", evt.EventId, evt.EventType);
                     skipped++;
                 }
             }
