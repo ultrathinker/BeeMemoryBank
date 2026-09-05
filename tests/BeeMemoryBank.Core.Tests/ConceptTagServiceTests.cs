@@ -133,4 +133,31 @@ public class ConceptTagServiceTests : TestFixture
         var tags = await _conceptTagRepo.GetByArticleIdAsync(article.Id);
         tags.Should().BeEquivalentTo("Orange");
     }
+
+    /// <summary>
+    /// The batch lookup behind every article LIST response must agree with the single-article
+    /// lookup right next to it. It did not: the batch query rendered its Guids with
+    /// <c>.ToString()</c> (lowercase) while the rows had been written by binding the Guid itself
+    /// (uppercase), and SQLite compares TEXT case-sensitively — so `IN` matched nothing and every
+    /// listed article came back with an empty tag set while <c>GET /api/articles/{id}</c> returned
+    /// the tags correctly. Found on a live two-node test mesh, not by this suite, which had no
+    /// coverage of the batch path at all.
+    /// </summary>
+    [Fact]
+    public async Task GetByArticleIds_ReturnsTheSameTagsAsTheSingleArticleLookup()
+    {
+        var a = await ArticleService.CreateAsync("Plum Article", "/Path", [], "Content");
+        var b = await ArticleService.CreateAsync("Quince Article", "/Path", [], "Content");
+        await _conceptTagRepo.AddToArticleAsync(a.Id, new List<string> { "Plum", "Fruit" });
+        await _conceptTagRepo.AddToArticleAsync(b.Id, new List<string> { "Quince" });
+
+        var batch = await _conceptTagRepo.GetByArticleIdsAsync(new[] { a.Id, b.Id });
+
+        batch.Should().ContainKey(a.Id).WhoseValue.Should().BeEquivalentTo("Plum", "Fruit");
+        batch.Should().ContainKey(b.Id).WhoseValue.Should().BeEquivalentTo("Quince");
+
+        // The two lookups are the same question asked two ways; they must never disagree.
+        foreach (var id in new[] { a.Id, b.Id })
+            batch[id].Should().BeEquivalentTo(await _conceptTagRepo.GetByArticleIdAsync(id));
+    }
 }

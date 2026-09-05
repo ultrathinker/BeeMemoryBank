@@ -54,7 +54,13 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
               JOIN tbl_concept_tag ct ON ct.id = act.concept_tag_id
               WHERE act.article_id IN @Ids
               ORDER BY (substr(ct.name,1,1)='_') DESC, ct.name",
-            new { Ids = ids.Select(i => i.ToString()).ToList() });
+            // Bind the Guids themselves, never `.ToString()`. Every other article_id parameter in
+            // this file (and in ArticleRepository / ArticleBodyRepository) binds a Guid and lets the
+            // provider render it; those rows come out uppercase. A hand-rolled `.ToString()` renders
+            // lowercase, and SQLite compares TEXT case-sensitively — so this one query silently
+            // matched nothing and every article in a list response came back with no tags at all,
+            // while the single-article route right next to it returned them correctly.
+            new { Ids = ids });
         var dict = new Dictionary<Guid, List<string>>();
         foreach (var (aid, name) in rows)
         {
