@@ -22,7 +22,8 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         m.source_node_id  AS SourceNodeId,
         m.created_at      AS CreatedAt,
         m.deleted_at      AS DeletedAt,
-        m.kind            AS Kind";
+        m.kind            AS Kind,
+        m.ciphertext_sha256 AS CiphertextSha256";
 
     public async Task<Media?> GetByIdAsync(Guid id, bool includeDeleted = false)
     {
@@ -83,9 +84,11 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
     {
         const string insertSql = @"INSERT INTO tbl_media
               (id, article_id, file_name, content_type, file_size,
-               encrypted_dek, dek_iv, iv, status, lamport_ts, source_node_id, created_at, kind)
+               encrypted_dek, dek_iv, iv, status, lamport_ts, source_node_id, created_at, kind,
+               ciphertext_sha256)
               VALUES (@Id, @ArticleId, @FileName, @ContentType, @FileSize,
-                      @EncryptedDek, @DekIV, @IV, @Status, @LamportTs, @SourceNodeId, @CreatedAt, @Kind)";
+                      @EncryptedDek, @DekIV, @IV, @Status, @LamportTs, @SourceNodeId, @CreatedAt, @Kind,
+                      @CiphertextSha256)";
 
         if (transaction != null)
         {

@@ -122,10 +122,12 @@ public class BlobRepository(DbConnectionFactory factory) : BaseRepository(factor
         // referenced by a transaction that has not committed yet (or by an event that a peer has
         // shipped the blob for but not yet pushed), and is never a candidate.
         //
-        // References counted: current bodies, version history, and any event payload carrying a
-        // ciphertext_sha256 — checked by JSON path rather than by event type, so a future event
-        // kind that references a blob is covered without touching this query. Events of a
-        // hard-deleted article keep its blobs alive until compaction removes the events, which
+        // References counted: current bodies, version history, live media rows (item 16a — a media
+        // row now points at its ciphertext blob by hash, and unlike an event that reference is not
+        // removed by compaction, so the blob survives as long as the media does), and any event
+        // payload carrying a ciphertext_sha256 — checked by JSON path rather than by event type, so
+        // a future event kind that references a blob is covered without touching this query. Events
+        // of a hard-deleted article keep its blobs alive until compaction removes the events, which
         // is the same retention the inline base64 copy had before the blob store existed.
         // tbl_conflict_version is not consulted: it still stores its ciphertext inline.
         await conn.ExecuteAsync("BEGIN IMMEDIATE");
@@ -136,6 +138,7 @@ public class BlobRepository(DbConnectionFactory factory) : BaseRepository(factor
                   WHERE created_at < @cutoff
                     AND hash NOT IN (SELECT ciphertext_hash FROM tbl_article_body    WHERE ciphertext_hash IS NOT NULL)
                     AND hash NOT IN (SELECT ciphertext_hash FROM tbl_article_version WHERE ciphertext_hash IS NOT NULL)
+                    AND hash NOT IN (SELECT ciphertext_sha256 FROM tbl_media          WHERE ciphertext_sha256 IS NOT NULL)
                     AND hash NOT IN (SELECT json_extract(payload, '$.ciphertext_sha256') FROM tbl_event
                                      WHERE json_extract(payload, '$.ciphertext_sha256') IS NOT NULL)",
                 new { cutoff = createdBefore.ToUniversalTime().ToString("o") });

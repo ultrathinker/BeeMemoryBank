@@ -23,7 +23,12 @@ public class MediaService(
     // Optional and last so the many direct constructions in tests keep compiling; DI supplies the
     // real one. Only used to report a media row whose file is gone, which is not a normal state
     // and must not pass silently.
-    ILogger<MediaService>? logger = null)
+    ILogger<MediaService>? logger = null,
+    // Item 16a: the read path resolves ciphertext from the content-addressed blob store when the
+    // row carries its hash, and falls back to the .enc file otherwise. Optional and last for the
+    // same test-construction reason; when null (older test setups) the blob path is simply skipped
+    // and the file fallback carries every read, exactly as before this change.
+    IBlobRepository? blobRepo = null)
 {
     private readonly ILogger<MediaService> logger = logger ?? NullLogger<MediaService>.Instance;
 
@@ -143,7 +148,12 @@ public class MediaService(
             LamportTs = lamportTs,
             SourceNodeId = identity?.NodeId,
             CreatedAt = now,
-            Kind = isAttachment ? "attachment" : "image"
+            Kind = isAttachment ? "attachment" : "image",
+            // The bytes go into the content-addressed blob store below (via LogMediaCreateAsync →
+            // EnsureBlobAsync), under exactly this hash. Recording it on the row lets the read path
+            // resolve the blob directly instead of only from the .enc file. Same hash function
+            // (BlobHash.Compute), so the row and the blob agree by construction. Item 16a.
+            CiphertextSha256 = BlobHash.Compute(ciphertext)
         };
 
         Directory.CreateDirectory(options.MediaDir);
@@ -209,34 +219,48 @@ public class MediaService(
                 return null;
         }
 
-        // A media row whose .enc file is gone must degrade to "not found" (the endpoint's 404),
-        // not to a 500. The two are reachable states, both from outside this node: a snapshot
-        // restore or a join that brought the database across without the media directory, and an
-        // event applied while MediaStorageOptions was not configured, which writes the row and no
-        // file. Reading it blind threw FileNotFoundException, which nothing catches and
-        // ExceptionStatusMap does not recognise — every broken image on the page became a server
-        // error in the log, hiding the one fact an operator needs, which media is missing.
-        var filePath = Path.Combine(options.MediaDir, $"{id}.enc");
-        if (!File.Exists(filePath))
+        // Item 16a: resolve the ciphertext from the content-addressed blob store first, by the hash
+        // recorded on the row, and fall back to the .enc file. The blob is the store the create path
+        // and the sync pusher already fill; the file is the legacy home. Preferring the blob is what
+        // lets a node serve media it received purely over sync (blob shipped ahead of the event) or
+        // through a snapshot/join that carried the database but not the media directory — cases the
+        // file-only path could only answer with a 404.
+        byte[]? ciphertext = null;
+        if (blobRepo != null && !string.IsNullOrEmpty(media.CiphertextSha256))
         {
-            this.logger.LogWarning(
-                "Media {MediaId} ({FileName}) has a row but no file at {Path} — serving 404. " +
-                "This node's media directory is incomplete; the bytes exist only on a peer that " +
-                "still has them.", id, media.FileName, filePath);
-            return null;
+            ciphertext = await blobRepo.GetAsync(media.CiphertextSha256);
         }
 
-        byte[] ciphertext;
-        try
+        if (ciphertext == null)
         {
-            ciphertext = await File.ReadAllBytesAsync(filePath);
-        }
-        catch (IOException ex)
-        {
-            // Deleted between the check and the read, or unreadable. Same answer, still logged:
-            // an unreadable file is an operational fact, not a caller error.
-            this.logger.LogWarning(ex, "Media {MediaId} could not be read from {Path}", id, filePath);
-            return null;
+            // A media row whose .enc file is gone must degrade to "not found" (the endpoint's 404),
+            // not to a 500. The two are reachable states, both from outside this node: a snapshot
+            // restore or a join that brought the database across without the media directory, and an
+            // event applied while MediaStorageOptions was not configured, which writes the row and no
+            // file. Reading it blind threw FileNotFoundException, which nothing catches and
+            // ExceptionStatusMap does not recognise — every broken image on the page became a server
+            // error in the log, hiding the one fact an operator needs, which media is missing.
+            var filePath = Path.Combine(options.MediaDir, $"{id}.enc");
+            if (!File.Exists(filePath))
+            {
+                this.logger.LogWarning(
+                    "Media {MediaId} ({FileName}) has a row but neither a blob ({Hash}) nor a file at {Path} — " +
+                    "serving 404. This node's media store is incomplete; the bytes exist only on a peer that " +
+                    "still has them.", id, media.FileName, media.CiphertextSha256 ?? "(none)", filePath);
+                return null;
+            }
+
+            try
+            {
+                ciphertext = await File.ReadAllBytesAsync(filePath);
+            }
+            catch (IOException ex)
+            {
+                // Deleted between the check and the read, or unreadable. Same answer, still logged:
+                // an unreadable file is an operational fact, not a caller error.
+                this.logger.LogWarning(ex, "Media {MediaId} could not be read from {Path}", id, filePath);
+                return null;
+            }
         }
 
         try
