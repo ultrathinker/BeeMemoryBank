@@ -29,6 +29,79 @@ public static class EventTypes
     public const string MasterPasswordChanged = "master_password_changed";
 }
 
+/// <summary>
+/// The one place that says who may originate each kind of sync event. <see cref="EventApplier"/>'s
+/// authorization gate reads <see cref="RequiresSuperadmin"/> from here instead of hard-coding a
+/// list, and <c>EventAuthorizationGuardTests</c> asserts that every constant in
+/// <see cref="EventTypes"/> is classified into exactly one category below.
+///
+/// Why the guard matters: the applier's <c>switch</c> has a <c>default:</c> that silently ignores
+/// unknown types, and the superadmin gate used to be an inline <c>||</c> chain. Add a new
+/// cluster-state event, forget to extend that chain, and it would apply from any whitelisted peer —
+/// exactly the "a single rogue peer can revoke the whole network" hole the gate exists to close.
+/// Forcing every new type into one of these sets turns "remember to update the gate" into a
+/// compile-then-red-test, the same house pattern as the other guardrail tests.
+/// </summary>
+public static class EventAuthorization
+{
+    /// <summary>
+    /// Cluster-state events. They apply immediately and irreversibly change who is trusted or what
+    /// exists network-wide, so only a peer marked superadmin in the local whitelist may originate
+    /// them. <see cref="MasterPasswordChanged"/> is here not because it is cluster-state but because
+    /// it raises an admin-UI security notice a rogue peer could use to phish a password re-entry.
+    /// </summary>
+    public static readonly IReadOnlySet<string> SuperadminOnly = new HashSet<string>
+    {
+        EventTypes.WhitelistAdd,
+        EventTypes.WhitelistRevoke,
+        EventTypes.WhitelistUpdate,
+        EventTypes.HardDelete,
+        EventTypes.RestoreNetwork,
+        EventTypes.MasterPasswordChanged,
+    };
+
+    /// <summary>
+    /// Content and metadata events. Any whitelisted peer may originate them; conflicts are resolved
+    /// by LWW, never by trust level.
+    /// </summary>
+    public static readonly IReadOnlySet<string> AnyPeer = new HashSet<string>
+    {
+        EventTypes.ArticleCreate,
+        EventTypes.ArticleUpdate,
+        EventTypes.ArticleDelete,
+        EventTypes.CommentCreate,
+        EventTypes.CommentDelete,
+        EventTypes.FolderCreate,
+        EventTypes.FolderRename,
+        EventTypes.FolderDelete,
+        EventTypes.MediaCreate,
+        EventTypes.MediaDelete,
+        EventTypes.MediaLink,
+        EventTypes.ConceptTagRename,
+        EventTypes.ConceptTagMerge,
+        EventTypes.ConceptTagDelete,
+        EventTypes.SnapshotCheckpoint,
+    };
+
+    /// <summary>
+    /// DEK rotation. A proposal or commit from any whitelisted peer is merely RECORDED as pending
+    /// state; the destructive rewrap runs only behind a per-peer auto-accept flag or an explicit
+    /// admin accept (see <c>EventApplier.Restore.cs</c>). That deferred-trust gate — not the
+    /// immediate superadmin one — is the right gate for these, so they are classified apart:
+    /// putting them under <see cref="SuperadminOnly"/> would wrongly reject a normal peer's
+    /// proposal outright, and leaving them in <see cref="AnyPeer"/> would wrongly imply they carry
+    /// no extra gate at all.
+    /// </summary>
+    public static readonly IReadOnlySet<string> RotationDeferredTrust = new HashSet<string>
+    {
+        EventTypes.DekRotationProposed,
+        EventTypes.DekRotationCommit,
+    };
+
+    /// <summary>True if only a superadmin peer may originate this event type.</summary>
+    public static bool RequiresSuperadmin(string eventType) => SuperadminOnly.Contains(eventType);
+}
+
 /// <summary>Payload for network-wide snapshot restore feature.</summary>
 public record RestoreNetworkEventPayload(
     [property: JsonPropertyName("snapshot_hash")]    string SnapshotHash,

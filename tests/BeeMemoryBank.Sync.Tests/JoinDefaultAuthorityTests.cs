@@ -11,11 +11,12 @@ namespace BeeMemoryBank.Sync.Tests;
 /// stores after a real <c>/api/join</c> call, not a synthetic value invented for the test.
 ///
 /// <para>Content still syncs freely (article create/update/delete are never gated). Cluster-state
-/// events — <c>hard_delete</c> and <c>whitelist_revoke</c> here, the same list
-/// <c>EventApplier.ApplyAsync</c>'s <c>requiresSuperadmin</c> gate protects — are refused from a
-/// non-superadmin originator, and accepted again only after the receiving node performs the
-/// explicit promotion (<c>PUT /api/whitelist/{nodeId}/superadmin</c>), modelled here by flipping
-/// the local row the same way that endpoint does.</para>
+/// events — <c>hard_delete</c> and <c>whitelist_revoke</c> here, the <c>EventAuthorization.SuperadminOnly</c>
+/// set that <c>EventApplier.ApplyAsync</c>'s gate protects — are refused from a non-superadmin
+/// originator, and accepted again only after the receiving node performs the explicit promotion
+/// (<c>PUT /api/whitelist/{nodeId}/superadmin</c>), modelled here by flipping the local row the same
+/// way that endpoint does. That the set is complete and correctly classified is held separately by
+/// <c>EventAuthorizationGuardTests</c>.</para>
 /// </summary>
 public class JoinDefaultAuthorityTests : IAsyncLifetime
 {

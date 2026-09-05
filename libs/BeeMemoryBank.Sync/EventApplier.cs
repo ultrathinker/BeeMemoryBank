@@ -160,16 +160,12 @@ public partial class EventApplier(
         // sign these by default; without this check a single rogue peer can revoke the
         // whole network, hard-delete arbitrary data, or trigger a destructive restore.
         // Wave 2 audit: gemini #1 (whitelist), #2 (hard-delete), #3 (restore-network).
-        var requiresSuperadmin = evt.EventType == EventTypes.WhitelistAdd
-            || evt.EventType == EventTypes.WhitelistRevoke
-            || evt.EventType == EventTypes.WhitelistUpdate
-            || evt.EventType == EventTypes.HardDelete
-            || evt.EventType == EventTypes.RestoreNetwork
-            // Not cluster-state, but it raises a security notice in the admin UI. A peer that could
-            // plant one at will could nag an operator into re-entering the master password, which
-            // is a decent phishing primitive; only nodes already trusted with everything may.
-            || evt.EventType == EventTypes.MasterPasswordChanged;
-        if (requiresSuperadmin && !node.IsSuperadmin)
+        //
+        // The classification lives in EventAuthorization, not inline here, so it cannot drift and
+        // so a newly added event type has to be deliberately classified — EventAuthorizationGuardTests
+        // fails the build if any EventTypes constant is left unclassified. See that class for why
+        // DEK rotation is gated elsewhere rather than here.
+        if (EventAuthorization.RequiresSuperadmin(evt.EventType) && !node.IsSuperadmin)
         {
             logger.LogWarning(
                 "Event {EventId} ({Type}) rejected: originator {NodeId} ({Display}) is not superadmin in local whitelist",
