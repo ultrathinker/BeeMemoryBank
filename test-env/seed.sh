@@ -19,7 +19,9 @@ api() { curl -sS -m 120 "${hdr[@]}" "$@"; }
 # the master DEK. A locked node answers with a 403 that says nothing about the real cause.
 api -X POST "$API/api/session/unlock" -d "{\"password\":\"$PASSWORD\"}" >/dev/null
 
-existing=$(api "$API/api/articles" | grep -o '"id"' | wc -l)
+# grep exits 1 when it matches nothing, and under 'set -e -o pipefail' that kills the script
+# silently — on exactly the case this check exists for, a node with no articles yet.
+existing=$(api "$API/api/articles" | { grep -o '"id"' || true; } | wc -l)
 if [ "$existing" -gt 1 ] && [ "${RESEED:-0}" != "1" ]; then
   echo "$NODE already has $existing articles; refusing to seed on top of them. Set RESEED=1 to override." >&2
   exit 1
@@ -73,9 +75,9 @@ echo "waiting for sync to test2 ..."
 K2=$(docker exec test2 cat /app/data/.internal-key)
 for i in $(seq 1 60); do
   c=$(curl -sS -m 30 -H "X-Internal-Key: $K2" -H "X-User-Role: superadmin" -H "X-User-Id: 1" \
-        "http://127.0.0.1:5014/api/articles" | grep -o '"id"' | wc -l)
-  echo "  test2 has $c / $((n+1))"
-  [ "$c" -ge "$((n+1))" ] && { echo "sync complete after ~$((i*10))s"; exit 0; }
+        "http://127.0.0.1:5014/api/articles" | { grep -o '"id"' || true; } | wc -l)
+  echo "  test2 has $c / $((n+existing))"
+  [ "$c" -ge "$((n+existing))" ] && { echo "sync complete after ~$((i*10))s"; exit 0; }
   sleep 10
 done
 echo "sync did not complete within 600s — check 'docker logs test2'" >&2
