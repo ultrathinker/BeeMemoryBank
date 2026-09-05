@@ -20,10 +20,15 @@ public class SearchModel(ApiClient api) : PageModel
     /// </summary>
     public bool IsFallback { get; private set; }
 
+    /// <summary>Current 1-based page. Only the linear content <see cref="IsFallback"/> path paginates;
+    /// the hybrid/keyword/semantic path is already relevance-capped and shows a single page.</summary>
+    public int Page { get; private set; } = 1;
+
     public SearchResponseDto? Results { get; private set; }
 
-    public async Task OnGetAsync(string? q, string? mode = "hybrid")
+    public async Task OnGetAsync(string? q, string? mode = "hybrid", int page = 1)
     {
+        Page = Math.Max(1, page);
         // Normalize case: ValidModes matches case-insensitively (so a hand-edited URL like
         // ?mode=KEYWORD is still accepted), but Mode's value is later used as a dictionary key and
         // an <sl-option> value match in the view, both of which are case-sensitive against the
@@ -42,7 +47,10 @@ public class SearchModel(ApiClient api) : PageModel
         // match, meaning, or both via RRF), not WHETHER. This search is fast enough (BM25 + the
         // in-memory chunk cache) that there is no longer a reason to make it opt-in the way the
         // old linear body scan was.
-        var folderResults = await api.SearchAsync(q, content: false);
+        // Folders + a title/tag metadata supplement to merge under the hybrid results. Request a
+        // full page of metadata (pageSize 100) so the supplement isn't clipped; folders always
+        // accompany page 1. This call is not itself paged — it augments the relevance-ranked set.
+        var folderResults = await api.SearchAsync(q, content: false, pageSize: 100);
         var articles = await api.SearchHybridArticlesAsync(q, mode: Mode);
 
         if (articles is null)
@@ -55,7 +63,7 @@ public class SearchModel(ApiClient api) : PageModel
             // never actually ran for this request" -- silently swapping in a plain substring scan
             // under a mode label that no longer describes what happened is misleading.
             IsFallback = true;
-            Results = await api.SearchAsync(q, content: true);
+            Results = await api.SearchAsync(q, content: true, page: Page);
             return;
         }
 

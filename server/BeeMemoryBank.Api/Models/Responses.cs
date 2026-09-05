@@ -99,7 +99,11 @@ public record FolderInfoResponse(Guid Id, string Path, string Name, int ArticleC
 
 public record SearchResponse(
     List<FolderInfoResponse> Folders,
-    List<ArticleResponse> Articles);
+    List<ArticleResponse> Articles,
+    int Page = 1,
+    int PageSize = 0,
+    int Total = 0,
+    bool HasMore = false);
 
 public record TreeChildrenResponse(
     string Path,

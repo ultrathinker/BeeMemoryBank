@@ -39,7 +39,11 @@ public record ReadOnlyPathsDto(string[] Paths);
 
 public record SearchResponseDto(
     List<FolderInfoDto> Folders,
-    List<ArticleDto> Articles);
+    List<ArticleDto> Articles,
+    int Page = 1,
+    int PageSize = 0,
+    int Total = 0,
+    bool HasMore = false);
 
 public record ConceptTagDto(string Name, int ArticleCount);
 

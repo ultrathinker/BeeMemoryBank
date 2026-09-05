@@ -22,9 +22,9 @@ public partial class ApiClient
 
     // ─── Search ───────────────────────────────────────────────────────────────
 
-    public async Task<SearchResponseDto?> SearchAsync(string query, bool content = false) =>
+    public async Task<SearchResponseDto?> SearchAsync(string query, bool content = false, int page = 1, int pageSize = 50) =>
         await http.GetFromJsonAsync<SearchResponseDto>(
-            $"/api/search?q={Uri.EscapeDataString(query)}&content={content}", JsonOpts);
+            $"/api/search?q={Uri.EscapeDataString(query)}&content={content}&page={page}&pageSize={pageSize}", JsonOpts);
 
     /// <summary>
     /// WP-16: ranked article results from <c>/api/search/hybrid</c> (RRF-combined BM25 keyword +

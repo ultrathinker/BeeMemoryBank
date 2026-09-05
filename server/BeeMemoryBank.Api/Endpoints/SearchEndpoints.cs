@@ -11,7 +11,7 @@ public static class SearchEndpoints
 {
     public static void MapSearchEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/search", async (SearchService svc, SessionService session, HttpContext ctx, IConceptTagRepository conceptTagRepo, string? q = null, bool content = false) =>
+        app.MapGet("/api/search", async (SearchService svc, SessionService session, HttpContext ctx, IConceptTagRepository conceptTagRepo, string? q = null, bool content = false, int page = 1, int pageSize = 50) =>
         {
 
             if (string.IsNullOrWhiteSpace(q))
@@ -19,6 +19,14 @@ public static class SearchEndpoints
 
             if (content && !session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session must be unlocked for content search"), statusCode: 403);
+
+            // Pagination (1-based) over the article results. The service already bounds the content
+            // path to a reachable depth (SearchService.MaxContentResults), so `articles` below is
+            // never the whole vault; slicing here caps what this endpoint hydrates concept tags for
+            // and serializes to at most one page, and lets the caller walk the ranked set instead of
+            // receiving it all at once. Folders (few, cheap) accompany the first page only.
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 100);
 
             // content=true now goes through the ranked BM25 index (SearchWebContentAsync), falling
             // back to a linear scan only for the (normally empty) set of articles the background
@@ -30,22 +38,25 @@ public static class SearchEndpoints
                 ? await svc.SearchWebContentAsync(q)
                 : await svc.SearchAsync(q);
 
-            var folders = results.Folders;
             var articles = results.Articles;
+            var total = articles.Count;
+            var pageArticles = articles.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+            var hasMore = (page - 1) * pageSize + pageArticles.Count < total;
 
             var articleResponses = new List<ArticleResponse>();
-            var articleIds = articles.Select(a => a.Id).ToList();
+            var articleIds = pageArticles.Select(a => a.Id).ToList();
             var tagMap = await conceptTagRepo.GetByArticleIdsAsync(articleIds);
-            foreach (var a in articles)
+            foreach (var a in pageArticles)
             {
                 var conceptTags = tagMap.GetValueOrDefault(a.Id, new List<string>());
                 articleResponses.Add(ArticleResponse.From(a, conceptTags));
             }
 
-            return Results.Ok(new SearchResponse(
-                folders.Select(f => FolderInfoResponse.From(f)).ToList(),
-                articleResponses
-            ));
+            var folders = page == 1
+                ? results.Folders.Select(f => FolderInfoResponse.From(f)).ToList()
+                : [];
+
+            return Results.Ok(new SearchResponse(folders, articleResponses, page, pageSize, total, hasMore));
         }).RequireInternalKey().WithTags("Search");
 
         app.MapPost("/api/search/semantic", async (

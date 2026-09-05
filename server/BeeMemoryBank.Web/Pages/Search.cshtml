@@ -126,6 +126,27 @@
                     }
                 </div>
             }
+
+            @* Pager: only the linear content fallback paginates; the relevance-capped hybrid path
+               shows a single page and reports HasMore=false / Page=1, so this stays hidden there. *@
+            @if (Model.IsFallback && (Model.Page > 1 || Model.Results.HasMore))
+            {
+                <div style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:20px;">
+                    @if (Model.Page > 1)
+                    {
+                        <sl-button size="small" href="/Search?q=@Uri.EscapeDataString(Model.Query)&mode=@Model.Mode&page=@(Model.Page - 1)">
+                            <sl-icon slot="prefix" name="chevron-left"></sl-icon> Prev
+                        </sl-button>
+                    }
+                    <span class="text-muted text-sm" style="line-height:32px;">Page @Model.Page</span>
+                    @if (Model.Results.HasMore)
+                    {
+                        <sl-button size="small" href="/Search?q=@Uri.EscapeDataString(Model.Query)&mode=@Model.Mode&page=@(Model.Page + 1)">
+                            Next <sl-icon slot="suffix" name="chevron-right"></sl-icon>
+                        </sl-button>
+                    }
+                </div>
+            }
         }
         else
         {

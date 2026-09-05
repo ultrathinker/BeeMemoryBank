@@ -51,6 +51,30 @@ public class SearchService(
     /// </summary>
     private const int MaxRestrictedFallbackIds = 2000;
 
+    /// <summary>
+    /// Maximum number of ranked body (content) matches the web content-search path hydrates and
+    /// returns for a single query — the "reachable depth" of paginated search, matching how every
+    /// real search UI caps the total result set a user can page through rather than materializing
+    /// every hit.
+    /// </summary>
+    /// <remarks>
+    /// <para>This bound is what makes broad-term content search scale. Without it,
+    /// <see cref="SearchWebContentUncachedAsync"/> asked <c>SearchIndexedContentAsync</c> for
+    /// <c>int.MaxValue</c> matches, so a common term on a 100k-article vault hydrated tens of
+    /// thousands of rows through <c>GetByIdsAsync</c>. That is an <c>IN</c> list long enough to blow
+    /// past SQLite's parameter limit (the source of the concurrency errors seen under load), plus an
+    /// O(matches) ACL filter and per-result concept-tag fetch — all wasted, since no page shows more
+    /// than <c>pageSize</c> of them. <c>SearchRanked</c> already returns matches in descending BM25
+    /// order, so capping at the top <c>MaxContentResults</c> keeps the most relevant results and
+    /// drops only the long, never-viewed tail.</para>
+    /// <para>This is a result-count bound, NOT a relaxation of the index-completeness invariant the
+    /// <c>index_pending</c> check enforces: the top-K returned are still complete and correct with
+    /// respect to what the index and the pending-fallback know — there are just at most this many of
+    /// them. 500 comfortably exceeds any realistic paged-search depth (10 pages of 50) while keeping
+    /// the hydrated set two orders of magnitude below the pathological case.</para>
+    /// </remarks>
+    internal const int MaxContentResults = 500;
+
     // WP-12: the same tokenizer/stemmer pipeline IndexBuilder uses at ingestion (see
     // IndexBuilder.TokenizeAndStem) -- a query must go through the identical pipeline so its stems
     // exactly match the stemmed dictionary IndexBuilder.SearchRanked looks up against. Stateless and
@@ -422,12 +446,13 @@ public class SearchService(
 
         var matchedIds = new HashSet<Guid>(metadataResults.Select(a => a.Id));
 
-        // Primary source: the ranked BM25 index. topK: int.MaxValue rather than the 20-result
-        // default other SearchIndexedContentAsync callers use -- SearchRanked already bounds its
-        // own candidate set to however many documents satisfy the implicit-AND query (see its own
-        // doc comment), so there is no separate "top N" cap layered on top here, matching
-        // SearchWithContentAsync's own uncapped "every matching article" contract exactly.
-        List<Article> rankedMatches = await SearchIndexedContentAsync(query, int.MaxValue);
+        // Primary source: the ranked BM25 index, capped at MaxContentResults (see that constant's
+        // remarks). SearchRanked returns matches in descending BM25 order, so this hydrates only the
+        // most relevant top-K rather than every document satisfying the implicit-AND query — the
+        // bound that keeps a broad term from hydrating tens of thousands of rows (and overflowing the
+        // GetByIdsAsync `IN` list) on a large vault. Pagination over the returned set happens at the
+        // endpoint; this is the reachable-depth cap beneath it.
+        List<Article> rankedMatches = await SearchIndexedContentAsync(query, MaxContentResults);
         var contentMatches = new List<Article>(rankedMatches.Count);
         foreach (Article a in rankedMatches)
         {

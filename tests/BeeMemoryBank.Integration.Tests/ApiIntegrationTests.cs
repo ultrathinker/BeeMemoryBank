@@ -249,6 +249,58 @@ public class ApiIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Search_Paginates_ArticlesAcrossPages_WithTotalAndHasMore()
+    {
+        await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password });
+
+        const int count = 25;
+        for (int i = 0; i < count; i++)
+        {
+            var create = await _client.PostAsJsonAsync("/api/articles", new
+            {
+                title = $"Zpagx_{i:D2}_pagination_item",
+                treePath = "/",
+                content = "x"
+            });
+            create.EnsureSuccessStatusCode();
+        }
+
+        // Metadata (title) search — matches all 25 by the shared "Zpagx" token.
+        var p1 = await GetSearchPageAsync("Zpagx", page: 1, pageSize: 10);
+        p1.Page.Should().Be(1);
+        p1.PageSize.Should().Be(10);
+        p1.Total.Should().Be(count);
+        p1.Articles.Should().HaveCount(10);
+        p1.HasMore.Should().BeTrue();
+
+        var p2 = await GetSearchPageAsync("Zpagx", page: 2, pageSize: 10);
+        p2.Articles.Should().HaveCount(10);
+        p2.HasMore.Should().BeTrue();
+        p2.Folders.Should().BeEmpty("folders accompany the first page only");
+
+        var p3 = await GetSearchPageAsync("Zpagx", page: 3, pageSize: 10);
+        p3.Articles.Should().HaveCount(5);
+        p3.HasMore.Should().BeFalse("page 3 is the last: 25 = 10 + 10 + 5");
+
+        // No overlap across pages: every one of the 25 appears exactly once.
+        var allIds = p1.Articles.Concat(p2.Articles).Concat(p3.Articles).Select(a => a.Id).ToList();
+        allIds.Should().OnlyHaveUniqueItems();
+        allIds.Should().HaveCount(count);
+
+        // pageSize is clamped to [1,100]; page floors to 1.
+        var clamped = await GetSearchPageAsync("Zpagx", page: 0, pageSize: 999);
+        clamped.Page.Should().Be(1);
+        clamped.PageSize.Should().Be(100);
+    }
+
+    private async Task<SearchResponse> GetSearchPageAsync(string q, int page, int pageSize)
+    {
+        var resp = await _client.GetAsync($"/api/search?q={q}&page={page}&pageSize={pageSize}");
+        resp.EnsureSuccessStatusCode();
+        return (await resp.Content.ReadFromJsonAsync<SearchResponse>())!;
+    }
+
+    [Fact]
     public async Task Tree_ReturnsKnownPaths()
     {
         await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password });

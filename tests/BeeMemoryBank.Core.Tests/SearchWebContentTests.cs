@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Services;
+using Dapper;
 
 namespace BeeMemoryBank.Core.Tests;
 
@@ -94,5 +95,33 @@ public class SearchWebContentTests : TestFixture
         var results = await SearchService.SearchWebContentAsync("zzzgamma");
 
         results.Articles.Should().BeEmpty("a locked session must not surface any body-derived result");
+    }
+
+    [Fact]
+    public async Task SearchWebContentAsync_BroadTerm_CapsResultsAtMaxContentResults()
+    {
+        // Create more matching-and-indexed articles than the reachable-depth cap, all sharing one
+        // body term, then clear the pending backlog so the completeness check reports zero and the
+        // fallback scan never runs — isolating the index path, whose top-K is what the cap bounds.
+        const int overCap = SearchService.MaxContentResults + 25;
+        for (int i = 0; i < overCap; i++)
+        {
+            var a = await ArticleService.CreateAsync($"Bulk {i}", "/", [], "zzzcap shared body term");
+            IndexBuilder.AddOrUpdateDocument(a.Id, a.FolderId ?? Guid.Empty, "zzzcap shared body term");
+        }
+
+        // Bulk-clear index_pending for every row (far cheaper than one call per article) so
+        // GetIndexPendingIdsUnscopedAsync reports an empty backlog and no linear fallback runs.
+        using (var conn = Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync("UPDATE tbl_article SET index_pending = 0");
+        }
+
+        var results = await SearchService.SearchWebContentAsync("zzzcap");
+
+        results.Articles.Should().HaveCount(SearchService.MaxContentResults,
+            "the web content path hydrates at most MaxContentResults ranked matches even when far " +
+            "more articles match — the bound that keeps a broad term from hydrating the whole vault " +
+            "and overflowing the GetByIdsAsync IN list on a large corpus");
     }
 }
