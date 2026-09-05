@@ -75,6 +75,26 @@ public class DekEnvelopeTests
         }
     }
 
+    [Fact]
+    public void PublicKeyToX25519_RejectsSmallOrderPoint()
+    {
+        // 32 zero bytes is a canonical encoding of an Ed25519 point of small order (not in the
+        // prime-order subgroup). It must be rejected before any X25519 key is derived from it,
+        // otherwise the birational map would happily produce a low-order Montgomery-u. The all-zero
+        // encoding also passes the y==1 singularity check, so this specifically exercises the new
+        // ValidatePublicKeyFull subgroup check rather than that older guard.
+        var smallOrder = new byte[32];
+        var act = () => DekEnvelope.Ed25519PublicKeyToX25519PublicKey(smallOrder);
+        act.Should().Throw<CryptographicException>();
+    }
+
+    [Fact]
+    public void PublicKeyToX25519_RejectsWrongLength()
+    {
+        var act = () => DekEnvelope.Ed25519PublicKeyToX25519PublicKey(new byte[31]);
+        act.Should().Throw<ArgumentException>();
+    }
+
     // ---- Raw X25519 primitive: RFC 7748 §6.1 external vector ------------------------------
 
     [Fact]

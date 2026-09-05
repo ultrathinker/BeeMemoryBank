@@ -316,6 +316,42 @@ public class ArticleTransactionalityTests : IAsyncLifetime
         _syncTrigger.SignalCount.Should().Be(initialSignals, "Sync trigger must not signal on failed delete");
     }
 
+    // Regression: a protected (second-layer passphrase) article must never gain attached media via
+    // a body-embedded reference. Media is wrapped by the MASTER DEK, not the passphrase, so linking
+    // it would make it readable without the passphrase — the same guarantee MediaService.CreateAsync
+    // enforces for directly-attached media. Embedding via the body used to slip past that check.
+    [Fact]
+    public async Task Update_ProtectedArticle_DoesNotLinkBodyEmbeddedMedia()
+    {
+        var article = await _articleService.CreateAsync("Protected With Media", "/protected-media", [], "plain body");
+        await _articleService.ProtectAsync(article.Id, "protectPass", null);
+
+        var mediaId = Guid.NewGuid();
+        await _mediaRepo.CreateAsync(new Media
+        {
+            Id = mediaId,
+            ArticleId = null, // orphan
+            FileName = "p.png",
+            ContentType = "image/png",
+            FileSize = 1024,
+            EncryptedDek = new byte[32],
+            DekIV = new byte[12],
+            IV = new byte[12],
+            Status = "A",
+            LamportTs = 1,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        // Update the protected article's body to embed the orphan media reference.
+        await _articleService.UpdateAsync(article.Id, plaintext: $"![img](/api/media/{mediaId})");
+
+        using var conn = _factory.CreateConnection();
+        var linkedArticleId = await conn.QuerySingleOrDefaultAsync<string?>(
+            "SELECT article_id FROM tbl_media WHERE id = @id", new { id = mediaId.ToString() });
+        linkedArticleId.Should().BeNull(
+            "media embedded in a protected article's body must stay unlinked — it is master-DEK-wrapped, not passphrase-wrapped");
+    }
+
     // 8. Delete_SerializesWithConcurrentAppend_UnderArticleWriteLock
     // (Per Correction 5: strictly assert one of two valid outcomes, never torn)
     [Fact]

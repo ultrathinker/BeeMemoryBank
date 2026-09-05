@@ -72,6 +72,12 @@ public partial class EventApplier
         var existing = await mediaRepo.GetByIdAsync(p.MediaId, includeDeleted: true);
         if (existing == null) return;
         if (existing.ArticleId != null) return;
+        // Symmetric with ArticleService.LinkOrphanMediaAsync: never attach media to a protected
+        // article, even via a peer's media_link event. Media is master-DEK-wrapped, not passphrase-
+        // wrapped, so linking it to a second-layer-protected article would expose it without the
+        // passphrase. A peer that links anyway (bug or malice) must not undermine that guarantee here.
+        var article = await articleRepo.GetByIdAsync(p.ArticleId, includeDeleted: true);
+        if (article is { Protected: true }) return;
         if (!ConflictResolver.IncomingWins(
                 RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
                 new RowVersion(evt.LamportTs, evt.NodeId)))

@@ -261,6 +261,93 @@ public class DekRotationFlowTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// Confidentiality guardrail (adversarial): a REVOKED peer must receive no envelope it could
+    /// open. Recipients come from GetAllActiveAsync(), so a status='R' peer is enumerated out — this
+    /// pins that property so a future change to the recipient set cannot silently start sealing the
+    /// new DEK for a revoked node.
+    /// </summary>
+    [Fact]
+    public async Task ConfidentialRotation_RevokedPeer_GetsNoEnvelope()
+    {
+        var (revokedPub, _) = Ed25519Signer.GenerateKeyPair();
+        var revokedNodeId = Guid.NewGuid();
+        var whitelistRepo = _factory.Services.GetRequiredService<IWhitelistRepository>();
+        await whitelistRepo.CreateAsync(new WhitelistEntry
+        {
+            NodeId = revokedNodeId,
+            DisplayName = "RevokedNode",
+            Ed25519PublicKey = revokedPub,
+            Status = "R", // revoked — must not be a rotation recipient
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        var proposeResp = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
+        proposeResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var commitEventId = (await proposeResp.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("commitEventId").GetGuid();
+
+        using var conn = connFactory.CreateConnection();
+        var payloadJson = await conn.ExecuteScalarAsync<string>(
+            "SELECT payload FROM tbl_event WHERE event_id = @id COLLATE NOCASE AND event_type = 'dek_rotation_commit'",
+            new { id = commitEventId.ToString() });
+        using var doc = JsonDocument.Parse(payloadJson!);
+        var peers = doc.RootElement.GetProperty("dek_envelopes").GetProperty("peers");
+
+        peers.TryGetProperty(revokedNodeId.ToString().ToUpperInvariant(), out _)
+            .Should().BeFalse("a revoked peer must not receive an openable envelope");
+        var localNodeId = await conn.ExecuteScalarAsync<string>("SELECT node_id FROM tbl_node_identity");
+        peers.TryGetProperty(localNodeId!.ToUpperInvariant(), out _)
+            .Should().BeTrue("the initiator still gets its own envelope");
+    }
+
+    /// <summary>
+    /// Availability guardrail (adversarial, P1): an active peer whose stored Ed25519 key is not a
+    /// valid curve point (corrupt row, or a maliciously planted key) is EXCLUDED from the rotation
+    /// with a log — it must not (a) abort the whole rotation for every healthy peer, nor (b) be
+    /// sealed an envelope from an off-curve/small-order key. The rotation still completes.
+    /// </summary>
+    [Fact]
+    public async Task ConfidentialRotation_BrokenPeerKey_IsExcluded_AndRotationCompletes()
+    {
+        var brokenNodeId = Guid.NewGuid();
+        var whitelistRepo = _factory.Services.GetRequiredService<IWhitelistRepository>();
+        await whitelistRepo.CreateAsync(new WhitelistEntry
+        {
+            NodeId = brokenNodeId,
+            DisplayName = "BrokenKeyNode",
+            Ed25519PublicKey = new byte[32], // small-order / non-subgroup point — rejected by validation
+            Status = "A",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        var proposeResp = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
+        proposeResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var commitEventId = (await proposeResp.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("commitEventId").GetGuid();
+
+        using (var conn = connFactory.CreateConnection())
+        {
+            var payloadJson = await conn.ExecuteScalarAsync<string>(
+                "SELECT payload FROM tbl_event WHERE event_id = @id COLLATE NOCASE AND event_type = 'dek_rotation_commit'",
+                new { id = commitEventId.ToString() });
+            using var doc = JsonDocument.Parse(payloadJson!);
+            var peers = doc.RootElement.GetProperty("dek_envelopes").GetProperty("peers");
+            peers.TryGetProperty(brokenNodeId.ToString().ToUpperInvariant(), out _)
+                .Should().BeFalse("a peer with an invalid Ed25519 key must be excluded, not sealed for");
+        }
+
+        var acceptResp = await _client.PostAsJsonAsync("/api/dek-rotation/accept",
+            new { commitEventId = commitEventId.ToString(), masterPassword = Password });
+        acceptResp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await PollProgressAsync(step => step == DekRotationFlowStep.Completed, TimeSpan.FromSeconds(60)))
+            .Should().BeTrue("one broken peer key must not abort the rotation for everyone else");
+    }
+
+    /// <summary>
     /// Regression: rotation used to build the unwrap AAD for tbl_article_version /
     /// tbl_conflict_version from the ROW's GUID primary key instead of the parent article_id.
     /// Those rows carry a byte-copy of the article body's DEK, wrapped under the article's AAD,

@@ -528,6 +528,16 @@ public partial class ArticleService(
             .ToList();
         if (mediaIds.Count == 0) return;
 
+        // A protected (second-layer passphrase) article must never gain attached media. Media is
+        // wrapped by the MASTER DEK, not the article passphrase, so a body-embedded image linked
+        // here would be readable without the passphrase — the exact guarantee
+        // MediaService.CreateAsync refuses to undermine for directly-attached media. Embedding via
+        // the body slipped past that check; refuse it here too by leaving the media unlinked (it
+        // stays an orphan and is swept by the media GC), so a protected article never carries a
+        // master-DEK-readable attachment.
+        var target = await articleRepo.GetByIdAsync(articleId);
+        if (target is { Protected: true }) return;
+
         var lamportTs = clock.Tick();
         var identity = await nodeRepo.GetAsync();
         var linked = await mediaRepo.LinkOrphansToArticleAsync(mediaIds, articleId, lamportTs, identity?.NodeId);

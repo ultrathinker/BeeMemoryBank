@@ -196,6 +196,19 @@ public static class DekEnvelope
             throw new ArgumentException(
                 $"Ed25519 public key must be {CryptoConstants.Ed25519PublicKeySize} bytes.", nameof(ed25519PublicKey));
 
+        // Reject anything that is not a canonical Ed25519 point in the prime-order subgroup BEFORE
+        // deriving an X25519 key from it. Without this, a garbage / off-curve / small-order 32-byte
+        // value still produces *some* Montgomery-u: the birational map is just field arithmetic and
+        // only rejects the y==1 singularity below. Two consequences it closes: (1) a corrupt or
+        // maliciously-planted whitelist key would seal an envelope no one can open, silently locking
+        // that peer out of every future DEK — the broken-peer path (DekRotationService.Propose)
+        // catches this CryptographicException and EXCLUDES the peer with a log instead; (2) a
+        // small-order public key would force a low-order shared secret. ValidatePublicKeyFull checks
+        // canonical encoding, on-curve, and prime-order-subgroup membership in one call.
+        if (!Org.BouncyCastle.Math.EC.Rfc8032.Ed25519.ValidatePublicKeyFull(ed25519PublicKey, 0))
+            throw new CryptographicException(
+                "Invalid Ed25519 public key: not a canonical point in the prime-order subgroup.");
+
         // Clear the sign bit; read the remaining 255 bits as a little-endian integer = y.
         var yBytes = (byte[])ed25519PublicKey.Clone();
         yBytes[31] &= 0x7F;

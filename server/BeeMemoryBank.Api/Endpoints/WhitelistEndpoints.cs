@@ -276,6 +276,16 @@ public static class WhitelistEndpoints
             if (localIdentity != null && localIdentity.NodeId == nodeId)
                 return Results.BadRequest(new ErrorResponse("Cannot set auto-accept for the local node"));
 
+            // Enabling auto-accept DEK rotation for a peer means "I let this peer rewrap my entire
+            // vault's DEK, unattended, whenever it proposes a rotation" — a superadmin-level trust.
+            // A joining node now defaults to content-only (is_superadmin=0, d10a2053); refuse to arm
+            // auto-accept for a non-superadmin peer so an operator can't accidentally grant DEK
+            // authority to a content-only node it would otherwise reason is harmless. Disabling is
+            // always allowed.
+            if (req.AutoAccept && !entry.IsSuperadmin)
+                return Results.BadRequest(new ErrorResponse(
+                    "Auto-accept DEK rotation can only be enabled for a superadmin peer."));
+
             await repo.SetAutoAcceptDekRotationAsync(nodeId.ToString(), req.AutoAccept);
             return Results.Ok(new { success = true, autoAccept = req.AutoAccept });
         });
