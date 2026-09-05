@@ -1,6 +1,7 @@
 ﻿using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 
 namespace BeeMemoryBank.Api.Endpoints;
@@ -22,7 +23,8 @@ public static class JoinEndpoints
             INodeIdentityRepository nodeRepo,
             IWhitelistRepository whitelistRepo,
             IUserRepository userRepo,
-            IEventLogger eventLogger) =>
+            IEventLogger eventLogger,
+            SessionService session) =>
         {
             // 1. Verify that this node is initialized
             var identity = await nodeRepo.GetAsync();
@@ -92,6 +94,19 @@ public static class JoinEndpoints
 
             if (passwordSlot == null)
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 401);
+
+            // The password is valid, but recording this peer means signing a whitelist_add event,
+            // and the signature needs this node's master DEK — which is only in memory while the
+            // vault is unlocked. If it is locked the join fails deep inside LogWhitelistAddAsync
+            // with a bare "Session is locked" 403 that says nothing about which node or what to do.
+            // Catch it here, where we can name the host node and the action. Found on the test mesh:
+            // a fresh standalone node accepts /api/init/standalone but is still locked, so the very
+            // next node's join fails with an error that points at the wrong end of the connection.
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse(
+                    "The node being joined is locked and cannot record new members. Unlock it " +
+                    "(sign in on its web UI, or POST /api/session/unlock) and retry the join."),
+                    statusCode: 409);
 
             // 3. Validate the public key of the new node
             byte[] publicKey;
