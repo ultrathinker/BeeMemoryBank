@@ -57,8 +57,19 @@ BeeMemoryBank uses a LUKS-style multi-slot key system stored in `tbl_key_slot`:
 API agent keys use a separate wrapping mechanism:
 
 - Agent keys are SHA-256 hashed for database lookup
-- A derived encryption key (`SHA256(apiKey + "bmb-encrypt")`) wraps the Master DEK for agent access
+- A derived encryption key (HKDF-SHA256 with a per-agent random salt, `kdf_version = 1`; legacy
+  `v0` agents still authenticate against the older `SHA256(apiKey + "bmb-encrypt")` derivation)
+  wraps the Master DEK for agent access
 - This allows programmatic access without storing the user's password
+- **Only an agent owned by a superadmin can carry a wrapped Master DEK and auto-unlock a locked
+  node.** Before this, every agent's key wrapped the same Master DEK regardless of owner, so a
+  self-service agent minted by an ordinary, folder-restricted user was cryptographically a key to
+  the *entire* vault — the folder ACL and read-only flag are enforced only in software, over
+  already-decrypted content, not by the key material. An ordinary user's agent still authenticates
+  and works normally whenever the vault is already unlocked by someone else; it just can't unlock
+  it by itself, and a stolen database file yields nothing usable from its row alone. Demoting a
+  superadmin strips the wrapped DEK from every agent they own; a revoked agent's key material is
+  wiped regardless of the owner's role.
 
 ### Data at Rest
 
@@ -72,10 +83,21 @@ API agent keys use a separate wrapping mechanism:
 
 Replacing the Master DEK across an entire network without exporting/re-importing the vault. Reasons to rotate: suspected compromise of the current DEK, periodic key hygiene, or rotating off material that may have transited insecure paths.
 
+**Confidential per-peer envelopes (ADR 0006, since 2026-09-04).** The new DEK is no longer wrapped
+under the old one for transport — that old scheme meant every current *and revoked* peer already
+held a copy of the wrapped new key inside the plaintext, replicated `dek_rotation_commit` event, so
+revoking a peer didn't stop it from reading every future rotation (see "What rotation does not
+protect against" below for what this still doesn't fix). The initiator instead seals the new DEK
+once per currently-trusted peer with a per-peer X25519 envelope derived from the Ed25519 identity
+keys every node and whitelist row already carries — no new key material, and a revoked node simply
+receives no envelope it can open. See [docs/adr/0006-confidential-dek-rotation-x25519-envelopes.md](docs/adr/0006-confidential-dek-rotation-x25519-envelopes.md)
+for the full design. The legacy old-DEK-wrapped field survives only as a fallback for a peer that
+hasn't upgraded past this change yet.
+
 **Initiator flow** (one superadmin, one node):
 
-1. **Propose** — verify the master password against the current DEK; generate a fresh 32-byte DEK; wrap it with the current DEK; emit a signed `dek_rotation_proposed` sync event.
-2. **Accept** — emit a signed `dek_rotation_commit` event referencing the proposed event; create a **pre-rotation snapshot** automatically (so the rotation is rollback-able to disk); verify the master password a second time before any destructive work; in a single SQLite transaction, walk every per-item DEK in `tbl_article_body` / `tbl_article_version` / `tbl_conflict_version` / `tbl_media`, unwrap with the old DEK and re-wrap with the new one; delete all `tbl_agent` rows (their API keys cannot be re-wrapped server-side); re-wrap the initiator's key slot; update the sentinel and the monotonic `dek_epoch`. Atomicity guarantees the database is never partially rotated. Then `SwapMasterDek` rolls the in-memory DEK over with a 2-second drain window for in-flight readers.
+1. **Propose** — verify the master password against the current DEK; generate a fresh 32-byte DEK; seal it into a per-peer X25519 envelope for every currently-trusted peer (a peer with an unusable/malformed identity key is excluded from this rotation rather than aborting it for everyone); emit a signed `dek_rotation_proposed` sync event.
+2. **Accept** — emit a signed `dek_rotation_commit` event referencing the proposed event; create a **pre-rotation snapshot** automatically (so the rotation is rollback-able to disk); verify the master password a second time before any destructive work; in a single SQLite transaction, walk every per-item DEK in `tbl_article_body` / `tbl_article_version` / `tbl_conflict_version` / `tbl_media` plus the embedding projection matrix and the node's own Ed25519 identity seed, unwrap with the old DEK and re-wrap with the new one (a row already re-wrapped by a peer that raced ahead is recognized and left alone, rather than aborting the whole rotation); delete all `tbl_agent` rows (their API keys cannot be re-wrapped server-side); re-wrap the initiator's key slot; update the sentinel and the monotonic `dek_epoch`. Atomicity guarantees the database is never left with a mix of old- and new-keyed rows that genuinely needed rewrapping. Then `SwapMasterDek` rolls the in-memory DEK over with a 2-second drain window for in-flight readers.
 
 The HTTP `/accept` returns 202 immediately and the work runs in the background; the UI polls `/progress` for status.
 
@@ -94,9 +116,23 @@ The HTTP `/accept` returns 202 immediately and the work runs in the background; 
 
 Read this before relying on rotation for the first reason listed above (suspected compromise of the current DEK).
 
-**An attacker who holds the old DEK derives every later one, given any copy of the database taken after the rotation.** The new DEK is wrapped under the *old* DEK and shipped inside the `dek_rotation_commit` payload — and `tbl_event.payload` is plaintext JSON, replicated to every node (see [docs/encryption.md](docs/encryption.md#what-is-not-encrypted-by-design)). So whoever has DEK₁ plus a later `beememorybank.db`, a local backup, or a pulled page of events reads `encrypted_new_dek`, unwraps it with DEK₁, and has DEK₂ — then DEK₃ from the next commit, and so on. Rotation therefore defends only against an attacker who holds the old key and never sees the log again, which is close to the attacker the old key already defended you from. Compaction eventually removes the commit rows, but that is a side effect of an unrelated mechanism, not a security boundary.
+**Fixed for confidential rotations (2026-09-04 onward), still true for older ones.** Before ADR-0006,
+an attacker who held the old DEK derived every later one, given any copy of the database taken
+after the rotation: the new DEK was wrapped under the *old* DEK and shipped inside the plaintext,
+replicated `dek_rotation_commit` payload — so whoever had DEK₁ plus a later `beememorybank.db`, a
+local backup, or a pulled page of events could unwrap `encrypted_new_dek` with DEK₁, get DEK₂, then
+DEK₃ from the next commit, and so on. That is now closed for a mesh whose nodes are all on a build
+with confidential rotation: the new DEK is sealed once per currently-trusted peer with a per-peer
+X25519 envelope (see above), so revoking a peer means it holds no envelope it can open for any
+*future* rotation. Two things this still does not do: it does not retroactively protect a rotation
+that already shipped the old-style commit before this change existed on that mesh, and if the mesh
+still contains a peer old enough to need the legacy fallback field, that field is exactly as exposed
+for *that* rotation as it always was. Compaction eventually removes old commit rows from the log,
+but that is a side effect of an unrelated mechanism, not a security boundary.
 
-The fix is per-peer envelopes (convert each whitelist entry's Ed25519 key to X25519 and wrap the new DEK once per active peer), so that only a node still whitelisted *and* holding its identity key can unwrap it. Until that exists, treat a rotation as key hygiene, not as containment of a leaked DEK. If the DEK is genuinely believed to have leaked, the containing action is revoking the peers you no longer trust *and* rotating, on the understanding that anyone holding both the old key and a later database copy is not shut out by the rotation alone.
+If the DEK is genuinely believed to have leaked, the containing action is still revoking the peers
+you no longer trust *and* rotating — on a fully-upgraded mesh, revoking removes a peer's ability to
+open the new envelope even if it already held the old DEK.
 
 **A rotation is also not safe on a mesh where anyone writes during it** — see the `dek_epoch` note in [docs/encryption.md](docs/encryption.md); a peer that receives a post-rotation article before it applies the rotation cannot afterwards apply that rotation at all.
 

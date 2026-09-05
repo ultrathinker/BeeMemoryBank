@@ -225,6 +225,31 @@ DEK rotation replaces the Master DEK — the single key that wraps all per-artic
 - **Key compromise:** if the Master DEK is suspected leaked, rotation re-encrypts every wrapped DEK with fresh key material.
 - **Periodic key hygiene:** limits the blast radius of an undetected compromise.
 
+### Confidential per-peer envelopes (ADR 0006, since 2026-09-04)
+
+The new DEK is no longer wrapped under the *old* DEK for transport — that scheme meant every
+current **and revoked** peer already had the material to unwrap every future rotation, since
+`tbl_event.payload` is plaintext JSON replicated to every node (see "What is NOT Encrypted" below).
+The initiator now seals the new DEK once per currently-trusted peer, in a per-peer X25519 envelope
+derived from the Ed25519 identity keys every node and whitelist row already carries — no new key
+material needed, and a revoked peer simply receives no envelope it can open:
+
+```
+DekEnvelope.Build (per trusted peer):
+  peer Ed25519 seed/pubkey → X25519 (birational map; BouncyCastle
+                                      Ed25519.ValidatePublicKeyFull rejects any
+                                      off-curve/small-order/garbage key rather than
+                                      silently deriving a usable-but-wrong secret)
+  HKDF-SHA256(shared_secret, salt=rotation_id, info=recipient_node_id) → envelope_key
+  AES-256-GCM(newDek, envelope_key) → this peer's envelope
+```
+
+The old `AES-256-GCM(newDek, oldDek)` field survives only as a fallback for a peer that hasn't
+upgraded past this change; it is nullable and omitted on an all-upgraded mesh. See
+`docs/adr/0006-confidential-dek-rotation-x25519-envelopes.md` for the full design rationale,
+including what this does and does not fix (a rotation whose commit already shipped under the old
+scheme is not retroactively protected).
+
 ### Three-Step Flow (Initiator Node)
 
 The rotation is initiated by a superadmin on one node and propagates to all peers via sync events.
@@ -233,9 +258,11 @@ The rotation is initiated by a superadmin on one node and propagates to all peer
 
 - Verifies the master password against the current DEK.
 - Generates a new random 32-byte DEK.
-- Wraps `newDek` with `oldDek`: `AES-256-GCM(newDek, oldDek)`.
+- Builds a per-peer X25519 envelope for every currently-trusted peer (see above); a peer with an
+  unusable/malformed identity key is excluded from *this* rotation's envelope set — loudly logged —
+  rather than aborting the rotation for the entire mesh. The initiator itself is never excluded.
 - Reads current `dek_epoch` from `tbl_node_identity`, increments by 1.
-- Emits a `dek_rotation_proposed` sync event carrying the wrapped new DEK, the new epoch, and a 24-hour expiry.
+- Emits a `dek_rotation_proposed` sync event carrying the envelopes, the new epoch, and a 24-hour expiry.
 - Immediately emits a `dek_rotation_commit` event referencing the proposed event ID (MVP: no quorum wait).
 
 **2. Accept** (`POST /api/dek-rotation/accept`)
@@ -245,19 +272,33 @@ Returns `202 Accepted` immediately; the destructive work runs in the background.
 The accept phase:
 
 1. Creates a **pre-rotation snapshot** automatically (`VACUUM INTO`).
-2. Unwraps the new DEK from the commit payload using the old DEK.
+2. `DekRotationMaterial.ResolveNewDek` opens this node's own envelope from the commit payload (or,
+   for a legacy pre-ADR-0006 sender, unwraps the fallback `encrypted_new_dek` with the old DEK).
 3. Verifies the admin's password a second time (prevents a typo from destroying the vault).
-4. **Destructive re-wrap** inside a single SQLite transaction:
-   - Walks `tbl_article_body`, `tbl_article_version`, `tbl_conflict_version`, `tbl_media` — for each row, unwraps the per-item DEK with `oldDek`, re-wraps with `newDek`, updates in-place. Uses keyset pagination (500 rows/batch) for linear performance.
+4. **Re-wrap** inside a single SQLite transaction:
+   - Walks `tbl_article_body`, `tbl_article_version`, `tbl_conflict_version`, `tbl_media`, the
+     embedding projection matrix, and the node's own Ed25519 identity seed — for each row, tries the
+     old DEK first (the normal case: unwrap and re-wrap with `newDek`), then the new DEK (the row was
+     already re-wrapped by a peer that raced ahead — left alone), and only if neither opens it is the
+     row counted as unreadable and skipped, rather than aborting the whole transaction. Rows framed
+     before DEK versioning existed (pre-`v1`, no AAD) keep that original framing instead of being
+     silently relabelled `v1` and permanently corrupted. Uses keyset pagination (500 rows/batch) for
+     linear performance. A completion tally reports rewrapped / already-on-new-key / unreadable counts
+     by name, rather than a bare pass/fail.
    - Deletes all rows from `tbl_agent` (agents hold DEKs encrypted with the old Master DEK; the server cannot re-wrap them without the plaintext API keys).
    - Re-wraps the initiator's key slot with the new DEK. **Deletes all other key slots** (users must re-register).
    - Deletes recovery-type key slots.
+   - Persists the chain material `LazySlotRewrapService` needs to walk this rotation later (see below), inside the same transaction that marks the rotation `Applied`.
    - Updates `tbl_node_identity`: new sentinel + new `dek_epoch`.
    - Marks the rotation state as `APPLIED` inside the same transaction.
 5. Swaps the in-memory Master DEK in `SessionService`.
 6. Runs a post-rotation compaction (log cleanup, non-fatal if it fails).
 
-**Why a single transaction?** A partial state where some rows are wrapped with the new DEK and others with the old is unrecoverable — the sentinel can only verify one DEK. Atomic commit-or-rollback ensures consistency.
+**Why a single transaction?** A partial state where some rows genuinely needing a rewrap end up
+split between the old and new DEK is unrecoverable — the sentinel can only verify one DEK. Atomic
+commit-or-rollback ensures consistency for those rows; a row that turns out to already be on the new
+key (or unreadable under either) no longer forces the whole transaction to roll back, which is what
+used to make a single stale/raced row brick the entire rotation permanently.
 
 **3. Cancel** (`POST /api/dek-rotation/cancel/{eventId}`)
 
@@ -267,12 +308,13 @@ Cancels a proposed or committing rotation before the destructive phase completes
 
 A monotonic integer in `tbl_node_identity` (starts at 1, incremented on each rotation). Purpose:
 
-- **Replay shield — NOT IMPLEMENTED.** The field exists in `ArticleEventPayload` and
-  `MediaEventPayload`, but `EventLogger` writes the literal `1` into it on every event and no
-  applier reads it. Nothing today detects an event encrypted under a different epoch than the
-  receiver's, which is why a peer that receives a post-rotation article before it applies the
-  rotation stores a DEK it cannot later unwrap. Treat this bullet as a design intent, not a
-  property of the running system.
+- **Replay shield — partially implemented.** `EventLogger` now writes the node's real
+  `tbl_node_identity.dek_epoch` into `ArticleEventPayload`/`MediaEventPayload` (fixed 2026-09-04;
+  it used to write the literal `1` on every event regardless of the node's actual epoch). No
+  applier acts on the field yet, though — nothing today detects or rejects an event encrypted under
+  a different epoch than the receiver's, which is why a peer that receives a post-rotation article
+  before it applies the rotation itself still stores a DEK it cannot later unwrap. Treat "applier
+  enforcement" as a design intent, not yet a property of the running system.
 - **Progress indicator:** the UI shows "Epoch 3 → 4" during rotation.
 
 ### Sentinel and `VerifySentinel`
@@ -292,6 +334,16 @@ When DEK rotation completes on a peer node via auto-accept (or manual peer-accep
 - For each rotation, it unwraps the next DEK from the commit event payload using the current candidate DEK.
 - After each step, it calls `VerifySentinel(currentSentinel, candidateDek)`. When this returns true, the chain has reached the current DEK.
 - The user's key slot is re-wrapped with the current DEK. Transparent — no user action required.
+
+**Chain persistence (2026-09-04).** This walk used to read every link out of the
+`dek_rotation_commit` event in `tbl_event` — but event-log compaction deletes exactly those rows
+(the initiator runs a compaction right after its own rotation), and once the commit row was gone
+the walk could never start: the affected user could never unlock that node again, no retry, no
+recovery short of restoring a backup. Migration 020 adds `chain_encrypted_new_dek`/`chain_iv` to
+`tbl_dek_rotation_state` — a local table that is never synced and that compaction never touches —
+and the rewrap writes them in the same statement that marks a rotation `Applied`. The read side
+prefers this local copy and falls back to the event log only for a rotation applied before this
+migration existed.
 
 ### Rotation State Machine
 

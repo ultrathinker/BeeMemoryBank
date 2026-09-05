@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed (design only — item 19). Not implemented. This is the design to review before writing any
-crypto; it touches `libs/BeeMemoryBank.Crypto` and the rotation path, both flagged "tread carefully".
+**Implemented** (2026-09-04/05, `d79794bd`, `94dfb46e`, `8eb0746b`). The design below was reviewed
+before the crypto was written, per this file's original note; the option-B design (per-peer X25519
+envelopes) is what shipped, along with the resilience fixes described in the closing section.
 
 ## Context
 
@@ -172,3 +173,24 @@ checkable precondition.
 gate (2 days), migration/`SECURITY.md`/docs and the mesh test matrix (1–2 days). The dedup question
 for media (item 16b) is deliberately folded into this review because it is the same class of
 decision — what the holder of the database can learn — and may share the same X25519 machinery.
+
+## Resolution (what actually shipped)
+
+The rollout question above was answered with **option 2 (dual-ship), not the recommended option 1
+(capability gate)**: `Propose` always builds per-peer envelopes, and the legacy
+`AES-256-GCM(newDek, oldDek)` field is still emitted alongside them as a fallback for a peer that
+hasn't upgraded — there is no capability negotiation and no refusal for a mixed-version mesh. This
+means a mesh that still contains a pre-ADR-0006 peer gets a rotation that is *not* fully
+confidential for that specific rotation (the legacy field is exactly as exposed as it always was),
+without the honesty check the recommended option would have provided. `SECURITY.md`'s "What rotation
+does not protect against" section states this trade-off explicitly rather than assuming it away.
+
+Edge cases from the "Consequences" section above resolved as expected: envelope construction
+validates the peer's Ed25519 key is a canonical prime-order-subgroup point (rejecting the
+off-curve/small-order case the birational map alone would silently mishandle) and excludes an
+unusable peer from that rotation's envelope set rather than aborting for the whole mesh; the
+initiator gets a uniform envelope like any other peer; HKDF salt/info is bound to the rotation id
+and recipient node id as specified; and the node's own Ed25519 identity seed — not called out above
+— turned out to need re-wrapping on every rotation too (missed in the first implementation pass,
+which worked once and then permanently locked out the node on the *second* rotation, since the seed
+is needed to open the node's own envelope in the first place).

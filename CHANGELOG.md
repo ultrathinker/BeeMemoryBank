@@ -9,6 +9,223 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Confidential per-peer DEK rotation — X25519 envelopes (ADR 0006, 2026-09-04/05)
+
+A DEK rotation used to wrap the new Master DEK under the *old* one and ship it inside the signed
+`dek_rotation_commit` event — which every current **and revoked** peer already had a copy of via
+`tbl_event` (plaintext JSON, replicated everywhere). Revoking a peer therefore didn't stop it from
+reading every future rotation's key: an attacker holding one old DEK plus any later database copy
+could derive every DEK that came after it. Rotation defended only against an attacker who held the
+old key and never saw the event log again — close to the attacker the old key already defended
+against.
+
+The initiator now seals the new DEK **once per currently-trusted peer** with a per-peer X25519
+envelope, derived from the Ed25519 identity keys every node and whitelist row already carries — no
+new key material, and a revoked node simply receives no envelope it can open:
+
+```
+peer Ed25519 pubkey → X25519 (birational map, validated as a canonical prime-order-subgroup point)
+HKDF-SHA256(shared_secret, salt=rotation_id, info=recipient_node_id) → envelope_key
+AES-256-GCM(newDek, envelope_key) → this peer's envelope
+```
+
+The node's own Ed25519 identity seed (wrapped under the Master DEK) is re-wrapped inside the same
+rotation transaction — a rotation that forgot to do this worked once and then permanently locked
+out every node on the second rotation. The legacy `encrypted_new_dek` (wrapped under the *old* DEK)
+survives only as a fallback for peers that haven't upgraded past this change; it is now nullable
+and omitted on the confidential path. This does not retroactively protect a rotation that already
+shipped the old-style commit — see [SECURITY.md](SECURITY.md#online-dek-rotation) for what is and
+isn't fixed.
+
+Robustness fixes shipped alongside, each closing a way a single bad row could brick an entire
+rotation for the whole mesh: a row already re-wrapped by a peer that raced ahead is now left alone
+instead of aborting the transaction; legacy pre-versioning ("v0") rows keep their original framing
+instead of being silently corrupted; `tbl_article_version`/`tbl_conflict_version` rows use the
+correct AAD (their own row id was being used instead of the owning article's); the projection
+(embedding) matrix is re-wrapped in the same transaction and repaired rather than discarded if
+found unreadable; and the rotation chain material needed by `LazySlotRewrapService` is now
+persisted locally (migration 020) so event-log compaction can no longer strand a user who hasn't
+logged back in since a rotation. The rewrap core (`DekRewrapper`) moved to `BeeMemoryBank.Sync` so
+mobile and CLI nodes — which previously registered a no-op applier and silently fell behind the
+cluster on every rotation — now apply it too.
+
+#### Content-addressed blob store & sync protocol v2 (2026-09-04)
+
+Every article write logged an event whose JSON payload embedded the entire encrypted body as
+base64 — the same bytes already living in `tbl_article_body`/`tbl_article_version` — tripling
+storage for no benefit (measured on the production node: `tbl_event.payload` alone was 42 MB from
+this duplication). `tbl_blob(hash, data)` now stores ciphertext addressed by the lowercase-hex
+SHA-256 of its own bytes; `article_create`/`article_update`/`media_create` events carry
+`ciphertext_sha256` instead of the ciphertext itself, with the hash living **inside** the
+Ed25519-signed payload so the signature still transitively covers the body even though the body
+itself never crosses the wire in the event. New blob-transport endpoints
+(`/api/sync/blobs/check|get`, `POST /api/sync/blobs`) let the side that opened the connection push
+or pull the bytes it's missing; an hourly GC sweeps blobs unreferenced by any row or event after a
+2-hour grace window. Media migrated the same way in two more phases (16a/16b): a media row now
+carries its own ciphertext hash, `.enc` files are backfilled into the blob store on startup
+(desktop and mobile), and new media creation stopped writing `.enc` files entirely once every row
+had a confirmed blob to fall back to.
+
+Older (protocol-1, inline-ciphertext) events keep applying unchanged. A peer still on protocol 1
+is pulled from normally but not pushed to (it can't apply blob-referencing events) and still has
+its position reported so its compaction accounting doesn't stall.
+
+### Changed
+
+#### Node trust model: a fresh join gets content authority only, not cluster-state authority (2026-09-04/05)
+
+`POST /api/join` used to write every new peer into `tbl_whitelist` with `is_superadmin = 1` — a
+phone that joined only to read notes had exactly the same power as the operator's own server: it
+could revoke any other peer, hard-delete content network-wide, or trigger a destructive restore.
+That default is now `0`. Membership (proven by the master password) and cluster-state *authority*
+are separate grants; `PUT /api/whitelist/{nodeId}/superadmin` is the only way to promote a peer
+afterwards, and it is an explicit act by a node that already holds the authority itself. Existing
+whitelist rows are untouched — this changes only the default for new joins. See
+[SECURITY.md](SECURITY.md#trust-model) and [docs/sync.md](docs/sync.md#trust-model) for the full
+picture, including the one node that still has to be trusted on faith (the bootstrap node a joiner
+first dials into).
+
+`tbl_whitelist` is now version-stamped (`lamport_ts`/`source_node_id`, migration 021) like every
+other replicated table — a node that was offline while an admin revoked a compromised peer could
+otherwise put that peer right back into the mesh with its own stale `whitelist_add` the moment it
+came back online, with nothing distinguishing "my revoke was undone" from "my revoke never
+applied". Rows revoked *before* this migration default to version 0 and get a narrower, permanent
+carve-out: an incoming remote `whitelist_add` can never outrank one of those (a local, deliberate
+re-add by an admin still can).
+
+Changing the master password now says what it actually did instead of nothing: it rewraps the key
+slot on the one node you changed it on (slots are node-local, never synced), and every other node
+silently keeps accepting the old password at its own `/api/join` until changed there too — the
+endpoint now reports how many peers are still on the old password.
+
+#### One idiom for "superadmin only", and the node decides its own public surface (2026-09-04)
+
+The superadmin role gate had been written four different ways across `Endpoints/` — a raw
+`X-User-Role` header compare, `CallerIdentity.Extract(ctx).IsSuperadmin`, per-file
+`IsSuperadmin`/`Forbidden` helpers, and the actual filter — and five endpoints turned out to have
+no gate at all (`POST /api/admin/compact`, whitelist revoke/update/address, quarantine clear). A
+single `RequireSuperadmin()` endpoint filter now replaces every unconditional check, with a
+guardrail test asserting both the metadata *and* a live 403 for every mutating route. Separately,
+`PublicSurface` gives the node its own authoritative list of what a caller **without**
+`BMB_INTERNAL_KEY` may reach — previously this was decided entirely by whatever reverse proxy sat
+in front (Apache on a server, a YARP table on the desktop node), two hand-maintained lists that had
+already drifted out of sync with each other and with the actual endpoint set. Anything not on the
+list now answers `404`, not `403` — "this exists but you may not use it" is itself information
+worth withholding from an anonymous prober. See [docs/deployment.md](docs/deployment.md#reverse-proxy--what-is-exposed).
+
+#### Bounded, explicit system-scope elevation via `RunAsSystemAsync` (Fable #6, completed 2026-09-05)
+
+The `CallerScopeHolder.ElevateToSystem()` disposable introduced earlier in this file's own
+"Changed" section above closed the *forgotten-restore* failure mode; it didn't remove the
+ambient-mutation shape itself — eight call sites still assigned the system scope by hand and relied
+on `using`/`try`-`finally` discipline to put the caller's real scope back. All eight (remote-event
+apply, folder ACL bootstrap, folder auto-vivification, the MCP write-tool ACL bootstrap, copy
+rollback, remote-account sync, and the sync push endpoint that had no restore at all) now go
+through `RunAsSystemAsync(delegate)` — the elevation is scoped to exactly one delegate's execution,
+not to "until something remembers to undo it". The existing guardrail test now fails on *any*
+hand-written `.ElevateToSystem(...)` call outside `CallerScopeHolder.cs` itself, not just a
+reappearing field assignment.
+
+#### Sync quarantine: persistent, and Permanent vs. Deferred (2026-09-05)
+
+A single 5-consecutive-failure budget quarantined a forged signature and "the sender's
+`whitelist_add` hasn't arrived here yet" identically — the latter resolves itself given time, but
+was being discarded exactly as fast as the former. `SyncFailureClassifier` now sorts an apply
+failure into `Permanent` (bad signature, malformed payload — quarantined immediately) or
+`Deferred` (a missing precondition — whitelist/blob/rotation-ordering — retried for hours on a
+wall-clock budget immune to attempt-count inflation from push-triggered retries) via an
+`IDeferrableSyncFailure` marker. `tbl_sync_quarantine` (migrations 013, then 022 for the
+Permanent/Deferred split) tracks both counters on one row and survives a restart, and quarantine
+state is now cleared by a standalone restore and stripped from join snapshots (it was leaking this
+node's raw exception text to a joining peer). A revoked event originator is now always treated as
+a permanent rejection rather than a retriable one, closing a window where re-adding a revoked peer
+inside the retry budget would have quietly replayed its entire pre-revocation backlog.
+`POST /api/whitelist/backfill-revokes` (superadmin, requires an unlocked session) heals legacy
+revoke rows that predate the row-versioning migration above and never got their own
+`whitelist_revoke` event to anchor a version against.
+
+### Fixed
+
+#### Security review findings, 2026-09-03/04: key material, node reset, chat history, write races
+
+- **Critical: a recovery key's own bytes were its key slot's salt.** `AddRecoveryKeyAsync` derived
+  the recovery slot's KEK using the recovery key itself as the Argon2id salt, so
+  `tbl_key_slot.salt` literally *contained* the recovery key in plaintext — anyone with read access
+  to the database file could reconstruct it and unwrap the vault with no password at all. Fixed to
+  use an independent random salt, matching every other slot type. Migration 012 deletes existing
+  recovery slots (the exposure already happened and cannot be un-done retroactively); generate a
+  new one from the Admin page.
+- **Unbounded Argon2 parameters in a protected article's passphrase blob.** `ProtectedContentCodec`
+  read memory/iterations/parallelism straight out of the (attacker-controlled) blob with no bounds
+  — a crafted article could demand a multi-terabyte allocation on unlock attempt. Now bounded the
+  same way key-slot KDF parameters already are.
+- **A protected article's cached passphrase survived Lock().** The 20-minute unlock cache was only
+  cleared by the `/lock` endpoint, not by every path that calls `Lock()` — so a previously-verified
+  passphrase kept working through a lock/unlock cycle within its TTL.
+- **Changing a password was two unguarded statements, not one transaction.** A crash between
+  creating the new key slot and deleting the old one left both passwords permanently valid.
+- **DPAPI-protected auto-unlock secret had no entropy parameter** — any process running as the same
+  Windows user could unwrap it with a bare `ProtectedData.Unprotect` call.
+- **Re-checking the master password before a dangerous operation used to unlock the whole vault as
+  a side effect**, even when the operation then failed — because it called the same `UnlockAsync`
+  used for a real login. `SessionService.VerifyMasterPasswordAsync` checks the password without
+  that side effect; `/api/init/reset`, snapshot restore, the whitelist endpoints, and the network
+  restore initiator all use it now. `UnlockAsync`/`UnlockWithDek` are pinned by an architectural
+  test to the small set of files that are genuine entry points (session endpoints, CLI, mobile, OS
+  auto-unlock).
+- **`/api/session/unlock` and `/api/join` accepted a password from *any* key slot**, not just a
+  superadmin's — a "user"-type slot is now honored only if its owner is currently an active
+  superadmin (`recovery` and legacy pre-user-table `password` slots are exempt by design).
+- **Two anonymous, unauthenticated node-wipe vectors closed:** a *"Reset & rejoin"* form on the
+  locked Login page, and an unauthenticated `POST /api-proxy/init/reset` — both let anyone who could
+  load the login screen grind the master password and destroy the node on a correct guess. Reset
+  now lives behind the superadmin-only Admin page (and rejects an agent's bearer token even from a
+  superadmin's own agent) plus a host-only `bmb init reset` CLI command for when nobody can sign in.
+  Both share one `NodeResetService` in Core. See [docs/deployment.md](docs/deployment.md#resetting-a-node).
+- **Every per-IP rate limit was one shared bucket behind Docker** — published-port traffic all
+  arrives from the bridge gateway, so an anonymous caller could exhaust the login or sync-challenge
+  budget for the whole mesh with one stream of requests. `BMB_TRUSTED_PROXIES` declares which
+  hop's `X-Forwarded-For` to believe; see [docs/deployment.md](docs/deployment.md#environment-variables).
+- **Anonymous browser traffic through the Web layer was never rate-limited at all** — the API's own
+  limiter deliberately skips loopback callers (which is what every browser request looks like once
+  it reaches the API through Web), so `/Login`, the master-password reset form, and the proxy reset
+  route had no limit on either side. A new `PublicRateLimitMiddleware` in the Web pipeline closes
+  the gap with the same sliding-window semantics as the API's own limiter.
+- **`probe-relay` followed HTTP redirects** — a validated public hostname could still 302 the probe
+  onto a loopback or metadata address, leaking a status code for an internal target. Fixed with a
+  dedicated `HttpClient` that disables `AllowAutoRedirect`.
+- **Two stored-XSS vectors.** An uploaded SVG is an active document, and media was served inline
+  from the same origin holding the session cookie under a CSP permitting `unsafe-inline` — opening
+  one by URL ran its script in an authenticated session. Media responses (API, Web proxy, and chat
+  attachments) now send `Content-Security-Policy: sandbox` + `X-Content-Type-Options: nosniff`.
+  Separately, ten front-end escaping helpers used the `textContent`→`innerHTML` idiom, which does
+  not escape `"`/`'`, and their output was interpolated into HTML attributes (folder/tag picker
+  `data-path`/`data-name`) — a folder or tag name containing a quote and an event handler executed
+  in every user's picker. All ten now escape the full five characters; three places that were
+  interpolating into an inline `onclick` (where HTML-entity decoding happens before JS parsing, so
+  escaping alone can't fix it) moved to `data-*` attributes with delegated listeners.
+- **Chat tool-call arguments were stored in plaintext.** An earlier fix encrypted
+  `chat_message.content_text` under the master DEK but missed `tool_calls_json` — and a write
+  tool's arguments *are* the article body or patch being saved. Now encrypted uniformly for every
+  tool call (including reads, to avoid a per-tool classification that's one more place to get
+  wrong), with a background processor backfilling rows written before the fix.
+- **Concurrent writes to the same article could silently lose one side's change.** MCP/chat
+  append/prepend/replace were plain read-modify-write with nothing serializing the pair — two
+  agents appending at once, or an agent appending while a browser edit is in flight, could each read
+  the same body and the second save silently overwrote the first. A new per-article-id
+  `ArticleWriteLock` puts the read and the write of `AppendAsync`/`PrependAsync`/`ReplaceInAsync`
+  (and `UpdateAsync`) inside one critical section.
+- **A relaying peer could rewrite an event's `EntityId`** without invalidating its signature (the
+  signed payload never covered that field) — and the hard-delete gate keys on exactly that field, so
+  a forged value could either silently censor a legitimate event or resurrect one that had been
+  hard-deleted. `EntityId` is now derived from already-signed fields on both the write and the read
+  side instead of trusted as transported data.
+- **The replicated-table list was a deny-list, not an allow-list** — a table added since the deny
+  list was last updated shipped to every peer, contents included, until someone remembered to add
+  it (this is how `tbl_remote_api_token` — bearer tokens this node issued to remote accounts — was
+  leaking into snapshots). Every table not on an explicit allow-list is now stripped, and a test
+  requires every table in the schema to be classified one way or the other.
+
 #### Custom roles with role-level folder permissions (2026-08-27)
 
 Folder permissions were per-user only. On a vault with ~20 users, hiding one folder from everyone

@@ -233,12 +233,17 @@ Inside the stable data root, files are organized as follows:
 
 ## Database Schema
 
-The database is initialized from a single consolidated schema file (`001_initial_schema.sql`). Key tables include:
+The database starts from a consolidated schema file (`001_initial_schema.sql`) plus incremental
+migrations (`002`–`024` as of this writing — roles, a content-addressed blob store, DEK-rotation
+resilience, whitelist versioning, persistent sync quarantine, and more). Key tables include:
 
 | Table | Purpose |
 |---|---|
 | `tbl_article` | Article metadata (title, treePath — plaintext) |
-| `tbl_article_body` | Encrypted article content (ciphertext, encrypted DEK) |
+| `tbl_article_body` | Encrypted article content (ciphertext_hash → `tbl_blob`, encrypted DEK) |
+| `tbl_blob` | Content-addressed ciphertext store, keyed by the SHA-256 of its own bytes; shared by article bodies/versions and media |
+| `tbl_role` / `tbl_role_folder_acl_entry` | Custom roles and their folder ACL rules (node-local, same shape as the per-user ACL table) |
+| `tbl_sync_quarantine` | Persistent record of sync events that failed to apply, split into permanent vs. deferred failure counters |
 | `tbl_article_version` | Encrypted article version history |
 | `tbl_comment` | Comments with soft-delete and Lamport LWW |
 | `tbl_event` | Sync event log (signed with Ed25519, actor tracking) |

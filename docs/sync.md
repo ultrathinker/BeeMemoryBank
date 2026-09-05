@@ -90,7 +90,7 @@ Node B (node-b.example.com) receives push within seconds
 NodeB → NodeA: POST /api/sync/challenge
 NodeA → NodeB: { challenge: "random_32_bytes_base64", serverNodeId: "..." }
 
-NodeB: signature = Ed25519.Sign(privateKey, challenge_bytes)
+NodeB: signature = Ed25519.Sign(privateKey, challenge_bytes)  // signs a V2 payload bound to serverNodeId
 
 NodeB → NodeA: POST /api/sync/authenticate { nodeId, challenge, signature }
 NodeA: verify signature vs whitelist[nodeId].publicKey
@@ -98,6 +98,16 @@ NodeA → NodeB: { token: "bearer_token_base64" }  (TTL 1 hour)
 ```
 
 **Why challenge-response instead of a simple API key?** The private key is never transmitted over the network. Even if someone intercepts the challenge and signature, they are single-use (TTL 60 seconds).
+
+**The challenge is bound to who it was fetched from (2026-09-04, breaking).** A signed response used
+to be redeemable against whichever node the audience field named — and that field came from the
+*responding* peer's own self-reported node identity, not from anything the caller pinned in advance.
+A hostile node could declare itself to be node C, relay a challenge fetched live from the real C, and
+present the resulting signature there as if it came from the victim. The audience is now taken from
+`tbl_whitelist` (pinned out-of-band when the peer was added) instead of the peer's own claim, and the
+client signs and the server verifies only the audience-bound (`V2`) challenge format — the older,
+unbound format is gone from both sides. **Every node in the mesh, including the Android app, must run
+this build or newer to keep syncing with the rest of the network.**
 
 ### Step 2: Pull (receiving events)
 
@@ -465,31 +475,41 @@ DEK rotation propagates through the sync event stream as two event types:
 
 The initiator node broadcasts this after the superadmin triggers rotation. Peers record it in `tbl_dek_rotation_state` as `Proposed` and wait — they do **not** start rotating yet.
 
-**Payload:**
+**Payload (since ADR-0006, 2026-09-04):**
 
 | Field | Type | Purpose |
 |---|---|---|
-| `encrypted_new_dek` | string (base64) | `AES-256-GCM(newDek, oldDek)` — wrapped with the current Master DEK |
-| `iv` | string (base64) | 12-byte GCM nonce for the DEK wrapping |
+| `peer_envelopes` | object | One X25519-sealed envelope per currently-trusted peer, keyed by recipient node id — each peer opens only its own entry (see `docs/adr/0006-confidential-dek-rotation-x25519-envelopes.md`) |
+| `encrypted_new_dek` | string (base64), **nullable** | Legacy fallback: `AES-256-GCM(newDek, oldDek)`. Present only when a peer on this mesh still needs the pre-ADR-0006 path; omitted otherwise |
+| `iv` | string (base64), **nullable** | 12-byte GCM nonce for the legacy `encrypted_new_dek` field, when present |
 | `new_dek_epoch` | int | Monotonic counter; `current_epoch + 1` |
 | `rotation_ts` | string (ISO 8601) | When the rotation was initiated |
 | `expires_at` | string (ISO 8601) | 24-hour expiry window |
 | `originator_node_id` | string | Node ID of the initiator |
 
+A peer whose whitelisted Ed25519 key turns out to be malformed/off-curve is excluded from
+`peer_envelopes` for this rotation (logged loudly) rather than aborting the rotation for the rest of
+the mesh; the initiator itself is never excluded by this filter.
+
 ### `dek_rotation_commit`
 
 Emitted immediately after `dek_rotation_proposed` (MVP: no quorum wait). Peers use the `proposed_event_id` reference to match the COMMIT with a locally stored PROPOSED.
 
-**Payload:**
+**Payload:** same shape as `dek_rotation_proposed` above (`peer_envelopes` + nullable legacy
+`encrypted_new_dek`/`iv`), plus:
 
 | Field | Type | Purpose |
 |---|---|---|
 | `proposed_event_id` | string | Links back to the PROPOSED event |
-| `encrypted_new_dek` | string (base64) | Same wrapped new DEK as in PROPOSED |
-| `iv` | string (base64) | 12-byte GCM nonce |
 | `new_dek_epoch` | int | Matches the PROPOSED epoch |
 | `rotation_ts` | string (ISO 8601) | Matches the PROPOSED timestamp |
 | `originator_node_id` | string | Node ID of the initiator |
+
+**Resolving the new DEK (`DekRotationMaterial.ResolveNewDek`):** a receiving node first tries to
+open its own entry in `peer_envelopes`; only if that's absent (a pre-ADR-0006 sender) does it fall
+back to unwrapping the legacy `encrypted_new_dek` with the current Master DEK. See
+[SECURITY.md](../SECURITY.md#online-dek-rotation) for what the envelope scheme does and does not
+protect against.
 
 ### Peer-Acceptance Model
 
@@ -526,3 +546,34 @@ When a peer auto-accepts a rotation, the destructive part on the PEER side keeps
 5. The user's key slot is re-wrapped with the current DEK.
 
 This is transparent to the user — no manual action required. See `docs/encryption.md → Lazy Slot Rewrap`.
+
+**Resilience (2026-09-04/05):** a single row that a faster peer had already re-wrapped, or a
+version/legacy-framed row needing different handling, used to abort the *entire* rotation
+transaction and leave the node stuck retrying the same failure forever. Per-row handling now tries
+the old key, then the new key, and only marks a row genuinely unreadable as a last resort, reporting
+counts (rewrapped / already-on-new-key / unreadable) rather than a bare pass/fail. The chain
+material `LazySlotRewrapService` needs is now persisted locally (migration 020) instead of being
+readable only from the `dek_rotation_commit` event — which event-log compaction routinely deletes,
+previously locking out any user who hadn't logged in since the rotation.
+
+## Recent hardening (2026-09)
+
+- **`tbl_whitelist` is version-stamped** (`lamport_ts`/`source_node_id`, migration 021) like every
+  other replicated table, closing a hole where a node offline during a peer revocation could put
+  that peer back into the mesh with its own stale `whitelist_add` on reconnect. Rows revoked before
+  this migration get a narrower, permanent carve-out against a remote (not local) re-add.
+- **`EntityId` is derived from already-signed fields, not trusted as a transported one.** A node
+  that only relays someone else's event could otherwise rewrite `EntityId` without invalidating the
+  signature — and the hard-delete gate keys on that exact field.
+- **Sync quarantine now distinguishes `Permanent` failures (bad signature, malformed payload) from
+  `Deferred` ones** (a precondition — the sender's whitelist entry, a blob, a rotation COMMIT — just
+  hasn't arrived yet), retried on a separate, longer wall-clock budget instead of being discarded on
+  the same 5-attempt counter as an actual forgery. Quarantine state is persisted (`tbl_sync_quarantine`)
+  and survives a restart; `GET /api/sync/quarantine` / `DELETE /api/sync/quarantine/{eventId}` expose
+  and clear it. A revoked event originator is always classified `Permanent`, never `Deferred` —
+  otherwise re-adding a revoked peer inside the retry window could replay its whole pre-revocation
+  backlog.
+- **The replicated-table set for snapshots/joins is an explicit allow-list, not a deny-list of
+  secrets** — a new table is stripped by default until deliberately added to the allow-list, closing
+  a class of bug where a forgotten table (e.g. `tbl_remote_api_token`) shipped its contents to every
+  joining peer.
