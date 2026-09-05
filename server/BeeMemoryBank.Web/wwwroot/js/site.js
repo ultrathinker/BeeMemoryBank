@@ -520,8 +520,13 @@ $(function () {
             return parts.join('');
         }
 
-        function locateInTree(fullPath, articleId) {
-            // 1. Expand sidebar if collapsed
+        // Reveal a FOLDER in the tree from a search result: expand the whole ancestor chain AND the
+        // folder itself, select it, scroll it into view, and blink it. For an article result the
+        // caller passes the article's tree path, so "show in tree" always opens the folder the item
+        // lives in (that is what the folder icon promises). `folderPath` is the raw path — matched
+        // against the node's data-path, so Cyrillic / spaces need no URL-encoding dance.
+        function locateInTree(folderPath) {
+            // 1. Expand the sidebar if it is collapsed.
             var sidebar = document.getElementById('app-sidebar');
             var expandTab = document.getElementById('sidebar-expand-tab');
             if (sidebar && sidebar.classList.contains('sidebar-collapsed')) {
@@ -530,51 +535,67 @@ $(function () {
                 localStorage.setItem('sidebar-collapsed', 'false');
             }
 
-            // 2. Clear search input to show the tree
-            if (searchInput) {
-                searchInput.value = '';
-            }
+            // 2. Clear the search box so the tree is shown again.
+            if (searchInput) searchInput.value = '';
 
-            // 3. Load tree and navigate to path
-            loadTree().then(function() {
-                var segments = fullPath.split('/').filter(Boolean);
+            // 3. Reload the tree, then expand every ancestor segment AND the folder itself.
+            loadTree().then(function () {
+                var segments = folderPath.split('/').filter(Boolean);
                 var currentPath = '';
                 var chain = Promise.resolve();
-
-                // Build path segments to expand sequentially
-                segments.forEach(function(seg) {
+                segments.forEach(function (seg) {
                     currentPath += '/' + seg;
-                    var path = currentPath;
-                    chain = chain.then(function() {
-                        if (!expandedPaths.has(path)) {
-                            expandedPaths.add(path);
-                            saveExpandedSet(expandedPaths);
-                        }
-                        return loadPathChildren(path);
+                    var p = currentPath;
+                    chain = chain.then(function () {
+                        expandedPaths.add(p);
+                        return loadPathChildren(p);
                     });
                 });
 
-                return chain.then(function() {
-                    var selector = articleId
-                        ? 'a[href="/Article/View?id=' + articleId + '"]'
-                        : 'a[href="/Folder?path=' + encodeURIComponent(fullPath) + '"]';
+                return chain.then(function () {
+                    saveExpandedSet(expandedPaths);
 
-                    var link = treeContainer.querySelector(selector);
-                    if (link) {
-                        var row = link.closest('.tree-node-row');
-                        if (row) {
-                            treeContainer.querySelectorAll('.tree-node-row.active').forEach(function(r) {
-                                r.classList.remove('active');
-                            });
-                            row.classList.add('active');
-                            row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                    var node = treeContainer.querySelector('.tree-node[data-path="' + folderPath + '"]');
+                    if (!node) return;
+                    var row = node.querySelector(':scope > .tree-node-row');
+                    if (!row) return;
 
-                            // Visual feedback
-                            row.style.transition = 'outline 0.3s';
-                            row.style.outline = '2px solid var(--accent)';
-                            setTimeout(function() { row.style.outline = 'none'; }, 2000);
+                    // loadPathChildren only FILLS a container; it leaves it `hidden`. Un-hide the
+                    // folder's own children and every ancestor container, and rotate their chevrons,
+                    // so the tree is visibly open rather than loaded-but-collapsed (the bug where the
+                    // tree "opened" but nothing was actually revealed or selected).
+                    var ownChildren = node.querySelector(':scope > .tree-children');
+                    if (ownChildren) ownChildren.classList.remove('hidden');
+                    var ownChevron = row.querySelector('.tree-chevron');
+                    if (ownChevron) ownChevron.classList.add('expanded');
+
+                    var el = node;
+                    while (el && el !== treeContainer) {
+                        el = el.parentElement;
+                        if (el && el.classList && el.classList.contains('tree-children')) {
+                            el.classList.remove('hidden');
+                            var ownerPath = el.getAttribute('data-owner-path');
+                            if (ownerPath) {
+                                expandedPaths.add(ownerPath);
+                                var pchev = treeContainer.querySelector('.tree-chevron[data-toggle-path="' + ownerPath + '"]');
+                                if (pchev) pchev.classList.add('expanded');
+                            }
                         }
                     }
+                    saveExpandedSet(expandedPaths);
+
+                    // Select it.
+                    treeContainer.querySelectorAll('.tree-node-row.active').forEach(function (r) {
+                        r.classList.remove('active');
+                    });
+                    row.classList.add('active');
+                    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+
+                    // Blink three times so the click is unmistakable.
+                    row.classList.remove('locate-blink');
+                    void row.offsetWidth; // force reflow so re-adding the class restarts the animation
+                    row.classList.add('locate-blink');
+                    setTimeout(function () { row.classList.remove('locate-blink'); }, 900);
                 });
             });
         }
@@ -629,9 +650,9 @@ $(function () {
             if (locateBtn) {
                 var item = locateBtn.closest('.search-result-item');
                 if (item) {
-                    var path = item.getAttribute('data-path');
-                    var id = item.getAttribute('data-id');
-                    locateInTree(path, id);
+                    // data-path is the folder for a folder result and the article's tree path for
+                    // an article result — either way, the folder to open and reveal in the tree.
+                    locateInTree(item.getAttribute('data-path'));
                 }
                 return;
             }

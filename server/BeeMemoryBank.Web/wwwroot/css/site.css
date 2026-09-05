@@ -669,9 +669,25 @@ a.search-result-path:hover {
 
 a.search-result-title {
     color: var(--text-primary);
+    /* The article title is the point of the row — make it clearly dominate the folder path
+       above it (0.75rem, secondary), which is context, not the primary label. */
+    font-size: 0.9rem;
+    font-weight: 600;
 }
 a.search-result-title:hover {
     color: var(--accent);
+}
+
+/* "Show in tree" blink: flash the located folder row a few times so the click clearly registers. */
+@keyframes tree-node-locate-blink {
+    0%, 100% { background: var(--tree-active); }
+    50%      { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+}
+.tree-node-row.locate-blink {
+    animation: tree-node-locate-blink 0.22s ease-in-out 3;
+}
+@media (prefers-reduced-motion: reduce) {
+    .tree-node-row.locate-blink { animation: none; }
 }
 .search-result-item mark {
     background: var(--accent);
