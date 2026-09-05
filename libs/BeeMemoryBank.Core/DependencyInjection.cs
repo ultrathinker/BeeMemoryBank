@@ -51,6 +51,7 @@ public static class DependencyInjection
         services.AddScoped<CopyService>();
         services.AddScoped<CommentService>();
         services.AddScoped<MediaService>();
+        services.AddScoped<MediaBlobBackfillService>();
         services.AddScoped<UserService>();
         services.AddScoped<FolderAccessService>();
         services.AddScoped<RoleService>();

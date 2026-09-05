@@ -227,6 +227,32 @@ if (OperatingSystem.IsWindows())
     }
 }
 
+// Backfill legacy media ciphertext into the content-addressed blob store, in background (16b).
+// Idempotent and additive: reads each .enc file whose row has no hash yet, stores it as a blob and
+// stamps the hash. Migration 023 can only backfill from surviving media_create events, which are
+// compacted away on a long-lived node, so this disk pass is what actually makes the blob store the
+// complete home for media. No decryption, no deletion — safe to run every startup.
+{
+    var mediaBackfillLogger = app.Services.GetRequiredService<ILogger<Program>>();
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            using var scope = app.Services.CreateScope();
+            var svc = scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Services.MediaBlobBackfillService>();
+            var result = await svc.BackfillAsync();
+            if (result.Stored > 0 || result.MissingFile > 0)
+                mediaBackfillLogger.LogInformation(
+                    "Media blob backfill on startup: {Stored} stored, {Missing} missing file, {Already} already done.",
+                    result.Stored, result.MissingFile, result.AlreadyDone);
+        }
+        catch (Exception ex)
+        {
+            mediaBackfillLogger.LogError(ex, "Media blob backfill failed");
+        }
+    });
+}
+
 // Backfill concept tag embeddings in background
 {
     using var scope = app.Services.CreateScope();
