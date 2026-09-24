@@ -97,8 +97,7 @@ public partial class DekRotationService
                 _maintenance.Enter("DEK rotation auto-accept in progress\u2026");
                 try
                 {
-                    await AutoAcceptCommitCoreAsync(commitEvent, payload);
-                    runPostCompaction = true;
+                    runPostCompaction = await AutoAcceptCommitCoreAsync(commitEvent, payload);
                 }
                 catch (DekRotationPreconditionException)
                 {
@@ -160,10 +159,25 @@ public partial class DekRotationService
         }
     }
 
-    private async Task AutoAcceptCommitCoreAsync(SyncEvent commitEvent, DekRotationCommitPayload payload)
+    /// <returns>True when the rotation was applied; false when it was skipped as already settled.</returns>
+    private async Task<bool> AutoAcceptCommitCoreAsync(SyncEvent commitEvent, DekRotationCommitPayload payload)
     {
         using var scope = _scopeFactory.CreateScope();
         var stateRepo = scope.ServiceProvider.GetRequiredService<IDekRotationStateRepository>();
+
+        // A commit this node has already applied (or cancelled, or rejected) is a no-op. Sync
+        // re-delivers events, and re-running an applied rotation would treat the CURRENT DEK as the
+        // old one. Checked here — under _executeLock and the heavy-operation lock, which the rewrap
+        // also runs under — so the check and the rewrap cannot interleave with another apply.
+        var existing = await stateRepo.GetAsync(commitEvent.EventId.ToString());
+        if (existing?.State is DekRotationState.Applied or DekRotationState.Cancelled or DekRotationState.Rejected)
+        {
+            _logger.LogInformation(
+                "DEK rotation commit {CommitEventId} is already {State}; auto-accept skipped (no-op)",
+                commitEvent.EventId, existing.State);
+            return false;
+        }
+
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -200,6 +214,7 @@ public partial class DekRotationService
             _logger.LogInformation(
                 "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, agentsDeleted, recoveryDeleted);
+            return true;
         }
         catch (DekRotationPreconditionException ex)
         {

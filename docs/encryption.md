@@ -353,8 +353,11 @@ the initiator from peers that already applied it — and the same commit is acce
 master password, once the cause is gone. A commit that is already `Applied`, `Cancelled` or
 `Rejected` is refused by accept. On a peer the rotation also stays `Committing`; it is retried on the
 next unlock and, while the node stays unlocked, by a bounded automatic retry (30 s doubling up to
-30 min, 10 attempts; reset after a successful apply) — never by the immediate post-apply sweep, which
-would re-dispatch it in a tight loop.
+30 min, 10 attempts; reset after a successful apply; exactly one retry outstanding at a time, so
+retries never overlap) — never by the immediate post-apply sweep, which would re-dispatch it in a
+tight loop. Every apply path (initiator accept, server auto-accept, the mobile/CLI applier) treats
+a commit that is already `Applied`, `Cancelled` or `Rejected` as settled, checked under the same
+locks as the rewrap: a re-delivered COMMIT is a no-op.
 
 The progress endpoint reports `Completed` only after the accept path has left maintenance mode, so a
 caller acting on it is never answered 503.

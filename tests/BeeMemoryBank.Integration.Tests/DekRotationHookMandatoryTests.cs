@@ -278,4 +278,27 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
         _factory.Services.GetRequiredService<SessionService>().GetMasterDek().Should().Equal(newDek);
         Array.Clear(oldDek);
     }
+
+    [Fact]
+    public async Task Peer_RedeliveredCommit_ForAnAppliedRotation_IsANoOp()
+    {
+        _hook.Fail = false;
+        var rotation = _factory.Services.GetRequiredService<DekRotationService>();
+        var (commit, oldDek, newDek) = await ArrivePeerCommitAsync();
+        Array.Clear(oldDek);
+
+        await rotation.AutoAcceptCommitAsync(commit);
+        (await StateAsync(commit)).Should().Be(DekRotationState.Applied);
+        var epoch = await CountAsync("SELECT dek_epoch FROM tbl_node_identity");
+        var calls = _hook.Calls;
+
+        // Sync re-delivers the same COMMIT after it was applied.
+        var redelivery = () => rotation.AutoAcceptCommitAsync(commit);
+        await redelivery.Should().NotThrowAsync("a settled commit is skipped, not re-run or failed");
+
+        (await StateAsync(commit)).Should().Be(DekRotationState.Applied);
+        (await CountAsync("SELECT dek_epoch FROM tbl_node_identity")).Should().Be(epoch, "the epoch must not move again");
+        _factory.Services.GetRequiredService<SessionService>().GetMasterDek().Should().Equal(newDek, "the DEK must not change again");
+        _hook.Calls.Should().Be(calls, "a skipped commit does not even run the pre-rewrap hooks");
+    }
 }
