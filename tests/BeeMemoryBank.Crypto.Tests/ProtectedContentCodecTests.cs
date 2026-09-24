@@ -9,7 +9,7 @@ public class ProtectedContentCodecTests
     [Fact]
     public void WrapUnwrap_Roundtrip()
     {
-        var plaintext = "my super secret password: hunter2 — Привет, мир!";
+        var plaintext = "my super secret password: hunter2 — \u041F\u0440\u0438\u0432\u0435\u0442, \u043C\u0438\u0440!";
         var wrapped = ProtectedContentCodec.Wrap(plaintext, "correct horse");
 
         ProtectedContentCodec.IsProtected(wrapped).Should().BeTrue();
@@ -70,12 +70,14 @@ public class ProtectedContentCodecTests
     // come from inside the blob, which is attacker-controlled — any writer (a folder-restricted
     // agent included) can save an article whose body is a hand-crafted "BMBENC1:" blob. Without
     // bounds, a value like memory = int.MaxValue asks Argon2id to allocate multiple terabytes the
-    // instant a human later enters the correct passphrase. These mirror the exact bounds
-    // SessionService.UnlockCoreAsync already enforces on key-slot KDF params.
+    // instant anyone tries a passphrase. The blob ceiling is deliberately tighter than the key-slot one.
     [Theory]
     [InlineData(int.MaxValue, 3, 4)]       // absurd memory
     [InlineData(65536, 999, 4)]            // absurd iterations
     [InlineData(65536, 3, 999)]            // absurd parallelism
+    [InlineData(524288, 3, 4)]             // 512 MiB: fine for a key slot, too much for a blob any writer can plant
+    [InlineData(65536, 11, 4)]             // iterations above the blob ceiling
+    [InlineData(65536, 3, 0)]              // parallelism below 1
     public void Unwrap_UnreasonablyLargeArgonParams_ThrowsWithoutAttemptingDerivation(
         int memory, int iterations, int parallelism)
     {

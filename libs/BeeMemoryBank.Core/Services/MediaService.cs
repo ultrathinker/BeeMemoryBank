@@ -116,18 +116,7 @@ public class MediaService(
         byte[] ciphertext, iv, encryptedDek, dekIv;
         try
         {
-            var mediaDek = DekManager.GenerateArticleDek();
-            try
-            {
-                var dekAad = "bmb-media-dek"u8.ToArray().Concat(mediaId.ToByteArray()).ToArray();
-                var bodyAad = "bmb-media"u8.ToArray().Concat(mediaId.ToByteArray()).ToArray();
-                (ciphertext, iv) = MediaEncryptor.Encrypt(plaintext, mediaDek, bodyAad);
-                (encryptedDek, dekIv) = DekManager.WrapDek(mediaDek, masterDek, dekAad);
-            }
-            finally
-            {
-                Array.Clear(mediaDek);
-            }
+            (ciphertext, iv, encryptedDek, dekIv) = EnvelopeFraming.Media.SealNew(mediaId, plaintext, masterDek);
         }
         finally
         {
@@ -296,15 +285,11 @@ public class MediaService(
 
         try
         {
-            var isV1 = media.EncryptedDek.Length > 48 && media.EncryptedDek[0] == 0x01;
-            var dekAad = isV1 ? "bmb-media-dek"u8.ToArray().Concat(media.Id.ToByteArray()).ToArray() : null;
-
             var mediaDek = session.TryUnwrapWithCandidates(masterDek =>
-                DekManager.UnwrapDek(media.EncryptedDek, media.DekIV, masterDek, dekAad));
+                EnvelopeFraming.Media.UnwrapDek(media.Id, media.EncryptedDek, media.DekIV, masterDek));
             try
             {
-                var bodyAad = isV1 ? "bmb-media"u8.ToArray().Concat(media.Id.ToByteArray()).ToArray() : null;
-                var plaintext = MediaEncryptor.Decrypt(ciphertext, media.IV, mediaDek, bodyAad);
+                var plaintext = EnvelopeFraming.Media.DecryptBody(media.Id, media.EncryptedDek, mediaDek, ciphertext, media.IV);
                 return (plaintext, media.ContentType, media.FileName);
             }
             finally

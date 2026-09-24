@@ -111,12 +111,28 @@ public static class JoinCommand
         var iv = Convert.FromBase64String(slot.IvB64);
         var remoteSalt = Convert.FromBase64String(slot.SaltB64);
 
+        // The peer chose these numbers; refuse hostile ones before committing memory to them.
+        try
+        {
+            KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+        }
+        catch (System.Security.Cryptography.CryptographicException ex)
+        {
+            await output.WriteLineAsync($"Error: the remote node sent an invalid key slot. {ex.Message}");
+            return 1;
+        }
+
         byte[] masterDek;
         try
         {
             var kek = KeyDerivation.DeriveKek(password, remoteSalt,
                 slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
             masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, iv, kek);
+        }
+        catch (KdfBusyException)
+        {
+            await output.WriteLineAsync("Error: too many password checks in progress, try again in a moment");
+            return 1;
         }
         catch
         {

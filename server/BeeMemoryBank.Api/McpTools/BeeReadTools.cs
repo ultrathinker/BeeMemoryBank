@@ -4,7 +4,6 @@ using System.Text.Json;
 using System.Text.Encodings.Web;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
-using BeeMemoryBank.Crypto;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -351,10 +350,9 @@ public class BeeReadTools(
         if (!session.IsUnlocked)
             return "Error: session is locked. Unlock first.";
 
-        var masterDek = session.GetMasterDek();
         try
         {
-            var content = DecryptVersionContent(version, masterDek);
+            var content = articleService.DecryptVersionContent(version);
 
             var json = JsonSerializer.Serialize(new
             {
@@ -371,26 +369,6 @@ public class BeeReadTools(
         catch (Exception ex)
         {
             return $"Error: {ex.Message}";
-        }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
-    }
-
-    private static string DecryptVersionContent(BeeMemoryBank.Core.Models.ArticleVersion version, byte[] masterDek)
-    {
-        var isV1 = version.EncryptedDek.Length > 48 && version.EncryptedDek[0] == 0x01;
-        var dekAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(version.ArticleId.ToByteArray()).ToArray() : null;
-        var bodyAad = isV1 ? "bmb-art-body"u8.ToArray().Concat(version.ArticleId.ToByteArray()).ToArray() : null;
-        var articleDek = DekManager.UnwrapDek(version.EncryptedDek, version.DekIV, masterDek, dekAad);
-        try
-        {
-            return ArticleEncryptor.Decrypt(version.Ciphertext, version.IV, articleDek, bodyAad);
-        }
-        finally
-        {
-            Array.Clear(articleDek);
         }
     }
 
@@ -444,18 +422,13 @@ public class BeeReadTools(
         }
 
         string baselineContent;
-        var masterDek = session.GetMasterDek();
         try
         {
-            baselineContent = DecryptVersionContent(baselineVersion, masterDek);
+            baselineContent = articleService.DecryptVersionContent(baselineVersion);
         }
         catch (Exception ex)
         {
             return $"Error: {ex.Message}";
-        }
-        finally
-        {
-            Array.Clear(masterDek);
         }
 
         string currentContent;

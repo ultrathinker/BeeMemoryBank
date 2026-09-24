@@ -89,6 +89,7 @@ public static class JoinEndpoints
                     passwordSlot = candidate;
                     break;
                 }
+                catch (KdfBusyException) { throw; }
                 catch { /* wrong password for this slot — try the next candidate */ }
             }
 

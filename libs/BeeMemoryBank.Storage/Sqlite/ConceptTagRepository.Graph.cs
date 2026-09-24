@@ -376,18 +376,15 @@ public partial class ConceptTagRepository
         public int Cnt { get; set; }
     }
 
-    // Normalize an optional folder-scope path into the (exactPath, likePattern) pair
-    // consumed by the folder-prefix filter added to the graph-search SQL. A null,
-    // empty, or "/" path means "no restriction": both values come back null so the
-    // SQL `@treePath IS NULL` guard short-circuits and the query returns everything.
-    // The exact branch uses the raw path (a = b match needs no LIKE escaping); the
-    // like branch escapes \ % _ exactly like the tag-name LIKE search at the top of
-    // SearchGraphAsync, then appends "/%" to match everything nested under it.
-    private static (string? treePath, string? treePathLike) NormalizeTreePath(string? treePath)
+    // Normalize an optional folder-scope path into the exact path plus the BINARY descendant range
+    // (TreePathSql) consumed by the folder-prefix filter of the graph-search SQL. A null, empty or
+    // "/" path means "no restriction": everything comes back null so the SQL `@treePath IS NULL`
+    // guard short-circuits. Case-sensitive, like folder identity -- no LIKE.
+    private static (string? treePath, string? lo, string? hi) NormalizeTreePath(string? treePath)
     {
-        if (string.IsNullOrEmpty(treePath) || treePath == "/") return (null, null);
-        var escaped = treePath.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
-        return (treePath, escaped + "/%");
+        if (string.IsNullOrEmpty(treePath) || treePath == "/") return (null, null, null);
+        var (lo, hi) = TreePathSql.DescendantRange(treePath);
+        return (treePath, lo, hi);
     }
 
     private async Task<List<ConceptGraphEdge>> GetInducedEdgesAsync(IDbConnection conn, HashSet<string> nodeNames, ICallerScope scope, string? treePath = null)
@@ -395,7 +392,7 @@ public partial class ConceptTagRepository
         if (nodeNames.Count < 2) return [];
 
         var nameList = nodeNames.ToList();
-        var (tp, tpl) = NormalizeTreePath(treePath);
+        var (tp, tpLo, tpHi) = NormalizeTreePath(treePath);
 
         if (scope.IsSuperadmin)
         {
@@ -406,9 +403,9 @@ public partial class ConceptTagRepository
                   JOIN tbl_concept_tag ct2 ON e.tag_id_b = ct2.id
                   JOIN tbl_article a ON e.article_id = a.id AND a.status = 'A'
                   WHERE ct1.name IN @names AND ct2.name IN @names
-                    AND (@treePath IS NULL OR a.tree_path = @treePath OR a.tree_path LIKE @treePathLike ESCAPE '\')
+                    AND (@treePath IS NULL OR a.tree_path = @treePath OR (a.tree_path >= @treePathLo AND a.tree_path < @treePathHi))
                   GROUP BY ct1.name, ct2.name",
-                new { names = nameList, treePath = tp, treePathLike = tpl })).ToList();
+                new { names = nameList, treePath = tp, treePathLo = tpLo, treePathHi = tpHi })).ToList();
         }
 
         var rows = (await conn.QueryAsync<GraphEdgeRow>(
@@ -418,8 +415,8 @@ public partial class ConceptTagRepository
               JOIN tbl_concept_tag ct2 ON e.tag_id_b = ct2.id
               JOIN tbl_article a ON e.article_id = a.id AND a.status = 'A'
               WHERE ct1.name IN @names AND ct2.name IN @names
-                AND (@treePath IS NULL OR a.tree_path = @treePath OR a.tree_path LIKE @treePathLike ESCAPE '\')",
-            new { names = nameList, treePath = tp, treePathLike = tpl })).ToList();
+                AND (@treePath IS NULL OR a.tree_path = @treePath OR (a.tree_path >= @treePathLo AND a.tree_path < @treePathHi))",
+            new { names = nameList, treePath = tp, treePathLo = tpLo, treePathHi = tpHi })).ToList();
 
         return rows
             .Where(r => !scope.IsAccessDenied(r.TreePath))
@@ -436,7 +433,7 @@ public partial class ConceptTagRepository
     {
         if (tagIds.Count == 0) return new Dictionary<int, int>();
         var ids = tagIds.ToList();
-        var (tp, tpl) = NormalizeTreePath(treePath);
+        var (tp, tpLo, tpHi) = NormalizeTreePath(treePath);
 
         if (scope.IsSuperadmin)
         {
@@ -457,8 +454,8 @@ public partial class ConceptTagRepository
                       LEFT JOIN tbl_article a ON a.id = e.article_id
                   )
                   WHERE tag_id IN @ids
-                    AND (@treePath IS NULL OR tree_path = @treePath OR tree_path LIKE @treePathLike ESCAPE '\')
-                  GROUP BY tag_id", new { ids, treePath = tp, treePathLike = tpl });
+                    AND (@treePath IS NULL OR tree_path = @treePath OR (tree_path >= @treePathLo AND tree_path < @treePathHi))
+                  GROUP BY tag_id", new { ids, treePath = tp, treePathLo = tpLo, treePathHi = tpHi });
             return rows.ToDictionary(r => r.TagId, r => r.Cnt);
         }
 
@@ -474,7 +471,7 @@ public partial class ConceptTagRepository
                   JOIN tbl_article a ON a.id = e.article_id AND a.status = 'A'
               )
               WHERE tag_id IN @ids
-                AND (@treePath IS NULL OR tree_path = @treePath OR tree_path LIKE @treePathLike ESCAPE '\')", new { ids, treePath = tp, treePathLike = tpl })).ToList();
+                AND (@treePath IS NULL OR tree_path = @treePath OR (tree_path >= @treePathLo AND tree_path < @treePathHi))", new { ids, treePath = tp, treePathLo = tpLo, treePathHi = tpHi })).ToList();
 
         return all
             .Where(r => !scope.IsAccessDenied(r.TreePath))
@@ -486,7 +483,7 @@ public partial class ConceptTagRepository
     {
         if (tagIds.Count == 0) return new Dictionary<int, int>();
         var ids = tagIds.ToList();
-        var (tp, tpl) = NormalizeTreePath(treePath);
+        var (tp, tpLo, tpHi) = NormalizeTreePath(treePath);
 
         if (scope.IsSuperadmin)
         {
@@ -495,9 +492,9 @@ public partial class ConceptTagRepository
                   FROM tbl_article_concept_tag act
                   JOIN tbl_article a ON a.id = act.article_id AND a.status = 'A'
                   WHERE act.concept_tag_id IN @ids
-                    AND (@treePath IS NULL OR a.tree_path = @treePath OR a.tree_path LIKE @treePathLike ESCAPE '\')
+                    AND (@treePath IS NULL OR a.tree_path = @treePath OR (a.tree_path >= @treePathLo AND a.tree_path < @treePathHi))
                   GROUP BY act.concept_tag_id",
-                new { ids, treePath = tp, treePathLike = tpl });
+                new { ids, treePath = tp, treePathLo = tpLo, treePathHi = tpHi });
             return rows.ToDictionary(r => r.TagId, r => r.Cnt);
         }
 
@@ -506,8 +503,8 @@ public partial class ConceptTagRepository
               FROM tbl_article_concept_tag act
               JOIN tbl_article a ON a.id = act.article_id AND a.status = 'A'
               WHERE act.concept_tag_id IN @ids
-                AND (@treePath IS NULL OR a.tree_path = @treePath OR a.tree_path LIKE @treePathLike ESCAPE '\')",
-            new { ids, treePath = tp, treePathLike = tpl })).ToList();
+                AND (@treePath IS NULL OR a.tree_path = @treePath OR (a.tree_path >= @treePathLo AND a.tree_path < @treePathHi))",
+            new { ids, treePath = tp, treePathLo = tpLo, treePathHi = tpHi })).ToList();
 
         return all
             .Where(r => !scope.IsAccessDenied(r.TreePath))

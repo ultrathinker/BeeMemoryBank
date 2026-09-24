@@ -384,31 +384,26 @@ public static class DekRewrapper
     /// </param>
     internal static byte[]? BuildPerRowAadForTable(string tableName, string aadId, byte[] wrapped)
     {
-        // v=0 legacy: exactly 48 bytes, no version prefix → no AAD
-        if (wrapped.Length == 48) return null;
-        // Anything else: assume v=1 (49 bytes with 0x01 prefix). DekManager validates strictly.
-        var prefix = tableName switch
+        // v=0 legacy (no version prefix) → no AAD. The v0/v1 rule itself lives in EnvelopeFraming;
+        // any malformed length is rejected by DekManager.UnwrapDek whatever AAD is passed here.
+        if (!EnvelopeFraming.IsVersioned(wrapped)) return null;
+        var framing = tableName switch
         {
-            "tbl_article_body" => "bmb-art-dek"u8.ToArray(),
-            "tbl_article_version" => "bmb-art-dek"u8.ToArray(),
-            "tbl_conflict_version" => "bmb-art-dek"u8.ToArray(),
-            "tbl_media" => "bmb-media-dek"u8.ToArray(),
+            "tbl_article_body" => EnvelopeFraming.Article,
+            "tbl_article_version" => EnvelopeFraming.Article,
+            "tbl_conflict_version" => EnvelopeFraming.Article,
+            "tbl_media" => EnvelopeFraming.Media,
             _ => null
         };
-        if (prefix == null) return null;
+        if (framing == null) return null;
         // aadId is the article_id / media_id GUID (string form). Convert back to bytes via Guid.
         if (!Guid.TryParse(aadId, out var pkGuid))
         {
-            // Not a GUID at all — no AAD scheme applies. UnwrapDek falls through to the legacy
-            // path on length 48; a length-49 v=1 row would throw, which is the correct signal
-            // that the row's format is not what this table's scheme expects.
+            // Not a GUID at all — no AAD scheme applies. A v1 row then fails to unwrap, which is
+            // the correct signal that the row's format is not what this table's scheme expects.
             return null;
         }
-        var pkBytes = pkGuid.ToByteArray();
-        var aad = new byte[prefix.Length + pkBytes.Length];
-        prefix.CopyTo(aad, 0);
-        pkBytes.CopyTo(aad, prefix.Length);
-        return aad;
+        return framing.DekAad(pkGuid);
     }
 
     /// <param name="aadIdColumn">
@@ -463,7 +458,6 @@ public static class DekRewrapper
                 // a legacy v0 row with it silently relabels the row: readers switch to v1 AAD while
                 // the body ciphertext is still v0 and was sealed with none, and the row is lost for
                 // good. Rotation is the one place that must preserve v0.
-                var isLegacyV0 = encDek.Length == 48;
                 var aad = BuildPerRowAadForTable(tableName, aadId, encDek);
 
                 // A row that does not unwrap under the OLD DEK used to throw straight out of this
@@ -505,9 +499,8 @@ public static class DekRewrapper
 
                 try
                 {
-                    var (newEnc, newIv) = isLegacyV0
-                        ? DekManager.WrapDekLegacyV0(plainDek, newDek)
-                        : DekManager.WrapDek(plainDek, newDek, aad);
+                    // v0 stays v0, v1 stays v1 under the same AAD it was just unwrapped with.
+                    var (newEnc, newIv) = EnvelopeFraming.RewrapDek(plainDek, encDek, newDek, aad);
                     conn.Execute(
                         $"UPDATE [{tableName}] SET [{dekColumn}] = @enc, [{dekIvColumn}] = @iv WHERE [{pkColumn}] = @pk",
                         new { enc = newEnc, iv = newIv, pk },

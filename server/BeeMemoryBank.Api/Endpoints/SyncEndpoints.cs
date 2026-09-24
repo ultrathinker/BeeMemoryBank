@@ -195,7 +195,7 @@ public static class SyncEndpoints
             long afterSequence = 0,
             int limit = 1000) =>
         {
-            if (!TryAuth(ctx, store, out var nodeId)) return Results.Unauthorized();
+            if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
             // M5b: clamp the caller-suppliable page size — a peer requesting an arbitrarily large
@@ -259,7 +259,7 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             ILogger<Program> logger) =>
         {
-            if (!TryAuth(ctx, store, out var requesterNodeId))
+            if (await AuthenticatePeerAsync(ctx, store) is not { } requesterNodeId)
                 return Results.Unauthorized();
 
             if (invisibleMode.IsInvisible)
@@ -340,7 +340,7 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             long sequence) =>
         {
-            if (!TryAuth(ctx, store, out var nodeId)) return Results.Unauthorized();
+            if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
             await pushPositionRepo.UpdatePositionAsync(nodeId, sequence);
             return Results.Ok();
@@ -356,7 +356,7 @@ public static class SyncEndpoints
             ISyncQuarantineRepository quarantineRepo,
             ILoggerFactory loggerFactory) =>
         {
-            if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
+            if (await AuthenticatePeerAsync(ctx, store) is null) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
             // M5a: `ctx.Request.ContentLength is > 10MB` used to be the only guard here, and it
@@ -491,7 +491,7 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             SyncBlobHashList req) =>
         {
-            if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
+            if (await AuthenticatePeerAsync(ctx, store) is null) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
             if (!ValidateHashList(req.Hashes, out var problem)) return problem;
 
@@ -510,7 +510,7 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             ILoggerFactory loggerFactory) =>
         {
-            if (!TryAuth(ctx, store, out var nodeId)) return Results.Unauthorized();
+            if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
             var maxBodyFeature = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
@@ -570,7 +570,7 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             SyncBlobHashList req) =>
         {
-            if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
+            if (await AuthenticatePeerAsync(ctx, store) is null) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
             if (!ValidateHashList(req.Hashes, out var problem)) return problem;
 
@@ -880,7 +880,7 @@ public static class SyncEndpoints
             ILoggerFactory loggerFactory,
             IPublicHostValidator hostValidator) =>
         {
-            if (!TryAuth(ctx, store, out _)) return Results.Unauthorized();
+            if (await AuthenticatePeerAsync(ctx, store) is null) return Results.Unauthorized();
 
             SyncProbeRelayRequest? req;
             try { req = await ctx.Request.ReadFromJsonAsync<SyncProbeRelayRequest>(); }
@@ -967,14 +967,18 @@ public static class SyncEndpoints
         return true;
     }
 
-    private static bool TryAuth(HttpContext ctx, SyncTokenStore store, out Guid nodeId)
+    /// <summary>
+    /// Resolves the peer behind a sync bearer token, or null. A token alone is not enough: it is
+    /// checked against the whitelist on every request, so revoking a peer cuts it off immediately
+    /// instead of when its hour-long token happens to expire.
+    /// </summary>
+    internal static Task<Guid?> AuthenticatePeerAsync(HttpContext ctx, SyncTokenStore store)
     {
-        nodeId = default;
         var authHeader = ctx.Request.Headers.Authorization.FirstOrDefault();
         if (authHeader == null || !authHeader.StartsWith("Bearer ", StringComparison.Ordinal))
-            return false;
-        var token = authHeader["Bearer ".Length..];
-        return store.TryValidateToken(token, out nodeId);
+            return Task.FromResult<Guid?>(null);
+        var whitelistRepo = ctx.RequestServices.GetRequiredService<IWhitelistRepository>();
+        return store.ValidateActivePeerAsync(authHeader["Bearer ".Length..], whitelistRepo);
     }
 
     /// <summary>

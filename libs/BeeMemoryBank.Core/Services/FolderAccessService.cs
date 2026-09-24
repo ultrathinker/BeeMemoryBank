@@ -71,9 +71,9 @@ public class FolderAccessService
         var roleAclRepo = _serviceProvider.GetRequiredService<IRoleAclRepository>();
         var folderRepo = _serviceProvider.GetRequiredService<IFolderRepository>();
 
-        var denyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var allowPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var readOnlyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var denyPaths = new HashSet<string>(StringComparer.Ordinal);
+        var allowPaths = new HashSet<string>(StringComparer.Ordinal);
+        var readOnlyPaths = new HashSet<string>(StringComparer.Ordinal);
 
         var holder = _serviceProvider.GetRequiredService<CallerScopeHolder>();
         await holder.RunAsSystemAsync(async () =>
@@ -157,7 +157,7 @@ public class FolderAccessService
     }
 
     private static HashSet<string> DenyAllSet() =>
-        new(StringComparer.OrdinalIgnoreCase) { DenyEverything };
+        new(StringComparer.Ordinal) { DenyEverything };
 
     public static bool IsAccessDenied(HashSet<string> denyPaths, HashSet<string> allowPaths, string? treePath)
     {
@@ -207,11 +207,11 @@ public class FolderAccessService
     {
         foreach (var prefix in prefixes)
         {
-            if (treePath.Equals(prefix, StringComparison.OrdinalIgnoreCase))
+            if (treePath.Equals(prefix, StringComparison.Ordinal))
                 return true;
             if (prefix == "/")
                 return true;
-            if (treePath.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
+            if (treePath.StartsWith(prefix + "/", StringComparison.Ordinal))
                 return true;
         }
         return false;
@@ -251,7 +251,7 @@ public class FolderAccessService
         var userRepo = _serviceProvider.GetRequiredService<IUserRepository>();
 
         var userIds = new HashSet<int>();
-        var roleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var roleNames = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var folderId in folderIds)
         {
@@ -308,7 +308,7 @@ public class FolderAccessService
     // can walk down to their allowed subtree without exposing sibling folders.
     public static HashSet<string> ComputeAncestors(HashSet<string> allowedPaths)
     {
-        var ancestors = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "/" };
+        var ancestors = new HashSet<string>(StringComparer.Ordinal) { "/" };
         foreach (var path in allowedPaths)
         {
             if (string.IsNullOrEmpty(path) || path == "/") continue;
@@ -398,13 +398,8 @@ public class FolderAccessService
         {
             var name = $"{paramPrefix}anc{i}";
             parameters[name] = ancestor;
-            // COLLATE NOCASE: ancestors are exact-path matches (not prefixes), and the ACL engine
-            // compares paths with OrdinalIgnoreCase (see MatchesAnyPrefix) -- SQL's default "="
-            // is BINARY (case-sensitive), which could otherwise fail to match a case-differing
-            // duplicate and wrongly WITHHOLD a stub the in-memory filter would have shown. Read
-            // visibility is never widened by this (NOCASE only makes the match agree with the
-            // ordinal-ignore-case reference more often, never less).
-            ancestorTerms.Add($"{pathExpr} = @{name} COLLATE NOCASE");
+            // Exact BINARY match -- the same ordinal comparison IsNavigable makes.
+            ancestorTerms.Add($"{pathExpr} = @{name}");
             i++;
         }
 
@@ -427,25 +422,21 @@ public class FolderAccessService
             if (prefix == "/") continue;
 
             var exactParam = $"{paramPrefix}{i}";
-            var likeParam = $"{paramPrefix}{i}_like";
+            var loParam = $"{paramPrefix}{i}_lo";
+            var hiParam = $"{paramPrefix}{i}_hi";
+            var trimmed = prefix.TrimEnd('/');
             parameters[exactParam] = prefix;
-            parameters[likeParam] = EscapeLike(prefix.TrimEnd('/')) + "/%";
-            // COLLATE NOCASE on the exact match only: see BuildFolderVisibilityPredicate's own
-            // comment on why -- LIKE already case-folds ASCII by default (SQLite's built-in
-            // behavior, independent of any COLLATE clause), so it needs no extra annotation here.
-            terms.Add($"({pathExpr} = @{exactParam} COLLATE NOCASE OR {pathExpr} LIKE @{likeParam} ESCAPE '\\')");
+            // "Descendant of prefix" as a BINARY range: every path starting with "prefix/" sorts in
+            // ["prefix/", "prefix0"), because '0' is the byte right after '/'. That is an exact,
+            // case-sensitive test -- the same ordinal comparison MatchesAnyPrefix makes, for every
+            // script. (LIKE and NOCASE fold ASCII only, so a case-insensitive SQL test could never
+            // agree with the in-memory one on non-Latin paths.) It also needs no LIKE escaping.
+            parameters[loParam] = trimmed + "/";
+            parameters[hiParam] = trimmed + "0";
+            terms.Add($"({pathExpr} = @{exactParam} OR ({pathExpr} >= @{loParam} AND {pathExpr} < @{hiParam}))");
             i++;
         }
 
         return terms.Count == 0 ? null : string.Join(" OR ", terms);
     }
-
-    /// <summary>
-    /// Escapes the LIKE wildcards "%" and "_" (and the escape character itself) so a folder path
-    /// segment is matched literally rather than as a pattern. Mirrors
-    /// <c>FolderRepository.EscapeLike</c>/<c>HardDeleteService.EscapeLike</c> exactly; every LIKE
-    /// built from this must declare <c>ESCAPE '\'</c>.
-    /// </summary>
-    private static string EscapeLike(string s) =>
-        s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }

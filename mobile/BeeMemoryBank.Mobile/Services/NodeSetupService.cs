@@ -107,12 +107,26 @@ public class NodeSetupService
         var remoteIv = Convert.FromBase64String(slot.IvB64);
         var remoteSalt = Convert.FromBase64String(slot.SaltB64);
 
+        // The peer chose these numbers; refuse hostile ones before the phone commits memory to them.
+        try
+        {
+            KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+        }
+        catch (System.Security.Cryptography.CryptographicException ex)
+        {
+            throw new InvalidOperationException($"The remote node sent an invalid key slot. {ex.Message}");
+        }
+
         byte[] masterDek;
         try
         {
             var remoteKek = KeyDerivation.DeriveKek(password, remoteSalt,
                 slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
             masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, remoteIv, remoteKek);
+        }
+        catch (KdfBusyException)
+        {
+            throw new InvalidOperationException("Too many password checks in progress, try again in a moment.");
         }
         catch
         {

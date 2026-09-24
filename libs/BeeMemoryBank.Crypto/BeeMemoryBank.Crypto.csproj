@@ -5,4 +5,9 @@
     <PackageReference Include="BouncyCastle.Cryptography" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- KeyDerivation.SaturateForTests: lets the test observe the saturated KDF gate. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Crypto.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -155,7 +155,7 @@ public static class RemoteAuthEndpoints
             // /Public, deny on /Public/Secrets — without filtering, /Public/Secrets
             // would still go on the wire). Gemini security review 2026-05-25.
             var subtreeFolders = allFolders
-                .Where(f => f.Id == root.Id || f.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .Where(f => f.Id == root.Id || f.Path.StartsWith(prefix, StringComparison.Ordinal))
                 .Where(f => isSuperadmin || !FolderAccessService.IsAccessDenied(deny, allow, f.Path))
                 .Select(f => new
                 {

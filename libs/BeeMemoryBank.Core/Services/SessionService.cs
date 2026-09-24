@@ -164,6 +164,12 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
 
                 unwrappedDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, kek);
             }
+            catch (KdfBusyException)
+            {
+                // "Too busy to check", not "wrong password" -- let the caller report it as such.
+                if (kek != null) Array.Clear(kek);
+                throw;
+            }
             catch
             {
                 // Wrong password for this slot. Wipe the derived KEK before moving on so failed

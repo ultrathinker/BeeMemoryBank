@@ -63,7 +63,7 @@ public class RemoteEventApplier(
             seenFolderOriginIds.Add(originId);
 
             string localPath;
-            if (string.Equals(rf.Path, rootRemote, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(rf.Path, rootRemote, StringComparison.Ordinal))
             {
                 localPath = rootLocal;
             }
@@ -72,13 +72,13 @@ public class RemoteEventApplier(
                 // SECURITY: same path-traversal guard as for articles —
                 // a hostile/buggy owner could send a folder Path that escapes
                 // the mount root. Canonicalise and skip if out of bounds.
-                if (string.IsNullOrEmpty(rf.Path) || !rf.Path.StartsWith(rootRemote, StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrEmpty(rf.Path) || !rf.Path.StartsWith(rootRemote, StringComparison.Ordinal))
                     continue;
                 var suffix = rf.Path[rootRemote.Length..];
                 var candidate = TreePathCanonicalizer.Canonicalize(rootLocal + suffix);
                 var rootLocalPrefix = rootLocal.TrimEnd('/') + "/";
-                if (!candidate.Equals(rootLocal, StringComparison.OrdinalIgnoreCase)
-                    && !candidate.StartsWith(rootLocalPrefix, StringComparison.OrdinalIgnoreCase))
+                if (!candidate.Equals(rootLocal, StringComparison.Ordinal)
+                    && !candidate.StartsWith(rootLocalPrefix, StringComparison.Ordinal))
                     continue;
                 localPath = candidate;
             }
@@ -145,7 +145,7 @@ public class RemoteEventApplier(
             // "/Recipes/../../Admin/Secrets" — naïve concatenation would let
             // it escape the mount root. Canonicalise and verify containment.
             // Gemini security review 2026-05-25.
-            if (string.IsNullOrEmpty(ra.TreePath) || !ra.TreePath.StartsWith(rootRemote, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrEmpty(ra.TreePath) || !ra.TreePath.StartsWith(rootRemote, StringComparison.Ordinal))
             {
                 // Either malformed or outside the share subtree → skip.
                 continue;
@@ -239,18 +239,7 @@ public class RemoteEventApplier(
         byte[] ciphertext, iv, encryptedDek, dekIv;
         try
         {
-            var articleDek = DekManager.GenerateArticleDek();
-            try
-            {
-                var dekAad = "bmb-art-dek"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                var bodyAad = "bmb-art-body"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                (ciphertext, iv) = ArticleEncryptor.Encrypt(content, articleDek, bodyAad);
-                (encryptedDek, dekIv) = DekManager.WrapDek(articleDek, masterDek, dekAad);
-            }
-            finally
-            {
-                Array.Clear(articleDek);
-            }
+            (ciphertext, iv, encryptedDek, dekIv) = EnvelopeFraming.Article.SealNewText(articleId, content, masterDek);
         }
         finally
         {
@@ -290,36 +279,28 @@ public class RemoteEventApplier(
     private async Task UpsertEncryptedBodyAsync(Guid articleId, string plaintext)
     {
         var body = await bodyRepo.GetByArticleIdAsync(articleId);
-        var masterDek = session.GetMasterDek();
         byte[] ciphertext, iv, encryptedDek, dekIv;
-        byte[] articleDek;
+        // An existing row may still be wrapped under a retired master DEK right after a rotation:
+        // unwrap it with the candidates, re-seal under the current key.
+        var articleDek = body != null
+            ? session.TryUnwrapWithCandidates(candidateDek =>
+                EnvelopeFraming.Article.UnwrapDek(articleId, body.EncryptedDek, body.DekIV, candidateDek))
+            : DekManager.GenerateArticleDek();
         try
         {
-            if (body != null)
-            {
-                var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
-                var unwrapAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(articleId.ToByteArray()).ToArray() : null;
-                articleDek = DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, unwrapAad);
-            }
-            else
-            {
-                articleDek = DekManager.GenerateArticleDek();
-            }
+            var masterDek = session.GetMasterDek();
             try
             {
-                var dekAad = "bmb-art-dek"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                var bodyAad = "bmb-art-body"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                (ciphertext, iv) = ArticleEncryptor.Encrypt(plaintext, articleDek, bodyAad);
-                (encryptedDek, dekIv) = DekManager.WrapDek(articleDek, masterDek, dekAad);
+                (ciphertext, iv, encryptedDek, dekIv) = EnvelopeFraming.Article.SealText(articleId, plaintext, articleDek, masterDek);
             }
             finally
             {
-                Array.Clear(articleDek);
+                Array.Clear(masterDek);
             }
         }
         finally
         {
-            Array.Clear(masterDek);
+            Array.Clear(articleDek);
         }
 
         await bodyRepo.UpsertAsync(new EncryptedArticleBody

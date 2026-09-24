@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
@@ -207,10 +208,10 @@ public class SearchService(
 
         var matchedIds = new HashSet<Guid>(metadataResults.Select(a => a.Id));
         var bodyMatchIds = new ConcurrentBag<Guid>();
-        // One DEK snapshot is shared read-only across all worker tasks for unwrap calls.
-        // It is cleared exactly once in `finally` AFTER Task.WhenAll(workers) so no worker can
-        // race the clear.
-        var masterDek = session.GetMasterDek();
+        // One snapshot of the candidate master DEKs (current first, then retired) is shared
+        // read-only across all worker tasks for unwrap calls. It is cleared exactly once in
+        // `finally` AFTER Task.WhenAll(workers) so no worker can race the clear.
+        var candidateDeks = GetCandidateDeksOrThrow();
         try
         {
             // Bounded channel: backpressure so we don't materialize the whole active-body set
@@ -232,7 +233,7 @@ public class SearchService(
                         if (matchedIds.Contains(body.ArticleId))
                             continue;
 
-                        if (BodyMatchesQuery(body, masterDek, query))
+                        if (BodyMatchesQuery(body, candidateDeks, query))
                             bodyMatchIds.Add(body.ArticleId);
                     }
                 });
@@ -258,7 +259,7 @@ public class SearchService(
             catch (Exception ex)
             {
                 // Surface producer failure to the workers via the channel, then rethrow after they
-                // wind down so masterDek is still cleared by the finally below.
+                // wind down so candidateDeks is still cleared by the finally below.
                 channel.Writer.Complete(ex);
             }
 
@@ -266,7 +267,7 @@ public class SearchService(
         }
         finally
         {
-            Array.Clear(masterDek);
+            ClearAll(candidateDeks);
         }
 
         if (!bodyMatchIds.IsEmpty)
@@ -284,21 +285,28 @@ public class SearchService(
     /// pending-only fallback scan below can share the exact same DEK-unwrap/AAD/protected-content
     /// logic instead of drifting out of sync with a second copy of it.
     /// </summary>
-    /// <param name="masterDek">
-    /// Caller-owned DEK snapshot. Read-only here (never mutated or cleared) -- clearing it once
-    /// every decrypt attempt across a batch has finished is the caller's responsibility, exactly as
-    /// it was before this was extracted into its own method.
+    /// <param name="candidateDeks">
+    /// Caller-owned snapshot of the candidate master DEKs (current first, then retired), so a body
+    /// still wrapped under a retired key right after a rotation is searchable, the same as it is
+    /// readable through <see cref="ArticleService.GetContentAsync"/>. Read-only here (never mutated
+    /// or cleared) -- clearing it once every decrypt attempt across a batch has finished is the
+    /// caller's responsibility.
     /// </param>
-    private static bool BodyMatchesQuery(EncryptedArticleBody body, byte[] masterDek, string query)
+    private static bool BodyMatchesQuery(EncryptedArticleBody body, byte[][] candidateDeks, string query)
     {
         try
         {
-            var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
-            var dekAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(body.ArticleId.ToByteArray()).ToArray() : null;
-            var bodyAad = isV1 ? "bmb-art-body"u8.ToArray().Concat(body.ArticleId.ToByteArray()).ToArray() : null;
-            var articleDek = DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, dekAad);
-            var plaintext = ArticleEncryptor.Decrypt(body.Ciphertext, body.IV, articleDek, bodyAad);
-            Array.Clear(articleDek);
+            var articleDek = UnwrapWithAny(body, candidateDeks);
+            string plaintext;
+            try
+            {
+                plaintext = EnvelopeFraming.Article.DecryptBodyText(
+                    body.ArticleId, body.EncryptedDek, articleDek, body.Ciphertext, body.IV);
+            }
+            finally
+            {
+                Array.Clear(articleDek);
+            }
 
             // Protected bodies are opaque BMBENC1 blobs — never full-text-search them
             // (we have no passphrase here, and matching base64 would be meaningless).
@@ -313,6 +321,41 @@ public class SearchService(
               // never fault a whole parallel batch.
             return false;
         }
+    }
+
+    /// <summary>Unwraps <paramref name="body"/>'s DEK with the first candidate that opens it; throws
+    /// the last <see cref="System.Security.Cryptography.CryptographicException"/> if none does.</summary>
+    private static byte[] UnwrapWithAny(EncryptedArticleBody body, byte[][] candidateDeks)
+    {
+        System.Security.Cryptography.CryptographicException? last = null;
+        foreach (var candidate in candidateDeks)
+        {
+            try
+            {
+                return EnvelopeFraming.Article.UnwrapDek(body.ArticleId, body.EncryptedDek, body.DekIV, candidate);
+            }
+            catch (System.Security.Cryptography.CryptographicException ex)
+            {
+                last = ex;
+            }
+        }
+        throw last ?? new System.Security.Cryptography.CryptographicException("No candidate master DEK.");
+    }
+
+    /// <summary><see cref="SessionService.GetCandidateDeks"/>, but throwing when locked exactly as
+    /// <see cref="SessionService.GetMasterDek"/> does. Caller clears every returned buffer.</summary>
+    private byte[][] GetCandidateDeksOrThrow()
+    {
+        var candidates = session.GetCandidateDeks();
+        if (candidates.Length == 0)
+            throw new SessionLockedException("Session is locked. Call UnlockAsync first.");
+        return candidates;
+    }
+
+    private static void ClearAll(byte[][] buffers)
+    {
+        foreach (var b in buffers)
+            Array.Clear(b);
     }
 
     /// <summary>
@@ -536,8 +579,8 @@ public class SearchService(
 
         // One DEK snapshot shared read-only across the parallel decrypt pass below, cleared exactly
         // once after every task has finished with it -- same pattern (and the same reason) as
-        // SearchWithContentUncachedAsync's own masterDek handling.
-        var masterDek = session.GetMasterDek();
+        // SearchWithContentUncachedAsync's own candidateDeks handling.
+        var candidateDeks = GetCandidateDeksOrThrow();
         var matchedPendingIds = new ConcurrentBag<Guid>();
         try
         {
@@ -553,14 +596,14 @@ public class SearchService(
             };
             await Parallel.ForEachAsync(bodies, options, (body, _) =>
             {
-                if (BodyMatchesQuery(body, masterDek, query))
+                if (BodyMatchesQuery(body, candidateDeks, query))
                     matchedPendingIds.Add(body.ArticleId);
                 return ValueTask.CompletedTask;
             });
         }
         finally
         {
-            Array.Clear(masterDek);
+            ClearAll(candidateDeks);
         }
 
         if (matchedPendingIds.IsEmpty)
