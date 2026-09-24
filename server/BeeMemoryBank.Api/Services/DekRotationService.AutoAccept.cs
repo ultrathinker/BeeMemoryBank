@@ -177,7 +177,7 @@ public partial class DekRotationService
                 chainIvB64: chainIvB64);
 
             _logger.LogInformation(
-                "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. Agents={Agents}. RecoverySlots={Recovery}.",
+                "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, agentsDeleted, recoveryDeleted);
         }
         catch (Exception ex)

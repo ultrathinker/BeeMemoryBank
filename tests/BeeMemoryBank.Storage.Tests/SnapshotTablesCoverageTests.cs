@@ -36,6 +36,10 @@ public class SnapshotTablesCoverageTests
         // Credentials this node holds for OTHER people's nodes, and tokens it issued for its own.
         "tbl_remote_account", "tbl_remote_subscription", "tbl_remote_api_token",
 
+        // Keys for host-side stores outside this database (the API's chat.db), wrapped with this
+        // node's own DEK. A joiner has its own stores and creates its own keys.
+        "tbl_node_data_key",
+
         // Per-user, and meaningless against another node's user ids.
         "tbl_favorite",
 

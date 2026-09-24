@@ -19,7 +19,7 @@ public partial class DekRotationService
     /// to exactly the same code every other host now runs.
     /// </para>
     /// </summary>
-    private Task<(int agentsDeleted, int slotsDeleted, RewrapTally tally)> RewrapDestructiveCoreAsync(
+    private async Task<(int agentsDeleted, int slotsDeleted, RewrapTally tally)> RewrapDestructiveCoreAsync(
         byte[] oldDek, byte[] newDek, int newEpoch, string commitEventId,
         bool isInitiator,
         int? initiatorSlotId = null,
@@ -28,7 +28,15 @@ public partial class DekRotationService
         string? chainEncryptedNewDekB64 = null,
         string? chainIvB64 = null)
     {
-        return DekRewrapper.RewrapAllAsync(
+        // chat.db lives outside the rewrap transaction. Its remaining legacy rows (sealed directly
+        // under the master DEK) are moved onto the node chat key now, while the session still holds
+        // the outgoing DEK; the chat key itself is then carried forward inside the transaction.
+        _progress.Update(DekRotationFlowStep.ReWrappingPerItem, 18,
+            isInitiator ? "Moving chat history onto the node chat key..." : "Auto-accept: moving chat history onto the node chat key...");
+        using (var hookScope = _scopeFactory.CreateScope())
+            await DekRewrapper.RunPreRewrapHooksAsync(hookScope.ServiceProvider, _logger);
+
+        return await DekRewrapper.RewrapAllAsync(
             _connFactory, _sessionService,
             oldDek, newDek, newEpoch, commitEventId,
             isInitiator, initiatorSlotId, newWrappedSlotDek, newWrappedSlotIv,

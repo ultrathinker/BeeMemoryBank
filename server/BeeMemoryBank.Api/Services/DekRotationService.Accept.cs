@@ -241,10 +241,10 @@ public partial class DekRotationService
                 commitEventId,
                 "dek_rotation_completed",
                 "web",
-                $"DEK rotation completed; epoch {payload.NewDekEpoch - 1}\u2192{payload.NewDekEpoch}; initiator={initiator.Id} ({initiator.DisplayName}); pre-rotation snapshot={snap.FileName}; agents invalidated={agentsDeleted}");
+                $"DEK rotation completed; epoch {payload.NewDekEpoch - 1}\u2192{payload.NewDekEpoch}; initiator={initiator.Id} ({initiator.DisplayName}); pre-rotation snapshot={snap.FileName}; auto-unlock agent keys removed={agentsDeleted}");
 
             _logger.LogInformation(
-                "DEK rotation completed. Epoch {OldEpoch}\u2192{NewEpoch}. Initiator={Initiator} ({InitiatorName}). Snapshot={Snap}. Agents invalidated={Agents}.",
+                "DEK rotation completed. Epoch {OldEpoch}\u2192{NewEpoch}. Initiator={Initiator} ({InitiatorName}). Snapshot={Snap}. AutoUnlockAgentsRemoved={Agents}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, initiator.Id, initiator.DisplayName, snap.FileName, agentsDeleted);
         }
         catch (Exception ex)

@@ -117,6 +117,10 @@ public sealed class PeerDekRotationApplier(
 
         try
         {
+            // Host-side data still sealed under the outgoing DEK is moved first, while that DEK is
+            // still the session's current one. None registered on mobile/CLI today; see IDekRotationHook.
+            await DekRewrapper.RunPreRewrapHooksAsync(scope.ServiceProvider, logger);
+
             oldDek = sessionService.GetMasterDek();
             // Confidential rotation: open this node's own envelope; legacy events fall back to
             // unwrap-under-old-DEK. (ADR 0006.)
@@ -136,7 +140,7 @@ public sealed class PeerDekRotationApplier(
 
             completed = true;
             logger.LogInformation(
-                "DEK rotation auto-accept completed. Epoch {OldEpoch}→{NewEpoch}. Agents={Agents}. RecoverySlots={Recovery}.",
+                "DEK rotation auto-accept completed. Epoch {OldEpoch}→{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, agentsDeleted, recoveryDeleted);
         }
         catch (Exception ex)

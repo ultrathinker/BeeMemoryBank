@@ -99,7 +99,7 @@ public static class DekRotateCommand
         var pwd = ReadMaskedPassword();
 
         Console.WriteLine();
-        Console.WriteLine("This will re-encrypt all article bodies/versions/conflicts/media, delete all agents, drop all other user key slots, and invalidate all recovery keys. A pre-rotation snapshot will be created automatically. Continue? [y/N] ");
+        Console.WriteLine("This will re-encrypt all article bodies/versions/conflicts/media, delete agent keys that can auto-unlock the vault (other agents keep working), drop all other user key slots, and invalidate all recovery keys. A pre-rotation snapshot will be created automatically. Continue? [y/N] ");
         var confirm = (Console.ReadLine() ?? string.Empty).Trim();
         if (!(string.Equals(confirm, "y", StringComparison.OrdinalIgnoreCase)
               || string.Equals(confirm, "yes", StringComparison.OrdinalIgnoreCase)))

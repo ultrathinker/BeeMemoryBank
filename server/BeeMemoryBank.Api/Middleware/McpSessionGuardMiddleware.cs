@@ -109,7 +109,7 @@ public class McpSessionGuardMiddleware(RequestDelegate next, McpToolRegistry reg
                 !context.Items.ContainsKey("AuthAgent"))
             {
                 var message = "Error: your agent key was not recognized. It may have been revoked " +
-                    "(for example, by a DEK rotation, which deletes all agent keys) or is otherwise " +
+                    "(for example, by a DEK rotation, which removes agent keys that can auto-unlock the vault) or is otherwise " +
                     "invalid. Ask the vault owner to issue you a new bee_ agent key.";
                 logger.LogWarning("MCP tools/call for {Tool} rejected: unrecognized agent key (TraceId={TraceId})",
                     toolName, context.TraceIdentifier);

@@ -57,6 +57,7 @@ public class MigrationTests : IAsyncLifetime
         tables.Should().Contain("tbl_key_slot");
         tables.Should().Contain("tbl_migration");
         tables.Should().Contain("tbl_node_identity");
+        tables.Should().Contain("tbl_node_data_key");
         tables.Should().Contain("tbl_whitelist");
         tables.Should().Contain("tbl_projection_matrix");
 
