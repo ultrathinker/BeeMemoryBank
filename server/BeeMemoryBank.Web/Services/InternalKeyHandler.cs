@@ -29,9 +29,12 @@ public class InternalKeyHandler(IHttpContextAccessor httpContextAccessor) : Dele
         if (!string.IsNullOrEmpty(userId) && !request.Headers.Contains("X-User-Id"))
             request.Headers.TryAddWithoutValidation("X-User-Id", userId);
 
-        var displayName = httpContextAccessor.HttpContext?.User.FindFirst("DisplayName")?.Value;
-        if (!string.IsNullOrEmpty(displayName))
-            request.Headers.TryAddWithoutValidation("X-User-DisplayName", displayName);
+        // The user's display name is deliberately NOT forwarded in a header. A display name is
+        // user-controlled text and may be non-ASCII, and SocketsHttpHandler refuses non-ASCII
+        // header values at the socket layer — a user whose name is not ASCII would fail EVERY
+        // Web→API call before it left the machine. The API resolves the name from the trusted
+        // X-User-Id instead (see HttpActorProvider.ActorName); X-User-DisplayName is still stripped
+        // defensively from inbound traffic by the node front.
 
         // Per-sign-in id (see LoginModel): the API scopes its protected-article unlock cache by it.
         // Cookies minted before this claim existed carry none — the API then just re-prompts.

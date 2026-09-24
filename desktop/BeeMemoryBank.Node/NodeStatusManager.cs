@@ -51,13 +51,15 @@ public class NodeStatusManager
     public NodeStatusManager(
         string dataDirectory,
         string? frontUrl = null,
-        string version = "1.0.1",
+        string? version = null,
         string mode = "production")
     {
         _statusFilePath = Path.Combine(dataDirectory, "node.status.json");
         _runtimeFilePath = Path.Combine(dataDirectory, ".runtime.json");
         _frontUrl = frontUrl;
-        _version = version;
+        // Default to the version this build actually is (repo VERSION via Directory.Build.props),
+        // not a literal that goes stale on the next release.
+        _version = version ?? BeeMemoryBank.Hosting.AssemblyVersion.Of(typeof(NodeStatusManager).Assembly);
         _mode = mode;
     }
 

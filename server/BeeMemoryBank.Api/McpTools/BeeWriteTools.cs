@@ -101,6 +101,12 @@ public class BeeWriteTools(
                 ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
                 : "Access denied: target folder is restricted for this agent.";
         }
+        catch (ArgumentException ex)
+        {
+            // Validation rejects (blank title/path) come back as a clean tool result, like
+            // every other expected failure — never as a raw escaping exception.
+            return $"Error: {ex.Message}";
+        }
         catch (InvalidOperationException ex)
         {
             return $"Error: {ex.Message}";
@@ -148,6 +154,12 @@ public class BeeWriteTools(
         catch (KeyNotFoundException)
         {
             return $"Error: article {id} not found";
+        }
+        catch (ArgumentException ex)
+        {
+            // UpdateAsync rejects a blank title the same way CreateAsync does — surface that as a
+            // clean tool result, not an escaping exception.
+            return $"Error: {ex.Message}";
         }
         catch (InvalidOperationException ex)
         {

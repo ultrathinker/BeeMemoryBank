@@ -120,6 +120,36 @@ public class ApiIntegrationTests : IAsyncLifetime
         await LockSessionAsync();
     }
 
+    // Update used to accept a whitespace-only title (`{"title":"   "}` → 200, spaces saved) while
+    // create always rejected blank ones. UpdateAsync now throws the same ArgumentException create
+    // does, mapped to 400 — and the stored title stays untouched.
+    [Fact]
+    public async Task Update_WhitespaceOnlyTitle_Returns400_AndKeepsCurrentTitle()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+
+        var create = await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Real Title",
+            treePath = "/Tests",
+            content = "Body"
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var article = await create.Content.ReadFromJsonAsync<ArticleResponse>();
+
+        var update = await _client.PutAsJsonAsync($"/api/articles/{article!.Id}", new { title = "   " });
+        update.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = await update.Content.ReadFromJsonAsync<JsonElement>();
+        error.GetProperty("error").GetString().Should().Be("Title cannot be empty.");
+
+        var after = await _client.GetAsync($"/api/articles/{article.Id}");
+        after.EnsureSuccessStatusCode();
+        var meta = await after.Content.ReadFromJsonAsync<ArticleResponse>();
+        meta!.Title.Should().Be("Real Title");
+
+        await LockSessionAsync();
+    }
+
     // Exercises the actual HTTP multipart binding for POST /api/media, not just the service layer:
     // articleId and attachment are plain (unattributed) string/bool parameters on a handler that
     // also takes an IFormFile. Minimal APIs bind un-attributed simple parameters from the query

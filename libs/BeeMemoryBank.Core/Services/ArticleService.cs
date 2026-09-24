@@ -212,7 +212,14 @@ public partial class ArticleService(
         var prevTitle = article.Title;
         var prevTreePath = article.TreePath;
 
-        if (title != null) article.Title = title;
+        if (title != null)
+        {
+            // Same rule CreateAsync enforces: null means "keep the current title", but a provided
+            // title may never be blank — accepting "   " here saved articles whose title was only
+            // whitespace, invisible in every tree/list view that trims.
+            if (string.IsNullOrWhiteSpace(title)) throw new ArgumentException("Title cannot be empty.");
+            article.Title = title;
+        }
         if (treePath != null)
         {
             treePath = TreePathCanonicalizer.Canonicalize(treePath);

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Security;
-using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -76,7 +75,7 @@ public class NodeFront
     /// separate binding mechanism, so the two listeners always coexist.
     /// </summary>
     /// <param name="enableHttps">
-    /// Opt-in flag for the second HTTPS listener. Defaults to false (OFF), matching "по кнопке"
+    /// Opt-in flag for the second HTTPS listener. Defaults to false (OFF), matching the "opt-in via a button" design
     /// in the superplan — a later task wires an actual UI toggle. When false, behavior is
     /// byte-for-byte identical to before this method grew these parameters.
     /// </param>
@@ -317,7 +316,7 @@ public class NodeFront
 
         nodeGroup.MapGet("/status", () =>
         {
-            var version = typeof(NodeFront).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "1.0.1";
+            var version = BeeMemoryBank.Hosting.AssemblyVersion.Of(typeof(NodeFront).Assembly);
             var status = new
             {
                 version,

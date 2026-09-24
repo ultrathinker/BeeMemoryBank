@@ -23,6 +23,23 @@ public static class ApiPipeline
 {
     public static void UseBeeApiPipeline(this WebApplication app)
     {
+// Error handling FIRST: an exception handler only sees exceptions thrown by middleware AFTER it,
+// so every identity/ACL gate below (public surface, rate limit, maintenance, agent auth, caller
+// scope, MCP guards) must sit inside its reach — a failure there is a mapped JSON error response,
+// not the server default page.
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+        // The switch this used to inline now lives in ExceptionStatusMap so a test can assert the
+        // type→status pairs directly, rather than the pairs being reachable only through a request.
+        var (statusCode, message) = BeeMemoryBank.Api.Helpers.ExceptionStatusMap.Map(feature?.Error);
+        context.Response.StatusCode = statusCode;
+        await context.Response.WriteAsJsonAsync(new ErrorResponse(message));
+    });
+});
+
 // unpublished path should not consume a rate-limit slot or reach agent auth, and until now the
 // answer to "what is visible from the internet" lived only in the reverse proxy's configuration.
 BeeMemoryBank.Api.Middleware.PublicSurfaceMiddleware.LogStartupState();
@@ -59,20 +76,6 @@ app.UseWhen(
         branch.UseMiddleware<BeeMemoryBank.Api.Middleware.McpParameterValidationMiddleware>();
     });
 
-// Error handling
-app.UseExceptionHandler(errorApp =>
-{
-    errorApp.Run(async context =>
-    {
-        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
-        // The switch this used to inline now lives in ExceptionStatusMap so a test can assert the
-        // type→status pairs directly, rather than the pairs being reachable only through a request.
-        var (statusCode, message) = BeeMemoryBank.Api.Helpers.ExceptionStatusMap.Map(feature?.Error);
-        context.Response.StatusCode = statusCode;
-        await context.Response.WriteAsJsonAsync(new ErrorResponse(message));
-    });
-});
-
 if (app.Environment.IsDevelopment())
     app.MapOpenApi();
     }
@@ -90,8 +93,10 @@ app.MapGet("/api/version", () =>
         ? File.GetLastWriteTimeUtc(location)
         : DateTime.UtcNow;
     // `version` is the compiled-in build version (source of truth for update checks).
-    // `deployedAt`/`build` are kept for backward compatibility (older mobile/Maestro readers).
-    return Results.Ok(new { version = BeeMemoryBank.Api.Helpers.AppVersion.Current, deployedAt, build = "2026-04-18" });
+    // `deployedAt`/`build` are kept for backward compatibility (older mobile/Maestro readers);
+    // `build` is the actual deploy date derived from the running binary's timestamp, not a frozen
+    // constant — old readers only need A date, not THE original date.
+    return Results.Ok(new { version = BeeMemoryBank.Api.Helpers.AppVersion.Current, deployedAt, build = deployedAt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) });
 }).WithTags("Health").AllowAnonymous();
 
 app.MapSessionEndpoints();

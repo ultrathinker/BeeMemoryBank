@@ -52,7 +52,8 @@ public class NodeStatusManagerTests : IDisposable
         runtime.Should().NotBeNull();
         runtime!.Pid.Should().Be(Environment.ProcessId);
         runtime.FrontUrl.Should().BeNull();
-        runtime.Version.Should().Be("1.0.1");
+        runtime.Version.Should().Be(BeeMemoryBank.Hosting.AssemblyVersion.Of(typeof(NodeStatusManager).Assembly));
+        runtime.Version.Should().NotBe("1.0.1", "the default comes from the build, not a stale literal");
         runtime.Mode.Should().Be("production");
     }
 

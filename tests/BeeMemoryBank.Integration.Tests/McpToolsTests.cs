@@ -693,6 +693,30 @@ public class McpToolsTests : IAsyncLifetime
         result.Should().StartWith("Error:");
     }
 
+    // UpdateAsync rejects a blank title exactly like CreateAsync; the tool must surface that as a
+    // clean tool result and leave the current title alone.
+    [Fact]
+    public async Task BeeUpdateArticle_BlankTitle_ReturnsCleanError_AndKeepsCurrentTitle()
+    {
+        var article = await _articleService.CreateAsync("Real Title", "/Test", [], "text");
+
+        var result = await _writeTools.UpdateArticle(article.Id, title: "   ");
+
+        result.Should().StartWith("Error:");
+        result.Should().Contain("Title cannot be empty");
+
+        var check = await _readTools.GetArticle(article.Id);
+        JsonDocument.Parse(check).RootElement.GetProperty("title").GetString().Should().Be("Real Title");
+    }
+
+    [Fact]
+    public async Task BeeSaveArticle_BlankTitle_ReturnsCleanError()
+    {
+        var result = await _writeTools.SaveArticle("   ", "/Test", "text");
+        result.Should().StartWith("Error:");
+        result.Should().Contain("Title cannot be empty");
+    }
+
     // ───── bee_delete_article ────────────────────────────────────────────────
 
     [Fact]

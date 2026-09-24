@@ -239,7 +239,7 @@ if (!string.IsNullOrEmpty(readyFilePath))
             Pid: Environment.ProcessId,
             Urls: app.Urls.ToList(),
             ApplicationName: "BeeMemoryBank.Web",
-            Version: "1.0.1",
+            Version: BeeMemoryBank.Hosting.AssemblyVersion.Of(typeof(Program).Assembly),
             StartupTimeUtc: DateTime.UtcNow
         );
         BeeMemoryBank.Hosting.ReadyFileManager.Write(readyFilePath, readyInfo);
