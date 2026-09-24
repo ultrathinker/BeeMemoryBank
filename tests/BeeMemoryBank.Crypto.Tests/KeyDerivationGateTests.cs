@@ -51,3 +51,36 @@ public class KeyDerivationUntrustedParameterTests
         act.Should().Throw<System.Security.Cryptography.CryptographicException>();
     }
 }
+
+[Collection(nameof(KeyDerivationGateCollection))]
+public class KeyDerivationMemoryBudgetTests
+{
+    [Fact]
+    public void Units_ScaleWithRequestedMemory_AndNeverExceedTheBudget()
+    {
+        KeyDerivation.UnitsFor(65_536).Should().Be(1);                    // default 64 MiB
+        KeyDerivation.UnitsFor(65_537).Should().Be(Math.Min(2, (int)(KeyDerivation.MemoryBudgetKiB / 65_536)));
+        KeyDerivation.UnitsFor(int.MaxValue).Should().Be((int)(KeyDerivation.MemoryBudgetKiB / 65_536));
+    }
+
+    [Fact]
+    public void ConcurrentMaxCostDerivations_NeverCommitMoreThanTheBudget()
+    {
+        // Eight parallel derivations at the largest cost an untrusted caller may choose (256 MiB):
+        // with a count-only gate they would all run at once on a big machine (2 GiB). The memory
+        // budget must hold regardless of core count.
+        KeyDerivation.ResetPeakForTests();
+        Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, _ =>
+        {
+            try
+            {
+                // One iteration keeps the test fast; memory is what is being budgeted.
+                KeyDerivation.DeriveKek("p", KeyDerivation.GenerateSalt(), memory: 262_144, iterations: 1, parallelism: 1);
+            }
+            catch (KdfBusyException) { }
+        });
+
+        KeyDerivation.PeakInFlightKiB.Should().BeGreaterThan(0);
+        KeyDerivation.PeakInFlightKiB.Should().BeLessThanOrEqualTo(Math.Max(KeyDerivation.MemoryBudgetKiB, 262_144));
+    }
+}

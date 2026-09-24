@@ -8,17 +8,24 @@ namespace BeeMemoryBank.Crypto;
 /// </summary>
 public static class KeyDerivation
 {
-    // Every Argon2id derivation allocates its full memory cost (64 MiB by default) and burns CPU for
-    // a noticeable fraction of a second. Several of the paths that trigger one are reachable by
-    // unauthenticated or low-privilege callers (join, login, remote-token, protected-article
-    // passphrases), so without a bound a burst of requests turns into a memory/CPU exhaustion of the
-    // whole node. One process-wide gate caps how many run at once and how many may wait; beyond
-    // that the caller gets KdfBusyException immediately instead of piling up blocked threads.
-    private static readonly int MaxConcurrent = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+    // Every Argon2id derivation allocates its full memory cost and burns CPU for a noticeable
+    // fraction of a second. Several paths that trigger one are reachable by unauthenticated or
+    // low-privilege callers (join, login, remote-token, protected-article passphrases), and some
+    // callers choose the memory cost themselves (a planted protected blob, a peer's key slot). So the
+    // process-wide gate budgets MEMORY, not just a count: capacity is expressed in 64 MiB units,
+    // a derivation takes ceil(memory / 64 MiB) of them, and the total never exceeds the budget no
+    // matter which parameters callers pick. A bounded wait queue sits in front; beyond it the caller
+    // gets KdfBusyException immediately instead of piling up blocked threads.
+    private const int UnitKiB = 65_536; // 64 MiB, Argon2 memory is expressed in KiB
+    private static readonly int CapacityUnits = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
     private const int MaxQueued = 16;
     private static readonly TimeSpan MaxWait = TimeSpan.FromSeconds(30);
-    private static readonly SemaphoreSlim Gate = new(MaxConcurrent, MaxConcurrent);
+    private static readonly object GateLock = new();
+    private static int _availableUnits = CapacityUnits;
     private static int _queued;
+
+    /// <summary>Total Argon2 memory, in KiB, the gate lets run at the same time.</summary>
+    internal static long MemoryBudgetKiB => (long)CapacityUnits * UnitKiB;
 
     /// <summary>
     /// Derives a KEK (Key Encryption Key) from password and salt.
@@ -31,25 +38,44 @@ public static class KeyDerivation
         int iterations = CryptoConstants.DefaultArgonIterations,
         int parallelism = CryptoConstants.DefaultArgonParallelism)
     {
-        AcquireGate();
+        var units = UnitsFor(memory);
+        AcquireUnits(units);
+        var inFlight = Interlocked.Add(ref _inFlightKiB, memory);
+        long peak;
+        while (inFlight > (peak = Interlocked.Read(ref _peakInFlightKiB))
+               && Interlocked.CompareExchange(ref _peakInFlightKiB, inFlight, peak) != peak) { }
         try
         {
             return DeriveKekCore(password, salt, memory, iterations, parallelism);
         }
         finally
         {
-            Gate.Release();
+            Interlocked.Add(ref _inFlightKiB, -memory);
+            ReleaseUnits(units);
         }
     }
 
+    // Diagnostics: Argon2 memory currently committed, and the highest it has been.
+    private static long _inFlightKiB;
+    private static long _peakInFlightKiB;
+    internal static long PeakInFlightKiB => Interlocked.Read(ref _peakInFlightKiB);
+    internal static void ResetPeakForTests() => Interlocked.Exchange(ref _peakInFlightKiB, 0);
+
     /// <summary>
-    /// Test hook: occupies every derivation slot and the whole wait queue until disposed, so a test
-    /// can observe the saturated behaviour without running dozens of real derivations.
+    /// Budget units a derivation of <paramref name="memoryKiB"/> takes. A request larger than the
+    /// whole budget is clamped to the whole budget: it then runs alone, never next to others.
+    /// </summary>
+    internal static int UnitsFor(int memoryKiB) =>
+        (int)Math.Clamp(((long)Math.Max(memoryKiB, 1) + UnitKiB - 1) / UnitKiB, 1, CapacityUnits);
+
+    /// <summary>
+    /// Test hook: occupies the whole budget and the whole wait queue until disposed, so a test can
+    /// observe the saturated behaviour without running dozens of real derivations.
     /// </summary>
     internal static IDisposable SaturateForTests()
     {
-        for (var i = 0; i < MaxConcurrent; i++) Gate.Wait();
-        Interlocked.Add(ref _queued, MaxQueued);
+        AcquireUnits(CapacityUnits);
+        lock (GateLock) _queued += MaxQueued;
         return new SaturationRelease();
     }
 
@@ -59,28 +85,52 @@ public static class KeyDerivation
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _done, 1) != 0) return;
-            Interlocked.Add(ref _queued, -MaxQueued);
-            Gate.Release(MaxConcurrent);
+            lock (GateLock) _queued -= MaxQueued;
+            ReleaseUnits(CapacityUnits);
         }
     }
 
-    private static void AcquireGate()
+    private static void AcquireUnits(int units)
     {
-        if (Gate.Wait(0)) return;
+        lock (GateLock)
+        {
+            if (_availableUnits >= units)
+            {
+                _availableUnits -= units;
+                return;
+            }
 
-        if (Interlocked.Increment(ref _queued) > MaxQueued)
-        {
-            Interlocked.Decrement(ref _queued);
-            throw new KdfBusyException();
-        }
-        try
-        {
-            if (!Gate.Wait(MaxWait))
+            if (_queued >= MaxQueued)
                 throw new KdfBusyException();
+
+            _queued++;
+            try
+            {
+                var deadline = DateTime.UtcNow + MaxWait;
+                while (_availableUnits < units)
+                {
+                    var remaining = deadline - DateTime.UtcNow;
+                    if (remaining <= TimeSpan.Zero || !Monitor.Wait(GateLock, remaining))
+                    {
+                        if (_availableUnits >= units) break;
+                        throw new KdfBusyException();
+                    }
+                }
+                _availableUnits -= units;
+            }
+            finally
+            {
+                _queued--;
+            }
         }
-        finally
+    }
+
+    private static void ReleaseUnits(int units)
+    {
+        lock (GateLock)
         {
-            Interlocked.Decrement(ref _queued);
+            _availableUnits += units;
+            Monitor.PulseAll(GateLock);
         }
     }
 
