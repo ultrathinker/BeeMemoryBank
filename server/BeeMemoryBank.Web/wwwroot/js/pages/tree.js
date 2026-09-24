@@ -1,4 +1,10 @@
 (function () {
+    var pageRoot = document.querySelector('#page-content .main-content') || document.getElementById('page-content');
+    if (pageRoot) {
+        if (pageRoot.dataset.treeInit) return;
+        pageRoot.dataset.treeInit = '1';
+    }
+
     document.body.classList.add('home-chat-page', 'chat-ui');
 
     // Header buttons

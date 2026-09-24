@@ -1,4 +1,10 @@
 (function () {
+    var pageRoot = document.querySelector('#page-content .main-content') || document.getElementById('page-content');
+    if (pageRoot) {
+        if (pageRoot.dataset.articleViewInit) return;
+        pageRoot.dataset.articleViewInit = '1';
+    }
+
     var dataEl = document.getElementById('article-view-data');
     var pageData = dataEl ? JSON.parse(dataEl.textContent || '{}') : {};
     var articleId = pageData.articleId || '';

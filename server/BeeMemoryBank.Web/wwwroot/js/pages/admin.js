@@ -2,6 +2,12 @@
 (function () {
     'use strict';
 
+    var pageRoot = document.querySelector('#page-content .main-content') || document.getElementById('page-content');
+    if (pageRoot) {
+        if (pageRoot.dataset.adminInit) return;
+        pageRoot.dataset.adminInit = '1';
+    }
+
     // Auto-refresh for in-progress software update
     var updateContainer = document.querySelector('[data-is-updating="true"]');
     if (updateContainer && !window._updateRefreshing) {
@@ -871,33 +877,13 @@
             // Destructive admin actions with confirmation (.btn-confirm-click)
             var confirmClickBtn = e.target.closest('.btn-confirm-click');
             if (confirmClickBtn) {
-                if (!confirmClickBtn._bmbConfirmed) {
-                    var msg = confirmClickBtn.dataset.confirm || 'Are you sure?';
-                    if (!confirm(msg)) {
-                        e.preventDefault();
-                        return;
-                    }
-                    confirmClickBtn._bmbConfirmed = true;
-                    setTimeout(function () { delete confirmClickBtn._bmbConfirmed; }, 500);
-                }
                 var href = confirmClickBtn.getAttribute('href');
                 if (href) {
                     e.preventDefault();
                     window.location.href = href;
                     return;
                 }
-                var cform = confirmClickBtn.closest('form');
-                if (cform && !confirmClickBtn._bmbSubmitted) {
-                    confirmClickBtn._bmbSubmitted = true;
-                    setTimeout(function () { delete confirmClickBtn._bmbSubmitted; }, 500);
-                    e.preventDefault();
-                    if (typeof cform.requestSubmit === 'function') {
-                        cform.requestSubmit(confirmClickBtn);
-                    } else {
-                        cform.submit();
-                    }
-                    return;
-                }
+                // Form submit actions are handled natively by Shoelace once confirmed in capture phase.
             }
 
             // Dialog cancel buttons (admin fallback)
