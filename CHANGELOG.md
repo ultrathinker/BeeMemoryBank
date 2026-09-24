@@ -72,6 +72,50 @@ its position reported so its compaction accounting doesn't stall.
 
 ### Changed
 
+#### Core is the kernel again; infrastructure moved to its own projects (2026-09-24)
+
+`BeeMemoryBank.Core` no longer references Certes, Makaretu.Dns.Multicast, ONNX Runtime/Tokenizers,
+ImageSharp or ProtectedData. Everything that consumes Core, including the MAUI app and the CLI, used to
+inherit all of them.
+
+- **`BeeMemoryBank.Infrastructure`**: ACME, Cloudflare/DDNS, UPnP/static external IP, firewall, local CA,
+  mDNS announcer/browser and OS auto-unlock (DPAPI).
+- **`BeeMemoryBank.Embeddings`**: the ONNX generator, tokenizer, model manager, projection and hybrid search.
+- **`BeeMemoryBank.Media`**: the ImageSharp transcoder behind the new Core interface `IImageTranscoder`.
+  `MediaService` now requires the transcoder, so a host that forgets to register it fails at startup
+  instead of silently skipping conversion.
+- **`model.onnx` path**: now `libs/BeeMemoryBank.Embeddings/Models/model.onnx`. CI's cache key was bumped
+  to match.
+
+#### Web proxy: one table-driven forwarder instead of hand-written passthroughs (2026-09-24)
+
+Pure `/api-proxy/*` passthrough endpoints are now entries in `ProxyRouteTable`: a prefix plus per-method
+role gates, deny-by-default, served by one catch-all forwarder. Endpoints with real Web-side logic stay
+explicit.
+
+- **Path handling**: the forwarder refuses any non-canonical path before table matching. That covers dot
+  segments, empty segments, backslashes, encoded `/`, `\` and `.`, and control characters. It also
+  checks that the resolved upstream URI still sits under the matched prefix, so a path can't be used to
+  reach an API route the table doesn't list.
+- **Chat SSE**: the streaming routes forward `Content-Type` with its parameters again. Previously every
+  `application/json; charset=utf-8` POST got a 500.
+
+#### Web UI: no inline JavaScript; CSP `script-src 'self'` (2026-09-24)
+
+- **Page code**: every page script now lives in `wwwroot/js/`, and server data reaches it through
+  non-executable JSON blocks.
+- **Handlers**: every inline `on*=` handler is a delegated listener. Page modules bind per page instance
+  and clean up on SPA navigation.
+- **Big files split**: `Admin.cshtml` is split into partials and `site.js` into cohesive modules.
+- **CSP**: `script-src` dropped `'unsafe-inline'`. `WebCspComplianceGuardTests` fails the build if any
+  inline script, inline handler or `javascript:` URL comes back, including markup generated from JS.
+
+#### Comments state invariants, not history (2026-09-24)
+
+Production-code comments no longer carry reviewer names, wave/finding IDs or war stories. Each one
+keeps only the invariant or reason a maintainer needs. The change is comment-only: a Roslyn token
+diff over every touched file reports no code change.
+
 #### Node trust model: a fresh join gets content authority only, not cluster-state authority (2026-09-04/05)
 
 `POST /api/join` used to write every new peer into `tbl_whitelist` with `is_superadmin = 1` — a
@@ -145,6 +189,39 @@ revoke rows that predate the row-versioning migration above and never got their 
 `whitelist_revoke` event to anchor a version against.
 
 ### Fixed
+
+#### Review fixes: auth, KDF, ACL, crypto framing (2026-09-24)
+
+- **Non-ASCII display names broke every Web→API call.** HttpClient rejects non-ASCII header values, and
+  the Web layer forwarded the display name in a header. It no longer does, and a real-socket test
+  covers it, because TestServer hid the bug.
+- **Anonymous MCP callers.**
+  - An unauthenticated request could reach tools such as `bee_save_media`; the MCP identity gate now
+    returns 401 before any tool runs.
+  - Uploads not linked to an article fail closed.
+  - A new "anonymous internet caller" test persona sends no internal key and no role.
+- **`/api/join` was unthrottled from loopback.** Only a valid internal key exempts a caller from rate
+  limiting now, not a loopback address.
+- **An article update accepted a blank title.** It no longer does.
+- **Revoked peers kept a valid sync token for up to an hour.** Every token-authenticated sync endpoint,
+  including the snapshot file download, now re-checks that the peer is still whitelisted.
+- **Argon2id had no concurrency cap and trusted peer-supplied parameters.**
+  - Derivations now go through a memory-budgeted FIFO gate. A full queue returns
+    503 (`KdfBusyException`) instead of piling up threads.
+  - KDF parameters from a join peer or a stored blob must lie within 32–256 MiB, 2–10 iterations and
+    1–8 lanes.
+  - Protected-article passphrase attempts are throttled per caller and article.
+- **Folder ACL matching and subtree operations are case-exact.**
+  - SQLite `LIKE` folds ASCII case, so subtree queries, including hard delete and its preview, reached
+    case-variant sibling folders.
+  - Subtrees are now BINARY ranges (`[p + "/", p + "0")`), and every ACL comparison is ordinal.
+- **Article, media and comment crypto framing is defined once.**
+  - `EnvelopeFraming` is the single definition of the framing.
+  - Existing rows decrypt with the full candidate-DEK set, which includes the retired DEK during a
+    rotation.
+  - A comment's framing is detected by trial rather than inferred from its parent article.
+- **Exception handler order and hard-coded versions.** Specific exception mappings now run before the
+  generic handler. The node status reports the real assembly version.
 
 #### DEK rotation no longer destroys agent keys and chat.db it has no reason to touch (2026-09-24)
 
