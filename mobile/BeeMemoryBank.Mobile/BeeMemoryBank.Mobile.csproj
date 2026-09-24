@@ -56,10 +56,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
-    <!-- Wave 2 A2 / mx2-fix-r1: Mobile needs OnnxEmbeddingGenerator (Embeddings) and the
-         IImageTranscoder for the camera-roll upload path (Media). The Media project was carved
-         out of Infrastructure so Mobile can pull image transcoding without dragging in
-         ACME/mDNS/DPAPI packages the app does not use. -->
+    <!-- OnnxEmbeddingGenerator for offline semantic search; the camera-roll upload path needs
+         the IImageTranscoder from Media (separately carved out from Infrastructure so this app
+         does not pull in ACME / mDNS / DPAPI). -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Embeddings\BeeMemoryBank.Embeddings.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Media\BeeMemoryBank.Media.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />

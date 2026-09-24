@@ -23,8 +23,8 @@
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
   </ItemGroup>
 
-  <!-- model.onnx is NOT in git — download separately (see docs/deployment.md). Wave 2 A2 moved
-       the model directory to Embeddings/Models; path updated. -->
+  <!-- model.onnx is NOT in git — download separately (see docs/deployment.md). The conditional
+       keeps a clean clone buildable. -->
   <ItemGroup>
     <Content Include="..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx"
              Condition="Exists('..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx')">

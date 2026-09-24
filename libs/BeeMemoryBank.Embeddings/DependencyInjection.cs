@@ -6,12 +6,14 @@ namespace BeeMemoryBank.Embeddings;
 /// <summary>
 /// DI helpers for the embedding subsystem: registers the ONNX-backed
 /// <see cref="IEmbeddingGenerator"/> together with the embedding-side services
-/// (<see cref="EmbeddingProjectionService"/>, <see cref="ArticleChunker"/>) and resolves the
-/// sentencepiece + ONNX model on disk.
+/// (<see cref="EmbeddingProjectionService"/>, <see cref="HybridSearchService"/>,
+/// <see cref="ArticleChunker"/>) and resolves the sentencepiece + ONNX model on disk.
 ///
 /// <para>
-/// Call this BEFORE <c>AddCore</c> on a host that wants semantic search: <c>AddCore</c> registers
-/// <see cref="HybridSearchService"/> which depends on <see cref="EmbeddingProjectionService"/>.
+/// <c>AddOnnxEmbeddings</c> must run BEFORE <c>AddSync</c>: <see cref="BeeMemoryBank.Sync.DependencyInjection.AddSync"/>
+/// calls <see cref="AddEmbeddingServices"/> internally, which registers the embedding-side services
+/// that depend on the <see cref="IEmbeddingGenerator"/> resolved here. Without this order,
+/// <see cref="EmbeddingProjectionService"/> fails to resolve at the first semantic-search call.
 /// </para>
 /// </summary>
 public static class DependencyInjection

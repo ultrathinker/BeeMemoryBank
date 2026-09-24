@@ -36,9 +36,10 @@ public static class ApiServices
 builder.Services.AddStorage(dataPath);
 builder.Services.AddCore();
 builder.Services.AddMemoryCache();
-// Order matters: AddOnnxEmbeddings must run after AddCore (Core's HybridSearchService takes
-// EmbeddingProjectionService); the image transcoder only needs to be present before the first
-// media upload resolves a scope.
+// Order matters: AddOnnxEmbeddings must run BEFORE AddSync (AddSync calls AddEmbeddingServices
+// internally, which registers HybridSearchService / EmbeddingProjectionService that depend on
+// IEmbeddingGenerator being present). AddImageTranscoder must run before any scope resolves
+// MediaService.
 builder.Services.AddOnnxEmbeddings(dataPath);
 builder.Services.AddImageTranscoder();
 builder.Services.AddSync();

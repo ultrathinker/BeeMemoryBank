@@ -10,10 +10,11 @@ namespace BeeMemoryBank.Media;
 public static class DependencyInjection
 {
     /// <summary>
-    /// Registers the ImageSharp-backed <see cref="IImageTranscoder"/>. Hosts that need to
-    /// transcode / downscale uploaded images (Api, Mobile) call this; hosts that don't (Web
-    /// proxy, plain CLI subcommands) skip it and <c>MediaService</c> rejects oversize uploads
-    /// cleanly.
+    /// Registers the ImageSharp-backed <see cref="IImageTranscoder"/>. REQUIRED wherever
+    /// <c>MediaService</c> can resolve: MediaService takes it as a non-optional constructor
+    /// dependency, so a missing registration here fails at DI resolution rather than at first
+    /// media upload. Hosts that do not resolve MediaService (Web proxy, plain CLI subcommands)
+    /// can safely skip this; hosts that do (Api, Mobile) must call it.
     /// </summary>
     public static IServiceCollection AddImageTranscoder(this IServiceCollection services)
     {

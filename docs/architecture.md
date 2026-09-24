@@ -87,16 +87,21 @@ libs/
 │   ├── Models/sentencepiece.bpe.model  (embedded)
 │   └── DependencyInjection    — AddOnnxEmbeddings / AddEmbeddingServices (HybridSearchService moved here)
 │
-├── BeeMemoryBank.Infrastructure/ — ACME, mDNS, ImageSharp, DPAPI, UPnP, firewall, local CA. Carved out of
-│                                    Core in wave 2 A2 — Core used to pull all of these and now does not.
+├── BeeMemoryBank.Infrastructure/ — ACME, mDNS, DPAPI, UPnP, firewall, local CA. Carved out of
+│                                    Core in wave 2 A2 so hosts that only need the kernel no longer pull
+│                                    any of these.
 │   ├── Acme/                 — AcmeCertificateService, AcmeChallengePersister, AcmeDirectories, TlsAlpn*…
 │   ├── Mdns/                 — MdnsAnnouncer (+Options), MdnsBrowser, MdnsConstants, MdnsNodeRecord
 │   ├── Ddns/                 — DdnsUpdater, CloudflareProvider/Config, DesecProvider/Config, DuckDnsProvider/Config
 │   ├── Network/              — StaticExternalIpProvider, UpnpExternalIpProvider, FirewallService
 │   ├── OsAutoUnlock/         — OsAutoUnlockService (DPAPI-backed, Windows-only)
 │   ├── Tls/                  — LocalCaService (Windows trust store + DPAPI leaf/CA keys)
-│   ├── Media/                — ImageSharpImageTranscoder (the only consumer of the IImageTranscoder interface)
-│   └── DependencyInjection    — AddMdnsBrowser / AddMdnsAnnouncer / AddImageTranscoder
+│   └── DependencyInjection    — AddMdnsBrowser / AddMdnsAnnouncer
+│
+├── BeeMemoryBank.Media/     — ImageSharp transcoder + AddImageTranscoder(). Carved out of
+│                                Infrastructure so consumers that only need transcoding (Mobile, Api)
+│                                do not pull ACME / mDNS / DPAPI through the larger project.
+│   └── ImageSharpImageTranscoder (the only consumer of the IImageTranscoder interface)
 │
 ├── BeeMemoryBank.Crypto/    — Cryptographic primitives (~450 LOC)
 │   └── AesGcmHelper, MasterKeyManager, DekManager, Ed25519Signer, KeyDerivation, ArticleEncryptor,
