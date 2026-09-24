@@ -47,8 +47,14 @@ app.UseWhen(
     ctx => ctx.Request.Path.StartsWithSegments("/mcp"),
     branch =>
     {
-        // Session/identity guard runs first — "can this call even proceed" is a more
-        // fundamental gate than "are the argument names spelled right."
+        // Identity gate runs first — "are you allowed to talk to MCP at all" is more
+        // fundamental than either session state or argument spelling. A keyless caller
+        // gets 401 before the MCP SDK ever runs (so it cannot open an MCP session),
+        // and a bmbrt_ remote token (scoped to RemoteAuthEndpoints) is rejected here
+        // rather than later, with a distinct answer.
+        branch.UseMiddleware<BeeMemoryBank.Api.Middleware.McpIdentityGateMiddleware>();
+        // Session/identity guard runs second — still handles "unrecognized bee_ key"
+        // as a JSON-RPC error (clients depend on the wording for key-rotation detection).
         branch.UseMiddleware<BeeMemoryBank.Api.Middleware.McpSessionGuardMiddleware>();
         branch.UseMiddleware<BeeMemoryBank.Api.Middleware.McpParameterValidationMiddleware>();
     });

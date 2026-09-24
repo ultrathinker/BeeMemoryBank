@@ -87,6 +87,13 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                             ViaAgentName: $"remote:{record.Label ?? "unlabelled"}",
                             IsSuperadmin: false);
 
+                        // Marker for endpoints that must explicitly reject bmbrt_ tokens (e.g. the
+                        // MCP gate, see McpIdentityGateMiddleware). Remote tokens are meant for
+                        // the cross-instance folder endpoints in RemoteAuthEndpoints; surfacing
+                        // their presence here lets those gates make the decision without
+                        // re-parsing the Authorization header.
+                        context.Items["IsRemoteToken"] = true;
+
                         // Sliding 90-day window: each successful auth bumps expiry.
                         // Awaited (not fire-and-forget) — the scoped repo handle
                         // would otherwise be disposed before the UPDATE completed
