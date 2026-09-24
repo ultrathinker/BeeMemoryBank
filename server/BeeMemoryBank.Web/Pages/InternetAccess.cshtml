@@ -195,8 +195,7 @@
         <!-- "Check now" lives in its OWN form, outside the save form — nested <form> elements
              are invalid HTML and the inner button would otherwise submit the outer (save) form. -->
         <form method="post" asp-page-handler="CheckDdnsNow" style="margin-top:14px;">
-            <sl-button type="submit" variant="default" size="small"
-                       onclick="return confirm('Run a DDNS check now? This contacts your provider to update the DNS record if your IP changed.')">
+            <sl-button type="submit" variant="default" size="small" id="btn-check-ddns-now">
                 <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Check now
             </sl-button>
         </form>
@@ -261,8 +260,7 @@
                 <sl-button type="submit" variant="default" size="small">
                     <sl-icon slot="prefix" name="save"></sl-icon> Save ACME settings
                 </sl-button>
-                <sl-button type="button" id="btn-acme-request" variant="primary" size="small"
-                        onclick="document.getElementById('dlg-acme-request').show()">
+                <sl-button type="button" id="btn-acme-request" variant="primary" size="small">
                     <sl-icon slot="prefix" name="cloud-download"></sl-icon> Request certificate
                 </sl-button>
             </div>
@@ -330,65 +328,11 @@
             <sl-radio value="true">Staging (untrusted, safe to retry)</sl-radio>
             <sl-radio value="false">Production (real cert, rate-limited)</sl-radio>
         </sl-radio-group>
-        <sl-button slot="footer" type="button" variant="default" onclick="document.getElementById('dlg-acme-request').hide()">Cancel</sl-button>
+        <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-acme-request">Cancel</sl-button>
         <sl-button slot="footer" type="submit" variant="primary">
             <sl-icon slot="prefix" name="cloud-download"></sl-icon> Request
         </sl-button>
     </form>
 </sl-dialog>
 
-<script>
-(function () {
-    function ready(fn) {
-        // Wait for Shoelace <sl-select>/<sl-radio-group> to upgrade before reading .value.
-        Promise.all([
-            customElements.whenDefined('sl-select'),
-            customElements.whenDefined('sl-radio-group')
-        ]).then(fn);
-    }
-
-    ready(function () {
-        // DDNS provider → toggle which credential fields are visible AND enabled. Fields are
-        // toggled with the `disabled` attribute (not just display:none) so a hidden provider's
-        // credentials are excluded from form submission entirely — otherwise both the DuckDNS
-        // token and the Cloudflare zone/record/token would always be posted.
-        var prov = document.getElementById('ddns-provider');
-        var simpleWrap = document.getElementById('ddns-simple-fields');
-        var cfWrap = document.getElementById('ddns-cloudflare-fields');
-        var tokenEl = document.getElementById('ddns-token');
-        var zoneEl = document.getElementById('ddns-zone');
-        var recordEl = document.getElementById('ddns-record');
-        var cfTokenEl = document.getElementById('ddns-cf-token');
-        function setDisabled(el, disabled) { if (el) el.disabled = disabled; }
-        function syncProvider() {
-            var v = (prov && prov.value) || 'duckdns';
-            var isCf = v === 'cloudflare';
-            if (simpleWrap) simpleWrap.style.display = isCf ? 'none' : 'block';
-            if (cfWrap) cfWrap.style.display = isCf ? 'flex' : 'none';
-            setDisabled(tokenEl, isCf);
-            setDisabled(zoneEl, !isCf);
-            setDisabled(recordEl, !isCf);
-            setDisabled(cfTokenEl, !isCf);
-        }
-        if (prov) { prov.addEventListener('sl-change', syncProvider); syncProvider(); }
-
-        // IP mode → show/hide static-IP input.
-        var ipmode = document.getElementById('ddns-ipmode');
-        var staticWrap = document.getElementById('ddns-static-ip-wrap');
-        function syncIpMode() {
-            var v = (ipmode && ipmode.value) || 'upnp';
-            if (staticWrap) staticWrap.style.display = (v === 'static') ? 'block' : 'none';
-        }
-        if (ipmode) { ipmode.addEventListener('sl-change', syncIpMode); syncIpMode(); }
-
-        // ACME staging → show production rate-limit warning when production selected.
-        var staging = document.getElementById('acme-staging');
-        var warn = document.getElementById('acme-prod-warning');
-        function syncStaging() {
-            var v = (staging && staging.value) || 'true';
-            if (warn) warn.style.display = (v === 'false') ? 'block' : 'none';
-        }
-        if (staging) { staging.addEventListener('sl-change', syncStaging); syncStaging(); }
-    });
-})();
-</script>
+<script src="/js/pages/internet-access.js"></script>

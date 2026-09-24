@@ -153,7 +153,6 @@
         }
     </style>
 }
-<script>document.body.classList.add('ai-chat-page', 'chat-ui');</script>
 <partial name="_Sidebar" />
 <div id="page-content">
 <!-- Chat history sidebar: a direct child of #page-content (display:contents in site.css),
@@ -197,8 +196,7 @@
 
     <partial name="_ChatUi" />
 </div>
-</div>
 
-@section Scripts {
-    <script src="/js/chat.js" asp-append-version="true"></script>
-}
+<script src="/js/pages/ai.js"></script>
+<script src="/js/chat.js" asp-append-version="true"></script>
+</div>
