@@ -44,11 +44,8 @@
         </p>
     </div>
 
-    <script>
-        if (!document.getElementById('login-form-active')) {
-            setTimeout(() => location.reload(), 3000);
-        }
-    </script>
+    <script type="application/json" id="page-data">{"reloadInterval":3000}</script>
+    <script src="~/js/pages/login.js" asp-append-version="true"></script>
 }
 else if (Model.RestoreProgress != null && Model.RestoreProgress.CurrentStep != "Idle" && Model.RestoreProgress.CurrentStep != "Completed")
 {
@@ -87,11 +84,8 @@ else if (Model.RestoreProgress != null && Model.RestoreProgress.CurrentStep != "
         </p>
     </div>
 
-    <script>
-        if (!document.getElementById('login-form-active')) {
-            setTimeout(() => location.reload(), 2000);
-        }
-    </script>
+    <script type="application/json" id="page-data">{"reloadInterval":2000}</script>
+    <script src="~/js/pages/login.js" asp-append-version="true"></script>
 }
 else
 {
