@@ -146,6 +146,33 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### DEK rotation no longer destroys agent keys and chat.db it has no reason to touch (2026-09-24)
+
+- **Every agent key was deleted on every rotation.** The rewrap ran `DELETE FROM tbl_agent`, on the
+  initiator and on every auto-accepting peer — so on a shared node every teammate's MCP client was
+  silently disconnected. Only agents that carry a wrapped Master DEK (superadmin-owned auto-unlock
+  agents) are now removed and must be re-issued; every other agent holds no key material and keeps
+  working. The progress/audit texts, the MCP "agent key not recognized" message and the Admin
+  rotation dialog say so.
+- **Chat history, attachments and stored LLM provider keys became undecryptable after a rotation.**
+  chat.db is a separate file the rotation transaction cannot reach, and its rows were sealed
+  directly under the Master DEK. They are now sealed under a node chat key whose wrapped form lives
+  in the new node-local `tbl_node_data_key` table (migration 026) and is re-wrapped inside the
+  rotation transaction on the initiator and on peers. Existing rows are migrated in the background
+  (and forcibly right before every rotation); until then they still open with the current or a
+  retired Master DEK. A restored database whose chat key no longer matches chat.db degrades to
+  placeholders rather than errors. The pre-rotation move is mandatory: if any chat record is still
+  under the Master DEK (or the move fails) the rotation refuses to start — a 400 at propose, or on a
+  peer the rotation stays pending and is retried on the next unlock.
+- **Remote-account tokens were broken by every rotation.** `tbl_remote_account` bearer tokens are
+  sealed directly under the Master DEK and were never re-encrypted; they are now re-encrypted inside
+  the rotation transaction, and a token write that races a rotation re-checks the sentinel inside
+  its own transaction and re-seals under the new DEK.
+- **A deferred rotation no longer strands a node.** If the mandatory pre-rotation step fails at the
+  initiator's accept (after the COMMIT is public), the commit stays pending and can be accepted
+  again; a deferred peer retries on its own with bounded backoff while it stays unlocked.
+- **"Completed" is reported only after maintenance mode ends**, so acting on it never gets a 503.
+
 #### Security review findings, 2026-09-03/04: key material, node reset, chat history, write races
 
 - **Critical: a recovery key's own bytes were its key slot's salt.** `AddRecoveryKeyAsync` derived

@@ -72,6 +72,7 @@ public partial class DekRotationService
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
             throw new ConflictException("Another rotation is in progress.");
 
+        var deferred = false;
         try
         {
             if (!_sessionService.IsUnlocked)
@@ -96,8 +97,12 @@ public partial class DekRotationService
                 _maintenance.Enter("DEK rotation auto-accept in progress\u2026");
                 try
                 {
-                    await AutoAcceptCommitCoreAsync(commitEvent, payload);
-                    runPostCompaction = true;
+                    runPostCompaction = await AutoAcceptCommitCoreAsync(commitEvent, payload);
+                }
+                catch (DekRotationPreconditionException)
+                {
+                    deferred = true;
+                    throw;
                 }
                 finally
                 {
@@ -111,6 +116,8 @@ public partial class DekRotationService
 
             if (runPostCompaction)
             {
+                PublishCompleted();
+                _deferredRetry.Reset();
                 try
                 {
                     using var compactionScope = _scopeFactory.CreateScope();
@@ -132,19 +139,45 @@ public partial class DekRotationService
             // together would only apply the first; the second would throw "Another rotation
             // in progress" and never retry (its event is already in tbl_event so sync won't
             // redeliver). Fire-and-forget — recursion is bounded by the lock + state row count.
-            // (Found by E2E multi-rotation test on 2026-04-26.)
-            _ = Task.Run(async () =>
+            // (Found by E2E multi-rotation test on 2026-04-26.) Not after a deferral: that row is
+            // still Committing, so the sweep would pick it straight back up, fail the same
+            // precondition and sweep again, forever. A deferral instead schedules one bounded,
+            // backed-off retry (so an always-unlocked server does not wait for an unlock that never
+            // comes); the next unlock retries too.
+            if (!deferred)
             {
-                try { await RetryPendingAutoAcceptsAsync(); }
-                catch (Exception ex) { _logger.LogWarning(ex, "Post-auto-accept retry sweep failed"); }
-            });
+                _ = Task.Run(async () =>
+                {
+                    try { await RetryPendingAutoAcceptsAsync(); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "Post-auto-accept retry sweep failed"); }
+                });
+            }
+            else
+            {
+                _deferredRetry.Schedule(RetryPendingAutoAcceptsAsync, _logger);
+            }
         }
     }
 
-    private async Task AutoAcceptCommitCoreAsync(SyncEvent commitEvent, DekRotationCommitPayload payload)
+    /// <returns>True when the rotation was applied; false when it was skipped as already settled.</returns>
+    private async Task<bool> AutoAcceptCommitCoreAsync(SyncEvent commitEvent, DekRotationCommitPayload payload)
     {
         using var scope = _scopeFactory.CreateScope();
         var stateRepo = scope.ServiceProvider.GetRequiredService<IDekRotationStateRepository>();
+
+        // A commit this node has already applied (or cancelled, or rejected) is a no-op. Sync
+        // re-delivers events, and re-running an applied rotation would treat the CURRENT DEK as the
+        // old one. Checked here — under _executeLock and the heavy-operation lock, which the rewrap
+        // also runs under — so the check and the rewrap cannot interleave with another apply.
+        var existing = await stateRepo.GetAsync(commitEvent.EventId.ToString());
+        if (existing?.State is DekRotationState.Applied or DekRotationState.Cancelled or DekRotationState.Rejected)
+        {
+            _logger.LogInformation(
+                "DEK rotation commit {CommitEventId} is already {State}; auto-accept skipped (no-op)",
+                commitEvent.EventId, existing.State);
+            return false;
+        }
+
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -159,6 +192,7 @@ public partial class DekRotationService
         byte[]? newDek = null;
         string? chainEncB64 = null;
         string? chainIvB64 = null;
+        var rewrapped = false;
 
         try
         {
@@ -175,10 +209,23 @@ public partial class DekRotationService
                 isInitiator: false,
                 chainEncryptedNewDekB64: chainEncB64,
                 chainIvB64: chainIvB64);
+            rewrapped = true;
 
             _logger.LogInformation(
-                "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. Agents={Agents}. RecoverySlots={Recovery}.",
+                "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, agentsDeleted, recoveryDeleted);
+            return true;
+        }
+        catch (DekRotationPreconditionException ex)
+        {
+            // Nothing was changed (the rewrap never started), so this is "not yet", not "failed":
+            // the row stays Committing and is retried (bounded automatic retry, next unlock, or an
+            // admin applying it from the pending-rotation banner). Failed is terminal — nothing retries it — which would
+            // strand this node on the retired DEK for good.
+            _progress.Update(DekRotationFlowStep.Failed, err: ex.Message,
+                msg: "DEK rotation auto-accept deferred; it stays pending and is retried automatically.");
+            _logger.LogError(ex, "DEK rotation auto-accept deferred for commit event {CommitEventId}", commitEvent.EventId);
+            throw;
         }
         catch (Exception ex)
         {
@@ -190,8 +237,9 @@ public partial class DekRotationService
         finally
         {
             // Clear key material on the error path. (Kilo R1 security review CRIT-1.)
-            // Success path already cleared oldDek + transferred newDek to SessionService.
-            if (_progress.Step != DekRotationFlowStep.Completed)
+            // Success path already cleared oldDek + transferred newDek to SessionService. Keyed on
+            // the rewrap having returned: Completed is published later, after maintenance ends.
+            if (!rewrapped)
             {
                 if (oldDek != null) Array.Clear(oldDek);
                 if (newDek != null) Array.Clear(newDek);

@@ -27,21 +27,18 @@ namespace BeeMemoryBank.Api.Endpoints;
 ///    <c>.RequireSuperadmin()</c> (the shared <see cref="SuperadminEndpointFilter"/>, visible at
 ///    the registration site rather than restated at the top of each handler).
 ///  - Any endpoint that encrypts/decrypts a key checks <c>session.IsUnlocked</c> first and
-///    returns <c>409 {"error":"Vault is locked"}</c> when locked (encrypt needs the master DEK —
-///    see plan §6 "Phase 0 acceptance made realistic").
+///    returns <c>409 {"error":"Vault is locked"}</c> when locked (the chat key that seals it is
+///    itself wrapped under the master DEK — see plan §6 "Phase 0 acceptance made realistic").
 ///  - A key's plaintext is returned ONLY at creation; every other response exposes
 ///    <c>key_prefix</c> only.
 ///
-/// Key encryption follows the EXACT <c>RemoteAccountService</c> precedent
-/// (<c>ArticleEncryptor.Encrypt(secret, masterDek, aad)</c> with
-/// <c>session.GetMasterDek()</c> + <c>Array.Clear(masterDek)</c> in <c>finally</c>). It does NOT
-/// use <c>AgentKeyHelper</c> (wrong direction — see plan §6).
+/// Key encryption is <c>ArticleEncryptor.Encrypt(secret, chatKey, aad)</c> inside
+/// <c>ChatSettingsRepository.SealSecretAsync</c> / <c>OpenSecretsAsync</c>, under the node chat key
+/// (<c>ChatDataProtector</c>) rather than the master DEK so a DEK rotation does not orphan stored
+/// keys. It does NOT use <c>AgentKeyHelper</c> (wrong direction — see plan §6).
 /// </summary>
 public static partial class ChatEndpoints
 {
-    // Constant AAD for OpenRouter-key encryption (distinct from RemoteAccountService's token AAD).
-    private static readonly byte[] KeyAad = "bmb-openrouter-key-v1"u8.ToArray();
-
     // Phase 3: in-flight confirmation guard. Prevents the SAME tool call from being processed by two
     // concurrent /confirm requests (two browser tabs / a rapid double-click). The persisted-tool-result
     // idempotency check below catches the SEQUENTIAL double-click (it sees the stored tool result); this
@@ -97,7 +94,7 @@ public static partial class ChatEndpoints
         group.MapPost("/keys", async (CreateChatKeyRequest req, ChatSettingsRepository repo,
             SessionService session) =>
         {
-            // Encrypts under the master DEK → needs an unlocked vault.
+            // Encrypts under the node chat key (itself wrapped under the master DEK) → needs an unlocked vault.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
 
@@ -107,19 +104,17 @@ public static partial class ChatEndpoints
                 return Results.Json(new ErrorResponse("ApiKey is required"), statusCode: 400);
 
             var plaintextKey = req.ApiKey.Trim();
-            var (ciphertext, iv) = EncryptKey(plaintextKey, session);
 
             var key = new ChatApiKey
             {
                 Id = Guid.NewGuid(),
                 Label = req.Label.Trim(),
                 KeyPrefix = ComputeKeyPrefix(plaintextKey),
-                Ciphertext = ciphertext,
-                Iv = iv,
                 Enabled = true,
                 Priority = req.Priority,
                 CreatedAt = DateTime.UtcNow
             };
+            await repo.SealSecretAsync(key, plaintextKey);
             await repo.CreateAsync(key);
 
             // Returned exactly once; thereafter only key_prefix is exposed.

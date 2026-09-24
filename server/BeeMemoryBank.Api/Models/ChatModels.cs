@@ -6,7 +6,8 @@ namespace BeeMemoryBank.Api.Models;
 
 /// <summary>
 /// Persisted OpenRouter API key. <c>Ciphertext</c>/<c>Iv</c> are the output of
-/// <c>ArticleEncryptor.Encrypt(plaintext, masterDek, aad)</c> (AES-256-GCM under the master DEK).
+/// <c>ArticleEncryptor.Encrypt(plaintext, key, aad)</c> (AES-256-GCM) — under the node chat key when
+/// <see cref="KeyVersion"/> is 1, under the master DEK for a legacy row (see ChatDataProtector).
 /// The plaintext key is held in memory only at creation/decryption time and is NEVER persisted,
 /// logged, or returned to the browser after creation (plan §1).
 /// </summary>
@@ -17,6 +18,8 @@ public class ChatApiKey
     public string KeyPrefix { get; set; } = "";
     public byte[] Ciphertext { get; set; } = [];
     public byte[] Iv { get; set; } = [];
+    /// <summary>chat_api_key.key_v — which key <see cref="Ciphertext"/> is sealed under (ChatDataProtector).</summary>
+    public int? KeyVersion { get; set; }
     public bool Enabled { get; set; } = true;
     public int Priority { get; set; }
     public DateTime? DisabledUntil { get; set; }
@@ -132,10 +135,13 @@ public class ChatMessage
     // the way OUT of ListByConversationAsync this is already decrypted -- callers never see
     // ciphertext. See H3 fix in ChatMessageRepository.
     public string? ContentText { get; set; }
-    /// <summary>On-disk ciphertext for <see cref="ContentText"/> (AES-256-GCM under the master
-    /// DEK). Populated by Dapper on read; never set directly by application code.</summary>
+    /// <summary>On-disk ciphertext for <see cref="ContentText"/> (AES-256-GCM under the key
+    /// <see cref="ContentKeyVersion"/> names). Populated by Dapper on read; never set directly by
+    /// application code.</summary>
     public byte[]? ContentCiphertext { get; set; }
     public byte[]? ContentIv { get; set; }
+    /// <summary>chat_message.content_key_v — see ChatDataProtector. Read-side only, cleared after decrypt.</summary>
+    public int? ContentKeyVersion { get; set; }
     // H3b fix: ToolCallsJson carries the assistant's raw tool-call arguments, which for any WRITE
     // tool (bee_save_article, bee_update_article, bee_append_to_article, bee_replace_in_article)
     // ARE decrypted vault content -- the exact gap the original H3 fix (ContentText only) missed.
@@ -143,12 +149,14 @@ public class ChatMessage
     // ToolCallsCiphertext/ToolCallsIv before the row is written), already-decrypted coming OUT of
     // ListByConversationAsync.
     public string? ToolCallsJson { get; set; }
-    /// <summary>On-disk ciphertext for <see cref="ToolCallsJson"/> (AES-256-GCM under the master
-    /// DEK, its OWN AAD distinct from <see cref="ContentCiphertext"/>'s -- see
+    /// <summary>On-disk ciphertext for <see cref="ToolCallsJson"/> (AES-256-GCM under the key
+    /// <see cref="ToolCallsKeyVersion"/> names, its OWN AAD distinct from <see cref="ContentCiphertext"/>'s -- see
     /// ChatMessageRepository.ToolCallsAad -- so a ciphertext cannot be swapped between the two
     /// columns). Populated by Dapper on read; never set directly by application code.</summary>
     public byte[]? ToolCallsCiphertext { get; set; }
     public byte[]? ToolCallsIv { get; set; }
+    /// <summary>chat_message.tool_calls_key_v — see ChatDataProtector. Read-side only, cleared after decrypt.</summary>
+    public int? ToolCallsKeyVersion { get; set; }
     public string? ToolCallId { get; set; }
     public string? Model { get; set; }
     public int? TokensIn { get; set; }
@@ -176,6 +184,9 @@ public class ChatAttachment
     /// <summary>AES-256-GCM IV for <see cref="Blob"/>. Null means a legacy row written before the
     /// H3 encryption fix, whose Blob is still plaintext.</summary>
     public byte[]? Iv { get; set; }
+    /// <summary>chat_attachment.key_v — which key an encrypted <see cref="Blob"/> is under
+    /// (ChatDataProtector). Read-side only, cleared after decrypt.</summary>
+    public int? KeyVersion { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

@@ -93,7 +93,8 @@ public class ChatMcpToolPolicyUnificationTests : IAsyncLifetime
 
         _chatDataDir = Path.Combine(Path.GetTempPath(), "bmb_chat_parity_" + Guid.NewGuid().ToString("N"));
         _chatFactory = new ChatDbConnectionFactory(_chatDataDir);
-        var attachRepo = new ChatAttachmentRepository(_chatFactory);
+        var attachRepo = new ChatAttachmentRepository(_chatFactory,
+            new ChatDataProtector(_factory, _session, NullLogger<ChatDataProtector>.Instance));
 
         var mcpRegistry = new McpToolRegistry(new[]
         {

@@ -12,8 +12,8 @@ namespace BeeMemoryBank.Sync.DekRotation;
 
 /// <summary>
 /// The destructive half of a DEK rotation: re-wrap every key-bearing row under the new master DEK,
-/// invalidate agents and stale key slots, bump the sentinel and epoch, commit, then swap the
-/// in-memory DEK.
+/// remove agent keys that carry the old master DEK and stale key slots, bump the sentinel and epoch,
+/// commit, then swap the in-memory DEK.
 ///
 /// <para>
 /// Lives in Sync, not the API project, because it is not server-only work. Every node in a cluster
@@ -29,6 +29,41 @@ public static class DekRewrapper
     private static void Report(Action<DekRotationFlowStep, int, string>? progress,
         DekRotationFlowStep step, int pct, string message) => progress?.Invoke(step, pct, message);
 
+    /// <summary>
+    /// Runs every registered <see cref="IDekRotationHook"/> while the session still holds the
+    /// outgoing DEK. Call before <see cref="RewrapAllAsync"/> on every apply path (and before a
+    /// proposal is published). Mandatory per the hook contract: the first failure is logged and
+    /// rethrown as <see cref="Core.Exceptions.DekRotationPreconditionException"/>, so the rotation
+    /// stops before its transaction opens and can be retried — committing with a hook's data still
+    /// under the retiring DEK would make that data unreadable after the next restart.
+    /// </summary>
+    public static async Task RunPreRewrapHooksAsync(
+        IServiceProvider services, Microsoft.Extensions.Logging.ILogger? logger, CancellationToken ct = default)
+    {
+        var hooks = (IEnumerable<IDekRotationHook>?)services.GetService(typeof(IEnumerable<IDekRotationHook>)) ?? [];
+        foreach (var hook in hooks)
+        {
+            try
+            {
+                await hook.BeforeRewrapAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex,
+                    "DEK rotation pre-rewrap hook {Hook} failed; the rotation is not applied and can be retried",
+                    hook.GetType().Name);
+                if (ex is Core.Exceptions.DekRotationPreconditionException) throw;
+                throw new Core.Exceptions.DekRotationPreconditionException(
+                    $"DEK rotation was not started: preparing host data outside the vault database failed ({ex.Message}). "
+                    + "Nothing was changed; retry once the cause is fixed.", ex);
+            }
+        }
+    }
+
+    /// <returns>
+    /// <c>agentsDeleted</c> counts only agents that carried a wrapped master DEK (auto-unlock
+    /// agents); agents without key material survive a rotation untouched.
+    /// </returns>
     public static async Task<(int agentsDeleted, int slotsDeleted, RewrapTally tally)> RewrapAllAsync(
         DbConnectionFactory connFactory,
         SessionService sessionService,
@@ -76,12 +111,32 @@ public static class DekRewrapper
 
             ReWrapProjectionMatrix(conn, tx, oldDek, newDek, tally, logger);
 
-            Report(progress, DekRotationFlowStep.InvalidatingAgents, 75,
-                isInitiator ? "Invalidating agents..." : "Auto-accept: invalidating agents...");
+            Report(progress, DekRotationFlowStep.ReWrappingPerItem, 72,
+                isInitiator ? "Re-wrapping node data keys..." : "Auto-accept: re-wrapping node data keys...");
 
-            // --- tbl_agent: agents hold API keys encrypted with the old DEK; server
-            // cannot re-wrap them (no access to plaintext keys). Delete all agents.
-            agentsDeleted = await conn.ExecuteAsync("DELETE FROM tbl_agent", transaction: tx);
+            ReWrapNodeDataKeys(conn, tx, oldDek, newDek, tally, logger);
+
+            Report(progress, DekRotationFlowStep.ReWrappingPerItem, 74,
+                isInitiator ? "Re-encrypting remote-account tokens..." : "Auto-accept: re-encrypting remote-account tokens...");
+
+            ReEncryptRemoteAccountTokens(conn, tx, oldDek, newDek, tally, logger);
+
+            Report(progress, DekRotationFlowStep.InvalidatingAgents, 75,
+                isInitiator ? "Removing agent keys that carry the old master key..." : "Auto-accept: removing agent keys that carry the old master key...");
+
+            // --- tbl_agent: only agents that carry a wrapped copy of the master DEK are removed.
+            // Such an agent (owner was a superadmin when it was created) holds the OLD DEK sealed
+            // under a key derived from its own plaintext API key, which the server never stores, so
+            // it cannot be re-wrapped — and a rotation is typically a response to suspected key
+            // exposure, so a credential that could open the old DEK is treated as part of what is
+            // being retired and must be re-issued. Every other agent holds no key material at all
+            // (encrypted_dek/dek_iv/salt are NULL — Agent.CanAutoUnlock is false, migration 014),
+            // so the rotation has nothing to take from it: it keeps authenticating as its owner,
+            // exactly as before. Deleting those too used to disconnect every teammate's MCP client
+            // on every rotation. Not filtered by status: a soft-deleted row that somehow still
+            // holds a wrapped DEK is exactly the kind of leftover that must not survive.
+            agentsDeleted = await conn.ExecuteAsync(
+                "DELETE FROM tbl_agent WHERE encrypted_dek IS NOT NULL", transaction: tx);
 
             if (isInitiator)
             {
@@ -180,8 +235,8 @@ public static class DekRewrapper
         Array.Clear(oldDek, 0, oldDek.Length);
 
         var completedMsg = isInitiator
-            ? $"DEK rotation completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Agents invalidated: {agentsDeleted}."
-            : $"DEK rotation auto-accept completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Agents invalidated: {agentsDeleted}. Recovery slots removed: {slotsDeleted}.";
+            ? $"DEK rotation completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Auto-unlock agent keys removed: {agentsDeleted}."
+            : $"DEK rotation auto-accept completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Auto-unlock agent keys removed: {agentsDeleted}. Recovery slots removed: {slotsDeleted}.";
         // Rows that survived the rotation without being rotated are said out loud, in the same
         // message the operator already reads, rather than left in a log they have no reason to
         // open. "AlreadyOnNewKey" is routine and healthy — it is the peer race, correctly handled.
@@ -281,6 +336,123 @@ public static class DekRewrapper
                 Array.Clear(plainMatrix, 0, plainMatrix.Length);
             }
         }
+    }
+
+    /// <summary>
+    /// Re-wraps every node data key (<c>tbl_node_data_key</c>, migration 026) from the old master
+    /// DEK to the new one. A node data key encrypts data a host keeps OUTSIDE this database — a
+    /// separate file this transaction cannot reach — so the host seals that data under the data key
+    /// instead of under the master DEK, and this pass is all a rotation has to do to carry it
+    /// forward. Generic on purpose: each row is re-wrapped by its name without this code knowing
+    /// what it protects.
+    /// <para>
+    /// Same three outcomes as the other passes: opened under the old key → re-sealed; already under
+    /// the new key (a create that committed after the sentinel moved) → left alone; neither →
+    /// counted unreadable and left in place rather than thrown, because a throw here would roll back
+    /// the entire rotation on every retry. The host-side provider treats a row that opens under no
+    /// key while the current DEK matches the sentinel as broken and replaces it. Hosts that never
+    /// created a data key (mobile, CLI) simply have no rows.
+    /// </para>
+    /// </summary>
+    internal static void ReWrapNodeDataKeys(
+        System.Data.IDbConnection conn, System.Data.IDbTransaction tx, byte[] oldDek, byte[] newDek,
+        RewrapTally tally, Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        var rows = conn.Query<NodeDataKeyRow>(
+            $"SELECT key_name AS Name, wrapped_key AS Wrapped, iv AS Iv FROM {NodeDataKeyEnvelope.TableName}",
+            transaction: tx).ToList();
+
+        foreach (var row in rows)
+        {
+            var dataKey = NodeDataKeyEnvelope.TryUnwrap(row.Name, row.Wrapped, row.Iv, oldDek);
+            if (dataKey is null)
+            {
+                if (NodeDataKeyEnvelope.TryUnwrap(row.Name, row.Wrapped, row.Iv, newDek) is { } already)
+                {
+                    Array.Clear(already);
+                    tally.AlreadyOnNewKey++;
+                    continue;
+                }
+
+                tally.Unreadable++;
+                tally.UnreadableExamples.Add($"{NodeDataKeyEnvelope.TableName}:{row.Name}");
+                logger?.LogError(
+                    "DEK rotation: node data key {Name} opened under neither the old nor the new master key. "
+                    + "The rotation continues; the data it protects stays unreadable on this node, and its "
+                    + "owner creates a new key on next use.", row.Name);
+                continue;
+            }
+
+            try
+            {
+                var (wrapped, iv) = NodeDataKeyEnvelope.Wrap(row.Name, dataKey, newDek);
+                conn.Execute(
+                    $"UPDATE {NodeDataKeyEnvelope.TableName} SET wrapped_key = @wrapped, iv = @iv WHERE key_name = @name",
+                    new { wrapped, iv, name = row.Name }, tx);
+                tally.Rewrapped++;
+            }
+            finally
+            {
+                Array.Clear(dataKey);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-encrypts every remote-account bearer token (<c>tbl_remote_account.encrypted_token</c>),
+    /// which <c>RemoteAccountService</c> seals directly under the master DEK. The table lives in this
+    /// database, so the tokens are simply carried forward inside the rotation transaction; before
+    /// this pass existed every rotation left every remote account unable to authenticate.
+    /// Same three outcomes as the other passes — re-sealed, already on the new key (a token written
+    /// by a request that raced the rotation), or counted unreadable and left alone, never thrown.
+    /// </summary>
+    internal static void ReEncryptRemoteAccountTokens(
+        System.Data.IDbConnection conn, System.Data.IDbTransaction tx, byte[] oldDek, byte[] newDek,
+        RewrapTally tally, Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        var rows = conn.Query<RemoteTokenRow>(
+            "SELECT id AS Id, encrypted_token AS Token, token_iv AS Iv FROM tbl_remote_account",
+            transaction: tx).ToList();
+
+        foreach (var row in rows)
+        {
+            var token = RemoteAccountService.TryOpenToken(row.Token, row.Iv, oldDek);
+            if (token is null)
+            {
+                if (RemoteAccountService.TryOpenToken(row.Token, row.Iv, newDek) is not null)
+                {
+                    tally.AlreadyOnNewKey++;
+                    continue;
+                }
+
+                tally.Unreadable++;
+                tally.UnreadableExamples.Add($"tbl_remote_account:{row.Id}");
+                logger?.LogError(
+                    "DEK rotation: remote account {Id} has a token that opened under neither the old nor the new master key. "
+                    + "The rotation continues; re-enter that account's credentials.", row.Id);
+                continue;
+            }
+
+            var (cipher, iv) = RemoteAccountService.SealToken(token, newDek);
+            conn.Execute(
+                "UPDATE tbl_remote_account SET encrypted_token = @cipher, token_iv = @iv WHERE id = @id",
+                new { cipher, iv, id = row.Id }, tx);
+            tally.Rewrapped++;
+        }
+    }
+
+    private sealed class RemoteTokenRow
+    {
+        public string Id { get; set; } = "";
+        public byte[]? Token { get; set; }
+        public byte[]? Iv { get; set; }
+    }
+
+    private sealed class NodeDataKeyRow
+    {
+        public string Name { get; set; } = "";
+        public byte[]? Wrapped { get; set; }
+        public byte[]? Iv { get; set; }
     }
 
     /// <summary>

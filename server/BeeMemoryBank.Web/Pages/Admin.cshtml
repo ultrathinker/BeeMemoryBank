@@ -1816,7 +1816,7 @@
         <p style="margin-bottom:12px;">Before proceeding, understand the impact:</p>
         <ul style="margin:0 0 16px 20px;line-height:1.8;">
             <li>All article bodies, version history, conflict copies, and media files will be <strong>re-encrypted</strong> (one big transaction; node enters maintenance for the duration).</li>
-            <li>All <strong>agents</strong> will be deleted — they must be regenerated after rotation completes (their API keys cannot be re-wrapped server-side).</li>
+            <li><strong>Agents that can auto-unlock the vault</strong> (superadmin-owned agents that carry the master key) will be deleted and must be re-issued after rotation completes — their wrapped copy of the old key cannot be re-wrapped server-side. All other agents keep working unchanged.</li>
             <li>All <strong>other user key slots</strong> will be removed — other users will need to re-register their passwords against the new DEK.</li>
             <li>All <strong>recovery keys</strong> will be invalidated — issue a new recovery key immediately after rotation.</li>
             <li>A <strong>pre-rotation snapshot</strong> is created automatically before any destructive change.</li>

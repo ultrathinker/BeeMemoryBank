@@ -94,19 +94,39 @@ public sealed class ChatDbInitializer
         await EnsureColumnAsync(conn, "chat_attachment", "iv",
             "ALTER TABLE chat_attachment ADD COLUMN iv BLOB");
 
-        // H3a fix: partial indexes backing ChatMessageRepository/ChatAttachmentRepository's
-        // BackfillLegacyPlaintextBatchAsync scans. Each index only contains rows still needing
-        // migration (its WHERE clause mirrors the "still plaintext" side of the backfill query),
-        // so it self-shrinks to empty as rows get migrated and stays empty forever after — a node
-        // that has never had a plaintext row (or has finished backfilling) pays an empty-index
-        // lookup per scan, never a full table scan, regardless of how large chat.db grows.
-        // CREATE INDEX IF NOT EXISTS is unconditionally idempotent (unlike ALTER TABLE ADD COLUMN),
-        // so these run every startup with no existence check needed.
+        // Key-version markers, one per ciphertext column: 1 = sealed under the node chat key (the
+        // 'chat' row of tbl_node_data_key in the main database, carried forward by every DEK
+        // rotation), NULL = legacy (sealed directly under the master DEK, or still plaintext),
+        // -1 = legacy ciphertext that opened under no available master DEK when migrated. See
+        // ChatDataProtector. Rows sealed directly under the master DEK did not survive a DEK
+        // rotation, which is why these exist.
+        await EnsureColumnAsync(conn, "chat_message", "content_key_v",
+            "ALTER TABLE chat_message ADD COLUMN content_key_v INTEGER");
+        await EnsureColumnAsync(conn, "chat_message", "tool_calls_key_v",
+            "ALTER TABLE chat_message ADD COLUMN tool_calls_key_v INTEGER");
+        await EnsureColumnAsync(conn, "chat_attachment", "key_v",
+            "ALTER TABLE chat_attachment ADD COLUMN key_v INTEGER");
+        await EnsureColumnAsync(conn, "chat_api_key", "key_v",
+            "ALTER TABLE chat_api_key ADD COLUMN key_v INTEGER");
+
+        // Partial indexes backing the legacy-migration scans (ChatMessageRepository /
+        // ChatAttachmentRepository.MigrateLegacyBatchAsync). Each index only contains rows still
+        // needing migration, so it self-shrinks to empty as rows get migrated and stays empty
+        // forever after — a node with nothing legacy left pays an empty-index lookup per scan,
+        // never a full table scan, regardless of how large chat.db grows. The first three served
+        // the original plaintext-only (H3a) backfill; the *_legacy_key pair now covers that case
+        // too and is what the scans use. CREATE INDEX IF NOT EXISTS is unconditionally idempotent
+        // (unlike ALTER TABLE ADD COLUMN), so these run every startup with no existence check.
         foreach (var indexDdl in new[]
         {
             "CREATE INDEX IF NOT EXISTS idx_chat_message_legacy_content ON chat_message(id) WHERE content_ciphertext IS NULL AND content_text IS NOT NULL AND content_text != ''",
             "CREATE INDEX IF NOT EXISTS idx_chat_message_legacy_toolcalls ON chat_message(id) WHERE tool_calls_ciphertext IS NULL AND tool_calls_json IS NOT NULL AND tool_calls_json != ''",
-            "CREATE INDEX IF NOT EXISTS idx_chat_attachment_legacy_blob ON chat_attachment(id) WHERE iv IS NULL AND blob IS NOT NULL"
+            "CREATE INDEX IF NOT EXISTS idx_chat_attachment_legacy_blob ON chat_attachment(id) WHERE iv IS NULL AND blob IS NOT NULL",
+            // Same self-emptying shape for the move onto the chat key: each WHERE mirrors the scan
+            // in the matching MigrateLegacyBatchAsync exactly (SQLite only uses a partial index when
+            // the query's WHERE implies the index's).
+            $"CREATE INDEX IF NOT EXISTS idx_chat_message_legacy_key ON chat_message(id) WHERE {ChatMessageRepository.LegacyKeyPredicate}",
+            $"CREATE INDEX IF NOT EXISTS idx_chat_attachment_legacy_key ON chat_attachment(id) WHERE {ChatAttachmentRepository.LegacyKeyPredicate}"
         })
         {
             await using var indexCmd = conn.CreateCommand();
@@ -142,9 +162,10 @@ public sealed class ChatDbInitializer
         await alterCmd.ExecuteNonQueryAsync();
     }
 
-    // Schema per plan §3. chat_api_key stores only (ciphertext, iv) — the
-    // ArticleEncryptor.Encrypt(secret, masterDek, aad) path yields exactly those two artifacts
-    // (AES-256-GCM under the master DEK with a constant AAD), so there is no salt/kdf_version.
+    // Schema per plan §3. chat_api_key stores only (ciphertext, iv) plus its key-version marker —
+    // ArticleEncryptor.Encrypt(secret, chatKey, aad) yields exactly those two artifacts (AES-256-GCM
+    // with a constant AAD), so there is no salt/kdf_version. The ciphertext/key_v columns of every
+    // table below are covered by the key-version comment in InitializeAsync.
     private static readonly string[] SchemaStatements =
     [
         """
@@ -164,16 +185,18 @@ public sealed class ChatDbInitializer
             role                  TEXT NOT NULL,
             -- content_text/tool_calls_json are legacy plaintext, kept for backward-compat reads of
             -- rows written before the H3/H3b encryption fixes. New rows leave them NULL and
-            -- populate the ciphertext/iv column pairs below instead (AES-256-GCM under the master
-            -- DEK, one independent AAD-bound pair per column) — see ChatMessageRepository. A fresh
-            -- database created after both fixes shipped gets these columns here directly and never
-            -- needs the additive ALTER path below.
+            -- populate the ciphertext/iv column pairs below instead (AES-256-GCM under the node
+            -- chat key, one independent AAD-bound pair per column, *_key_v = 1) — see
+            -- ChatMessageRepository and ChatDataProtector. A fresh database gets these columns here
+            -- directly and never needs the additive ALTER path below.
             content_text          TEXT,
             content_ciphertext    BLOB,
             content_iv            BLOB,
+            content_key_v         INTEGER,
             tool_calls_json       TEXT,
             tool_calls_ciphertext BLOB,
             tool_calls_iv         BLOB,
+            tool_calls_key_v      INTEGER,
             tool_call_id          TEXT,
             model                 TEXT,
             tokens_in             INTEGER,
@@ -189,11 +212,12 @@ public sealed class ChatDbInitializer
             message_id  TEXT NOT NULL,
             kind        TEXT NOT NULL,
             mime        TEXT NOT NULL,
-            -- blob holds ciphertext (AES-256-GCM under the master DEK) when iv is set; a NULL iv
-            -- means a legacy row written before the H3 encryption fix, whose blob is still
-            -- plaintext bytes — see ChatAttachmentRepository.
+            -- blob holds ciphertext when iv is set (under the node chat key when key_v = 1, under
+            -- the master DEK for a legacy row); a NULL iv means a legacy row written before the H3
+            -- encryption fix, whose blob is still plaintext bytes — see ChatAttachmentRepository.
             blob        BLOB,
             iv          BLOB,
+            key_v       INTEGER,
             created_at  TEXT NOT NULL
         );
         """,
@@ -204,6 +228,7 @@ public sealed class ChatDbInitializer
             key_prefix      TEXT NOT NULL,
             ciphertext      BLOB NOT NULL,
             iv              BLOB NOT NULL,
+            key_v           INTEGER,
             enabled         INTEGER NOT NULL DEFAULT 1,
             priority        INTEGER NOT NULL DEFAULT 0,
             disabled_until  TEXT,
