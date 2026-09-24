@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Services;
 using Dapper;
 
 namespace BeeMemoryBank.Api.Services;
@@ -6,16 +7,21 @@ namespace BeeMemoryBank.Api.Services;
 /// CRUD for the chat key catalogue (<c>chat_api_key</c>) and model catalogue
 /// (<c>chat_model</c>), both in chat.db. Node-local — never synced, never snapshotted.
 ///
-/// Keys are stored as AES-256-GCM ciphertext under the master DEK (see
-/// <c>RemoteAccountService</c> precedent). This repo persists/returns <c>byte[]</c> blobs only;
-/// encrypt/decrypt happens at the call-site that has the master DEK in scope.
+/// Keys are stored as AES-256-GCM ciphertext under the node chat key (<see cref="ChatDataProtector"/>
+/// — the master DEK directly would not survive a DEK rotation, since chat.db is outside the rotation
+/// transaction). <see cref="SealSecretAsync"/> / <see cref="OpenSecretsAsync"/> are the only places a
+/// provider key is encrypted or decrypted; both need an unlocked vault.
 /// </summary>
-public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : ChatRepositoryBase(factory)
+public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory, ChatDataProtector protector)
+    : ChatRepositoryBase(factory)
 {
     // ── chat_api_key ──────────────────────────────────────────────────────────
 
+    // Constant AAD for OpenRouter-key encryption (distinct from RemoteAccountService's token AAD).
+    private static readonly byte[] KeyAad = "bmb-openrouter-key-v1"u8.ToArray();
+
     private const string KeyCols = @"id AS Id, label AS Label, key_prefix AS KeyPrefix,
-        ciphertext AS Ciphertext, iv AS Iv, enabled AS Enabled, priority AS Priority,
+        ciphertext AS Ciphertext, iv AS Iv, key_v AS KeyVersion, enabled AS Enabled, priority AS Priority,
         disabled_until AS DisabledUntil, last_error AS LastError, last_used_at AS LastUsedAt,
         created_at AS CreatedAt";
 
@@ -52,11 +58,74 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory) : Ch
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"INSERT INTO chat_api_key
-              (id, label, key_prefix, ciphertext, iv, enabled, priority,
+              (id, label, key_prefix, ciphertext, iv, key_v, enabled, priority,
                disabled_until, last_error, last_used_at, created_at)
-              VALUES (@Id, @Label, @KeyPrefix, @Ciphertext, @Iv, @Enabled, @Priority,
+              VALUES (@Id, @Label, @KeyPrefix, @Ciphertext, @Iv, @KeyVersion, @Enabled, @Priority,
                       @DisabledUntil, @LastError, @LastUsedAt, @CreatedAt)",
             key);
+    }
+
+    /// <summary>Encrypts <paramref name="secret"/> under the chat key into
+    /// <paramref name="key"/>'s Ciphertext/Iv/KeyVersion, ready for <see cref="CreateAsync"/>.</summary>
+    public async Task SealSecretAsync(Models.ChatApiKey key, string secret)
+    {
+        using var lease = await protector.AcquireAsync();
+        (key.Ciphertext, key.Iv) = lease.EncryptText(secret, KeyAad);
+        key.KeyVersion = ChatDataProtector.ChatKeyVersion;
+    }
+
+    /// <summary>
+    /// Decrypts each key's secret, index-aligned with <paramref name="keys"/>; an entry is null when
+    /// that row opens under no key this node holds (the caller skips it and records why). Legacy
+    /// master-DEK rows open through the current or a retired master DEK until migrated.
+    /// </summary>
+    public async Task<string?[]> OpenSecretsAsync(IReadOnlyList<Models.ChatApiKey> keys)
+    {
+        var result = new string?[keys.Count];
+        if (keys.Count == 0) return result;
+
+        using var lease = keys.Any(k => k.KeyVersion == ChatDataProtector.ChatKeyVersion)
+            ? await protector.TryAcquireForReadAsync()
+            : null;
+        for (var i = 0; i < keys.Count; i++)
+            result[i] = protector.TryDecryptText(lease, keys[i].Ciphertext, keys[i].Iv, keys[i].KeyVersion, KeyAad);
+        return result;
+    }
+
+    /// <summary>
+    /// Moves provider keys still sealed directly under the master DEK (<c>key_v IS NULL</c>) onto
+    /// the chat key; one that opens under no available master DEK is marked <c>-1</c> and left as
+    /// it is. Same contract as <c>ChatMessageRepository.MigrateLegacyBatchAsync</c>. The table
+    /// holds a handful of rows, so no partial index backs the scan.
+    /// </summary>
+    public async Task<int> MigrateLegacyBatchAsync(int batchSize, SessionService session, CancellationToken ct)
+    {
+        using var conn = OpenConnection();
+        var legacy = (await conn.QueryAsync<Models.ChatApiKey>(
+            $"SELECT {KeyCols} FROM chat_api_key WHERE key_v IS NULL LIMIT @batchSize",
+            new { batchSize })).ToList();
+        if (legacy.Count == 0) return 0;
+
+        using var lease = await protector.AcquireAsync(ct);
+        foreach (var row in legacy)
+        {
+            if (ct.IsCancellationRequested) break;
+
+            var secret = protector.TryDecryptText(null, row.Ciphertext, row.Iv, keyVersion: null, KeyAad);
+            if (secret is null)
+            {
+                await conn.ExecuteAsync(
+                    "UPDATE chat_api_key SET key_v = @Marker WHERE id = @Id AND key_v IS NULL",
+                    new { row.Id, Marker = ChatDataProtector.LegacyUnreadable });
+                continue;
+            }
+
+            var (ciphertext, iv) = lease.EncryptText(secret, KeyAad);
+            await conn.ExecuteAsync(
+                "UPDATE chat_api_key SET ciphertext = @Ciphertext, iv = @Iv, key_v = @Version WHERE id = @Id AND key_v IS NULL",
+                new { row.Id, Ciphertext = ciphertext, Iv = iv, Version = ChatDataProtector.ChatKeyVersion });
+        }
+        return legacy.Count;
     }
 
     public async Task UpdateMetadataAsync(Guid id, string? label, bool? enabled, int? priority)

@@ -6,12 +6,13 @@ using Microsoft.Extensions.Logging;
 namespace BeeMemoryBank.Api.Services;
 
 /// <summary>
-/// H3a fix: one-time backfill that encrypts <c>chat_message</c> rows (content_text,
-/// tool_calls_json) and <c>chat_attachment</c> blobs still holding plaintext from before the
-/// H3/H3b encryption fixes shipped. The actual per-row encryption lives in
-/// <see cref="ChatMessageRepository.BackfillLegacyPlaintextBatchAsync"/> and
-/// <see cref="ChatAttachmentRepository.BackfillLegacyPlaintextBatchAsync"/> — this class is only
-/// the scheduling loop around them.
+/// Moves legacy chat.db data onto the node chat key (<see cref="ChatDataProtector"/>): message
+/// columns and attachment blobs still holding plaintext from before the H3/H3b encryption fixes
+/// (the original H3a backfill), and message columns, attachment blobs and LLM provider keys sealed
+/// directly under the master DEK from before the chat key existed — which a DEK rotation would
+/// otherwise orphan. The per-row work lives in the repositories' <c>MigrateLegacyBatchAsync</c>
+/// methods — this class is only the scheduling loop around them. <see cref="ChatDekRotationHook"/>
+/// runs the same batch to completion right before every DEK rotation.
 ///
 /// <para><b>Why a polling BackgroundService, not a SessionService unlock hook.</b> The backfill
 /// needs the master DEK, which only exists once the vault is unlocked
@@ -93,23 +94,47 @@ public sealed class ChatHistoryBackfillProcessor(
     private async Task<int> ProcessPendingCoreAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
-        var session = scope.ServiceProvider.GetRequiredService<SessionService>();
+        var total = await MigrateOneBatchAsync(scope.ServiceProvider, _batchSize, logger, ct);
+        return total;
+    }
+
+    /// <summary>
+    /// One batch across all three tables; returns the number of rows looked at (0 = nothing left,
+    /// or the vault is locked). Shared by the periodic tick and <see cref="ChatDekRotationHook"/> —
+    /// the repositories' <c>*_key_v IS NULL</c> guards make the two harmless to overlap.
+    /// </summary>
+    internal static async Task<int> MigrateOneBatchAsync(
+        IServiceProvider services, int batchSize, ILogger logger, CancellationToken ct)
+    {
+        var session = services.GetRequiredService<SessionService>();
 
         // No DEK, nothing to encrypt with — this is the normal state for most of a locked node's
         // uptime, not an error.
         if (!session.IsUnlocked) return 0;
 
-        var msgRepo = scope.ServiceProvider.GetRequiredService<ChatMessageRepository>();
-        var attachRepo = scope.ServiceProvider.GetRequiredService<ChatAttachmentRepository>();
+        var msgRepo = services.GetRequiredService<ChatMessageRepository>();
+        var attachRepo = services.GetRequiredService<ChatAttachmentRepository>();
+        var settingsRepo = services.GetRequiredService<ChatSettingsRepository>();
 
-        var messages = await msgRepo.BackfillLegacyPlaintextBatchAsync(_batchSize, session, ct);
-        var attachments = await attachRepo.BackfillLegacyPlaintextBatchAsync(_batchSize, session, ct);
+        int messages, attachments, apiKeys;
+        try
+        {
+            messages = await msgRepo.MigrateLegacyBatchAsync(batchSize, session, ct);
+            attachments = await attachRepo.MigrateLegacyBatchAsync(batchSize, session, ct);
+            apiKeys = await settingsRepo.MigrateLegacyBatchAsync(batchSize, session, ct);
+        }
+        catch (Core.Exceptions.SessionLockedException)
+        {
+            // Locked mid-batch. Every column already moved stays moved; the rest waits for the next
+            // unlock, exactly like the locked case above.
+            return 0;
+        }
 
-        var total = messages + attachments;
+        var total = messages + attachments + apiKeys;
         if (total > 0)
             logger.LogInformation(
-                "Backfilled legacy plaintext chat history: {Messages} message column(s), {Attachments} attachment(s)",
-                messages, attachments);
+                "Moved legacy chat data onto the node chat key: {Messages} message row(s), {Attachments} attachment(s), {ApiKeys} provider key(s)",
+                messages, attachments, apiKeys);
         return total;
     }
 

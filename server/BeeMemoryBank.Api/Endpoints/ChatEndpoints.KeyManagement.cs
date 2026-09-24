@@ -20,32 +20,6 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static partial class ChatEndpoints
 {
-    private static (byte[] cipher, byte[] iv) EncryptKey(string secret, SessionService session)
-    {
-        var masterDek = session.GetMasterDek();
-        try
-        {
-            return ArticleEncryptor.Encrypt(secret, masterDek, KeyAad);
-        }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
-    }
-
-    private static string DecryptKey(byte[] ciphertext, byte[] iv, SessionService session)
-    {
-        var masterDek = session.GetMasterDek();
-        try
-        {
-            return ArticleEncryptor.Decrypt(ciphertext, iv, masterDek, KeyAad);
-        }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
-    }
-
     // ── Phase 4: multi-key failover ────────────────────────────────────────────
     //
     // The chat egress path no longer pins one "highest-priority enabled key". Instead it decrypts
@@ -103,26 +77,26 @@ public static partial class ChatEndpoints
     }
 
     /// <summary>Decrypts every key eligible for egress right now (enabled, not cooling down), in
-    /// priority order. An undecryptable key (e.g. after a DEK rotation) is skipped with a recorded
-    /// note rather than failing the whole turn — it simply won't be tried. Returns an empty list only
-    /// if nothing is available, which the caller maps to a clear "no key / all cooling down" error.
-    /// Decryption needs the master DEK, so callers gate on <c>session.IsUnlocked</c> first.</summary>
+    /// priority order. An undecryptable key (sealed under a key this node no longer has) is skipped
+    /// with a recorded note rather than failing the whole turn — it simply won't be tried. Returns an
+    /// empty list only if nothing is available, which the caller maps to a clear "no key / all
+    /// cooling down" error. Decryption needs an unlocked vault, so callers gate on
+    /// <c>session.IsUnlocked</c> first.</summary>
     private static async Task<List<KeyMaterial>> DecryptAvailableKeysAsync(
         ChatSettingsRepository repo, SessionService session)
     {
         var rows = await repo.ListAvailableOrderedAsync();
+        var secrets = await repo.OpenSecretsAsync(rows);
         var result = new List<KeyMaterial>(rows.Count);
-        foreach (var k in rows)
+        for (var i = 0; i < rows.Count; i++)
         {
-            try
+            if (secrets[i] is { } secret)
             {
-                result.Add(new KeyMaterial(k.Id, DecryptKey(k.Ciphertext, k.Iv, session)));
+                result.Add(new KeyMaterial(rows[i].Id, secret));
+                continue;
             }
-            catch (CryptographicException)
-            {
-                // Skip — this key can't be used until the vault/DEK situation is sorted. Note it for admin.
-                await repo.RecordUsageAsync(k.Id, "decrypt failed");
-            }
+            // Skip — this key can't be used until it is re-entered. Note it for admin.
+            await repo.RecordUsageAsync(rows[i].Id, "decrypt failed");
         }
         return result;
     }

@@ -1,6 +1,4 @@
-using System.Security.Cryptography;
 using BeeMemoryBank.Core.Services;
-using BeeMemoryBank.Crypto;
 using Dapper;
 
 namespace BeeMemoryBank.Api.Services;
@@ -17,36 +15,50 @@ namespace BeeMemoryBank.Api.Services;
 /// A foreign conversation's attachment id yields null, never a leak.</para>
 ///
 /// <para><b>H3 fix:</b> <c>blob</c> used to be stored and served as plaintext image bytes.
-/// <see cref="CreateAsync"/> now encrypts it under the master DEK (AES-256-GCM) before the row is
-/// written; every read method decrypts it back, so callers only ever see plaintext bytes. A NULL
-/// <c>iv</c> column means a legacy row written before this fix — its <c>blob</c> is read as-is
-/// (backward compat, not retroactively re-encrypted by this repository on its own — see
-/// <see cref="BackfillLegacyPlaintextBatchAsync"/> for the one-time migration off of that path).</para>
+/// <see cref="CreateAsync"/> now encrypts it (AES-256-GCM, under the node chat key — see
+/// <see cref="ChatDataProtector"/> for why not the master DEK) before the row is written; every read
+/// method decrypts it back, so callers only ever see plaintext bytes. A NULL <c>iv</c> column means
+/// a legacy row written before this fix — its <c>blob</c> is read as-is; <c>iv</c> set with a NULL
+/// <c>key_v</c> means a legacy row sealed directly under the master DEK. Both are moved onto the
+/// chat key by <see cref="MigrateLegacyBatchAsync"/>.</para>
 /// </summary>
-public sealed class ChatAttachmentRepository(ChatDbConnectionFactory factory) : ChatRepositoryBase(factory)
+public sealed class ChatAttachmentRepository(ChatDbConnectionFactory factory, ChatDataProtector protector)
+    : ChatRepositoryBase(factory)
 {
     // Distinct from ChatMessageRepository's ContentAad and every other AAD tag in the codebase.
     private static readonly byte[] BlobAad = "bmb-chat-attachment-blob-v1"u8.ToArray();
 
+    /// <summary>
+    /// Attachments whose bytes still need moving onto the chat key (legacy plaintext, or legacy
+    /// master-DEK ciphertext). Shared verbatim by the partial index in <see cref="ChatDbInitializer"/>
+    /// and the scan in <see cref="MigrateLegacyBatchAsync"/>.
+    /// </summary>
+    internal const string LegacyKeyPredicate = "key_v IS NULL AND blob IS NOT NULL AND length(blob) > 0";
+
     private const string Cols = @"a.id AS Id, a.message_id AS MessageId, a.kind AS Kind,
-        a.mime AS Mime, a.blob AS Blob, a.iv AS Iv, a.created_at AS CreatedAt";
+        a.mime AS Mime, a.blob AS Blob, a.iv AS Iv, a.key_v AS KeyVersion, a.created_at AS CreatedAt";
 
     public async Task CreateAsync(Models.ChatAttachment attachment, SessionService session)
     {
         byte[] blob = attachment.Blob ?? [];
         byte[]? iv = null;
+        int? keyVersion = null;
         if (blob.Length > 0)
         {
-            var masterDek = session.GetMasterDek();
-            try { (blob, iv) = MediaEncryptor.Encrypt(blob, masterDek, BlobAad); }
-            finally { Array.Clear(masterDek); }
+            using var key = await protector.AcquireAsync();
+            (blob, iv) = key.EncryptBytes(blob, BlobAad);
+            keyVersion = ChatDataProtector.ChatKeyVersion;
         }
 
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
-            @"INSERT INTO chat_attachment (id, message_id, kind, mime, blob, iv, created_at)
-              VALUES (@Id, @MessageId, @Kind, @Mime, @Blob, @Iv, @CreatedAt)",
-            new { attachment.Id, attachment.MessageId, attachment.Kind, attachment.Mime, Blob = blob, Iv = iv, attachment.CreatedAt });
+            @"INSERT INTO chat_attachment (id, message_id, kind, mime, blob, iv, key_v, created_at)
+              VALUES (@Id, @MessageId, @Kind, @Mime, @Blob, @Iv, @KeyVersion, @CreatedAt)",
+            new
+            {
+                attachment.Id, attachment.MessageId, attachment.Kind, attachment.Mime,
+                Blob = blob, Iv = iv, KeyVersion = keyVersion, attachment.CreatedAt
+            });
     }
 
     /// <summary>All attachments for a conversation (used to attach image metadata to the
@@ -62,7 +74,7 @@ public sealed class ChatAttachmentRepository(ChatDbConnectionFactory factory) : 
                WHERE m.conversation_id = @conversationId
                ORDER BY a.created_at ASC",
             new { conversationId })).ToList();
-        DecryptInPlace(rows, session);
+        await DecryptInPlaceAsync(rows);
         return rows;
     }
 
@@ -79,92 +91,84 @@ public sealed class ChatAttachmentRepository(ChatDbConnectionFactory factory) : 
                WHERE a.id = @id AND c.user_id = @userId",
             new { id, userId });
         if (row != null)
-            DecryptInPlace([row], session);
+            await DecryptInPlaceAsync([row]);
         return row;
     }
 
-    private static void DecryptInPlace(List<Models.ChatAttachment> rows, SessionService session)
+    private async Task DecryptInPlaceAsync(List<Models.ChatAttachment> rows)
     {
         if (!rows.Any(r => r.Iv is { Length: > 0 }))
             return;
 
-        var masterDek = session.GetMasterDek();
-        try
+        var needsChatKey = rows.Any(r => r.Iv is { Length: > 0 } && r.KeyVersion == ChatDataProtector.ChatKeyVersion);
+        using var key = needsChatKey ? await protector.TryAcquireForReadAsync() : null;
+
+        foreach (var row in rows)
         {
-            foreach (var row in rows)
+            if (row.Iv is not { Length: > 0 } || row.Blob is not { Length: > 0 })
             {
-                if (row.Iv is not { Length: > 0 } || row.Blob is not { Length: > 0 })
-                    continue; // legacy plaintext row, or no bytes to decrypt
-                try
-                {
-                    row.Blob = MediaEncryptor.Decrypt(row.Blob, row.Iv, masterDek, BlobAad);
-                }
-                catch (CryptographicException)
-                {
-                    // Most likely a DEK rotation since this attachment was saved. Blank it out
-                    // rather than serving garbage bytes as an "image" or throwing and failing the
-                    // whole list/read.
-                    row.Blob = [];
-                }
-                row.Iv = null;
+                row.KeyVersion = null;
+                continue; // legacy plaintext row, or no bytes to decrypt
             }
-        }
-        finally
-        {
-            Array.Clear(masterDek);
+
+            // A blob sealed under a key this node no longer has is blanked out rather than served
+            // as garbage bytes posing as an "image", or thrown, failing the whole list/read.
+            row.Blob = protector.TryDecryptBytes(key, row.Blob, row.Iv, row.KeyVersion, BlobAad) ?? [];
+            row.Iv = null;
+            row.KeyVersion = null;
         }
     }
 
     /// <summary>
-    /// H3a fix: one-time backfill for attachment blobs written before the H3 encryption fix
-    /// (<c>iv IS NULL</c>). Mirrors <c>ChatMessageRepository.BackfillLegacyPlaintextBatchAsync</c>
-    /// — see that method's doc comment for the crash-safety/idempotency/fresh-node-cost reasoning,
-    /// which applies identically here. Returns the number of rows touched (0 = nothing left to
-    /// backfill; a node that has never had a plaintext attachment pays only the empty SELECT).
+    /// Moves up to <paramref name="batchSize"/> legacy attachment blobs onto the chat key — plaintext
+    /// ones (<c>iv IS NULL</c>, written before the H3 fix) and ones sealed directly under the master
+    /// DEK. Mirrors <c>ChatMessageRepository.MigrateLegacyBatchAsync</c>, including the <c>-1</c>
+    /// marker for a ciphertext no available master DEK opens and the idempotency guard; see its doc
+    /// comment. Returns the number of rows looked at (0 = nothing left).
     /// </summary>
-    public async Task<int> BackfillLegacyPlaintextBatchAsync(int batchSize, SessionService session, CancellationToken ct)
+    public async Task<int> MigrateLegacyBatchAsync(int batchSize, SessionService session, CancellationToken ct)
     {
         using var conn = OpenConnection();
         var legacyRows = (await conn.QueryAsync<LegacyAttachmentRow>(
-            @"SELECT id AS Id, blob AS Blob FROM chat_attachment
-              WHERE iv IS NULL AND blob IS NOT NULL AND length(blob) > 0
-              LIMIT @batchSize",
+            $@"SELECT id AS Id, blob AS Blob, iv AS Iv FROM chat_attachment
+               WHERE {LegacyKeyPredicate}
+               LIMIT @batchSize",
             new { batchSize })).ToList();
 
         if (legacyRows.Count == 0)
             return 0;
 
-        var masterDek = session.GetMasterDek();
-        try
+        using var key = await protector.AcquireAsync(ct);
+        foreach (var row in legacyRows)
         {
-            foreach (var row in legacyRows)
+            if (ct.IsCancellationRequested) break;
+
+            var plaintext = row.Iv is null
+                ? row.Blob!
+                : protector.TryDecryptBytes(null, row.Blob!, row.Iv, keyVersion: null, BlobAad);
+            if (plaintext is null)
             {
-                if (ct.IsCancellationRequested) break;
-
-                var (ciphertext, iv) = MediaEncryptor.Encrypt(row.Blob!, masterDek, BlobAad);
-
-                // "AND iv IS NULL" repeats the SELECT's guard on the UPDATE itself: belt-and-braces
-                // idempotency in case a concurrent run ever raced past ChatHistoryBackfillProcessor's
-                // single-flight lock — a second write for an already-migrated row becomes a no-op
-                // instead of re-encrypting (with a fresh random IV) and discarding the original,
-                // already-correct ciphertext.
                 await conn.ExecuteAsync(
-                    "UPDATE chat_attachment SET blob = @Ciphertext, iv = @Iv WHERE id = @Id AND iv IS NULL",
-                    new { row.Id, Ciphertext = ciphertext, Iv = iv });
+                    "UPDATE chat_attachment SET key_v = @Marker WHERE id = @Id AND key_v IS NULL",
+                    new { row.Id, Marker = ChatDataProtector.LegacyUnreadable });
+                continue;
             }
-        }
-        finally
-        {
-            Array.Clear(masterDek);
+
+            var (ciphertext, iv) = key.EncryptBytes(plaintext, BlobAad);
+            if (row.Iv is not null) Array.Clear(plaintext);
+            await conn.ExecuteAsync(
+                "UPDATE chat_attachment SET blob = @Ciphertext, iv = @Iv, key_v = @Version WHERE id = @Id AND key_v IS NULL",
+                new { row.Id, Ciphertext = ciphertext, Iv = iv, Version = ChatDataProtector.ChatKeyVersion });
         }
 
         return legacyRows.Count;
     }
 
-    /// <summary>Row shape for <see cref="BackfillLegacyPlaintextBatchAsync"/>'s scan query.</summary>
+    /// <summary>Row shape for <see cref="MigrateLegacyBatchAsync"/>'s scan query.</summary>
     private sealed class LegacyAttachmentRow
     {
         public Guid Id { get; set; }
         public byte[]? Blob { get; set; }
+        public byte[]? Iv { get; set; }
     }
 }

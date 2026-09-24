@@ -142,11 +142,15 @@ if (OperatingSystem.IsWindows())
 builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();
 builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler>();
-// Encrypts chat rows written before chat.db content/attachments/tool-calls were encrypted at rest
-// (finding H3a). Needs the master DEK, so it can only run while the vault is unlocked — it polls
-// and no-ops when locked rather than hooking unlock, matching PendingEmbeddingProcessor. On a node
-// with nothing legacy left (and on every fresh node) a tick is one empty partial-index lookup.
+// Moves legacy chat rows onto the node chat key: plaintext from before chat.db was encrypted at
+// rest (finding H3a), and ciphertext sealed directly under the master DEK from before the chat key
+// existed. Needs an unlocked vault — it polls and no-ops when locked rather than hooking unlock,
+// matching PendingEmbeddingProcessor. On a node with nothing legacy left (and on every fresh node)
+// a tick is one empty partial-index lookup per table.
 builder.Services.AddHostedService<BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor>();
+// Same migration, run to completion right before every DEK rotation (initiator and peer), so no
+// chat row is left sealed under a DEK the node is about to retire. See IDekRotationHook.
+builder.Services.AddScoped<BeeMemoryBank.Core.Services.IDekRotationHook, ChatDekRotationHook>();
 builder.Services.AddScoped<ZipExportService>();
 builder.Services.AddScoped<CompactionService>();
 // Node reset lives in Core so the API endpoint and `bmb init reset` share one definition of
@@ -165,6 +169,10 @@ builder.Services.AddSingleton(new BeeMemoryBank.Core.Services.MediaStorageOption
 // AddStorage; schema created by ChatDbInitializer (not MigrationRunner / Storage/Migrations).
 // See docs/ai-chat-implementation-plan.md §1 ("Chat DB").
 builder.Services.AddSingleton(new ChatDbConnectionFactory(dataPath));
+// The node chat key every chat.db ciphertext is sealed under (itself wrapped under the master DEK
+// in tbl_node_data_key, which DEK rotation carries forward). Singleton: it caches the unwrapped key while
+// the vault is unlocked and wipes it on SessionService.Locked.
+builder.Services.AddSingleton<ChatDataProtector>();
 builder.Services.AddScoped<ChatDbInitializer>();
 builder.Services.AddScoped<ChatConversationRepository>();
 builder.Services.AddScoped<ChatMessageRepository>();
