@@ -51,7 +51,7 @@ public class SourcePathsGuardTests
     {
         // Stage 2 rescue sources — intentionally reference the legacy Velopack path as read-only source
         "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:133",
-        "desktop/BeeMemoryBank.Node/Program.cs:156",
+        "desktop/BeeMemoryBank.Node/Program.cs:157",
         // Stage 3 transit guards — same rationale
         "desktop/BeeMemoryBank.Desktop/Program.cs:28",
         "server/BeeMemoryBank.Api/Services/UpdateService.cs:344",
