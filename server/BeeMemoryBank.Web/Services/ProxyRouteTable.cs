@@ -128,14 +128,14 @@ public static class ProxyRouteTable
         ["activity"] = new("/api/activity", [new("GET", null)]),
         ["maintenance"] = new("/api/session/status", [new("GET", null)]),
 
-        // ── Sync (invisible GET: the API is superadmin-only and returns the same
-        //    {isInvisible} shape the old Web wrapper did, so the entry mirrors that;
-        //    the old Web gate was any-user only because the API's 403 used to surface
-        //    as a quiet `false` — the table now states the real policy) ──
+        // ── Sync (the API is superadmin-only for these, GET and POST alike, and returns the
+        //    same {isInvisible} shape the old Web wrapper did; the old Web gates were looser
+        //    only because the API's 403 surfaced as a quiet `false` — the table states the
+        //    real policy, so refusals are local and explicit) ──
         ["sync/status"] = new("/api/sync/status", [new("GET", UserRoles.Superadmin)]),
         ["sync/delivery-status"] = new("/api/sync/delivery-status", [new("GET", UserRoles.Superadmin)]),
         ["sync/invisible"] = new("/api/sync/invisible",
-            [new("GET", UserRoles.Superadmin), new("POST", null)]),
+            [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin)]),
 
         // ── Snapshots / compaction / search admin ────────────────────────────────
         ["snapshots"] = new("/api/snapshots",
@@ -176,7 +176,11 @@ public static class ProxyRouteTable
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("PUT", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
         ["hard-delete"] = new("/api/hard-delete",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin)]),
-        ["keys"] = new("/api/keys", [new("POST", UserRoles.Superadmin)]),
+        // Scoped to the ONE route the old hand-written proxy served (Admin's add-recovery
+        // button). A bare "keys" prefix would re-expose change-password, password-notice and
+        // auto-unlock endpoints to the browser-facing table — the API still gates them
+        // superadmin-only, but deny-by-default is the point.
+        ["keys/add-recovery"] = new("/api/keys/add-recovery", [new("POST", UserRoles.Superadmin)]),
 
         // ── Remote accounts: the whole API surface is superadmin-only (its group filter);
         //    the entries now state that instead of relaying a 403-shaped 502. ──
@@ -207,6 +211,50 @@ public static class ProxyRouteTable
     /// over real HTTP (one request per entry and method, as a regular user).
     /// </summary>
     public static IReadOnlyDictionary<string, ProxyRouteEntry> Entries => _entries;
+
+    /// <summary>
+    /// Invariant of the forwarder: a proxy path is forwarded ONLY when it is canonical — no dot
+    /// segments ("." / ".."), no empty segments ("//"), no backslash, no control characters, and
+    /// no percent-encodings of slash, backslash or dot (%2F / %5C / %2E, any case). The table is
+    /// deny-by-default per PREFIX; a ".." remainder would let any null-role entry springboard to
+    /// API paths deliberately left out of the table, carrying the real internal key once
+    /// HttpClient merges the relative path against its BaseAddress (dot segments collapse).
+    /// The rules are written to hold for BOTH spellings the caller passes: the URL-decoded
+    /// <c>{**path}</c> route value (single-encoded %2F became '/', so what still shows a %xx
+    /// sequence there is double-encoding) and the raw request-target path (where %2F is still
+    /// encoded and literal dot segments may already have been normalized away by the HTTP
+    /// stack). Encoded spaces (%20) and plus signs are legitimate and pass. Non-canonical input
+    /// must be refused with 404 BEFORE prefix matching and role checks, so traversal probes
+    /// cannot distinguish existing prefixes (403/405) from missing ones; as a second layer the
+    /// forwarder additionally verifies the merged absolute Uri stays under the entry's upstream
+    /// prefix.
+    /// </summary>
+    public static bool IsCanonicalProxyPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+
+        // Whole-string checks, valid for raw and decoded forms alike. A space (from %20) or a
+        // plus is fine — only traversal spellings are refused.
+        foreach (var ch in path)
+        {
+            if (ch < ' ' || ch == '\x7f') return false; // control characters
+            if (ch == '\\') return false;               // backslash: Windows separator smuggling
+        }
+        if (path.Contains("%2f", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("%5c", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("%2e", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Segment checks. One leading '/' is the root of an origin-form request target; any
+        // further one is an empty segment. The {**path} route value carries no leading slash.
+        var body = path.StartsWith('/') ? path[1..] : path;
+        foreach (var segment in body.Split('/'))
+        {
+            if (segment.Length == 0) return false;    // "//" anywhere, or a trailing slash
+            if (segment is "." or "..") return false; // dot segments climb out of the prefix
+        }
+        return true;
+    }
 
     /// <summary>
     /// Longest-segment-prefix match plus the method rule. "concept-tags" matches

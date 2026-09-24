@@ -41,6 +41,9 @@ public sealed class ProxyForwarderFixture : IAsyncLifetime
 
     public HttpClient Admin { get; private set; } = null!;
     public HttpClient Bob { get; private set; } = null!;
+
+    /// <summary>Counts every Web→API request; the traversal tests assert a refused path adds none.</summary>
+    public CountingHandler ApiCalls { get; private set; } = null!;
     public Guid ArticleId { get; private set; }
     public Guid MediaId { get; private set; }
 
@@ -73,7 +76,7 @@ public sealed class ProxyForwarderFixture : IAsyncLifetime
 
         // Only now point the Web host's outbound calls at the API host, then sign in through the
         // real Razor login so both clients carry the cookie InternalKeyHandler reads claims from.
-        Web.RouteOutboundHttpThrough(Api.Server.CreateHandler());
+        Web.RouteOutboundHttpThrough(ApiCalls = new CountingHandler(Api.Server.CreateHandler()));
         Admin = await WebLogin.LoginAsync(Web, "admin", AdminPassword);
         Bob = await WebLogin.LoginAsync(Web, "bob", BobPassword);
 
@@ -105,6 +108,25 @@ public sealed class ProxyForwarderFixture : IAsyncLifetime
         content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
         using var form = new MultipartFormDataContent { { content, "file", fileName } };
         return await client.PostAsync(apiBase ? "/api/media/" : "/api-proxy/media/upload", form);
+    }
+}
+
+/// <summary>
+/// Wraps the API TestServer handler and counts every Web→API request, so the traversal tests
+/// can prove a refused path is dropped in the Web layer instead of merely answered 404 by the
+/// API. Tests within the collection run sequentially, so before/after snapshots are reliable.
+/// </summary>
+public sealed class CountingHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+{
+    private int _count;
+
+    public int Count => Volatile.Read(ref _count);
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _count);
+        return base.SendAsync(request, cancellationToken);
     }
 }
 
@@ -340,6 +362,59 @@ public class ProxyForwarderTests
 
         var patch = await _fx.Admin.SendAsync(new HttpRequestMessage(HttpMethod.Patch, "/api-proxy/tree"));
         patch.StatusCode.Should().Be(HttpStatusCode.MethodNotAllowed);
+    }
+
+    // ── Path traversal: refused before any table work, never reaching the API ────
+
+    public static IEnumerable<object[]> TraversalTargetsArrivingIntact()
+    {
+        // These springboard off the null-role "media" GET toward API surface the table
+        // deliberately omits (/api/users among others), and the in-process HTTP stack hands
+        // them to the Web INTACT (System.Uri normalizes literal dot segments and %2e-decoded
+        // dots away at request construction — those are covered in Guard_RejectsDotSegments).
+        yield return ["/api-proxy/media/..%2F..%2Fusers"];
+        yield return ["/api-proxy/media//x"];
+        yield return ["/api-proxy/media/a%2fb"];
+        yield return ["/api-proxy/media/a%5Cb"];
+    }
+
+    [Theory]
+    [MemberData(nameof(TraversalTargetsArrivingIntact))]
+    public async Task TraversalShapes_Are404_AndNeverReachTheApi(string target)
+    {
+        // Absorb any pending security-stamp revalidation first, so the call counter below
+        // measures exactly the probe request.
+        await _fx.Admin.GetAsync("/api-proxy/session/status");
+        var before = _fx.ApiCalls.Count;
+
+        var response = await _fx.Admin.GetAsync(target);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, target);
+        _fx.ApiCalls.Count.Should().Be(before,
+            $"the traversal attempt {target} must die in the Web layer, unforwarded");
+    }
+
+    [Theory]
+    [InlineData("/api-proxy/media/../../users")]
+    [InlineData("/api-proxy/media/%2e%2e/%2e%2e/users")]
+    [InlineData("/api-proxy/media/%2E%2E/users")]
+    [InlineData("media/..")]
+    [InlineData("media/.")]
+    public void Guard_RejectsDotSegmentSpellings(string target) =>
+        ProxyRouteTable.IsCanonicalProxyPath(target).Should().BeFalse(target);
+
+    [Fact]
+    public async Task EncodedSpaceAndPlus_InQuery_AreLegit_AndStillReachTheApi()
+    {
+        var before = _fx.ApiCalls.Count;
+
+        var space = await _fx.Admin.GetAsync("/api-proxy/search?q=hello%20world");
+        var plus = await _fx.Admin.GetAsync("/api-proxy/search?q=hello+world");
+
+        space.IsSuccessStatusCode.Should().BeTrue($"got {(int)space.StatusCode}");
+        plus.IsSuccessStatusCode.Should().BeTrue($"got {(int)plus.StatusCode}");
+        _fx.ApiCalls.Count.Should().BeGreaterThan(before + 1,
+            "both searches must have been forwarded to the API");
     }
 
     // ── The table itself ─────────────────────────────────────────────────────────

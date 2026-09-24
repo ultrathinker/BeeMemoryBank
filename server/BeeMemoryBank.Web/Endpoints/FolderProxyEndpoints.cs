@@ -1,10 +1,13 @@
 namespace BeeMemoryBank.Web.Endpoints;
 
 /// <summary>
-/// Every folder/download route here was a pure passthrough and moved into ProxyRouteTable
-/// ("folders", "folders/search" and "folders/download" via the "folders" prefix; "downloads" for
-/// prepare + token fetch) — the catch-all forwarder in MiscProxyEndpoints serves them now, with the
-/// upstream Content-Disposition/Content-Type supplying the zip's download filename.
+/// Every route this file served was a pure passthrough and moved into ProxyRouteTable:
+/// "folders" (POST / PATCH / DELETE — the folder is named by the ?path= query string) and
+/// "folders/search". Folder zip export is the "downloads" pair (POST prepare, GET single-use
+/// token), as before. The old GET /api-proxy/folders/download died with the migration: it had
+/// no browser caller and its ApiClient method (DownloadFolderZipAsync) was removed as
+/// zero-reference, so there is deliberately NO "folders/download" entry — add one only if a
+/// caller ever appears. The catch-all forwarder in MiscProxyEndpoints serves everything above.
 /// </summary>
 public static class FolderProxyEndpoints
 {

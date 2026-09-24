@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
+using Microsoft.AspNetCore.Http.Features;
 
 namespace BeeMemoryBank.Web.Endpoints;
 
@@ -49,6 +50,26 @@ public static class MiscProxyEndpoints
         app.MapMethods("/api-proxy/{**path}", new[] { "GET", "POST", "PUT", "DELETE", "PATCH" },
             async (string path, HttpContext ctx, ApiClient api) =>
         {
+            // Traversal guard, BEFORE any table work (prefix match, 405, roles): a non-canonical
+            // path must be indistinguishable from a missing one (404), or the denials themselves
+            // could be used to probe which prefixes exist. The route value is URL-decoded by
+            // routing, and the HTTP stack may already have normalized literal dot segments —
+            // which is why the raw request target is checked too. See
+            // ProxyRouteTable.IsCanonicalProxyPath for the exact invariant.
+            var rawTarget = ctx.Features.Get<IHttpRequestFeature>()?.RawTarget;
+            // TestServer hands an empty string here (real Kestrel: origin-form path+query);
+            // absolute-form targets behind some proxies are reduced to their path first.
+            if (rawTarget is { Length: > 0 })
+            {
+                if (rawTarget.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    || rawTarget.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                    rawTarget = new Uri(rawTarget).PathAndQuery;
+                if (!ProxyRouteTable.IsCanonicalProxyPath(rawTarget.Split('?', 2)[0]))
+                    return Results.NotFound();
+            }
+            if (!ProxyRouteTable.IsCanonicalProxyPath(path))
+                return Results.NotFound();
+
             var (outcome, entry, rule, matchedPrefix) = ProxyRouteTable.Match(path, ctx.Request.Method);
             switch (outcome)
             {
@@ -69,9 +90,22 @@ public static class MiscProxyEndpoints
             if (rule!.RequiredRole != null && !ctx.User.IsInRole(rule.RequiredRole))
                 return Results.Json(new { error = "Forbidden — superadmin only" }, statusCode: 403);
 
-            var upstreamPath = ProxyRouteTable.BuildUpstreamPath(path, matchedPrefix!, entry!)
-                                + ctx.Request.QueryString.Value;
-            using var upstreamReq = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), upstreamPath);
+            var upstreamPathAndQuery = ProxyRouteTable.BuildUpstreamPath(path, matchedPrefix!, entry!)
+                                       + ctx.Request.QueryString.Value;
+
+            // Backstop against anything the textual canonical check could not see: resolve the
+            // request the same way HttpClient merges a relative RequestUri against its base
+            // address, and refuse whatever no longer sits under the matched entry's upstream
+            // prefix. The verified Uri IS the sent Uri, so there is no gap in between.
+            var requestUri = new Uri(api.BaseAddress, upstreamPathAndQuery);
+            var absolutePath = requestUri.AbsolutePath;
+            if (!absolutePath.StartsWith(entry!.UpstreamPrefix + "/", StringComparison.Ordinal)
+                && !absolutePath.Equals(entry.UpstreamPrefix, StringComparison.Ordinal))
+            {
+                return Results.NotFound();
+            }
+
+            using var upstreamReq = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), requestUri);
 
             // Stream the request body through — binary-safe, no buffering, no string round-trip.
             // Multipart (media/import uploads) works because the raw bytes AND the Content-Type
