@@ -7,6 +7,7 @@ using BeeMemoryBank.Hosting.AspNetCore;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
+using System.Security.Claims;
 using System.Text;
 
 // If a published bundle sits next to the binary (wwwroot present), anchor ContentRoot
@@ -122,6 +123,22 @@ builder.Services.AddAuthentication("BeeWebCookie")
                 {
                     context.RejectPrincipal();
                     return;
+                }
+
+                // Cookies minted before the per-sign-in WebSessionId claim existed carry none, and
+                // without it the API never caches a protected-article unlock (so no "locks in N min"
+                // countdown, and every reload re-prompts). Upgrade such a cookie in place instead of
+                // forcing a re-login: add a fresh id and re-issue the cookie. Two concurrent requests
+                // on the same old cookie may each mint one; the last Set-Cookie wins, which at worst
+                // costs one extra passphrase prompt. A later RejectPrincipal below still wins.
+                if (principal!.FindFirst(InternalKeyHandler.WebSessionClaim) == null
+                    && principal.Identity is ClaimsIdentity oldIdentity)
+                {
+                    var upgraded = new ClaimsIdentity(oldIdentity.Claims, oldIdentity.AuthenticationType);
+                    upgraded.AddClaim(new Claim(InternalKeyHandler.WebSessionClaim, Guid.NewGuid().ToString("N")));
+                    principal = new ClaimsPrincipal(upgraded);
+                    context.ReplacePrincipal(principal);
+                    context.ShouldRenew = true;
                 }
 
                 var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
