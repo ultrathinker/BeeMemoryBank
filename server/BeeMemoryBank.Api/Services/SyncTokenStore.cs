@@ -46,6 +46,22 @@ public class SyncTokenStore
     }
 
     /// <summary>Validates a Bearer token. Returns true and nodeId if the token is valid.</summary>
+    /// <summary>
+    /// Validates the token AND that the peer it was issued to is still an active whitelist member.
+    /// A token for a peer that has since been revoked (or removed by a reset/restore) is dropped on
+    /// the spot, so revocation takes effect on the peer's next request rather than at token expiry.
+    /// </summary>
+    public async Task<Guid?> ValidateActivePeerAsync(string token, BeeMemoryBank.Core.Interfaces.IWhitelistRepository whitelistRepo)
+    {
+        if (!TryValidateToken(token, out var nodeId)) return null;
+        if (await whitelistRepo.GetByNodeIdAsync(nodeId) is null)
+        {
+            _tokens.TryRemove(token, out _);
+            return null;
+        }
+        return nodeId;
+    }
+
     public bool TryValidateToken(string token, out Guid nodeId)
     {
         nodeId = default;

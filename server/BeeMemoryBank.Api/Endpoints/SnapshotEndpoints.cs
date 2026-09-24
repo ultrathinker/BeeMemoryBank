@@ -322,7 +322,7 @@ public static class SnapshotEndpoints
             if (authHeader == null || !authHeader.StartsWith("Bearer ", StringComparison.Ordinal))
                 return Results.Unauthorized();
             var token = authHeader["Bearer ".Length..];
-            if (!tokenStore.TryValidateToken(token, out _))
+            if (await tokenStore.ValidateActivePeerAsync(token, whitelistRepo) is null)
                 return Results.Unauthorized();
 
             if (!Guid.TryParse(eventId, out var eventIdGuid)) return Results.BadRequest();
