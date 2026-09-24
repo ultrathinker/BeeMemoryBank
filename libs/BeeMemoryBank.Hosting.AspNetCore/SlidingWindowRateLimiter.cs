@@ -145,6 +145,13 @@ public sealed class SlidingWindowRateLimiter(int maxAttempts, TimeSpan window)
     /// </summary>
     public void Reset(string key) => _attempts.TryRemove(key, out _);
 
+    /// <summary>
+    /// Forgets every attempt recorded for every key. Tests that exercise rate-limit behaviour
+    /// start from a clean bucket via this; in production the per-key <see cref="Reset"/> is the
+    /// only path. The process-wide shared state is what makes the test hook necessary.
+    /// </summary>
+    public void ResetAll() => _attempts.Clear();
+
     /// <summary>Attempts currently counted against a key. Test/diagnostic helper.</summary>
     public int CountFor(string key, DateTime? nowUtc = null)
     {

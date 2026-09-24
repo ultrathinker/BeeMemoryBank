@@ -6,10 +6,12 @@ namespace BeeMemoryBank.Web.Middleware;
 /// Per-IP throttling for the Web layer's anonymous, password-checking endpoints.
 ///
 /// <para>
-/// The API has its own <c>RateLimitMiddleware</c>, but it deliberately skips loopback callers —
-/// and every browser request reaches the API through this Web process on loopback, so browser
-/// traffic was never throttled by anything. That left two unbounded password oracles open to the
-/// internet, both of which spend a full Argon2id derivation (64 MiB, t=3) per guess:
+/// The API has its own <c>RateLimitMiddleware</c>, and it exempts the Web layer via the internal
+/// key, not by IP — so the Web process's loopback hop does not double-throttle browser traffic.
+/// The split is deliberate: the API's limiter keys on the trusted-inside exception (the key the
+/// Web layer presents), and this limiter keys on the real remote client IP that
+/// <c>ForwardedHeadersExtensions</c> already rewrote. That left two unbounded password oracles
+/// open to the internet, both of which spend a full Argon2id derivation (64 MiB, t=3) per guess:
 /// </para>
 /// <list type="bullet">
 /// <item><description>

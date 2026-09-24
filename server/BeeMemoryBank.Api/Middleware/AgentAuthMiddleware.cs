@@ -87,6 +87,14 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                             ViaAgentName: $"remote:{record.Label ?? "unlabelled"}",
                             IsSuperadmin: false);
 
+                        // Marker for endpoints that want to know the caller came in via a bmbrt_
+                        // remote token rather than a bee_ agent key. The MCP gate classifies
+                        // directly from the header value (it must — an expired bmbrt_ never
+                        // reaches this branch and would otherwise slip past the marker-based
+                        // check); this marker is kept for any future endpoint that wants the
+                        // same information.
+                        context.Items["IsRemoteToken"] = true;
+
                         // Sliding 90-day window: each successful auth bumps expiry.
                         // Awaited (not fire-and-forget) — the scoped repo handle
                         // would otherwise be disposed before the UPDATE completed

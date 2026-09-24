@@ -71,7 +71,20 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
     private async Task EnsureWriteAllowedAsync(System.Data.IDbConnection conn, Guid? articleId, System.Data.IDbTransaction? transaction = null)
     {
         if (_holder.Scope.IsSuperadmin) return;
-        if (!articleId.HasValue) return;  // orphaned upload, scope check happens via article creation
+        if (!articleId.HasValue)
+        {
+            // Unlinked upload (no article owns it yet): there is no folder ACL to evaluate, so the
+            // scope check has nothing to check. Fail closed when there is no identity at all
+            // (MediaOwnerKey == null) — that is what an anonymous caller resolves to, and letting
+            // such a caller create a row that replicates to every peer is the hole B2 closes at
+            // the repository layer. A uploader-present caller (Web proxy, MCP agent, chat tool
+            // dispatcher, Obsidian/Bee import) keeps the previous behaviour: scope check happens
+            // when the row is later linked or read.
+            if (_holder.Scope.MediaOwnerKey == null)
+                throw new UnauthorizedAccessException(
+                    "Unlinked media upload requires an authenticated caller.");
+            return;
+        }
         var treePath = await conn.QuerySingleOrDefaultAsync<string?>(
             "SELECT COALESCE(f.path, '/') FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id WHERE a.id = @articleId AND a.status = 'A'",
             new { articleId = articleId.Value }, transaction: transaction);
