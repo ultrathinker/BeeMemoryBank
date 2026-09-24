@@ -28,12 +28,11 @@ public class TombstoneRepository(DbConnectionFactory factory) : BaseRepository(f
                 tombstone.ExpiresAt,
                 tombstone.LamportTs,
                 tombstone.SourceNodeId,
-                // COALESCE rather than the previous pair of IS NOT NULL guards: those made the
-                // upsert refuse a tie against a tombstone written before source tracking existed,
-                // so one node kept the unattributed row and its peer took the attributed one — the
-                // two then answered the create gate differently for the same event. Guid.Empty is
-                // how RowVersion.Of reads a missing node id, and it sorts below every real one, so
-                // this is the same rule the comparator applies, expressed in SQL.
+                // COALESCE, not IS NOT NULL guards: guards would make the upsert refuse a tie
+                // against a tombstone written before source tracking existed, so peers could keep
+                // different rows and answer the create gate differently for the same event.
+                // Guid.Empty is how RowVersion.Of reads a missing node id, and it sorts below every
+                // real one, so this is the same rule the comparator applies, expressed in SQL.
                 EmptyNodeId = Guid.Empty
             });
     }

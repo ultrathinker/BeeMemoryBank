@@ -57,9 +57,8 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
             // Bind the Guids themselves, never `.ToString()`. Every other article_id parameter in
             // this file (and in ArticleRepository / ArticleBodyRepository) binds a Guid and lets the
             // provider render it; those rows come out uppercase. A hand-rolled `.ToString()` renders
-            // lowercase, and SQLite compares TEXT case-sensitively — so this one query silently
-            // matched nothing and every article in a list response came back with no tags at all,
-            // while the single-article route right next to it returned them correctly.
+            // lowercase, and SQLite compares TEXT case-sensitively — the query would silently
+            // match nothing and every article in a list response would come back with no tags.
             new { Ids = ids });
         var dict = new Dictionary<Guid, List<string>>();
         foreach (var (aid, name) in rows)

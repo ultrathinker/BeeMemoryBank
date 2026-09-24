@@ -75,11 +75,11 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         {
             // Unlinked upload (no article owns it yet): there is no folder ACL to evaluate, so the
             // scope check has nothing to check. Fail closed when there is no identity at all
-            // (MediaOwnerKey == null) — that is what an anonymous caller resolves to, and letting
-            // such a caller create a row that replicates to every peer is the hole B2 closes at
-            // the repository layer. A uploader-present caller (Web proxy, MCP agent, chat tool
-            // dispatcher, Obsidian/Bee import) keeps the previous behaviour: scope check happens
-            // when the row is later linked or read.
+            // (MediaOwnerKey == null) — that is what an anonymous caller resolves to, and such a
+            // caller must not create a row that replicates to every peer; enforced here at the
+            // repository layer. An uploader-present caller (Web proxy, MCP agent, chat tool
+            // dispatcher, Obsidian/Bee import) is allowed: the scope check happens when the row
+            // is later linked or read.
             if (_holder.Scope.MediaOwnerKey == null)
                 throw new UnauthorizedAccessException(
                     "Unlinked media upload requires an authenticated caller.");
@@ -114,26 +114,21 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         if (transaction != null)
         {
             // Caller-supplied transaction: guard and write already share the caller's
-            // connection, so just run them against it in order -- unchanged from before
-            // this fix.
+            // connection, so just run them against it in order.
             await EnsureWriteAllowedAsync(transaction.Connection!, media.ArticleId, transaction);
             await transaction.Connection!.ExecuteAsync(insertSql, media, transaction);
         }
         else
         {
             // SECURITY: EnsureWriteAllowedAsync's guard reads the OWNING ARTICLE's current
-            // tree path via a SELECT separate from the INSERT below. This used to run both
-            // on the SAME connection but with NO shared transaction (autocommit) -- each
-            // statement takes and releases SQLite's lock on its own, so a concurrent
-            // ArticleRepository.UpdateAsync could still move the article into a denied
-            // folder in the gap between the guard's read and this INSERT, and the media
-            // row would be created under an authorization decision that was already stale.
-            // BeginTransaction() issues BEGIN IMMEDIATE, which takes the write lock the
-            // instant the transaction opens (see DbConnectionFactory.CreateConnection), so
-            // running the guard AND the insert inside the SAME transaction closes that
-            // window: a concurrent mover blocks on the write lock until this transaction
-            // commits or rolls back. Do not go back to checking and writing as two separate
-            // autocommit statements "to simplify" -- that's the bug this fixes. Keep
+            // tree path via a SELECT separate from the INSERT below. As two autocommit
+            // statements (even on one connection) each takes and releases SQLite's lock on its
+            // own, so a concurrent ArticleRepository.UpdateAsync could move the article into a
+            // denied folder in between and the media row would be created under a stale
+            // authorization decision. BeginTransaction() issues BEGIN IMMEDIATE, which takes the
+            // write lock the instant the transaction opens (see DbConnectionFactory.CreateConnection),
+            // so running the guard AND the insert inside the SAME transaction closes that window.
+            // Do not split them back into separate autocommit statements "to simplify". Keep
             // everything between BeginTransaction() and Commit() cheap.
             using var conn = OpenConnection();
             using var tx = conn.BeginTransaction();
@@ -150,8 +145,7 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         if (transaction != null)
         {
             // Caller-supplied transaction: guard and write already share the caller's
-            // connection, so just run them against it in order -- unchanged from before
-            // this fix.
+            // connection, so just run them against it in order.
             await EnsureWriteAllowedAsync(transaction.Connection!, articleId, transaction);
             var now = UtcNow();
             await transaction.Connection!.ExecuteAsync(
@@ -203,9 +197,9 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
     public async Task SoftDeleteAsync(Guid id)
     {
         // SECURITY: same TOCTOU shape as CreateAsync/SoftDeleteByArticleIdAsync above -- the
-        // owning-article lookup, the tree-path guard, and the UPDATE all used to share a
-        // connection but no transaction (autocommit), so a concurrent move of the owning
-        // article could land between the guard's read and this UPDATE. No IDbTransaction
+        // owning-article lookup, the tree-path guard, and the UPDATE must share one transaction,
+        // or a concurrent move of the owning article could land between the guard's read and
+        // this UPDATE. No IDbTransaction
         // parameter is exposed on this method (nothing currently needs to compose it with
         // another write), so it is fully self-contained: open one transaction, run the guard
         // and the write against it, commit.

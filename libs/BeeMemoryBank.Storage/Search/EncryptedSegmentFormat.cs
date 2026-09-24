@@ -38,10 +38,9 @@ namespace BeeMemoryBank.Storage.Search;
 /// <para>
 /// Plaintext is split into fixed <see cref="BlockSize"/> (64 KiB) chunks before encryption (the
 /// last block may be shorter). Each block is encrypted independently with its own random nonce
-/// and AAD = <see cref="BuildBlockAad"/>, binding it to (segmentId, blockIndex). This WP only ever
-/// decrypts whole segments (looping over every block); partial/range reads are a forward-looking
-/// capability a later WP can add without changing this on-disk format again, because block
-/// boundaries already exist.
+/// and AAD = <see cref="BuildBlockAad"/>, binding it to (segmentId, blockIndex). Only whole
+/// segments are decrypted today (looping over every block); partial/range reads can be added
+/// later without changing this on-disk format, because block boundaries already exist.
 /// </para>
 /// </summary>
 public static class EncryptedSegmentFormat
@@ -49,7 +48,7 @@ public static class EncryptedSegmentFormat
     /// <summary>The ASCII "BMES" magic bytes every encrypted segment container starts with.</summary>
     public static ReadOnlySpan<byte> Magic => "BMES"u8;
 
-    /// <summary>The only container format version this WP produces/understands.</summary>
+    /// <summary>The only container format version this code produces/understands.</summary>
     public const int FormatVersion = 1;
 
     /// <summary>Plaintext block size before encryption. The final block of a segment may be shorter.</summary>

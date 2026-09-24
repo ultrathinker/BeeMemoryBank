@@ -9,10 +9,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
     public async Task<WhitelistEntry?> GetByNodeIdAsync(Guid nodeId, bool includeDeleted = false)
     {
         using var conn = OpenConnection();
-        // auto_accept_restore was missing from the SELECT pre-existing this change — UI checkbox
-        // always rendered as OFF after refresh even though the actual flag in DB was honored by
-        // EventApplier (which reads via the dedicated GetAutoAcceptRestoreAsync). Fixed both
-        // columns in one go.
+        // Both SELECTs must include auto_accept_restore: the UI checkbox reads it from here, while
+        // EventApplier reads it via the dedicated GetAutoAcceptRestoreAsync -- omitting it makes
+        // the checkbox render OFF even though the flag is honored.
         var sql = includeDeleted
             ? @"SELECT
                 node_id                    AS NodeId,
@@ -152,7 +151,7 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
         // status = 'A' filter: a revoked peer ('R') with auto_accept_restore=1 from before
         // revocation must NOT trigger auto-apply on incoming events. Their Ed25519 key still
         // passes signature verification in EventApplier, so without this filter a revoked
-        // peer could force a destructive restore. (Found by Kilo R1 security review CRIT-3.)
+        // peer could force a destructive restore.
         var val = await conn.ExecuteScalarAsync<long?>(
             "SELECT auto_accept_restore FROM tbl_whitelist WHERE node_id = @nodeId COLLATE NOCASE AND status = 'A'",
             new { nodeId });
@@ -163,8 +162,7 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
     {
         using var conn = OpenConnection();
         // node_id stored UPPERCASE; callers pass lowercase Guid.ToString(). COLLATE NOCASE so
-        // UPDATE actually matches. Same fix in SetAutoAcceptDekRotationAsync below. (Found
-        // when E2E test couldn't enable auto-accept on a peer.)
+        // UPDATE actually matches. Same in SetAutoAcceptDekRotationAsync below.
         await conn.ExecuteAsync(
             @"UPDATE tbl_whitelist
               SET auto_accept_restore = @autoAccept, updated_at = @now

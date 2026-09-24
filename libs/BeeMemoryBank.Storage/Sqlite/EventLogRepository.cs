@@ -127,7 +127,7 @@ public class EventLogRepository(DbConnectionFactory factory) : BaseRepository(fa
     {
         // Query tbl_hard_delete_audit (NOT tbl_event) so the gate survives compaction —
         // tbl_event hard_delete rows get purged by CompactionService, but the audit
-        // table is never compacted. Wave 2 audit kilo-1 #1 (CRIT).
+        // table is never compacted.
         using var conn = OpenConnection();
         var count = await conn.ExecuteScalarAsync<int>(
             "SELECT COUNT(1) FROM tbl_hard_delete_audit WHERE entity_identifier = @entityId AND lamport_ts >= @lamportTs",

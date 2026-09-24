@@ -9,28 +9,20 @@ namespace BeeMemoryBank.Storage.Search;
 ///
 /// <para>
 /// <b>Why this exists instead of calling <see cref="DekManager.WrapDek"/>/<see cref="DekManager.UnwrapDek"/>
-/// directly</b> (as this WP's index-key wrapping does, and as
-/// <c>BeeMemoryBank.Embeddings.ProjectionMatrix</c>'s own doc comment claims it does for its
-/// matrix bytes): <c>DekManager.UnwrapDek</c>'s current implementation dispatches on the wrapped
-/// blob's exact byte LENGTH (48 bytes for its legacy v0 framing, 49 for v1) to decide how to frame
-/// the AES-GCM call -- hardening added to eliminate ambiguity between the two wire formats. That
-/// dispatch is correct for its only currently-tested use, wrapping exactly-32-byte secrets
-/// (<c>ArticleService</c>/<c>MediaService</c>/<c>CommentService</c>'s per-entity DEKs, and this
-/// WP's own 32-byte index key -- a 32-byte plaintext always wraps to exactly 49 bytes) -- but it
-/// makes <c>DekManager.UnwrapDek</c> unable to unwrap a payload of any OTHER plaintext length.
-/// Verified empirically while building this WP: a 64 KiB block wraps fine via <c>WrapDek</c>
-/// (which has no length restriction), but <c>UnwrapDek</c> then throws
-/// <c>CryptographicException("Invalid wrapped DEK length...")</c> unconditionally, because the
-/// wrapped length is neither 48 nor 49. The same would be true of
-/// <c>ProjectionMatrix.Unwrap</c> for any real (e.g. 384-dim, ~590 KB) matrix -- apparently
-/// untested in this codebase today (no test exercises <c>ProjectionMatrix.Unwrap</c> with a
-/// real-size matrix) -- and fixing that is out of this WP's scope: it lives in
-/// <c>libs/BeeMemoryBank.Crypto/</c>, which this WP must not modify.
+/// directly</b> (as the segment store's 32-byte index-key wrapping does):
+/// <c>DekManager.UnwrapDek</c> dispatches on the wrapped blob's exact byte LENGTH (48 bytes for
+/// its legacy v0 framing, 49 for v1) to decide how to frame the AES-GCM call -- deliberate, to
+/// keep the two wire formats unambiguous. That is correct for exactly-32-byte secrets
+/// (per-entity DEKs, the index key -- a 32-byte plaintext always wraps to exactly 49 bytes), but
+/// it makes <c>UnwrapDek</c> unable to unwrap a payload of any OTHER plaintext length: a 64 KiB
+/// block wraps fine via <c>WrapDek</c> (which has no length restriction), but <c>UnwrapDek</c>
+/// then throws <c>CryptographicException("Invalid wrapped DEK length...")</c> because the
+/// wrapped length is neither 48 nor 49.
 /// </para>
 ///
 /// <para>
 /// Given that, block-sized (~64 KiB) segment data cannot be routed through
-/// <c>DekManager</c> at all. This class is the minimal, unavoidable workaround: the exact same
+/// <c>DekManager</c> at all. This class is the minimal workaround: the exact same
 /// primitive (<see cref="AesGcm"/>), the exact same sizing
 /// (<see cref="CryptoConstants.IvSize"/>/<see cref="CryptoConstants.TagSize"/>), and the exact
 /// same iv-separate / ciphertext‖tag framing convention that <c>BeeMemoryBank.Crypto.AesGcmHelper</c>

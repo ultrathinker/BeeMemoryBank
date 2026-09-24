@@ -62,7 +62,7 @@ public class AgentRepository(DbConnectionFactory factory) : BaseRepository(facto
     {
         using var conn = OpenConnection();
         // Revoking an agent also destroys its wrapped master DEK, not just its ability to
-        // authenticate. Leaving the blob behind meant a revoked key was still a vault key: anyone
+        // authenticate. Leaving the blob behind would keep a revoked key a vault key: anyone
         // holding the old plaintext bee_... string plus a copy of the database file (a backup, a
         // decommissioned disk) could re-derive the KEK from the stored salt and decrypt everything,
         // long after the operator believed they had cut that key off. Wiping is safe because the

@@ -6,11 +6,11 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Sqlite;
 
 /// <summary>
-/// WP-14: process-wide in-memory cache of every active article's <c>(id, embedding_projection)</c>,
+/// Process-wide in-memory cache of every active article's <c>(id, embedding_projection)</c>,
 /// held as two flat contiguous arrays (one <c>Guid[]</c> of ids, one <c>float[]</c> of all vectors
 /// packed at a single dimension) rather than one <c>byte[]</c> per row. The packed layout is what
 /// lets <see cref="Snapshot.Score"/> score every candidate with <see cref="TensorPrimitives"/>
-/// (SIMD-accelerated) dot products instead of the old scalar per-candidate loop, and lets each
+/// (SIMD-accelerated) dot products instead of a scalar per-candidate loop, and lets each
 /// candidate's L2 norm be precomputed once at rebuild rather than recomputed on every search.
 ///
 /// <para>
@@ -62,11 +62,10 @@ namespace BeeMemoryBank.Storage.Sqlite;
 /// projection. The cache therefore packs every vector at one dimension (<see cref="Snapshot.Dimension"/>,
 /// taken from the first non-empty projection). A candidate whose stored projection length does not
 /// match that dimension is zero-filled into its slot and naturally scores 0 (a zero vector has L2
-/// norm 0, so <c>denom = 0</c>), reproducing the pre-WP-14 <c>"proj.Length != dim =&gt; score 0"</c>
-/// behavior for a mismatched-dimension candidate without crashing. This is exactly the case the
-/// WP-14 brief's dimension-mismatch test exercises. The only state it does NOT model is a corpus
-/// containing two different non-empty projection dimensions at once -- which cannot occur here,
-/// because every projection is produced through the same single projection matrix.
+/// norm 0, so <c>denom = 0</c>): <c>"proj.Length != dim =&gt; score 0"</c>, without crashing.
+/// The only state it does NOT model is a corpus containing two different non-empty projection
+/// dimensions at once -- which cannot occur here, because every projection is produced through the
+/// same single projection matrix.
 /// </para>
 /// </summary>
 public sealed class EmbeddingVectorCache
@@ -157,15 +156,11 @@ public sealed class EmbeddingVectorCache
             // at any point since this snapshot was published, not merely while this method runs —
             // then `current` is stale by definition and a one-row patch cannot make it fresh.
             //
-            // Stamping the patch with the newer generation anyway is the trap, and it is not
-            // theoretical: the result publishes as "matches _generation", so the next
-            // GetOrRebuild() sees a snapshot that looks fresh, skips the rebuild the Invalidate()
-            // asked for, and every row that changed independently of this cache (a new article, a
-            // regenerated projection matrix) stays invisible to search until some later invalidate
-            // happens to race the other way. An earlier version of this comment reasoned only about
-            // an Invalidate landing DURING the patch build and concluded the capture order was
-            // enough; it is not, because the damaging case is an Invalidate that landed BEFORE this
-            // method was ever called.
+            // Do not stamp the patch with the newer generation anyway: it would publish as "matches
+            // _generation", so the next GetOrRebuild() skips the rebuild the Invalidate() asked for
+            // and every row that changed independently of this cache (a new article, a regenerated
+            // projection matrix) stays invisible to search. Capture order alone is not enough: the
+            // damaging case is an Invalidate that landed BEFORE this method was called.
             //
             // Returning here loses nothing: the caller has already committed its row to the
             // database, so the pending full rebuild reads it from there.
@@ -230,10 +225,9 @@ public sealed class EmbeddingVectorCache
 
         using var conn = _factory.CreateConnection();
 
-        // Same predicate the pre-WP-14 first pass used: every active article whose
-        // embedding_projection is non-null. We deliberately do NOT add `AND length(...) > 0`, so
-        // protected articles (which store an empty -- but non-null -- projection BLOB) remain
-        // candidates that score 0, exactly as before.
+        // Every active article whose embedding_projection is non-null. Deliberately NO
+        // `AND length(...) > 0`: protected articles (which store an empty -- but non-null --
+        // projection BLOB) must remain candidates that score 0.
         var rows = conn.Query<EmbeddingRow>(
             "SELECT a.id AS Id, a.embedding_projection AS EmbeddingProjection " +
             "FROM tbl_article a " +
@@ -269,8 +263,8 @@ public sealed class EmbeddingVectorCache
                 norms[i] = MathF.Sqrt(TensorPrimitives.SumOfSquares(floats));
             }
             // else: leave the vector slot zeroed and norm 0 -- this candidate scores 0 at query
-            // time, reproducing the old `proj.Length != dim => 0` behavior for mismatched/empty
-            // projections without ever indexing wrong-dimension data into a flat D-wide slot.
+            // time (`proj.Length != dim => 0` for mismatched/empty projections) without ever
+            // indexing wrong-dimension data into a flat D-wide slot.
         }
 
         return new Snapshot(generation, ids, vectors, norms, dim);
@@ -406,8 +400,7 @@ public sealed class EmbeddingVectorCache
         /// <summary>
         /// The single dimension every non-empty vector in this snapshot is packed at. A query whose
         /// <see cref="Score"/> projection length differs from this scores every candidate 0, because
-        /// no packed vector shares the query's dimension -- the same outcome the pre-WP-14 scalar
-        /// code produced (<c>proj.Length != queryDim =&gt; 0</c>).
+        /// no packed vector shares the query's dimension (<c>proj.Length != queryDim =&gt; 0</c>).
         /// </summary>
         public int Dimension => _dimension;
 
@@ -420,15 +413,13 @@ public sealed class EmbeddingVectorCache
         /// <para>
         /// Scoring uses <see cref="TensorPrimitives"/> (SIMD-accelerated) for the dot product, and
         /// reuses each candidate's precomputed L2 norm (<see cref="_norms"/>) plus the query norm
-        /// (computed once, outside the per-candidate loop) for the denominator. The pre-WP-14 loop
-        /// recomputed the query norm on every candidate iteration -- a wasted cost independent of
-        /// SIMD, fixed here.
+        /// (computed once, outside the per-candidate loop) for the denominator.
         /// </para>
         /// </summary>
         /// <remarks>
         /// Tie-breaking is stable by candidate order (the order rows came back from the rebuild
-        /// SQL), matching <see cref="System.Linq.Enumerable.OrderByDescending{TSource,TKey}"/>'s
-        /// stable sort that the pre-WP-14 code relied on. Implemented by sorting an index array
+        /// SQL), the same order a stable
+        /// <see cref="System.Linq.Enumerable.OrderByDescending{TSource,TKey}"/> would produce. Implemented by sorting an index array
         /// keyed on (score descending, original index ascending); because the index is a unique
         /// tiebreaker, the result is total-stable regardless of
         /// <see cref="Array.Sort{T}(T[], Comparison{T})"/>'s own (non-stable) ordering.
@@ -443,10 +434,9 @@ public sealed class EmbeddingVectorCache
 
             int count = _ids.Length;
 
-            // Query norm computed once (the pre-WP-14 loop recomputed it on every candidate -- a
-            // redundant cost independent of SIMD). When the query dimension does not match the
+            // Query norm computed once, outside the loop. When the query dimension does not match the
             // snapshot's packed dimension, no candidate can share the query's dimension, so every
-            // candidate must score 0 (same as the old proj.Length != dim => 0). Setting queryNorm
+            // candidate must score 0 (proj.Length != dim => 0). Setting queryNorm
             // to 0 in that case makes every denom below 0 and thus every score 0, so a single loop
             // handles both cases without indexing wrong-dimension data into a flat D-wide slot.
             float queryNorm = queryProjection.Length == _dimension
@@ -466,7 +456,7 @@ public sealed class EmbeddingVectorCache
             }
 
             // Stable sort: higher score first; ties broken by original candidate index ascending
-            // (i.e. the rebuild SQL's row order, which is what the old OrderByDescending used).
+            // (i.e. the rebuild SQL's row order).
             // The unique-index tiebreaker makes the ordering total-stable regardless of Array.Sort
             // not being a stable sort itself.
             var indices = new int[count];
@@ -492,7 +482,7 @@ public sealed class EmbeddingVectorCache
         }
 
         /// <summary>
-        /// WP-15: cosine score for every candidate in this snapshot, not just the top-K —
+        /// Cosine score for every candidate in this snapshot, not just the top-K —
         /// <see cref="Storage.Sqlite.ArticleChunkEmbeddingRepository"/>-backed chunk scoring needs
         /// the full-document score for every article that has no chunk rows yet (the "old vectors
         /// remain a fallback until backfill" case), which a top-K cut would silently drop candidates

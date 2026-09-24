@@ -52,8 +52,7 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         var parameters = new DynamicParameters();
 
         // Folder-visibility ACL (deny/allow prefixes PLUS ancestor stubs) pushed into SQL instead
-        // of the in-memory _holder.Scope.FilterFolders(...) pass this used to do after fetching
-        // every child row.
+        // of an in-memory _holder.Scope.FilterFolders(...) pass after fetching every child row.
         var visibilityPredicate = _holder.Scope.BuildFolderVisibilityPredicate("f.path", "acl");
         var aclClause = visibilityPredicate != null ? $"AND ({visibilityPredicate.Sql}) " : "";
         if (visibilityPredicate != null)
@@ -88,7 +87,7 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
                 parameters.Add(key, value);
 
         // Optional subtree narrowing, mirroring ArticleRepository.ListAsync's own treePath
-        // handling: null/"/" means the whole vault (pre-existing unbounded contract), anything
+        // handling: null/"/" means the whole vault (unbounded contract), anything
         // else additionally restricts to that folder and its descendants.
         var subtreeClause = "";
         if (!string.IsNullOrEmpty(pathPrefix) && pathPrefix != "/")
@@ -151,20 +150,17 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
 
         // SECURITY: consult the stored row, not the caller-supplied object — a malicious or
         // buggy caller could clear RemoteSubscriptionId on the in-memory Folder to bypass the
-        // read-only guard. Same fix pattern as ArticleRepository.UpdateAsync (gemini+kilo
-        // round-3 finding).
+        // read-only guard. Same pattern as ArticleRepository.UpdateAsync.
         //
         // The guard read and the UPDATE below must run inside the SAME transaction, not just
-        // the same connection: this used to read storedRemoteSubId on a short-lived connection
-        // that was opened, queried and disposed BEFORE a second, independent connection ran the
-        // UPDATE with no transaction of its own. A concurrent write that set
-        // remote_subscription_id in that gap (e.g. a sync event turning this folder into a
-        // mirrored remote share) would never be seen, and this UPDATE would proceed anyway.
-        // BeginTransaction() here issues BEGIN IMMEDIATE, which takes SQLite's write lock the
-        // instant the transaction opens (see DbConnectionFactory.CreateConnection), so opening
-        // the connection+transaction FIRST and running both the guard query and the UPDATE
-        // against it closes that window. Keep everything between BeginTransaction() and
-        // Commit() cheap: the write lock is held for the whole span.
+        // the same connection: otherwise a concurrent write that sets remote_subscription_id
+        // between them (e.g. a sync event turning this folder into a mirrored remote share)
+        // is never seen and this UPDATE proceeds anyway. BeginTransaction() here issues
+        // BEGIN IMMEDIATE, which takes SQLite's write lock the instant the transaction opens
+        // (see DbConnectionFactory.CreateConnection), so opening the connection+transaction
+        // FIRST and running both the guard query and the UPDATE against it closes that window.
+        // Keep everything between BeginTransaction() and Commit() cheap: the write lock is held
+        // for the whole span.
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
 
@@ -253,28 +249,22 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         if (_holder.Scope.IsReadOnly(pathPrefix))
             throw new ReadOnlyAccessException(pathPrefix);
 
-        // SECURITY: the descendant scan below (H1) and the cascading UPDATE it guards must run
-        // inside the SAME transaction. This used to scan descendants on a short-lived connection
-        // that was opened, queried and disposed BEFORE the UPDATE even began on a second,
-        // independent connection with no transaction of its own -- a restricted subfolder created
-        // or moved under pathPrefix in that gap would never get re-checked, it would just get
-        // swept up by the UPDATE's LIKE match and soft-deleted without ever having been
-        // authorized.
+        // SECURITY: the descendant scan below and the cascading UPDATE it guards must run
+        // inside the SAME transaction. Otherwise a restricted subfolder created or moved under
+        // pathPrefix between them is never re-checked: the UPDATE's range match sweeps it up and
+        // soft-deletes it without it ever having been authorized.
         //
         // BeginTransaction() on this provider issues BEGIN IMMEDIATE, which takes SQLite's write
-        // lock the instant the transaction opens (see DbConnectionFactory.CreateConnection).
-        // Opening the connection+transaction FIRST and running BOTH the descendant scan and the
-        // UPDATE against it closes that window: any concurrent writer that would create or move a
-        // folder under this prefix blocks on the write lock until this transaction commits or
-        // rolls back, so the descendant set the scan just cleared is guaranteed to still be
-        // accurate when the UPDATE runs. Do not go back to scanning on a separate, short-lived
-        // connection "to keep it simple" -- that's exactly what reopened the race before. Keep
-        // everything between BeginTransaction() and Commit() cheap: the write lock is held for
-        // the whole span.
+        // lock the instant the transaction opens (see DbConnectionFactory.CreateConnection), so any
+        // concurrent writer that would create or move a folder under this prefix blocks until this
+        // transaction ends, and the descendant set the scan cleared is still accurate when the
+        // UPDATE runs. Do not move the scan to a separate, short-lived connection "to keep it
+        // simple" -- that reopens the race. Keep everything between BeginTransaction() and
+        // Commit() cheap: the write lock is held for the whole span.
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
 
-        // H1: the two checks above only cover pathPrefix itself. A caller can be authorized on the
+        // The two checks above only cover pathPrefix itself. A caller can be authorized on the
         // TOP of a subtree (e.g. allow=/, deny=/Work/Secret) while a DESCENDANT under it is
         // individually denied or read-only — this cascading soft-delete must not silently sweep
         // that descendant along for the ride just because the top of the subtree passed. Walk the
@@ -297,7 +287,7 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     }
 
     /// <summary>
-    /// H1: throws <see cref="UnauthorizedAccessException"/> or <see cref="ReadOnlyAccessException"/>
+    /// Throws <see cref="UnauthorizedAccessException"/> or <see cref="ReadOnlyAccessException"/>
     /// if any ACTIVE folder strictly under <paramref name="pathPrefix"/> is denied or read-only for
     /// the ambient caller scope. Reads the raw path list directly (no ACL filter applied to the
     /// query itself — that's the point: we need the true descendant set, not what the caller can
@@ -418,12 +408,12 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
 
         // Enforce, at the point that assumes it, the invariant the ancestor-vivification code
         // below states as given: "the leaf creation has already been authorized at the endpoint
-        // level". It wasn't, on the busiest path in the app — ArticleService.CreateAsync (and the
-        // move branch of UpdateAsync) vivified folders BEFORE articleRepo.CreateAsync applied the
-        // caller's ACL, and nothing rolled the folders back when that throw came. So an agent
-        // denied on /Secrets, or read-only on /Public, could call bee_save_article with
-        // treePath=/Secrets/Anything and persist arbitrary folders there — plaintext metadata,
-        // visible to everyone, and node-local since no FolderCreate event is emitted for them.
+        // level". Callers such as ArticleService.CreateAsync (and the move branch of UpdateAsync)
+        // vivify folders BEFORE articleRepo.CreateAsync applies the caller's ACL, and nothing rolls
+        // the folders back when that throws. Without this check an agent denied on /Secrets, or
+        // read-only on /Public, could persist arbitrary folders there via bee_save_article —
+        // plaintext metadata, visible to everyone, and node-local since no FolderCreate event is
+        // emitted for them.
         //
         // Only the requested LEAF is checked. Ancestors deliberately are not: an AllowList user
         // creating /A/B/C must not be blocked because /A and /A/B are outside their scope — the
@@ -509,7 +499,7 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
 
     public async Task<List<Folder>> SearchAsync(string query)
     {
-        // WP-07: FTS5-backed search over fts_folder (name + path), mirroring ArticleRepository.
+        // FTS5-backed search over fts_folder (name + path), mirroring ArticleRepository.
         // Same tokenize→stem→quoted-prefix MATCH build; same empty-query short-circuit; same
         // status = 'A' re-filter at the join (soft-deleted folders linger in the FTS index).
         // bm25 weights name above path; the underscore-prefix-sorts-first quirk stays primary.
@@ -536,10 +526,10 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     }
 
     /// <summary>
-    /// The pre-WP-07 <see cref="SearchAsync"/> implementation: a per-row managed-code
-    /// <c>unicode_contains</c> substring scan over name and path, no morphology. Kept available
-    /// (currently unused by <c>SearchService</c>) for a possible future "exact substring" search
-    /// mode. Wiring a UI/API toggle for it is out of WP-07's scope.
+    /// Legacy exact-substring search (the implementation before the FTS5 index): a per-row
+    /// managed-code <c>unicode_contains</c> substring scan over name and path, no morphology. Kept
+    /// available (currently unused by <c>SearchService</c>) for a possible future "exact substring"
+    /// search mode; no UI/API toggle is wired to it yet.
     /// </summary>
     public async Task<List<Folder>> SearchByExactSubstringAsync(string query)
     {

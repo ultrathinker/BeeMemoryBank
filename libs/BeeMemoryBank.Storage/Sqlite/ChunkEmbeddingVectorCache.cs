@@ -4,8 +4,8 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Sqlite;
 
 /// <summary>
-/// WP-15: process-wide in-memory cache of every active article's chunk embeddings, kept genuinely
-/// int8-sized (never bulk-dequantized to float32) so the cache stays within the WP-15 RAM budget
+/// Process-wide in-memory cache of every active article's chunk embeddings, kept genuinely
+/// int8-sized (never bulk-dequantized to float32) so the cache stays within its RAM budget
 /// at ~100k-article scale. Mirrors <see cref="EmbeddingVectorCache"/>'s copy-on-write snapshot
 /// design (see that type's doc comment for the concurrency argument, identical here) but scores
 /// against quantized bytes via <see cref="Int8Quantizer.Dot"/> instead of
@@ -106,8 +106,8 @@ public sealed class ChunkEmbeddingVectorCache
         // SearchByChunkEmbeddingCoreAsync uses this article's chunk score OR falls back to its
         // full-document score. A dimension-mismatched row that instead got zero-filled and counted
         // as "chunked" would score exactly 0 forever and never fall back to its (dimension-correct)
-        // full-document embedding -- a real, if currently unreachable, gap since this codebase ships
-        // only one model version today: found during an independent adversarial review (2026-08-12).
+        // full-document embedding (unreachable today, with a single shipped model version, but
+        // real as soon as there are two).
         var matching = raw.Where(r => dim > 0 && r.Projection.Length == dim).ToList();
 
         var articleIds = new Guid[matching.Count];
@@ -177,16 +177,15 @@ public sealed class ChunkEmbeddingVectorCache
         /// <see cref="ScoreMaxPerArticle"/> would score every one of these ids 0 (the snapshot has
         /// nothing usable for a query of a different dimension), which would incorrectly withhold
         /// the full-document fallback from every chunked article for that query rather than just
-        /// the ones that genuinely have no better answer. Found during an independent adversarial
-        /// review (2026-08-12): see <c>ArticleRepository.SearchByChunkEmbeddingCoreAsync</c> for the
-        /// caller-side fix.
+        /// the ones that genuinely have no better answer. See
+        /// <c>ArticleRepository.SearchByChunkEmbeddingCoreAsync</c> for the caller-side check.
         /// </summary>
         public HashSet<Guid> ChunkedArticleIds => new(_articleIds);
 
         /// <summary>
         /// Cosine score for every article that has at least one chunk, taking the MAX score across
         /// that article's own chunks. Returns an empty dictionary if this snapshot has no chunks
-        /// (e.g. before any article has been (re)chunked since WP-15 shipped).
+        /// (e.g. before any article has been (re)chunked into per-chunk embeddings).
         /// </summary>
         public Dictionary<Guid, float> ScoreMaxPerArticle(float[] queryProjection)
         {

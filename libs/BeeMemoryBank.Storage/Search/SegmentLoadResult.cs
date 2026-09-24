@@ -5,8 +5,8 @@ namespace BeeMemoryBank.Storage.Search;
 /// Purely informational/diagnostic -- every value here maps to exactly the same caller-facing
 /// outcome (see <see cref="SegmentLoadResult"/>): "this segment needs to be rebuilt from source
 /// article content," never a distinct exception type a caller has to know about and handle
-/// individually. Actually triggering that rebuild is a later work package's job (WP-11); this
-/// type only makes the "why" cheaply inspectable for logging/diagnostics along the way.
+/// individually. Triggering that rebuild is the caller's job (<c>SearchIndexLifecycleService</c>);
+/// this type only makes the "why" cheaply inspectable for logging/diagnostics along the way.
 /// </summary>
 public enum SegmentRebuildReason
 {

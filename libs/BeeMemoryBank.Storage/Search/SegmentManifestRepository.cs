@@ -6,7 +6,7 @@ namespace BeeMemoryBank.Storage.Search;
 /// <summary>
 /// Local-only data access for encrypted-segment bookkeeping: which segment files exist on disk
 /// (tbl_search_index_manifest) and the single wrapped "index key" that encrypts them
-/// (tbl_search_index_key). Both tables are a local cache exactly like the rest of this WP --
+/// (tbl_search_index_key). Both tables are a local cache like the rest of the search index --
 /// never part of the sync event log, never assumed authoritative, always safe to discard and
 /// rebuild.
 /// </summary>
@@ -60,7 +60,7 @@ public sealed class SegmentManifestRepository(DbConnectionFactory factory) : Bas
     }
 
     /// <summary>
-    /// WP-11: every currently-recorded segment manifest row, for the unlock warm-start path to
+    /// Every currently-recorded segment manifest row, for the unlock warm-start path to
     /// enumerate and attempt to load each one back via <c>EncryptedSegmentStore.LoadAsync</c>.
     /// </summary>
     public async Task<List<SegmentManifestEntry>> GetAllManifestsAsync()
@@ -79,7 +79,7 @@ public sealed class SegmentManifestRepository(DbConnectionFactory factory) : Bas
     }
 
     /// <summary>
-    /// WP-11: clears every manifest row. Used only by the search-index full-rebuild path (see
+    /// Clears every manifest row. Used only by the search-index full-rebuild path (see
     /// <c>SearchIndexLifecycleService.TriggerFullRebuildAsync</c>) -- the segment FILES themselves
     /// are deliberately left on disk (an orphaned .bmesg file is just wasted space, not a
     /// correctness problem, and deleting them here would add I/O to an already-degraded path
@@ -122,12 +122,8 @@ public sealed class SegmentManifestRepository(DbConnectionFactory factory) : Bas
 
     /// <summary>
     /// Reads the node's current DEK epoch the same way DekRotationService.Propose does it: a raw
-    /// SELECT against tbl_node_identity.dek_epoch (see AGENTS.md's "Non-obvious invariants" note
-    /// on how dek_epoch is read elsewhere). There is no existing repository method that exposes
-    /// this value as of this WP, and adding one to INodeIdentityRepository is out of this WP's
-    /// declared file scope (see wp-09.md's "DO NOT TOUCH" list) -- so this queries the table
-    /// directly, exactly like DekRotationService already does from a different project. Falls
-    /// back to 1 (tbl_node_identity's own column default) if the identity row does not exist yet;
+    /// SELECT against tbl_node_identity.dek_epoch, since no repository method exposes this value.
+    /// Falls back to 1 (tbl_node_identity's own column default) if the identity row does not exist yet;
     /// that should not happen in practice, since writing/reading segments requires an unlocked
     /// session, which itself requires the node identity to already exist.
     /// </summary>
@@ -140,7 +136,7 @@ public sealed class SegmentManifestRepository(DbConnectionFactory factory) : Bas
     }
 
     /// <summary>
-    /// WP-19 (merge persistence): atomically retires a merge's input segments and, if the merge
+    /// Merge persistence: atomically retires a merge's input segments and, if the merge
     /// produced surviving content, installs its output segment's manifest row -- both in ONE
     /// database transaction, never as separate statements. This is the crash-safety-critical step
     /// <c>SearchIndexLifecycleService.PersistMostRecentlyMergedSegmentAsync</c> relies on; see that
@@ -153,8 +149,8 @@ public sealed class SegmentManifestRepository(DbConnectionFactory factory) : Bas
     /// (<see cref="System.Data.IDbConnection.BeginTransaction"/>), and the whole point of this
     /// method is that the new manifest row's insert and the old rows' deletes across BOTH tables
     /// must commit or roll back together -- splitting this across two repositories, each opening
-    /// its own connection/transaction, would reopen exactly the "insert committed, deletes not yet"
-    /// (or vice versa) crash window this method exists to close. Retiring a segment's tombstone rows
+    /// its own connection/transaction, would open an "insert committed, deletes not yet"
+    /// (or vice versa) crash window. Retiring a segment's tombstone rows
     /// alongside its manifest row here is deliberate, not a layering violation: the two tables are
     /// only ever mutated together for a segment's whole lifetime (see
     /// <see cref="SegmentTombstoneRepository"/>'s own doc comment -- both are "sibling" local-cache

@@ -5,10 +5,10 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Sqlite;
 
 /// <summary>
-/// WP-15: durable storage for tbl_article_chunk_embedding (one int8-quantized projection vector
+/// Durable storage for tbl_article_chunk_embedding (one int8-quantized projection vector
 /// per ~256-token chunk of an article — see <c>BeeMemoryBank.Embeddings.ArticleChunker</c>).
 /// A sibling table to tbl_article's single <c>embedding_projection</c> column, not a replacement
-/// for it: an article with no rows here yet (not (re)chunked since WP-15 shipped) still has its
+/// for it: an article with no rows here yet (not yet (re)chunked) still has its
 /// old full-document embedding as a fallback — see <see cref="ChunkEmbeddingVectorCache"/>.
 /// </summary>
 public sealed class ArticleChunkEmbeddingRepository(DbConnectionFactory factory, ChunkEmbeddingVectorCache? cache = null)
@@ -49,7 +49,7 @@ public sealed class ArticleChunkEmbeddingRepository(DbConnectionFactory factory,
 
         tx.Commit();
 
-        // WP-15: this is the one write path that changes chunk-embedding bytes during normal
+        // This is the one write path that changes chunk-embedding bytes during normal
         // operation (PendingEmbeddingProcessor via EmbeddingProjectionService). Mirrors
         // ArticleRepository.UpdateEmbeddingUnscopedAsync's own EmbeddingVectorCache.Invalidate() call.
         cache?.Invalidate();
