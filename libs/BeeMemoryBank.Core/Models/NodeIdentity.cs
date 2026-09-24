@@ -22,10 +22,9 @@ public class NodeIdentity
     // Defaults true: the ONNX model ships with every build/Docker image, so semantic search
     // should work out of the box. Every call site that constructs a NodeIdentity without
     // explicitly setting this (e.g. JoinCommand.cs, InitEndpoints.cs's web join handler) picks
-    // up this default -- historically every one of them ended up false because bool's own
-    // implicit default is false and nothing here overrode it, silently disabling semantic
-    // search on every node ever created with no way to turn it back on (see
-    // InitializationService.InitializeAsync for the explicit-init path's own default).
+    // up this default; do not drop the initializer, or bool's implicit false silently disables
+    // semantic search on every new node (see InitializationService.InitializeAsync for the
+    // explicit-init path's own default).
     public bool CanGenerateEmbeddings { get; set; } = true;
     public bool InitialSyncCompleted { get; set; } = true;
     /// <summary>
@@ -34,9 +33,8 @@ public class NodeIdentity
     ///
     /// <para>
     /// It is on the identity because it describes the KEY this node holds, not any one row. Events
-    /// this node emits carry it so a receiver can say which generation a wrapped DEK belongs to —
-    /// the field was in the payload from the start but hardcoded to 1, which made every article
-    /// claim to be from the first generation forever.
+    /// this node emits carry it so a receiver can say which generation a wrapped DEK belongs to; a
+    /// hardcoded value would make every event claim the first generation forever.
     /// </para>
     /// </summary>
     public int DekEpoch { get; set; } = 1;

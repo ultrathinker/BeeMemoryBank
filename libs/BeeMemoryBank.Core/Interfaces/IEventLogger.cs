@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Core.Interfaces;
 
 /// <summary>
 /// Records local operations to the event log.
-/// Implementation is in BeeMemoryBank.Sync; null implementation in Core (Phase 1).
+/// Implementation is in BeeMemoryBank.Sync; null implementation in Core.
 /// </summary>
 public interface IEventLogger
 {
@@ -16,11 +16,11 @@ public interface IEventLogger
     /// must stamp that same version onto the row it is deleting.
     ///
     /// <para>
-    /// Returned rather than passed in, so there is exactly one place the version is minted. When
+    /// Returned rather than passed in, so there is exactly one place the version is minted. If
     /// the row kept the version of its last EDIT instead, a concurrent peer edit with a lower
-    /// Lamport still beat it at the applier's gate and brought the article back from the dead,
-    /// while the peer — which compared against our delete EVENT, not our row — deleted it. A
-    /// permanent, silent disagreement produced by two versions of one write.
+    /// Lamport would beat it at the applier's gate and bring the article back here, while the
+    /// peer (comparing against our delete EVENT, not our row) deletes it: a permanent, silent
+    /// divergence.
     /// </para>
     /// </summary>
     Task<RowVersion> LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null);
@@ -30,8 +30,8 @@ public interface IEventLogger
     /// transaction, it deliberately does NOT self-signal (it would fire before the caller's
     /// transaction commits, waking the push loop to look for a row on another connection that
     /// can't see it yet) — the caller must call this explicitly, once, strictly after its own
-    /// <c>tx.Commit()</c> succeeds. Given no transaction, the three log methods self-signal as
-    /// before and callers don't need to call this at all.
+    /// <c>tx.Commit()</c> succeeds. Given no transaction, the three log methods self-signal and
+    /// callers don't need to call this at all.
     /// </summary>
     void SignalSync();
     /// <summary>

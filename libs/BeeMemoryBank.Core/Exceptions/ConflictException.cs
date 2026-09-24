@@ -6,11 +6,11 @@ namespace BeeMemoryBank.Core.Exceptions;
 /// pending, a name is already taken. Maps to HTTP 409.
 /// </summary>
 /// <remarks>
-/// Derives from <see cref="InvalidOperationException"/> on purpose. Every one of these was an
-/// <c>InvalidOperationException</c> before, and dozens of <c>catch (InvalidOperationException)</c>
-/// blocks across the API endpoints and the MCP tools still translate those into their own
-/// responses. Keeping the base type means converting a throw site changes nothing for any handler
-/// that has not been migrated yet — only handlers that opt into the derived type see a difference.
+/// Derives from <see cref="InvalidOperationException"/> on purpose: dozens of
+/// <c>catch (InvalidOperationException)</c> blocks across the API endpoints and the MCP tools
+/// translate these into their own responses. Keeping the base type means converting a throw site
+/// changes nothing for a handler that does not catch the derived type — only handlers that opt
+/// into it see a difference.
 /// </remarks>
 public class ConflictException : InvalidOperationException
 {

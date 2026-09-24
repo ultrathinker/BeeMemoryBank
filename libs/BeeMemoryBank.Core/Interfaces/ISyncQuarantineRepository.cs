@@ -22,16 +22,16 @@ public enum SyncFailureKind
 }
 
 /// <summary>
-/// One event's cross-restart failure-tracking record for the sync pull/push quarantine (M5c/M5
-/// follow-up). See <c>BeeMemoryBank.Sync.SyncEventQuarantine</c> for the "why quarantine exists at
-/// all" explanation and the threshold comparisons this backs.
+/// One event's cross-restart failure-tracking record for the sync pull/push quarantine. See
+/// <c>BeeMemoryBank.Sync.SyncEventQuarantine</c> for the "why quarantine exists at all"
+/// explanation and the threshold comparisons this backs.
 ///
 /// <para>
 /// PermanentFailureCount and DeferredFailureCount are tracked SEPARATELY, not as one combined
 /// counter, because a deferred failure (whitelist/blob/rotation precondition missing) must never
 /// count toward the short permanent-failure budget — an event stuck waiting on a slow-to-arrive
-/// whitelist_add would otherwise get quarantined at 5 attempts exactly like a bad signature would,
-/// which is the bug this record shape exists to prevent. The same EventId can flip classification
+/// whitelist_add would otherwise get quarantined at 5 attempts exactly like a bad signature would.
+/// The same EventId can flip classification
 /// across attempts (e.g. blob-missing today, a genuinely corrupt payload once the blob arrives
 /// tomorrow) — each attempt's failure is credited to whichever counter its OWN exception
 /// classifies as, never both.

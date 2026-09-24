@@ -17,7 +17,7 @@ public interface IEventLogRepository
     /// <summary>
     /// Recent events, newest first. Pass <paramref name="eventType"/> to filter at SQL level —
     /// filtering in memory after LIMIT silently drops matches when the window is smaller than the
-    /// event stream (this is a real issue at ~50+ mixed events).
+    /// event stream.
     /// </summary>
     Task<List<SyncEvent>> GetRecentAsync(int limit = 50, int offset = 0, string? eventType = null);
     Task<int> GetTotalCountAsync();

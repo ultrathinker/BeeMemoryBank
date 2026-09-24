@@ -5,6 +5,7 @@ namespace BeeMemoryBank.Core.Models;
 /// tree navigation, search, MCP queries, and folder operations without requiring vault unlock.
 /// Article bodies are E2E encrypted (AES-256-GCM, per-article DEK). The trade-off is
 /// intentional: metadata privacy vs. usability for a personal knowledge base.
+/// See docs/adr/0005-plaintext-metadata.md.
 /// </remarks>
 public class Article
 {
@@ -16,7 +17,7 @@ public class Article
     public string? EmbeddingModelVersion { get; set; }
     public bool EmbeddingPending { get; set; } = true;
 
-    // WP-11: mirrors EmbeddingPending exactly, but drives the independent search-index
+    // Mirrors EmbeddingPending exactly, but drives the independent search-index
     // background processor (PendingIndexProcessor) instead of embedding generation. Both flags
     // mean "this article's derived search artifacts are stale" and are set together wherever
     // content changes -- they just feed two separate background pipelines.
@@ -36,8 +37,8 @@ public class Article
     public string? ProtectionHint { get; set; }
 
     // Set when this row mirrors an article from a remote BMB node. Non-null
-    // makes the row read-only at the repository layer (Phase 4 turns this into
-    // write-through-via-REST instead of a hard refusal).
+    // makes the row read-only at the repository layer (a hard refusal, not a write-through
+    // to the owner node).
     public Guid? RemoteSubscriptionId { get; set; }
     public string? RemoteOriginId { get; set; }
     public long? RemoteVersion { get; set; }

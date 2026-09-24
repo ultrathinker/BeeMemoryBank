@@ -33,8 +33,8 @@ public class InitializationService(
         try
         {
             // Encrypt the Ed25519 private key with the master DEK before persisting,
-            // so a stolen DB file alone cannot be used to impersonate the node (closes the
-            // CRIT finding from Wave 1 RERUN audit gemini2 #2). AAD binds to nodeId.
+            // so a stolen DB file alone cannot be used to impersonate the node. AAD binds to
+            // nodeId.
             var (wrappedPk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, masterDek, nodeId);
             Array.Clear(privateKey);
 

@@ -124,11 +124,10 @@ public sealed class NodeResetService(
         using (var tx = conn.BeginTransaction())
         {
             // Enumerate every real content table from the LIVE schema instead of hand-maintaining a
-            // list here. A hand list silently rots: it can name a table that never existed (this
-            // used to list "tbl_agent_access", wrapped in an empty catch — invisible) and, worse, it
-            // can OMIT a table a later migration added — which is exactly how tbl_remote_api_token
-            // was left out, handing a pre-reset bmbrt_ remote token a live read path into the NEW
-            // vault once Setup reassigned its user_id. Excluded on purpose:
+            // list here. A hand list silently rots: it can name a table that does not exist and,
+            // worse, OMIT a table a later migration adds — e.g. a surviving tbl_remote_api_token
+            // hands a pre-reset bmbrt_ remote token a live read path into the NEW vault once Setup
+            // reassigns its user_id. Excluded on purpose:
             //   - sqlite_%      — SQLite's own internal bookkeeping tables.
             //   - fts_%         — FTS5 index tables and their shadow tables. AFTER INSERT/UPDATE/
             //                     DELETE triggers on the content tables keep these in sync, so

@@ -28,7 +28,7 @@ public interface IWhitelistRepository
     /// <para>
     /// The version is required rather than optional because this row is what a later
     /// <c>whitelist_add</c> is compared against. Leaving it at the version of some earlier rename
-    /// is how an add issued BEFORE the revoke wins that comparison and puts a revoked peer back
+    /// would let an add issued BEFORE the revoke win that comparison and put a revoked peer back
     /// into the mesh.
     /// </para>
     /// </summary>

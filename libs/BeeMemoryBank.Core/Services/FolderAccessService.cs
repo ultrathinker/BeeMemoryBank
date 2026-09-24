@@ -55,8 +55,8 @@ public class FolderAccessService
             // authenticated identity at all — CallerScopeMiddleware already decided both of those
             // deny everything, and the endpoints that call this directly (ArticleEndpoints,
             // TreeEndpoints, CopyEndpoints, …) bypass the middleware's scope and use these sets
-            // raw. Returning empty sets here meant "no restrictions" to IsAccessDenied, i.e. full
-            // vault access for a caller we could not identify.
+            // raw. Empty sets would mean "no restrictions" to IsAccessDenied, i.e. full vault
+            // access for a caller we could not identify.
             return (DenyAllSet(), [], []);
         }
 

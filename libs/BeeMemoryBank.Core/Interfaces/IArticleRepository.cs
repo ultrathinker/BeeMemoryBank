@@ -22,8 +22,8 @@ public interface IArticleRepository
     /// <see cref="Interfaces.ICallerScope.BuildReadAclPredicate"/> pushed into the WHERE clause) —
     /// not a full unbounded load followed by an in-memory filter/Skip/Take. This is what lets a
     /// "give me the first page" caller avoid materializing every article in the vault.
-    /// <paramref name="limit"/> null (the default) means unbounded, matching the pre-pagination
-    /// contract exactly; <paramref name="offset"/> is only applied together with a non-null
+    /// <paramref name="limit"/> null (the default) means unbounded; <paramref name="offset"/> is
+    /// only applied together with a non-null
     /// <paramref name="limit"/> (offset alone, with no limit, still returns everything — same
     /// forgiving contract <c>TreeService.GetTreePathsAsync</c> already uses).
     /// </summary>
@@ -41,8 +41,8 @@ public interface IArticleRepository
     /// <c>IArticleBodyRepository</c>, <c>IArticleVersionRepository</c>, <c>IConceptTagRepository</c>,
     /// <c>IEventLogRepository</c>, <c>IMediaRepository</c>) that takes an optional
     /// <see cref="IDbTransaction"/> follows the same contract: pass null (the default) and the
-    /// method opens, commits and disposes its own connection exactly as before — every existing
-    /// caller is unaffected. Pass a non-null transaction and it executes against that transaction's
+    /// method opens, commits and disposes its own connection. Pass a non-null transaction and it
+    /// executes against that transaction's
     /// connection WITHOUT committing or disposing anything — commit and rollback become the caller's
     /// responsibility.
     ///
@@ -72,8 +72,8 @@ public interface IArticleRepository
     /// The version is not optional and not derived here, because a soft-deleted row is still a
     /// replicated row: the applier compares incoming creates and updates against
     /// <c>tbl_article.lamport_ts</c>/<c>source_node_id</c>. Leaving those at the last EDIT's
-    /// version — which is what this method used to do — means a peer edit older than the delete
-    /// still wins the comparison and flips the row back to 'A'.
+    /// version would let a peer edit older than the delete win the comparison and flip the row
+    /// back to 'A'.
     /// </para>
     /// </summary>
     Task SoftDeleteAsync(Guid id, RowVersion version, IDbTransaction? transaction = null);
@@ -102,7 +102,7 @@ public interface IArticleRepository
     void InvalidateVectorCache();
     Task<List<Article>> SearchAsync(string query);
     /// <summary>
-    /// Pre-WP-07 exact-substring search (per-row <c>unicode_contains</c> scan over title and tag
+    /// Legacy exact-substring search, from before the FTS5 index (per-row <c>unicode_contains</c> scan over title and tag
     /// name, no morphology). Preserved for a possible future "exact substring" search mode; not
     /// used by <c>SearchService</c>, which routes through FTS-backed <see cref="SearchAsync"/>.
     /// </summary>
@@ -149,18 +149,18 @@ public interface IArticleRepository
     /// </summary>
     Task<int> MarkAllEmbeddingsPendingUnscopedAsync();
 
-    /// <summary>WP-11: mirrors GetEmbeddingPendingAsync exactly, for the search-index background processor.</summary>
+    /// <summary>Mirrors GetEmbeddingPendingAsync exactly, for the search-index background processor.</summary>
     Task<List<Article>> GetIndexPendingAsync(int limit = 100);
 
     /// <summary>
-    /// WP-11: mirrors the embedding_pending = 0 clear inside <see cref="UpdateEmbeddingUnscopedAsync"/>,
+    /// Mirrors the embedding_pending = 0 clear inside <see cref="UpdateEmbeddingUnscopedAsync"/>,
     /// without any projection payload to store. "Unscoped": no caller-scope check, by design —
     /// reachable only from <c>PendingIndexProcessor</c> (background worker, SystemCallerScope).
     /// </summary>
     Task ClearIndexPendingUnscopedAsync(Guid id);
 
     /// <summary>
-    /// WP-11: re-flags every active article as index_pending = 1. Used only by the search-index
+    /// Re-flags every active article as index_pending = 1. Used only by the search-index
     /// full-rebuild path (a persisted segment failed to load and the whole persisted index is no
     /// longer trustworthy) -- returns the number of rows affected for logging.
     ///
@@ -186,7 +186,7 @@ public interface IArticleRepository
     Task<List<Guid>> GetIndexPendingIdsUnscopedAsync(int limit);
     Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10);
 
-    /// <summary>WP-15: chunk-based semantic search — see <c>ArticleRepository.SearchByChunkEmbeddingAsync</c>'s doc comment.</summary>
+    /// <summary>Chunk-based semantic search — see <c>ArticleRepository.SearchByChunkEmbeddingAsync</c>'s doc comment.</summary>
     Task<List<Article>> SearchByChunkEmbeddingAsync(float[] queryProjection, int topK = 10);
     Task<List<Article>> GetRecentActivityAsync(int limit = 50);
 
@@ -202,11 +202,11 @@ public interface IArticleRepository
 
     /// <summary>
     /// Detaches every article under a folder by setting folder_id = NULL and tree_path = '/', with
-    /// NO caller-scope check of its own — this is the exact method a user-facing folder-delete path
-    /// once called directly, relocating ACL-denied articles to the vault root instead of being
-    /// blocked. Marked <see langword="internal"/> for the same reason as
+    /// NO caller-scope check of its own — called directly from a user-facing folder-delete path it
+    /// would relocate ACL-denied articles to the vault root instead of being blocked. Marked
+    /// <see langword="internal"/> for the same reason as
     /// <see cref="SetFolderIdUnscopedAsync"/>: the compiler, not a comment, keeps it off the
-    /// API/MCP surface. The two remaining callers are safe DESPITE the missing check:
+    /// API/MCP surface. The two callers are safe DESPITE the missing check:
     /// <c>FolderService.DeleteAsync</c> (Core, same assembly) calls
     /// <c>folderRepo.SoftDeleteByPathPrefixAsync</c> first, which walks every descendant and throws
     /// on the first ACL violation, so a denied descendant aborts the whole cascade before this is

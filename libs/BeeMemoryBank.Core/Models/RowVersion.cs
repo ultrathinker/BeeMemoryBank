@@ -6,21 +6,12 @@ namespace BeeMemoryBank.Core.Models;
 /// one value instead of two arguments that can be passed in the wrong order, or forgotten.
 ///
 /// <para>
-/// It exists because the comparison was being written by hand at each gate, and the hand-written
-/// versions had drifted apart. The article tombstone gate compared <c>tombstone.LamportTs &gt;=
-/// evt.LamportTs</c> with no tiebreak at all; folder delete used a bare <c>&gt;</c>; comment delete
-/// used <c>&gt;</c> against a nullable; everything else went through
-/// <c>ConflictResolver.IncomingWins</c> in BeeMemoryBank.Sync. Three different answers to
-/// the same question, and at equal Lamport timestamps — which happen constantly, because two nodes
-/// that were in sync and each tick once produce the same number — they disagree deterministically
-/// rather than occasionally. A delete on A and an edit on B, both at L=11, ended with the article
-/// alive on one node and gone on the other for half of all node-id pairs, and nothing ever
-/// reconciles it: both nodes believe they applied the newest write.
-/// </para>
-///
-/// <para>
-/// So the comparison has exactly one implementation and every gate calls it. A new event type gets
-/// the rule by construction rather than by whoever writes it remembering to.
+/// Every gate must compare versions through this one implementation, never a hand-written
+/// <c>&gt;</c>/<c>&gt;=</c>. Equal Lamport timestamps are common (two in-sync nodes that each tick
+/// once produce the same number), and gates with different tiebreaks disagree deterministically
+/// there: a delete on A and an edit on B at the same Lamport leave the row alive on one node and
+/// gone on the other, and nothing ever reconciles it because both believe they applied the newest
+/// write. A new event type gets the rule by construction.
 /// </para>
 /// </summary>
 /// <param name="LamportTs">Lamport timestamp of the write that produced this version.</param>

@@ -14,7 +14,7 @@ public sealed class BeeExportManifest
     public DateTime ExportedAt { get; set; }
 
     /// <summary>
-    /// The exported folder's own name (e.g. "Мой гитхаб"), or null for a root/"export all" export —
+    /// The exported folder's own name (e.g. "My GitHub"), or null for a root/"export all" export —
     /// there is no single folder identity to preserve in that case. BeeImportService creates a
     /// subfolder named this at the chosen destination; when null, it imports directly into the
     /// chosen destination with no extra wrapping folder.
@@ -23,7 +23,7 @@ public sealed class BeeExportManifest
 
     /// <summary>
     /// Every folder under the export root, as paths RELATIVE to it ("" = the root itself,
-    /// "Аудиты/2026-07-19" = a nested subfolder). Includes folders with zero articles — the
+    /// "Audits/2026-07-19" = a nested subfolder). Includes folders with zero articles — the
     /// only reason this list exists is so empty folders survive the round trip.
     /// </summary>
     public List<string> Folders { get; set; } = [];

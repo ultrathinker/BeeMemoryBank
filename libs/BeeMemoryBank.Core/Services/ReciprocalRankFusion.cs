@@ -1,7 +1,7 @@
 namespace BeeMemoryBank.Core.Services;
 
 /// <summary>
-/// WP-16: Reciprocal Rank Fusion — combines several independently-ranked id lists (e.g. a BM25
+/// Reciprocal Rank Fusion — combines several independently-ranked id lists (e.g. a BM25
 /// keyword ranking and a cosine-similarity semantic ranking) into one ranking, without needing the
 /// two sources' scores to be on comparable scales (BM25 scores and cosine similarities have
 /// nothing in common numerically; RRF sidesteps that by fusing on RANK POSITION, not raw score).

@@ -2,7 +2,7 @@ using BeeMemoryBank.Core.Models;
 
 namespace BeeMemoryBank.Core.Interfaces;
 
-/// <summary>WP-15: durable storage for one article's per-chunk semantic embeddings.</summary>
+/// <summary>Durable storage for one article's per-chunk semantic embeddings.</summary>
 public interface IArticleChunkEmbeddingRepository
 {
     /// <summary>

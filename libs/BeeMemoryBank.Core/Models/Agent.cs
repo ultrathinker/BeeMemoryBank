@@ -9,19 +9,14 @@ public class Agent
     public string KeyHash { get; set; } = "";
 
     /// <summary>
-    /// Wrapped master DEK. Security fix H6: this used to be populated for every agent, which
-    /// made every agent key -- including one an ordinary, folder-restricted user minted for
-    /// themselves (self-service, limit 20) -- cryptographically a key to the WHOLE vault, not
-    /// just to whatever the folder ACL on its owner allowed in software. Anyone holding such a
-    /// key plus any copy of the database file (a backup, a decommissioned disk) could unwrap
-    /// the master DEK and read every article, ACL or no ACL.
-    ///
-    /// Now only agents owned by a superadmin get this populated at creation
-    /// (AgentEndpoints/AgentCommand) -- superadmins can already unlock the vault through the web
-    /// UI, so letting their agents do the same on their behalf adds no new capability. An
-    /// ordinary user's agent gets null here: it authenticates and works exactly as before
-    /// whenever the vault is already unlocked, it just can't unlock it, and a stolen database
-    /// file yields nothing from its row alone. See <see cref="CanAutoUnlock"/>,
+    /// Wrapped master DEK. SECURITY: populated ONLY for agents owned by a superadmin
+    /// (AgentEndpoints/AgentCommand). A wrapped DEK makes the agent key, together with any copy
+    /// of the database file (a backup, a decommissioned disk), cryptographically a key to the
+    /// WHOLE vault, whatever the owner's folder ACL allows in software. Superadmins can already
+    /// unlock the vault through the web UI, so their agents gain no new capability. An ordinary
+    /// (folder-restricted, self-service) user's agent gets null: it works whenever the vault is
+    /// already unlocked, it just can't unlock it, and a stolen database file yields nothing from
+    /// its row alone. See <see cref="CanAutoUnlock"/>,
     /// AgentAuthMiddleware, and migration 014_agent_dek_optional.sql (which strips this from
     /// every pre-existing non-superadmin agent).
     /// </summary>

@@ -116,9 +116,9 @@ public class CopyService(
             if (fetched is null)
             {
                 // Refuse to ship a copy with stale references — rollback covers
-                // the partial work (kilo round-3). Silent skip used to leave the
-                // copy pointing at the original article's media, which then
-                // broke if the original was later deleted.
+                // the partial work. A silent skip would leave the copy pointing at
+                // the original article's media, which breaks once the original is
+                // deleted.
                 throw new InvalidOperationException(
                     $"Cannot copy: media {oldMedia.Id} on source article {sourceArticleId} could not be read (decryption or orphan).");
             }
@@ -185,7 +185,7 @@ public class CopyService(
         }
 
         // Filter at SQL layer (LIKE prefix) instead of loading the entire vault
-        // into memory just to copy a subtree — gemini round-3 OOM finding.
+        // into memory just to copy a subtree (OOM risk on a large vault).
         var subtreeArticles = await articleRepo.ListAsync(source.Path);
 
         foreach (var article in subtreeArticles)

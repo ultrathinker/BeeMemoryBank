@@ -47,9 +47,8 @@ public class RemoteEventApplier(
         // 2. Build remote-origin → local folder map. Start with the mount root.
         var allFolders = await folderRepo.GetAllActiveAsync();
         // GroupBy.First instead of ToDictionary — a stale row pair with a
-        // null/duplicate RemoteOriginId would otherwise crash the entire poll
-        // (caught by kilo round-3). First-wins lets the duplicate get cleaned
-        // by the orphan pass.
+        // null/duplicate RemoteOriginId would otherwise crash the entire poll.
+        // First-wins lets the duplicate get cleaned by the orphan pass.
         var existingBySubId = allFolders
             .Where(f => f.RemoteSubscriptionId == sub.Id)
             .GroupBy(f => f.RemoteOriginId ?? "")
@@ -144,7 +143,6 @@ public class RemoteEventApplier(
             // SECURITY: the remote node could send a malicious TreePath like
             // "/Recipes/../../Admin/Secrets" — naïve concatenation would let
             // it escape the mount root. Canonicalise and verify containment.
-            // Gemini security review 2026-05-25.
             if (string.IsNullOrEmpty(ra.TreePath) || !ra.TreePath.StartsWith(rootRemote, StringComparison.Ordinal))
             {
                 // Either malformed or outside the share subtree → skip.
@@ -194,12 +192,11 @@ public class RemoteEventApplier(
         // articles, refuse the cleanup pass and emit a warning. This protects
         // against owner-side bugs / partial responses that nevertheless arrived
         // as valid JSON (e.g. Articles array silently truncated). Worst case
-        // outcome: next poll re-syncs cleanly. The alternative — quiet mass
-        // delete — was kilo's critical finding in 2026-05-24 review.
+        // outcome: next poll re-syncs cleanly — far better than a quiet mass delete.
         // Count only existing rows the snapshot did NOT mention — net difference
         // (Count - SeenCount) silently misses the case "owner deleted 10, added
-        // 10 different ones" → 0 net but 10 actual losses. Bug caught by gemini
-        // round-3 review. Always count via Keys.Count(k => !seen.Contains(k)).
+        // 10 different ones" → 0 net but 10 actual losses. Always count via
+        // Keys.Count(k => !seen.Contains(k)).
         var articlesGoingAway = existingArticlesBySubId.Keys.Count(k => !seenArticleOriginIds.Contains(k));
         var safeToCleanArticles = existingArticlesBySubId.Count == 0
             || articlesGoingAway <= existingArticlesBySubId.Count / 2;

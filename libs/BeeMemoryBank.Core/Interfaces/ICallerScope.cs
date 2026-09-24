@@ -44,7 +44,7 @@ public interface ICallerScope
     // that depends ONLY on the read-ACL (not on write/read-only flags, which do not affect which
     // rows a read returns) and must be constant for the lifetime of the scope object. Read-only
     // paths are deliberately excluded: they affect write-denial, never the set of rows a search
-    // returns. Used by SearchQueryCache (WP-17) to build an ACL-safe cache key.
+    // returns. Used by SearchQueryCache to build an ACL-safe cache key.
     string ReadScopeFingerprint { get; }
 
     /// <summary>
