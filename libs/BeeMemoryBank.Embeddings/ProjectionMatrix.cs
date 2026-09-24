@@ -93,10 +93,9 @@ public class ProjectionMatrix
     /// <summary>
     /// Decrypts and restores the matrix. Uses <see cref="DekManager.UnwrapVersioned"/>, not
     /// <see cref="DekManager.UnwrapDek"/>: the matrix is hundreds of KB, not the fixed 32-byte
-    /// secret <c>UnwrapDek</c>'s length-based dispatch expects -- see
-    /// <see cref="DekManager.UnwrapVersioned"/>'s doc comment for why reusing <c>UnwrapDek</c>
-    /// here previously made this method throw <see cref="System.Security.Cryptography.CryptographicException"/>
-    /// for any real-size matrix.
+    /// secret <c>UnwrapDek</c>'s length-based dispatch expects, so <c>UnwrapDek</c> would throw
+    /// <see cref="System.Security.Cryptography.CryptographicException"/> for any real-size matrix
+    /// (see <see cref="DekManager.UnwrapVersioned"/>'s doc comment).
     /// </summary>
     public static ProjectionMatrix Unwrap(byte[] encryptedMatrix, byte[] iv, byte[] masterDek)
     {

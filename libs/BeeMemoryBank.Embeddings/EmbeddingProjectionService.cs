@@ -43,25 +43,21 @@ public class EmbeddingProjectionService(
         if (stored != null && CanDecrypt(stored)) return; // already initialized and readable
 
         // A matrix that will not open is NOT proof it is dead while a heavy operation is in
-        // flight. DEK rotation commits the re-wrapped matrix inside its transaction and only
-        // swaps the in-memory master DEK AFTER the commit, so between those two points the row
-        // is sealed under the NEW key while this service still holds the OLD one — and the
-        // retired-DEK candidates cannot help, because the new key is not a candidate yet. The
-        // background PendingEmbeddingProcessor calls this method every cycle, so without this
-        // guard a rotation could land in that window and be met with a full regeneration:
-        // every vector in the vault discarded, every article re-queued, and the freshly written
-        // matrix overwritten with one sealed under the retired key — leaving the vault worse
-        // than before and failing the same way on every later cycle. Rotation and restore both
-        // hold maintenance mode across their whole operation, so backing off here costs one
-        // cycle and nothing else.
+        // flight. DEK rotation commits the re-wrapped matrix inside its transaction and swaps the
+        // in-memory master DEK only AFTER the commit, so in between the row is sealed under the NEW
+        // key while this service still holds the OLD one (and the new key is not a retired-DEK
+        // candidate either). PendingEmbeddingProcessor calls this every cycle; regenerating in that
+        // window would discard every vector, re-queue every article and overwrite the matrix with
+        // one sealed under the retired key, failing again on every later cycle. Rotation and restore
+        // hold maintenance mode for their whole operation, so backing off here costs one cycle.
         if (stored != null && maintenance?.IsInMaintenance == true) return;
 
         // Either no matrix yet, or one we can no longer decrypt. The latter is recoverable only by
         // regenerating: a matrix sealed under a key we don't have is not coming back, and every
-        // projection derived from it is meaningless in the new matrix's space. This is the repair
-        // path for vaults rotated by a build that did not re-wrap tbl_projection_matrix (see
-        // DekRotationService.ReWrapProjectionMatrix) — without it, semantic search stayed broken
-        // forever. A wrong-but-valid DEK cannot reach here: unlock verifies the DEK against the
+        // projection derived from it is meaningless in the new matrix's space. This is also the
+        // repair path for vaults rotated by older builds that did not re-wrap tbl_projection_matrix
+        // (see DekRotationService.ReWrapProjectionMatrix); without it their semantic search would
+        // stay broken. A wrong-but-valid DEK cannot reach here: unlock verifies the DEK against the
         // node sentinel before caching it, so an unwrap failure means the matrix, not the key.
         bool regenerating = stored != null;
 
@@ -116,9 +112,8 @@ public class EmbeddingProjectionService(
 
     /// <summary>
     /// Generates and saves an embedding projection for a single article: the full-document
-    /// projection (unchanged, pre-WP-15 behavior — <see cref="ProjectQueryAsync"/> and any caller
-    /// still relying on it keep working) plus, since WP-15, one projection per ~256-token chunk
-    /// (<see cref="ArticleChunker"/>), so content past
+    /// projection (still used by callers that score against the article-level embedding) plus one
+    /// projection per ~256-token chunk (<see cref="ArticleChunker"/>), so content past
     /// <see cref="OnnxEmbeddingGenerator.MaxSequenceLength"/> tokens — silently dropped by the
     /// single full-document embedding — is still searchable via its own chunk.
     /// </summary>

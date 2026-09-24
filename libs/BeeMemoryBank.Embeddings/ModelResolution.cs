@@ -27,7 +27,7 @@ public enum ModelStatus
 }
 
 /// <summary>
-/// The result of <see cref="ModelManager.ResolveAsync"/>. A future caller hands
+/// The result of <see cref="ModelManager.ResolveAsync"/>. The caller hands
 /// <see cref="Path"/> straight to <see cref="OnnxEmbeddingGenerator(string?)"/> only when
 /// <see cref="Status"/> is <see cref="ModelStatus.Valid"/>; the other two statuses let it show
 /// distinct "no model" vs "model is corrupt" messages.

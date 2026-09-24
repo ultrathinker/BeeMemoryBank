@@ -22,7 +22,8 @@ public static class DependencyInjection
     /// Resolves the multilingual-e5-small ONNX model under <paramref name="dataDirectory"/> via
     /// <see cref="ModelManager"/> and registers a singleton <see cref="OnnxEmbeddingGenerator"/>
     /// keyed on <see cref="IEmbeddingGenerator"/>. Corrupt/missing models degrade to a sentinel
-    /// path so the generator throws <c>ModelUnavailableException</c> exactly as before this split.
+    /// path so the generator throws <c>ModelUnavailableException</c> on first use, the same way a
+    /// missing model does.
     /// </summary>
     public static IServiceCollection AddOnnxEmbeddings(this IServiceCollection services, string dataDirectory)
     {

@@ -1,7 +1,7 @@
 namespace BeeMemoryBank.Embeddings;
 
 /// <summary>
-/// WP-15: splits article plaintext into overlapping chunks sized in real SentencePiece tokens (via
+/// Splits article plaintext into overlapping chunks sized in real SentencePiece tokens (via
 /// <see cref="XlmRobertaTokenizer.TokenizeWithCounts"/>), so each chunk fits within one
 /// <see cref="OnnxEmbeddingGenerator.Generate"/> call without <see cref="XlmRobertaTokenizer.Encode"/>
 /// silently re-truncating it.
@@ -9,8 +9,8 @@ namespace BeeMemoryBank.Embeddings;
 /// <para>
 /// <b>Why chunking exists.</b> <see cref="OnnxEmbeddingGenerator"/> truncates any input to
 /// <see cref="OnnxEmbeddingGenerator.MaxSequenceLength"/> (256) tokens before embedding it — a
-/// "needle" placed past that point in a long article is invisible to semantic search today,
-/// because it was never part of what got embedded. Chunking embeds every ~256-token slice of the
+/// "needle" placed past that point in a long article would be invisible to semantic search,
+/// because it would never be part of what got embedded. Chunking embeds every ~256-token slice of the
 /// article separately (with a sliding overlap so a needle straddling a chunk boundary isn't lost
 /// either), and article-level semantic scoring becomes the max over its chunks.
 /// </para>
@@ -24,7 +24,7 @@ public sealed class ArticleChunker
     /// </summary>
     public const int ChunkTokenBudget = OnnxEmbeddingGenerator.MaxSequenceLength - 2;
 
-    /// <summary>Target token overlap between consecutive chunks, per the search-100k plan (WP-15).</summary>
+    /// <summary>Target token overlap between consecutive chunks, so a match straddling a chunk boundary is not lost.</summary>
     public const int ChunkOverlapTokens = 32;
 
     private readonly XlmRobertaTokenizer _tokenizer;
@@ -76,11 +76,10 @@ public sealed class ArticleChunker
             }
             // Pathological case: a single word alone exceeds the budget -- e.g. an unbroken run of
             // base64/JWT/hash text with no whitespace or punctuation for SplitWords to break on.
-            // Unlike the old WordPiece tokenizer (words over 100 chars collapsed to one [UNK]
-            // token), SentencePiece has no such cap, so this word must be split further here rather
-            // than emitted whole -- otherwise Encode() would silently truncate away the vast
-            // majority of it, exactly the "content past the truncation point is invisible" gap
-            // WP-15 chunking exists to close.
+            // SentencePiece has no per-word length cap, so this word must be split further here
+            // rather than emitted whole -- otherwise Encode() would silently truncate away most of
+            // it, exactly the "content past the truncation point is invisible" gap chunking exists
+            // to close.
             if (end == start)
             {
                 foreach (var piece in SplitOversizedWord(words[start].Word))

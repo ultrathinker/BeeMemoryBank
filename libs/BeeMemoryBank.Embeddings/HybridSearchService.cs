@@ -15,8 +15,8 @@ public enum SearchMode
 }
 
 /// <summary>
-/// WP-16: combines WP-08–13's BM25 keyword ranking (<see cref="SearchService.SearchIndexedContentAsync"/>)
-/// and WP-15's chunk-based semantic ranking (<see cref="IArticleRepository.SearchByChunkEmbeddingAsync"/>)
+/// Combines the BM25 keyword ranking (<see cref="SearchService.SearchIndexedContentAsync"/>)
+/// and the chunk-based semantic ranking (<see cref="IArticleRepository.SearchByChunkEmbeddingAsync"/>)
 /// via <see cref="ReciprocalRankFusion"/>, so a query benefits from both exact-term matching and
 /// semantic similarity without one drowning out the other.
 ///
@@ -81,10 +81,8 @@ public class HybridSearchService(
             // embeddings (tbl_node_identity.can_generate_embeddings = 0 in a multi-node sync setup)
             // so the projection matrix was never initialized here, or the ONNX model itself is
             // unavailable. Degrade to keyword-only ranking rather than failing the entire hybrid
-            // request: BM25 search works independently of embeddings and should not be held hostage
-            // by a missing semantic component. Found in production (2026-08-12): a node without
-            // embedding generation got zero hybrid results (not even its keyword-only results)
-            // before this fix, silently falling all the way back to the pre-WP-16 linear body scan.
+            // request: BM25 search works independently of embeddings and must not be held hostage
+            // by a missing semantic component.
             semanticResults = [];
         }
 

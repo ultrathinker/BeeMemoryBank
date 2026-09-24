@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace BeeMemoryBank.Embeddings;
 
 /// <summary>
-/// WP-15: per-vector int8 (max-abs) quantization for chunk embeddings. A chunked article can have
+/// Per-vector int8 (max-abs) quantization for chunk embeddings. A chunked article can have
 /// several chunk vectors instead of tbl_article's single float32 <c>embedding_projection</c>, so
 /// keeping the in-memory scoring cache at ~100k-article scale within budget needs roughly 1/4 the
 /// per-vector footprint float32 would cost — this is that quantization.

@@ -25,8 +25,8 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
     /// Bumped whenever the embedding model or tokenizer changes -- <see cref="EmbeddingProjectionService"/>
     /// and <see cref="BeeMemoryBank.Core.Services.ConceptTagService"/> compare this against each row's stored
     /// <c>embedding_model_version</c> to flag stale embeddings (from a previous model) for
-    /// re-generation. Both the old MiniLM model and this one happen to produce 384-dim vectors, so
-    /// the dimension-based staleness check elsewhere would NOT have caught a swap between them --
+    /// re-generation. Different models can share a dimension (the previous MiniLM model was also
+    /// 384-dim), so the dimension-based staleness check elsewhere cannot detect a model swap --
     /// this string comparison is the only thing that does.
     /// </summary>
     public const string Version = "multilingual-e5-small-v1";
@@ -36,7 +36,7 @@ public sealed class OnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
     private const string PassagePrefix = "passage: ";
     private const string QueryPrefix = "query: ";
 
-    // WP-15: internal (not private) so ArticleChunker can size chunks to fit within one embedding
+    // Internal (not private) so ArticleChunker can size chunks to fit within one embedding
     // call without silent re-truncation by Encode below.
     internal const int MaxSequenceLength = 256;
 

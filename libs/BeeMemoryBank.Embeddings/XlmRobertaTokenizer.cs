@@ -79,10 +79,9 @@ internal sealed class XlmRobertaTokenizer
     /// Real SentencePiece token count for an arbitrary substring. Used by
     /// <see cref="ArticleChunker"/> to binary-search a safe split point inside a single
     /// "word" too large to fit a whole chunk on its own (e.g. an unbroken run of base64/JWT/hash
-    /// text with no whitespace or punctuation) -- the old WordPiece tokenizer had an implicit cap
-    /// (words over 100 chars collapsed to a single [UNK]) that made this impossible; SentencePiece
-    /// has no equivalent cap, so a run long enough can otherwise tokenize past the whole chunk
-    /// budget by itself and get silently truncated by <see cref="Encode"/>.
+    /// text with no whitespace or punctuation) -- SentencePiece has no per-word length cap, so a
+    /// run long enough can otherwise tokenize past the whole chunk budget by itself and get
+    /// silently truncated by <see cref="Encode"/>.
     /// </summary>
     internal int CountTokens(string text) => CountPieces(text);
 
@@ -90,8 +89,8 @@ internal sealed class XlmRobertaTokenizer
         rawSentencePieceId == 0 ? UnknownId : rawSentencePieceId + FairseqOffset;
 
     // Splits text into whitespace-separated words, punctuation, and CJK characters as their own
-    // units -- the same segmentation ArticleChunker needs to rejoin words into chunk text. Unlike
-    // the old BERT tokenizer's basic-tokenize step, this does NOT lowercase or strip accents:
+    // units -- the same segmentation ArticleChunker needs to rejoin words into chunk text. This
+    // does NOT lowercase or strip accents:
     // SentencePiece's own normalizer (baked into the .model file) handles that, and this split
     // exists only to give ArticleChunker word-sized units, not to preprocess for tokenization.
     private static IEnumerable<string> SplitWords(string text)
