@@ -81,7 +81,7 @@ internal static class Scenarios
         // can_generate_embeddings=0 so no projection matrix is ever built, or the backfill hasn't
         // populated anything within the wait), do NOT measure 503 latencies and present them as
         // "semantic search performance". Record an explicit skip with the reason so the baseline
-        // stays honest. See the WP-03 report for the can_generate_embeddings finding.
+        // stays honest.
         if (!ready || probeCount <= 0)
         {
             await progress.WriteLineAsync(

@@ -9,7 +9,7 @@ namespace BeeMemoryBank.Mobile.Services;
 /// body so the generic error-display logic in pages shows a friendly "Node maintenance: …"
 /// message instead of a raw "Service Unavailable".
 ///
-/// Roadmap p5. Doesn't help raw `new HttpClient()` sites elsewhere in the app — those bypass
+/// Doesn't help raw `new HttpClient()` sites elsewhere in the app — those bypass
 /// DI — but the named/typed clients registered in MauiProgram do route through this handler.
 /// </summary>
 public class MaintenanceDetectingHandler : DelegatingHandler
@@ -25,7 +25,6 @@ public class MaintenanceDetectingHandler : DelegatingHandler
         // Try to extract `reason`; fall back to a generic message if parsing fails.
         // Bound the body read at 16 KB and JSON depth at 8 — without bounds a malicious peer
         // or compromised proxy could send a multi-gigabyte 503 to OOM the mobile app.
-        // (Found by Gemini R1 security review.)
         const int MaxBodyBytes = 16 * 1024;
         string reason = "Node is being maintained. Try again in a minute.";
         try
