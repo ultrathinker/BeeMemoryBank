@@ -15,17 +15,18 @@ public class CallerScopeMiddleware
     public async Task InvokeAsync(HttpContext ctx)
     {
         var holder = ctx.RequestServices.GetRequiredService<CallerScopeHolder>();
-        var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
+        var identity = CallerIdentity.Extract(ctx);
+        var (userId, agentId, isSuperadmin) = identity;
 
         if (isSuperadmin)
         {
-            holder.Scope = new HttpCallerScope(true, [], []);
+            holder.Scope = new HttpCallerScope(true, [], []) { MediaOwnerKey = identity.MediaOwnerKey };
         }
         else if (userId.HasValue)
         {
             var folderAccess = ctx.RequestServices.GetRequiredService<FolderAccessService>();
             var (denyPaths, allowPaths, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
-            holder.Scope = new HttpCallerScope(false, denyPaths, allowPaths, readOnlyPaths);
+            holder.Scope = new HttpCallerScope(false, denyPaths, allowPaths, readOnlyPaths) { MediaOwnerKey = identity.MediaOwnerKey };
         }
         else if (agentId.HasValue)
         {

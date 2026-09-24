@@ -83,6 +83,13 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
 
     public async Task CreateAsync(Media media, System.Data.IDbTransaction? transaction = null)
     {
+        // An unlinked upload remembers who made it (from the ambient caller scope unless the caller
+        // set it), so only that uploader can later link, read or delete it — see the link methods.
+        if (media.ArticleId == null)
+            media.UploadedBy ??= _holder.Scope.MediaOwnerKey;
+        else
+            media.UploadedBy = null;
+
         const string insertSql = @"INSERT INTO tbl_media
               (id, article_id, file_name, content_type, file_size,
                encrypted_dek, dek_iv, iv, status, lamport_ts, source_node_id, created_at, kind,
@@ -217,6 +224,13 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
 
     public async Task<List<Guid>> LinkOrphansToArticleAsync(IEnumerable<Guid> mediaIds, Guid articleId, long lamportTs, Guid? sourceNodeId)
     {
+        // Body-referenced media (![..](/api/media/{id})): a non-superadmin may only link rows THEY
+        // uploaded, otherwise an id learned from someone else, written into a body, would pull that
+        // person's unlinked image into an article the caller can read. Superadmin and system work
+        // (sync replay, import running as system) are unrestricted. A non-superadmin without an
+        // owner key links nothing (uploaded_by = NULL never matches).
+        var unrestricted = _holder.Scope.IsSuperadmin;
+        var owner = _holder.Scope.MediaOwnerKey;
         using var conn = OpenConnection();
         var ids = mediaIds.ToList();
         var linked = await conn.QueryAsync<string>(
@@ -224,8 +238,9 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
               SET article_id = @articleId, lamport_ts = @lamportTs, source_node_id = @sourceNodeId,
                   uploaded_by = NULL
               WHERE id IN @ids AND article_id IS NULL AND status = 'A'
+                AND (@unrestricted = 1 OR uploaded_by = @owner)
               RETURNING id",
-            new { ids, articleId, lamportTs, sourceNodeId });
+            new { ids, articleId, lamportTs, sourceNodeId, unrestricted = unrestricted ? 1 : 0, owner });
         return linked.Select(Guid.Parse).ToList();
     }
 
@@ -253,13 +268,12 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
             new { id, uploadedBy });
     }
 
-    public async Task<bool> SoftDeleteOwnedOrphanAsync(Guid id, string uploadedBy)
+    public async Task<bool> SoftDeleteOwnedOrphanAsync(Guid id, string uploadedBy, System.Data.IDbTransaction transaction)
     {
-        using var conn = OpenConnection();
         var now = UtcNow();
-        return await conn.ExecuteAsync(
+        return await transaction.Connection!.ExecuteAsync(
             @"UPDATE tbl_media SET status = 'D', deleted_at = @now
               WHERE id = @id AND article_id IS NULL AND status = 'A' AND uploaded_by = @uploadedBy",
-            new { id, uploadedBy, now }) > 0;
+            new { id, uploadedBy, now }, transaction) > 0;
     }
 }

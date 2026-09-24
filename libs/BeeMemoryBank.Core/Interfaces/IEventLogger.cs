@@ -57,7 +57,7 @@ public interface IEventLogger
     /// </summary>
     Task<RowVersion> LogFolderDeleteAsync(Guid folderId, string path, DateTime deletedAt);
     Task LogMediaCreateAsync(Media media, byte[] ciphertext, IDbTransaction? transaction = null);
-    Task LogMediaDeleteAsync(Guid mediaId);
+    Task LogMediaDeleteAsync(Guid mediaId, IDbTransaction? transaction = null);
     Task LogConceptTagRenameAsync(string oldName, string newName);
     Task LogConceptTagMergeAsync(string source, string target);
     Task LogConceptTagDeleteAsync(string name);

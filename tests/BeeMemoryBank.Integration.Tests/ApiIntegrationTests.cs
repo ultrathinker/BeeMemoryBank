@@ -284,6 +284,38 @@ public class ApiIntegrationTests : IAsyncLifetime
         await LockSessionAsync();
     }
 
+    // Same takeover through the other door: a Markdown reference in the body links unlinked media
+    // too (Codex review, round 3).
+    [Fact]
+    public async Task ArticleBody_CannotLinkAnotherUsersUnlinkedImage()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        using var alice = await RegularUserClientAsync("alice-img");
+        using var mallory = await RegularUserClientAsync("mallory-img");
+
+        var alicesImage = await UploadUnlinkedAsync(alice, "alice.png", attachment: false);
+        var body = $"![stolen](/api/media/{alicesImage})";
+
+        var mine = await (await mallory.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Mallory body", treePath = "/Tests", content = body
+        })).Content.ReadFromJsonAsync<ArticleResponse>();
+        var list = await (await _client.GetAsync($"/api/articles/{mine!.Id}/media")).Content.ReadFromJsonAsync<JsonElement>();
+        list.GetArrayLength().Should().Be(0, "the image was uploaded by alice, not mallory");
+        (await mallory.GetAsync($"/api/media/{alicesImage}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        // The uploader's own reference still links as before.
+        var hers = await (await alice.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Alice body", treePath = "/Tests", content = body
+        })).Content.ReadFromJsonAsync<ArticleResponse>();
+        var herList = await (await alice.GetAsync($"/api/articles/{hers!.Id}/media")).Content.ReadFromJsonAsync<JsonElement>();
+        herList.GetArrayLength().Should().Be(1);
+        (await alice.GetAsync($"/api/media/{alicesImage}")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await LockSessionAsync();
+    }
+
     // The ACL hides unlinked rows from a non-superadmin, so before the uploader check a regular
     // user could neither preview nor remove a file they had just added to a not-yet-saved article.
     [Fact]

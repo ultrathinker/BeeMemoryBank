@@ -6,6 +6,14 @@ public interface ICallerScope
 {
     bool IsSuperadmin { get; }
 
+    /// <summary>
+    /// The caller's key for media that isn't linked to an article yet (tbl_media.uploaded_by):
+    /// recorded when such media is uploaded, and required to match when a non-superadmin links it
+    /// to an article — by attachment id or by a Markdown reference in the body. Null for system
+    /// work and for callers with no identity (who then can't link unlinked media at all).
+    /// </summary>
+    string? MediaOwnerKey => null;
+
     bool IsAccessDenied(string? treePath);
 
     // True when path is accessible for read but read-only for write — i.e. the

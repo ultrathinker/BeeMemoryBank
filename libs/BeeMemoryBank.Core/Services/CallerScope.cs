@@ -81,6 +81,9 @@ public sealed class HttpCallerScope : ICallerScope
 
     public bool IsSuperadmin { get; }
 
+    /// <inheritdoc />
+    public string? MediaOwnerKey { get; init; }
+
     // Back-compat overload — read-only paths default to empty.
     public HttpCallerScope(bool isSuperadmin, HashSet<string> denyPaths, HashSet<string> allowPaths)
         : this(isSuperadmin, denyPaths, allowPaths, new HashSet<string>(StringComparer.OrdinalIgnoreCase))

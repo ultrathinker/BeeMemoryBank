@@ -39,7 +39,8 @@ public interface IMediaRepository
 
     /// <summary>
     /// Soft-deletes <paramref name="id"/> only if it is still active, unlinked and uploaded by
-    /// <paramref name="uploadedBy"/> — checked and written in one statement. True if a row changed.
+    /// <paramref name="uploadedBy"/> — checked and written in one statement, inside the caller's
+    /// transaction so the media-delete event can commit with it. True if a row changed.
     /// </summary>
-    Task<bool> SoftDeleteOwnedOrphanAsync(Guid id, string uploadedBy);
+    Task<bool> SoftDeleteOwnedOrphanAsync(Guid id, string uploadedBy, IDbTransaction transaction);
 }

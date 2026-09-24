@@ -223,10 +223,28 @@ public class MediaService(
     /// </summary>
     public async Task<bool> DeleteOwnedOrphanAsync(Guid id, string uploadedBy)
     {
-        if (!await mediaRepo.SoftDeleteOwnedOrphanAsync(id, uploadedBy))
-            return false;
-        await eventLogger.LogMediaDeleteAsync(id);
-        return true;
+        // Row change and media-delete event commit together (same shape as CreateAsync): a failed
+        // event append must not leave the row deleted here while peers keep it.
+        bool changed;
+        using (var conn = connFactory.CreateConnection())
+        using (var tx = conn.BeginTransaction())
+        {
+            try
+            {
+                changed = await mediaRepo.SoftDeleteOwnedOrphanAsync(id, uploadedBy, tx);
+                if (changed)
+                    await eventLogger.LogMediaDeleteAsync(id, tx);
+                tx.Commit();
+            }
+            catch
+            {
+                try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back */ }
+                throw;
+            }
+        }
+        if (changed)
+            eventLogger.SignalSync();
+        return changed;
     }
 
     private async Task<(byte[] data, string contentType, string fileName)?> ReadContentAsync(Media media)
