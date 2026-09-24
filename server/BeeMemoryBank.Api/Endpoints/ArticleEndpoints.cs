@@ -6,6 +6,7 @@ using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Hosting.AspNetCore;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -199,9 +200,11 @@ public static class ArticleEndpoints
                 // Body FIRST: UpdateProtectedContentAsync verifies the passphrase before writing, so a
                 // wrong passphrase aborts with nothing committed. Only then apply title/path — otherwise
                 // a bad passphrase would still have persisted the metadata change (non-atomic edit).
+                if (ThrottlePassphraseAttempt(ctx, id) is { } throttled) return throttled;
                 try
                 {
                     await svc.UpdateProtectedContentAsync(id, req.Content, passphrase);
+                    PassphraseAttemptSucceeded(ctx, id);
                 }
                 catch (CryptographicException)
                 {
@@ -301,9 +304,11 @@ public static class ArticleEndpoints
         {
             var (_, error) = await WriteGateAsync(id, ctx, svc, session, folderAccess);
             if (error != null) return error;
+            if (ThrottlePassphraseAttempt(ctx, id) is { } throttled) return throttled;
             try
             {
                 await svc.UnprotectAsync(id, req.Passphrase);
+                PassphraseAttemptSucceeded(ctx, id);
                 unlockCache.Forget(CallerKey(ctx), id); // no longer protected
                 return Results.Ok(new { protected_ = false });
             }
@@ -323,9 +328,11 @@ public static class ArticleEndpoints
             if (error != null) return error;
             if (string.IsNullOrEmpty(req.NewPassphrase) || req.NewPassphrase.Length < 4)
                 return Results.Json(new ErrorResponse("New passphrase must be at least 4 characters."), statusCode: 400);
+            if (ThrottlePassphraseAttempt(ctx, id) is { } throttled) return throttled;
             try
             {
                 await svc.ChangePassphraseAsync(id, req.OldPassphrase, req.NewPassphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
+                PassphraseAttemptSucceeded(ctx, id);
                 unlockCache.Remember(CallerKey(ctx), id, req.NewPassphrase); // cache the new passphrase
                 return Results.Ok(new { changed = true });
             }
@@ -358,9 +365,11 @@ public static class ArticleEndpoints
                     return Results.Json(new ErrorResponse("You don't have permission to read this article."), statusCode: 403);
             }
 
+            if (ThrottlePassphraseAttempt(ctx, id) is { } throttled) return throttled;
             try
             {
                 var content = await svc.UnlockContentAsync(id, req.Passphrase);
+                PassphraseAttemptSucceeded(ctx, id);
                 // Remember the verified passphrase server-side (see ProtectedUnlockCache.Ttl) so the
                 // View and Edit pages can both open without re-prompting. Never returned to the browser.
                 // No caller key (browser request without a Web session) → nothing is cached, and the
@@ -439,6 +448,28 @@ public static class ArticleEndpoints
     // Without it, the same user signed in on a second device or browser would see the article open
     // there too. A non-agent request that lacks the header gets no key at all — the cache is then
     // bypassed and the user is re-prompted, rather than falling back to a user-wide entry.
+    // Every passphrase check runs a full Argon2id derivation before the GCM tag can say "wrong", so
+    // unthrottled guessing is both a brute-force channel against the passphrase and a CPU/memory
+    // drain on the node. Budget: failed attempts per caller identity per article; a success clears
+    // it, so ordinary repeated saves of a protected article never add up. Keyed on the user/agent,
+    // not the web session, so signing in again does not reset the budget.
+    private static readonly SlidingWindowRateLimiter PassphraseAttempts = new(10, TimeSpan.FromMinutes(5));
+
+    private static string PassphraseAttemptKey(HttpContext ctx, Guid id)
+    {
+        var (userId, agentId, _) = CallerIdentity.Extract(ctx);
+        return $"u{userId}:a{agentId}:{id:N}";
+    }
+
+    private static IResult? ThrottlePassphraseAttempt(HttpContext ctx, Guid id) =>
+        PassphraseAttempts.TryAcquire(PassphraseAttemptKey(ctx, id))
+            ? null
+            : Results.Json(new ErrorResponse("Too many passphrase attempts for this article. Try again in a few minutes."),
+                statusCode: StatusCodes.Status429TooManyRequests);
+
+    private static void PassphraseAttemptSucceeded(HttpContext ctx, Guid id) =>
+        PassphraseAttempts.Reset(PassphraseAttemptKey(ctx, id));
+
     private static string? CallerKey(HttpContext ctx)
     {
         var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);

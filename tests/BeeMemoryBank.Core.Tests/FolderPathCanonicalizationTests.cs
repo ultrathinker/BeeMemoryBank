@@ -59,18 +59,30 @@ public class FolderPathCanonicalizationTests : TestFixture
     /// caller move a folder into its own descendant, which the SQL then rewrote as a cycle.
     /// </summary>
     [Fact]
-    public async Task MoveAsync_SelfNestingGuard_IsCaseInsensitive()
+    public async Task MoveAsync_IntoCaseVariantFolder_IsNotSelfNesting()
+    {
+        // "/WORK" is a different folder from "/Work" (paths are case-sensitive), so moving "/Work"
+        // under "/WORK/Sub" is an ordinary move -- and the subtree rewrite must touch only "/Work/...".
+        var work = await FolderService.CreateAsync("/Work");
+        await FolderService.CreateAsync("/Work/Sub");
+        await FolderService.CreateAsync("/WORK/Sub");
+
+        await FolderService.MoveAsync(work.Id, "/WORK/Sub");
+
+        (await FolderRepo.GetByIdAsync(work.Id))!.Path.Should().Be("/WORK/Sub/Work");
+        (await FolderRepo.GetByPathAsync("/WORK/Sub/Work/Sub")).Should().NotBeNull();
+        (await FolderRepo.GetByPathAsync("/WORK/Sub")).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task MoveAsync_SelfNestingGuard_RejectsOwnDescendant()
     {
         var work = await FolderService.CreateAsync("/Work");
         await FolderService.CreateAsync("/Work/Sub");
 
-        var act = async () => await FolderService.MoveAsync(work.Id, "/WORK/Sub");
+        var act = async () => await FolderService.MoveAsync(work.Id, "/Work/Sub");
         await act.Should().ThrowAsync<ArgumentException>().WithMessage("*into itself*");
-
-        // The tree must be exactly as it was -- no corruption from a partially-applied move.
-        var reloadedWork = await FolderRepo.GetByIdAsync(work.Id);
-        reloadedWork!.Path.Should().Be("/Work");
-        (await FolderRepo.GetByPathAsync("/Work/Sub")).Should().NotBeNull();
+        (await FolderRepo.GetByIdAsync(work.Id))!.Path.Should().Be("/Work");
     }
 
     [Fact]

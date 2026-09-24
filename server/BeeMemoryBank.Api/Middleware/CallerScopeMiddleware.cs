@@ -34,8 +34,8 @@ public class CallerScopeMiddleware
             // FolderAccessService.GetAccessInfoAsync(null, …) returns empty allow/deny sets,
             // and IsAccessDenied with both empty defaults to "not denied" → full vault access.
             // Fail closed: deny everything. Operator must reassign ownership or recreate the agent.
-            var denyAll = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "/" };
-            holder.Scope = new HttpCallerScope(false, denyAll, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            var denyAll = new HashSet<string>(StringComparer.Ordinal) { "/" };
+            holder.Scope = new HttpCallerScope(false, denyAll, new HashSet<string>(StringComparer.Ordinal));
         }
         else
         {
@@ -45,8 +45,8 @@ public class CallerScopeMiddleware
             // and MCP tools (which don't individually invoke InternalKeyValidator) would
             // return data to anonymous callers. Use "/" as a deny prefix so every path is
             // blocked via MatchesAnyPrefix.
-            var denyAll = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "/" };
-            holder.Scope = new HttpCallerScope(false, denyAll, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            var denyAll = new HashSet<string>(StringComparer.Ordinal) { "/" };
+            holder.Scope = new HttpCallerScope(false, denyAll, new HashSet<string>(StringComparer.Ordinal));
         }
 
         await _next(ctx);

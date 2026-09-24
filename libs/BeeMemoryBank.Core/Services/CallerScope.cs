@@ -86,7 +86,7 @@ public sealed class HttpCallerScope : ICallerScope
 
     // Back-compat overload — read-only paths default to empty.
     public HttpCallerScope(bool isSuperadmin, HashSet<string> denyPaths, HashSet<string> allowPaths)
-        : this(isSuperadmin, denyPaths, allowPaths, new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+        : this(isSuperadmin, denyPaths, allowPaths, new HashSet<string>(StringComparer.Ordinal))
     {
     }
 
@@ -102,7 +102,7 @@ public sealed class HttpCallerScope : ICallerScope
         _readOnlyPaths = readOnlyPaths;
         _ancestors = allowPaths.Count > 0
             ? FolderAccessService.ComputeAncestors(allowPaths)
-            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            : new HashSet<string>(StringComparer.Ordinal);
         _readScopeFingerprint = ComputeReadScopeFingerprint(isSuperadmin, denyPaths, allowPaths);
     }
 
@@ -161,17 +161,15 @@ public sealed class HttpCallerScope : ICallerScope
 
     private static void AppendSorted(StringBuilder sb, string prefix, HashSet<string> paths)
     {
-        // Order + content are both canonicalized case-insensitively: ACL access decisions compare
-        // paths with OrdinalIgnoreCase, so two paths that differ only in case are the SAME rule and
-        // must hash identically. Lowercasing is a safe canonical form here — if ToLowerInvariant(a)
-        // == ToLowerInvariant(b) then a.Equals(b, OrdinalIgnoreCase), so this can never merge two
-        // paths the access engine keeps distinct (no leak risk), it only collapses case variants
-        // that the engine already treats as identical.
-        var ordered = paths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase);
+        // Paths are hashed exactly as the access engine compares them: ordinal, case-sensitive.
+        // Folding case here would let two scopes that differ only in the case of a path ("/Work" vs
+        // "/work" are different folders) share a search-cache entry, i.e. see each other's results.
+        // Ordinal ordering keeps the digest independent of HashSet enumeration order.
+        var ordered = paths.OrderBy(p => p, StringComparer.Ordinal);
         foreach (var path in ordered)
         {
             sb.Append(prefix);
-            sb.Append(path.ToLowerInvariant());
+            sb.Append(path);
             sb.Append(';');
         }
     }

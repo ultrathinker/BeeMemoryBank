@@ -11,7 +11,7 @@ namespace BeeMemoryBank.Core.Tests;
 public class CallerScopeFingerprintTests
 {
     private static HashSet<string> Set(params string[] paths)
-        => new(paths, StringComparer.OrdinalIgnoreCase);
+        => new(paths, StringComparer.Ordinal);
 
     [Fact]
     public void SystemCallerScope_HasConstantSysFingerprint()
@@ -35,14 +35,28 @@ public class CallerScopeFingerprintTests
     }
 
     [Fact]
-    public void EquivalentAclSets_ProduceSameFingerprint_RegardlessOfOrderOrCase()
+    public void EquivalentAclSets_ProduceSameFingerprint_RegardlessOfOrder()
     {
         var a = new HttpCallerScope(false, denyPaths: Set("/Work/Secret"), allowPaths: Set("/Public", "/Work"));
-        // Same paths, different insertion order and different element case — same effective read ACL.
-        var b = new HttpCallerScope(false, denyPaths: Set("/work/SECRET"), allowPaths: Set("/WORK", "/public"));
+        // Same paths, different insertion order — same effective read ACL.
+        var b = new HttpCallerScope(false, denyPaths: Set("/Work/Secret"), allowPaths: Set("/Work", "/Public"));
 
         a.ReadScopeFingerprint.Should().Be(b.ReadScopeFingerprint,
-            "two scopes whose deny+allow sets cover the same paths (modulo order and case) must collapse to one key");
+            "two scopes whose deny+allow sets hold the same paths must collapse to one key");
+    }
+
+    [Fact]
+    public void CaseVariantPaths_ProduceDifferentFingerprints()
+    {
+        // "/Work" and "/work" are different folders (tbl_folder.path is case-sensitive), so scopes
+        // allowing one or the other see different rows and must never share a cache entry.
+        var upper = new HttpCallerScope(false, denyPaths: Set(), allowPaths: Set("/Work"));
+        var lower = new HttpCallerScope(false, denyPaths: Set(), allowPaths: Set("/work"));
+        var cyrUpper = new HttpCallerScope(false, denyPaths: Set(), allowPaths: Set("/\u041F\u0440\u043E\u0435\u043A\u0442\u044B"));
+        var cyrLower = new HttpCallerScope(false, denyPaths: Set(), allowPaths: Set("/\u043F\u0440\u043E\u0435\u043A\u0442\u044B"));
+
+        upper.ReadScopeFingerprint.Should().NotBe(lower.ReadScopeFingerprint);
+        cyrUpper.ReadScopeFingerprint.Should().NotBe(cyrLower.ReadScopeFingerprint);
     }
 
     [Fact]

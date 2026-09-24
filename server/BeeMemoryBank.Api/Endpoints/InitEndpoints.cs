@@ -176,12 +176,27 @@ public static class InitEndpoints
                 var remoteIv = Convert.FromBase64String(slot.IvB64);
                 var remoteSalt = Convert.FromBase64String(slot.SaltB64);
 
+                // The peer chose these numbers; a hostile or broken one must not make this node
+                // allocate gigabytes before the fake wrapped DEK can even be rejected.
+                try
+                {
+                    KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+                }
+                catch (System.Security.Cryptography.CryptographicException ex)
+                {
+                    return Results.Json(new ErrorResponse($"Cannot join: the remote node sent an invalid key slot. {ex.Message}"), statusCode: 400);
+                }
+
                 byte[] masterDek;
                 try
                 {
                     var remoteKek = KeyDerivation.DeriveKek(req.Password, remoteSalt,
                         slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
                     masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, remoteIv, remoteKek);
+                }
+                catch (KdfBusyException)
+                {
+                    throw; // "busy, retry" (503), not "wrong password"
                 }
                 catch
                 {

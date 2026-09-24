@@ -55,7 +55,7 @@ public sealed partial class ChatToolDispatcher
         foreach (var a in articles) allPaths.Add(a.TreePath);
 
         var filteredPaths = path != null
-            ? allPaths.Where(p => p == path || p.StartsWith(path.TrimEnd('/') + "/"))
+            ? allPaths.Where(p => p == path || p.StartsWith(path.TrimEnd('/') + "/", StringComparison.Ordinal))
             : allPaths;
 
         var byPath = filteredPaths.OrderBy(p => p).Select(p =>

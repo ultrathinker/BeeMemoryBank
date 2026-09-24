@@ -93,10 +93,11 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         var subtreeClause = "";
         if (!string.IsNullOrEmpty(pathPrefix) && pathPrefix != "/")
         {
-            subtreeClause = "AND (f.path = @pathPrefix OR f.path LIKE @pathPrefixLike ESCAPE '\\') ";
-            var escapedPrefix = pathPrefix.TrimEnd('/').Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "/%";
+            subtreeClause = $"AND (f.path = @pathPrefix OR {TreePathSql.DescendantPredicate("f.path", "pathPrefixLo", "pathPrefixHi")}) ";
+            var (lo, hi) = TreePathSql.DescendantRange(pathPrefix);
             parameters.Add("pathPrefix", pathPrefix);
-            parameters.Add("pathPrefixLike", escapedPrefix);
+            parameters.Add("pathPrefixLo", lo);
+            parameters.Add("pathPrefixHi", hi);
         }
 
         var sql = $"SELECT {SelectCols} FROM tbl_folder f WHERE f.status = 'A' {subtreeClause}{aclClause}ORDER BY f.path";
@@ -286,10 +287,10 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         }
 
         var now = deletedAt.ToString("o");
-        var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
+        var (lo, hi) = TreePathSql.DescendantRange(pathPrefix);
         var affected = await conn.ExecuteAsync(
-            "UPDATE tbl_folder SET status = 'D', deleted_at = @now, updated_at = @now, cascade_delete_op_id = @cascadeOpId WHERE path LIKE @prefix ESCAPE '\\' AND status = 'A'",
-            new { prefix, now, cascadeOpId }, tx);
+            $"UPDATE tbl_folder SET status = 'D', deleted_at = @now, updated_at = @now, cascade_delete_op_id = @cascadeOpId WHERE {TreePathSql.DescendantPredicate("path", "lo", "hi")} AND status = 'A'",
+            new { lo, hi, now, cascadeOpId }, tx);
 
         tx.Commit();
         return affected;
@@ -324,10 +325,10 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
 
     private async Task ThrowIfAnyDescendantWriteDeniedCoreAsync(string pathPrefix, System.Data.IDbConnection conn, System.Data.IDbTransaction? transaction)
     {
-        var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
+        var (lo, hi) = TreePathSql.DescendantRange(pathPrefix);
         var descendantPaths = await conn.QueryAsync<string>(
-            "SELECT path FROM tbl_folder WHERE path LIKE @prefix ESCAPE '\\' AND status = 'A'",
-            new { prefix }, transaction: transaction);
+            $"SELECT path FROM tbl_folder WHERE {TreePathSql.DescendantPredicate("path", "lo", "hi")} AND status = 'A'",
+            new { lo, hi }, transaction: transaction);
 
         foreach (var path in descendantPaths)
         {
@@ -342,14 +343,14 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     public async Task<List<Folder>> ListSoftDeletedByCascadeOpIdAsync(Guid cascadeOpId, string pathPrefix)
     {
         using var conn = OpenConnection();
-        var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
+        var (lo, hi) = TreePathSql.DescendantRange(pathPrefix);
         var folders = (await conn.QueryAsync<Folder>(
             $@"SELECT {SelectCols} FROM tbl_folder f
                WHERE f.cascade_delete_op_id = @cascadeOpId
                  AND f.status = 'D'
-                 AND f.path LIKE @prefix ESCAPE '\'
+                 AND {TreePathSql.DescendantPredicate("f.path", "lo", "hi")}
                ORDER BY length(f.path) ASC",
-            new { cascadeOpId, prefix })).ToList();
+            new { cascadeOpId, lo, hi })).ToList();
         return folders;
     }
 
@@ -367,8 +368,7 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         var updatedAtStr = updatedAt.ToString("o");
         var newName = GetLastSegment(newPath);
         var newParentPath = GetParentPath(newPath);
-        var oldPathPrefix = oldPath.TrimEnd('/') + "/";
-        var oldPathLikePrefix = EscapeLike(oldPathPrefix) + "%";
+        var (oldLo, oldHi) = TreePathSql.DescendantRange(oldPath);
 
         using var tx = conn.BeginTransaction();
         try
@@ -391,16 +391,15 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
                       updated_at = @updatedAtStr,
                       lamport_ts = @lamportTs,
                       source_node_id = @sourceNodeId
-                  WHERE path LIKE @oldPathLikePrefix ESCAPE '\'",
-                new { newPath, oldPath, oldPathLikePrefix, updatedAtStr, lamportTs, sourceNodeId },
+                  WHERE path >= @oldLo AND path < @oldHi",
+                new { newPath, oldPath, oldLo, oldHi, updatedAtStr, lamportTs, sourceNodeId },
                 tx);
 
-            var escapedOldPathExact = EscapeLike(oldPath);
             await conn.ExecuteAsync(
                 @"UPDATE tbl_article
                   SET tree_path = @newPath || SUBSTR(tree_path, LENGTH(@oldPath) + 1)
-                  WHERE tree_path = @oldPath OR tree_path LIKE @escapedOldPathExact || '/' || '%' ESCAPE '\'",
-                new { newPath, oldPath, escapedOldPathExact },
+                  WHERE tree_path = @oldPath OR (tree_path >= @oldLo AND tree_path < @oldHi)",
+                new { newPath, oldPath, oldLo, oldHi },
                 tx);
 
             tx.Commit();
@@ -501,10 +500,10 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
     public async Task<List<Guid>> ListIdsByPathPrefixAsync(string pathPrefix)
     {
         using var conn = OpenConnection();
-        var prefix = EscapeLike(pathPrefix.TrimEnd('/') + "/") + "%";
+        var (lo, hi) = TreePathSql.DescendantRange(pathPrefix);
         var ids = await conn.QueryAsync<Guid>(
-            "SELECT id FROM tbl_folder WHERE path LIKE @prefix ESCAPE '\\' AND status = 'A'",
-            new { prefix });
+            $"SELECT id FROM tbl_folder WHERE {TreePathSql.DescendantPredicate("path", "lo", "hi")} AND status = 'A'",
+            new { lo, hi });
         return ids.ToList();
     }
 
@@ -563,10 +562,5 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         var trimmed = path.TrimEnd('/');
         var idx = trimmed.LastIndexOf('/');
         return idx < 0 ? trimmed.TrimStart('/') : trimmed[(idx + 1)..];
-    }
-
-    private static string EscapeLike(string s)
-    {
-        return s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 }

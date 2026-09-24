@@ -191,13 +191,9 @@ public class FolderService(
                 $"Cannot move to reserved system path '{newPath}'.");
 
         if (newPath == oldPath) return;
-        // M7: OrdinalIgnoreCase to agree with RenamePathAsync's descendant rewrite, which matches
-        // via SQLite's default case-insensitive LIKE. A culture-sensitive/case-sensitive StartsWith
-        // here let a caller move a folder into a differently-cased alias of its own descendant
-        // (e.g. oldPath "/Work" into newParentPath "/WORK/Sub") straight past this guard — the SQL
-        // below would then match and rewrite "/Work"'s own row as a descendant of itself, corrupting
-        // the tree, precisely the self-nesting this check exists to prevent.
-        if (newPath.StartsWith(oldPath + "/", StringComparison.OrdinalIgnoreCase))
+        // Ordinal, like RenamePathAsync's descendant rewrite (TreePathSql): paths are case-sensitive,
+        // so only a true descendant of oldPath would make the rewrite nest the folder into itself.
+        if (newPath.StartsWith(oldPath + "/", StringComparison.Ordinal))
             throw new ArgumentException("Cannot move a folder into itself.");
 
         var existing = await folderRepo.GetByPathAsync(newPath);
@@ -344,7 +340,7 @@ public class FolderService(
         var prefix = path.TrimEnd('/') + "/";
         var blocker = all.FirstOrDefault(f =>
             f.RemoteSubscriptionId.HasValue
-            && f.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            && f.Path.StartsWith(prefix, StringComparison.Ordinal));
         if (blocker != null)
         {
             throw new InvalidOperationException(

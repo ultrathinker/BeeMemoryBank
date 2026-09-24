@@ -12,14 +12,14 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
         // Determine which system-folder roots are empty (no descendants and no
         // direct articles) — they get hidden from the tree to keep the UI quiet
         // until the first time backend code writes into them.
-        var hiddenSystemPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hiddenSystemPaths = new HashSet<string>(StringComparer.Ordinal);
         if (!includeEmptySystemFolders)
         {
             var systemRoots = folders.Where(f => f.IsSystem).Select(f => f.Path).ToList();
             foreach (var root in systemRoots)
             {
                 var prefix = root.TrimEnd('/') + "/";
-                var hasSubfolder = folders.Any(f => f.Path != root && f.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+                var hasSubfolder = folders.Any(f => f.Path != root && f.Path.StartsWith(prefix, StringComparison.Ordinal));
                 if (hasSubfolder) continue;
 
                 // Ask the DB "is there any (visible) article at or under this root?" instead of
@@ -214,7 +214,7 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
                 // Hide empty system folders (no articles and no sub-folders).
                 var prefix = f.Path.TrimEnd('/') + "/";
                 var hasSub = allFoldersForHide.Any(cf => cf.Path != f.Path
-                    && cf.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+                    && cf.Path.StartsWith(prefix, StringComparison.Ordinal));
                 if (articleCount == 0 && !hasSub) continue;
             }
 
