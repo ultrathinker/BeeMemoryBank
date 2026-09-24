@@ -205,6 +205,10 @@
         var handlers = { 'form-add-role': submitAddRole, 'form-edit-role': submitEditRole };
         var form = document.getElementById(fid);
         if (!form) return;
+        form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            handlers[fid]();
+        });
         form.addEventListener('keydown', function (e) {
             if (e.key === 'Enter' && e.target.tagName && e.target.tagName.toLowerCase() !== 'textarea') {
                 e.preventDefault();

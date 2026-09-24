@@ -269,11 +269,15 @@
         });
     });
 
-    // Enter key submits the active dialog
+    // Form submit or Enter key submits the active dialog
     ['form-add-user', 'form-change-password', 'form-edit-user'].forEach(function(fid) {
         var handlers = { 'form-add-user': submitAddUser, 'form-change-password': submitChangePassword, 'form-edit-user': submitEditUser };
         var form = document.getElementById(fid);
         if (form) {
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                handlers[fid]();
+            });
             form.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter' && e.target.tagName && e.target.tagName.toLowerCase() !== 'textarea') {
                     e.preventDefault();

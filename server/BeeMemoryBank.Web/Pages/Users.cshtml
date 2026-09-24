@@ -116,7 +116,7 @@
             This user's password is local to this node only. To allow this user to log in on other nodes,
             add them on each node separately.
         </sl-alert>
-        <form id="form-add-user" onsubmit="return false;">
+        <form id="form-add-user">
             <div style="margin-bottom:16px;">
                 <sl-input id="add-username" name="username" label="Username" required autocomplete="off"></sl-input>
             </div>
@@ -144,7 +144,7 @@
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             <span class="msg"></span>
         </sl-alert>
-        <form id="form-change-password" onsubmit="return false;">
+        <form id="form-change-password">
             <input type="hidden" id="cp-user-id" name="id" />
             <p id="cp-user-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
             <div style="margin-bottom:16px;">
@@ -161,7 +161,7 @@
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             <span class="msg"></span>
         </sl-alert>
-        <form id="form-edit-user" onsubmit="return false;">
+        <form id="form-edit-user">
             <input type="hidden" id="edit-user-id" name="id" />
             <div style="margin-bottom:16px;">
                 <sl-input id="edit-display-name" name="displayName" label="Display Name" required></sl-input>
