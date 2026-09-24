@@ -6,11 +6,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\server\BeeMemoryBank.Api\BeeMemoryBank.Api.csproj" />
-    <!-- The real Web→API identity pipeline (InternalKeyHandler) lives in the Web project; the
-         non-ASCII display-name test drives it over a real socket, so it references Web directly.
-         Aliased because both hosts expose a public Program class for WebApplicationFactory<T>;
-         the unaliased Program must stay the API's. -->
-    <ProjectReference Include="..\..\server\BeeMemoryBank.Web\BeeMemoryBank.Web.csproj" Aliases="WebProject" />
+    <!-- Aliased: Api and Web both declare a global-namespace `Program`, which would make
+         WebApplicationFactory<Program> ambiguous; the unaliased Program stays the API's. Web types are
+         reached via `extern alias WebApp;` / `extern alias WebProject;` in the files that need them
+         (BmbWebHostFactory, and the real-socket Web->API identity test for non-ASCII display names). -->
+    <ProjectReference Include="..\..\server\BeeMemoryBank.Web\BeeMemoryBank.Web.csproj" Aliases="WebApp,WebProject" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />

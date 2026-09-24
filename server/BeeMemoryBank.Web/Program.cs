@@ -391,8 +391,10 @@ app.Run();
 
 public partial class Program { }
 
-internal record AddCommentProxyRequest(Guid ArticleId, string Text);
-internal record CreateAgentProxyRequest(string Name, string? Description);
+// Request DTOs for the hand-written proxy routes that survived the catch-all migration
+// (ArticleProxyEndpoints / SnapshotProxyEndpoints). The routes that became ProxyRouteTable
+// entries needed no DTO — the forwarder streams request bodies through unparsed.
+// DisposingStreamWrapper is still used by the snapshot download in Admin.cshtml.cs.
 
 internal record UpdateArticleProxyRequest(
     string? Title,
@@ -404,31 +406,11 @@ internal record ProtectArticleProxyRequest(string Passphrase, string? Hint = nul
 internal record UnlockArticleProxyRequest(string Passphrase);
 internal record ChangePassphraseProxyRequest(string OldPassphrase, string NewPassphrase, string? Hint = null);
 
-internal record CreateFolderProxyRequest(string Path);
-internal record RenameFolderProxyRequest(string NewPath);
-internal record MoveArticleProxyRequest(string NewPath);
-internal record MoveFolderProxyRequest(string NewParentPath);
-internal record CreateUserProxyRequest(string Username, string DisplayName, string Password, string Role, bool ChatAccess = true);
-internal record UpdateUserProxyRequest(string DisplayName, string? Role, bool? ChatAccess = null);
-internal record ChangeUserPasswordProxyRequest(string NewPassword);
-internal record ChangeOwnPasswordProxyRequest(string OldPassword, string NewPassword);
-internal record AddAclEntryProxyRequest(Guid FolderId, string Effect, bool IsReadOnly = false);
-
-internal record UpdateAclReadOnlyProxyRequest(bool IsReadOnly);
-
 internal record CopyArticleProxyRequest(string TargetFolderPath);
 
 internal record CopyFolderProxyRequest(string TargetParentPath);
 
-internal record CreateRemoteAccountProxyRequest(string DisplayName, string BaseUrl, string Username, string Password);
-
-internal record AddRemoteSubscriptionProxyRequest(Guid RemoteAccountId, Guid RemoteFolderId, string RemoteFolderPath, string MountPath);
-internal record RenameTagDto(string NewName);
-internal record MergeConceptTagDto(string Source, string Target);
 internal record SetConceptTagsDto(List<string>? ConceptTags);
-internal record PreviewFolderRequest(string Path);
-internal record HardDeleteFolderRequest(string Path);
-internal record ResetProxyRequest(string MasterPassword);
 
 internal sealed class DisposingStreamWrapper(Stream inner, IDisposable owner) : Stream
 {

@@ -1,7 +1,7 @@
-using System.Text;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
+using Microsoft.AspNetCore.Http.Features;
 
 namespace BeeMemoryBank.Web.Endpoints;
 
@@ -29,63 +29,8 @@ public static class MiscProxyEndpoints
             return Results.Ok(result);
         }).RequireAuthorization(policy => policy.RequireRole(UserRoles.Superadmin));
 
-        // Remote Accounts proxy ────────────────────────────────────────────────
-        app.MapGet("/api-proxy/remote-accounts", async (ApiClient api) =>
-        {
-            var list = await api.ListRemoteAccountsAsync();
-            return list != null ? Results.Ok(list) : Results.StatusCode(502);
-        }).RequireAuthorization();
-
-        app.MapPost("/api-proxy/remote-accounts", async (HttpContext ctx, ApiClient api) =>
-        {
-            var req = await ctx.Request.ReadFromJsonAsync<CreateRemoteAccountProxyRequest>();
-            if (req == null || string.IsNullOrWhiteSpace(req.BaseUrl) || string.IsNullOrWhiteSpace(req.Username))
-                return Results.BadRequest(new { error = "displayName, baseUrl, username, password required" });
-            var (ok, status, body, error) = await api.CreateRemoteAccountAsync(req.DisplayName, req.BaseUrl, req.Username, req.Password);
-            if (ok) return Results.Ok(body);
-            return Results.Json(new { error = error ?? "Failed" }, statusCode: status);
-        }).RequireAuthorization();
-
-        app.MapDelete("/api-proxy/remote-accounts/{id:guid}", async (Guid id, ApiClient api) =>
-        {
-            await api.DeleteRemoteAccountAsync(id);
-            return Results.NoContent();
-        }).RequireAuthorization();
-
-        app.MapGet("/api-proxy/remote-accounts/{id:guid}/accessible", async (Guid id, ApiClient api) =>
-        {
-            var (ok, status, body, error) = await api.ListAccessibleRemoteFoldersAsync(id);
-            if (ok) return Results.Ok(body);
-            return Results.Json(new { error = error ?? "Failed" }, statusCode: status);
-        }).RequireAuthorization();
-
-        app.MapGet("/api-proxy/remote-accounts/{id:guid}/subscriptions", async (Guid id, ApiClient api) =>
-        {
-            var list = await api.ListRemoteSubscriptionsAsync(id);
-            return list != null ? Results.Ok(list) : Results.StatusCode(502);
-        }).RequireAuthorization();
-
-        app.MapPost("/api-proxy/remote-accounts/subscriptions", async (HttpContext ctx, ApiClient api) =>
-        {
-            var req = await ctx.Request.ReadFromJsonAsync<AddRemoteSubscriptionProxyRequest>();
-            if (req == null || string.IsNullOrWhiteSpace(req.MountPath))
-                return Results.BadRequest(new { error = "mountPath required" });
-            var (ok, status, body, error) = await api.AddRemoteSubscriptionAsync(req.RemoteAccountId, req.RemoteFolderId, req.RemoteFolderPath, req.MountPath);
-            if (ok) return Results.Ok(body);
-            return Results.Json(new { error = error ?? "Failed" }, statusCode: status);
-        }).RequireAuthorization();
-
-        app.MapDelete("/api-proxy/remote-accounts/subscriptions/{id:guid}", async (Guid id, ApiClient api) =>
-        {
-            await api.DeleteRemoteSubscriptionAsync(id);
-            return Results.NoContent();
-        }).RequireAuthorization();
-
-        app.MapGet("/api-proxy/maintenance", async (ApiClient api) =>
-        {
-            var unlocked = await api.IsUnlockedAsync();
-            return Results.Ok(new { isUnlocked = unlocked });
-        }).RequireAuthorization();
+        // Remote accounts and /maintenance are table entries now — see ProxyRouteTable
+        // ("remote-accounts", "maintenance"); the API surface they forward to is unchanged.
 
         // Backfill Orphan Media Links proxy — disabled. Auto-link on save handles new uploads.
         // Uncomment together with the UI in Admin.cshtml and the API endpoint if ever needed.
@@ -95,36 +40,88 @@ public static class MiscProxyEndpoints
         //     return Results.Content(body ?? "", "application/json", null, status);
         // }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
 
-        // ─── W1 catch-all forwarder (registered LAST so explicit routes win) ──────────
-        // Routes /api-proxy/{**path} requests that are NOT matched by an explicit hand-written route
-        // through the deny-by-default ProxyRouteTable. Identity headers (X-Internal-Key / X-User-*) are
-        // injected automatically by InternalKeyHandler, so the forwarder only expresses ROLE gating and
-        // STREAMING. Pilot: only the concept-tags GET family is in the table. Unknown prefix → 404.
+        // ─── Catch-all forwarder (registered LAST so explicit routes win) ─────────────
+        // Serves /api-proxy/{**path} requests that no explicit hand-written route matched, using
+        // the deny-by-default ProxyRouteTable: unknown prefix → 404, prefix listed but method not
+        // → 405, listed but the caller lacks the entry's role → 403. Everything else is forwarded
+        // through ApiClient (InternalKeyHandler injects X-Internal-Key / X-User-* identity
+        // headers) as a verbatim stream pass-through: status, body, and a small allow-list of
+        // response headers. Hop-by-hop and Set-Cookie are never copied.
         app.MapMethods("/api-proxy/{**path}", new[] { "GET", "POST", "PUT", "DELETE", "PATCH" },
             async (string path, HttpContext ctx, ApiClient api) =>
         {
-            var entry = ProxyRouteTable.Match(path, out var matchedPrefix);
-            if (entry is null)
-                return Results.NotFound(); // deny-by-default: unknown prefix → 404, never a blind forward
+            // Traversal guard, BEFORE any table work (prefix match, 405, roles): a non-canonical
+            // path must be indistinguishable from a missing one (404), or the denials themselves
+            // could be used to probe which prefixes exist. The route value is URL-decoded by
+            // routing, and the HTTP stack may already have normalized literal dot segments —
+            // which is why the raw request target is checked too. See
+            // ProxyRouteTable.IsCanonicalProxyPath for the exact invariant.
+            var rawTarget = ctx.Features.Get<IHttpRequestFeature>()?.RawTarget;
+            // TestServer hands an empty string here (real Kestrel: origin-form path+query);
+            // absolute-form targets behind some proxies are reduced to their path first.
+            if (rawTarget is { Length: > 0 })
+            {
+                if (rawTarget.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    || rawTarget.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                    rawTarget = new Uri(rawTarget).PathAndQuery;
+                if (!ProxyRouteTable.IsCanonicalProxyPath(rawTarget.Split('?', 2)[0]))
+                    return Results.NotFound();
+            }
+            if (!ProxyRouteTable.IsCanonicalProxyPath(path))
+                return Results.NotFound();
 
-            // Role gate — preserves the per-path RequireAuthorization("superadmin") semantics that a
-            // single catch-all registration cannot otherwise attach per route.
-            if (entry.RequiredRole == "superadmin" && !ctx.User.IsInRole("superadmin"))
+            var (outcome, entry, rule, matchedPrefix) = ProxyRouteTable.Match(path, ctx.Request.Method);
+            switch (outcome)
+            {
+                // Deny-by-default: an unknown prefix must never become a blind forward.
+                case ProxyRouteTable.MatchOutcome.UnknownPrefix:
+                    return Results.NotFound();
+
+                case ProxyRouteTable.MatchOutcome.MethodNotAllowed:
+                    // Advertise what the entry does accept, like a real 405 should.
+                    ctx.Response.Headers.Allow = entry!.AllowHeader;
+                    return Results.StatusCode(StatusCodes.Status405MethodNotAllowed);
+            }
+
+            // Role gate — the per-route RequireRole("superadmin") semantics that a single
+            // catch-all registration cannot attach per method. The API enforces roles too; this
+            // is the same Web-layer gate the hand-written routes carried (defense in depth, and
+            // it keeps the round-trip local for the obvious case).
+            if (rule!.RequiredRole != null && !ctx.User.IsInRole(rule.RequiredRole))
                 return Results.Json(new { error = "Forbidden — superadmin only" }, statusCode: 403);
 
-            var upstreamPath = ProxyRouteTable.BuildUpstreamPath(path, matchedPrefix, entry)
-                                + ctx.Request.QueryString.Value;
-            var method = new HttpMethod(ctx.Request.Method);
-            var upstreamReq = new HttpRequestMessage(method, upstreamPath);
+            var upstreamPathAndQuery = ProxyRouteTable.BuildUpstreamPath(path, matchedPrefix!, entry!)
+                                       + ctx.Request.QueryString.Value;
 
-            // Forward a body when present (POST/PUT/PATCH). The pilot is GET-only; the general path is
-            // kept so the table can grow into mutation routes in a supervised follow-up.
+            // Backstop against anything the textual canonical check could not see: resolve the
+            // request the same way HttpClient merges a relative RequestUri against its base
+            // address, and refuse whatever no longer sits under the matched entry's upstream
+            // prefix. The verified Uri IS the sent Uri, so there is no gap in between.
+            var requestUri = new Uri(api.BaseAddress, upstreamPathAndQuery);
+            var absolutePath = requestUri.AbsolutePath;
+            if (!absolutePath.StartsWith(entry!.UpstreamPrefix + "/", StringComparison.Ordinal)
+                && !absolutePath.Equals(entry.UpstreamPrefix, StringComparison.Ordinal))
+            {
+                return Results.NotFound();
+            }
+
+            using var upstreamReq = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), requestUri);
+
+            // Stream the request body through — binary-safe, no buffering, no string round-trip.
+            // Multipart (media/import uploads) works because the raw bytes AND the Content-Type
+            // (with its boundary) are forwarded untouched.
             if (ctx.Request.ContentLength is > 0 || ctx.Request.Headers.ContainsKey("Transfer-Encoding"))
             {
                 upstreamReq.Content = new StreamContent(ctx.Request.Body);
+                // Raw copy, deliberately NOT via MediaTypeHeaderValue: the constructor rejects
+                // parameters (a multipart boundary), which would 500 every browser upload.
                 if (!string.IsNullOrEmpty(ctx.Request.ContentType))
-                    upstreamReq.Content.Headers.ContentType =
-                        new System.Net.Http.Headers.MediaTypeHeaderValue(ctx.Request.ContentType);
+                    upstreamReq.Content.Headers.TryAddWithoutValidation(
+                        "Content-Type", ctx.Request.ContentType);
+                // Preserve the declared length: Request.Body is non-seekable, so StreamContent
+                // alone would fall back to chunked encoding for no reason.
+                if (ctx.Request.ContentLength is > 0)
+                    upstreamReq.Content.Headers.ContentLength = ctx.Request.ContentLength;
             }
 
             HttpResponseMessage upstream;
@@ -132,20 +129,68 @@ public static class MiscProxyEndpoints
             {
                 upstream = await api.SendForwardAsync(upstreamReq);
             }
-            catch
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
             {
-                return Results.StatusCode(502); // API unreachable
+                return Results.Json(new { error = "Upstream API is unavailable" }, statusCode: 502);
             }
 
             using (upstream)
             {
-                // Status + content-type + body passthrough — this is the W2 fix, for free.
-                var body = await upstream.Content.ReadAsStringAsync();
-                var contentType = upstream.Content.Headers.ContentType?.MediaType ?? "application/json";
-                return Results.Content(body, contentType, Encoding.UTF8, (int)upstream.StatusCode);
+                var response = ctx.Response;
+                response.StatusCode = (int)upstream.StatusCode;
+
+                // Untrusted-user-content headers (CSP sandbox + nosniff) for entries that serve
+                // bytes a browser can open directly as a document. Must happen before the first
+                // body write, and it deliberately REPLACES the site CSP the global security
+                // middleware stamped on the response.
+                if (entry!.Flags.HasFlag(ProxyRouteFlags.UserContent))
+                    BeeMemoryBank.Hosting.AspNetCore.UserContentResponseHeaders.ApplyTo(response);
+
+                // Response headers: a small allow-list, never a blind copy. Hop-by-hop headers
+                // (Connection, Transfer-Encoding, ...) are managed by Kestrel; Set-Cookie must
+                // never cross from the API's session world into the browser. Content-Type is set
+                // below via the content stream. Content-Length is recomputed by the framework
+                // when the length is knowable; copying the upstream value is safe for byte-exact
+                // bodies and skipped for chunked ones. Content headers travel on
+                // upstream.Content.Headers (Content-Disposition, Last-Modified), the rest on
+                // upstream.Headers — both collections are filtered.
+                if (entry!.Flags.HasFlag(ProxyRouteFlags.StripContentDisposition))
+                    upstream.Content.Headers.ContentDisposition = null;
+
+                foreach (var header in upstream.Headers.Concat(upstream.Content.Headers))
+                {
+                    if (!CopyableResponseHeaders.Contains(header.Key)) continue;
+                    response.Headers[header.Key] = header.Value.ToArray();
+                }
+
+                var upstreamContent = upstream.Content;
+                if (upstreamContent.Headers.ContentLength is { } length && upstream.Headers.TransferEncoding.Count == 0)
+                    response.ContentLength = length;
+
+                response.ContentType = upstreamContent.Headers.ContentType?.ToString() ?? "application/octet-stream";
+                await upstreamContent.CopyToAsync(response.Body, ctx.RequestAborted);
             }
+
+            // The body and status were written directly above; this no-op result only satisfies
+            // the handler's return type. (Results.Empty's ExecuteAsync writes nothing and does
+            // not touch the already-set status.)
+            return Results.Empty;
         }).RequireAuthorization();
     }
+
+    /// <summary>
+    /// Response headers safe to relay from the API to the browser. Anything not listed (most
+    /// importantly Set-Cookie, plus Location — the API's addresses are not reachable from the
+    /// browser and must not leak a same-origin-looking link) is dropped by the forwarder.
+    /// </summary>
+    private static readonly HashSet<string> CopyableResponseHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Content-Disposition",
+        "ETag",
+        "Cache-Control",
+        "Last-Modified",
+        "Accept-Ranges",
+    };
 
     /// <summary>
     /// A malformed body is a client error, not a crash: without this a stray request would throw

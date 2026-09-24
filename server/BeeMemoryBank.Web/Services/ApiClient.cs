@@ -14,6 +14,14 @@ public partial class ApiClient(HttpClient http)
     // Auth headers (X-Internal-Key, X-User-Role) are added automatically
     // by InternalKeyHandler registered as a DelegatingHandler on the HttpClient.
 
+    /// <summary>
+    /// The upstream base address, exposed for the catch-all forwarder's canonical-path backstop:
+    /// it resolves the absolute request Uri the same way HttpClient will and verifies the
+    /// normalized path stayed under the matched entry's upstream prefix before sending.
+    /// </summary>
+    public Uri BaseAddress => http.BaseAddress
+        ?? throw new InvalidOperationException("ApiClient BaseAddress is not configured.");
+
     // ─── Init ────────────────────────────────────────────────────────────────
 
     public async Task<bool?> GetInitStatusAsync()
