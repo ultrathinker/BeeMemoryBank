@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage;
@@ -48,7 +49,7 @@ public class FolderAccessCacheTests : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(_factory, _scopeHolder);
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
-        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory);
+        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory, new ImageSharpImageTranscoder());
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, _factory);
 

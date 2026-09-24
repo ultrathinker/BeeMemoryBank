@@ -9,6 +9,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Hosting.AspNetCore;
 using BeeMemoryBank.Infrastructure;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -35,11 +36,9 @@ public static class ApiServices
 builder.Services.AddStorage(dataPath);
 builder.Services.AddCore();
 builder.Services.AddMemoryCache();
-// Wave 2 A2: AddOnnxEmbeddings / AddMdnsAnnouncer / AddImageTranscoder all moved out of Core.
-// AddOnnxEmbeddings now lives in BeeMemoryBank.Embeddings; the other two in BeeMemoryBank.Infrastructure.
-// The order matters: AddOnnxEmbeddings must run after AddCore (Core's HybridSearchService takes
-// EmbeddingProjectionService), and the image transcoder only needs to be present before the
-// first media upload resolves a scope.
+// Order matters: AddOnnxEmbeddings must run after AddCore (Core's HybridSearchService takes
+// EmbeddingProjectionService); the image transcoder only needs to be present before the first
+// media upload resolves a scope.
 builder.Services.AddOnnxEmbeddings(dataPath);
 builder.Services.AddImageTranscoder();
 builder.Services.AddSync();

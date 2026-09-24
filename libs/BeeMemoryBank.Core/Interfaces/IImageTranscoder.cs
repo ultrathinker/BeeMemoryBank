@@ -1,11 +1,10 @@
 namespace BeeMemoryBank.Core.Interfaces;
 
 /// <summary>
-/// Encodes / downscales image bytes for media uploads. Lives behind an interface so the
-/// SixLabors.ImageSharp dependency stays out of Core; the concrete implementation lives in
-/// <c>BeeMemoryBank.Infrastructure</c> (wave 2 A2). Hosts that need image processing register
-/// the ImageSharp-backed implementation; hosts that don't (e.g. Web proxy, plain CLI subcommands)
-/// leave it unregistered and <see cref="Services.MediaService"/> degrades gracefully.
+/// Encodes / downscales image bytes for media uploads. The concrete SixLabors.ImageSharp-backed
+/// implementation lives in <c>BeeMemoryBank.Media</c>; every host that constructs
+/// <see cref="Services.MediaService"/> must register one (MediaService takes the transcoder as
+/// a required constructor parameter so a missing registration fails at DI resolution).
 ///
 /// <para>
 /// Behaviour to preserve: animated GIF pass-through (frame-count check on the raw bytes, done by

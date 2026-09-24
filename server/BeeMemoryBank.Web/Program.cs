@@ -1,5 +1,5 @@
 using BeeMemoryBank.Core.Models;
-using BeeMemoryBank.Core; // AddCore (still here for clarity; AddMdnsBrowser moved with wave 2 A2)
+using BeeMemoryBank.Core;
 using BeeMemoryBank.Infrastructure; // AddMdnsBrowser (join-wizard LAN node discovery)
 using BeeMemoryBank.Web.Endpoints;
 using BeeMemoryBank.Web.Models;

@@ -53,7 +53,7 @@ public class SessionUnlockCallSiteGuardTests
     /// </summary>
     private static readonly Dictionary<string, string> AllowedCallSites = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["libs/BeeMemoryBank.Core/Services/OsAutoUnlockService.cs"] =
+        ["libs/BeeMemoryBank.Infrastructure/OsAutoUnlock/OsAutoUnlockService.cs"] =
             "OS auto-unlock: unwraps the master DEK from the DPAPI-protected os_auto_unlock slot and " +
             "verifies it against the sentinel before installing it. Unlocking IS the feature.",
 

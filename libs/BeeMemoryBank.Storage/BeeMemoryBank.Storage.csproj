@@ -6,7 +6,7 @@
          byte layouts and reuses EncryptedSegmentFormat's header/AAD helpers. Search stays
          dependency-free in the other direction: nothing was added to its own csproj. -->
     <ProjectReference Include="..\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
-    <!-- Wave 2 A2: ChunkEmbeddingVectorCache (this project) calls Int8Quantizer.ComputeNorm / .Dot
+    <!-- ChunkEmbeddingVectorCache (this project) calls Int8Quantizer.ComputeNorm / .Dot
          directly on quantized bytes coming back from tbl_article_chunk_embedding. Int8Quantizer
          moved to BeeMemoryBank.Embeddings; we kept Int8Quantizer together with the rest of the
          chunk-embedding pipeline rather than split a pure-math utility off into Core. -->

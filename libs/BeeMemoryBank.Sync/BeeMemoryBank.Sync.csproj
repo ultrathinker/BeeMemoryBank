@@ -9,7 +9,7 @@
          direct consumer of Search's public API, not just of Storage's, so it gets its own explicit
          reference, same reasoning Storage's csproj documents for its own Search reference). -->
     <ProjectReference Include="..\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
-    <!-- Wave 2 A2: Sync's PendingEmbeddingProcessor / EventApplier resolve EmbeddingProjectionService
+    <!-- Sync's PendingEmbeddingProcessor / EventApplier resolve EmbeddingProjectionService
          directly from the scope (Core no longer registers it). Core's HybridSearchService already
          pulls EmbeddingProjectionService transitively via Core->Embeddings, but Sync needs the
          direct ref because it constructs PendingEmbeddingProcessor without going through Core. -->

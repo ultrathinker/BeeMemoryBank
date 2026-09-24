@@ -15,12 +15,12 @@ public static class DependencyInjection
 
         // Singleton: the query cache is shared across all requests/scopes so concurrent identical
         // searches coalesce onto one in-flight task and near-repeat hits are served from the TTL
-        // cache (WP-17). ACL safety comes from the scope fingerprint embedded in each cache key.
+        // cache. ACL safety comes from the scope fingerprint embedded in each cache key.
         services.AddSingleton<SearchQueryCache>();
 
-        // WP-18: Singleton so the rolling latency/result-count windows are process-wide and every
-        // request feeds the same admin-visible numbers. Records only timings + coarse result-count
-        // buckets + fixed labels -- never query text or content (see SearchMetrics doc comment).
+        // Singleton so the rolling latency/result-count windows are process-wide and every request
+        // feeds the same admin-visible numbers. Records only timings + coarse result-count buckets
+        // + fixed labels -- never query text or content (see SearchMetrics doc comment).
         services.AddSingleton<SearchMetrics>();
 
         // Null implementations are replaced with real ones when BeeMemoryBank.Sync / Api / Cli is registered
@@ -34,9 +34,6 @@ public static class DependencyInjection
         services.AddScoped<KeyManagementService>();
         services.AddScoped<TreeService>();
         services.AddScoped<SearchService>();
-        // WP-16: HybridSearchService moved to BeeMemoryBank.Embeddings (wave 2 A2). It composes
-        // EmbeddingProjectionService (also in Embeddings) with Core's SearchService, so it lives
-        // on the Embeddings side of the seam now. Callers wire it through AddEmbeddingServices.
         services.AddScoped<FolderService>();
         services.AddScoped<CopyService>();
         services.AddScoped<CommentService>();
@@ -54,9 +51,4 @@ public static class DependencyInjection
         services.AddScoped<RemoteEventApplier>();
         return services;
     }
-
-    // ── mDNS / DNS-SD LAN discovery (TASK_BRIEF §5 Этап 5) ──────────────────────
-    // mDNS services moved to BeeMemoryBank.Infrastructure (wave 2 A2). Hosts that need them
-    // (Api for AddMdnsAnnouncer, Web for AddMdnsBrowser) now reference the Infrastructure project
-    // and call the extensions from BeeMemoryBank.Infrastructure.DependencyInjection.
 }

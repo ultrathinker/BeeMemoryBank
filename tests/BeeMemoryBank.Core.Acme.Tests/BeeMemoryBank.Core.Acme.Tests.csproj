@@ -6,7 +6,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
-    <!-- Wave 2 A2: Acme types moved to Infrastructure.Acme; this project now references it
+    <!-- Acme types moved to Infrastructure.Acme; this project now references it
          directly (and pulls the Certes package transitively via Infrastructure.csproj). -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Infrastructure\BeeMemoryBank.Infrastructure.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />

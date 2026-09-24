@@ -14,6 +14,8 @@
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <!-- Tests construct MediaService directly with a real ImageSharpImageTranscoder. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Media\BeeMemoryBank.Media.csproj" />
   </ItemGroup>
 
   <ItemGroup>

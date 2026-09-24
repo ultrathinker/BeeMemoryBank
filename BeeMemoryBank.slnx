@@ -10,6 +10,7 @@
     <Project Path="libs/BeeMemoryBank.Embeddings/BeeMemoryBank.Embeddings.csproj" />
     <Project Path="libs/BeeMemoryBank.Hosting/BeeMemoryBank.Hosting.csproj" />
     <Project Path="libs/BeeMemoryBank.Hosting.AspNetCore/BeeMemoryBank.Hosting.AspNetCore.csproj" />
+    <Project Path="libs/BeeMemoryBank.Media/BeeMemoryBank.Media.csproj" />
     <Project Path="libs/BeeMemoryBank.Profiles/BeeMemoryBank.Profiles.csproj" />
     <Project Path="libs/BeeMemoryBank.Search/BeeMemoryBank.Search.csproj" />
     <Project Path="libs/BeeMemoryBank.Storage/BeeMemoryBank.Storage.csproj" />

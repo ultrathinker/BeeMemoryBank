@@ -24,9 +24,8 @@ public static class DependencyInjection
         services.AddScoped<EventApplier>();
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
-        // Wave 2 A2: EmbeddingProjectionService + ArticleChunker live in BeeMemoryBank.Embeddings
-        // now (Core no longer registers them). AddEmbeddingServices is called from every host that
-        // wants semantic search; Sync itself scopes EmbeddingProjectionService through here because
+        // EmbeddingProjectionService + ArticleChunker live in BeeMemoryBank.Embeddings; Core no
+        // longer registers them. Sync itself scopes EmbeddingProjectionService through here because
         // PendingEmbeddingProcessor / EventApplier resolve it per cycle.
         services.AddEmbeddingServices();
 

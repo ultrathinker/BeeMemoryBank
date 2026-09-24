@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
-    <!-- Wave 2 A2: NodeFront serves the local CA cert (LocalCaService) and the TLS-ALPN-01
+    <!-- NodeFront serves the local CA cert (LocalCaService) and the TLS-ALPN-01
          ACME challenge (AcmeChallengePersister + TlsAlpnChallengeResponder). All three are
          Infrastructure types now; Node pulls the project reference directly. -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Infrastructure\BeeMemoryBank.Infrastructure.csproj" />

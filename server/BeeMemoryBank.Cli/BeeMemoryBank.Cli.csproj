@@ -13,7 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
-    <!-- Wave 2 A2: AddOnnxEmbeddings now lives here. Cli's `bmb seed` etc. wire it the same way
+    <!-- AddOnnxEmbeddings now lives here. Cli's `bmb seed` etc. wire it the same way
          the Api does, just without the image transcoder (the CLI has no upload path). -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Embeddings\BeeMemoryBank.Embeddings.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />

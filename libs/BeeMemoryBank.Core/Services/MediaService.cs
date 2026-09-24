@@ -17,23 +17,22 @@ public class MediaService(
     IEventLogger eventLogger,
     MediaStorageOptions options,
     IDbConnectionFactory connFactory,
-    // Wave 2 A2: image transcoding moved behind IImageTranscoder (SixLabors.ImageSharp now
-    // lives in BeeMemoryBank.Infrastructure). Optional and last for the same reason the
-    // previous fields are: the many direct constructions in tests keep compiling without it;
-    // when null, the create path still rejects oversize inputs but does NOT transcode, so
-    // over-limit uploads surface as a clean ArgumentException instead of silently keeping a
-    // 50 MB PNG in the vault.
-    IImageTranscoder? imageTranscoder = null,
+    // Image transcoding is required: a host that forgets to register the IImageTranscoder
+    // implementation would silently change behaviour (no conversion, oversized images rejected).
+    // Required so a missing registration fails at DI resolution. Tests that construct
+    // MediaService directly take an ImageSharpImageTranscoder from BeeMemoryBank.Media.
+    IImageTranscoder imageTranscoder,
     // Optional and last so the many direct constructions in tests keep compiling; DI supplies the
     // real one. Only used to report a media row whose file is gone, which is not a normal state
     // and must not pass silently.
     ILogger<MediaService>? logger = null,
-    // Item 16a: the read path resolves ciphertext from the content-addressed blob store when the
-    // row carries its hash, and falls back to the .enc file otherwise. Optional and last for the
-    // same test-construction reason; when null (older test setups) the blob path is simply skipped
-    // and the file fallback carries every read, exactly as before this change.
+    // The read path resolves ciphertext from the content-addressed blob store when the row carries
+    // its hash, and falls back to the .enc file otherwise. Optional and last for the same
+    // test-construction reason; when null (older test setups) the blob path is simply skipped and
+    // the file fallback carries every read.
     IBlobRepository? blobRepo = null)
 {
+    private readonly IImageTranscoder _imageTranscoder = imageTranscoder;
     private readonly ILogger<MediaService> logger = logger ?? NullLogger<MediaService>.Instance;
 
     private static readonly HashSet<string> AllowedContentTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -88,31 +87,19 @@ public class MediaService(
             // Convert raster images to JPEG (except SVG and animated GIF). Downscale if still oversized.
             if (contentType != "image/svg+xml" && !IsAnimatedGif(plaintext, contentType))
             {
-                if (imageTranscoder == null)
+                var (jpegBytes, converted) = _imageTranscoder.ConvertToJpeg(plaintext, contentType);
+                if (converted)
                 {
-                    // No transcoder registered: accept the bytes as-is if they already fit, reject
-                    // otherwise. Tests that construct MediaService directly without an IImageTranscoder
-                    // land here; production hosts (Api, Mobile) wire the Infrastructure one in.
-                    if (plaintext.Length > MaxFileSize)
-                        throw new ArgumentException(
-                            $"File size exceeds {MaxFileSize / (1024 * 1024)} MB limit and no image transcoder is registered to downscale it.");
+                    plaintext = jpegBytes;
+                    contentType = "image/jpeg";
+                    fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
                 }
-                else
-                {
-                    var (jpegBytes, converted) = imageTranscoder.ConvertToJpeg(plaintext, contentType);
-                    if (converted)
-                    {
-                        plaintext = jpegBytes;
-                        contentType = "image/jpeg";
-                        fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
-                    }
 
-                    if (plaintext.Length > MaxFileSize)
-                    {
-                        plaintext = imageTranscoder.DownscaleJpeg(plaintext, MaxImageDimension);
-                        contentType = "image/jpeg";
-                        fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
-                    }
+                if (plaintext.Length > MaxFileSize)
+                {
+                    plaintext = _imageTranscoder.DownscaleJpeg(plaintext, MaxImageDimension);
+                    contentType = "image/jpeg";
+                    fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
                 }
             }
 

@@ -18,7 +18,10 @@ public class EmbeddingProjectionService(
     IArticleChunkEmbeddingRepository chunkRepo,
     MaintenanceModeService? maintenance = null)
 {
-    private const string ModelVersion = OnnxEmbeddingGenerator.Version;
+    // Read through the interface so any IEmbeddingGenerator impl drives the persisted version
+    // string. OnnxEmbeddingGenerator.Version is just the production default; tests that wire a
+    // fake generator get the version they declare on the interface, not the Onnx constant.
+    private string ModelVersion => generator.Version;
 
     /// <summary>
     /// Initializes the projection matrix for the current node.

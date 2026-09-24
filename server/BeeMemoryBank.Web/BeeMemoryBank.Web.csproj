@@ -34,14 +34,4 @@
     <InternalsVisibleTo Include="BeeMemoryBank.Integration.Tests" />
   </ItemGroup>
 
-  <!-- model.onnx is NOT in git — download separately (see docs/deployment.md). Wave 2 A2 moved the
-       model directory from Core/Embeddings/Models to Embeddings/Models; the path below is updated
-       accordingly. -->
-  <ItemGroup>
-    <Content Include="..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx" Condition="Exists('..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx')">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>model.onnx</Link>
-    </Content>
-  </ItemGroup>
-
 </Project>

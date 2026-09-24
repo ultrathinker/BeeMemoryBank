@@ -100,6 +100,57 @@ public class ProjectionMatrixRecoveryTests : TestFixture
         (await _articleRepo.GetByIdAsync(article.Id))!.EmbeddingPending.Should().BeFalse();
     }
 
+    /// <summary>
+    /// Verifies that the model version EmbeddingProjectionService persists on every row it writes is
+    /// the version reported by the wired <see cref="IEmbeddingGenerator"/>, not the hard-coded
+    /// OnnxEmbeddingGenerator.Version constant. Anything else (a test fake, a future non-ONNX
+    /// generator) would otherwise pin every row to the wrong version and silently look stale on
+    /// every embedding cycle.
+    /// </summary>
+    [Fact]
+    public async Task ProjectArticle_PersistsTheGeneratorVersionNotTheOnnxConstant()
+    {
+        const string customVersion = "alternate-embedding-v3";
+
+        var customGenerator = new VersionedFakeEmbeddingGenerator(customVersion, dimension: 384);
+        var customProjection = new EmbeddingProjectionService(
+            customGenerator, _matrixRepo, _articleRepo, Session,
+            ArticleChunker.CreateDefault(), new ArticleChunkEmbeddingRepository(Factory));
+
+        await customProjection.EnsureProjectionMatrixAsync();
+
+        var article = await ArticleService.CreateAsync(
+            "Version Probe", "/version-probe", [], "body");
+
+        await customProjection.ProjectArticleAsync(article, "body");
+
+        // ArticleRepository.UpdateEmbeddingUnscopedAsync writes the supplied model_version string
+        // verbatim into tbl_article.embedding_model_version, so the assertion reads it back through
+        // the same path the search side reads it on.
+        var row = await _articleRepo.GetByIdAsync(article.Id);
+        row.Should().NotBeNull();
+        row!.EmbeddingModelVersion.Should().Be(
+            customVersion,
+            "EmbeddingProjectionService must persist generator.Version, not the Onnx constant");
+    }
+
+    private sealed class VersionedFakeEmbeddingGenerator : IEmbeddingGenerator
+    {
+        private readonly int _dimension;
+        private readonly string _version;
+
+        public VersionedFakeEmbeddingGenerator(string version, int dimension)
+        {
+            _version = version;
+            _dimension = dimension;
+        }
+
+        public int Dimension => _dimension;
+        public string Version => _version;
+        public float[] Generate(string text) => new float[_dimension];
+        public float[] GenerateQuery(string text) => new float[_dimension];
+    }
+
     [Fact]
     public async Task ALockedSession_DoesNotTouchAnExistingMatrix()
     {

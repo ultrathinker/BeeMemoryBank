@@ -36,14 +36,15 @@ jobs:
         run: dotnet tool install --global vpk --version 1.2.0
 
       # Cache the ~113 MB quantized ONNX model so we do not re-download it on every push.
-      # Wave 2 A2: model directory moved from libs/BeeMemoryBank.Core/Embeddings/Models to
-      # libs/BeeMemoryBank.Embeddings/Models (the ONNX impl moved to its own project).
+      # The cache key includes the on-disk path so an old entry (which stored the model under
+      # the pre-split Core/Embeddings/Models location) cannot satisfy a hit here and silently
+      # leave the new path empty.
       - name: Cache ONNX model
         id: onnx-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: libs/BeeMemoryBank.Embeddings/Models/model.onnx
-          key: onnx-multilingual-e5-small-v1
+          key: onnx-multilingual-e5-small-v2-embeddings-path
 
       # Tests boot the API via WebApplicationFactory; the API's DI graph
       # constructs OnnxEmbeddingGenerator at startup, which reads the model
