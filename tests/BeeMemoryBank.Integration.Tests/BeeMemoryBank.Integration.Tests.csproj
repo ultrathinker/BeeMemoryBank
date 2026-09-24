@@ -6,6 +6,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\server\BeeMemoryBank.Api\BeeMemoryBank.Api.csproj" />
+    <!-- Aliased: Api and Web both declare a global-namespace `Program`, which would make
+         WebApplicationFactory<Program> ambiguous in every existing test file. Web types are
+         reached via `extern alias WebApp;` in the files that need them (see BmbWebHostFactory). -->
+    <ProjectReference Include="..\..\server\BeeMemoryBank.Web\BeeMemoryBank.Web.csproj" Aliases="WebApp" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
