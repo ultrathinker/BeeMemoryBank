@@ -8,7 +8,7 @@ namespace BeeMemoryBank.Infrastructure.Acme;
 /// Builds the ephemeral self-signed certificate presented during a TLS-ALPN-01 challenge
 /// (RFC 8737). The certificate is served by the TLS listener when an ACME validator connects
 /// with SNI = the domain under validation, and proves control of that domain by embedding the
-/// SHA-256 digest of the ACME key authorization in a dedicated non-critical-... actually
+/// SHA-256 digest of the ACME key authorization in a dedicated
 /// <b>critical</b> extension (OID <c>1.3.6.1.5.5.7.1.31</c>, id-pe-acmeIdentifier).
 /// </summary>
 /// <remarks>

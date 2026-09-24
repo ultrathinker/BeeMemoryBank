@@ -54,7 +54,7 @@ public class OsAutoUnlockService(
     string dataPath)
 {
     /// <summary>
-    /// DPAPI optional entropy for the auto-unlock secret file (finding M12b). Fixed and versioned
+    /// DPAPI optional entropy for the auto-unlock secret file. Fixed and versioned
     /// rather than random/per-install: DPAPI folds this byte string into the derivation, so it
     /// must be reproducible at unprotect time without persisting anything extra — a random value
     /// would have to be stored somewhere, and stored next to the DPAPI blob it would add nothing
@@ -130,7 +130,7 @@ public class OsAutoUnlockService(
             try
             {
                 // Protect the raw secret with DPAPI (current-user scope) using application-specific
-                // optional entropy (finding M12b) and persist it next to the vault.
+                // optional entropy (see Entropy) and persist it next to the vault.
                 var dpapi = ProtectedData.Protect(secret, Entropy, DataProtectionScope.CurrentUser);
                 await File.WriteAllBytesAsync(SecretFilePath, dpapi);
                 return dpapi;
