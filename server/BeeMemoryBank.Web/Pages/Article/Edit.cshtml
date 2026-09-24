@@ -774,6 +774,17 @@
         window.bmbAttachDropZone(dropzone, attachmentFileInput, queueAttachmentUploads);
         attachDroppedFiles = queueAttachmentUploads;
 
+        // Saving mid-upload would post only the files finished so far; the rest would be left
+        // unlinked (and swept by the orphan GC) or cut off by the navigation. Capture phase +
+        // stopImmediatePropagation so the draft-clearing / validation submit handlers don't run
+        // for a submit that isn't happening.
+        form.addEventListener('submit', function(e) {
+            if (queued === 0) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            showToast('Files are still uploading — save again once they finish.');
+        }, true);
+
         attachmentsList.addEventListener('click', function(e) {
             var btn = e.target.closest('[data-delete-attachment]');
             if (!btn) return;

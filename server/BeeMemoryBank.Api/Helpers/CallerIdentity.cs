@@ -50,6 +50,14 @@ public sealed record CallerIdentity(int? UserId, int? AgentId, string? ViaAgentN
     }
 
     /// <summary>
+    /// Stable key recorded as the uploader of media that isn't linked to an article yet
+    /// (tbl_media.uploaded_by). An agent resolves to its owning user, so a file an agent uploads
+    /// for its owner counts as the owner's. Null when the caller has no identity at all.
+    /// </summary>
+    public string? MediaOwnerKey =>
+        UserId is { } uid ? $"u{uid}" : AgentId is { } aid ? $"a{aid}" : null;
+
+    /// <summary>
     /// Backward-compatible 3-value deconstruct for existing call-sites.
     /// Use the record properties directly when you need ViaAgentName.
     /// </summary>

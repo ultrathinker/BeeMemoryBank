@@ -533,16 +533,31 @@ public partial class ArticleService(
     /// Links file attachments that were uploaded BEFORE their article existed (the "new article"
     /// page uploads them unlinked and hands their ids over on save). Unlike body images they are
     /// never referenced in the Markdown, so <see cref="LinkOrphanMediaAsync"/> can't find them.
-    /// Only still-unlinked, active media is taken — an id that already belongs to another article
-    /// is ignored, never moved — and a protected article gets nothing (same rule as body media).
+    /// Only still-unlinked, active rows of kind "attachment" are taken — an id that already belongs
+    /// to another article is ignored, never moved — and a protected article gets nothing (same
+    /// rule as body media). <paramref name="uploadedBy"/> restricts it to rows that same caller
+    /// uploaded, so an id learned from someone else can't be used to pull their file into a
+    /// readable article; pass null only for a superadmin, who can see every unlinked row anyway.
     /// Anything left unlinked is swept by the orphan-media GC. Returns the ids actually linked.
     /// </summary>
-    public async Task<List<Guid>> LinkAttachmentsAsync(Guid articleId, IEnumerable<Guid> mediaIds) =>
-        await LinkOrphanMediaIdsAsync(articleId, mediaIds.Where(g => g != Guid.Empty).Distinct().ToList());
-
-    private async Task<List<Guid>> LinkOrphanMediaIdsAsync(Guid articleId, List<Guid> mediaIds)
+    public async Task<List<Guid>> LinkAttachmentsAsync(Guid articleId, IEnumerable<Guid> mediaIds, string? uploadedBy)
     {
-        if (mediaIds.Count == 0) return [];
+        var ids = mediaIds.Where(g => g != Guid.Empty).Distinct().ToList();
+        if (ids.Count == 0) return [];
+        var target = await articleRepo.GetByIdAsync(articleId);
+        if (target is null or { Protected: true }) return [];
+
+        var lamportTs = clock.Tick();
+        var identity = await nodeRepo.GetAsync();
+        var linked = await mediaRepo.LinkOrphanAttachmentsAsync(ids, articleId, uploadedBy, lamportTs, identity?.NodeId);
+        foreach (var id in linked)
+            await eventLogger.LogMediaLinkAsync(id, articleId, lamportTs);
+        return linked;
+    }
+
+    private async Task LinkOrphanMediaIdsAsync(Guid articleId, List<Guid> mediaIds)
+    {
+        if (mediaIds.Count == 0) return;
 
         // A protected (second-layer passphrase) article must never gain attached media. Media is
         // wrapped by the MASTER DEK, not the article passphrase, so a body-embedded image linked
@@ -552,13 +567,12 @@ public partial class ArticleService(
         // stays an orphan and is swept by the media GC), so a protected article never carries a
         // master-DEK-readable attachment.
         var target = await articleRepo.GetByIdAsync(articleId);
-        if (target is { Protected: true }) return [];
+        if (target is { Protected: true }) return;
 
         var lamportTs = clock.Tick();
         var identity = await nodeRepo.GetAsync();
         var linked = await mediaRepo.LinkOrphansToArticleAsync(mediaIds, articleId, lamportTs, identity?.NodeId);
         foreach (var id in linked)
             await eventLogger.LogMediaLinkAsync(id, articleId, lamportTs);
-        return linked;
     }
 }

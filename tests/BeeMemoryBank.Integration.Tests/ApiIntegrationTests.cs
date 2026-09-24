@@ -164,14 +164,27 @@ public class ApiIntegrationTests : IAsyncLifetime
         await LockSessionAsync();
     }
 
-    private async Task<Guid> UploadUnlinkedAttachmentAsync(string fileName)
+    private Task<Guid> UploadUnlinkedAttachmentAsync(string fileName) => UploadUnlinkedAsync(_client, fileName);
+
+    private static async Task<Guid> UploadUnlinkedAsync(HttpClient client, string fileName, bool attachment = true)
     {
         using var form = new MultipartFormDataContent();
-        var fileContent = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes("content of " + fileName));
-        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain");
+        ByteArrayContent fileContent;
+        if (attachment)
+        {
+            fileContent = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes("content of " + fileName));
+            fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain");
+        }
+        else
+        {
+            // 1x1 PNG, so the inline-image path (which decodes and re-encodes) accepts it.
+            fileContent = new ByteArrayContent(Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="));
+            fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+        }
         form.Add(fileContent, "file", fileName);
-        form.Add(new StringContent("true"), "attachment");
-        var upload = await _client.PostAsync("/api/media", form);
+        if (attachment) form.Add(new StringContent("true"), "attachment");
+        var upload = await client.PostAsync("/api/media", form);
         upload.StatusCode.Should().Be(HttpStatusCode.Created);
         var uploaded = await upload.Content.ReadFromJsonAsync<JsonElement>();
         return Guid.Parse(uploaded.GetProperty("id").GetString()!);
@@ -215,6 +228,96 @@ public class ApiIntegrationTests : IAsyncLifetime
             .Content.ReadFromJsonAsync<JsonElement>();
         stillThere.EnumerateArray().Select(m => m.GetProperty("fileName").GetString())
             .Should().BeEquivalentTo(["taken.txt"]);
+
+        await LockSessionAsync();
+    }
+
+    // A plain (non-superadmin) user client, as the Web proxy would send it.
+    private async Task<HttpClient> RegularUserClientAsync(string username)
+    {
+        var resp = await _client.PostAsJsonAsync("/api/users", new
+        {
+            username, password = "UserPass123", displayName = username, role = "user"
+        });
+        resp.EnsureSuccessStatusCode();
+        var id = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Remove("X-User-Role");
+        client.DefaultRequestHeaders.Add("X-User-Role", "user");
+        client.DefaultRequestHeaders.Add("X-User-Id", id.ToString());
+        return client;
+    }
+
+    private static async Task<List<string?>> AttachmentNamesAsync(HttpClient client, Guid articleId)
+    {
+        var list = await (await client.GetAsync($"/api/articles/{articleId}/media"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        return list.EnumerateArray().Select(m => m.GetProperty("fileName").GetString()).ToList();
+    }
+
+    // Codex review: attachmentIds used to link ANY unlinked row by id, so an id learned from
+    // someone else would pull their file into an article the caller can read.
+    [Fact]
+    public async Task CreateArticle_CannotLinkAnotherUsersUnlinkedUpload()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        using var alice = await RegularUserClientAsync("alice");
+        using var mallory = await RegularUserClientAsync("mallory");
+
+        var alicesFile = await UploadUnlinkedAsync(alice, "alice-private.txt");
+
+        var stolen = await (await mallory.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Mallory", treePath = "/Tests", content = "x", attachmentIds = new[] { alicesFile }
+        })).Content.ReadFromJsonAsync<ArticleResponse>();
+        (await AttachmentNamesAsync(_client, stolen!.Id)).Should().BeEmpty("the file was uploaded by alice, not mallory");
+        (await mallory.GetAsync($"/api/media/{alicesFile}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await mallory.DeleteAsync($"/api/media/{alicesFile}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        // Alice can still use her own upload.
+        var hers = await (await alice.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Alice", treePath = "/Tests", content = "x", attachmentIds = new[] { alicesFile }
+        })).Content.ReadFromJsonAsync<ArticleResponse>();
+        (await AttachmentNamesAsync(alice, hers!.Id)).Should().BeEquivalentTo(["alice-private.txt"]);
+
+        await LockSessionAsync();
+    }
+
+    // The ACL hides unlinked rows from a non-superadmin, so before the uploader check a regular
+    // user could neither preview nor remove a file they had just added to a not-yet-saved article.
+    [Fact]
+    public async Task RegularUser_CanReadAndDeleteTheirOwnUnlinkedUpload()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        using var bob = await RegularUserClientAsync("bob");
+
+        var file = await UploadUnlinkedAsync(bob, "draft-notes.txt");
+        var get = await bob.GetAsync($"/api/media/{file}");
+        get.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await get.Content.ReadAsStringAsync()).Should().Be("content of draft-notes.txt");
+
+        (await bob.DeleteAsync($"/api/media/{file}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await bob.GetAsync($"/api/media/{file}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        await LockSessionAsync();
+    }
+
+    // attachmentIds is for attachments only; an unlinked inline image passed there must not
+    // become an invisible media row on the article (attachment lists show kind=attachment only).
+    [Fact]
+    public async Task CreateArticle_AttachmentIds_IgnoresInlineImages()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        var image = await UploadUnlinkedAsync(_client, "pic.png", attachment: false);
+        var file = await UploadUnlinkedAttachmentAsync("doc.txt");
+
+        var article = await (await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Kinds", treePath = "/Tests", content = "no image reference", attachmentIds = new[] { image, file }
+        })).Content.ReadFromJsonAsync<ArticleResponse>();
+
+        (await AttachmentNamesAsync(_client, article!.Id)).Should().BeEquivalentTo(["doc.txt"]);
 
         await LockSessionAsync();
     }

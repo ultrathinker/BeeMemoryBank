@@ -56,7 +56,10 @@ public static class MediaEndpoints
 
             try
             {
-                var media = await mediaService.CreateAsync(file.FileName, file.ContentType, plaintext, artId, isAttachment: attachment);
+                // An unlinked upload (no articleId) remembers its uploader: until an article owns it
+                // there is no folder ACL to go by, and only that uploader may link, read or delete it.
+                var media = await mediaService.CreateAsync(file.FileName, file.ContentType, plaintext, artId,
+                    isAttachment: attachment, uploadedBy: CallerIdentity.Extract(ctx).MediaOwnerKey);
                 return Results.Created($"/api/media/{media.Id}", new
                 {
                     id = media.Id,
@@ -77,12 +80,16 @@ public static class MediaEndpoints
         }).DisableAntiforgery();
 
         group.MapGet("/{id:guid}", async (
-            Guid id, SessionService session, MediaService mediaService, HttpContext ctx) =>
+            Guid id, SessionService session, MediaService mediaService, CallerScopeHolder scopeHolder, HttpContext ctx) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             var result = await mediaService.GetContentAsync(id);
+            // The folder ACL hides every unlinked row from a non-superadmin — including the files
+            // they just uploaded on the "new article" page. Let the uploader through for their own.
+            if (result is null && await IsCallersOwnOrphanAsync(id, mediaService, ctx))
+                result = await scopeHolder.RunAsSystemAsync(() => mediaService.GetContentAsync(id));
             if (result is null)
                 return Results.NotFound();
 
@@ -93,7 +100,7 @@ public static class MediaEndpoints
         });
 
         group.MapDelete("/{id:guid}", async (
-            Guid id, SessionService session, MediaService mediaService, HttpContext ctx) =>
+            Guid id, SessionService session, MediaService mediaService, CallerScopeHolder scopeHolder, HttpContext ctx) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -105,7 +112,12 @@ public static class MediaEndpoints
             }
             catch (KeyNotFoundException)
             {
-                return Results.NotFound();
+                // Same as GET: an unlinked row is invisible to a non-superadmin's ACL, so the
+                // uploader removing a file from a not-yet-saved article would otherwise get 404.
+                if (!await IsCallersOwnOrphanAsync(id, mediaService, ctx))
+                    return Results.NotFound();
+                await scopeHolder.RunAsSystemAsync(() => mediaService.DeleteAsync(id));
+                return Results.NoContent();
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -135,5 +147,11 @@ public static class MediaEndpoints
                 kind = m.Kind
             }));
         }).RequireInternalKey().WithTags("Media");
+    }
+
+    private static async Task<bool> IsCallersOwnOrphanAsync(Guid id, MediaService mediaService, HttpContext ctx)
+    {
+        var owner = CallerIdentity.Extract(ctx).MediaOwnerKey;
+        return owner != null && await mediaService.IsOwnedOrphanAsync(id, owner);
     }
 }

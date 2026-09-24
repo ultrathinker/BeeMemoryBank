@@ -22,4 +22,18 @@ public interface IMediaRepository
     Task SoftDeleteAsync(Guid id);
     Task UpdateLamportTsAsync(Guid id, long lamportTs, Guid? sourceNodeId);
     Task<List<Guid>> LinkOrphansToArticleAsync(IEnumerable<Guid> mediaIds, Guid articleId, long lamportTs, Guid? sourceNodeId);
+
+    /// <summary>
+    /// Links still-unlinked, active ATTACHMENT rows to <paramref name="articleId"/>. When
+    /// <paramref name="uploadedBy"/> is non-null only rows uploaded by that owner key are taken;
+    /// null (superadmin) takes any. Returns the ids actually linked.
+    /// </summary>
+    Task<List<Guid>> LinkOrphanAttachmentsAsync(IEnumerable<Guid> mediaIds, Guid articleId, string? uploadedBy, long lamportTs, Guid? sourceNodeId);
+
+    /// <summary>
+    /// True when <paramref name="id"/> is an active, unlinked row uploaded by
+    /// <paramref name="uploadedBy"/>. Deliberately NOT scoped by the caller's folder ACL: an
+    /// unlinked row has no folder, so the uploader is the only thing that can own it.
+    /// </summary>
+    Task<bool> IsOwnedOrphanAsync(Guid id, string uploadedBy);
 }

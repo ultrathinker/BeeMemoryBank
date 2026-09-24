@@ -23,6 +23,7 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         m.created_at      AS CreatedAt,
         m.deleted_at      AS DeletedAt,
         m.kind            AS Kind,
+        m.uploaded_by     AS UploadedBy,
         m.ciphertext_sha256 AS CiphertextSha256";
 
     public async Task<Media?> GetByIdAsync(Guid id, bool includeDeleted = false)
@@ -85,10 +86,10 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         const string insertSql = @"INSERT INTO tbl_media
               (id, article_id, file_name, content_type, file_size,
                encrypted_dek, dek_iv, iv, status, lamport_ts, source_node_id, created_at, kind,
-               ciphertext_sha256)
+               ciphertext_sha256, uploaded_by)
               VALUES (@Id, @ArticleId, @FileName, @ContentType, @FileSize,
                       @EncryptedDek, @DekIV, @IV, @Status, @LamportTs, @SourceNodeId, @CreatedAt, @Kind,
-                      @CiphertextSha256)";
+                      @CiphertextSha256, @UploadedBy)";
 
         if (transaction != null)
         {
@@ -225,5 +226,28 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
               RETURNING id",
             new { ids, articleId, lamportTs, sourceNodeId });
         return linked.Select(Guid.Parse).ToList();
+    }
+
+    public async Task<List<Guid>> LinkOrphanAttachmentsAsync(IEnumerable<Guid> mediaIds, Guid articleId, string? uploadedBy, long lamportTs, Guid? sourceNodeId)
+    {
+        using var conn = OpenConnection();
+        var ids = mediaIds.ToList();
+        var linked = await conn.QueryAsync<string>(
+            @"UPDATE tbl_media
+              SET article_id = @articleId, lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+              WHERE id IN @ids AND article_id IS NULL AND status = 'A' AND kind = 'attachment'
+                AND (@uploadedBy IS NULL OR uploaded_by = @uploadedBy)
+              RETURNING id",
+            new { ids, articleId, uploadedBy, lamportTs, sourceNodeId });
+        return linked.Select(Guid.Parse).ToList();
+    }
+
+    public async Task<bool> IsOwnedOrphanAsync(Guid id, string uploadedBy)
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<long>(
+            @"SELECT COUNT(1) FROM tbl_media
+              WHERE id = @id AND article_id IS NULL AND status = 'A' AND uploaded_by = @uploadedBy",
+            new { id, uploadedBy }) > 0;
     }
 }

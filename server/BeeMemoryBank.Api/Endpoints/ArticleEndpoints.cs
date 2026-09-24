@@ -107,8 +107,11 @@ public static class ArticleEndpoints
                 // stored them locally and emitted nothing — the article arrived on other nodes
                 // with an empty tag set, permanently.
                 var article = await svc.CreateAsync(req.Title, req.TreePath, req.ConceptTags ?? [], content, hint);
-                if (attachmentIds.Count > 0)
-                    await svc.LinkAttachmentsAsync(article.Id, attachmentIds);
+                // Only files this caller uploaded (a superadmin already sees every unlinked row); a
+                // non-superadmin with no identity to match on links nothing.
+                var uploader = CallerIdentity.Extract(ctx).MediaOwnerKey;
+                if (attachmentIds.Count > 0 && (isSuperadmin || uploader != null))
+                    await svc.LinkAttachmentsAsync(article.Id, attachmentIds, isSuperadmin ? null : uploader);
                 return Results.Created($"/api/articles/{article.Id}", ArticleResponse.From(article, req.ConceptTags ?? []));
             }
             catch (UnauthorizedAccessException ex)

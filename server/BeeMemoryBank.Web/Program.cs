@@ -134,7 +134,8 @@ builder.Services.AddAuthentication("BeeWebCookie")
                 if (principal!.FindFirst(InternalKeyHandler.WebSessionClaim) == null
                     && principal.Identity is ClaimsIdentity oldIdentity)
                 {
-                    var upgraded = new ClaimsIdentity(oldIdentity.Claims, oldIdentity.AuthenticationType);
+                    // Copy constructor: keeps the auth type, name/role claim types and any actor.
+                    var upgraded = new ClaimsIdentity(oldIdentity);
                     upgraded.AddClaim(new Claim(InternalKeyHandler.WebSessionClaim, Guid.NewGuid().ToString("N")));
                     principal = new ClaimsPrincipal(upgraded);
                     context.ReplacePrincipal(principal);

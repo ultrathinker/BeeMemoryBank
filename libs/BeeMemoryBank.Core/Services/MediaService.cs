@@ -47,7 +47,10 @@ public class MediaService(
     /// <see cref="AllowedContentTypes"/>, re-encoded/downscaled to fit <see cref="MaxFileSize"/>.
     /// True = generic file attachment shown below the article, never inlined: any content type,
     /// stored as-is (no image processing), capped at <see cref="MaxAttachmentFileSize"/>.</param>
-    public async Task<Media> CreateAsync(string fileName, string contentType, byte[] plaintext, Guid? articleId, bool isAttachment = false)
+    /// <param name="uploadedBy">Owner key of the caller, recorded only for an UNLINKED upload
+    /// (<paramref name="articleId"/> null) — it's what later lets that same caller link, read or
+    /// delete the file while no article (and so no folder ACL) owns it yet.</param>
+    public async Task<Media> CreateAsync(string fileName, string contentType, byte[] plaintext, Guid? articleId, bool isAttachment = false, string? uploadedBy = null)
     {
         if (plaintext.Length > MaxInputSize)
             throw new ArgumentException($"Input size exceeds {MaxInputSize / (1024 * 1024)} MB limit.");
@@ -149,6 +152,7 @@ public class MediaService(
             SourceNodeId = identity?.NodeId,
             CreatedAt = now,
             Kind = isAttachment ? "attachment" : "image",
+            UploadedBy = articleId == null ? uploadedBy : null,
             // The bytes go into the content-addressed blob store below (via LogMediaCreateAsync →
             // EnsureBlobAsync), under exactly this hash. Recording it on the row lets the read path
             // resolve the blob directly instead of only from the .enc file. Same hash function
@@ -287,6 +291,9 @@ public class MediaService(
 
 
     public Task<List<Media>> GetByArticleIdAsync(Guid articleId) => mediaRepo.GetByArticleIdAsync(articleId);
+
+    /// <summary>See <see cref="IMediaRepository.IsOwnedOrphanAsync"/>.</summary>
+    public Task<bool> IsOwnedOrphanAsync(Guid id, string uploadedBy) => mediaRepo.IsOwnedOrphanAsync(id, uploadedBy);
 
     private static bool IsAnimatedGif(byte[] data, string contentType)
     {
