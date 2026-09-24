@@ -484,7 +484,7 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         ("GET",  "/api/dek-rotation/progress",             HttpStatusCode.OK),
         ("POST", "/api/auth/remote-token",                 HttpStatusCode.Unauthorized),
         ("GET",  "/api/folders/accessible",                HttpStatusCode.Unauthorized),
-        ("GET",  "/api/folders/by-path/snapshot",          HttpStatusCode.BadRequest),
+        ("GET",  "/api/folders/by-path/snapshot",          HttpStatusCode.Unauthorized),
     };
 
     [Theory]
@@ -528,6 +528,8 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         {
             url += "?eventId=" + Guid.Empty;
         }
+        // The query was appended after the request object was built — point it at the final URL.
+        request.RequestUri = new Uri(url, UriKind.Relative);
 
         HttpResponseMessage resp;
         try
