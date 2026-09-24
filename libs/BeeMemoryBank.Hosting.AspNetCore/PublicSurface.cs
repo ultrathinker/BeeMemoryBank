@@ -6,21 +6,20 @@ namespace BeeMemoryBank.Hosting.AspNetCore;
 /// What a caller without the internal key is allowed to reach — peers, MCP agents, and the two
 /// screens a browser can see before anyone has signed in.
 ///
-/// <para>Until now nothing in the node itself knew this. "What is visible from the internet" was
-/// decided entirely by whatever sat in front: an Apache vhost on a server deployment, a YARP route
-/// table in the desktop node (<c>NodeFront</c>). Two lists, maintained by different people, in
-/// different syntaxes, neither reviewed when an endpoint is added — and a mistake in either one
-/// publishes <c>/api/session/unlock</c>, a password oracle that unlocks the vault for every user
-/// and agent at once, straight to the internet. That has happened.</para>
+/// <para>This is the node's own answer to "what is visible from the internet", so whatever sits in
+/// front (an Apache vhost on a server deployment, the YARP route table in the desktop node's
+/// <c>NodeFront</c>) is a second layer rather than the only one. Those proxy lists are maintained
+/// separately, in different syntaxes, and a mistake in either must not on its own publish
+/// <c>/api/session/unlock</c> — a password oracle that unlocks the vault for every user and agent
+/// at once.</para>
 ///
-/// <para>So the node now has its own answer, and the proxies become a second layer rather than the
-/// only one. Anything not listed here answers 404 to a keyless caller — 404 and not 403, because
+/// <para>Anything not listed here answers 404 to a keyless caller — 404 and not 403, because
 /// "this endpoint exists but you may not use it" is itself information about a node an attacker is
 /// probing.</para>
 ///
 /// <para>The rule is deliberately about the KEY, not about authentication in general: a request
 /// carrying a valid internal key is the web layer, the desktop tray or the node itself, and those
-/// see everything exactly as before. Peers and agents authenticate further inside — sync tokens,
+/// see everything. Peers and agents authenticate further inside — sync tokens,
 /// <c>bee_</c> keys, the join password — and this list only decides whether they get to try.</para>
 /// </summary>
 public static class PublicSurface
@@ -55,13 +54,13 @@ public static class PublicSurface
         // Listed one by one rather than as "/api/sync/**", because that subtree is not uniform:
         // /api/sync/{status,ping,invisible,delivery-status,quarantine,quarantine/{id},probe} are
         // RequireInternalKey (most also RequireSuperadmin) operator routes that happen to share
-        // the prefix. Publishing the wildcard let a keyless caller reach them and collect a 401
+        // the prefix. Publishing the wildcard would let a keyless caller reach them and collect a 401
         // where every other unpublished path answers 404 — a small existence oracle, and exactly
         // the distinction the "404, not 403" rule at the top of this file exists to remove.
         //
         // The cost of an explicit list is that a NEW peer route has to be added here or peers get
         // a 404. That is the intended failure direction: forgetting makes sync visibly stop, while
-        // forgetting under the wildcard silently published an admin route.
+        // a new admin route under the wildcard would be published silently.
         new("GET", "/api/sync/identity"),
         new("GET", "/api/sync/sentinel"),
         new("POST", "/api/sync/challenge"),

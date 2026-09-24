@@ -29,11 +29,9 @@ public static class RateLimitPath
     /// or give two vectors onto the same destructive action a budget each.
     ///
     /// <para>
-    /// The node wipe used to be reachable from the anonymous Login screen and through an anonymous
-    /// <c>/api-proxy/init/reset</c> route, so it needed its own budget on both. It now lives only on
-    /// the superadmin-only Admin page; the budget stays as brute-force protection on the master
-    /// password an already-signed-in caller must still supply, but an anonymous visitor can no
-    /// longer reach it at all.
+    /// The node wipe lives only on the superadmin-only Admin page, so an anonymous visitor cannot
+    /// reach it; its budget is brute-force protection on the master password an already-signed-in
+    /// caller must still supply.
     /// </para>
     /// </summary>
     /// <param name="handlerValues">
