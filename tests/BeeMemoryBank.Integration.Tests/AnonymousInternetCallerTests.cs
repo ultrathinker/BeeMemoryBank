@@ -16,19 +16,22 @@ namespace BeeMemoryBank.Integration.Tests;
 /// <summary>
 /// Pins what an anonymous internet caller (no internal key, no Authorization header, no bearer
 /// token of any kind) can and cannot reach — the "no credentials presented at all" persona that
-/// BmbWebApplicationFactory's default client has never exercised because CreateClient() always
-/// stamps X-Internal-Key and X-User-Role on every request.
+/// <see cref="BmbWebApplicationFactory.CreateClient"/> has never exercised because it always stamps
+/// X-Internal-Key + X-User-Role on every request.
 ///
-/// <para>Three claims, each covered by its own test class:</para>
+/// <para>Three claims, each covered by its own test area:</para>
 /// <list type="bullet">
 ///   <item><description>Every MCP tool is unreachable without credentials — both at the HTTP
 ///   layer (McpIdentityGateMiddleware answers 401 before the SDK runs) and as a side-effect
-///   (no media row, no event row written).</description></item>
+///   (no media row, no event row written). The test drives the full initialize → initialized →
+///   tools/call sequence and asserts the FIRST request is already 401, so an MCP session cannot
+///   be opened at all.</description></item>
 ///   <item><description>Every endpoint NOT in <see cref="PublicSurface.Entries"/> answers 404 to a
-///   keyless caller. Enumerating <c>EndpointDataSource</c> covers new endpoints automatically
-///   (the same completeness trick PublicSurfaceTests uses).</description></item>
-///   <item><description>Every <see cref="PublicSurface.Entries"/> entry returns ONLY its documented
-///   anonymous answer (401/404/200-with-no-secrets as appropriate).</description></item>
+///   keyless caller. Enumerating <c>EndpointDataSource</c> covers new endpoints automatically,
+///   and every (route × method) pair is probed (not just the first method on each route).</description></item>
+///   <item><description>Every <see cref="PublicSurface.Entries"/> entry returns the EXACT
+///   documented anonymous status (the table is written out explicitly in
+///   <see cref="DocumentedAnonymousStatuses"/>), not "any 2xx–4xx".</description></item>
 ///   <item><description>/api/join and /api/auth/remote-token from a keyless loopback caller get
 ///   429 after the limit — the loopback exemption B3 removed.</description></item>
 /// </list>
@@ -84,12 +87,18 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(AllMcpToolNames))]
-    public async Task McpTool_NoCredentials_Answers401_BeforeMcpSession(string toolName)
+    public async Task McpTool_NoCredentials_FullSequenceAnswers401AndCreatesNoSession(string toolName)
     {
-        // Full initialize → initialized → tools/call sequence, just like an actual MCP client
-        // would do. Without credentials the gate must short-circuit with 401 BEFORE the MCP SDK
-        // produces an Mcp-Session-Id — so an anonymous caller cannot even create a session.
-        var resp = await McpPostAsync(_raw, new
+        // Drive the full initialize → notifications/initialized → tools/call sequence, the same
+        // handshake an MCP client would do. The gate must short-circuit with 401 at the very
+        // FIRST request — so an anonymous caller never gets to "notifications/initialized", never
+        // gets to "tools/call", and never receives an Mcp-Session-Id (no MCP session exists).
+        // Pinned: the FIRST request's status is 401, the response carries no Mcp-Session-Id,
+        // and tbl_media / tbl_event row counts are unchanged.
+        var beforeMedia = await CountMediaAsync();
+        var beforeEvents = await CountEventAsync();
+
+        var initResp = await McpPostAsync(_raw, new
         {
             jsonrpc = "2.0",
             id = 1,
@@ -101,24 +110,55 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
                 clientInfo = new { name = "anonymous-internet-caller-tests", version = "1.0" }
             }
         });
-        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+
+        initResp.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
             $"the MCP gate must answer 401 to a keyless request, even for initialize (tool under test: {toolName})");
-        resp.Headers.WwwAuthenticate.ToString().Should().Contain("Bearer",
+        initResp.Headers.WwwAuthenticate.ToString().Should().Contain("Bearer",
             "RFC 7235: a 401 must include WWW-Authenticate so clients know what credential to send");
+        initResp.Headers.Contains("Mcp-Session-Id").Should().BeFalse(
+            "an anonymous caller must never receive an MCP session id");
+
+        // The full sequence still fails — drive the next two requests so a regression that lets
+        // initialize through but breaks the rest of the handshake would surface here too.
+        var notifResp = await McpPostAsync(_raw, new
+        {
+            jsonrpc = "2.0",
+            method = "notifications/initialized"
+        });
+        // Notifications don't carry an id, so the SDK's answer (when reached) is a JSON-RPC
+        // success with no body, status 202. The gate answers 401 before the SDK runs.
+        notifResp.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            $"the gate must reject notifications/initialized too (tool under test: {toolName})");
+
+        var callResp = await McpPostAsync(_raw, new
+        {
+            jsonrpc = "2.0",
+            id = 2,
+            method = "tools/call",
+            @params = new { name = toolName, arguments = new { } }
+        });
+        callResp.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            $"the gate must reject tools/call {toolName} too");
+
+        var afterMedia = await CountMediaAsync();
+        var afterEvents = await CountEventAsync();
+        afterMedia.Should().Be(beforeMedia,
+            $"the gate must short-circuit {toolName} before any media row can be written");
+        afterEvents.Should().Be(beforeEvents,
+            $"the gate must short-circuit {toolName} before any event row can be written");
     }
 
     [Fact]
-    public async Task McpSaveMedia_NoCredentials_NoMediaRowCreated()
+    public async Task McpSaveMedia_NoCredentials_FullSequenceLeavesNothingBehind()
     {
         // The specific hole B2 closes: an anonymous caller driving the full MCP handshake and
-        // then calling bee_save_media must NOT leave a row behind. Even though the HTTP gate
-        // answers 401, this also asserts the second layer (the repository's identity check) by
-        // repeating the attack with the internal key — which would normally bypass the HTTP gate
-        // — but with no MediaOwnerKey, the repository refuses at the second layer.
-        var scopeHolder = _factory.Services.GetRequiredService<CallerScopeHolder>();
-        var beforeCount = await CountMediaAsync();
+        // then calling bee_save_media must NOT leave a media row OR an event row behind.
+        // Drive initialize → notifications/initialized → tools/call with a real PNG body, so a
+        // regression that let a 401 slip into a 200-with-row would be caught.
+        var beforeMedia = await CountMediaAsync();
+        var beforeEvents = await CountEventAsync();
 
-        var resp = await McpPostAsync(_raw, new
+        var initResp = await McpPostAsync(_raw, new
         {
             jsonrpc = "2.0",
             id = 1,
@@ -130,11 +170,74 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
                 clientInfo = new { name = "anonymous-test", version = "1.0" }
             }
         });
-        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        initResp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
-        var afterCount = await CountMediaAsync();
-        afterCount.Should().Be(beforeCount,
-            "the gate must short-circuit before any repository write can land");
+        var notifResp = await McpPostAsync(_raw, new
+        {
+            jsonrpc = "2.0",
+            method = "notifications/initialized"
+        });
+        notifResp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        var callResp = await McpPostAsync(_raw, new
+        {
+            jsonrpc = "2.0",
+            id = 2,
+            method = "tools/call",
+            @params = new
+            {
+                name = "bee_save_media",
+                arguments = new
+                {
+                    fileName = "anonymous.png",
+                    contentBase64 = TinyPngBase64,
+                    isAttachment = false
+                }
+            }
+        });
+        callResp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        var afterMedia = await CountMediaAsync();
+        var afterEvents = await CountEventAsync();
+        afterMedia.Should().Be(beforeMedia,
+            "the gate must short-circuit bee_save_media before any media row can be written");
+        afterEvents.Should().Be(beforeEvents,
+            "the gate must short-circuit bee_save_media before any event row can be written");
+    }
+
+    [Fact]
+    public async Task McpSaveMedia_BearerJunk_AlsoRejectedAndLeavesNothingBehind()
+    {
+        // Round-1 finding: my old gate accepted any Bearer value because it only checked for
+        // the absence of the header, not its contents. "Bearer junk" must now be rejected too,
+        // and the gate must short-circuit before the SDK can ever run bee_save_media.
+        var beforeMedia = await CountMediaAsync();
+        var beforeEvents = await CountEventAsync();
+
+        using var junkClient = _factory.Server.CreateClient();
+        junkClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "junk");
+
+        var initResp = await McpPostAsync(junkClient, new
+        {
+            jsonrpc = "2.0",
+            id = 1,
+            method = "initialize",
+            @params = new
+            {
+                protocolVersion = "2025-03-26",
+                capabilities = new { },
+                clientInfo = new { name = "junk-bearer", version = "1.0" }
+            }
+        });
+        initResp.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "'Bearer junk' is not a recognised credential shape and must not open an MCP session");
+
+        var afterMedia = await CountMediaAsync();
+        var afterEvents = await CountEventAsync();
+        afterMedia.Should().Be(beforeMedia,
+            "a Bearer junk header must not let bee_save_media reach the repository");
+        afterEvents.Should().Be(beforeEvents,
+            "a Bearer junk header must not let bee_save_media log a sync event");
     }
 
     [Fact]
@@ -146,9 +249,6 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         // when Scope.MediaOwnerKey is null on an unlinked upload.
         await _factory.Services.GetRequiredService<SessionService>().UnlockAsync(Password);
 
-        // Drop any agent or user context: the bearer factory does not attach X-User-Id, so the
-        // CallerScopeMiddleware installs a deny-all with no MediaOwnerKey — exactly the
-        // anonymous state the repository guard catches.
         using var withKeyOnly = _factory.Server.CreateClient();
         withKeyOnly.DefaultRequestHeaders.Add("X-Internal-Key", BmbWebApplicationFactory.InternalKeyForTests);
 
@@ -173,17 +273,8 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         // A 1x1 PNG (base64). The MCP SDK should accept it; the repository then refuses because
         // the caller has no MediaOwnerKey. The result body is a JSON-RPC tool error, not a
         // 200-OK with a mediaId.
-        var tinyPngB64 = Convert.ToBase64String(new byte[]
-        {
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-            0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
-            0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-            0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82
-        });
-
-        var beforeCount = await CountMediaAsync();
+        var beforeMedia = await CountMediaAsync();
+        var beforeEvents = await CountEventAsync();
 
         var call = await McpPostAsync(withKeyOnly, new
         {
@@ -196,7 +287,7 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
                 arguments = new
                 {
                     fileName = "second-layer-test.png",
-                    contentBase64 = tinyPngB64,
+                    contentBase64 = TinyPngBase64,
                     isAttachment = false
                 }
             }
@@ -207,95 +298,143 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         var body = await call.Content.ReadAsStringAsync();
         body.Should().Contain("error", "the tool must surface the authorization failure, not a success");
 
-        var afterCount = await CountMediaAsync();
-        afterCount.Should().Be(beforeCount,
+        var afterMedia = await CountMediaAsync();
+        var afterEvents = await CountEventAsync();
+        afterMedia.Should().Be(beforeMedia,
             "the repository must not create a media row for a caller with no MediaOwnerKey, " +
             "regardless of whether the HTTP gate let the request through");
+        afterEvents.Should().Be(beforeEvents,
+            "the repository must not log a media_create event when no row is created");
     }
 
     [Fact]
-    public async Task McpSaveMedia_BmbrtRemoteToken_IsRejected()
+    public async Task McpSaveMedia_BmbrtRemoteToken_ResolvedAndUnresolved_AreBothRejected()
     {
-        // bmbrt_ tokens are scoped to the cross-instance remote-folder endpoints, not MCP. A
-        // request presenting only a bmbrt_ token must be rejected at the MCP gate, distinct from
-        // a missing credential. Issue a token through /api/auth/remote-token and then drive the
-        // MCP handshake with it.
-        var token = await IssueRemoteTokenAsync(_raw, "admin", Password);
-        token.Should().NotBeNullOrEmpty();
+        // bmbrt_ tokens are scoped to the cross-instance remote-folder endpoints, not MCP.
+        // Classify from the header value, not from the AgentAuthMiddleware resolution marker —
+        // a valid bmbrt_ (resolves into CallerIdentity) AND an unknown/expired one (never
+        // resolves) must BOTH be rejected, with the same shape, so an anonymous caller cannot
+        // open an MCP session by holding a stolen token.
+        var validToken = await IssueRemoteTokenAsync(_raw, "admin", Password);
+        validToken.Should().NotBeNullOrEmpty();
 
-        using var remoteClient = _factory.Server.CreateClient();
-        remoteClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        var beforeMedia = await CountMediaAsync();
+        var beforeEvents = await CountEventAsync();
 
-        var init = await McpPostAsync(remoteClient, new
+        async Task AssertRejectedAsync(HttpClient client, string label)
         {
-            jsonrpc = "2.0",
-            id = 1,
-            method = "initialize",
-            @params = new
+            var initResp = await McpPostAsync(client, new
             {
-                protocolVersion = "2025-03-26",
-                capabilities = new { },
-                clientInfo = new { name = "bmbrt-test", version = "1.0" }
-            }
-        });
+                jsonrpc = "2.0",
+                id = 1,
+                method = "initialize",
+                @params = new
+                {
+                    protocolVersion = "2025-03-26",
+                    capabilities = new { },
+                    clientInfo = new { name = label, version = "1.0" }
+                }
+            });
+            initResp.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+                $"{label}: a bmbrt_ token must not be a valid credential on /mcp");
+            initResp.Headers.Contains("Mcp-Session-Id").Should().BeFalse(
+                $"{label}: the gate must reject before any MCP session is created");
+        }
 
-        init.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
-            "a bmbrt_ token must not be a valid credential on /mcp, even after AgentAuthMiddleware " +
-            "resolves it into a CallerIdentity");
+        // Resolved bmbrt_ — AgentAuthMiddleware sets CallerIdentity + IsRemoteToken for this one.
+        using (var resolvedClient = _factory.Server.CreateClient())
+        {
+            resolvedClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", validToken);
+            await AssertRejectedAsync(resolvedClient, "resolved-bmbrt");
+        }
+
+        // Unresolved bmbrt_ — never reaches the IsRemoteToken branch, so the gate must catch it
+        // from the bearer prefix alone.
+        using (var unknownClient = _factory.Server.CreateClient())
+        {
+            unknownClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", "bmbrt_unknown_0000000000000000000000000000000000000000");
+            await AssertRejectedAsync(unknownClient, "unknown-bmbrt");
+        }
+
+        // Drive the full sequence for one of them too, to confirm no MCP session opens and no
+        // event/media row is written even when a forged bmbrt_ tries the full handshake.
+        using (var callClient = _factory.Server.CreateClient())
+        {
+            callClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", validToken);
+            await McpPostAsync(callClient, new
+            {
+                jsonrpc = "2.0",
+                method = "notifications/initialized"
+            });
+            await McpPostAsync(callClient, new
+            {
+                jsonrpc = "2.0",
+                id = 2,
+                method = "tools/call",
+                @params = new
+                {
+                    name = "bee_save_media",
+                    arguments = new
+                    {
+                        fileName = "bmbrt.png",
+                        contentBase64 = TinyPngBase64,
+                        isAttachment = false
+                    }
+                }
+            });
+        }
+
+        var afterMedia = await CountMediaAsync();
+        var afterEvents = await CountEventAsync();
+        afterMedia.Should().Be(beforeMedia,
+            "bmbrt_ tokens must not let bee_save_media reach the repository, resolved or not");
+        afterEvents.Should().Be(beforeEvents,
+            "bmbrt_ tokens must not let bee_save_media log a sync event, resolved or not");
     }
 
     // ───── B2: Non-PublicSurface endpoints ───────────────────────────────────
 
     [Fact]
-    public async Task NonPublicEndpoints_AllAnswer404WithoutTheKey()
+    public async Task NonPublicEndpoints_EveryRouteEveryMethod_Answers404WithoutTheKey()
     {
-        // Build the list from EndpointDataSource so a new endpoint is covered automatically, the
-        // same completeness strategy PublicSurfaceTests uses. /mcp is checked above; /api/join,
-        // /api/auth/remote-token, and the peer/sync endpoints stay in PublicSurface and answer
-        // their own documented shape, not 404.
-        //
-        // Whether a pattern is "public" is decided here by inspecting the entries list directly:
-        // PublicSurface.Allows(path, "ANY") is the wrong probe because each entry specifies its
-        // own verb, so /api/version (public for GET only) would be reported as non-public and
-        // this test would expect it to answer 404 — wrong on both counts.
-        var publicPatterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in PublicSurface.Entries)
+        // Enumerate EndpointDataSource and probe every (route × method) pair, not just the first
+        // method per route. Compare against method-aware PublicSurface.Allows so an entry that
+        // permits only GET does not accidentally make POSTs public. Routes outside the prefix
+        // set must still answer 404, so /mcp, /health, and anything else the API maps is
+        // covered automatically.
+        var dataSource = _factory.Services.GetRequiredService<EndpointDataSource>();
+        var allRoutes = dataSource.Endpoints.OfType<RouteEndpoint>().ToList();
+        var probes = new List<(string Method, string Pattern, string Url)>();
+
+        foreach (var ep in allRoutes)
         {
-            // Skip the "/mcp/**" pattern (wildcard tail) — the MCP gate test covers that surface
-            // already and the "method == null → any verb" semantics would make every /mcp route
-            // "public" here, which would defeat the 404 check.
-            var segs = entry.Pattern.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (segs.Length > 0 && segs[^1] == "**") continue;
-            publicPatterns.Add(entry.Pattern);
+            var pattern = ep.RoutePattern.RawText;
+            if (pattern == null) continue;
+            var methods = ep.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods ?? new List<string> { "GET" };
+            var url = SubstituteRouteParams(pattern);
+            foreach (var m in methods)
+                probes.Add((m, pattern, url));
         }
 
-        var dataSource = _factory.Services.GetRequiredService<EndpointDataSource>();
-        var patterns = dataSource.Endpoints
-            .OfType<RouteEndpoint>()
-            .Select(e => e.RoutePattern.RawText)
-            .Where(p => p != null
-                && (p.StartsWith("/api/") || p.StartsWith("/node/"))
-                && p != "/mcp"
-                && !publicPatterns.Contains(p!))
-            .Distinct()
-            .ToList();
-
-        patterns.Should().NotBeEmpty(
-            "the test is meaningless if every endpoint happens to be public — enumerate EndpointDataSource");
+        probes.Should().NotBeEmpty(
+            "the test is meaningless if EndpointDataSource produced nothing to probe");
 
         var failures = new List<string>();
-        foreach (var pattern in patterns!)
+        foreach (var (method, pattern, url) in probes)
         {
+            // Method-aware: a route is public only if some entry covers THIS method. This is
+            // stricter than checking the pattern alone: /api/version is public for GET only, so
+            // a POST to it must answer 404, not the GET-200.
+            var isPublic = PublicSurface.Entries.Any(entry =>
+                PatternAgrees(entry.Pattern, pattern) && MatchesVerb(entry.Method, method));
+            // /mcp subtree entries use "/mcp/**" — PublicSurface.Matches already handles that
+            // for "ANY" via the trailing **, but Method is null on those entries (any verb),
+            // so MatchesVerb returns true for every verb. Same as PublicSurface.Allows. Good.
+
+            if (isPublic) continue;
+
             using var client = _factory.Server.CreateClient();
-            var url = SubstituteRouteParams(pattern!);
-
-            var methods = dataSource.Endpoints
-                .OfType<RouteEndpoint>()
-                .Where(e => e.RoutePattern.RawText == pattern)
-                .SelectMany(e => e.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods ?? new List<string>())
-                .ToList();
-
-            var method = methods.FirstOrDefault() ?? "GET";
             try
             {
                 var request = new HttpRequestMessage(new HttpMethod(method), url);
@@ -310,28 +449,86 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         }
 
         failures.Should().BeEmpty(
-            "every non-PublicSurface endpoint must answer 404 to a keyless caller. Failures:\n" +
-            string.Join("\n", failures.Select(f => "  - " + f)));
+            "every non-PublicSurface (route × method) pair must answer 404 to a keyless caller. " +
+            "Failures:\n" + string.Join("\n", failures.Select(f => "  - " + f)));
     }
 
-    // ───── B2: PublicSurface entries have their documented answer ─────────────
+    // ───── B2: PublicSurface entries have their exact documented answer ─────
 
-    public static IEnumerable<object[]> PublicSurfaceEntries()
+    /// <summary>
+    /// The exact anonymous-call answer per PublicSurface entry. Built from a one-off probe (see
+    /// PublicSurfaceProbeTests) and pinned here as a deliberate contract: a future change that
+    /// shifts the answer (e.g. locking /api/snapshots/restore/progress behind auth) must update
+    /// this table AND the brief that justifies the change.
+    /// </summary>
+    private static readonly (string Method, string Pattern, HttpStatusCode Status)[] DocumentedAnonymousStatuses =
     {
-        foreach (var entry in PublicSurface.Entries)
-            yield return new object[] { entry.Method ?? "ANY", entry.Pattern };
-    }
+        ("ANY",  "/health",                                HttpStatusCode.OK),
+        ("GET",  "/api/version",                           HttpStatusCode.OK),
+        ("ANY",  "/mcp",                                   HttpStatusCode.Unauthorized),
+        ("ANY",  "/mcp/**",                                HttpStatusCode.Unauthorized),
+        ("GET",  "/api/sync/identity",                     HttpStatusCode.OK),
+        ("GET",  "/api/sync/sentinel",                     HttpStatusCode.OK),
+        ("POST", "/api/sync/challenge",                    HttpStatusCode.OK),
+        ("POST", "/api/sync/authenticate",                 HttpStatusCode.BadRequest),
+        ("ANY",  "/api/sync/events",                       HttpStatusCode.Unauthorized),
+        ("GET",  "/api/sync/snapshot/for-join",            HttpStatusCode.Unauthorized),
+        ("POST", "/api/sync/report-position",              HttpStatusCode.BadRequest),
+        ("POST", "/api/sync/blobs",                        HttpStatusCode.Unauthorized),
+        ("POST", "/api/sync/blobs/check",                  HttpStatusCode.Unauthorized),
+        ("POST", "/api/sync/blobs/get",                    HttpStatusCode.Unauthorized),
+        ("POST", "/api/sync/probe-relay",                  HttpStatusCode.Unauthorized),
+        ("POST", "/api/join",                              HttpStatusCode.Unauthorized),
+        ("GET",  "/api/snapshots/restore/{eventId}/file",  HttpStatusCode.Unauthorized),
+        ("GET",  "/api/snapshots/restore/progress",        HttpStatusCode.OK),
+        ("GET",  "/api/dek-rotation/progress",             HttpStatusCode.OK),
+        ("POST", "/api/auth/remote-token",                 HttpStatusCode.Unauthorized),
+        ("GET",  "/api/folders/accessible",                HttpStatusCode.Unauthorized),
+        ("GET",  "/api/folders/by-path/snapshot",          HttpStatusCode.BadRequest),
+    };
 
     [Theory]
-    [MemberData(nameof(PublicSurfaceEntries))]
-    public async Task PublicSurfaceEntry_NoKey_AnswersAsDocumented(string method, string pattern)
+    [MemberData(nameof(PublicSurfaceEntryData))]
+    public async Task PublicSurfaceEntry_NoKey_AnswersExactDocumentedStatus(string method, string pattern, HttpStatusCode expected)
     {
         using var client = _factory.Server.CreateClient();
         var url = SubstituteRouteParams(pattern);
 
-        // Pick the verb documented in the entry; "ANY" / null means any verb works.
+        // Build a request that matches what a sensible anonymous caller would send:
+        // - POSTs get a body that the handler actually reads (so the answer is the documented one,
+        //   not a 400 because the body was empty);
+        // - GETs with required query parameters get them.
         var verb = method == "ANY" ? "GET" : method;
         var request = new HttpRequestMessage(new HttpMethod(verb), url);
+
+        if (verb == "POST")
+        {
+            request.Content = pattern switch
+            {
+                "/api/join" => JsonContent.Create(new
+                {
+                    masterPassword = "wrong-password-by-design",
+                    nodeId = Guid.NewGuid(),
+                    displayName = "probe",
+                    ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32])
+                }),
+                "/api/auth/remote-token" => JsonContent.Create(new
+                {
+                    username = "probe",
+                    password = "wrong-password-by-design"
+                }),
+                _ => JsonContent.Create(new { })
+            };
+        }
+        else if (pattern == "/api/folders/by-path/snapshot")
+        {
+            url += "?path=/probe";
+        }
+        else if (pattern == "/api/snapshots/restore/progress")
+        {
+            url += "?eventId=" + Guid.Empty;
+        }
+
         HttpResponseMessage resp;
         try
         {
@@ -340,18 +537,18 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         catch (Exception ex)
         {
             throw new InvalidOperationException(
-                $"PublicSurface entry {method} {pattern} threw before producing a documented answer: {ex.Message}");
+                $"PublicSurface entry {method} {pattern} threw before producing its documented answer: {ex.Message}");
         }
 
-        // Documented per-entry shape: most answer 200 (health/version/identity/sentinel), a few
-        // intentionally answer 4xx (join without password, auth/remote-token without creds). The
-        // gate is documented per entry, so the answer is one of "the request reached the handler
-        // and was answered" (200) or "the handler rejected it for an obvious input reason" (4xx).
-        // 404 here would mean the PublicSurface list is out of date — that case is covered by
-        // PublicSurfaceTests already; we just want to confirm none of the documented shapes
-        // became a 5xx (server bug) or some other surprise.
-        ((int)resp.StatusCode).Should().BeInRange(200, 499,
-            $"PublicSurface entry {method} {pattern} must answer in 2xx–4xx with its documented shape");
+        resp.StatusCode.Should().Be(expected,
+            $"{method} {pattern} must answer {expected} for a keyless caller with a sensible request. " +
+            $"If the documented answer changed, update DocumentedAnonymousStatuses AND document why in the change.");
+    }
+
+    public static IEnumerable<object[]> PublicSurfaceEntryData()
+    {
+        foreach (var (method, pattern, status) in DocumentedAnonymousStatuses)
+            yield return new object[] { method, pattern, status };
     }
 
     // ───── B3: rate limit kicks in for keyless loopback callers ──────────────
@@ -447,6 +644,14 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
 
     // ───── helpers ────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Valid 1x1 PNG (base64). Small enough to stay below the 20 MB upload cap and to round-trip
+    /// through any test transport, large enough that "is this a real image" is unambiguous if a
+    /// future test asserts on the body.
+    /// </summary>
+    private const string TinyPngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
     private static async Task<HttpResponseMessage> McpPostAsync(
         HttpClient client, object payload, string? sessionId = null)
     {
@@ -474,6 +679,35 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         });
     }
 
+    /// <summary>
+    /// True when <paramref name="published"/> (a PublicSurface pattern with {param} / ** segments)
+    /// matches <paramref name="mapped"/> (an EndpointDataSource raw text). Same shape as
+    /// PublicSurfaceTests.PatternsAgree so the two tests cannot drift on what "matches" means.
+    /// </summary>
+    private static bool PatternAgrees(string published, string mapped)
+    {
+        var publishedSegments = published.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var mappedSegments = mapped.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < publishedSegments.Length; i++)
+        {
+            if (publishedSegments[i] == "**") return mappedSegments.Length >= i;
+            if (i >= mappedSegments.Length) return false;
+            var isPublishedParam = publishedSegments[i].StartsWith('{');
+            var isMappedParam = mappedSegments[i].StartsWith('{');
+            if (isPublishedParam || isMappedParam)
+            {
+                if (isPublishedParam != isMappedParam) return false;
+                continue;
+            }
+            if (!string.Equals(publishedSegments[i], mappedSegments[i], StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+        return mappedSegments.Length == publishedSegments.Length;
+    }
+
+    private static bool MatchesVerb(string? entryMethod, string requestMethod) =>
+        entryMethod == null || string.Equals(entryMethod, requestMethod, StringComparison.OrdinalIgnoreCase);
+
     private async Task<int> CountMediaAsync()
     {
         // Reach into the SQLite store directly — there is no public repository service for the
@@ -481,8 +715,16 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         using var scope = _factory.Services.CreateScope();
         var connFactory = scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Storage.Sqlite.DbConnectionFactory>();
         using var conn = connFactory.CreateConnection();
-        var count = await Dapper.SqlMapper.ExecuteScalarAsync<int>(conn, "SELECT COUNT(*) FROM tbl_media WHERE status = 'A'");
-        return count;
+        return await Dapper.SqlMapper.ExecuteScalarAsync<int>(
+            conn, "SELECT COUNT(*) FROM tbl_media WHERE status = 'A'");
+    }
+
+    private async Task<int> CountEventAsync()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var connFactory = scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Storage.Sqlite.DbConnectionFactory>();
+        using var conn = connFactory.CreateConnection();
+        return await Dapper.SqlMapper.ExecuteScalarAsync<int>(conn, "SELECT COUNT(*) FROM tbl_event");
     }
 
     private async Task<string> IssueRemoteTokenAsync(HttpClient client, string username, string password)
