@@ -90,37 +90,42 @@ public static class KeyDerivation
         }
     }
 
+    // FIFO: once anyone is waiting, newcomers queue behind them, and only the oldest waiter may
+    // take units. Otherwise a steady stream of small (default-cost) derivations could keep a
+    // larger request waiting until it times out while capacity keeps getting handed out.
+    private static readonly LinkedList<int> Waiters = new();
+
     private static void AcquireUnits(int units)
     {
         lock (GateLock)
         {
-            if (_availableUnits >= units)
+            if (Waiters.Count == 0 && _availableUnits >= units)
             {
                 _availableUnits -= units;
                 return;
             }
 
-            if (_queued >= MaxQueued)
+            if (Waiters.Count + _queued >= MaxQueued)
                 throw new KdfBusyException();
 
-            _queued++;
+            var ticket = Waiters.AddLast(units);
+            var deadline = Environment.TickCount64 + (long)MaxWait.TotalMilliseconds; // monotonic
             try
             {
-                var deadline = DateTime.UtcNow + MaxWait;
-                while (_availableUnits < units)
+                while (!(ReferenceEquals(Waiters.First, ticket) && _availableUnits >= units))
                 {
-                    var remaining = deadline - DateTime.UtcNow;
-                    if (remaining <= TimeSpan.Zero || !Monitor.Wait(GateLock, remaining))
-                    {
-                        if (_availableUnits >= units) break;
+                    var remaining = deadline - Environment.TickCount64;
+                    if (remaining <= 0)
                         throw new KdfBusyException();
-                    }
+                    Monitor.Wait(GateLock, TimeSpan.FromMilliseconds(remaining));
                 }
                 _availableUnits -= units;
             }
             finally
             {
-                _queued--;
+                Waiters.Remove(ticket);
+                // The head changed (we got through or gave up): let the next waiter re-check.
+                Monitor.PulseAll(GateLock);
             }
         }
     }

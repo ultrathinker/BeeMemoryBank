@@ -84,3 +84,35 @@ public class KeyDerivationMemoryBudgetTests
         KeyDerivation.PeakInFlightKiB.Should().BeLessThanOrEqualTo(Math.Max(KeyDerivation.MemoryBudgetKiB, 262_144));
     }
 }
+
+[Collection(nameof(KeyDerivationGateCollection))]
+public class KeyDerivationFairnessTests
+{
+    [Fact]
+    public void LargeRequest_IsNotStarvedBySmallOnes()
+    {
+        // A stream of default-cost derivations must not keep a larger one waiting until it times out:
+        // the gate is FIFO once anyone waits.
+        var budgetUnits = (int)(KeyDerivation.MemoryBudgetKiB / 65_536);
+        if (budgetUnits < 2) return; // nothing to starve on a 2-unit host with 128 MiB requests clamped
+
+        using var cts = new CancellationTokenSource();
+        var small = Enumerable.Range(0, budgetUnits).Select(_ => Task.Run(() =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try { KeyDerivation.DeriveKek("p", KeyDerivation.GenerateSalt(), memory: 65_536, iterations: 1, parallelism: 1); }
+                catch (KdfBusyException) { }
+            }
+        })).ToArray();
+
+        Thread.Sleep(200);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var act = () => KeyDerivation.DeriveKek("p", KeyDerivation.GenerateSalt(),
+            memory: 65_536 * Math.Min(4, budgetUnits), iterations: 1, parallelism: 1);
+        act.Should().NotThrow<KdfBusyException>();
+        cts.Cancel();
+        Task.WaitAll(small);
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(20));
+    }
+}
