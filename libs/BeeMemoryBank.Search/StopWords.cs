@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Search;
 /// SEARCH QUERY before it is scored, so a term like "the"/"и"/"a" -- which matches most of the
 /// corpus and contributes almost no ranking signal while forcing a full-postings walk -- never
 /// reaches <see cref="Indexing.IndexBuilder.SearchRanked"/>. This is a deliberate, standard
-/// query-time behavior change; it is NOT applied at indexing time, so the index still contains
+/// query-time filter; it is NOT applied at indexing time, so the index still contains
 /// these terms and nothing needs to be re-indexed.
 ///
 /// <para>

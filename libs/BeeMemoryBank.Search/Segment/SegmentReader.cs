@@ -80,7 +80,8 @@ public sealed class SegmentReader
 
     /// <summary>
     /// Number of distinct documents containing <paramref name="term"/>, or 0 if the term is not
-    /// present in this segment. Stored in the dictionary for a later work package's BM25 scoring.
+    /// present in this segment. Stored in the dictionary for BM25 scoring; it counts the segment as
+    /// built and knows nothing about tombstones recorded later.
     /// </summary>
     public int GetDocumentFrequency(string term)
     {
@@ -120,14 +121,11 @@ public sealed class SegmentReader
     /// <summary>
     /// Enumerates every distinct term in this segment's dictionary, in on-disk dictionary order
     /// (sorted by hash, not alphabetically -- the point of this method is completeness, not any
-    /// particular order). Added for WP-11: a segment reloaded from disk otherwise has no way to
-    /// tell a caller what terms it contains (this class only supports point lookups by exact term
-    /// text, by design -- see this class's own header doc), which blocks folding a reloaded
-    /// segment back into <see cref="Indexing.IndexBuilder"/>'s sealed-segment list (it needs a
-    /// <c>Vocabulary</c> set to know what terms to consider a segment for during a merge). No
-    /// format change was needed: every term's UTF-8 text is already stored in the term text block
-    /// for hash-collision disambiguation (see <see cref="SegmentWriter"/>'s doc comment) --
-    /// this method only exposes what <see cref="FindTermRecordIndex"/> already reads internally.
+    /// particular order). Needed to rebuild the <c>Vocabulary</c> set <see cref="Indexing.IndexBuilder"/>
+    /// requires (to know which terms to visit during a merge) when a segment reloaded from disk is
+    /// folded back into its sealed-segment list. Every term's UTF-8 text is already stored for
+    /// hash-collision disambiguation (see <see cref="SegmentWriter"/>'s doc comment); this method
+    /// only exposes what <see cref="FindTermRecordIndex"/> already reads internally.
     /// </summary>
     public IEnumerable<string> EnumerateTerms()
     {

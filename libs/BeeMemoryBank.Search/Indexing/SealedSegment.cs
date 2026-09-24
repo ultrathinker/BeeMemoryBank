@@ -8,13 +8,11 @@ namespace BeeMemoryBank.Search.Indexing;
 /// <list type="bullet">
 /// <item>
 /// <description>
-/// <b>Vocabulary</b> -- the distinct terms this segment contains. <see cref="SegmentReader"/>
-/// itself only supports point lookups by exact term text (<c>GetPostings</c>/
-/// <c>GetDocumentFrequency</c>); it has no "enumerate every term in the dictionary" method. A merge
-/// needs to visit every term to recombine postings, so <see cref="IndexBuilder"/> captures this
-/// vocabulary at seal time (when it already has every document's term list in hand, before
-/// <see cref="SegmentWriter.Build"/> throws that structure away into flat bytes) rather than trying
-/// to recover it later from the segment's raw bytes.
+/// <b>Vocabulary</b> -- the distinct terms this segment contains. A merge needs to visit every term
+/// to recombine postings, so <see cref="IndexBuilder"/> captures this vocabulary at seal time (when
+/// it already has every document's term list in hand, before <see cref="SegmentWriter.Build"/>
+/// flattens it into bytes), or rebuilds it via <see cref="SegmentReader.EnumerateTerms"/> when
+/// adopting a segment reloaded from disk.
 /// </description>
 /// </item>
 /// <item>
@@ -42,7 +40,7 @@ namespace BeeMemoryBank.Search.Indexing;
 /// </summary>
 internal sealed class SealedSegment
 {
-    /// <summary>Monotonically increasing id, unique for the lifetime of the owning <see cref="IndexBuilder"/>. Used only for the merge-invariant check in <see cref="IndexBuilder"/>; never persisted.</summary>
+    /// <summary>Monotonically increasing id, unique for the lifetime of the owning <see cref="IndexBuilder"/>. Used for the merge-invariant check in <see cref="IndexBuilder"/> and as the in-process correlation key in <see cref="SegmentTombstoneEvent"/>; never persisted.</summary>
     public int Id { get; }
 
     public SegmentReader Reader { get; }
