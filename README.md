@@ -634,6 +634,7 @@ Tip: take a snapshot via Admin → Snapshots → Create before updating, in case
 | 401/403 between Web and API | Different `BMB_INTERNAL_KEY` in the two processes | Use `EnvironmentFile=` (systemd) or a shared env file |
 | `docker compose down -v` did not delete `./data` | `data/` is a bind mount, not a named volume — `-v` doesn't touch it | Remove manually: `rm -rf data/` |
 | `Too many attempts` for everyone at once, or peers stop syncing after one busy client | Behind a proxy, every client looks like the proxy, so they share one rate-limit bucket | Set `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS=true` (proxy on the same host) or `BMB_TRUSTED_PROXIES` (Docker or remote proxy) — see [HTTPS Reverse Proxy](#https-reverse-proxy). The startup log prints which hops are trusted. |
+| `/api/join` or `/api/auth/remote-token` accepts unlimited wrong-password guesses from a same-host reverse proxy | The API's `RateLimitMiddleware` used to skip every loopback caller, so the Web process and any proxy on the host did too — including untrusted internet traffic forwarded to 127.0.0.1 | Set `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS=true` so the Web layer's real-client limiter sees the actual peer IP and throttles. The API's limiter now keys on the internal key, not loopback, and counts loopback-without-key traffic against its bucket. |
 
 ### Join an Existing Network
 
