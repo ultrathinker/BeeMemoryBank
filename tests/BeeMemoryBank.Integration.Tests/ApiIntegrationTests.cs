@@ -164,6 +164,80 @@ public class ApiIntegrationTests : IAsyncLifetime
         await LockSessionAsync();
     }
 
+    private async Task<Guid> UploadUnlinkedAttachmentAsync(string fileName)
+    {
+        using var form = new MultipartFormDataContent();
+        var fileContent = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes("content of " + fileName));
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain");
+        form.Add(fileContent, "file", fileName);
+        form.Add(new StringContent("true"), "attachment");
+        var upload = await _client.PostAsync("/api/media", form);
+        upload.StatusCode.Should().Be(HttpStatusCode.Created);
+        var uploaded = await upload.Content.ReadFromJsonAsync<JsonElement>();
+        return Guid.Parse(uploaded.GetProperty("id").GetString()!);
+    }
+
+    // The "new article" page uploads files before the article exists (no articleId), then passes
+    // their ids on create. Attachments are never referenced in the body, so without explicit
+    // linking they'd stay orphans and be swept by the media GC.
+    [Fact]
+    public async Task CreateArticle_WithPreUploadedAttachments_LinksThem()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+
+        var first = await UploadUnlinkedAttachmentAsync("a.txt");
+        var second = await UploadUnlinkedAttachmentAsync("b.txt");
+
+        // An attachment that already belongs to another article must not be moved.
+        var taken = await UploadUnlinkedAttachmentAsync("taken.txt");
+        var linkOther = await (await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Other Owner", treePath = "/Tests", content = "x", attachmentIds = new[] { taken }
+        })).Content.ReadFromJsonAsync<ArticleResponse>();
+
+        var create = await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Created With Files",
+            treePath = "/Tests",
+            content = "Body without any media reference",
+            attachmentIds = new[] { first, second, taken }
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var article = await create.Content.ReadFromJsonAsync<ArticleResponse>();
+
+        var list = await (await _client.GetAsync($"/api/articles/{article!.Id}/media"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        list.EnumerateArray().Select(m => m.GetProperty("fileName").GetString())
+            .Should().BeEquivalentTo(["a.txt", "b.txt"]);
+        list.EnumerateArray().Should().OnlyContain(m => m.GetProperty("kind").GetString() == "attachment");
+
+        var stillThere = await (await _client.GetAsync($"/api/articles/{linkOther!.Id}/media"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        stillThere.EnumerateArray().Select(m => m.GetProperty("fileName").GetString())
+            .Should().BeEquivalentTo(["taken.txt"]);
+
+        await LockSessionAsync();
+    }
+
+    [Fact]
+    public async Task CreateProtectedArticle_WithAttachments_IsRejected()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        var file = await UploadUnlinkedAttachmentAsync("secret.txt");
+
+        var create = await _client.PostAsJsonAsync("/api/articles", new
+        {
+            title = "Protected With Files",
+            treePath = "/Tests",
+            content = "secret body",
+            passphrase = "correct-horse",
+            attachmentIds = new[] { file }
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        await LockSessionAsync();
+    }
+
     [Fact]
     public async Task GetContent_WhenLocked_Returns403()
     {

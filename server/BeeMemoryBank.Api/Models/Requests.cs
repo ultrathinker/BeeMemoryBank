@@ -10,7 +10,10 @@ public record CreateArticleRequest(
     // Create the article ALREADY protected: the body is wrapped before the first save, so the
     // plaintext never reaches the event log / sync. Omit for a normal (plaintext) article.
     string? Passphrase = null,
-    string? Hint = null);
+    string? Hint = null,
+    // File attachments uploaded (unlinked) while the article was still being written; linked to
+    // the new article once it exists. Not allowed together with Passphrase.
+    List<Guid>? AttachmentIds = null);
 
 public record UpdateArticleRequest(
     string? Title = null,

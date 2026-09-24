@@ -91,6 +91,9 @@ public static class ArticleEndpoints
                 // reaches the event log or sync. The very first CREATE event carries only ciphertext.
                 var content = req.Content;
                 string? hint = null;
+                var attachmentIds = req.AttachmentIds ?? [];
+                if (!string.IsNullOrEmpty(req.Passphrase) && attachmentIds.Count > 0)
+                    return Results.Json(new ErrorResponse("A password-protected article can't have attachments. Remove the files or create it without a password."), statusCode: 400);
                 if (!string.IsNullOrEmpty(req.Passphrase))
                 {
                     if (req.Passphrase.Length < 4)
@@ -104,6 +107,8 @@ public static class ArticleEndpoints
                 // stored them locally and emitted nothing — the article arrived on other nodes
                 // with an empty tag set, permanently.
                 var article = await svc.CreateAsync(req.Title, req.TreePath, req.ConceptTags ?? [], content, hint);
+                if (attachmentIds.Count > 0)
+                    await svc.LinkAttachmentsAsync(article.Id, attachmentIds);
                 return Results.Created($"/api/articles/{article.Id}", ArticleResponse.From(article, req.ConceptTags ?? []));
             }
             catch (UnauthorizedAccessException ex)

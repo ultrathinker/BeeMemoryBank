@@ -924,6 +924,42 @@ a.search-result-title:hover {
     margin: 0 0 12px;
 }
 
+/* Drag-and-drop / click-to-choose area for article attachments (View and Edit pages). */
+.attach-dropzone {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding: 18px 12px;
+    border: 2px dashed var(--sl-color-neutral-300);
+    border-radius: 8px;
+    color: var(--sl-color-neutral-500);
+    font-size: 0.9rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.attach-dropzone:hover,
+.attach-dropzone:focus-visible,
+.attach-dropzone.is-dragover {
+    border-color: var(--sl-color-primary-500);
+    color: var(--sl-color-primary-600);
+    background: color-mix(in srgb, var(--sl-color-primary-500) 8%, transparent);
+    outline: none;
+}
+.attach-dropzone.is-busy {
+    cursor: progress;
+    opacity: 0.7;
+}
+.attach-dropzone[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.5;
+    border-color: var(--sl-color-neutral-300);
+    color: var(--sl-color-neutral-500);
+    background: none;
+}
+
 /* "Temporarily unlocked · locks in N min · Lock now" strip above a protected article's body. */
 .unlock-banner {
     display: flex;

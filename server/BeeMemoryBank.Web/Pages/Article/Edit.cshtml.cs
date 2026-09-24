@@ -1,3 +1,5 @@
+using System.Text.Json;
+using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,6 +21,15 @@ public class EditModel(ApiClient api) : PageModel
     // Protected AND not unlockable from the recent-unlock cache → show the passphrase gate.
     public bool IsLocked { get; private set; }
     public string? ErrorMessage { get; set; }
+    // Existing article: its current file attachments (uploaded straight onto the article).
+    public List<MediaDto> Attachments { get; private set; } = [];
+    // New article: files uploaded before the article exists, as the JSON the page posts back in
+    // the hidden "pendingAttachments" field ([{id,fileName,fileSize}]). Round-tripped so a failed
+    // create re-renders the same list instead of silently dropping the uploads.
+    public string PendingAttachmentsJson { get; private set; } = "[]";
+
+    private record PendingAttachment(Guid Id, string FileName, long FileSize);
+    private static readonly JsonSerializerOptions PendingJsonOpts = new(JsonSerializerDefaults.Web);
 
     public async Task<IActionResult> OnGetAsync(Guid? id, string? treePath)
     {
@@ -55,6 +66,11 @@ public class EditModel(ApiClient api) : PageModel
                     return Redirect($"/Article/View?id={id.Value}");
                 }
             }
+            if (article is { Protected: false })
+            {
+                var media = await api.ListMediaAsync(id.Value) ?? [];
+                Attachments = media.Where(m => m.Kind == "attachment").ToList();
+            }
             var ct = await api.GetArticleConceptTagsAsync(id.Value);
             ConceptTagsRaw = ct != null ? string.Join(", ", ct) : "";
         }
@@ -74,7 +90,7 @@ public class EditModel(ApiClient api) : PageModel
 
     public async Task<IActionResult> OnPostAsync(
         Guid? id, string? treePath, string title, string? content, string? conceptTags,
-        string? passphrase = null, string? hint = null)
+        string? passphrase = null, string? hint = null, string? pendingAttachments = null)
     {
         var body = content ?? "";
 
@@ -102,10 +118,13 @@ public class EditModel(ApiClient api) : PageModel
         }
         else
         {
+            var pending = ParsePending(pendingAttachments);
+            PendingAttachmentsJson = JsonSerializer.Serialize(pending, PendingJsonOpts);
             var (article, status, error) = await api.CreateArticleWithErrorAsync(
                 title, treePath ?? "/", body,
                 string.IsNullOrWhiteSpace(passphrase) ? null : passphrase,
-                string.IsNullOrWhiteSpace(hint) ? null : hint);
+                string.IsNullOrWhiteSpace(hint) ? null : hint,
+                pending.Count > 0 ? pending.Select(p => p.Id).ToList() : null);
             if (article != null)
             {
                 await api.SetArticleConceptTagsAsync(article.Id, ctList);
@@ -113,6 +132,22 @@ public class EditModel(ApiClient api) : PageModel
             }
             ErrorMessage = FriendlyError(status, error, "create");
             return Page();
+        }
+    }
+
+    private static List<PendingAttachment> ParsePending(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            return (JsonSerializer.Deserialize<List<PendingAttachment>>(json, PendingJsonOpts) ?? [])
+                .Where(p => p.Id != Guid.Empty)
+                .DistinctBy(p => p.Id)
+                .ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
         }
     }
 

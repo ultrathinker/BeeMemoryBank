@@ -88,12 +88,14 @@ public partial class ApiClient
     }
 
     public async Task<(ArticleDto? Article, int Status, string? Error)> CreateArticleWithErrorAsync(
-        string title, string treePath, string content, string? passphrase = null, string? hint = null)
+        string title, string treePath, string content, string? passphrase = null, string? hint = null,
+        List<Guid>? attachmentIds = null)
     {
         // passphrase != null → create the article ALREADY protected (body wrapped server-side before
         // the first save, so the plaintext never reaches the event log / sync).
+        // attachmentIds: files uploaded (unlinked) while the article was being written.
         var resp = await http.PostAsync("/api/articles",
-            Body(new { title, treePath, content, passphrase, hint }));
+            Body(new { title, treePath, content, passphrase, hint, attachmentIds }));
         if (!resp.IsSuccessStatusCode)
             return (null, (int)resp.StatusCode, await ReadErrorAsync(resp));
         var dto = await resp.Content.ReadFromJsonAsync<ArticleDto>(JsonOpts);

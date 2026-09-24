@@ -223,11 +223,10 @@
 
             @if (!Model.IsReadOnly)
             {
-                <div style="margin-top:14px;">
-                    <input type="file" id="attachment-file-input" style="display:none;" />
-                    <sl-button id="btn-add-attachment" size="small" variant="default">
-                        <sl-icon slot="prefix" name="paperclip"></sl-icon> Add File
-                    </sl-button>
+                <input type="file" id="attachment-file-input" multiple style="display:none;" />
+                <div class="attach-dropzone" id="attachment-dropzone" role="button" tabindex="0" aria-label="Add files">
+                    <sl-icon name="cloud-arrow-up"></sl-icon>
+                    <span id="attachment-dropzone-text">Drop files here or click to choose</span>
                 </div>
             }
         </div>
@@ -804,26 +803,50 @@ else
     }
 
     var attachmentFileInput = document.getElementById('attachment-file-input');
-    var addAttachmentBtn = document.getElementById('btn-add-attachment');
-    if (addAttachmentBtn && attachmentFileInput) {
-        addAttachmentBtn.addEventListener('click', function() { attachmentFileInput.click(); });
-        attachmentFileInput.addEventListener('change', function() {
-            var file = attachmentFileInput.files[0];
-            attachmentFileInput.value = '';
-            if (!file) return;
-            addAttachmentBtn.loading = true;
+    var attachmentDropzone = document.getElementById('attachment-dropzone');
+    if (attachmentDropzone && attachmentFileInput) {
+        var dropzoneText = document.getElementById('attachment-dropzone-text');
+        var dropzoneIdleText = dropzoneText.textContent;
+        var uploadQueue = Promise.resolve();
+        var queued = 0;
+        var failures = [];
+
+        function uploadAttachment(file) {
             var formData = new FormData();
             formData.append('file', file);
             formData.append('attachment', 'true');
             if (articleId) formData.append('articleId', articleId);
-            fetch('/api-proxy/media/upload', { method: 'POST', body: formData })
+            return fetch('/api-proxy/media/upload', { method: 'POST', body: formData })
                 .then(function(r) {
-                    if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || 'Upload failed'); });
+                    if (!r.ok) return r.json().catch(function(){ return {}; }).then(function(e) {
+                        throw new Error((e.error || 'Upload failed') + ' (' + file.name + ')');
+                    });
                     return r.json();
                 })
-                .then(function(media) { appendAttachmentRow(media); })
-                .catch(function(e) { alert(e.message || 'Upload failed'); })
-                .finally(function() { addAttachmentBtn.loading = false; });
+                .then(function(media) { appendAttachmentRow(media); });
+        }
+
+        function setBusyText() {
+            dropzoneText.textContent = 'Uploading ' + queued + (queued === 1 ? ' file…' : ' files…');
+        }
+
+        // One at a time, in pick/drop order; a second drop while a batch is running just queues up.
+        // Failures are collected and reported once the queue drains, so one bad file doesn't stop the rest.
+        window.bmbAttachDropZone(attachmentDropzone, attachmentFileInput, function(files) {
+            files.forEach(function(f) {
+                queued++;
+                attachmentDropzone.classList.add('is-busy');
+                setBusyText();
+                uploadQueue = uploadQueue.then(function() {
+                    return uploadAttachment(f).catch(function(e) { failures.push(e.message || 'Upload failed'); });
+                }).then(function() {
+                    queued--;
+                    if (queued > 0) { setBusyText(); return; }
+                    attachmentDropzone.classList.remove('is-busy');
+                    dropzoneText.textContent = dropzoneIdleText;
+                    if (failures.length) { alert(failures.join('\n')); failures = []; }
+                });
+            });
         });
     }
 

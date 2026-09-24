@@ -45,6 +45,53 @@
             if (opts.renderer) parseOpts.renderer = opts.renderer;
             return DOMPurify.sanitize(marked.parse(window.bmbPreserveBlankLines(md), parseOpts));
         };
+        // Wires a file drop zone (article attachments): highlights while files are dragged over it,
+        // hands dropped files to onFiles(File[]), and opens pickerInput on click / Enter / Space.
+        // aria-disabled="true" on the zone switches all of that off.
+        window.bmbAttachDropZone = function (zone, pickerInput, onFiles) {
+            if (!zone) return;
+            var depth = 0; // dragenter/dragleave fire for every child element crossed
+            function disabled() { return zone.getAttribute('aria-disabled') === 'true'; }
+            function hasFiles(e) {
+                var t = e.dataTransfer && e.dataTransfer.types;
+                return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0;
+            }
+            zone.addEventListener('dragenter', function (e) {
+                if (!hasFiles(e)) return;
+                e.preventDefault();
+                depth++;
+                if (!disabled()) zone.classList.add('is-dragover');
+            });
+            zone.addEventListener('dragover', function (e) {
+                if (!hasFiles(e)) return;
+                e.preventDefault(); // without this the browser opens the file instead of dropping it
+                e.dataTransfer.dropEffect = disabled() ? 'none' : 'copy';
+            });
+            zone.addEventListener('dragleave', function () {
+                depth = Math.max(0, depth - 1);
+                if (!depth) zone.classList.remove('is-dragover');
+            });
+            zone.addEventListener('drop', function (e) {
+                if (!hasFiles(e)) return;
+                e.preventDefault();
+                depth = 0;
+                zone.classList.remove('is-dragover');
+                if (disabled()) return;
+                var files = Array.prototype.slice.call(e.dataTransfer.files || []);
+                if (files.length) onFiles(files);
+            });
+            if (pickerInput) {
+                zone.addEventListener('click', function () { if (!disabled()) pickerInput.click(); });
+                zone.addEventListener('keydown', function (e) {
+                    if ((e.key === 'Enter' || e.key === ' ') && !disabled()) { e.preventDefault(); pickerInput.click(); }
+                });
+                pickerInput.addEventListener('change', function () {
+                    var files = Array.prototype.slice.call(pickerInput.files || []);
+                    pickerInput.value = '';
+                    if (files.length) onFiles(files);
+                });
+            }
+        };
     </script>
 </head>
 @{var themeUser = User.Identity?.Name ?? "";}

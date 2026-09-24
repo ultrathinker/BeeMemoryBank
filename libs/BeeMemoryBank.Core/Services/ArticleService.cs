@@ -526,7 +526,23 @@ public partial class ArticleService(
             .Where(g => g != Guid.Empty)
             .Distinct()
             .ToList();
-        if (mediaIds.Count == 0) return;
+        await LinkOrphanMediaIdsAsync(articleId, mediaIds);
+    }
+
+    /// <summary>
+    /// Links file attachments that were uploaded BEFORE their article existed (the "new article"
+    /// page uploads them unlinked and hands their ids over on save). Unlike body images they are
+    /// never referenced in the Markdown, so <see cref="LinkOrphanMediaAsync"/> can't find them.
+    /// Only still-unlinked, active media is taken — an id that already belongs to another article
+    /// is ignored, never moved — and a protected article gets nothing (same rule as body media).
+    /// Anything left unlinked is swept by the orphan-media GC. Returns the ids actually linked.
+    /// </summary>
+    public async Task<List<Guid>> LinkAttachmentsAsync(Guid articleId, IEnumerable<Guid> mediaIds) =>
+        await LinkOrphanMediaIdsAsync(articleId, mediaIds.Where(g => g != Guid.Empty).Distinct().ToList());
+
+    private async Task<List<Guid>> LinkOrphanMediaIdsAsync(Guid articleId, List<Guid> mediaIds)
+    {
+        if (mediaIds.Count == 0) return [];
 
         // A protected (second-layer passphrase) article must never gain attached media. Media is
         // wrapped by the MASTER DEK, not the article passphrase, so a body-embedded image linked
@@ -536,12 +552,13 @@ public partial class ArticleService(
         // stays an orphan and is swept by the media GC), so a protected article never carries a
         // master-DEK-readable attachment.
         var target = await articleRepo.GetByIdAsync(articleId);
-        if (target is { Protected: true }) return;
+        if (target is { Protected: true }) return [];
 
         var lamportTs = clock.Tick();
         var identity = await nodeRepo.GetAsync();
         var linked = await mediaRepo.LinkOrphansToArticleAsync(mediaIds, articleId, lamportTs, identity?.NodeId);
         foreach (var id in linked)
             await eventLogger.LogMediaLinkAsync(id, articleId, lamportTs);
+        return linked;
     }
 }

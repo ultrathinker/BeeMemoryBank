@@ -148,6 +148,44 @@
             <textarea name="content" id="md-editor">@Model.Content</textarea>
         </div>
 
+        @if (!Model.IsProtected)
+        {
+            <div style="margin-bottom:16px;" id="attachments-block">
+                <label style="display:block;font-size:0.88rem;color:var(--text-secondary);margin-bottom:6px;">
+                    <sl-icon name="paperclip"></sl-icon> Attachments (<span id="attachments-count">@Model.Attachments.Count</span>)
+                    @if (Model.IsNew)
+                    {
+                        <span style="font-size:0.75rem;color:var(--sl-color-neutral-400);margin-left:6px;">(attached to the article when you save it)</span>
+                    }
+                </label>
+                <div id="attachments-list">
+                    @foreach (var att in Model.Attachments)
+                    {
+                        <div class="attachment-item" id="attachment-@att.Id" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">
+                            <a href="/api-proxy/media/@att.Id" download="@att.FileName" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+                                <sl-icon name="file-earmark"></sl-icon>
+                                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@att.FileName</span>
+                                <span style="font-size:0.78rem;color:var(--sl-color-neutral-500);flex-shrink:0;">(@BeeMemoryBank.Web.Pages.Article.ViewModel.FormatFileSize(att.FileSize))</span>
+                            </a>
+                            <sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;flex-shrink:0;" data-delete-attachment="@att.Id"></sl-icon-button>
+                        </div>
+                    }
+                </div>
+                <input type="file" id="attachment-file-input" multiple style="display:none;" />
+                <div class="attach-dropzone" id="attachment-dropzone" role="button" tabindex="0" aria-label="Add files">
+                    <sl-icon name="cloud-arrow-up"></sl-icon>
+                    <span id="attachment-dropzone-text">Drop files here or click to choose</span>
+                </div>
+                <div id="attachments-protect-note" style="display:none;margin-top:6px;font-size:0.85rem;color:var(--sl-color-warning-600);">
+                    A password-protected article can't have attachments.
+                </div>
+                @if (Model.IsNew)
+                {
+                    <input type="hidden" name="pendingAttachments" id="pending-attachments" value="@Model.PendingAttachmentsJson" />
+                }
+            </div>
+        }
+
         <div style="display:flex;justify-content:center;gap:12px;padding-top:8px;">
             <sl-button type="submit" variant="primary" size="large">
                 <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
@@ -363,15 +401,24 @@
         }
     });
 
-    // Handle drag & drop
+    // Handle drag & drop: images go inline into the body; any other file dropped on the editor
+    // becomes an attachment (set up further down, see attachDroppedFiles) instead of being lost.
+    var attachDroppedFiles = null;
     easyMDE.codemirror.on('drop', function(cm, e) {
         var files = e.dataTransfer && e.dataTransfer.files;
         if (!files || !files.length) return;
+        var others = [];
         for (var i = 0; i < files.length; i++) {
             if (files[i].type.indexOf('image/') === 0) {
                 e.preventDefault();
                 insertImageAtCursor(cm, files[i]);
+            } else {
+                others.push(files[i]);
             }
+        }
+        if (others.length && attachDroppedFiles) {
+            e.preventDefault();
+            attachDroppedFiles(others);
         }
     });
 
@@ -625,6 +672,125 @@
         });
     }
 
+    // ── File attachments ──
+    // Existing article: each file is uploaded straight onto it. New article: there is no id yet, so
+    // files are uploaded unlinked and their ids ride along in the hidden "pendingAttachments" field;
+    // the API links them once the article is created (unsaved ones are swept by the orphan GC).
+    var attachmentsList = document.getElementById('attachments-list');
+    var pendingInput = document.getElementById('pending-attachments');
+    var pendingAttachments = [];
+    if (pendingInput) {
+        try { pendingAttachments = JSON.parse(pendingInput.value || '[]') || []; } catch (e) { pendingAttachments = []; }
+    }
+
+    function escHtml(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function formatFileSize(bytes) {
+        var units = ['B', 'KB', 'MB', 'GB'];
+        var size = bytes, i = 0;
+        while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+        return (i === 0 ? size.toFixed(0) : size.toFixed(1)) + ' ' + units[i];
+    }
+    function updateAttachmentsCount() {
+        var countEl = document.getElementById('attachments-count');
+        if (countEl && attachmentsList) countEl.textContent = attachmentsList.querySelectorAll('.attachment-item').length;
+    }
+    function syncPending() {
+        if (pendingInput) pendingInput.value = JSON.stringify(pendingAttachments);
+    }
+    function appendAttachmentRow(att) {
+        var div = document.createElement('div');
+        div.className = 'attachment-item';
+        div.id = 'attachment-' + att.id;
+        div.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);';
+        div.innerHTML =
+            '<a href="/api-proxy/media/' + escHtml(att.id) + '" download="' + escHtml(att.fileName) + '" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">' +
+            '<sl-icon name="file-earmark"></sl-icon>' +
+            '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(att.fileName) + '</span>' +
+            '<span style="font-size:0.78rem;color:var(--sl-color-neutral-500);flex-shrink:0;">(' + formatFileSize(att.fileSize) + ')</span>' +
+            '</a>' +
+            '<sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;flex-shrink:0;" data-delete-attachment="' + escHtml(att.id) + '"></sl-icon-button>';
+        attachmentsList.appendChild(div);
+        updateAttachmentsCount();
+    }
+
+    if (attachmentsList) {
+        // A failed create re-renders the page with the uploads it already made — show them again.
+        pendingAttachments.forEach(appendAttachmentRow);
+
+        var attachmentFileInput = document.getElementById('attachment-file-input');
+        var dropzone = document.getElementById('attachment-dropzone');
+        var dropzoneText = document.getElementById('attachment-dropzone-text');
+        var dropzoneIdleText = dropzoneText.textContent;
+
+        function uploadAttachment(file) {
+            var formData = new FormData();
+            formData.append('file', file);
+            formData.append('attachment', 'true');
+            if (articleId) formData.append('articleId', articleId);
+            return fetch('/api-proxy/media/upload', { method: 'POST', body: formData })
+                .then(function(r) {
+                    if (!r.ok) return r.json().catch(function(){ return {}; }).then(function(e) {
+                        throw new Error((e.error || 'Upload failed') + ' (' + file.name + ')');
+                    });
+                    return r.json();
+                })
+                .then(function(media) {
+                    appendAttachmentRow(media);
+                    if (pendingInput) {
+                        pendingAttachments.push({ id: media.id, fileName: media.fileName, fileSize: media.fileSize });
+                        syncPending();
+                    }
+                });
+        }
+
+        var uploadQueue = Promise.resolve();
+        var queued = 0;
+        function setBusyText() {
+            dropzoneText.textContent = 'Uploading ' + queued + (queued === 1 ? ' file…' : ' files…');
+        }
+        // One at a time, so the list order matches the pick/drop order and one failure doesn't hide
+        // the rest. A second drop while the first batch is still going just queues up.
+        function queueAttachmentUploads(files) {
+            if (dropzone.getAttribute('aria-disabled') === 'true') {
+                showToast('A password-protected article cannot have attachments.');
+                return;
+            }
+            files.forEach(function(f) {
+                queued++;
+                dropzone.classList.add('is-busy');
+                setBusyText();
+                uploadQueue = uploadQueue.then(function() {
+                    return uploadAttachment(f).catch(function(err) { showToast(err.message || 'Upload failed'); });
+                }).then(function() {
+                    queued--;
+                    if (queued > 0) { setBusyText(); return; }
+                    dropzone.classList.remove('is-busy');
+                    dropzoneText.textContent = dropzoneIdleText;
+                });
+            });
+        }
+        window.bmbAttachDropZone(dropzone, attachmentFileInput, queueAttachmentUploads);
+        attachDroppedFiles = queueAttachmentUploads;
+
+        attachmentsList.addEventListener('click', function(e) {
+            var btn = e.target.closest('[data-delete-attachment]');
+            if (!btn) return;
+            e.preventDefault();
+            var id = btn.getAttribute('data-delete-attachment');
+            if (!confirm('Delete this attachment?')) return;
+            fetch('/api-proxy/media/' + id, { method: 'DELETE' }).then(function(r) {
+                if (!(r.ok || r.status === 204)) { showToast('Delete failed'); return; }
+                var row = document.getElementById('attachment-' + id);
+                if (row) row.remove();
+                pendingAttachments = pendingAttachments.filter(function(p) { return p.id !== id; });
+                syncPending();
+                updateAttachmentsCount();
+            });
+        });
+    }
+
     // ── New article being created WITH a password: validate the passphrase before the form posts. ──
     if (isNew) {
         var createPassEl = document.getElementById('create-pass');
@@ -632,6 +798,11 @@
             // The instant a password is typed, drop any plaintext draft already on disk.
             createPassEl.addEventListener('sl-input', function() {
                 if (createPassEl.value) { try { localStorage.removeItem(draftKey); } catch (e) {} }
+                // A protected article can't carry attachments (they'd be readable without its password).
+                var note = document.getElementById('attachments-protect-note');
+                var zone = document.getElementById('attachment-dropzone');
+                if (note) note.style.display = createPassEl.value ? '' : 'none';
+                if (zone) zone.setAttribute('aria-disabled', createPassEl.value ? 'true' : 'false');
             });
         }
         form.addEventListener('submit', function(e) {
@@ -645,6 +816,8 @@
                 if (err) { err.textContent = msg; err.style.display = ''; }
                 if (details) details.open = true;
             }
+            if (pendingAttachments.length > 0)
+                return fail('A password-protected article can\'t have attachments. Remove the files or clear the password.');
             if (cp.value.length < 4) return fail('Password must be at least 4 characters.');
             if (cp.value !== (cp2 ? cp2.value : '')) return fail('Passwords do not match.');
         });
