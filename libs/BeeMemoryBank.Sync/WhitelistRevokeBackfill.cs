@@ -16,11 +16,9 @@ namespace BeeMemoryBank.Sync;
 /// a fresh lamport timestamp). Once run, subsequent invocations are no-ops.
 ///
 /// <para>
-/// <b>NOTHING CALLS THIS.</b> The line above used to say it "runs on every startup"; it does not,
-/// and has not for as long as the current tree goes back — no type constructs it and
-/// <c>ApiStartupTasks</c> runs a different bootstrapper. Said plainly here because a comment
-/// claiming a heal happens automatically is worse than no comment: it stops the next reader from
-/// checking.
+/// <b>NOTHING CALLS THIS.</b> It does not run on startup: no type constructs it and
+/// <c>ApiStartupTasks</c> runs a different bootstrapper. Do not assume the heal happens
+/// automatically.
 /// </para>
 ///
 /// <para>

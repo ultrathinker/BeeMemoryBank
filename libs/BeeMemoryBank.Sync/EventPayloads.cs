@@ -36,9 +36,9 @@ public static class EventTypes
 /// <see cref="EventTypes"/> is classified into exactly one category below.
 ///
 /// Why the guard matters: the applier's <c>switch</c> has a <c>default:</c> that silently ignores
-/// unknown types, and the superadmin gate used to be an inline <c>||</c> chain. Add a new
-/// cluster-state event, forget to extend that chain, and it would apply from any whitelisted peer —
-/// exactly the "a single rogue peer can revoke the whole network" hole the gate exists to close.
+/// unknown types, so a new cluster-state event left out of the superadmin gate would apply from
+/// any whitelisted peer — exactly the "a single rogue peer can revoke the whole network" hole the
+/// gate exists to close.
 /// Forcing every new type into one of these sets turns "remember to update the gate" into a
 /// compile-then-red-test, the same house pattern as the other guardrail tests.
 /// </summary>
@@ -252,10 +252,10 @@ public record WhitelistAddPayload(
     [property: JsonPropertyName("api_address")]      string? ApiAddress,
     [property: JsonPropertyName("can_generate_embeddings")] bool CanGenerateEmbeddings,
     // Default false for forward-compat: pre-2026-05-01 senders omit the
-    // field entirely and JSON deserialization fills false. Without this
-    // field a 3+ node cluster lost the IsSuperadmin bit on every sync —
-    // the receiving node would create the entry as non-superadmin and
-    // then reject the new peer's hard_delete / restore_network /
+    // field entirely and JSON deserialization fills false. The field must
+    // travel: without it a 3+ node cluster loses the IsSuperadmin bit on
+    // every sync — the receiving node creates the entry as non-superadmin
+    // and then rejects the new peer's hard_delete / restore_network /
     // whitelist_add events forever (cluster split-brain).
     [property: JsonPropertyName("is_superadmin")]    bool IsSuperadmin = false
 );
@@ -322,8 +322,8 @@ public record FolderDeletePayload(
 );
 
 // CiphertextB64 / CiphertextSha256: same by-reference scheme as ArticleEventPayload — see there.
-// Media is where it matters most for transport: a single media_create used to carry up to ~27MB
-// of base64 in one event, which is what forced the per-request size caps on the sync endpoints.
+// Media is where it matters most for transport: inline, a single media_create can carry up to
+// ~27MB of base64 in one event, which is why the sync endpoints have per-request size caps.
 public record MediaEventPayload(
     [property: JsonPropertyName("media_id")]        Guid MediaId,
     [property: JsonPropertyName("article_id")]      Guid? ArticleId,

@@ -28,17 +28,15 @@ public partial class EventApplier
         {
             // The row is only touched by an add that actually supersedes what produced it.
             //
-            // This is the gate that mattered: the re-activation below used to run on ANY add for a
-            // revoked peer, with no regard for when that add was issued. An admin revokes a
-            // compromised node; a peer that was offline at the time still holds the older
-            // whitelist_add for it and delivers it on catch-up; the revoked node is back in the
-            // mesh, and the revoking admin sees it active again with nothing to distinguish "my
-            // revoke was undone" from "my revoke never applied".
+            // The re-activation below must not run on ANY add for a revoked peer regardless of when
+            // that add was issued: an admin revokes a compromised node, a peer that was offline at
+            // the time still holds the older whitelist_add for it and delivers it on catch-up, and
+            // the revoked node is back in the mesh with nothing to distinguish "my revoke was
+            // undone" from "my revoke never applied".
             //
             // Deliberately plain LWW rather than a special "revoke always wins" rule: re-adding a
             // peer you previously revoked is a real workflow the UI offers, so revoke has to be
-            // undoable — by a NEWER add. That is exactly what this comparison allows and what the
-            // old code could not distinguish.
+            // undoable — by a NEWER add. That is exactly what this comparison allows.
             // A revoked row that predates versioning cannot be compared, and must not lose by
             // default. Rows revoked before migration 021 sit at Lamport 0, so ANY incoming add
             // outranks them arithmetically — which would let a stale add from a peer that never
@@ -141,8 +139,8 @@ public partial class EventApplier
         var existing = await whitelistRepo.GetByNodeIdAsync(p.NodeId, includeDeleted: true);
         if (existing == null || existing.Status != "A") return;
 
-        // Without this, two admins renaming the same peer (or moving its address) resolved to
-        // whichever event happened to arrive last, and the nodes then disagreed about a row nothing
+        // Without this, two admins renaming the same peer (or moving its address) would resolve to
+        // whichever event happened to arrive last, and the nodes would disagree about a row nothing
         // ever recompares.
         var incoming = new RowVersion(evt.LamportTs, evt.NodeId);
         if (!ConflictResolver.IncomingWins(existing.Version, incoming))
@@ -271,9 +269,9 @@ public partial class EventApplier
                     RowVersion.Of(existing.LamportTs, existing.SourceNodeId),
                     new RowVersion(evt.LamportTs, evt.NodeId)))
                 return;
-            // LWW-wins must update CONTENT too — old code only bumped lamport, leaving stale
-            // text/ciphertext attached to a newer timestamp. Future comparisons would see
-            // the stale content as "newer". (Wave 2 audit kilo-1 #3.)
+            // LWW-wins must update CONTENT too — bumping only the lamport would leave stale
+            // text/ciphertext attached to a newer timestamp, and future comparisons would see
+            // the stale content as "newer".
             await commentRepo.ResurrectFromSyncAsync(p.CommentId, new Comment
             {
                 CommentId = p.CommentId,
@@ -321,7 +319,7 @@ public partial class EventApplier
         {
             // Already soft-deleted — keep the winning delete, not merely the higher lamport.
             // tbl_comment stores delete_node_id alongside delete_lamport_ts precisely so this
-            // comparison can be made the same way as every other one; it just was not using it.
+            // comparison can be made the same way as every other one.
             if (ConflictResolver.IncomingWins(
                     RowVersion.Of(existing.DeleteLamportTs ?? 0, existing.DeleteNodeId),
                     new RowVersion(evt.LamportTs, evt.NodeId)))

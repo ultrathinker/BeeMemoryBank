@@ -24,19 +24,19 @@ public static class DependencyInjection
         services.AddScoped<EventApplier>();
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
-        // EmbeddingProjectionService + ArticleChunker live in BeeMemoryBank.Embeddings; Core no
-        // longer registers them. Sync itself scopes EmbeddingProjectionService through here because
+        // EmbeddingProjectionService + ArticleChunker live in BeeMemoryBank.Embeddings, not Core,
+        // so Core does not register them. Sync itself scopes EmbeddingProjectionService through here because
         // PendingEmbeddingProcessor / EventApplier resolve it per cycle.
         services.AddEmbeddingServices();
 
-        // M5: registered here (Sync's own DI) rather than Storage's AddStorage(), unlike the other
+        // Registered here (Sync's own DI) rather than Storage's AddStorage(), unlike the other
         // repositories this project consumes — this one is Sync-specific (only ever consumed by
         // SyncEventQuarantine/SyncClient and the GET+DELETE /api/sync/quarantine endpoints), so it
         // stays colocated with its only consumer, the same way EventLogger/EventApplier/SyncClient
         // themselves are registered here rather than in Storage.
         services.AddScoped<Core.Interfaces.ISyncQuarantineRepository, BeeMemoryBank.Storage.Sqlite.SyncQuarantineRepository>();
 
-        // WP-11: the search index lifecycle. IndexBuilder and SearchIndexRuntimeState are process-
+        // The search index lifecycle. IndexBuilder and SearchIndexRuntimeState are process-
         // lifetime singletons (the in-memory index itself, and the internal-segment-id -> persisted
         // Guid map / rebuild coordination lock must survive across PendingIndexProcessor's per-cycle
         // scopes); SearchIndexLifecycleService is scoped like its repository/store dependencies.
@@ -59,8 +59,8 @@ public static class DependencyInjection
         // EventApplier takes it as a constructor dependency, so something must be registered.
         services.TryAddSingleton<IRestoreInitiator, NoOpRestoreInitiator>();
         // The REAL peer applier, not a no-op. A mobile or CLI node must rewrap its own vault when
-        // a peer rotates the master DEK; with the no-op it stayed on the retired key forever and
-        // everything that synced afterwards was silently unreadable. The server registers its own
+        // a peer rotates the master DEK; with a no-op it would stay on the retired key forever and
+        // everything synced afterwards would be silently unreadable. The server registers its own
         // DekRotationService over this (AddSingleton beats TryAddSingleton) because it also
         // proposes, accepts and reports progress — but both run the identical rewrap.
         services.TryAddSingleton<IDekRotationApplier, DekRotation.PeerDekRotationApplier>();
@@ -138,7 +138,7 @@ public static class DependencyInjection
     }
 
     /// <summary>
-    /// WP-11: adds the background pending search-index processor. Requires AddStorage() (for
+    /// Adds the background pending search-index processor. Requires AddStorage() (for
     /// EncryptedSegmentStore/SegmentManifestRepository/SegmentTombstoneRepository) and AddSync()
     /// (for the IndexBuilder/SearchIndexLifecycleService registrations above) to have already run.
     /// Also registered as itself, same reason as <see cref="AddEmbeddingProcessor"/> above.

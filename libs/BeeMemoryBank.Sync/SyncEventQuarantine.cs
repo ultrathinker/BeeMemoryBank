@@ -4,21 +4,20 @@ namespace BeeMemoryBank.Sync;
 
 /// <summary>
 /// Tracks events that repeatedly fail to apply during pull, and quarantines one once it has
-/// failed too many times in a row (M5c).
+/// failed too many times in a row.
 ///
 /// <para>
-/// Before this existed, <see cref="SyncClient"/>'s pull loop stopped at the FIRST event that threw
-/// (bad signature, whitelist ordering, any other permanent failure) and left the sync cursor
-/// exactly where it was: every subsequent cycle re-fetched the same page, hit the same event
-/// first, and stopped again — forever. Two problems, not one: the node made zero forward progress
-/// even on other, perfectly fine events later in that page, and nothing beyond a repeating log
-/// line at WARNING/ERROR ever told an operator this was happening.
+/// Without it, <see cref="SyncClient"/>'s pull loop would stop at the FIRST event that throws
+/// (bad signature, whitelist ordering, any other permanent failure) with the sync cursor
+/// unchanged, and every subsequent cycle would hit the same event and stop again — forever. The
+/// node would make zero forward progress even on perfectly fine events later in that page, and
+/// nothing beyond a repeating log line would tell an operator.
 /// </para>
 ///
 /// <para>
 /// A TRANSIENT failure (a network blip mid-batch, a momentarily-locked local DB) should still stop
-/// the loop and retry from the same position next cycle — that's the existing, correct behavior
-/// for something that might just work next time. Only once the SAME event has failed
+/// the loop and retry from the same position next cycle — the correct behavior for something that
+/// might just work next time. Only once the SAME event has failed
 /// <see cref="QuarantineThreshold"/> times in a row does it get skipped: the cursor advances past
 /// it and the rest of the page keeps being applied. This is a judgment call the codebase already
 /// makes with the same shape for the replay shield and hard-delete gate (skip-and-move-on beats
@@ -27,15 +26,10 @@ namespace BeeMemoryBank.Sync;
 /// </para>
 ///
 /// <para>
-/// M5 follow-up: this USED to be a static, purely in-memory <c>ConcurrentDictionary</c> (see git
-/// history) for the same reason <see cref="BeeMemoryBank.Core.Services.ArticleWriteLock"/> is
-/// static — a lightweight tracker needing neither a migration nor DI registration. That tradeoff
-/// turned out to be wrong in practice: a node restart forgot every recorded failure, so a
-/// permanently-bad event that had just been quarantined started blocking the pull loop again on
-/// the very next cycle after the restart — and a stuck sync is exactly the situation most likely
-/// to make an operator reach for a restart. It is now backed by
-/// <see cref="ISyncQuarantineRepository"/> (durable, survives restart) instead of the dictionary.
-/// The class stays a static, stateless helper taking its dependency as a parameter — the same
+/// Backed by <see cref="ISyncQuarantineRepository"/> (durable), not an in-memory map: a restart
+/// must not forget recorded failures, or a just-quarantined event blocks the pull loop again on
+/// the very next cycle — and a stuck sync is exactly the situation most likely to make an
+/// operator reach for a restart. The class stays a static, stateless helper taking its dependency as a parameter — the same
 /// shape <see cref="PeerAuthenticator"/> already uses for exactly this reason (see its own remarks)
 /// — rather than becoming a DI-registered instance service, since every caller already has (or can
 /// trivially obtain via DI) an <see cref="ISyncQuarantineRepository"/> to pass in, and the
@@ -49,7 +43,7 @@ namespace BeeMemoryBank.Sync;
 /// </para>
 ///
 /// <para>
-/// Night-7 follow-up: not every failure is permanent. A whitelist_add for the originating node
+/// Not every failure is permanent. A whitelist_add for the originating node
 /// that has not arrived yet, a blob the transport has not delivered yet, and a DEK rotation COMMIT
 /// that outran its own PROPOSED all resolve themselves given enough time — usually minutes,
 /// sometimes hours, never the five-cycle (roughly five-minute) budget <see cref="QuarantineThreshold"/>
@@ -68,9 +62,9 @@ public static class SyncEventQuarantine
     /// How long a DEFERRED failure is retried before it, too, is given up on. Measured as wall-clock
     /// time since the event's FIRST recorded failure (of either kind) rather than as an attempt
     /// count: <see cref="SyncScheduler"/>'s push-on-save trigger means a busy node can retry the
-    /// same event many times inside one minute, so a "generous" attempt-count budget meant to span
-    /// hours at the default 60-second interval could instead be exhausted in minutes under load —
-    /// exactly the "hours, not minutes" guarantee this budget exists to give.
+    /// same event many times inside one minute, so an attempt-count budget meant to span hours at
+    /// the default 60-second interval could be exhausted in minutes under load — breaking the
+    /// "hours, not minutes" guarantee this budget exists to give.
     /// </summary>
     public static readonly TimeSpan DeferredQuarantineBudget = TimeSpan.FromHours(6);
 
@@ -121,20 +115,18 @@ public static class SyncEventQuarantine
     /// Pure decision, no I/O — same shape as <see cref="ConflictResolver.IncomingWins"/> and for
     /// the same reason: one place callers ask "is this event done being retried", rather than each
     /// re-deriving the rule. A permanent failure is quarantined once it alone has reached
-    /// <see cref="QuarantineThreshold"/>; a CURRENTLY deferred one (its most recent attempt was
-    /// deferred) is instead judged by whether <see cref="DeferredQuarantineBudget"/> has elapsed
+    /// <see cref="QuarantineThreshold"/>; one with any deferred failure in its history is also
+    /// judged by whether <see cref="DeferredQuarantineBudget"/> has elapsed
     /// since its first recorded failure of either kind — see that constant's own remarks for why
     /// time, not attempt count.
     /// </summary>
     public static bool IsQuarantined(SyncQuarantineEntry entry, DateTime nowUtc) =>
         entry.PermanentFailureCount >= QuarantineThreshold
         // Any deferral in this event's history puts it under the time budget — not just a deferral
-        // on its MOST RECENT attempt. Gating on the last kind alone left a gap: an event with a
-        // handful of permanent failures (below the threshold) whose latest attempt happened to be
-        // permanent was invisible to the time check no matter how old it was, so it could sit
-        // un-quarantined indefinitely and under-report its own staleness in the operator's
-        // quarantine view — the exact "nobody ever finds out" outcome this whole mechanism exists
-        // to close.
+        // on its MOST RECENT attempt. Gating on the last kind alone would let an event with a few
+        // permanent failures (below the threshold) and a permanent latest attempt escape the time
+        // check no matter how old it is, sitting un-quarantined indefinitely and under-reporting
+        // its staleness in the operator's quarantine view.
         || (entry.DeferredFailureCount > 0
             && nowUtc - entry.FirstFailedAtUtc >= DeferredQuarantineBudget);
 

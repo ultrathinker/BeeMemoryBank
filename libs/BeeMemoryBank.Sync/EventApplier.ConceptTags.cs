@@ -126,7 +126,7 @@ public partial class EventApplier
     /// non-canonical input ("//" or trailing "/") IS allowed through:
     /// dropping it would permanently diverge from peers running
     /// pre-canonicalisation code whose history legitimately contains
-    /// such paths (gemini review feedback). Only event types that carry
+    /// such paths. Only event types that carry
     /// user-controlled paths are checked; others pass through.
     /// </summary>
     private static bool IsTreePathPayloadValid(SyncEvent evt)

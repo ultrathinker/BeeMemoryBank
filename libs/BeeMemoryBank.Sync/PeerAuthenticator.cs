@@ -24,24 +24,23 @@ public static class PeerAuthenticator
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    // V2 binds the signed payload to the specific server we intend to authenticate to (M6): a
+    // V2 binds the signed payload to the specific server we intend to authenticate to: otherwise a
     // malicious/compromised peer, or a plain-HTTP LAN MITM (realistic given mDNS discovery), that
-    // we're authenticating TO could otherwise fetch a fresh challenge from some unrelated third
-    // node C and hand it to us as its own — nothing in the old "BMB-CHALLENGE-V1\0" + challenge
-    // payload said WHO the signature was for, so it verified just as well at C as at the peer we
-    // thought we were talking to, handing whoever relayed it a Bearer token AS US on a node we
-    // never intended to contact.
+    // we're authenticating TO could fetch a fresh challenge from some unrelated third node C and
+    // hand it to us as its own. The unbound "BMB-CHALLENGE-V1\0" + challenge payload says nothing
+    // about WHO the signature is for, so it verifies just as well at C as at the peer we think we
+    // are talking to, handing whoever relayed it a Bearer token AS US on a node we never intended
+    // to contact.
     //
-    // THERE IS NO V1 FALLBACK, and adding one back would silently undo all of the above. The
-    // fallback that used to live here triggered whenever a peer's challenge response omitted
-    // ServerNodeId — which is not a property of genuinely old peers, it is just a field the
-    // responding peer chooses whether to send. Any attacker could omit it, get us to produce an
-    // unbound V1 signature over a challenge relayed from node C, and redeem it at C: the exact
+    // THERE IS NO V1 FALLBACK, and adding one would silently undo all of the above. Whether a
+    // challenge response carries ServerNodeId is the responding peer's choice, not a property of
+    // genuinely old peers: a fallback on its absence lets any attacker omit it, get us to produce
+    // an unbound V1 signature over a challenge relayed from node C, and redeem it at C — the exact
     // relay attack V2 exists to stop, reachable by deleting one line of JSON. A peer that does
-    // not declare an audience now fails authentication outright.
+    // not declare an audience fails authentication outright.
     //
-    // The matching server-side verifier in SyncEndpoints.cs accepts V2 only, for the same reason.
-    // Both ends changed together: every node in the mesh must run this build or newer to sync.
+    // The matching server-side verifier in SyncEndpoints.cs accepts V2 only, for the same reason,
+    // so every node in the mesh must speak V2 to sync.
     private static readonly byte[] DomainTagV2 = "BMB-CHALLENGE-V2\0"u8.ToArray();
 
     /// <summary>
@@ -50,7 +49,7 @@ public static class PeerAuthenticator
     /// Flow:
     ///   POST <paramref name="baseUrl"/>/api/sync/challenge
     ///   → verify the response's ServerNodeId matches <paramref name="expectedServerNodeId"/>
-    ///     (M6 — refuses to sign a challenge issued for a different node than the one we intended
+    ///     (refuses to sign a challenge issued for a different node than the one we intended
     ///     to dial; see the domain-tag comment above for what this closes)
     ///   → sign the challenge (tagged with the audience-bound "BMB-CHALLENGE-V2\0" + server NodeId
     ///     prefix) via <paramref name="authSigner"/>
@@ -108,7 +107,7 @@ public static class PeerAuthenticator
         var challengeData = await challengeResp.Content.ReadFromJsonAsync<ChallengeDto>(JsonOpts, ct)
             ?? throw new InvalidDataException("Invalid challenge response.");
 
-        // Audience check (M6): refuse to sign a challenge issued for a DIFFERENT node than the one
+        // Audience check: refuse to sign a challenge issued for a DIFFERENT node than the one
         // we intended to dial. This is what actually stops the relay attack described above — the
         // server-side signature verification alone isn't enough, because a peer that honestly
         // relays a foreign ServerNodeId (rather than lying about it) would otherwise get us to
@@ -120,9 +119,9 @@ public static class PeerAuthenticator
         //
         // A missing ServerNodeId is a hard failure, not a compatibility case. The responding peer
         // decides whether to send the field, so "absent" tells us nothing about how old that peer
-        // is — treating it as "pre-M6, sign the unbound V1 payload instead" (which this code used
-        // to do) let anyone downgrade us out of the audience binding by omitting one JSON
-        // property, and then relay the resulting signature to the node it was really fetched from.
+        // is — treating it as "old peer, sign the unbound V1 payload instead" would let anyone
+        // downgrade us out of the audience binding by omitting one JSON property, and then relay
+        // the resulting signature to the node it was really fetched from.
         if (challengeData.ServerNodeId is not { } actualServerNodeId)
             throw new InvalidOperationException(
                 $"Peer at {baseUrl} returned a challenge with no ServerNodeId. Refusing to sign an " +

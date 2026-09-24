@@ -114,13 +114,12 @@ public partial class EventApplier
                 new RowVersion(evt.LamportTs, evt.NodeId)))
             return;
 
-        // H5: detach articles BEFORE marking the folder deleted, not after. ClearFolderIdUnscopedAsync is a
-        // plain idempotent UPDATE ("WHERE folder_id = @folderId"), safe to call more than once. With
-        // the OLD order (soft-delete then detach) a crash in between left the folder permanently
-        // Status='D' with its articles still pointing at the now-invisible folder id: the
-        // `folder.Status == "D"` branch above returns early on every retry (only bumping lamport if
-        // higher) and never reaches ClearFolderIdUnscopedAsync again, so the orphaned folder_id could never
-        // self-heal. Detaching first means a crash before the soft-delete just leaves the folder
+        // Detach articles BEFORE marking the folder deleted, not after. ClearFolderIdUnscopedAsync is a
+        // plain idempotent UPDATE ("WHERE folder_id = @folderId"), safe to call more than once. In
+        // the reverse order a crash in between leaves the folder permanently Status='D' with its
+        // articles still pointing at the now-invisible folder id: the `folder.Status == "D"` branch
+        // above returns early on every retry (only bumping lamport if higher) and never reaches
+        // ClearFolderIdUnscopedAsync again, so the orphaned folder_id never self-heals. Detaching first means a crash before the soft-delete just leaves the folder
         // status still 'A', so the retry re-runs this whole method and completes it.
         await articleRepo.ClearFolderIdUnscopedAsync(p.FolderId);
         await folderRepo.SoftDeleteAsync(p.FolderId, p.DeletedAt);
@@ -166,12 +165,12 @@ public partial class EventApplier
             CiphertextSha256 = p.CiphertextSha256
         };
 
-        // Media ciphertext lives in the content-addressed blob store (16b) — no .enc file is written
-        // any more. Ensure the blob is present and stamp its hash onto the row:
+        // Media ciphertext lives in the content-addressed blob store — no .enc file is written.
+        // Ensure the blob is present and stamp its hash onto the row:
         //   • protocol-2 event: the transport already shipped the blob, so ResolveCiphertextAsync
         //     reads it back and StoreAsync is an idempotent no-op returning the same hash;
         //   • protocol-1 (inline-ciphertext) event: this is where those bytes first enter the blob
-        //     store, and StoreAsync gives the row the hash it was previously missing.
+        //     store, and StoreAsync gives the row the hash the event did not carry.
         // Resolve BEFORE the insert so a not-yet-arrived protocol-2 blob fails the whole apply (the
         // event is retried once the bytes land) rather than leaving a row that points at nothing.
         var ciphertext = await ResolveCiphertextAsync(p.CiphertextB64, p.CiphertextSha256);

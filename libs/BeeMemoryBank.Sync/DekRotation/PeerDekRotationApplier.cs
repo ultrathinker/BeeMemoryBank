@@ -15,13 +15,10 @@ namespace BeeMemoryBank.Sync.DekRotation;
 /// — mobile and CLI.
 ///
 /// <para>
-/// These hosts previously registered a no-op applier. A rotation reached them, logged
-/// "node will fall behind cluster on next rotation", and did nothing: the node kept its retired
-/// master DEK while the rest of the cluster moved on. Every article arriving afterwards carried a
-/// DEK wrapped under a key it did not have, and <c>EventApplier</c> stored those rows verbatim —
-/// so the content synced fine and was simply unreadable, with no error at the point of failure.
-/// The gap was unreachable only for as long as rotation itself was broken; fixing rotation made it
-/// live.
+/// Do not replace it with a no-op: a node that skips a rotation keeps its retired master DEK while
+/// the rest of the cluster moves on. Every article arriving afterwards carries a DEK wrapped under
+/// a key it does not have, and <c>EventApplier</c> stores those rows verbatim — so the content
+/// syncs fine and is simply unreadable, with no error at the point of failure.
 /// </para>
 ///
 /// <para>

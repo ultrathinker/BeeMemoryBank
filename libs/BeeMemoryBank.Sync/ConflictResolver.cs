@@ -7,15 +7,15 @@ namespace BeeMemoryBank.Sync;
 /// Deterministic: any two nodes will reach the same result.
 ///
 /// <para>
-/// This is the ONLY place a replicated row's version may be compared. Gates that wrote the
-/// comparison by hand drifted from it and from each other — see <see cref="RowVersion"/> for what
-/// that cost. If a new gate needs "does this event supersede what I have", it calls
+/// This is the ONLY place a replicated row's version may be compared. Gates that write the
+/// comparison by hand drift from it and from each other — see <see cref="RowVersion"/> for what
+/// that costs. If a new gate needs "does this event supersede what I have", it calls
 /// <see cref="IncomingWins"/>; there is no case that needs its own rule.
 /// </para>
 ///
 /// <para>
-/// There is deliberately no four-argument <c>(long, Guid, long, Guid)</c> overload. It existed, and
-/// every call site had to hand-write <c>x.SourceNodeId ?? Guid.Empty</c> first and then get four
+/// There is deliberately no four-argument <c>(long, Guid, long, Guid)</c> overload. With one,
+/// every call site has to hand-write <c>x.SourceNodeId ?? Guid.Empty</c> first and then get four
 /// positional values in the right order — two adjacent <c>long</c>s and two adjacent
 /// <see cref="Guid"/>s, where swapping existing and incoming compiles and silently inverts every
 /// conflict on the node. Taking <see cref="RowVersion"/> makes that swap visible at the call site.

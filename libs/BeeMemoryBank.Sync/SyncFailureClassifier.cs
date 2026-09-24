@@ -9,13 +9,12 @@ namespace BeeMemoryBank.Sync;
 /// is given up on).
 ///
 /// <para>
-/// Mirrors <see cref="ConflictResolver"/>'s shape and reason: this rule used to have exactly one
-/// call site (<see cref="SyncClient"/>'s pull loop), which was fine until the DEK-rotation and
-/// blob-transport paths each needed the same "is this worth retrying" answer too — three
-/// hand-copied versions of one rule drift the moment someone fixes only one of them. Everything
-/// funnels through here instead: an exception opts in by implementing
+/// Mirrors <see cref="ConflictResolver"/>'s shape and reason: <see cref="SyncClient"/>'s pull
+/// loop and the DEK-rotation and blob-transport paths all need the same "is this worth retrying"
+/// answer, and hand-copied versions of one rule drift the moment someone fixes only one of them.
+/// Everything funnels through here instead: an exception opts in by implementing
 /// <see cref="IDeferrableSyncFailure"/>, and anything that hasn't is Permanent — the safe default
-/// for an exception type nobody has reasoned about yet, matching today's behavior for it.
+/// for an exception type nobody has reasoned about yet.
 /// </para>
 /// </summary>
 public static class SyncFailureClassifier

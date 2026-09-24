@@ -24,7 +24,7 @@ public partial class EventApplier
     // AcquireAsync would block forever on a semaphore this same logical call already holds. Only
     // the Core methods may call each other; only the public methods may call ArticleWriteLock.
     //
-    // The lock itself closes M9: without it, a local read-modify-write (bee_append/prepend/replace,
+    // Why the lock exists: without it, a local read-modify-write (bee_append/prepend/replace,
     // which read the current body then write it back under a freshly-ticked Lamport timestamp) could
     // interleave with a peer's update landing here, read the pre-peer-update body, and write it back
     // — silently discarding the peer's edit mesh-wide, with the peer's version surviving only 7 days
@@ -47,21 +47,17 @@ public partial class EventApplier
         var articleId = evt.ArticleId!.Value;
         var p = Deserialize<ArticleEventPayload>(evt.Payload);
 
-        // Tombstone gate: article was deleted before; LWW vs delete's lamport.
-        // Wave 2 audit: claude-A #2 (zombie article from out-of-order CREATE-after-DELETE).
+        // Tombstone gate: article was deleted before; LWW vs delete's lamport. Prevents a zombie
+        // article from an out-of-order CREATE-after-DELETE.
         var tombstone = await tombstoneRepo.GetByEntityIdAsync(articleId);
         // Through the one comparator, with the tombstone's own node id — not a bare `>=`.
         //
-        // The bare version dropped the event whenever the timestamps merely TIED, and a tie is not
+        // A bare comparison drops the event whenever the timestamps merely TIE, and a tie is not
         // the rare case: two nodes that were in sync and each write once produce the same Lamport
-        // number every time. A delete on A and an edit on B, both at L=11, therefore resolved one
+        // number every time. A delete on A and an edit on B, both at L=11, would then resolve one
         // way here (tombstone always wins) and the other way in the delete path below (which does
-        // use the tiebreak) — so the article ended alive on one node and gone on the other, for
-        // half of all node-id pairs, deterministically. Neither node ever reconciles it: both
-        // believe they applied the newest write.
-        //
-        // tbl_tombstone has carried source_node_id since the Wave 2 rerun; only this gate was not
-        // reading it.
+        // use the tiebreak) — the article alive on one node and gone on the other, for half of all
+        // node-id pairs, deterministically, and never reconciled.
         if (tombstone != null &&
             !ConflictResolver.IncomingWins(
                 RowVersion.Of(tombstone.LamportTs, tombstone.SourceNodeId),
@@ -112,17 +108,13 @@ public partial class EventApplier
         // ArticleService.CreateAsync's PrecomputeNewTagEmbeddingsAsync call.
         var precomputedEmbeddings = await conceptTagService.PrecomputeNewTagEmbeddingsAsync(tags);
 
-        // H5: the article row, its encrypted body and its concept-tag links must land together or
-        // not at all. Before this fix they went through three separate connections/transactions —
-        // if the process crashed between the row write and the body write, the event was never
-        // recorded (see ApplyAsync's ordering comment), so sync would redeliver it. But the redelivered
-        // event would then see existing.LamportTs == evt.LamportTs and existing.SourceNodeId ==
-        // evt.NodeId (the row DID commit before the crash), which ties ConflictResolver.IncomingWins
-        // and loses — so the retry filed the real body into a 7-day conflict-version row instead of
-        // ever completing the create, leaving GetContentAsync throwing forever. Wrapping the three
-        // writes in one transaction means a crash anywhere in here rolls all of it back, so the
-        // redelivered event finds no article row at all and creates cleanly. Mirrors
-        // ArticleService.CreateAsync's transaction shape.
+        // The article row, its encrypted body and its concept-tag links must land together or not
+        // at all. If a crash committed the row but not the body, the event is not yet recorded (see
+        // ApplyAsync's ordering comment), so sync redelivers it — but the redelivery then ties
+        // ConflictResolver.IncomingWins on (LamportTs, SourceNodeId) against the committed row and
+        // loses, filing the real body into a 7-day conflict-version row and leaving
+        // GetContentAsync throwing forever. One transaction means a crash rolls all of it back and
+        // the redelivered event creates cleanly. Mirrors ArticleService.CreateAsync's transaction shape.
         using (var conn = connFactory.CreateConnection())
         using (var tx = conn.BeginTransaction())
         {
@@ -241,11 +233,10 @@ public partial class EventApplier
             // ApplyArticleCreateCoreAsync.
             var precomputedEmbeddings = await conceptTagService.PrecomputeNewTagEmbeddingsAsync(tags);
 
-            // H5: article row + body + concept tags land together or not at all. See the long
-            // comment in ApplyArticleCreateCoreAsync for the failure mode this closes — same
-            // mechanism, just on the update path (a crash between UpdateAsync and UpsertAsync used
-            // to leave new metadata paired with the OLD body, permanently, since the retry would
-            // then tie on (LamportTs, SourceNodeId) and lose IncomingWins).
+            // Article row + body + concept tags land together or not at all — same reason as in
+            // ApplyArticleCreateCoreAsync, on the update path: a crash between UpdateAsync and
+            // UpsertAsync would leave new metadata paired with the OLD body permanently, since the
+            // retry ties on (LamportTs, SourceNodeId) and loses IncomingWins.
             using (var conn = connFactory.CreateConnection())
             using (var tx = conn.BeginTransaction())
             {
@@ -307,7 +298,6 @@ public partial class EventApplier
             // be permanently lost. Mirror the comment SoftDeletePlaceholderAsync pattern by
             // writing a tombstone with the delete's lamport so a late CREATE goes through
             // the LWW gate at the top of ApplyArticleCreateCoreAsync.
-            // Wave 2 audit: claude-A #1, kilo-1 #2.
             await tombstoneRepo.CreateAsync(new Tombstone
             {
                 ArticleId = articleId,
@@ -322,10 +312,10 @@ public partial class EventApplier
         {
             // Already deleted — but by WHICH delete? Two nodes deleting the same article
             // independently each apply the other's delete to a row that is already 'D'. Returning
-            // here unconditionally (what this used to do) left each node attributing the row to
-            // its own delete, so the two disagreed about its version forever; a later event at the
-            // same Lamport then resolved differently on each of them. Run the same comparison as
-            // everywhere else and converge on the delete that wins it.
+            // here unconditionally would leave each node attributing the row to its own delete, so
+            // the two disagree about its version forever and a later event at the same Lamport
+            // resolves differently on each. Run the same comparison as everywhere else and
+            // converge on the delete that wins it.
             var recorded = RowVersion.Of(existing.LamportTs, existing.SourceNodeId);
             var arriving = new RowVersion(evt.LamportTs, evt.NodeId);
             if (ConflictResolver.IncomingWins(recorded, arriving))
@@ -351,15 +341,14 @@ public partial class EventApplier
                 new RowVersion(evt.LamportTs, evt.NodeId)))
             return;
 
-        // H5: tombstone BEFORE soft-delete, not after. TombstoneRepository.CreateAsync is an
+        // Tombstone BEFORE soft-delete, not after. TombstoneRepository.CreateAsync is an
         // idempotent LWW upsert (ON CONFLICT ... WHERE excluded.lamport_ts > ...), safe to call
-        // more than once. With the OLD order (soft-delete then tombstone) a crash in between left
-        // the article permanently Status='D' with no tombstone ever written: the early-return guard
-        // above (`existing.Status != "A"`) fires on every retry before the tombstone write is ever
-        // reached again, so the gap could never self-heal — and without a tombstone, an
-        // out-of-order CREATE for the same id would resurrect the "deleted" article. Writing the
-        // (idempotent) tombstone first means a crash before the soft-delete just leaves the article
-        // status still 'A', so the retry runs this whole method again from the top and completes it.
+        // more than once. In the reverse order a crash in between leaves the article permanently
+        // Status='D' with no tombstone: the early-return guard above (`existing.Status != "A"`)
+        // fires on every retry before the tombstone write is reached, so the gap never self-heals —
+        // and without a tombstone, an out-of-order CREATE for the same id resurrects the "deleted"
+        // article. Tombstone first means a crash before the soft-delete leaves status 'A', so the
+        // retry runs this whole method again from the top and completes it.
         await tombstoneRepo.CreateAsync(new Tombstone
         {
             ArticleId = articleId,

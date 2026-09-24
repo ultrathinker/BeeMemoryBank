@@ -93,7 +93,7 @@ public partial class EventApplier(
         logger.LogInformation("Applying event {EventId} {Type} from {NodeId} (lamport={Ts})",
             evt.EventId, evt.EventType, evt.NodeId, evt.LamportTs);
 
-        // TASK 2: Override untrusted actor fields with local node info
+        // Override untrusted actor fields with local node info
         evt.ActorName = node.DisplayName ?? $"node:{evt.NodeId.ToString()[..8]}";
         evt.ActorType = "remote-peer";
 
@@ -159,7 +159,6 @@ public partial class EventApplier(
         // Authorization gate for cluster-state-modifying events. ANY whitelisted peer can
         // sign these by default; without this check a single rogue peer can revoke the
         // whole network, hard-delete arbitrary data, or trigger a destructive restore.
-        // Wave 2 audit: gemini #1 (whitelist), #2 (hard-delete), #3 (restore-network).
         //
         // The classification lives in EventAuthorization, not inline here, so it cannot drift and
         // so a newly added event type has to be deliberately classified — EventAuthorizationGuardTests
@@ -176,7 +175,7 @@ public partial class EventApplier(
 
         // Strip ViaAgentName from remote events too (ActorName/Type already overridden above).
         // Otherwise an attacker could surface a misleading "Security Purge Agent" string in
-        // audit logs. Wave 2 audit: gemini #6.
+        // audit logs.
         evt.ViaAgentName = null;
 
         // Apply data changes BEFORE recording the event. This ensures crash safety:
@@ -185,7 +184,7 @@ public partial class EventApplier(
         // All apply methods are idempotent (LWW conflict resolution, existence checks),
         // so re-applying a partially-applied event is safe — PROVIDED the apply method itself never
         // leaves half of a multi-row write committed. The article create/update paths wrap their
-        // row + body + concept-tag writes in one SQLite transaction for exactly this reason (H5):
+        // row + body + concept-tag writes in one SQLite transaction for exactly this reason:
         // without it, a crash between two of those writes could commit the first, and a redelivered
         // event would then tie LWW against the row that DID commit and lose — permanently stranding
         // the article half-written instead of ever healing. See EventApplier.Article.cs.

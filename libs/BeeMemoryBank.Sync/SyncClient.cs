@@ -33,15 +33,14 @@ public class SyncClient(
     /// Synchronizes with a remote node. Returns the number of new events applied locally.
     /// </summary>
     /// <param name="expectedPeerNodeId">
-    /// The whitelist entry's NodeId for the peer being dialed — the audience anchor for M6's
+    /// The whitelist entry's NodeId for the peer being dialed — the audience anchor for the
     /// challenge-relay protection. It is a required parameter rather than something resolved in
     /// here precisely because it must come from a source the peer does not control: every caller
     /// (SyncScheduler, and the mobile InitialSyncPage/SyncWorker/SyncStatusService) is already
-    /// iterating tbl_whitelist rows and has it in hand. An earlier version looked it up by
-    /// matching remoteApiBase against tbl_whitelist.api_address, which quietly resolved to
-    /// "nothing pinned" for any caller that passed the address in a different shape — and the
-    /// only safe thing to do with "nothing pinned" is refuse, so a string mismatch became a
-    /// sync outage. Passing the id explicitly removes the string comparison from the trust path.
+    /// iterating tbl_whitelist rows and has it in hand. Do not resolve it by matching
+    /// remoteApiBase against tbl_whitelist.api_address: an address in a different shape resolves
+    /// to "nothing pinned", the only safe answer to which is refusing, so a string mismatch would
+    /// become a sync outage. Passing the id explicitly keeps string comparison out of the trust path.
     /// </param>
     public async Task<int> SyncWithAsync(
         HttpClient http, string remoteApiBase, Guid expectedPeerNodeId, CancellationToken ct = default)
@@ -52,7 +51,7 @@ public class SyncClient(
         // or a caller assembling an address by hand, would otherwise wedge sync with this peer.
         remoteApiBase = remoteApiBase.TrimEnd('/');
 
-        // Belt-and-suspenders for bug #5: in addition to the unlock-time sweep in
+        // Belt-and-suspenders for stuck restores: in addition to the unlock-time sweep in
         // SessionService, retry stuck restore events at the start of every sync cycle.
         // Catches the case where the user stays unlocked but a transient failure (network,
         // disk) left a restore in Pending/Downloading. Cheap — no-op if nothing stuck.
@@ -72,7 +71,7 @@ public class SyncClient(
         var remoteIdentity = await GetRemoteIdentityAsync(http, remoteApiBase, ct);
         logger.LogDebug("Synchronizing with {NodeId} ({Base})", remoteIdentity.NodeId, remoteApiBase);
 
-        // 2. Authentication. The audience anchor for M6's challenge-relay protection is
+        // 2. Authentication. The audience anchor for the challenge-relay protection is
         // expectedPeerNodeId — the caller's whitelist entry — never remoteIdentity.NodeId, which
         // is self-declared by step 1's /api/sync/identity call on THIS SAME CONNECTION and so is
         // fully controlled by a malicious/compromised peer (or a LAN MITM; plain-HTTP peers are
@@ -111,8 +110,8 @@ public class SyncClient(
             // peer looks far behind, and "far behind" is judged from the position we last
             // reported — a node that stops reporting because it cannot apply newer events would
             // otherwise freeze the peer's event log at its old cursor for as long as it stays on
-            // the old protocol. (The protocol-1 build that predates this line has exactly that
-            // problem against a protocol-2 server; nothing here can fix it retroactively.)
+            // the old protocol. (Protocol-1 builds do not report here, so they still freeze a
+            // protocol-2 server's log; nothing on this side can fix that.)
             var stale = await syncPositionRepo.GetAsync(remoteIdentity.NodeId);
             await ReportPositionAsync(http, remoteApiBase, token, stale?.LastSequenceNum ?? 0, ct);
         }
@@ -160,17 +159,15 @@ public class SyncClient(
                 }
                 catch (Exception ex)
                 {
-                    // M5c: a genuinely broken event (bad signature, whitelist ordering, any other
-                    // permanent failure) used to stop the WHOLE page here, every cycle, forever —
-                    // the cursor never moved past it, so no event after it in this page (or any
-                    // later pull) ever got a chance either. Once the SAME event has exhausted its
+                    // A genuinely broken event (bad signature, whitelist ordering, any other
+                    // permanent failure) must not stop the WHOLE page every cycle forever: the
+                    // cursor would never move past it. Once the SAME event has exhausted its
                     // budget (SyncEventQuarantine.IsQuarantined — a handful of attempts for a
                     // permanent failure, hours for a deferred one: originator not yet whitelisted,
                     // blob not yet transported, DEK rotation predecessor not yet applied — see
-                    // SyncFailureClassifier), treat it as skipped instead: advance past it and keep
-                    // going, rather than wedging the entire pull behind one event. A failure still
-                    // within its budget hasn't built up enough of a streak yet and still gets the
-                    // old stop-and-retry-from-here behavior.
+                    // SyncFailureClassifier), treat it as skipped: advance past it and keep going.
+                    // A failure still within its budget stops here and is retried from this
+                    // position next cycle.
                     var quarantined = await SyncEventQuarantine.RecordFailureAsync(quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, ex);
                     if (quarantined)
                     {
@@ -208,14 +205,11 @@ public class SyncClient(
 
         // 4. Push: relay all events to the remote node (excluding its own events)
         //
-        // M5: pushed HTTP requests are now bounded by cumulative payload SIZE
-        // (SplitIntoByteBoundedBatches), not just event count — a fixed 500-event batch could
-        // still embed a single ~20MB media_create event (~27MB once base64-encoded), and the old
-        // 10MB server-side guard never actually caught it: JsonContent sends a chunked body with
-        // no Content-Length, which is all that guard checked, so it silently did nothing against
-        // the real client and only bit if some buffering proxy added a Content-Length header. When
-        // it did, the peer 413'd and this loop retried the IDENTICAL oversized batch forever — a
-        // permanent push wedge. PushChunkWithSplitAsync is the safety net if a chunk is still
+        // Pushed HTTP requests are bounded by cumulative payload SIZE
+        // (SplitIntoByteBoundedBatches), not just event count — a fixed 500-event batch can
+        // embed a single ~20MB media_create event (~27MB once base64-encoded), and JsonContent
+        // sends a chunked body with no Content-Length, so a server-side Content-Length guard
+        // cannot be relied on to catch it. PushChunkWithSplitAsync is the safety net if a chunk is still
         // rejected as too large despite the size-aware split (e.g. a config mismatch between this
         // node's MediaService size limit and the peer's per-request cap): it halves and retries
         // rather than resending the same request forever, quarantining a single event that's still
@@ -263,9 +257,9 @@ public class SyncClient(
                 totalSkipped += skipped;
 
                 // Advance the cursor only as far as the remote actually applied. If the remote
-                // skipped event N (signature, schema, replay shield, etc.) and applied N+1, the
-                // old code (`pushAfter = chunk[^1].SequenceNum`) would jump past N permanently —
-                // N is gone from the pusher's view and the remote never sees it again.
+                // skipped event N (signature, schema, replay shield, etc.) and applied N+1,
+                // advancing to the chunk end (`chunk[^1].SequenceNum`) would jump past N
+                // permanently — the remote would never see it again.
                 //
                 // Three cases:
                 //   1. New server, Applied > 0 → use LastAppliedSequence. Stops past the last
@@ -273,12 +267,9 @@ public class SyncClient(
                 //      they get applied on the remote or admin intervenes.
                 //   2. New server, Applied == 0 → LastAppliedSequence is null AND nothing landed.
                 //      Don't advance; break to surface the stall via /api/sync/status.
-                //   3. Old server (LastAppliedSequence absent in JSON, deserializes to null) but
-                //      Applied > 0 → no per-event detail available, use legacy chunk[^1] behaviour.
-                //      Old server can't return Applied > 0 with LastAppliedSequence == null on the
-                //      new client because old server was buggy in exactly the way #3 fixes — but
-                //      for any in-flight transition cluster, treating "got something, no detail"
-                //      as "advance to end of chunk" matches old semantics.
+                //   3. Older server (LastAppliedSequence absent in JSON, deserializes to null) but
+                //      Applied > 0 → no per-event detail available; treat "got something, no
+                //      detail" as "advance to end of chunk", matching that server's semantics.
                 if (applied == 0 && dropped == 0)
                 {
                     // 0 applied AND 0 dropped — all skipped (permanent failures). Advancing
@@ -297,7 +288,7 @@ public class SyncClient(
                 }
                 else
                 {
-                    // Pre-fix server: no per-event detail. Match legacy behaviour.
+                    // Older server: no per-event detail (case 3). Advance to the end of the chunk.
                     pushAfter = chunk[^1].SequenceNum;
                 }
             }
@@ -343,15 +334,13 @@ public class SyncClient(
             {
                 if (!MasterKeyManager.VerifySentinel(remoteSentinel, localDek))
                 {
-                    // Sentinel mismatch USED to throw immediately — but that prevented us from
-                    // pulling DEK_ROTATION_COMMIT events that would catch us up. After auto-
-                    // accept (peer-acceptance model), an honest peer that rotated their DEK is
-                    // expected to look like a sentinel mismatch UNTIL we apply their COMMIT.
-                    // Now: log warning and proceed; let event pull deliver the rotation event,
-                    // and either auto-accept (per whitelist flag) or queue for manual accept.
-                    // If after the pull we still mismatch and no rotation event arrived, the
-                    // next cycle will retry the same warning. (Found by E2E test — a peer that
-                    // joined before a rotation could never receive the rotation event.)
+                    // Do not throw on a sentinel mismatch: that would block pulling the
+                    // DEK_ROTATION_COMMIT events that catch us up (a peer that joined before a
+                    // rotation could never receive it). Under the peer-acceptance model an honest
+                    // peer that rotated its DEK looks like a sentinel mismatch UNTIL we apply its
+                    // COMMIT. So log a warning and proceed; the pull delivers the rotation event,
+                    // which is auto-accepted (per whitelist flag) or queued for manual accept. If
+                    // we still mismatch after the pull, the next cycle repeats the warning.
                     logger.LogWarning(
                         "DEK sentinel mismatch with {BaseUrl}; proceeding with event pull anyway — peer may have a pending DEK rotation we need to apply.",
                         baseUrl);
@@ -376,7 +365,7 @@ public class SyncClient(
     }
 
     // Delegates to the shared PeerAuthenticator helper — same flow, single source of truth,
-    // now also reused by the reachability self-test (POST /api/sync/probe) endpoint.
+    // also used by the reachability self-test (POST /api/sync/probe) endpoint.
     private Task<string> AuthenticateAsync(
         HttpClient http, string baseUrl, NodeIdentity identity, Guid expectedServerNodeId, CancellationToken ct)
         => PeerAuthenticator.AuthenticateAsync(authSigner, http, baseUrl, identity, expectedServerNodeId, ct);
@@ -435,10 +424,9 @@ public class SyncClient(
         req.Content = JsonContent.Create(events, options: JsonOpts);
 
         var resp = await http.SendAsync(req, ct);
-        // M5: report 413 as data instead of throwing, so the caller (PushChunkWithSplitAsync) can
-        // split and retry rather than have the whole push loop unwind on an HttpRequestException —
-        // that used to leave the cursor exactly where it was, so the next cycle resent the same
-        // request and 413'd again, forever.
+        // Report 413 as data instead of throwing, so the caller (PushChunkWithSplitAsync) can
+        // split and retry. Throwing would unwind the whole push loop with the cursor unchanged,
+        // and the next cycle would resend the same request and 413 again, forever.
         if (resp.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
             return new ApplyResultDto(0, 0, null, 0, TooLarge: true);
         resp.EnsureSuccessStatusCode();
@@ -448,11 +436,11 @@ public class SyncClient(
 
     /// <summary>
     /// Pushes one chunk, splitting and retrying if the peer reports it as too large (413) — the
-    /// safety net behind client-side size-bounded batching (M5). SplitIntoByteBoundedBatches should
+    /// safety net behind client-side size-bounded batching. SplitIntoByteBoundedBatches should
     /// keep an ordinary chunk well under the server's per-request cap, but a config mismatch (e.g. a
     /// future MediaService size limit raised without a matching bump to the cap enforced in
     /// SyncEndpoints.cs) must still degrade gracefully instead of resending the identical oversized
-    /// request forever — the exact permanent-wedge failure mode this finding closes. Halves the
+    /// request forever, which would wedge the push permanently. Halves the
     /// chunk and recurses; a single event that STILL 413s alone is quarantined: logged loudly and
     /// counted as permanently skipped rather than retried every cycle with no operator-visible
     /// signal beyond a log line.
@@ -489,7 +477,7 @@ public class SyncClient(
 
     /// <summary>
     /// Splits a page of candidate events into HTTP-request-sized chunks, bounded by cumulative
-    /// payload size (M5) rather than just count — a fixed event-COUNT batch can still silently
+    /// payload size rather than just count — a fixed event-COUNT batch can still silently
     /// exceed the server's per-request size cap (a single media_create event can carry up to ~20MB
     /// of base64 ciphertext alone) and get stuck retrying an oversized request forever. Uses
     /// SyncEvent.Payload.Length (the JSON payload string's UTF-16 char count) as a size estimate —
@@ -521,9 +509,9 @@ public class SyncClient(
     private sealed record SentinelDto(string? SentinelB64);
     private sealed record RemoteIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
     // LastAppliedSequence is nullable for backward compat with older servers — fall back to
-    // the prior batch[^1] behaviour if absent. New servers always populate it (see
-    // SyncApplyResult in BeeMemoryBank.Api.Models). (Brainstorm bug #3.)
-    // TooLarge (M5) is a purely local (client-side) marker for a 413 response — it never round-trips
+    // advancing to the batch end (batch[^1]) if absent. Current servers always populate it (see
+    // SyncApplyResult in BeeMemoryBank.Api.Models).
+    // TooLarge is a purely local (client-side) marker for a 413 response — it never round-trips
     // through JSON (the server never returns it; PushEventsAsync constructs it directly), so it's
     // fine that ReadFromJsonAsync<ApplyResultDto> would leave it false by default on every real
     // deserialized response.

@@ -16,10 +16,9 @@ public class SnapshotJoinClient
 {
     private const string ManifestFileName = "manifest.json";
 
-    // Shared with SnapshotService.NetworkRestore. This used to be a local copy, and it had
-    // drifted: it was missing tbl_comment and tbl_article_version, so a node that joined a
-    // network quietly got no comments and no article history while a node seeded by a
-    // network-wide restore got both.
+    // Shared with SnapshotService.NetworkRestore — do not keep a local copy. A copy drifts, and a
+    // table missing from it (e.g. tbl_comment, tbl_article_version) is silently absent on a node
+    // that joined a network while a node seeded by a network-wide restore has it.
     private static readonly string[] ImportTables = SnapshotTables.Replicated;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -69,13 +68,13 @@ public class SnapshotJoinClient
 
         var challengeBytes = Convert.FromBase64String(challenge.Challenge);
         // V2: the signature is bound to the audience node's id. /api/sync/authenticate verifies
-        // against ITS OWN recorded identity and no longer accepts the old unbound V1 tag at all,
+        // against ITS OWN recorded identity and does not accept the unbound V1 tag at all,
         // so signing V1 here would simply 401 — see PeerAuthenticator's domain-tag comment.
         //
         // Unlike the steady-state sync path, the anchor here can only be the id the remote just
         // declared: this is first contact, so there is no whitelist row to pin against yet. That
         // is trust-on-first-use, and it is what the operator is already doing by typing this URL
-        // and master password. It is still strictly better than the unbound payload it replaces —
+        // and master password. It is still strictly better than an unbound payload —
         // the resulting signature is redeemable only at the node that issued the challenge.
         var domainTag = "BMB-CHALLENGE-V2\0"u8.ToArray();
         var challengePayload = domainTag
@@ -101,12 +100,10 @@ public class SnapshotJoinClient
 
         // HttpClient.Timeout — 100 s by default, and nothing overrides it on the mobile client —
         // covers the WHOLE SendAsync while the completion option is ResponseContentRead: headers
-        // AND the entire body. A join snapshot is the whole vault (92 MB on the personal node when
-        // this was found), so on any link slower than roughly 1 MB/s the download is killed
-        // mid-transfer. The join then fails with "net_http_request_timedout, 100" AFTER the key
-        // exchange has already succeeded, which leaves a half-provisioned node row on the server
-        // and tells the user nothing useful. Measured on the same 92 MB snapshot: 17 s on a phone,
-        // exactly 100 030 ms on a tablet on the same Wi-Fi.
+        // AND the entire body. A join snapshot is the whole vault (easily ~100 MB), so on any link
+        // slower than roughly 1 MB/s the download would be killed mid-transfer, AFTER the key
+        // exchange has already succeeded — leaving a half-provisioned node row on the server and
+        // telling the user nothing useful ("net_http_request_timedout, 100").
         //
         // ResponseHeadersRead scopes HttpClient.Timeout to the header phase; the body copy is then
         // bounded by the token below instead — still bounded, so a genuinely stalled transfer

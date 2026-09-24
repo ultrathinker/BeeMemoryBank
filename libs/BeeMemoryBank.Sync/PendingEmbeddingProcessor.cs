@@ -24,11 +24,9 @@ public class PendingEmbeddingProcessor(
 
     // Guards against the periodic tick and a manual DrainAllPendingAsync (or two concurrent
     // manual drains) running ProcessPendingCoreAsync at the same time. Without this, two
-    // concurrent runs could pull and re-process the same pending batch. AGY review 2026-08-12
-    // caught the search-index equivalent of this hazard producing duplicate segments that
-    // permanently crash the merge step -- see PendingIndexProcessor for the worse case; this
-    // processor doesn't have that specific failure mode, but the same non-exclusive access
-    // would still mean duplicate embedding-generation work.
+    // concurrent runs could pull and re-process the same pending batch. PendingIndexProcessor has
+    // the worse form of this hazard (duplicate segments that permanently crash the merge step);
+    // here the same non-exclusive access would still mean duplicate embedding-generation work.
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
