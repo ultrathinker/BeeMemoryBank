@@ -9,7 +9,7 @@ using BeeMemoryBank.Embeddings;
 namespace BeeMemoryBank.Api.Services;
 
 /// <summary>
-/// Curated, deny-by-default READ-ONLY tool surface for the native AI chat (plan §1, §2 Phase 1).
+/// Curated, deny-by-default READ-ONLY tool surface for the native AI chat.
 ///
 /// <para>Each tool calls the SAME scope-checked Core service methods the REST endpoints and the
 /// MCP read tools use (<see cref="SearchService"/>, <see cref="ArticleService"/>,
@@ -18,7 +18,7 @@ namespace BeeMemoryBank.Api.Services;
 /// reads automatically by that scope, so the AI can only ever see what the calling user can see —
 /// this is also the prompt-injection backstop.</para>
 ///
-/// <para><b>CRITICAL ACL gate (plan §1):</b> <c>bee_get_article</c>'s content branch runs through
+/// <para><b>CRITICAL ACL gate:</b> <c>bee_get_article</c>'s content branch runs through
 /// <see cref="BeeMemoryBank.Api.Helpers.ArticleContentPolicy"/> — the SAME shared gate
 /// <c>BeeReadTools.GetArticle</c> (MCP) uses — which mirrors the <c>ArticleEndpoints</c>
 /// <c>/{id}/content</c> handler exactly: <see cref="ArticleService.GetMetadataAsync"/>
@@ -31,7 +31,7 @@ namespace BeeMemoryBank.Api.Services;
 /// a clear "vault is locked" tool RESULT (never an exception) when locked — so a locked vault
 /// degrades gracefully instead of crashing the tool loop.</para>
 ///
-/// <para><b>Phase 3 — guarded writes.</b> The write tools (<c>bee_save_article</c>,
+/// <para><b>Guarded writes.</b> The write tools (<c>bee_save_article</c>,
 /// <c>bee_update_article</c>, <c>bee_append_to_article</c>, <c>bee_replace_in_article</c>,
 /// <c>bee_delete_article</c>) call the SAME scope-checked <see cref="ArticleService"/> methods the
 /// REST endpoints and MCP write tools use (never raw repos/SQL), and catch
@@ -40,7 +40,7 @@ namespace BeeMemoryBank.Api.Services;
 /// loop: the streaming loop pauses on any write tool call behind a human-in-the-loop confirm SSE
 /// gate (<c>confirm_required</c>) and only the dedicated confirm endpoint runs them after the user
 /// clicks Allow (see <c>ChatEndpoints</c>). Tag rename/merge/delete, folder delete, hard-delete, DEK
-/// rotation, snapshot, user/agent admin, and audit tools are deliberately NOT exposed (plan §1).</para>
+/// rotation, snapshot, user/agent admin, and audit tools are deliberately NOT exposed.</para>
 /// </summary>
 public sealed partial class ChatToolDispatcher(
     ArticleService articleService,
@@ -63,9 +63,9 @@ public sealed partial class ChatToolDispatcher(
     /// <summary>The tool definitions declared to the model (deny-by-default: only these are exposed).</summary>
     public static IReadOnlyList<Models.ChatToolDefinition> ToolDefinitions { get; } = BuildToolDefinitions();
 
-    // ── Phase 3: write-tool classification + audit-tagging plumbing ──────────
+    // ── write-tool classification + audit-tagging plumbing ──────────
 
-    /// <summary>Write tools (plan §1 "Tool surface"). Read tools execute immediately inside the
+    /// <summary>Write tools. Read tools execute immediately inside the
     /// tool loop; write tools are PAUSED behind a human-in-the-loop confirm SSE gate and only ever
     /// executed by the confirm endpoint after the user clicks Allow. Kept as a public set so the
     /// streaming loop can decide "emit confirm_required + pause" vs "execute now".</summary>
@@ -75,8 +75,8 @@ public sealed partial class ChatToolDispatcher(
         "bee_replace_in_article", "bee_delete_article", "bee_insert_image_into_article"
     };
 
-    /// <summary>Tool names that CAN be destructive (plan §2 Phase 3 "per-session destructive-op
-    /// cap") — see <see cref="IsDestructiveTool"/> for the actual (args-aware) determination.
+    /// <summary>Tool names that CAN be destructive
+    /// — see <see cref="IsDestructiveTool"/> for the actual (args-aware) determination.
     /// <c>bee_delete_article</c>/<c>bee_replace_in_article</c> always count; <c>bee_update_article</c>
     /// only counts when its call actually carries a <c>content</c> argument.</summary>
     public static readonly IReadOnlySet<string> DestructiveTools = new HashSet<string>
@@ -92,8 +92,8 @@ public sealed partial class ChatToolDispatcher(
     /// replaces the ENTIRE article body (no partial/no-op outcome, unlike replace's "0 occurrences"),
     /// exactly as destructive as bee_replace_in_article; a metadata-only update (title/treePath/tags,
     /// no content) is no more destructive than a rename and would otherwise burn the shared budget for
-    /// free. Before this, the whole cap could be sidestepped by asking the model to "update" the body
-    /// instead of "replace" it.</summary>
+    /// free — counting content-carrying updates is what keeps the cap from being sidestepped by
+    /// "update" instead of "replace".</summary>
     public static bool IsDestructiveTool(string name, JsonElement args)
     {
         if (name is "bee_delete_article" or "bee_replace_in_article") return true;
@@ -114,16 +114,13 @@ public sealed partial class ChatToolDispatcher(
     /// delete still needs the DEK.</summary>
     public static bool RequiresUnlockedSessionForCall(string name, JsonElement args, McpToolRegistry registry)
     {
-        // No special cases. This briefly carved out bee_delete_article and metadata-only
-        // bee_update_article on the reasoning that neither re-encrypts anything — true of the
-        // article and media repositories, but not of the write as a whole: EVERY write logs an
-        // event, and EventLogger.AppendEventAsync SIGNS it with the node's Ed25519 key, which on
-        // any node initialized after the key-wrapping change (Ed25519PrivateKeyV == 1, i.e. every
-        // node InitializationService creates) is unwrapped with the master DEK. session
-        // .GetMasterDek() throws while locked, so a "metadata-only" write fails just as hard as a
-        // content write — it just fails deeper, as an exception instead of a clean tool result.
-        // Verified against the real event logger in WriteWhileLockedTests; the test that
-        // originally justified the carve-out used a NullEventLogger and so could not see it.
+        // No special cases. A metadata-only write or a soft delete still needs the DEK: EVERY
+        // write logs an event, and EventLogger.AppendEventAsync SIGNS it with the node's Ed25519
+        // key, which (Ed25519PrivateKeyV == 1, i.e. every node InitializationService creates) is
+        // unwrapped with the master DEK. session.GetMasterDek() throws while locked, so a
+        // "metadata-only" write fails just as hard as a content write — it just fails deeper, as
+        // an exception instead of a clean tool result (and a locked write must degrade to a
+        // clean tool result, never throw).
         //
         // Fail-safe default true for a tool with no MCP counterpart at all (currently only
         // bee_insert_image_into_article, a chat-only tool that always touches the encrypted body).
@@ -131,7 +128,7 @@ public sealed partial class ChatToolDispatcher(
     }
 
     /// <summary>The value recorded as <c>ViaAgentName</c> on chat-driven writes so /Activity shows
-    /// "via agent: chat" exactly like MCP-agent-driven edits (plan §1 "Audit", §2 Phase 3).</summary>
+    /// "via agent: chat" exactly like MCP-agent-driven edits.</summary>
     public const string ChatViaAgentName = "chat";
 
     /// <summary>The <see cref="HttpContext.Items"/> key set while a chat write tool executes, so
@@ -140,7 +137,7 @@ public sealed partial class ChatToolDispatcher(
 
     /// <summary>The <see cref="HttpContext.Items"/> key the confirm endpoint sets BEFORE executing a
     /// user-approved write. <see cref="InvokeAsync"/> refuses to run ANY write tool unless this is
-    /// present — so the Phase 1 non-streaming <c>/message</c> loop (which calls InvokeAsync for every
+    /// present — so the non-streaming <c>/message</c> loop (which calls InvokeAsync for every
     /// tool but has no confirm gate) can NEVER execute an ungated write. Only <c>/confirm</c> (after a
     /// human Allow) sets it. Defense-in-depth on top of the /stream loop never calling InvokeAsync for
     /// writes in the first place.</summary>
@@ -149,11 +146,10 @@ public sealed partial class ChatToolDispatcher(
     /// <summary>Short human-readable summary of a write tool call, shown on the confirm card
     /// ("AI wants to: &lt;summary&gt;"). Built from the tool name + the model's args; never throws.
     ///
-    /// <para><b>M1 fix:</b> this used to deliberately omit <c>content</c>/<c>search</c>/<c>replace</c>
-    /// — a human approved "Update article 3f2a…" with no sight of the payload, which is not a
+    /// <para>Every text-carrying write tool includes a truncated, single-line preview of what
+    /// will actually be written: a confirmation with no sight of the payload is not a
     /// meaningful confirmation against a prompt-injected write (the injected instruction controls
-    /// exactly the text nobody was shown). Every text-carrying write tool now includes a truncated,
-    /// single-line preview of what will actually be written. It is still a PREVIEW, not the full
+    /// exactly the text nobody was shown). It is still a PREVIEW, not the full
     /// body/diff — the confirm card is a short summary, not a document viewer — but a bounded
     /// snippet is enough for a human to recognize "this isn't what I asked for" the same way a git
     /// commit's diffstat is enough to smell a bad commit without reading the whole patch.</para></summary>
@@ -200,7 +196,7 @@ public sealed partial class ChatToolDispatcher(
     /// on expected failures (locked / not-found / denied / bad args) — those become structured
     /// tool results so the model can recover. Only truly unexpected errors propagate.</summary>
     ///
-    /// <para><b>Phase 3 audit tagging:</b> while a write tool executes, the ambient
+    /// <para><b>Audit tagging:</b> while a write tool executes, the ambient
     /// <see cref="HttpContext.Items"/> is tagged (<see cref="ChatActorItemsKey"/>=<see cref="ChatViaAgentName"/>)
     /// so <c>HttpActorProvider.ViaAgentName</c> reports "chat" and the resulting audit-log event is
     /// attributed to the AI (read tools are NOT tagged — only writes). Writes also re-check
@@ -231,7 +227,7 @@ public sealed partial class ChatToolDispatcher(
                     Ok: true, DurationMs: (int)sw.ElapsedMilliseconds, Error: null);
             }
 
-            // Phase 3 confirm-gate: a write may ONLY execute when the confirm endpoint has set the
+            // Confirm-gate: a write may ONLY execute when the confirm endpoint has set the
             // ChatWriteExec marker (i.e. after a human Allow). The streaming loop never reaches here
             // for writes (it pauses on confirm_required); this guard prevents any OTHER caller of
             // InvokeAsync — notably the non-streaming /message loop, which has no confirm gate — from

@@ -19,10 +19,10 @@ public static class DekRotationEndpoints
     public static void MapDekRotationEndpoints(this WebApplication app)
     {
         // Rotating the vault's master DEK is a superadmin operation end to end, so the gate is
-        // declared once here. RequireNonAgent alongside it because these handlers used to compare
-        // the X-User-Role header directly, which no agent request ever carries — an agent owned by
-        // a superadmin would otherwise inherit the ability to re-key the vault (see KeyEndpoints
-        // for the same pairing and the same reason).
+        // declared once here. RequireNonAgent rides along: role checks alone no longer stop
+        // agent requests — a superadmin-owned agent resolves through CallerIdentity with full
+        // owner rights and must never inherit the ability to re-key the vault (see KeyEndpoints
+        // for the same pairing).
         var group = app.MapGroup("/api/dek-rotation").WithTags("DekRotation")
             .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 

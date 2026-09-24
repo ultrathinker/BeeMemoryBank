@@ -13,16 +13,15 @@ namespace BeeMemoryBank.Api.Middleware;
 /// caller this method says yes to is a full superadmin for the asking: it just has to state the
 /// role it wants in a header.</para>
 ///
-/// <para><b>There used to be a second way to say yes.</b> When <c>BMB_INTERNAL_KEY</c> was unset,
-/// this fell through to "trust any caller whose remote address is loopback" — a convenience from
-/// when running the API and Web from two terminals meant no shared secret existed yet. It is gone
-/// because it can no longer be reached and, since PublicSurface, would be far worse than it was:
-/// with the fallback live, ANY process on the same host — a second container, another user's shell,
-/// anything that gets a request onto 127.0.0.1 through a proxy hop — would be fully trusted.
-/// Unreachable, because the API process guarantees the variable is set before the first request:
+/// <para><b>There is deliberately NO loopback fallback.</b> Do not restore "trust any caller
+/// whose remote address is loopback when <c>BMB_INTERNAL_KEY</c> is unset": with PublicSurface
+/// deciding the node's reachability from this answer, ANY process on the same host — a second
+/// container, another user's shell, anything that gets a request onto 127.0.0.1 through a proxy
+/// hop — would be fully trusted. Unreachable in practice, because the API process guarantees the
+/// variable is set before the first request:
 /// <c>Program.cs</c> throws at startup in Production when it is missing, and in every other
-/// environment generates one into <c>{dataPath}/.internal-key</c> and sets it. Do not restore the
-/// fallback; if two processes need to agree on a key, share the file, which is what Web already
+/// environment generates one into <c>{dataPath}/.internal-key</c> and sets it. If two processes
+/// need to agree on a key, share the file, which is what Web already
 /// does.</para>
 /// </summary>
 public static class InternalKeyValidator
@@ -36,7 +35,7 @@ public static class InternalKeyValidator
 
         var providedKey = ctx.Request.Headers["X-Internal-Key"].FirstOrDefault();
         if (string.IsNullOrEmpty(providedKey)) return false;
-        // AUDIT NOTE: FixedTimeEquals returns false (not throws) when arrays have different lengths.
+        // FixedTimeEquals returns false (not throws) when arrays have different lengths.
         // No timing leak on key length — both are UTF8 byte arrays, comparison is constant-time
         // regardless of length mismatch. This is safe as-is per .NET documentation.
         return CryptographicOperations.FixedTimeEquals(

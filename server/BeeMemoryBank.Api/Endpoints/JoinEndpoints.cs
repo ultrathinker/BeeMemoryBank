@@ -13,7 +13,7 @@ public static class JoinEndpoints
         // POST /api/join — a new node joins the network.
         // Validates the master password, adds the node to the whitelist,
         // returns a key slot for obtaining the Master DEK.
-        // AUDIT NOTE: The master password is sent in the request body. This is a known limitation.
+        // The master password is sent in the request body. This is a known limitation.
         // The bootstrap node is the user's own server, not a third party. The password is needed
         // to derive the KEK and transfer the master DEK. A SPAKE2/SRP zero-knowledge protocol
         // would eliminate this but is a significant engineering effort for a self-hosted system.
@@ -36,14 +36,14 @@ public static class JoinEndpoints
                 return Results.BadRequest(new ErrorResponse("A node cannot join itself"));
 
             // 2. Validate password: try EVERY password-bearing slot, not just the first one found.
-            // After A2, fresh nodes have a "user" slot instead of legacy "password". Accept both
-            // types so multi-node join works on post-A2 nodes. Found by E2E test on 2026-04-26.
+            // Fresh nodes have a "user" slot instead of legacy "password". Accept both
+            // types so multi-node join works on nodes of either vintage.
             //
-            // L3: a node can carry MULTIPLE "user" slots — one per superadmin, each independently
+            // A node can carry MULTIPLE "user" slots — one per superadmin, each independently
             // wrapping the SAME master DEK with that user's own password-derived KEK (see
-            // UserService's promote-to-superadmin path). Checking only slots.FirstOrDefault(...)
-            // meant every superadmin except whichever one happened to sort first got "invalid
-            // master password" trying to join a new node with THEIR OWN correct password. Try every
+            // UserService's promote-to-superadmin path). The first slot belongs to exactly one
+            // superadmin, so every other superadmin would get "invalid master password" trying
+            // to join a new node with THEIR OWN correct password. Try every
             // candidate slot and accept the first one the supplied password actually unwraps —
             // mirrors the same try-every-candidate-slot pattern KeyManagementService.
             // ChangePasswordAsync already uses for the equivalent "which slot is this password for"
@@ -145,10 +145,9 @@ public static class JoinEndpoints
                         statusCode: 403);
 
                 // A re-join with the same key can change the peer's display name or address, and
-                // that has to reach the mesh like any other whitelist change. This branch used to
-                // write the row and log nothing — unlike the new-peer branch just below it — so a
-                // node that moved to a new URL and re-joined stayed reachable only from the node it
-                // re-joined through. Found by the repository-write guardrail.
+                // that has to reach the mesh like any other whitelist change — the new-peer branch
+                // below logs too, and a re-join that wrote only the local row would leave every
+                // other node with stale reachability for this peer forever.
                 var version = await eventLogger.LogWhitelistUpdateAsync(req.NodeId, apiAddress, req.DisplayName);
 
                 existing.DisplayName = req.DisplayName;

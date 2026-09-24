@@ -20,7 +20,7 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static partial class ChatEndpoints
 {
-    // M3 fix: neither a size nor a rate limit existed on /stream before this — chat is on by
+    // /stream needs both a size cap and a rate limit — chat is on by
     // default for every user, and each turn can trigger several OpenRouter calls internally
     // (vision delegation, the tool loop's own iterations, generate_image), all billed to the
     // admin's configured key(s). This budget is generous for a real interactive conversation
@@ -36,14 +36,13 @@ public static partial class ChatEndpoints
 
     private static void MapStreamEndpoint(RouteGroupBuilder group)
     {
-        // ── Phase 2: STREAMING tool-loop turn + persistence ─────────────────────────
+        // ── STREAMING tool-loop turn + persistence ─────────────────────────
         //
         // Runs the SAME tool-call loop as /message, but writes the response as a Server-Sent Events
         // stream: text deltas (so the assistant bubble fills in incrementally), tool-call lifecycle
         // events ("tool_call_start"/"tool_call_result" so the UI can show "searching…"), and a final
         // "done" event. The browser's disconnect (HttpContext.RequestAborted) is forwarded into the
-        // OpenRouter streaming call so navigating away cancels the upstream request (no wasted billing
-        // — plan §1 "Cancellation", §2 Phase 2 accept).
+        // OpenRouter streaming call so navigating away cancels the upstream request (no wasted billing).
         //
         // Persistence: on the first message with no conversationId it creates a chat_conversation
         // (title = first ~40 chars of the message); it appends each user/assistant/tool turn to
@@ -83,7 +82,7 @@ public static partial class ChatEndpoints
                 await JsonError(400, "Message is required");
                 return;
             }
-            // M3 fix: bound a single call's worst-case egress size. Generous for legitimate long
+            // Bound a single call's worst-case egress size. Generous for legitimate long
             // pastes, but every extra character is more prompt tokens billed to the admin's
             // OpenRouter key(s) on a feature that's on by default for every user.
             if (req.Message.Length > MaxMessageLength)
@@ -102,7 +101,7 @@ public static partial class ChatEndpoints
             }
             int userId = identity.UserId.Value; // Web always forwards X-User-Id.
 
-            // M3 fix: chat has no rate limit at all today, and it's on by default for every user
+            // Chat must be rate-limited per user: it's on by default for every user
             // (RequireChatAccess only checks the two access flags, not volume) — so any user with
             // access could burn the admin's configured OpenRouter credits without bound. Keyed by
             // the caller's OWN user id (not IP): the Web proxy calls this from one loopback
@@ -258,7 +257,7 @@ public static partial class ChatEndpoints
             if (!string.IsNullOrWhiteSpace(req.SystemPrompt))
                 convoMessages.Add(new ChatToolMessage { Role = "system", Content = req.SystemPrompt });
 
-            // Phase 5: load this conversation's attachments once (already user-scoped via the
+            // Load this conversation's attachments once (already user-scoped via the
             // conversation lookup) so prior vision images can be re-included in the egress request
             // (multi-turn vision). user-upload attachments become image_url parts on their owning
             // user message; generated-image attachments are display-only and not re-sent.
@@ -331,7 +330,7 @@ public static partial class ChatEndpoints
             }
             catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat user message"); }
 
-            // Phase 5 (vision): persist each validated attachment linked to the new user message and
+            // Vision: persist each validated attachment linked to the new user message and
             // arm the egress image parts. Stored as the ORIGINAL (validated) bytes so reopening the
             // conversation renders faithful images; the egress resize happens in BuildVisionDataUrl.
             // The images are attached inline to the text model's request ONLY when the text model

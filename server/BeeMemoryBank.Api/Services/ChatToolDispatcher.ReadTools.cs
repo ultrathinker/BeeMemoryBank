@@ -74,7 +74,7 @@ public sealed partial class ChatToolDispatcher
         return JsonSerializer.Serialize(new { paths = byPath }, JsonOpts);
     }
 
-    // Shares BeeReadTools.GetArticle's gate order via ArticleContentPolicy (plan §1 CRITICAL):
+    // Shares BeeReadTools.GetArticle's gate order via ArticleContentPolicy:
     // metadata (scope-filtered) -> protected check -> session-lock check -> explicit folder-ACL
     // re-check -> decrypt. Content is withheld — never an exception — for every reason a caller
     // might not get it, so a locked vault or a denied folder degrades to a clear tool result.

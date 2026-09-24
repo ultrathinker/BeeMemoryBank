@@ -142,7 +142,6 @@ using (var scope = app.Services.CreateScope())
     // For Committing rows: only mark Failed those originated by THIS node. Peer-originated
     // rows may still be auto-accepted on next unlock (RetryPendingAutoAcceptsAsync), or
     // manually accepted by the admin. Marking them Failed here would prevent both paths.
-    // (Claude R2 prod review CRIT-1.)
     var eventLogRepo = scope.ServiceProvider.GetRequiredService<IEventLogRepository>();
     var stuckDek = await dekStateRepo.GetByStateAsync(DekRotationState.Committing);
     foreach (var row in stuckDek)
@@ -166,7 +165,7 @@ using (var scope = app.Services.CreateScope())
 
     // Sweep stale Proposed rows (>24h or past explicit ExpiresAt) → Cancelled. Without this,
     // a node that received a PROPOSED but never the matching COMMIT would accumulate them
-    // forever. (Claude R2 prod review CRIT-2.)
+    // forever.
     var stuckProposed = await dekStateRepo.GetByStateAsync(DekRotationState.Proposed);
     foreach (var row in stuckProposed)
     {
@@ -246,7 +245,7 @@ if (OperatingSystem.IsWindows())
                     "Media blob backfill on startup: {Stored} stored, {Missing} missing file, {Already} already done.",
                     result.Stored, result.MissingFile, result.AlreadyDone);
 
-            // Phase 2: once every media is in the blob store, delete the now-redundant .enc files.
+            // Once every media is in the blob store, delete the now-redundant .enc files.
             // Safe by construction — SweepRedundantEncFilesAsync only removes a file whose blob it
             // has just confirmed present, so the blob is always the surviving copy.
             var swept = await svc.SweepRedundantEncFilesAsync();

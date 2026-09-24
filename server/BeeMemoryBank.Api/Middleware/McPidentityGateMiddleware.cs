@@ -11,12 +11,10 @@ namespace BeeMemoryBank.Api.Middleware;
 /// <para>Without this, anything left of "am I allowed to talk to MCP at all" ran only inside the
 /// tool handlers, where the only signal was the deny-all <c>CallerScopeMiddleware</c> applied to an
 /// unidentified caller. That is fine for most tools (they silently return nothing), but a write
-/// that did not consult the caller's scope at all — <c>MediaRepository.CreateAsync</c> for an
-/// unlinked upload, specifically <c>if (!articleId.HasValue) return;</c> — succeeded: the
-/// anonymous caller got back a media id, the file landed in the blob store, and a media_create sync
-/// event propagated the row to every peer. With this gate, every request that is not on the short
-/// allow-list below answers 401 before the SDK runs; the repository's own guard is the second
-/// layer (B2 fix #2).</para>
+/// that never consults the caller's scope at all (e.g. an unlinked media upload) would succeed for
+/// an anonymous caller and propagate a sync event to every peer. With this gate, every request
+/// that is not on the short allow-list below answers 401 before the SDK runs; the repository's
+/// own guard is the second layer.</para>
 ///
 /// <para>What counts as a credential, and why each is allowed or rejected — the classification is
 /// the contract, not just the implementation, so that any future loosening is a deliberate diff

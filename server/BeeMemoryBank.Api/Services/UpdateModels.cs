@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace BeeMemoryBank.Api.Services;
 
-// ── Manifest DTO (mirrors superplan §6.1 releases.json shape) ────────────────
+// ── Manifest DTO (mirrors the update feed's releases.json shape) ────────────────
 
 /// <summary>
 /// Root DTO for the releases.json manifest file.

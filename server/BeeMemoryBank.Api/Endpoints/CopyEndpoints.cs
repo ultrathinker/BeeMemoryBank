@@ -23,7 +23,7 @@ public static class CopyEndpoints
             if (string.IsNullOrWhiteSpace(req.TargetFolderPath))
                 return Results.BadRequest(new ErrorResponse("targetFolderPath is required"));
 
-            // SOURCE ACL gate (gemini+kilo security review):
+            // SOURCE ACL gate:
             // Without this, any caller who guessed a GUID could "copy" a foreign
             // article into their own writable folder and effectively exfiltrate
             // its plaintext. The repo-level write guard fires on the target only.

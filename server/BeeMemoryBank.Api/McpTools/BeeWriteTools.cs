@@ -295,7 +295,7 @@ public class BeeWriteTools(
             if (folder == null)
                 return $"Error: folder '{path}' not found";
 
-            // L7: emptiness must be checked against the TRUE contents, not this caller's
+            // Emptiness must be checked against the TRUE contents, not this caller's
             // ACL-filtered view. GetChildrenAsync/ListAsync apply the ambient scope's FilterFolders/
             // FilterArticles -- a folder whose only contents are hidden from this caller (e.g. a
             // deny rule on a descendant subtree) would otherwise read as "empty" and get deleted,

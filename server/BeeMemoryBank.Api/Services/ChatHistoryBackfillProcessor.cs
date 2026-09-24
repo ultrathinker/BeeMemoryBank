@@ -7,8 +7,8 @@ namespace BeeMemoryBank.Api.Services;
 
 /// <summary>
 /// Moves legacy chat.db data onto the node chat key (<see cref="ChatDataProtector"/>): message
-/// columns and attachment blobs still holding plaintext from before the H3/H3b encryption fixes
-/// (the original H3a backfill), and message columns, attachment blobs and LLM provider keys sealed
+/// columns and attachment blobs still holding plaintext from before chat encryption existed, and
+/// message columns, attachment blobs and LLM provider keys sealed
 /// directly under the master DEK from before the chat key existed — which a DEK rotation would
 /// otherwise orphan. The per-row work lives in the repositories' <c>MigrateLegacyBatchAsync</c>
 /// methods — this class is only the scheduling loop around them. <see cref="ChatDekRotationHook"/>

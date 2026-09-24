@@ -6,7 +6,7 @@ namespace BeeMemoryBank.Api.Services;
 
 public sealed partial class ChatToolDispatcher
 {
-    // ── WRITE tools (Phase 3 — confirm-gated; never run inline by the tool loop) ──
+    // ── WRITE tools (confirm-gated; never run inline by the tool loop) ──
     //
     // Each mirrors the corresponding BeeWriteTools method: same scope-checked ArticleService calls,
     // same ACL-error handling (ReadOnlyAccessException → "read-only folder", UnauthorizedAccessException

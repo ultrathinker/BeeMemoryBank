@@ -19,7 +19,7 @@ using SixLabors.ImageSharp.Processing;
 namespace BeeMemoryBank.Api.Endpoints;
 
 /// <summary>
-/// Phase 0 surface for the native AI chat (plan §2). Backend-only — no UI yet.
+/// REST surface for the native AI chat.
 ///
 /// Group is gated by <see cref="RequireInternalKeyExtensions.RequireInternalKey(RouteGroupBuilder)"/>
 /// (internal-key check) the same as every other protected group. Within it:
@@ -28,18 +28,18 @@ namespace BeeMemoryBank.Api.Endpoints;
 ///    the registration site rather than restated at the top of each handler).
 ///  - Any endpoint that encrypts/decrypts a key checks <c>session.IsUnlocked</c> first and
 ///    returns <c>409 {"error":"Vault is locked"}</c> when locked (the chat key that seals it is
-///    itself wrapped under the master DEK — see plan §6 "Phase 0 acceptance made realistic").
+///    itself wrapped under the master DEK — see <c>ChatDataProtector</c>).
 ///  - A key's plaintext is returned ONLY at creation; every other response exposes
 ///    <c>key_prefix</c> only.
 ///
 /// Key encryption is <c>ArticleEncryptor.Encrypt(secret, chatKey, aad)</c> inside
 /// <c>ChatSettingsRepository.SealSecretAsync</c> / <c>OpenSecretsAsync</c>, under the node chat key
 /// (<c>ChatDataProtector</c>) rather than the master DEK so a DEK rotation does not orphan stored
-/// keys. It does NOT use <c>AgentKeyHelper</c> (wrong direction — see plan §6).
+/// keys. It does NOT use <c>AgentKeyHelper</c> (wrong key direction).
 /// </summary>
 public static partial class ChatEndpoints
 {
-    // Phase 3: in-flight confirmation guard. Prevents the SAME tool call from being processed by two
+    // In-flight confirmation guard. Prevents the SAME tool call from being processed by two
     // concurrent /confirm requests (two browser tabs / a rapid double-click). The persisted-tool-result
     // idempotency check below catches the SEQUENTIAL double-click (it sees the stored tool result); this
     // catches the CONCURRENT window where two requests both load history before either persists a tool
@@ -47,7 +47,7 @@ public static partial class ChatEndpoints
     // Process-singleton (resets on restart — same accepted trade-off as ChatDestructiveOpCounter).
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _inFlightConfirms = new();
 
-    // L5 fix (see ChatEndpoints.Confirm.cs): how long a confirm_required card stays confirmable
+    // How long a confirm_required card stays confirmable
     // after the assistant message that proposed it was created. Mirrors McpResponseManager's
     // TempFileExpiry (also 24h) for consistency — old enough that no legitimate human click
     // should ever hit it, short enough that a genuinely abandoned confirm card can't be
@@ -60,7 +60,7 @@ public static partial class ChatEndpoints
         // (registered directly on app, NOT on the /api/chat group below) so a blocked user can
         // still ask and get a straight yes/no answer for UI gating. Still behind the internal-key
         // gate (RequireInternalKey). Superadmins always pass; everyone else — including an agent
-        // caller, whose access inherits its OWNER's (M2 fix: an agent key must never be MORE
+        // caller, whose access inherits its OWNER's (an agent key must never be MORE
         // privileged than the user it belongs to) — needs BOTH the node-wide toggle AND their own
         // per-user flag. Mirrors ChatAccessEndpointFilter exactly; keep both in sync.
         app.MapGet("/api/chat/access", async (HttpContext ctx, IUserRepository userRepo, ChatSettingsRepository chatSettingsRepo) =>
@@ -236,13 +236,12 @@ public static partial class ChatEndpoints
         // Not RequireSuperadmin, deliberately: the rule is per-caller, not per-role — a user may
         // only ever waive their OWN confirmation, which the filter cannot express.
         //
-        // Auto-approve writes (opt-in, PER-USER — M1 fix): when enabled, the streaming tool loop
+        // Auto-approve writes (opt-in, PER-USER): when enabled, the streaming tool loop
         // executes THIS caller's write tool calls immediately instead of pausing for a human
         // Allow/Deny. ACL, the destructive-op cap, and audit tagging still apply in full — only the
         // human-in-the-loop pause is skipped, and only for the caller's own turns. Article
-        // history/restore is the accepted safety net. Previously a single superadmin-controlled
-        // node-global toggle that removed the confirm gate for EVERY user at once; no role gate
-        // needed now — a user can only ever waive their OWN confirmation, never anyone else's, so
+        // history/restore is the accepted safety net. No role gate needed: a user can only ever
+        // waive their OWN confirmation, never anyone else's, so
         // there is nothing here for a role check to protect that ACL/the destructive cap don't
         // already cover.
         group.MapGet("/settings/auto-approve", async (ChatSettingsRepository repo, HttpContext ctx) =>
@@ -302,7 +301,7 @@ public static partial class ChatEndpoints
     private static ChatModelResponse ToModelResponse(ChatModelRow m) => new(
         m.Id, m.ModelId, m.Label, m.IsText, m.IsVision, m.IsImageGen, m.ContextWindow, m.CreatedAt);
 
-    // Raw upload size cap (plan §2 Phase 5: "a reasonable max size, e.g. 8MB raw upload"). Enforced
+    // Raw upload size cap (~8MB — sized for photo attachments). Enforced
     // server-side regardless of any client-side resize.
     private const long MaxAttachmentBytes = 8L * 1024 * 1024;
 

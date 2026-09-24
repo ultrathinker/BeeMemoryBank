@@ -52,7 +52,7 @@ public class AuditLogPruningHostedService : BackgroundService
 
                 // Skip pruning while the node is locked. Without this, a node sitting locked for
                 // >91 days could have its still-relevant pre-lock audit trail silently deleted
-                // by a timer fire with no operator present to react. (Claude security review MED-2.)
+                // by a timer fire with no operator present to react.
                 if (!_session.IsUnlocked)
                 {
                     _logger.LogInformation("Audit log pruning: skipped (session locked).");
@@ -66,7 +66,7 @@ public class AuditLogPruningHostedService : BackgroundService
 
                 // Meta-audit: write a row INTO tbl_audit_log itself so the deletion leaves an
                 // in-DB trail. Without this, an attacker whose footprint is >retention days old
-                // has their audit rows silently scrubbed by the system. (Claude security review HIGH-1.)
+                // has their audit rows silently scrubbed by the system.
                 if (deleted > 0)
                 {
                     await repo.LogAsync("system", "audit_log", "prune", "system",

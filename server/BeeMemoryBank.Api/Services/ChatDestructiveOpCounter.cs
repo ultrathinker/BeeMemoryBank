@@ -3,18 +3,18 @@ using System.Collections.Concurrent;
 namespace BeeMemoryBank.Api.Services;
 
 /// <summary>
-/// Phase 3 guardrail: a small per-conversation cap on destructive chat tool calls
+/// Guardrail: a small per-conversation cap on destructive chat tool calls
 /// (<c>bee_delete_article</c>, <c>bee_replace_in_article</c>), so a single chat session cannot
-/// spiral into mass deletions/replacements even if the user keeps clicking Allow (plan §2 Phase 3:
-/// "per-session destructive-op cap ... a hard cap is enough").
+/// spiral into mass deletions/replacements even if the user keeps clicking Allow — a hard cap
+/// is enough.
 ///
 /// <para>SIMPLICITY TRADE-OFF (documented): the counter is an in-memory singleton keyed by
 /// conversation id. It is correct across the confirm-gate (each Allow is a separate HTTP request to
 /// the confirm endpoint, but the singleton survives across requests within the process lifetime),
-/// and it resets on application restart. That is acceptable per the plan ("in-memory OR chat.db-
-/// persisted ... keep this simple") because (a) the human-in-the-loop gate already bounds every
-/// destructive op one-by-one, and (b) after a restart the conversation context is reloaded from
-/// chat.db and the model would have to re-request destructive ops, re-triggering confirmations.</para>
+/// and it resets on application restart. That is acceptable because (a) the human-in-the-loop gate
+/// already bounds every destructive op one-by-one, and (b) after a restart the conversation context
+/// is reloaded from chat.db and the model would have to re-request destructive ops, re-triggering
+/// confirmations.</para>
 ///
 /// <para>The count reflects EXECUTED destructive ops (incremented only after a successful execution
 /// on Allow), checked at execution time in the confirm endpoint so an over-cap op refuses with a
@@ -33,7 +33,7 @@ public sealed class ChatDestructiveOpCounter
     /// <summary>Atomically reserve a destructive-op slot: checks the cap AND increments in a single
     /// CAS loop, so two concurrent Allows (e.g. two browser tabs, or a rapid double-click that slips
     /// past the per-call in-flight guard because it targets a DIFFERENT pending destructive call)
-    /// cannot both pass the cap (plan §2 Phase 3 "per-session destructive-op cap"). Returns false
+    /// cannot both pass the cap. Returns false
     /// when the conversation is already at <see cref="CapPerConversation"/>; the caller should then
     /// refuse the op. Pair with <see cref="Release"/> when the reserved op does not actually execute.</summary>
     public bool TryReserve(Guid conversationId)

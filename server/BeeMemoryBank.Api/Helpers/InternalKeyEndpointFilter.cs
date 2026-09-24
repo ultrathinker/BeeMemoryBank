@@ -19,7 +19,7 @@ public sealed class SkipInternalKey;
 /// Endpoint filter that enforces <see cref="InternalKeyValidator.Validate"/> structurally,
 /// so a newly added endpoint inside a protected group cannot accidentally forget the gate.
 /// Per-endpoint role/superadmin re-checks stay in the handlers (defense-in-depth); this only
-/// hoists the internal-key check that was previously copy-pasted at the top of every handler.
+/// hoists the internal-key check out of every handler into this one structural gate.
 ///
 /// Endpoints that must remain reachable without an internal key (login-screen polling, sync
 /// challenge-response bearer auth, first-run init status) are marked with

@@ -45,7 +45,7 @@ public record SetPeerSuperadminRequest(bool IsSuperadmin);
 public record SemanticSearchRequest(string Query, int TopK = 10);
 
 /// <summary>
-/// WP-16: <c>Mode</c> is a string (not the <c>SearchMode</c> enum directly) so an unrecognized value
+/// <c>Mode</c> is a string (not the <c>SearchMode</c> enum directly) so an unrecognized value
 /// produces a clean 400 from the endpoint's own parsing rather than an ASP.NET model-binding error
 /// whose message leaks enum member names. "hybrid" is the default: RRF-combined keyword + semantic
 /// ranking, the mode most search callers actually want.

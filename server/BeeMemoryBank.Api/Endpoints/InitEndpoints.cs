@@ -33,7 +33,7 @@ public static class InitEndpoints
         }).WithMetadata(new SkipInternalKey());
 
         // POST /api/init/standalone — first-time node initialization (new network).
-        // AUDIT NOTE: This endpoint is only callable from the Web UI server (localhost or X-Internal-Key).
+        // This endpoint is only callable from the Web UI server (localhost or X-Internal-Key).
         // It is NOT exposed to external clients. This prevents unauthorized initialization of the node
         // by external actors, while still allowing the setup flow before auth is configured.
         group.MapPost("/standalone", async (
@@ -72,7 +72,7 @@ public static class InitEndpoints
         });
 
         // POST /api/init/join — first-time node initialization (join existing network).
-        // AUDIT NOTE: This endpoint is only callable from the Web UI server (localhost or X-Internal-Key).
+        // This endpoint is only callable from the Web UI server (localhost or X-Internal-Key).
         // The master password is sent in the request body to derive the KEK and transfer the master DEK.
         // This is the same known limitation as POST /api/join — see JoinEndpoints.cs for rationale.
         group.MapPost("/join", async (
@@ -433,9 +433,9 @@ public static class InitEndpoints
         });
 
         // Superadmin AND non-agent, on top of the group's internal-key gate. This is the most
-        // destructive call in the product; it used to be reachable anonymously through the Web port
-        // with the master password as the only credential — i.e. a public password oracle whose
-        // reward for a correct guess was wiping the node. The wipe itself lives in NodeResetService
+        // destructive call in the product — the master password alone must never be enough to
+        // reach it, or it becomes a public password oracle whose reward for a correct guess is
+        // wiping the node. The wipe itself lives in NodeResetService
         // (shared with `bmb init reset`, the host-only path for when nobody can sign in any more).
         //
         // RequireNonAgent matters because a superadmin's MCP agent inherits its owner's

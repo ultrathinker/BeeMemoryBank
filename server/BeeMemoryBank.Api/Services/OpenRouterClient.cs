@@ -9,11 +9,10 @@ namespace BeeMemoryBank.Api.Services;
 /// <summary>
 /// Thin client for OpenRouter's OpenAI-compatible chat-completions endpoint.
 ///
-/// Phase 0 scope (plan §2): NON-STREAMING completion, SINGLE key, egress PINNED to
-/// <c>https://openrouter.ai</c>. Multi-key failover, categories, and streaming arrive in
-/// later phases (plan §2 Phase 2/4). The browser never calls OpenRouter directly — this is
-/// the only egress path and it lives server-side (plan §1: "Egress pinned to
-/// https://openrouter.ai; browser never calls OpenRouter").
+/// The only egress path to OpenRouter, and it lives server-side — the browser never calls
+/// OpenRouter directly. Egress is PINNED to <c>https://openrouter.ai</c>. Non-streaming and
+/// streaming completions, multi-key failover, and cancellation (a client disconnect aborts
+/// the upstream call) are all supported here.
 /// </summary>
 public sealed class OpenRouterClient
 {
@@ -87,7 +86,7 @@ public sealed class OpenRouterClient
     }
 
     /// <summary>
-    /// Phase 1: NON-STREAMING completion that supports an OpenAI-style tool-calling loop. The
+    /// NON-STREAMING completion that supports an OpenAI-style tool-calling loop. The
     /// plaintext <paramref name="apiKey"/> is used only for this request and is not retained.
     /// Pass the curated tool definitions (see <see cref="ChatToolDispatcher.ToolDefinitions"/>);
     /// pass <c>tools</c> as null/empty to skip tool-calling. Returns the assistant turn with any
@@ -160,7 +159,7 @@ public sealed class OpenRouterClient
     }
 
     /// <summary>
-    /// Phase 2: STREAMING completion with tool-calling support. Runs an OpenAI-style streaming
+    /// STREAMING completion with tool-calling support. Runs an OpenAI-style streaming
     /// chat completion (<c>stream:true</c>), reads the upstream SSE frame-by-frame, and invokes
     /// <paramref name="onTextDelta"/> for each incremental <c>content</c> delta as it arrives
     /// (so the caller can forward text deltas to the browser in real time). Tool-call deltas are
@@ -174,8 +173,7 @@ public sealed class OpenRouterClient
     /// <para>Honors <paramref name="cancellationToken"/> throughout: <see cref="HttpClient.SendAsync"/>
     /// uses <see cref="HttpCompletionOption.ResponseHeadersRead"/> and the token is forwarded into
     /// both the send and every line read. A client disconnect (passed in as the request's
-    /// <c>RequestAborted</c>) therefore aborts the upstream OpenRouter call — no wasted tokens/billing
-    /// (plan §1 "Cancellation", §2 Phase 2 accept criterion).</para>
+    /// <c>RequestAborted</c>) therefore aborts the upstream OpenRouter call — no wasted tokens/billing.</para>
     /// </summary>
     public async Task<ToolCompletionResult> StreamWithToolsAsync(
         string apiKey,
@@ -330,7 +328,7 @@ public sealed class OpenRouterClient
         // content (mimicking ChatGPT-plugin-style transcripts from training data). That looks like
         // "the tool didn't work" from the user's side but is a model-capability limitation, not a
         // dispatch bug. Log tool-call outcome + a content snippet so this is diagnosable from logs
-        // instead of guessed at. M3 fix: Debug, not Information — the snippet quotes the model's
+        // instead of guessed at. Debug, not Information — the snippet quotes the model's
         // actual output, which routinely quotes vault content the model just read via a tool
         // result (e.g. an article body). Information-level logs are typically always-on in
         // production and often shipped to less-protected/longer-retention log aggregators;
@@ -373,8 +371,8 @@ public sealed class OpenRouterClient
         [JsonPropertyName("stream")] public bool Stream { get; init; }
     }
 
-    // Phase 1 tool-calling request shape. tool_calls / tool_call_id on individual messages are
-    // carried by ChatToolMessage (defined in ChatToolModels.cs). Phase 5: messages are mapped to
+    // Tool-calling request shape. tool_calls / tool_call_id on individual messages are
+    // carried by ChatToolMessage (defined in ChatToolModels.cs). Messages are mapped to
     // WireMessage (below) so a user turn carrying an image serializes as a multimodal content
     // ARRAY [{type:text},{type:image_url}] (vision models) instead of a plain string.
     private sealed class ToolsCompletionRequest
@@ -398,7 +396,7 @@ public sealed class OpenRouterClient
         [JsonPropertyName("include_usage")] public bool IncludeUsage { get; init; }
     }
 
-    // Phase 5: the on-the-wire message shape. `content` is `object?` so it serializes as a JSON
+    // The on-the-wire message shape. `content` is `object?` so it serializes as a JSON
     // STRING for plain text turns and as a JSON ARRAY of content parts for vision turns
     // (System.Text.Json serializes the runtime type of an `object` value). tool_calls/tool_call_id
     // are carried verbatim so the tool loop is unaffected.
@@ -457,11 +455,11 @@ public sealed class OpenRouterClient
     }
 
     /// <summary>
-    /// Phase 5: NON-STREAMING completion for an image-generation model. Routes through the SAME
-    /// pinned <c>chat/completions</c> endpoint as the text/vision paths — per the plan ("many
-    /// OpenRouter image-capable models respond via the standard chat/completions endpoint with an
-    /// image content part in the response, so check that first; only add a new endpoint if the
-    /// standard one categorically doesn't work"). No tools are declared (image generation does not
+    /// NON-STREAMING completion for an image-generation model. Routes through the SAME
+    /// pinned <c>chat/completions</c> endpoint as the text/vision paths — many OpenRouter
+    /// image-capable models respond via the standard chat/completions endpoint with an
+    /// image content part in the response, so check that first; a dedicated endpoint is
+    /// only warranted if the standard one categorically doesn't work. No tools are declared (image generation does not
     /// use the tool loop). The response <c>content</c> is parsed TOLERANTLY because it can arrive
     /// as either a plain string (text-only answer) or an ARRAY of content parts containing
     /// <c>image_url</c> entries (the generated image). It also accepts the OpenAI images-API shape
@@ -560,7 +558,7 @@ public sealed class OpenRouterClient
             }
         }
 
-        // M3 fix: truncated, not the entire raw body — this response can carry the model's full
+        // Truncated, not the entire raw body — this response can carry the model's full
         // text answer (which may quote/paraphrase vault content the prompt included) and, in the
         // "some image field we don't recognize yet" case this warning exists to catch, potentially
         // base64 image data too. A bounded snippet is still enough to see the response's shape
@@ -627,7 +625,7 @@ public sealed class OpenRouterClient
     {
         [JsonPropertyName("role")] public string? Role { get; set; }
         [JsonPropertyName("content")] public string? Content { get; set; }
-        // Present on assistant turns that requested tool calls (Phase 1 tool loop).
+        // Present on assistant turns that requested tool calls (tool loop).
         [JsonPropertyName("tool_calls")] public List<ChoiceToolCall>? ToolCalls { get; set; }
     }
 
@@ -651,7 +649,7 @@ public sealed class OpenRouterClient
         [JsonPropertyName("total_tokens")] public int TotalTokens { get; set; }
     }
 
-    // Phase 2 streaming chunk shapes (OpenAI-compatible SSE `data:` payload). Property names are
+    // Streaming chunk shapes (OpenAI-compatible SSE `data:` payload). Property names are
     // snake_case to match the wire format exactly.
     private sealed class StreamChunk
     {
@@ -693,13 +691,13 @@ public sealed class OpenRouterClient
 
 /// <summary>
 /// Thrown when OpenRouter returns a non-success HTTP status for a completion request (non-streaming
-/// or streaming). Carries the <see cref="StatusCode"/> so Phase 4 multi-key failover
+/// or streaming). Carries the <see cref="StatusCode"/> so multi-key failover
 /// (<c>ChatEndpoints</c>) can classify it (401→disable, 402/429→cooldown, 5xx→retry-next) without
 /// parsing the message string.
 ///
 /// <para>Deliberately derives from <see cref="InvalidOperationException"/>: every existing completion
-/// call-site catches <c>InvalidOperationException</c>, so this keeps that behaviour intact, while new
-/// Phase 4 code catches the more specific type FIRST to inspect <see cref="StatusCode"/> and drive
+/// call-site catches <c>InvalidOperationException</c>, so this keeps that behaviour intact, while
+/// failover code catches the more specific type FIRST to inspect <see cref="StatusCode"/> and drive
 /// failover. Transport errors (timeout, refused, DNS) surface as <see cref="HttpRequestException"/>
 /// from <c>HttpClient.SendAsync</c> and are NOT wrapped here — the failover helper catches those
 /// separately (retry-next, no cooldown).</para>
@@ -716,7 +714,7 @@ public sealed class OpenRouterHttpException : InvalidOperationException
 }
 
 /// <summary>
-/// Phase 5: the parsed result of an image-generation completion. <see cref="ImageSources"/> are
+/// The parsed result of an image-generation completion. <see cref="ImageSources"/> are
 /// verbatim strings exactly as OpenRouter returned them — <c>data:</c> URLs, http(s) URLs, or
 /// already-wrapped base64. The chat endpoint materializes each into bytes (decoding data: URLs
 /// directly, fetching http(s) URLs server-side) so the image renders inline through the CSP-allowed

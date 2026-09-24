@@ -137,9 +137,9 @@ public class McpResponseManager(string dataPath, IHttpContextAccessor httpContex
         {
             // JSON can't be truncated mid-structure and stay parseable, so this call only ever
             // returns a small preview, never a usable prefix -- offset MUST start at 0 (the true
-            // beginning of the saved document). Setting it to an interior byte position while
-            // only ever delivering a preview (the previous behavior) silently drops everything
-            // between the preview and that position -- found in review, not a cosmetic issue.
+            // beginning of the saved document). Setting it to an interior byte position silently
+            // drops everything between the preview and that position — data loss, not a cosmetic
+            // issue.
             var preview = response.Length > 500 ? response[..500] : response;
             return JsonSerializer.Serialize(new
             {

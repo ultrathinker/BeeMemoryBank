@@ -11,10 +11,10 @@ namespace BeeMemoryBank.Api.Services;
 /// Owns the node's chat data key: the one AES-256 key everything in chat.db is encrypted under
 /// (message content, tool-call arguments, attachment blobs, LLM provider API keys).
 ///
-/// <para><b>Why a separate key.</b> chat.db is its own SQLite file. Its rows used to be sealed
-/// directly under the master DEK, and a DEK rotation — one transaction in the MAIN database — could
-/// not re-encrypt them, so every rotation left all chat history, attachments and stored provider
-/// keys undecryptable. The chat key is stored wrapped under the master DEK in the main database
+/// <para><b>Why a separate key.</b> chat.db is its own SQLite file, outside every master-DEK
+/// rotation transaction (a rotation re-wraps key material in the MAIN database only) — rows sealed
+/// directly under the master DEK would be left undecryptable by the next rotation. The chat key is
+/// stored wrapped under the master DEK in the main database
 /// (the <c>'chat'</c> row of <c>tbl_node_data_key</c>, migration 026), and <c>DekRewrapper</c>
 /// re-wraps that row inside the rotation transaction on the initiator and on every applying peer.
 /// The chat key itself never

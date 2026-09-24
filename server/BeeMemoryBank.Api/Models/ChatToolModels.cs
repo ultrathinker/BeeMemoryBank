@@ -2,12 +2,12 @@ using System.Text.Json.Serialization;
 
 namespace BeeMemoryBank.Api.Models;
 
-// ── OpenAI / OpenRouter tool-calling wire models (Phase 1) ───────────────────
-// These extend Phase 0's flat ChatRoleMessage (role+content) with the structured
+// ── OpenAI / OpenRouter tool-calling wire models ─────────────────────────────
+// These extend the flat ChatRoleMessage (role+content) with the structured
 // fields needed for a non-streaming tool-call loop: assistant `tool_calls`,
 // tool-role `tool_call_id`, and the `tools` array + tool definitions. They are
-// deliberately separate types so Phase 0's /complete path (which uses
-// ChatRoleMessage) is untouched. See docs/ai-chat-implementation-plan.md §2 Phase 1.
+// deliberately separate types so the plain /complete path (which uses
+// ChatRoleMessage) is untouched.
 
 /// <summary>A single message in a tool-aware completion conversation.</summary>
 public sealed class ChatToolMessage
@@ -19,7 +19,7 @@ public sealed class ChatToolMessage
     /// <summary>Present only on role="tool" messages, echoing the call this answers.</summary>
     [JsonPropertyName("tool_call_id")] public string? ToolCallId { get; set; }
 
-    /// <summary>Phase 5 (vision): an in-memory-only carrier for the image(s) attached to this
+    /// <summary>Vision: an in-memory-only carrier for the image(s) attached to this
     /// message. When set, <see cref="BeeMemoryBank.Api.Services.OpenRouterClient"/> builds a
     /// multimodal egress content array <c>[{type:text},{type:image_url},...]</c> instead of a plain
     /// string. It is deliberately <c>[JsonIgnore]</c> so it NEVER persists (the bytes live in
@@ -77,9 +77,8 @@ public sealed record ResolvedToolCall(string Id, string Name, string ArgumentsJs
 
 // ── POST /api/chat/message request/response ──────────────────────────────────
 
-/// <summary>Conversation-less turn request (Phase 1 is ephemeral; Phase 2 adds persistence).
-/// The client sends the user message plus any short prior history; the server does NOT
-/// persist anything yet.</summary>
+/// <summary>Conversation-less, ephemeral turn request. The client sends the user message plus
+/// any short prior history; the server does NOT persist anything.</summary>
 public record ChatMessageRequest(
     [property: JsonPropertyName("model")] string Model,
     [property: JsonPropertyName("messages")] List<ChatRoleMessage> Messages,

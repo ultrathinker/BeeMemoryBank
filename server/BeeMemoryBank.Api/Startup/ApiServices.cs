@@ -78,7 +78,7 @@ builder.Services.AddIndexProcessor(interval: indexInterval, batchSize: indexBatc
 // AddCore) and the node identity (INodeIdentityRepository) live — the announcer checks both on its
 // refresh cycle and withdraws its announcement when invisible mode is on.
 // BMB_MDNS_PORT / BMB_MDNS_HTTPS let the deployment supply the reachable port/HTTPS flag; the HTTPS
-// flag's real wiring (Ярус-1 local CA) is a later task.
+// flag's real wiring (a local CA) is a later task.
 builder.Services.AddMdnsAnnouncer(o =>
 {
     if (int.TryParse(Environment.GetEnvironmentVariable("BMB_MDNS_PORT"), out var port) && port > 0)
@@ -151,7 +151,7 @@ builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();
 builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler>();
 // Moves legacy chat rows onto the node chat key: plaintext from before chat.db was encrypted at
-// rest (finding H3a), and ciphertext sealed directly under the master DEK from before the chat key
+// rest, and ciphertext sealed directly under the master DEK from before the chat key
 // existed. Needs an unlocked vault — it polls and no-ops when locked rather than hooking unlock,
 // matching PendingEmbeddingProcessor. On a node with nothing legacy left (and on every fresh node)
 // a tick is one empty partial-index lookup per table.
@@ -170,7 +170,7 @@ var mediaDir = Path.Combine(dataPath, "media");
 Directory.CreateDirectory(mediaDir);
 builder.Services.AddSingleton(new BeeMemoryBank.Core.Services.MediaStorageOptions(mediaDir));
 
-// ── AI chat (Phase 0) ──────────────────────────────────────────────────────────
+// ── AI chat ─────────────────────────────────────────────────────────────────────
 // chat.db is a SEPARATE SQLite DB from beememorybank.db, owned entirely by the Api. Its
 // ChatDbConnectionFactory is a distinct DI type (does NOT implement Core's IDbConnectionFactory)
 // so it can never collide with BeeMemoryBank.Storage.DbConnectionFactory. NOT registered via
@@ -185,24 +185,22 @@ builder.Services.AddScoped<ChatDbInitializer>();
 builder.Services.AddScoped<ChatConversationRepository>();
 builder.Services.AddScoped<ChatMessageRepository>();
 builder.Services.AddScoped<ChatSettingsRepository>();
-// Phase 5: chat_attachment CRUD (vision uploads + generated images) — chat.db only, never synced.
+// chat_attachment CRUD (vision uploads + generated images) — chat.db only, never synced.
 builder.Services.AddScoped<ChatAttachmentRepository>();
-// M3 fix: OpenRouterClient's egress is documented as "pinned to https://openrouter.ai ... prevents
-// an SSRF-style redirect of vault content to an attacker host" (see OpenRouterClient.cs), but that
-// was only true of the URL, not the HttpClient — the plain AddScoped<OpenRouterClient>() this
-// replaced resolved the DEFAULT HttpClient (registered above via AddHttpClient() +
-// AddTransient<HttpClient>()), whose handler has AllowAutoRedirect=true. A 307/308 from
-// openrouter.ai would silently re-POST the entire conversation (decrypted article bodies
-// included) to wherever the redirect pointed, with only the Authorization header stripped
-// cross-origin — the payload travels regardless. AddHttpClient<T>() gives OpenRouterClient its
-// OWN typed client instead of sharing the default one, so this handler config can't leak onto
-// (or be overridden by) any other HttpClient consumer. Mirrors ImageFetchClient's SSRF hardening
-// in ChatEndpoints.Stream.cs, which got this right from the start.
+// OpenRouterClient's egress is documented as "pinned to https://openrouter.ai ... prevents
+// an SSRF-style redirect of vault content to an attacker host" (see OpenRouterClient.cs) —
+// the URL pin is not enough by itself: the HttpClient must also refuse redirects, because
+// a 307/308 from openrouter.ai would silently re-POST the entire conversation (decrypted
+// article bodies included) to wherever the redirect pointed, with only the Authorization
+// header stripped cross-origin — the payload travels regardless. AddHttpClient<T>() gives
+// OpenRouterClient its OWN typed client instead of sharing the default one, so this handler
+// config can't leak onto (or be overridden by) any other HttpClient consumer. Mirrors
+// ImageFetchClient's SSRF hardening in ChatEndpoints.Stream.cs.
 builder.Services.AddHttpClient<OpenRouterClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
-// Phase 3: per-conversation destructive-op cap (in-memory singleton — see ChatDestructiveOpCounter).
+// Per-conversation destructive-op cap (in-memory singleton — see ChatDestructiveOpCounter).
 builder.Services.AddSingleton<ChatDestructiveOpCounter>();
-// Phase 1: curated read-only tool surface for the native AI chat. Scoped (depends on the
+// Curated read-only tool surface for the native AI chat. Scoped (depends on the
 // ambient CallerScope + SessionService, both request-scoped). See ChatToolDispatcher.
 builder.Services.AddScoped<ChatToolDispatcher>();
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>

@@ -20,7 +20,7 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static partial class ChatEndpoints
 {
-    // ── Phase 2 helpers ─────────────────────────────────────────────────────────
+    // ── helpers ─────────────────────────────────────────────────────────────────
 
     // camelCase + relaxed-encoder JSON for the hand-written SSE payloads (JS-idiomatic on the wire,
     // and never double-escapes non-ASCII). Reused by the /stream frames and the conversation DTOs
@@ -71,7 +71,7 @@ public static partial class ChatEndpoints
         });
     }
 
-    // First ~120 chars of the first user message → conversation title (plan §2 Phase 2). This is
+    // First ~120 chars of the first user message → conversation title. This is
     // stored as-is, permanently, at conversation-creation time — the sidebar's own CSS ellipsis
     // (text-overflow:ellipsis) truncates it further for DISPLAY depending on the sidebar's current
     // width, but it can never show more than what's actually stored here, no matter how wide the
@@ -107,7 +107,7 @@ public static partial class ChatEndpoints
         }
     }
 
-    // ── Phase 3: shared streaming tool loop ────────────────────────────────────
+    // ── shared streaming tool loop ─────────────────────────────────────────────
 
     /// <summary>Everything the shared tool loop needs. Both /stream (after appending+persisting the
     /// user message) and /confirm (after appending+persisting the tool result) build one of these and
@@ -117,7 +117,7 @@ public static partial class ChatEndpoints
         OpenRouterClient OpenRouter,
         ChatToolDispatcher Dispatcher,
         // Threaded through to every chat_message/chat_attachment repo call the loop makes — both
-        // encrypt/decrypt under the master DEK now (H3 fix). The caller has already checked
+        // encrypt/decrypt under the master DEK. The caller has already checked
         // session.IsUnlocked before entering the loop (decrypting the OpenRouter key itself needs
         // the DEK), so this is always unlocked by the time the loop uses it.
         SessionService Session,
@@ -137,7 +137,7 @@ public static partial class ChatEndpoints
         // The effective text model's context-window size (tokens), for the context-fill % metric.
         // Null when unset — ComputeContextFill returns null in that case.
         int? ContextWindow,
-        // The conversation owner's user id — auto-approve-writes is per-user (M1 fix), so the loop
+        // The conversation owner's user id — auto-approve-writes is per-user, so the loop
         // needs to know WHOSE setting to check, not just whether "someone" turned it on.
         int UserId);
 
@@ -157,10 +157,10 @@ public static partial class ChatEndpoints
     /// before the write have already executed + been persisted.</item>
     /// <item>The per-resume iteration cap is reached → best-effort cap notice + <c>done</c>.</item>
     /// </list>
-    /// Owns its own cancellation (no-op on client disconnect) and egress-error handling (error frame),
-    /// matching the previous inline /stream behaviour. Per-turn iteration cap is reused from Phase 1/2
-    /// (plan §2 Phase 3); a write-paused turn can only resume via a human confirmation, so the cap
-    /// resets per-resume and cannot spiral on its own.
+    /// Owns its own cancellation (no-op on client disconnect) and egress-error handling (error frame).
+    /// The per-turn iteration cap is reused from the non-streaming loop; a write-paused turn
+    /// can only resume via a human confirmation, so the cap resets per-resume and cannot
+    /// spiral on its own.
     /// </summary>
     private static async Task RunToolLoopAsync(ChatLoopContext lc)
     {
@@ -178,7 +178,7 @@ public static partial class ChatEndpoints
             {
                 lc.Ct.ThrowIfCancellationRequested();
 
-                // Phase 4: the upstream streaming call goes through multi-key failover. It tries each
+                // The upstream streaming call goes through multi-key failover. It tries each
                 // available key in priority order; a pre-first-byte HTTP failure (401/402/429/5xx) is
                 // recorded on that key and retried with the next. A failure AFTER a delta has reached
                 // the client propagates here (no splicing) and is surfaced as an event:error below.
@@ -297,7 +297,7 @@ public static partial class ChatEndpoints
                     {
                         if (await lc.Repo.GetAutoApproveWritesAsync(lc.UserId))
                         {
-                            // Auto-approve (opt-in, per-user — M1 fix): skip the human confirm gate
+                            // Auto-approve (opt-in, per-user): skip the human confirm gate
                             // for THIS user's turn and execute immediately, through the SAME defense-in-depth
                             // path /confirm uses (ACL via CallerScope reuse, the destructive-op cap,
                             // the ChatWriteExecItemsKey marker, audit tagging). tool_call_start was
@@ -390,7 +390,7 @@ public static partial class ChatEndpoints
     /// <summary>STREAMING multi-key failover for ONE iteration of the tool loop. Tries each available
     /// key in priority order; if a key fails BEFORE it has streamed any content delta for this attempt,
     /// the failure is recorded (disable/cooldown/transient) and the SAME request is retried with the
-    /// next key (failover before the first byte — plan §2 Phase 4; mid-stream splicing is explicitly
+    /// next key (failover before the first byte; mid-stream splicing is explicitly
     /// out of scope). If a key fails AFTER a delta has already been forwarded to the client, the
     /// exception propagates to <see cref="RunToolLoopAsync"/> (→ an <c>event: error</c> frame) — we
     /// cannot splice another key's stream into text the user has already seen. Throws

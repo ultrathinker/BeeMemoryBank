@@ -136,7 +136,6 @@ public partial class DekRotationService
         // Decrypt new DEK + run pre-validation INSIDE the state-setting try-catch. Otherwise
         // a CryptographicException from a corrupted payload bubbles past the state machine,
         // leaves _progress.Step stuck at Committing, AND leaks oldDek (no finally reaches it).
-        // (Found by Gemini R3 reviewer of god-class refactor.)
         byte[]? oldDek = null;
         byte[]? newDek = null;
         // Node-local chain material for LazySlotRewrap; for a confidential rotation it is computed
@@ -197,8 +196,7 @@ public partial class DekRotationService
             // SessionService. Without this check, a typo on Accept would (a) successfully re-wrap
             // every article body with the new DEK, (b) wrap the new DEK into the initiator slot
             // using a garbage KEK derived from the wrong password, (c) drop all other slots — the
-            // node would be unrecoverable except via the pre-rotation snapshot. Pre-existing in
-            // B3, surfaced by Gemini reviewer at p2.
+            // node would be unrecoverable except via the pre-rotation snapshot.
             byte[] verifyDek;
             try
             {
@@ -227,9 +225,9 @@ public partial class DekRotationService
             await stateRepo.UpdateStateAsync(commitEventId, DekRotationState.Failed, ex.Message);
             _logger.LogError(ex, "DEK rotation pre-validation failed for commit event {CommitEventId}", commitEventId);
             // Clear partial key material on the pre-validation failure path. The destructive-
-            // section finally (line ~700) only runs if we actually entered destructive code.
-            // localKek added per Gemini security review of tail-A: was leaked when password
-            // verify threw UnauthorizedAccessException after KEK derivation.
+            // section finally (line ~700) only runs if we actually entered destructive code —
+            // localKek in particular would leak here when password verify threw
+            // UnauthorizedAccessException right after KEK derivation.
             if (oldDek != null) Array.Clear(oldDek);
             if (newDek != null) Array.Clear(newDek);
             if (localKek != null) Array.Clear(localKek);
@@ -242,7 +240,7 @@ public partial class DekRotationService
             // Clean up the pre-rotation snapshot — without this, every failed rotation leaves
             // a ~DBsize .tar.gz behind. With repeated retries on a 1GB DB, the snapshots
             // directory fills and the disk-space pre-check then BLOCKS future rotations.
-            // (Claude R2 prod review HIGH-2.) A retried accept takes a fresh one.
+            // A retried accept takes a fresh one.
             try
             {
                 var snapPath = snapshotService.GetSnapshotPath(snap.FileName);
@@ -304,7 +302,7 @@ public partial class DekRotationService
         {
             _progress.Update(DekRotationFlowStep.Failed, err: ex.Message, msg: "DEK rotation failed.");
             await stateRepo.UpdateStateAsync(commitEventId, DekRotationState.Failed, ex.Message);
-            // AUDIT NOTE: on failure we do NOT swap DEK, so the old DEK remains active.
+            // On failure we do NOT swap DEK, so the old DEK remains active.
             // We DO exit maintenance mode so the node is usable (with old DEK).
             // Re-try requires a new Propose+Accept cycle.
             RemovePreRotationSnapshot();
@@ -315,11 +313,11 @@ public partial class DekRotationService
         finally
         {
             Array.Clear(localKek, 0, localKek.Length);
-            // Clear key material on the error path. On success path, oldDek was already cleared
+            // Clear key material on the error path. On the success path oldDek was already cleared
             // inside RewrapDestructiveCoreAsync and newDek ownership transferred to SessionService.SwapMasterDek.
-            // (Found by Kilo R1 security review CRIT-1.) Keyed on the rewrap having returned, not on
-            // the progress step: Completed is now published later, after maintenance mode ends, and
-            // clearing newDek here would zero the live master DEK.
+            // Keyed on the rewrap having returned, not on the progress step: Completed is published
+            // later, after maintenance mode ends, and clearing newDek here would zero the live
+            // master DEK.
             if (!rewrapped)
             {
                 Array.Clear(oldDek, 0, oldDek.Length);

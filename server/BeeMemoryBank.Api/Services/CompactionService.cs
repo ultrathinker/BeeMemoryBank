@@ -95,10 +95,8 @@ public class CompactionService(
         // Peer-safety check: every synced peer must be WITHIN the last TargetKeepCount events
         // of head — otherwise compaction would cut them off. Count = events with seq > peer_pos.
         //
-        // The result is collected here rather than recomputed later. The "is anyone at risk?"
-        // decision below used to re-run this same COUNT for every peer inside a LINQ predicate,
-        // via .GetAwaiter().GetResult() — sync-over-async on a request thread, and twice the
-        // queries, to answer a question this loop had already answered.
+        // The result is collected here rather than recomputed later: this loop has already
+        // answered "who is at risk?" per peer — nothing downstream needs to re-run the COUNT.
         var atRiskPeers = new List<Guid>();
 
         foreach (var peer in syncedPeers)
@@ -163,8 +161,7 @@ public class CompactionService(
     {
         // ConflictException, not a bare InvalidOperationException: "someone else is already doing
         // this" is a 409 the caller can retry, while everything else ExecuteAsync refuses is a bad
-        // request. The endpoint used to map every InvalidOperationException to 400, so a second
-        // operator pressing Compact was told their request was malformed. Same distinction
+        // request — the two must stay distinguishable. Same distinction
         // DekRotationService.ProposeRotationAsync makes for the same reason.
         if (!await _executeLock.WaitAsync(0))
             throw new ConflictException("Another compaction is already in progress");
@@ -185,11 +182,9 @@ public class CompactionService(
         var preview = await PreviewAsync();
 
         // The peer-safety check runs on EVERY path, not only when the caller lets the preview
-        // choose the checkpoint. It used to live in PreviewAsync alone, and ExecuteCoreAsync
-        // consulted it only through preview.ProposedCp — so a caller passing an explicit cp
-        // sailed straight past it and stranded peers with nothing logged and nothing said. The
-        // explicit-cp path is exactly the one an operator reaches for when the button is greyed
-        // out, which made it the likeliest way to hit the case the check exists for.
+        // choose the checkpoint — an explicit cp must pass the same gate, or it strands peers
+        // silently. The explicit-cp path is exactly the one an operator reaches for when the
+        // button is greyed out.
         //
         // acceptCuttingOffPeers is the only way through, and it is deliberately not a no-op alias
         // for "use an explicit cp": a dormant phone otherwise blocks every compaction forever, so
@@ -336,9 +331,8 @@ public record CompactionResult(long CpAfter, int EventsDeleted, string SnapshotF
 /// a deadlock that had no exit: one phone that has been off for a week blocks every compaction, so
 /// <c>tbl_event</c> grows without bound and nobody can do anything about it but revoke the phone.
 ///
-/// <para>It also closes a hole rather than opening one. The peer check lived only in
-/// <c>PreviewAsync</c>, so passing an explicit checkpoint skipped it entirely and stranded peers
-/// with no warning at all. ExecuteAsync now runs the same check on every path; this flag is the
-/// only way past it, and it is recorded in the log line with the list of peers it stranded.</para>
+/// <para>The peer-safety check runs on every path (not only <c>PreviewAsync</c>); this flag is the
+/// only way past it, and accepting it is recorded in the log line with the list of peers it
+/// stranded.</para>
 /// </param>
 public record CompactionRequest(long? ExplicitCp = null, string Reason = "manual", bool AcceptCuttingOffPeers = false);

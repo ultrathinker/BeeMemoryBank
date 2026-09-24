@@ -265,8 +265,8 @@ public class BeeReadTools(
     {
         var result = await treeService.GetTreePathsAsync(path, depth, limit, offset);
 
-        // Build the paths payload with the EXACT same anonymous shape the legacy inline build used,
-        // so omitting depth/limit/offset stays byte-for-byte identical to the pre-WP-19 response.
+        // Build the paths payload with the EXACT same anonymous shape callers already see,
+        // so omitting depth/limit/offset stays byte-for-byte identical for existing clients.
         var pathEntries = result.Paths.Select(p => new
         {
             path = p.Path,

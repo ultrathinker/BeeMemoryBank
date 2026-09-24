@@ -13,7 +13,7 @@ namespace BeeMemoryBank.Api.Endpoints;
 /// and then used as a long-lived bearer token (90-day rolling TTL) so the
 /// other BMB node can poll mirrored folders without storing the password.
 ///
-/// Read-only by design in Phase 3; Phase 4 adds write-through.
+/// Read-only by design — the remote node polls; nothing writes through this token.
 /// </summary>
 public static class RemoteAuthEndpoints
 {
@@ -76,7 +76,7 @@ public static class RemoteAuthEndpoints
             if (userId is null)
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 401);
             // Even folder metadata (paths, article counts) is sensitive — refuse
-            // to disclose it while the vault is locked. Kilo security review.
+            // to disclose it while the vault is locked.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Owner session is locked"), statusCode: 423);
 
@@ -153,7 +153,7 @@ public static class RemoteAuthEndpoints
             // SECURITY: filter sub-folders by caller ACL — without this we leak
             // descendants the caller doesn't have read access to (e.g. allow on
             // /Public, deny on /Public/Secrets — without filtering, /Public/Secrets
-            // would still go on the wire). Gemini security review 2026-05-25.
+            // would still go on the wire).
             var subtreeFolders = allFolders
                 .Where(f => f.Id == root.Id || f.Path.StartsWith(prefix, StringComparison.Ordinal))
                 .Where(f => isSuperadmin || !FolderAccessService.IsAccessDenied(deny, allow, f.Path))
@@ -166,7 +166,8 @@ public static class RemoteAuthEndpoints
 
             // ListAsync(path) filters at SQL layer via LIKE prefix — much
             // cheaper than loading the whole vault into memory and filtering in
-            // LINQ (kilo+gemini DoS finding for the snapshot endpoint).
+            // LINQ, which lets an unauthenticated caller force a full-vault
+            // materialization per request.
             var subtreeArticles = await articleRepo.ListAsync(path);
             subtreeArticles = subtreeArticles
                 .Where(a => isSuperadmin || !FolderAccessService.IsAccessDenied(deny, allow, a.TreePath))

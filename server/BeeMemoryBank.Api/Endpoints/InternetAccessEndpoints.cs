@@ -18,7 +18,7 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 /// <summary>
 /// /api/internet-access/* — thin HTTP surface that drives the "Access from the internet"
-/// Web wizard (superplan §5 Ярус 2, Этап 5). It exposes the three already-merged pieces —
+/// Web wizard. It exposes the three already-merged pieces —
 /// <see cref="DdnsUpdater"/>, <see cref="AcmeCertificateService"/> and the existing
 /// <c>POST /api/sync/probe</c> reachability self-test — as small, superadmin-only endpoints
 /// the wizard's PageModel can call through <c>ApiClient</c>.

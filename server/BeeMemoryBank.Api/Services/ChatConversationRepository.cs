@@ -4,16 +4,16 @@ namespace BeeMemoryBank.Api.Services;
 
 /// <summary>
 /// CRUD for <c>chat_conversation</c> (chat.db). Node-local — never synced, never snapshotted.
-/// Persisted history is consumed starting in Phase 2; the repo is scaffolded here per plan §2.
+/// Persisted history is consumed in later phases; the repo is scaffolded here.
 /// </summary>
 public sealed class ChatConversationRepository(ChatDbConnectionFactory factory) : ChatRepositoryBase(factory)
 {
     private const string Cols = @"id AS Id, user_id AS UserId, title AS Title,
         created_at AS CreatedAt, updated_at AS UpdatedAt, is_home_pinned AS IsHomePinned";
 
-    /// <summary>User-scoped read (Phase 2). Returns null when the conversation does not exist OR is
+    /// <summary>User-scoped read. Returns null when the conversation does not exist OR is
     /// owned by a different user — so the conversation/message endpoints can enforce "a user must
-    /// never see another user's conversations" with a single lookup (plan §2 Phase 2). chat.db has
+    /// never see another user's conversations" with a single lookup. chat.db has
     /// no ACL system of its own, so this filter is the only boundary.</summary>
     public async Task<Models.ChatConversation?> GetByIdForUserAsync(Guid id, int userId)
     {
