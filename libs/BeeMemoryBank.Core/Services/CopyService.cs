@@ -159,7 +159,7 @@ public class CopyService(
 
         var srcPrefix = source.Path.TrimEnd('/') + "/";
         if (targetParentPath == source.Path
-            || targetParentPath.StartsWith(srcPrefix, StringComparison.OrdinalIgnoreCase))
+            || targetParentPath.StartsWith(srcPrefix, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Cannot copy a folder into itself or one of its descendants.");
         }
@@ -172,7 +172,7 @@ public class CopyService(
 
         var allFolders = await folderRepo.GetAllActiveAsync();
         var subFolders = allFolders
-            .Where(f => f.Path.StartsWith(srcPrefix, StringComparison.OrdinalIgnoreCase))
+            .Where(f => f.Path.StartsWith(srcPrefix, StringComparison.Ordinal))
             .OrderBy(f => f.Path.Length)
             .ToList();
 

@@ -139,10 +139,11 @@ public class ArticleRepository(
         }
         else
         {
-            whereClause = $"WHERE a.status = 'A' AND (f.path = @treePath OR f.path LIKE @prefix ESCAPE '\\') {updatedAfterClause}{aclClause}";
-            var escapedPrefix = treePath.TrimEnd('/').Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "/%";
+            whereClause = $"WHERE a.status = 'A' AND (f.path = @treePath OR {TreePathSql.DescendantPredicate("f.path", "prefixLo", "prefixHi")}) {updatedAfterClause}{aclClause}";
+            var (lo, hi) = TreePathSql.DescendantRange(treePath);
             parameters.Add("treePath", treePath);
-            parameters.Add("prefix", escapedPrefix);
+            parameters.Add("prefixLo", lo);
+            parameters.Add("prefixHi", hi);
         }
 
         return (whereClause, parameters);

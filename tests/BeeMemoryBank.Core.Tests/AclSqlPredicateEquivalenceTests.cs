@@ -37,7 +37,7 @@ public class AclSqlPredicateEquivalenceTests : IDisposable
 
     public void Dispose() => _factory.Dispose();
 
-    private static HashSet<string> Set(params string[] paths) => new(paths, StringComparer.OrdinalIgnoreCase);
+    private static HashSet<string> Set(params string[] paths) => new(paths, StringComparer.Ordinal);
 
     // Deliberately includes: root, exact matches, true descendants, siblings whose name
     // textually starts with the same characters ("/Work" vs "/Workshop", "/Work/Project1" vs
@@ -63,6 +63,12 @@ public class AclSqlPredicateEquivalenceTests : IDisposable
         "/Te_st",              // folder name containing a literal '_'
         "/Te_st/Child",        // genuine descendant of "/Te_st"
         "/TeXst/Child",        // decoy: unrelated folder -- would match "/Te_st/%" if '_' were a real wildcard
+        "/\u041F\u0440\u043E\u0435\u043A\u0442\u044B",            // non-Latin folder
+        "/\u041F\u0440\u043E\u0435\u043A\u0442\u044B/\u041F\u043B\u0430\u043D",       // its descendant
+        "/\u043F\u0440\u043E\u0435\u043A\u0442\u044B/\u0421\u0435\u043A\u0440\u0435\u0442",     // case-variant sibling tree: a DIFFERENT folder, must not follow "/\u041F\u0440\u043E\u0435\u043A\u0442\u044B"
+        "/\u041F\u0420\u041E\u0415\u041A\u0422\u042B",
+        "/Work0",              // sorts right after the "/Work/" range bound -- must not count as a descendant
+        "/Work.",              // '.' sorts right before '/' -- must not count either
     ];
 
     private List<string> RunPredicate(AclSqlPredicate? predicate)
@@ -91,6 +97,21 @@ public class AclSqlPredicateEquivalenceTests : IDisposable
         yield return [Array.Empty<string>(), new[] { "/Te_st" }];                    // allow path with literal '_'
         yield return [Array.Empty<string>(), new[] { "/Work/Project1/Sub" }];        // deep allow -> ancestor stubs
         yield return [new[] { "/" }, new[] { "/Work/Project1/Sub" }];                // deny-all root beats even a deep allow
+        yield return [Array.Empty<string>(), new[] { "/\u041F\u0440\u043E\u0435\u043A\u0442\u044B" }];                  // non-Latin allow: case variants stay hidden
+        yield return [new[] { "/\u041F\u0440\u043E\u0435\u043A\u0442\u044B" }, Array.Empty<string>()];                  // non-Latin deny: case variants stay visible
+        yield return [Array.Empty<string>(), new[] { "/Work" }];                     // ASCII allow: "/WORK", "/work/Sub" are other folders
+    }
+
+    [Fact]
+    public void Matching_IsCaseSensitive_LikeFolderIdentity()
+    {
+        // tbl_folder.path is BINARY with a case-sensitive unique index, so "/Work" and "/work" are two
+        // folders. A rule on one must not reach the other, in memory or in SQL, for any script.
+        var allow = Set("/\u041F\u0440\u043E\u0435\u043A\u0442\u044B");
+        FolderAccessService.IsAccessDenied(Set(), allow, "/\u041F\u0440\u043E\u0435\u043A\u0442\u044B/\u041F\u043B\u0430\u043D").Should().BeFalse();
+        FolderAccessService.IsAccessDenied(Set(), allow, "/\u043F\u0440\u043E\u0435\u043A\u0442\u044B/\u0421\u0435\u043A\u0440\u0435\u0442").Should().BeTrue();
+        FolderAccessService.IsAccessDenied(Set(), Set("/Work"), "/work/Sub").Should().BeTrue();
+        FolderAccessService.IsAccessDenied(Set("/Work"), Set(), "/WORK").Should().BeFalse();
     }
 
     [Theory]
@@ -101,10 +122,10 @@ public class AclSqlPredicateEquivalenceTests : IDisposable
         var allow = Set(allowArr);
 
         var predicate = FolderAccessService.BuildReadAclPredicate(deny, allow, "path", "acl");
-        var sqlVisible = RunPredicate(predicate).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var sqlVisible = RunPredicate(predicate).ToHashSet(StringComparer.Ordinal);
         var expectedVisible = CandidatePaths
             .Where(p => !FolderAccessService.IsAccessDenied(deny, allow, p))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToHashSet(StringComparer.Ordinal);
 
         sqlVisible.Should().BeEquivalentTo(expectedVisible);
     }
@@ -118,10 +139,10 @@ public class AclSqlPredicateEquivalenceTests : IDisposable
         var scope = new HttpCallerScope(false, deny, allow);
 
         var predicate = FolderAccessService.BuildFolderVisibilityPredicate(deny, allow, "path", "acl");
-        var sqlVisible = RunPredicate(predicate).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var sqlVisible = RunPredicate(predicate).ToHashSet(StringComparer.Ordinal);
         var expectedVisible = CandidatePaths
             .Where(scope.IsNavigable)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToHashSet(StringComparer.Ordinal);
 
         sqlVisible.Should().BeEquivalentTo(expectedVisible);
     }

@@ -254,7 +254,7 @@ public static class FolderEndpoints
                 var allFolders = await folderRepo.GetAllActiveAsync();
                 var mirrorBlocker = allFolders.FirstOrDefault(f =>
                     f.RemoteSubscriptionId.HasValue
-                    && f.Path.StartsWith(pathPrefix, StringComparison.OrdinalIgnoreCase));
+                    && f.Path.StartsWith(pathPrefix, StringComparison.Ordinal));
                 if (mirrorBlocker != null)
                     return Results.Json(new ErrorResponse(
                         $"Folder {PathHelper.Display(path)} contains a remote mirror at {PathHelper.Display(mirrorBlocker.Path)}. Detach the subscription first."),

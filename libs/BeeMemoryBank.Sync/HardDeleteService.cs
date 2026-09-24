@@ -268,32 +268,21 @@ public class HardDeleteService(
         return mediaIds;
     }
 
-    /// <summary>
-    /// Escapes the LIKE wildcards "%" and "_" (and the escape character itself) so a folder path
-    /// is matched literally. Mirrors FolderRepository.EscapeLike; every LIKE that consumes it must
-    /// declare ESCAPE '\'.
-    /// </summary>
-    private static string EscapeLike(string s) =>
-        s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
-
     private static async Task<(int articleCount, int folderCount, List<Guid> mediaIds, List<Guid> articleIds)> PurgeFolderSubtreeAsync(
         IDbConnection conn, IDbTransaction trans, string folderPath)
     {
-        // The path is escaped and the LIKE declares its ESCAPE character. Folder names are user
-        // text and SQLite's LIKE treats "_" as "any one character": purging "/Q_1" without this
-        // also purged "/Q21/..." and everything else that matched the pattern -- a hard delete,
-        // which physically removes rows and their media files with nothing to restore from.
-        // FolderRepository has carried the same escaping for the same reason; this call site
-        // predates it.
-        var prefix = EscapeLike(folderPath.TrimEnd('/')) + "/%";
+        // Exact BINARY subtree (see TreePathSql): no LIKE, so neither a "_" in a folder name nor a
+        // case-variant sibling ("/work" next to "/Work") can pull unrelated rows into a purge that
+        // physically removes them, with nothing to restore from.
+        var (lo, hi) = TreePathSql.DescendantRange(folderPath);
 
         var articleIds = (await conn.QueryAsync<Guid>(
-            "SELECT id FROM tbl_article WHERE tree_path = @folderPath OR tree_path LIKE @prefix ESCAPE '\\'",
-            new { folderPath, prefix }, trans)).ToList();
+            "SELECT id FROM tbl_article WHERE tree_path = @folderPath OR (tree_path >= @lo AND tree_path < @hi)",
+            new { folderPath, lo, hi }, trans)).ToList();
 
         var folderIds = (await conn.QueryAsync<Guid>(
-            "SELECT id FROM tbl_folder WHERE path = @folderPath OR path LIKE @prefix ESCAPE '\\'",
-            new { folderPath, prefix }, trans)).ToList();
+            "SELECT id FROM tbl_folder WHERE path = @folderPath OR (path >= @lo AND path < @hi)",
+            new { folderPath, lo, hi }, trans)).ToList();
 
         var allMediaToDelete = new List<Guid>();
         foreach (var aid in articleIds)
@@ -393,22 +382,23 @@ public class HardDeleteService(
     public async Task<HardDeletePreview> PreviewFolderAsync(string folderPath, CancellationToken ct)
     {
         using var conn = factory.CreateConnection();
-        var prefix = folderPath.TrimEnd('/') + "/%";
+        // Same subtree definition as the purge itself, so the preview counts exactly what it deletes.
+        var (lo, hi) = TreePathSql.DescendantRange(folderPath);
 
         var artCount = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM tbl_article WHERE tree_path = @folderPath OR tree_path LIKE @prefix",
-            new { folderPath, prefix });
+            "SELECT COUNT(*) FROM tbl_article WHERE tree_path = @folderPath OR (tree_path >= @lo AND tree_path < @hi)",
+            new { folderPath, lo, hi });
 
         var fldCount = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM tbl_folder WHERE path = @folderPath OR path LIKE @prefix",
-            new { folderPath, prefix });
+            "SELECT COUNT(*) FROM tbl_folder WHERE path = @folderPath OR (path >= @lo AND path < @hi)",
+            new { folderPath, lo, hi });
 
         var medCount = await conn.ExecuteScalarAsync<int>(
             @"SELECT COUNT(*) FROM tbl_media
               WHERE article_id IN (
-                SELECT id FROM tbl_article WHERE tree_path = @folderPath OR tree_path LIKE @prefix
+                SELECT id FROM tbl_article WHERE tree_path = @folderPath OR (tree_path >= @lo AND tree_path < @hi)
               )",
-            new { folderPath, prefix });
+            new { folderPath, lo, hi });
 
         return new HardDeletePreview(artCount, fldCount, medCount);
     }

@@ -72,7 +72,7 @@ public class RemoteEventApplier(
                 // SECURITY: same path-traversal guard as for articles —
                 // a hostile/buggy owner could send a folder Path that escapes
                 // the mount root. Canonicalise and skip if out of bounds.
-                if (string.IsNullOrEmpty(rf.Path) || !rf.Path.StartsWith(rootRemote, StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrEmpty(rf.Path) || !rf.Path.StartsWith(rootRemote, StringComparison.Ordinal))
                     continue;
                 var suffix = rf.Path[rootRemote.Length..];
                 var candidate = TreePathCanonicalizer.Canonicalize(rootLocal + suffix);
@@ -145,7 +145,7 @@ public class RemoteEventApplier(
             // "/Recipes/../../Admin/Secrets" — naïve concatenation would let
             // it escape the mount root. Canonicalise and verify containment.
             // Gemini security review 2026-05-25.
-            if (string.IsNullOrEmpty(ra.TreePath) || !ra.TreePath.StartsWith(rootRemote, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrEmpty(ra.TreePath) || !ra.TreePath.StartsWith(rootRemote, StringComparison.Ordinal))
             {
                 // Either malformed or outside the share subtree → skip.
                 continue;
