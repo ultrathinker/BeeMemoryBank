@@ -21,13 +21,16 @@
             currentPageAbortController.abort();
             currentPageAbortController = new AbortController();
         }
-        var pageContent = document.getElementById('page-content');
-        if (pageContent) {
-            delete pageContent.dataset.adminInit;
-            delete pageContent.dataset.folderInit;
-            delete pageContent.dataset.articleViewInit;
-            delete pageContent.dataset.searchInit;
-            delete pageContent.dataset.treeInit;
+        // The per-page init flags (adminInit / folderInit / …) are written on the inner .main-content
+        // element by each page module; the outer #page-content is preserved across swaps, so the
+        // flags live on the element that's actually discarded. Clear them there.
+        var mainContent = document.querySelector('#page-content .main-content');
+        if (mainContent) {
+            delete mainContent.dataset.adminInit;
+            delete mainContent.dataset.folderInit;
+            delete mainContent.dataset.articleViewInit;
+            delete mainContent.dataset.searchInit;
+            delete mainContent.dataset.treeInit;
         }
         document.dispatchEvent(new CustomEvent('bmb:page-cleanup'));
     }

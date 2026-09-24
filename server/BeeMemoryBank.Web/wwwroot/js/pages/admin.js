@@ -8,6 +8,13 @@
         pageRoot.dataset.adminInit = '1';
     }
 
+    // Per-page AbortSignal: every document-level listener below uses pageOpts so that
+    // spaCleanup()'s abort on the next SPA navigation tears down this run's listeners
+    // together with their closures (keysBody, modelsBody, modelsCache, editingModelId, …).
+    var pageSignal = window.bmbGetPageSignal ? window.bmbGetPageSignal() : null;
+    var pageOpts = pageSignal ? { signal: pageSignal } : false;
+    var pageCaptureOpts = pageSignal ? { signal: pageSignal, capture: true } : true;
+
     // Auto-refresh for in-progress software update
     var updateContainer = document.querySelector('[data-is-updating="true"]');
     if (updateContainer && !window._updateRefreshing) {
@@ -717,285 +724,289 @@
         });
     }
 
-    // Delegated listeners (one-time registration on document)
-    if (!window._adminDelegated) {
-        window._adminDelegated = true;
+    // Delegated listeners (registered per page run, aborted by spaCleanup via pageSignal)
+    // Block snapshot-progress dialog from being dismissed mid-operation
+    document.addEventListener('sl-request-close', function (e) {
+        if (e.target && e.target.id === 'dlg-snapshot-progress') e.preventDefault();
+    }, pageCaptureOpts);
 
-        // Block snapshot-progress dialog from being dismissed mid-operation
-        document.addEventListener('sl-request-close', function (e) {
-            if (e.target && e.target.id === 'dlg-snapshot-progress') e.preventDefault();
-        }, true);
+    // Confirm before executing destructive admin actions (.btn-confirm-click) in capture phase
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.btn-confirm-click');
+        if (!btn || btn._bmbConfirmed) return;
+        var msg = btn.dataset.confirm || 'Are you sure?';
+        if (!confirm(msg)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
+        btn._bmbConfirmed = true;
+        setTimeout(function () { delete btn._bmbConfirmed; }, 500);
+    }, pageCaptureOpts);
 
-        // Confirm before executing destructive admin actions (.btn-confirm-click) in capture phase
-        document.addEventListener('click', function (e) {
-            var btn = e.target.closest('.btn-confirm-click');
-            if (!btn || btn._bmbConfirmed) return;
-            var msg = btn.dataset.confirm || 'Are you sure?';
+    // Document-level clicks
+    document.addEventListener('click', function (e) {
+        // Upload dropzone toggle
+        var uploadToggle = e.target.closest('#btn-show-upload');
+        if (uploadToggle) {
+            var zone = document.getElementById('snapshot-upload-zone');
+            if (zone) zone.style.display = (zone.style.display === 'none' || !zone.style.display) ? 'block' : 'none';
+            return;
+        }
+
+        // Create snapshot button
+        var createBtn = e.target.closest('#btn-create-snapshot');
+        if (createBtn) {
+            if (createBtn.hasAttribute('data-busy')) return;
+            createBtn.setAttribute('data-busy', '');
+            createBtn.loading = true;
+            showProgress('Creating snapshot\u2026', 'This may take a while for large databases.');
+            fetch('/api-proxy/snapshots', { method: 'POST' })
+                .then(function (r) {
+                    if (r.ok) {
+                        window.location.reload();
+                    } else {
+                        hideProgress();
+                        alert('Failed to create snapshot');
+                    }
+                })
+                .catch(function () {
+                    hideProgress();
+                    alert('Network error');
+                })
+                .finally(function () {
+                    createBtn.loading = false;
+                    createBtn.removeAttribute('data-busy');
+                });
+            return;
+        }
+
+        // Open restore snapshot dialog
+        var restoreTrigger = e.target.closest('.btn-open-restore-snapshot');
+        if (restoreTrigger) {
+            var fname = restoreTrigger.dataset.filename;
+            var inputFn = document.getElementById('restore-file-name');
+            var disp = document.getElementById('restore-snapshot-name-display');
+            var dlg = document.getElementById('dlg-restore-snapshot');
+            if (inputFn) inputFn.value = fname;
+            if (disp) disp.textContent = fname;
+            if (dlg) dlg.show();
+            return;
+        }
+
+        // Change node URL
+        var changeUrlBtn = e.target.closest('.btn-open-change-url');
+        if (changeUrlBtn) {
+            var nid = changeUrlBtn.dataset.nodeId;
+            var nname = changeUrlBtn.dataset.nodeName;
+            var curl = changeUrlBtn.dataset.currentUrl;
+            var nidInput = document.getElementById('change-url-node-id');
+            var nnameEl = document.getElementById('change-url-node-name');
+            var urlInput = document.getElementById('change-url-input');
+            var dlgUrl = document.getElementById('dlg-change-url');
+            if (nidInput) nidInput.value = nid;
+            if (nnameEl) nnameEl.textContent = 'Node: ' + nname;
+            if (urlInput) {
+                urlInput.value = curl;
+                setTimeout(function () { urlInput.value = curl; }, 50);
+            }
+            if (dlgUrl) dlgUrl.show();
+            return;
+        }
+
+        // Open DEK rotation dialog (initial propose + retry after a failed rotation)
+        var openDekBtn = e.target.closest('.btn-open-dek-rotation');
+        if (openDekBtn) {
+            var dlgDek = document.getElementById('dlg-dek-rotation');
+            if (dlgDek) dlgDek.show();
+            return;
+        }
+
+        // Promote/Demote superadmin
+        var superadminBtn = e.target.closest('.btn-confirm-superadmin');
+        if (superadminBtn) {
+            var sname = superadminBtn.dataset.nodeName;
+            var demoting = superadminBtn.dataset.demote === 'true';
+            var msg = demoting
+                ? 'Demote "' + sname + '"?\n\nIt will no longer be able to revoke peers, hard-delete content across the network, or restore every node from its own snapshot. It keeps syncing content as usual.'
+                : 'Promote "' + sname + '" to superadmin?\n\nIt will be able to revoke any peer, hard-delete content on every node, and restore the whole network from its own snapshot.';
             if (!confirm(msg)) {
                 e.preventDefault();
-                e.stopImmediatePropagation();
                 return;
             }
-            btn._bmbConfirmed = true;
-            setTimeout(function () { delete btn._bmbConfirmed; }, 500);
-        }, true);
+            var form = superadminBtn.closest('form');
+            if (form) form.submit();
+            return;
+        }
 
-        // Document-level clicks
-        document.addEventListener('click', function (e) {
-            // Upload dropzone toggle
-            var uploadToggle = e.target.closest('#btn-show-upload');
-            if (uploadToggle) {
-                var zone = document.getElementById('snapshot-upload-zone');
-                if (zone) zone.style.display = (zone.style.display === 'none' || !zone.style.display) ? 'block' : 'none';
+        // Generic confirm button in form
+        var confirmBtn = e.target.closest('.btn-confirm-submit');
+        if (confirmBtn) {
+            var pat = confirmBtn.dataset.confirmPattern || 'Are you sure?';
+            var nameVal = confirmBtn.dataset.name || '';
+            var text = pat.replace('{name}', nameVal);
+            if (!confirm(text)) {
+                e.preventDefault();
                 return;
             }
+            var cform = confirmBtn.closest('form');
+            if (cform) cform.submit();
+            return;
+        }
 
-            // Create snapshot button
-            var createBtn = e.target.closest('#btn-create-snapshot');
-            if (createBtn) {
-                if (createBtn.hasAttribute('data-busy')) return;
-                createBtn.setAttribute('data-busy', '');
-                createBtn.loading = true;
-                showProgress('Creating snapshot\u2026', 'This may take a while for large databases.');
-                fetch('/api-proxy/snapshots', { method: 'POST' })
-                    .then(function (r) {
-                        if (r.ok) {
-                            window.location.reload();
-                        } else {
-                            hideProgress();
-                            alert('Failed to create snapshot');
-                        }
-                    })
-                    .catch(function () {
-                        hideProgress();
-                        alert('Network error');
-                    })
-                    .finally(function () {
-                        createBtn.loading = false;
-                        createBtn.removeAttribute('data-busy');
-                    });
+        // Open dialog button
+        var openDlgBtn = e.target.closest('.btn-open-dialog');
+        if (openDlgBtn) {
+            var targetDlgId = openDlgBtn.dataset.dialogId;
+            if (targetDlgId) {
+                var targetDlg = document.getElementById(targetDlgId);
+                if (targetDlg) targetDlg.show();
+            }
+            return;
+        }
+
+        // Delete chat key
+        var delKeyBtn = e.target.closest('.btn-delete-chat-key');
+        if (delKeyBtn) {
+            deleteChatKey(delKeyBtn.dataset.keyId);
+            return;
+        }
+
+        // Edit chat model
+        var editModelBtn = e.target.closest('.btn-edit-chat-model');
+        if (editModelBtn) {
+            editChatModel(editModelBtn.dataset.editId);
+            return;
+        }
+
+        // Delete chat model
+        var delModelBtn = e.target.closest('.btn-delete-chat-model');
+        if (delModelBtn) {
+            deleteChatModel(delModelBtn.dataset.modelId);
+            return;
+        }
+
+        // Destructive admin actions with confirmation (.btn-confirm-click)
+        var confirmClickBtn = e.target.closest('.btn-confirm-click');
+        if (confirmClickBtn) {
+            var href = confirmClickBtn.getAttribute('href');
+            if (href) {
+                e.preventDefault();
+                window.location.href = href;
                 return;
             }
+            // Form submit actions are handled natively by Shoelace once confirmed in capture phase.
+        }
 
-            // Open restore snapshot dialog
-            var restoreTrigger = e.target.closest('.btn-open-restore-snapshot');
-            if (restoreTrigger) {
-                var fname = restoreTrigger.dataset.filename;
-                var inputFn = document.getElementById('restore-file-name');
-                var disp = document.getElementById('restore-snapshot-name-display');
-                var dlg = document.getElementById('dlg-restore-snapshot');
-                if (inputFn) inputFn.value = fname;
-                if (disp) disp.textContent = fname;
-                if (dlg) dlg.show();
-                return;
+        // Dialog cancel buttons (admin fallback)
+        var cancelDlgBtn = e.target.closest('[data-dlg-cancel]');
+        if (cancelDlgBtn) {
+            var cDlgId = cancelDlgBtn.getAttribute('data-dlg-cancel');
+            if (cDlgId) {
+                var cDlg = document.getElementById(cDlgId);
+                if (cDlg && typeof cDlg.hide === 'function') cDlg.hide();
             }
+            return;
+        }
 
-            // Change node URL
-            var changeUrlBtn = e.target.closest('.btn-open-change-url');
-            if (changeUrlBtn) {
-                var nid = changeUrlBtn.dataset.nodeId;
-                var nname = changeUrlBtn.dataset.nodeName;
-                var curl = changeUrlBtn.dataset.currentUrl;
-                var nidInput = document.getElementById('change-url-node-id');
-                var nnameEl = document.getElementById('change-url-node-name');
-                var urlInput = document.getElementById('change-url-input');
-                var dlgUrl = document.getElementById('dlg-change-url');
-                if (nidInput) nidInput.value = nid;
-                if (nnameEl) nnameEl.textContent = 'Node: ' + nname;
-                if (urlInput) {
-                    urlInput.value = curl;
-                    setTimeout(function () { urlInput.value = curl; }, 50);
-                }
-                if (dlgUrl) dlgUrl.show();
-                return;
-            }
-
-            // Promote/Demote superadmin
-            var superadminBtn = e.target.closest('.btn-confirm-superadmin');
-            if (superadminBtn) {
-                var sname = superadminBtn.dataset.nodeName;
-                var demoting = superadminBtn.dataset.demote === 'true';
-                var msg = demoting
-                    ? 'Demote "' + sname + '"?\n\nIt will no longer be able to revoke peers, hard-delete content across the network, or restore every node from its own snapshot. It keeps syncing content as usual.'
-                    : 'Promote "' + sname + '" to superadmin?\n\nIt will be able to revoke any peer, hard-delete content on every node, and restore the whole network from its own snapshot.';
-                if (!confirm(msg)) {
-                    e.preventDefault();
-                    return;
-                }
-                var form = superadminBtn.closest('form');
-                if (form) form.submit();
-                return;
-            }
-
-            // Generic confirm button in form
-            var confirmBtn = e.target.closest('.btn-confirm-submit');
-            if (confirmBtn) {
-                var pat = confirmBtn.dataset.confirmPattern || 'Are you sure?';
-                var nameVal = confirmBtn.dataset.name || '';
-                var text = pat.replace('{name}', nameVal);
-                if (!confirm(text)) {
-                    e.preventDefault();
-                    return;
-                }
-                var cform = confirmBtn.closest('form');
-                if (cform) cform.submit();
-                return;
-            }
-
-            // Open dialog button
-            var openDlgBtn = e.target.closest('.btn-open-dialog');
-            if (openDlgBtn) {
-                var targetDlgId = openDlgBtn.dataset.dialogId;
-                if (targetDlgId) {
-                    var targetDlg = document.getElementById(targetDlgId);
-                    if (targetDlg) targetDlg.show();
-                }
-                return;
-            }
-
-            // Delete chat key
-            var delKeyBtn = e.target.closest('.btn-delete-chat-key');
-            if (delKeyBtn) {
-                deleteChatKey(delKeyBtn.dataset.keyId);
-                return;
-            }
-
-            // Edit chat model
-            var editModelBtn = e.target.closest('.btn-edit-chat-model');
-            if (editModelBtn) {
-                editChatModel(editModelBtn.dataset.editId);
-                return;
-            }
-
-            // Delete chat model
-            var delModelBtn = e.target.closest('.btn-delete-chat-model');
-            if (delModelBtn) {
-                deleteChatModel(delModelBtn.dataset.modelId);
-                return;
-            }
-
-            // Destructive admin actions with confirmation (.btn-confirm-click)
-            var confirmClickBtn = e.target.closest('.btn-confirm-click');
-            if (confirmClickBtn) {
-                var href = confirmClickBtn.getAttribute('href');
-                if (href) {
-                    e.preventDefault();
-                    window.location.href = href;
-                    return;
-                }
-                // Form submit actions are handled natively by Shoelace once confirmed in capture phase.
-            }
-
-            // Dialog cancel buttons (admin fallback)
-            var cancelDlgBtn = e.target.closest('[data-dlg-cancel]');
-            if (cancelDlgBtn) {
-                var cDlgId = cancelDlgBtn.getAttribute('data-dlg-cancel');
-                if (cDlgId) {
-                    var cDlg = document.getElementById(cDlgId);
-                    if (cDlg && typeof cDlg.hide === 'function') cDlg.hide();
-                }
-                return;
-            }
-
-            // Copy public key
-            var copyPubBtn = e.target.closest('.btn-copy-pubkey, #btn-copy-pubkey');
-            if (copyPubBtn) {
-                var tgtId = copyPubBtn.dataset.target || 'pubkey-val';
-                var el = document.getElementById(tgtId);
-                if (el) {
-                    var val = el.textContent.trim();
-                    if (window.bmbCopyToClipboard) {
-                        window.bmbCopyToClipboard(val, copyPubBtn);
-                    } else if (navigator.clipboard) {
-                        navigator.clipboard.writeText(val).catch(function () {});
-                    }
-                }
-                return;
-            }
-        });
-
-        // Delegated form submission confirmation
-        document.addEventListener('submit', function (e) {
-            var form = e.target.closest('form.form-confirm');
-            if (form) {
-                var confirmMsg = form.dataset.confirm;
-                if (confirmMsg && !confirm(confirmMsg)) {
-                    e.preventDefault();
+        // Copy public key
+        var copyPubBtn = e.target.closest('.btn-copy-pubkey, #btn-copy-pubkey');
+        if (copyPubBtn) {
+            var tgtId = copyPubBtn.dataset.target || 'pubkey-val';
+            var el = document.getElementById(tgtId);
+            if (el) {
+                var val = el.textContent.trim();
+                if (window.bmbCopyToClipboard) {
+                    window.bmbCopyToClipboard(val, copyPubBtn);
+                } else if (navigator.clipboard) {
+                    navigator.clipboard.writeText(val).catch(function () {});
                 }
             }
-        });
+            return;
+        }
+    }, pageOpts);
 
-        // Delegated Shoelace switch changes
-        document.addEventListener('sl-change', function (e) {
-            // Auto accept restore toggle
-            var autoAcceptSwitch = e.target.closest('.switch-auto-accept');
-            if (autoAcceptSwitch) {
-                var nodeId = autoAcceptSwitch.dataset.nodeId;
-                var nodeName = autoAcceptSwitch.dataset.nodeName;
-                var newVal = autoAcceptSwitch.checked;
-                var proceed = true;
-                if (newVal) {
-                    proceed = confirm(
-                        "Enable AUTO-RESTORE for peer '" + nodeName + "'?\n\n" +
-                        "When this peer initiates a snapshot restore, it will apply on this node WITHOUT confirmation. " +
-                        "Your articles, folders, and tags from after the restore point will be replaced.\n\n" +
-                        "Only enable for peers you fully trust (your own devices, your team's nodes). " +
-                        "For peers belonging to other people, keep this OFF.\n\n" +
-                        "Continue?"
-                    );
-                }
-                if (!proceed) {
-                    autoAcceptSwitch.checked = !newVal;
-                    return;
-                }
-                var valInput = document.getElementById("autoaccept-value-" + nodeId);
-                var form = document.getElementById("autoaccept-form-" + nodeId);
-                if (valInput && form) {
-                    valInput.value = newVal ? "true" : "false";
-                    form.submit();
-                }
+    // Delegated form submission confirmation
+    document.addEventListener('submit', function (e) {
+        var form = e.target.closest('form.form-confirm');
+        if (form) {
+            var confirmMsg = form.dataset.confirm;
+            if (confirmMsg && !confirm(confirmMsg)) {
+                e.preventDefault();
+            }
+        }
+    }, pageOpts);
+
+    // Delegated Shoelace switch changes
+    document.addEventListener('sl-change', function (e) {
+        // Auto accept restore toggle
+        var autoAcceptSwitch = e.target.closest('.switch-auto-accept');
+        if (autoAcceptSwitch) {
+            var nodeId = autoAcceptSwitch.dataset.nodeId;
+            var nodeName = autoAcceptSwitch.dataset.nodeName;
+            var newVal = autoAcceptSwitch.checked;
+            var proceed = true;
+            if (newVal) {
+                proceed = confirm(
+                    "Enable AUTO-RESTORE for peer '" + nodeName + "'?\n\n" +
+                    "When this peer initiates a snapshot restore, it will apply on this node WITHOUT confirmation. " +
+                    "Your articles, folders, and tags from after the restore point will be replaced.\n\n" +
+                    "Only enable for peers you fully trust (your own devices, your team's nodes). " +
+                    "For peers belonging to other people, keep this OFF.\n\n" +
+                    "Continue?"
+                );
+            }
+            if (!proceed) {
+                autoAcceptSwitch.checked = !newVal;
                 return;
             }
+            var valInput = document.getElementById("autoaccept-value-" + nodeId);
+            var form = document.getElementById("autoaccept-form-" + nodeId);
+            if (valInput && form) {
+                valInput.value = newVal ? "true" : "false";
+                form.submit();
+            }
+            return;
+        }
 
-            // Auto accept DEK toggle
-            var autoAcceptDekSwitch = e.target.closest('.switch-auto-accept-dek');
-            if (autoAcceptDekSwitch) {
-                var dekNodeId = autoAcceptDekSwitch.dataset.nodeId;
-                var dekNodeName = autoAcceptDekSwitch.dataset.nodeName;
-                var dekNewVal = autoAcceptDekSwitch.checked;
-                var dekProceed = true;
-                if (dekNewVal) {
-                    dekProceed = confirm(
-                        "Enable AUTO-ACCEPT DEK ROTATION for peer '" + dekNodeName + "'?\n\n" +
-                        "When this peer initiates a DEK rotation, it will apply on this node WITHOUT confirmation. " +
-                        "ALL article bodies, versions, and media will be re-encrypted with a new key. " +
-                        "This is more destructive than snapshot restore.\n\n" +
-                        "Only enable for peers you fully trust (your own devices).\n\n" +
-                        "Continue?"
-                    );
-                }
-                if (!dekProceed) {
-                    autoAcceptDekSwitch.checked = !dekNewVal;
-                    return;
-                }
-                var dekValInput = document.getElementById("autoaccept-dek-value-" + dekNodeId);
-                var dekForm = document.getElementById("autoaccept-dek-form-" + dekNodeId);
-                if (dekValInput && dekForm) {
-                    dekValInput.value = dekNewVal ? "true" : "false";
-                    dekForm.submit();
-                }
+        // Auto accept DEK toggle
+        var autoAcceptDekSwitch = e.target.closest('.switch-auto-accept-dek');
+        if (autoAcceptDekSwitch) {
+            var dekNodeId = autoAcceptDekSwitch.dataset.nodeId;
+            var dekNodeName = autoAcceptDekSwitch.dataset.nodeName;
+            var dekNewVal = autoAcceptDekSwitch.checked;
+            var dekProceed = true;
+            if (dekNewVal) {
+                dekProceed = confirm(
+                    "Enable AUTO-ACCEPT DEK ROTATION for peer '" + dekNodeName + "'?\n\n" +
+                    "When this peer initiates a DEK rotation, it will apply on this node WITHOUT confirmation. " +
+                    "ALL article bodies, versions, and media will be re-encrypted with a new key. " +
+                    "This is more destructive than snapshot restore.\n\n" +
+                    "Only enable for peers you fully trust (your own devices).\n\n" +
+                    "Continue?"
+                );
+            }
+            if (!dekProceed) {
+                autoAcceptDekSwitch.checked = !dekNewVal;
                 return;
             }
-
-            // Chat key toggle
-            var chatKeySwitch = e.target.closest('.switch-chat-key');
-            if (chatKeySwitch) {
-                var kId = chatKeySwitch.dataset.keyId;
-                toggleChatKey(kId, chatKeySwitch.checked);
-                return;
+            var dekValInput = document.getElementById("autoaccept-dek-value-" + dekNodeId);
+            var dekForm = document.getElementById("autoaccept-dek-form-" + dekNodeId);
+            if (dekValInput && dekForm) {
+                dekValInput.value = dekNewVal ? "true" : "false";
+                dekForm.submit();
             }
-        });
-    }
+            return;
+        }
+
+        // Chat key toggle
+        var chatKeySwitch = e.target.closest('.switch-chat-key');
+        if (chatKeySwitch) {
+            var kId = chatKeySwitch.dataset.keyId;
+            toggleChatKey(kId, chatKeySwitch.checked);
+            return;
+        }
+    }, pageOpts);
 
     // Initial data loads
     loadChatEnabled();
