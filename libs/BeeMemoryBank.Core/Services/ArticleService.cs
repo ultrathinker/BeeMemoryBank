@@ -40,18 +40,7 @@ public partial class ArticleService(
         byte[] ciphertext, iv, encryptedDek, dekIv;
         try
         {
-            var articleDek = DekManager.GenerateArticleDek();
-            try
-            {
-                var dekAad = "bmb-art-dek"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                var bodyAad = "bmb-art-body"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                (ciphertext, iv) = ArticleEncryptor.Encrypt(plaintext, articleDek, bodyAad);
-                (encryptedDek, dekIv) = DekManager.WrapDek(articleDek, masterDek, dekAad);
-            }
-            finally
-            {
-                Array.Clear(articleDek);
-            }
+            (ciphertext, iv, encryptedDek, dekIv) = EnvelopeFraming.Article.SealNewText(articleId, plaintext, masterDek);
         }
         finally
         {
@@ -154,15 +143,32 @@ public partial class ArticleService(
         var body = await bodyRepo.GetByArticleIdAsync(id);
         if (body == null) throw new KeyNotFoundException($"Article body {id} not found.");
 
-        var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
-        var dekAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(id.ToByteArray()).ToArray() : null;
-
         var articleDek = session.TryUnwrapWithCandidates(masterDek =>
-            DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, dekAad));
+            EnvelopeFraming.Article.UnwrapDek(id, body.EncryptedDek, body.DekIV, masterDek));
         try
         {
-            var bodyAad = isV1 ? "bmb-art-body"u8.ToArray().Concat(id.ToByteArray()).ToArray() : null;
-            return ArticleEncryptor.Decrypt(body.Ciphertext, body.IV, articleDek, bodyAad);
+            return EnvelopeFraming.Article.DecryptBodyText(id, body.EncryptedDek, articleDek, body.Ciphertext, body.IV);
+        }
+        finally
+        {
+            Array.Clear(articleDek);
+        }
+    }
+
+    /// <summary>
+    /// Decrypts one historical version's body. A version row carries a byte-for-byte copy of the
+    /// article body's wrapped DEK at snapshot time, so it is framed with the ARTICLE id and may
+    /// still be wrapped under a retired master DEK right after a rotation — hence the candidate
+    /// walk, the same as <see cref="GetContentAsync"/>. Requires an unlocked session.
+    /// </summary>
+    public string DecryptVersionContent(ArticleVersion version)
+    {
+        var articleDek = session.TryUnwrapWithCandidates(masterDek =>
+            EnvelopeFraming.Article.UnwrapDek(version.ArticleId, version.EncryptedDek, version.DekIV, masterDek));
+        try
+        {
+            return EnvelopeFraming.Article.DecryptBodyText(
+                version.ArticleId, version.EncryptedDek, articleDek, version.Ciphertext, version.IV);
         }
         finally
         {
@@ -309,18 +315,18 @@ public partial class ArticleService(
                 };
             }
 
-            var masterDek = session.GetMasterDek();
+            // The existing row may still be wrapped under a retired master DEK (a rotation just
+            // swapped keys), so unwrap it the way every reader does — current key first, then the
+            // retired ones. The re-sealed row is always wrapped under the CURRENT key.
+            var articleDek = session.TryUnwrapWithCandidates(candidateDek =>
+                EnvelopeFraming.Article.UnwrapDek(id, existingBody.EncryptedDek, existingBody.DekIV, candidateDek));
             try
             {
-                var isV1 = existingBody.EncryptedDek.Length > 48 && existingBody.EncryptedDek[0] == 0x01;
-                var unwrapAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(id.ToByteArray()).ToArray() : null;
-                var articleDek = DekManager.UnwrapDek(existingBody.EncryptedDek, existingBody.DekIV, masterDek, unwrapAad);
+                var masterDek = session.GetMasterDek();
                 try
                 {
-                    var dekAad = "bmb-art-dek"u8.ToArray().Concat(id.ToByteArray()).ToArray();
-                    var bodyAad = "bmb-art-body"u8.ToArray().Concat(id.ToByteArray()).ToArray();
-                    var (ciphertext, iv) = ArticleEncryptor.Encrypt(plaintext, articleDek, bodyAad);
-                    var (encryptedDek, dekIv) = DekManager.WrapDek(articleDek, masterDek, dekAad);
+                    var (ciphertext, iv, encryptedDek, dekIv) =
+                        EnvelopeFraming.Article.SealText(id, plaintext, articleDek, masterDek);
                     body = new EncryptedArticleBody
                     {
                         ArticleId = id,
@@ -332,12 +338,12 @@ public partial class ArticleService(
                 }
                 finally
                 {
-                    Array.Clear(articleDek);
+                    Array.Clear(masterDek);
                 }
             }
             finally
             {
-                Array.Clear(masterDek);
+                Array.Clear(articleDek);
             }
         }
         else

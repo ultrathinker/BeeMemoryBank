@@ -23,28 +23,19 @@ public class CommentService(
             ?? throw new KeyNotFoundException($"Article body {articleId} not found — cannot encrypt comment.");
 
         var commentId = Guid.NewGuid();
-        var masterDek = session.GetMasterDek();
         byte[] ciphertext, iv;
+        // Candidates, not just the current key: the article body may still be wrapped under a
+        // retired master DEK right after a rotation, and GetContentAsync reads it fine then.
+        var articleDek = session.TryUnwrapWithCandidates(masterDek =>
+            EnvelopeFraming.Article.UnwrapDek(articleId, body.EncryptedDek, body.DekIV, masterDek));
         try
         {
-            var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
-            var unwrapAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(articleId.ToByteArray()).ToArray() : null;
-            var articleDek = DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, unwrapAad);
-            try
-            {
-                var commentAad = "bmb-comment"u8.ToArray()
-                    .Concat(articleId.ToByteArray())
-                    .Concat(commentId.ToByteArray()).ToArray();
-                (ciphertext, iv) = ArticleEncryptor.Encrypt(plaintext, articleDek, commentAad);
-            }
-            finally
-            {
-                Array.Clear(articleDek);
-            }
+            // Always the current comment framing (with AAD), whatever the parent body's framing is.
+            (ciphertext, iv) = ArticleEncryptor.Encrypt(plaintext, articleDek, CommentAad(articleId, commentId));
         }
         finally
         {
-            Array.Clear(masterDek);
+            Array.Clear(articleDek);
         }
 
         var comment = await commentRepo.CreateEncryptedAsync(articleId, commentId, ciphertext, iv);
@@ -65,25 +56,55 @@ public class CommentService(
         if (body == null)
             return "[encrypted — article key unavailable]";
 
-        var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
-        var dekAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(comment.ArticleId.ToByteArray()).ToArray() : null;
+        var ciphertext = comment.Ciphertext;
+        var iv = comment.IV;
+        // Whole attempt per candidate master DEK, in the session's candidate order (current, then
+        // retired): unwrap the article DEK, then open the comment with it.
+        return session.TryUnwrapWithCandidates(masterDek =>
+        {
+            var articleDek = EnvelopeFraming.Article.UnwrapDek(comment.ArticleId, body.EncryptedDek, body.DekIV, masterDek);
+            try
+            {
+                return DecryptCommentText(comment.ArticleId, comment.CommentId, ciphertext, iv, articleDek);
+            }
+            finally
+            {
+                Array.Clear(articleDek);
+            }
+        });
+    }
 
-        var articleDek = session.TryUnwrapWithCandidates(masterDek =>
-            DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, dekAad));
+    /// <summary>
+    /// Opens one comment ciphertext with its article DEK. A comment row carries no framing marker,
+    /// and its framing is independent of the parent body's (a body update re-seals the body as v1
+    /// but never touches its comments), so the comment's own framing is detected by trial: the
+    /// current framing (<see cref="CommentAad"/>) first, and only on an authentication-tag failure
+    /// the legacy framing with no AAD.
+    /// <para>
+    /// Invariant: the no-AAD fallback accepts only ciphertexts that were sealed without AAD, i.e.
+    /// legacy comments. Those carry no article/comment binding in the first place, so the fallback
+    /// grants an attacker with DB write access nothing beyond what those rows already allowed;
+    /// every comment written now is sealed with AAD and cannot be opened by the fallback under a
+    /// different article or comment id.
+    /// </para>
+    /// </summary>
+    private static string DecryptCommentText(Guid articleId, Guid commentId, byte[] ciphertext, byte[] iv, byte[] articleDek)
+    {
         try
         {
-            var commentAad = isV1
-                ? "bmb-comment"u8.ToArray()
-                    .Concat(comment.ArticleId.ToByteArray())
-                    .Concat(comment.CommentId.ToByteArray()).ToArray()
-                : null;
-            return ArticleEncryptor.Decrypt(comment.Ciphertext, comment.IV, articleDek, commentAad);
+            return ArticleEncryptor.Decrypt(ciphertext, iv, articleDek, CommentAad(articleId, commentId));
         }
-        finally
+        catch (System.Security.Cryptography.AuthenticationTagMismatchException)
         {
-            Array.Clear(articleDek);
+            return ArticleEncryptor.Decrypt(ciphertext, iv, articleDek, aad: null);
         }
     }
+
+    /// <summary>AAD a comment is sealed under: <c>"bmb-comment" || articleId || commentId</c>.</summary>
+    private static byte[] CommentAad(Guid articleId, Guid commentId) =>
+        "bmb-comment"u8.ToArray()
+            .Concat(articleId.ToByteArray())
+            .Concat(commentId.ToByteArray()).ToArray();
 
     /// <summary>Gets comments for an article, decrypting encrypted ones.</summary>
     public async Task<List<(Comment comment, string text)>> GetDecryptedByArticleAsync(Guid articleId)
