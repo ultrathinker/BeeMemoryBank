@@ -239,18 +239,7 @@ public class RemoteEventApplier(
         byte[] ciphertext, iv, encryptedDek, dekIv;
         try
         {
-            var articleDek = DekManager.GenerateArticleDek();
-            try
-            {
-                var dekAad = "bmb-art-dek"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                var bodyAad = "bmb-art-body"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                (ciphertext, iv) = ArticleEncryptor.Encrypt(content, articleDek, bodyAad);
-                (encryptedDek, dekIv) = DekManager.WrapDek(articleDek, masterDek, dekAad);
-            }
-            finally
-            {
-                Array.Clear(articleDek);
-            }
+            (ciphertext, iv, encryptedDek, dekIv) = EnvelopeFraming.Article.SealNewText(articleId, content, masterDek);
         }
         finally
         {
@@ -290,36 +279,28 @@ public class RemoteEventApplier(
     private async Task UpsertEncryptedBodyAsync(Guid articleId, string plaintext)
     {
         var body = await bodyRepo.GetByArticleIdAsync(articleId);
-        var masterDek = session.GetMasterDek();
         byte[] ciphertext, iv, encryptedDek, dekIv;
-        byte[] articleDek;
+        // An existing row may still be wrapped under a retired master DEK right after a rotation:
+        // unwrap it with the candidates, re-seal under the current key.
+        var articleDek = body != null
+            ? session.TryUnwrapWithCandidates(candidateDek =>
+                EnvelopeFraming.Article.UnwrapDek(articleId, body.EncryptedDek, body.DekIV, candidateDek))
+            : DekManager.GenerateArticleDek();
         try
         {
-            if (body != null)
-            {
-                var isV1 = body.EncryptedDek.Length > 48 && body.EncryptedDek[0] == 0x01;
-                var unwrapAad = isV1 ? "bmb-art-dek"u8.ToArray().Concat(articleId.ToByteArray()).ToArray() : null;
-                articleDek = DekManager.UnwrapDek(body.EncryptedDek, body.DekIV, masterDek, unwrapAad);
-            }
-            else
-            {
-                articleDek = DekManager.GenerateArticleDek();
-            }
+            var masterDek = session.GetMasterDek();
             try
             {
-                var dekAad = "bmb-art-dek"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                var bodyAad = "bmb-art-body"u8.ToArray().Concat(articleId.ToByteArray()).ToArray();
-                (ciphertext, iv) = ArticleEncryptor.Encrypt(plaintext, articleDek, bodyAad);
-                (encryptedDek, dekIv) = DekManager.WrapDek(articleDek, masterDek, dekAad);
+                (ciphertext, iv, encryptedDek, dekIv) = EnvelopeFraming.Article.SealText(articleId, plaintext, articleDek, masterDek);
             }
             finally
             {
-                Array.Clear(articleDek);
+                Array.Clear(masterDek);
             }
         }
         finally
         {
-            Array.Clear(masterDek);
+            Array.Clear(articleDek);
         }
 
         await bodyRepo.UpsertAsync(new EncryptedArticleBody
