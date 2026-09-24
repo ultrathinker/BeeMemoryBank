@@ -68,7 +68,7 @@ public static class AgentCommand
             OwnerUserId = owner.Id
         };
 
-        // H6 hybrid model (see AgentEndpoints for the full reasoning): only a superadmin's
+        // Hybrid model (see AgentEndpoints for the full reasoning): only a superadmin's
         // agent gets a wrapped master DEK and can therefore auto-unlock a locked vault. An
         // ordinary user's CLI-created agent is otherwise identical — it authenticates and
         // works normally whenever the vault is already unlocked.

@@ -22,9 +22,8 @@ public static class CliServiceProvider
         var services = new ServiceCollection()
             // Console-backed logging at Warning+ level. Surfaces lazy-rewrap warnings,
             // signature mismatches, and other security-relevant signals directly to the
-            // operator running the CLI. Previously we used .AddLogging() with no provider
-            // (null sink) — security audits flagged that intentional warnings would
-            // disappear silently. Info+ would be too chatty for a CLI.
+            // operator running the CLI — never a null sink, which would swallow exactly
+            // those intentional warnings. Info+ would be too chatty for a CLI.
             .AddLogging(b => b.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; })
                               .SetMinimumLevel(LogLevel.Warning))
             .AddStorage(dataPath)
