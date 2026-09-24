@@ -16,7 +16,8 @@ using Yarp.ReverseProxy.Forwarder;
 using Yarp.ReverseProxy.Model;
 using Yarp.ReverseProxy.Transforms;
 using BeeMemoryBank.Core.Services;
-using BeeMemoryBank.Core.Services.Acme;
+using BeeMemoryBank.Infrastructure.Acme;
+using BeeMemoryBank.Infrastructure.Tls;
 using BeeMemoryBank.Hosting;
 using BeeMemoryBank.Hosting.AspNetCore;
 

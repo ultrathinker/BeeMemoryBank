@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.Mdns;
 using BeeMemoryBank.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;

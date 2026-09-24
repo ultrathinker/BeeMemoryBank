@@ -71,12 +71,37 @@ server/
 │   └── CliActorProvider     — IActorProvider for CLI (actor_type = "cli")
 │
 libs/
-├── BeeMemoryBank.Core/      — Models, services, interfaces (no external dependencies)
+├── BeeMemoryBank.Core/      — Domain kernel. No ONNX, ACME, mDNS, DPAPI, ImageSharp.
 │   ├── Models/              — Article, Comment, Agent, Folder, FolderInfo, Media, NodeIdentity, AuditLog,
 │   │                          ArticleVersion, FolderAclEntry...
 │   │                          (models in BeeMemoryBank.Core/Models/)
-│   ├── Interfaces/          — 39 interfaces (incl. IMediaRepository, IFolderRepository, IArticleVersionRepository, IFolderAclRepository, IActorProvider, IEmbeddingGenerator, ISyncTrigger, ISyncPushPositionRepository, IDekRotationApplier, IDekRotationStateRepository, ILazySlotRewrapService, IAuditLogRepository)
-│   └── Embeddings/          — HashBasedEmbeddingGenerator, ProjectionMatrix
+│   ├── Interfaces/          — 40 interfaces (incl. IMediaRepository, IFolderRepository, IArticleVersionRepository, IFolderAclRepository, IActorProvider, IEmbeddingGenerator, ISyncTrigger, ISyncPushPositionRepository, IDekRotationApplier, IDekRotationStateRepository, ILazySlotRewrapService, IAuditLogRepository, IImageTranscoder)
+│   └── Embeddings/          — ModelUnavailableException (kept on Core as part of the embedding contract)
+│
+├── BeeMemoryBank.Embeddings/ — ONNX-backed embedding generator + tokenizer + projection matrix.
+│                                Wave 2 A2 carved this out of Core so mobile / CLI / library consumers
+│                                pay only for the embedding surface they actually use.
+│   ├── OnnxEmbeddingGenerator, XlmRobertaTokenizer, ModelManager, ModelManifest, ModelResolution,
+│   ├── EmbeddingModelWiring, EmbeddingProjectionService, HybridSearchService, ArticleChunker,
+│   ├── ProjectionMatrix, Int8Quantizer,
+│   ├── Models/sentencepiece.bpe.model  (embedded)
+│   └── DependencyInjection    — AddOnnxEmbeddings / AddEmbeddingServices (HybridSearchService moved here)
+│
+├── BeeMemoryBank.Infrastructure/ — ACME, mDNS, DPAPI, UPnP, firewall, local CA. Carved out of
+│                                    Core in wave 2 A2 so hosts that only need the kernel no longer pull
+│                                    any of these.
+│   ├── Acme/                 — AcmeCertificateService, AcmeChallengePersister, AcmeDirectories, TlsAlpn*…
+│   ├── Mdns/                 — MdnsAnnouncer (+Options), MdnsBrowser, MdnsConstants, MdnsNodeRecord
+│   ├── Ddns/                 — DdnsUpdater, CloudflareProvider/Config, DesecProvider/Config, DuckDnsProvider/Config
+│   ├── Network/              — StaticExternalIpProvider, UpnpExternalIpProvider, FirewallService
+│   ├── OsAutoUnlock/         — OsAutoUnlockService (DPAPI-backed, Windows-only)
+│   ├── Tls/                  — LocalCaService (Windows trust store + DPAPI leaf/CA keys)
+│   └── DependencyInjection    — AddMdnsBrowser / AddMdnsAnnouncer
+│
+├── BeeMemoryBank.Media/     — ImageSharp transcoder + AddImageTranscoder(). Carved out of
+│                                Infrastructure so consumers that only need transcoding (Mobile, Api)
+│                                do not pull ACME / mDNS / DPAPI through the larger project.
+│   └── ImageSharpImageTranscoder (the only consumer of the IImageTranscoder interface)
 │
 ├── BeeMemoryBank.Crypto/    — Cryptographic primitives (~450 LOC)
 │   └── AesGcmHelper, MasterKeyManager, DekManager, Ed25519Signer, KeyDerivation, ArticleEncryptor,
@@ -109,15 +134,18 @@ mobile/
 ## Module Dependencies (unidirectional)
 
 ```
-Core ← Storage
 Core ← Crypto
-Core, Storage, Crypto ← Sync
-Core, Storage, Crypto, Sync ← Api
-Core, Storage, Sync ← Cli
-Core ← Web (shared DTO/enums only; no business logic)
+Core ← Search
+Core ← Embeddings   (Embeddings owns IEmbeddingGenerator's concrete impl + ProjectionMatrix + HybridSearchService; Core stays free of ONNX/Tokenizers)
+Core ← Infrastructure  (Infrastructure owns the ACME/mDNS/ImageSharp/DPAPI/UPnP/firewall/local-CA surface; Core stays free of all of those)
+Core, Embeddings, Infrastructure, Storage, Crypto ← Sync
+Core, Embeddings, Infrastructure, Storage, Crypto, Sync ← Api
+Core, Embeddings, Infrastructure, Storage, Sync ← Cli
+Core, Embeddings, Infrastructure ← Web
+Core, Embeddings, Infrastructure, Storage, Crypto, Sync ← Mobile
 ```
 
-No circular dependencies. Core is the kernel with no external dependencies.
+No circular dependencies. After wave 2 A2 Core no longer references ONNX, ACME, mDNS, DPAPI, ImageSharp or Makaretu.Dns.Multicast — every consumer that needs them now depends on Embeddings (for ONNX/Tokenizers) or Infrastructure (for the rest), keeping the kernel light.
 
 ## Node Topology
 

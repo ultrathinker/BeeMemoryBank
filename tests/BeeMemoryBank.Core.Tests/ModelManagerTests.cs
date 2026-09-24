@@ -1,6 +1,6 @@
 using System.IO;
 using System.Security.Cryptography;
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using FluentAssertions;
 using Xunit;
 

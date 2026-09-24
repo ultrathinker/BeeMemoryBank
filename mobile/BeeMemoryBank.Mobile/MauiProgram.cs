@@ -1,7 +1,8 @@
 using BeeMemoryBank.Core;
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
@@ -64,6 +65,7 @@ public static class MauiProgram
             .AddStorage(dbPath)
             .AddCore()
             .AddSync()
+            .AddImageTranscoder()
             .AddSingleton(new MediaStorageOptions(mediaDir))
             .AddSingleton<SyncNotificationService>()
             .AddSingleton<SyncStatusService>()

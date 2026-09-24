@@ -2,6 +2,7 @@ using System.IO.Compression;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -57,7 +58,7 @@ public class ZipExportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), _session, blobRepo);
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo,
             new NullLamportClock(), mediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), _factory,
-            blobRepo: blobRepo);
+            new ImageSharpImageTranscoder(), blobRepo: blobRepo);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(), mediaRepo, _folderRepo,
@@ -168,7 +169,7 @@ public class ZipExportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), otherSession, otherBlobRepo);
         var otherMediaService = new MediaService(otherMediaRepo, otherArticleRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), otherMediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), otherVaultFactory,
-            blobRepo: otherBlobRepo);
+            new ImageSharpImageTranscoder(), blobRepo: otherBlobRepo);
         var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
             otherVersionRepo, new NullActorProvider(), otherConceptTagService, otherVaultFactory);
@@ -235,7 +236,7 @@ public class ZipExportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), otherSession, otherBlobRepo);
         var otherMediaService = new MediaService(otherMediaRepo, otherArticleRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), otherMediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), otherVaultFactory,
-            blobRepo: otherBlobRepo);
+            new ImageSharpImageTranscoder(), blobRepo: otherBlobRepo);
         var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
             otherVersionRepo, new NullActorProvider(), otherConceptTagService, otherVaultFactory);

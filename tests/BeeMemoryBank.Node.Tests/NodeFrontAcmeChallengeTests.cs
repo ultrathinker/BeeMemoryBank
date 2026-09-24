@@ -12,7 +12,8 @@ using Microsoft.AspNetCore.Hosting;
 using Xunit;
 using FluentAssertions;
 using BeeMemoryBank.Core.Services;
-using BeeMemoryBank.Core.Services.Acme;
+using BeeMemoryBank.Infrastructure.Acme;
+using BeeMemoryBank.Infrastructure.Tls;
 using BeeMemoryBank.Hosting;
 using Certes;
 

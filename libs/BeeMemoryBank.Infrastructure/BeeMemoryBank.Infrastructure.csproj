@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ACME / mDNS / DPAPI surface. ImageSharp and AddImageTranscoder moved to
+         BeeMemoryBank.Media so consumers that only need image transcoding (the Mobile MAUI
+         app) don't pull in any of these packages. -->
+    <PackageReference Include="Certes" />
+    <PackageReference Include="Makaretu.Dns.Multicast" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+</Project>

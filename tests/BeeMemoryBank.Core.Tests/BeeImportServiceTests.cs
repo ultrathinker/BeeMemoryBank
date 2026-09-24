@@ -4,6 +4,7 @@ using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using SixLabors.ImageSharp;
@@ -58,7 +59,7 @@ public class BeeImportServiceTests : IAsyncLifetime
         Directory.CreateDirectory(TempMediaDir);
         MediaService = new MediaService(mediaRepo, articleRepo, Session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(),
-            new MediaStorageOptions(TempMediaDir), Factory);
+            new MediaStorageOptions(TempMediaDir), Factory, new ImageSharpImageTranscoder());
 
         ImportService = new BeeImportService(ArticleService, MediaService, folderRepo, nodeRepo);
 

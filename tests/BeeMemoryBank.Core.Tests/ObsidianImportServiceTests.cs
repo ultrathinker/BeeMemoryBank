@@ -4,6 +4,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using SixLabors.ImageSharp;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 
@@ -51,7 +52,7 @@ public class ObsidianImportServiceTests : IAsyncLifetime
         Directory.CreateDirectory(TempMediaDir);
         MediaService = new MediaService(mediaRepo, articleRepo, Session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(),
-            new MediaStorageOptions(TempMediaDir), Factory);
+            new MediaStorageOptions(TempMediaDir), Factory, new ImageSharpImageTranscoder());
 
         FolderRepo = folderRepo;
         ImportService = new ObsidianImportService(ArticleService, MediaService);

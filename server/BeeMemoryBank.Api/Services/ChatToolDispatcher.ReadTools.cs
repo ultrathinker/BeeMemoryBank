@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 

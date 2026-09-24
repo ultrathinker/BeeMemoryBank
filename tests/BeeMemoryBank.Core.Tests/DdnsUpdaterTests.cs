@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.Ddns;
 
 namespace BeeMemoryBank.Core.Tests;
 

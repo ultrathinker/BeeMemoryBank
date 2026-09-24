@@ -4,6 +4,7 @@ using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.OsAutoUnlock;
 
 namespace BeeMemoryBank.Api.Endpoints;
 

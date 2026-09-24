@@ -1,4 +1,4 @@
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Crypto;
 
 namespace BeeMemoryBank.Core.Tests;

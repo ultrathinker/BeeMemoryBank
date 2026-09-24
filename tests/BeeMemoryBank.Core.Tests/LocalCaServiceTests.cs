@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.Tls;
 using Xunit.Abstractions;
 
 namespace BeeMemoryBank.Core.Tests;

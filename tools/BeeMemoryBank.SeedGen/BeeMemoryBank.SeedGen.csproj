@@ -18,6 +18,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <!-- AddOnnxEmbeddings now lives here. ConceptTagService needs IEmbeddingGenerator,
+         so the seedgen wires it the same way the Migrator and CLI do. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Embeddings\BeeMemoryBank.Embeddings.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
   </ItemGroup>
@@ -33,10 +36,11 @@
   <!-- model.onnx is NOT required by the generator itself (it never produces embeddings), but
        AddOnnxEmbeddings must resolve a generator because ConceptTagService takes one as a
        constructor dependency. The model file is gitignored (~87MB) and downloaded separately in CI;
-       the content include is conditional so the build never depends on it being present. -->
+       the content include is conditional so the build never depends on it being present.
+       model directory moved to Embeddings/Models. -->
   <ItemGroup>
-    <Content Include="..\..\libs\BeeMemoryBank.Core\Embeddings\Models\model.onnx"
-             Condition="Exists('..\..\libs\BeeMemoryBank.Core\Embeddings\Models\model.onnx')">
+    <Content Include="..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx"
+             Condition="Exists('..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>model.onnx</Link>
     </Content>

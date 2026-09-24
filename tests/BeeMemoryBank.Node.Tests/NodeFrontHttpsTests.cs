@@ -13,6 +13,7 @@ using Xunit;
 using FluentAssertions;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Hosting;
+using BeeMemoryBank.Infrastructure.Tls;
 using BeeMemoryBank.Node;
 
 namespace BeeMemoryBank.Node.Tests;

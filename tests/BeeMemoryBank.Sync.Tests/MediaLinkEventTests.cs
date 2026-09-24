@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using MediaModel = BeeMemoryBank.Core.Models.Media;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
 
@@ -138,7 +139,7 @@ public class MediaLinkEventTests : IAsyncLifetime
         var ciphertext = System.Text.Encoding.UTF8.GetBytes("item-16a synced media ciphertext");
         var expectedHash = BlobHash.Compute(ciphertext);
 
-        var media = new Media
+        var media = new MediaModel
         {
             Id = mediaId,
             ArticleId = null,

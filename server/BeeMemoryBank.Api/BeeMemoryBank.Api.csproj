@@ -8,6 +8,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.AppPaths\BeeMemoryBank.AppPaths.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <!-- AddMdnsAnnouncer + AcmeCertificateService + StoredCertificate come from Infrastructure; the
+         ImageSharp IImageTranscoder comes from the smaller Media project so consumers that only
+         need transcoding don't pull ACME/mDNS/DPAPI. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Infrastructure\BeeMemoryBank.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Media\BeeMemoryBank.Media.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Embeddings\BeeMemoryBank.Embeddings.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Hosting.AspNetCore\BeeMemoryBank.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
@@ -27,9 +33,10 @@
     <InternalsVisibleTo Include="BeeMemoryBank.Integration.Tests" />
   </ItemGroup>
 
-  <!-- model.onnx is NOT in git — download separately (see docs/deployment.md) -->
+  <!-- model.onnx is NOT in git — download separately (see docs/deployment.md). The conditional is
+       preserved so a clean clone without the model still builds. -->
   <ItemGroup>
-    <Content Include="..\..\libs\BeeMemoryBank.Core\Embeddings\Models\model.onnx" Condition="Exists('..\..\libs\BeeMemoryBank.Core\Embeddings\Models\model.onnx')">
+    <Content Include="..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx" Condition="Exists('..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>model.onnx</Link>
     </Content>

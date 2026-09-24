@@ -2,6 +2,7 @@ using System.Data;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using MediaModel = BeeMemoryBank.Core.Models.Media;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using Dapper;
@@ -282,7 +283,7 @@ public class ArticleTransactionalityTests : IAsyncLifetime
         var article = await _articleService.CreateAsync("Article With Media", "/media-test", [], "Body text");
 
         // Create media attached to this article
-        var media = new Media
+        var media = new MediaModel
         {
             Id = Guid.NewGuid(),
             ArticleId = article.Id,
@@ -327,7 +328,7 @@ public class ArticleTransactionalityTests : IAsyncLifetime
         await _articleService.ProtectAsync(article.Id, "protectPass", null);
 
         var mediaId = Guid.NewGuid();
-        await _mediaRepo.CreateAsync(new Media
+        await _mediaRepo.CreateAsync(new MediaModel
         {
             Id = mediaId,
             ArticleId = null, // orphan

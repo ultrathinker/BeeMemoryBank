@@ -1,4 +1,4 @@
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -158,6 +158,7 @@ public class ChunkedSemanticSearchRecallTests : IAsyncLifetime
         private static readonly XlmRobertaTokenizer Tokenizer = XlmRobertaTokenizer.LoadDefault();
 
         public int Dimension => 2;
+    public string Version => "fake-v1";
 
         public float[] Generate(string text)
         {

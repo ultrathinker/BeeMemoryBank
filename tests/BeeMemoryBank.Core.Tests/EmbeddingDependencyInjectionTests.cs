@@ -1,4 +1,5 @@
 using System.IO;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using FluentAssertions;

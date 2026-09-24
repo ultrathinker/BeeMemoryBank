@@ -6,7 +6,10 @@ using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Hosting.AspNetCore;
+using BeeMemoryBank.Infrastructure;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -33,7 +36,12 @@ public static class ApiServices
 builder.Services.AddStorage(dataPath);
 builder.Services.AddCore();
 builder.Services.AddMemoryCache();
+// Order matters: AddOnnxEmbeddings must run BEFORE AddSync (AddSync calls AddEmbeddingServices
+// internally, which registers HybridSearchService / EmbeddingProjectionService that depend on
+// IEmbeddingGenerator being present). AddImageTranscoder must run before any scope resolves
+// MediaService.
 builder.Services.AddOnnxEmbeddings(dataPath);
+builder.Services.AddImageTranscoder();
 builder.Services.AddSync();
 builder.Services.AddSingleton<SyncTokenStore>();
 // Per-node, not per-process: see SyncChallengeRateLimiter.
@@ -134,7 +142,7 @@ builder.Services.AddSingleton<BeeMemoryBank.Api.Services.ProtectedUnlockCache>()
 if (OperatingSystem.IsWindows())
 {
     builder.Services.AddSingleton(sp =>
-        new BeeMemoryBank.Core.Services.OsAutoUnlockService(
+        new BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService(
             sp.GetRequiredService<BeeMemoryBank.Core.Interfaces.IKeySlotRepository>(),
             sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
             dataPath));

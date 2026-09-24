@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Encodings.Web;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 using ModelContextProtocol.Server;
 
 namespace BeeMemoryBank.Api.McpTools;

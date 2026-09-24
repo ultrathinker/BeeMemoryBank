@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Hosting;
+using BeeMemoryBank.Infrastructure.Network;
 
 namespace BeeMemoryBank.Node;
 

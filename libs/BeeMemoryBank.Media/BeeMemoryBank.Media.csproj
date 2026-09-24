@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Single dependency: SixLabors.ImageSharp. Everything else (Certes, Makaretu,
+         DPAPI) stays in BeeMemoryBank.Infrastructure, so consumers that only need
+         image transcoding (the Mobile MAUI app, in particular) do not pay for any of
+         those packages. -->
+    <PackageReference Include="SixLabors.ImageSharp" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+</Project>

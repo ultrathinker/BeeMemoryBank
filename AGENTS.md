@@ -11,7 +11,7 @@ something here.
 
 ```bash
 dotnet build BeeMemoryBank.slnx
-dotnet test                          # needs libs/BeeMemoryBank.Core/Embeddings/Models/model.onnx,
+dotnet test                          # needs libs/BeeMemoryBank.Embeddings/Models/model.onnx,
                                       # gitignored (~87MB); build.yml downloads it in CI
 dotnet run --project server/BeeMemoryBank.Api    # port 5300
 dotnet run --project server/BeeMemoryBank.Web    # port 5301, proxies to Api

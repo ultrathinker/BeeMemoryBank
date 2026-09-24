@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using FluentAssertions;
 using Xunit;
 

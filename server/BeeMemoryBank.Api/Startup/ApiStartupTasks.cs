@@ -209,7 +209,7 @@ if (OperatingSystem.IsWindows())
     var autoUnlockLogger = autoUnlockScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     try
     {
-        var autoUnlockSvc = app.Services.GetService<BeeMemoryBank.Core.Services.OsAutoUnlockService>();
+        var autoUnlockSvc = app.Services.GetService<BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService>();
         if (autoUnlockSvc != null)
         {
             var nodeRepo = autoUnlockScope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.INodeIdentityRepository>();

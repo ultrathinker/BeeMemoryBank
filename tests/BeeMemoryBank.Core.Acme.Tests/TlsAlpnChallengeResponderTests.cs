@@ -1,5 +1,5 @@
 using System.Security.Cryptography.X509Certificates;
-using BeeMemoryBank.Core.Services.Acme;
+using BeeMemoryBank.Infrastructure.Acme;
 
 namespace BeeMemoryBank.Core.Acme.Tests;
 

@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Models;
-using BeeMemoryBank.Core; // AddMdnsBrowser (join-wizard LAN node discovery)
+using BeeMemoryBank.Core;
+using BeeMemoryBank.Infrastructure; // AddMdnsBrowser (join-wizard LAN node discovery)
 using BeeMemoryBank.Web.Endpoints;
 using BeeMemoryBank.Web.Models;
 using BeeMemoryBank.Web.Services;

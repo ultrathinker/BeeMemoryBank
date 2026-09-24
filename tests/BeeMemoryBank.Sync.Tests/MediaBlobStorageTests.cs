@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
@@ -60,7 +61,7 @@ public class MediaBlobStorageTests : IAsyncLifetime
         Directory.CreateDirectory(_mediaDir);
 
         _media = new MediaService(_mediaRepo, articleRepo, session, nodeRepo, clock, eventLogger,
-            new MediaStorageOptions(_mediaDir), _factory, logger: null, blobRepo: _blobs);
+            new MediaStorageOptions(_mediaDir), _factory, new ImageSharpImageTranscoder(), logger: null, blobRepo: _blobs);
     }
 
     public Task DisposeAsync()

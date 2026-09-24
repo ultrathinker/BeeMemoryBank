@@ -1,9 +1,11 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.McpTools;
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Media;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
@@ -76,7 +78,7 @@ public class McpAclTests : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(_factory, _scopeHolder);
         _conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
-        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory);
+        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory, new ImageSharpImageTranscoder());
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), _conceptTagService, _factory);
         _indexBuilder = new IndexBuilder();
@@ -894,6 +896,7 @@ public class McpAclTests : IAsyncLifetime
     private sealed class ConstantEmbeddingGenerator : IEmbeddingGenerator
     {
         public int Dimension => 384;
+    public string Version => "fake-v1";
         public float[] Generate(string text) => Enumerable.Repeat(1f, Dimension).ToArray();
     }
 }

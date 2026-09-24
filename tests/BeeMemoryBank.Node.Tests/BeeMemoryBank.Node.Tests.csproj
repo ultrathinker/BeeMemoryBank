@@ -5,6 +5,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\desktop\BeeMemoryBank.Node\BeeMemoryBank.Node.csproj" />
+    <!-- NodeFront tests instantiate LocalCaService directly (it's no longer on
+         Core). The SUT (BeeMemoryBank.Node) already references Infrastructure transitively, so
+         this project does not need a direct ref. -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Hosting\BeeMemoryBank.Hosting.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Node.Tests.StubProcess\BeeMemoryBank.Node.Tests.StubProcess.csproj" />
   </ItemGroup>

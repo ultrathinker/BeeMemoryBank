@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.Versioning;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.Network;
 
 namespace BeeMemoryBank.Core.Tests;
 

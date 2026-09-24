@@ -9,7 +9,10 @@ public class ConceptTagService(
     IEmbeddingGenerator embeddingGenerator,
     IEventLogger eventLogger)
 {
-    private const string ModelVersion = OnnxEmbeddingGenerator.Version;
+    // Read through the interface (not OnnxEmbeddingGenerator.Version directly) so this Core
+    // service does not need to reference the embedding implementation project for a string
+    // constant. The interface property is implemented by OnnxEmbeddingGenerator.
+    private string ModelVersion => embeddingGenerator.Version;
 
     public async Task<List<ConceptTagInfo>> ListAsync(string? filter, int limit = 100, int offset = 0)
     {
