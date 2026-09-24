@@ -91,28 +91,56 @@ public class KeyDerivationFairnessTests
     [Fact]
     public void LargeRequest_IsNotStarvedBySmallOnes()
     {
-        // A stream of default-cost derivations must not keep a larger one waiting until it times out:
-        // the gate is FIFO once anyone waits.
-        var budgetUnits = (int)(KeyDerivation.MemoryBudgetKiB / 65_536);
-        if (budgetUnits < 2) return; // nothing to starve on a 2-unit host with 128 MiB requests clamped
-
-        using var cts = new CancellationTokenSource();
-        var small = Enumerable.Range(0, budgetUnits).Select(_ => Task.Run(() =>
+        // The whole budget is held as 1-unit reservations. A 2-unit request queues first, then a
+        // 1-unit one. Freeing a single unit must NOT let the later small request jump the queue;
+        // freeing a second must admit the large one before the small one.
+        var capacity = (int)(KeyDerivation.MemoryBudgetKiB / 65_536);
+        var held = new List<IDisposable>();
+        var order = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        Task? large = null, small = null;
+        try
         {
-            while (!cts.IsCancellationRequested)
-            {
-                try { KeyDerivation.DeriveKek("p", KeyDerivation.GenerateSalt(), memory: 65_536, iterations: 1, parallelism: 1); }
-                catch (KdfBusyException) { }
-            }
-        })).ToArray();
+            for (var i = 0; i < capacity; i++) held.Add(KeyDerivation.HoldUnitsForTests(1));
 
-        Thread.Sleep(200);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var act = () => KeyDerivation.DeriveKek("p", KeyDerivation.GenerateSalt(),
-            memory: 65_536 * Math.Min(4, budgetUnits), iterations: 1, parallelism: 1);
-        act.Should().NotThrow<KdfBusyException>();
-        cts.Cancel();
-        Task.WaitAll(small);
-        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(20));
+            large = Task.Run(() => { using (KeyDerivation.HoldUnitsForTests(2)) order.Enqueue("large"); });
+            WaitUntil(() => KeyDerivation.WaitingForTests == 1);
+            small = Task.Run(() => { using (KeyDerivation.HoldUnitsForTests(1)) order.Enqueue("small"); });
+            WaitUntil(() => KeyDerivation.WaitingForTests == 2);
+
+            Release(held, 1);
+            Thread.Sleep(200);
+            order.Should().BeEmpty("one free unit is not enough for the head, and nobody may overtake it");
+            KeyDerivation.WaitingForTests.Should().Be(2);
+
+            Release(held, 1);
+            Task.WaitAll([large, small], TimeSpan.FromSeconds(10)).Should().BeTrue();
+            order.Should().Equal("large", "small");
+        }
+        finally
+        {
+            Release(held, held.Count);
+            // Bounded: never leave a stuck waiter holding the static gate for the next test.
+            if (large is not null) large.Wait(TimeSpan.FromSeconds(35));
+            if (small is not null) small.Wait(TimeSpan.FromSeconds(35));
+        }
+    }
+
+    private static void Release(List<IDisposable> held, int count)
+    {
+        for (var i = 0; i < count && held.Count > 0; i++)
+        {
+            held[^1].Dispose();
+            held.RemoveAt(held.Count - 1);
+        }
+    }
+
+    private static void WaitUntil(Func<bool> condition)
+    {
+        var deadline = Environment.TickCount64 + 10_000;
+        while (!condition())
+        {
+            if (Environment.TickCount64 > deadline) throw new TimeoutException("gate never reached the expected state");
+            Thread.Sleep(10);
+        }
     }
 }

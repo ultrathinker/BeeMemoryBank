@@ -79,6 +79,28 @@ public static class KeyDerivation
         return new SaturationRelease();
     }
 
+    /// <summary>Test hook: takes <paramref name="units"/> through the normal gate until disposed.</summary>
+    internal static IDisposable HoldUnitsForTests(int units)
+    {
+        AcquireUnits(units);
+        return new UnitsRelease(units);
+    }
+
+    /// <summary>Test hook: how many callers are queued in the gate right now.</summary>
+    internal static int WaitingForTests
+    {
+        get { lock (GateLock) return Waiters.Count; }
+    }
+
+    private sealed class UnitsRelease(int units) : IDisposable
+    {
+        private int _done;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _done, 1) == 0) ReleaseUnits(units);
+        }
+    }
+
     private sealed class SaturationRelease : IDisposable
     {
         private int _done;
