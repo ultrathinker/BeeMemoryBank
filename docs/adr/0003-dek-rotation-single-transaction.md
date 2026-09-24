@@ -111,5 +111,9 @@ need to fall back to the prior state.
   under a node data key (`tbl_node_data_key`, migration 026) whose wrapped form lives in the vault
   database and is re-wrapped inside this same transaction; the data itself never needs touching.
   Anything still sealed directly under the master DEK is moved onto that key by an
-  `IDekRotationHook` immediately before the transaction starts (best-effort by design — a failure
-  there must not leave a peer stranded on a retired DEK).
+  `IDekRotationHook` before the transaction starts. The hook is mandatory: if anything is left
+  unmoved the rotation stops before the transaction with nothing changed (a peer keeps it pending
+  and retries on the next unlock), because committing would make that data unreadable after a
+  restart.
+- **Remote-account tokens** (`tbl_remote_account`) live in the vault database and are re-encrypted
+  inside the same transaction.

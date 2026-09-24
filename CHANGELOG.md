@@ -161,7 +161,12 @@ revoke rows that predate the row-versioning migration above and never got their 
   rotation transaction on the initiator and on peers. Existing rows are migrated in the background
   (and forcibly right before every rotation); until then they still open with the current or a
   retired Master DEK. A restored database whose chat key no longer matches chat.db degrades to
-  placeholders rather than errors.
+  placeholders rather than errors. The pre-rotation move is mandatory: if any chat record is still
+  under the Master DEK (or the move fails) the rotation refuses to start — a 400 at propose, or on a
+  peer the rotation stays pending and is retried on the next unlock.
+- **Remote-account tokens were broken by every rotation.** `tbl_remote_account` bearer tokens are
+  sealed directly under the Master DEK and were never re-encrypted; they are now re-encrypted inside
+  the rotation transaction.
 
 #### Security review findings, 2026-09-03/04: key material, node reset, chat history, write races
 

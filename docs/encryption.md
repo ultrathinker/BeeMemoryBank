@@ -325,6 +325,8 @@ The accept phase:
      by name, rather than a bare pass/fail.
    - Re-wraps every node data key in `tbl_node_data_key` (see "Node data keys" below) — the only
      thing chat.db needs from a rotation.
+   - Re-encrypts every remote-account bearer token (`tbl_remote_account.encrypted_token`, sealed
+     directly under the Master DEK by `RemoteAccountService`) under the new DEK.
    - Deletes the `tbl_agent` rows that carry a wrapped Master DEK (`encrypted_dek IS NOT NULL` —
      superadmin-owned auto-unlock agents): their wrap is keyed by the plaintext API key, which the
      server never stores, so it cannot be re-wrapped; they must be re-issued. Every other agent holds
@@ -337,10 +339,18 @@ The accept phase:
 5. Swaps the in-memory Master DEK in `SessionService`.
 6. Runs a post-rotation compaction (log cleanup, non-fatal if it fails).
 
-Immediately before step 4, every registered `IDekRotationHook` runs while the session still holds
-the old DEK. The Api's hook moves any chat.db row still sealed directly under the Master DEK onto
-the node chat key, so nothing in chat.db is left under the retiring DEK when the transaction commits.
-The same hook runs on the peer auto-accept path.
+Every registered `IDekRotationHook` runs while the session still holds the old DEK — once at
+propose (before any event is published) and again immediately before step 4. The Api's hook moves
+any chat.db row still sealed directly under the Master DEK onto the node chat key, then re-counts and
+requires zero such rows. Hooks are **mandatory**: any failure (vault locked, an I/O error, rows left
+over) aborts with `DekRotationPreconditionException` before the transaction opens, with nothing
+changed. On the initiator that is a 400 from propose (nothing published) or a Failed accept; on a
+peer the rotation stays `Committing` — not `Failed`, which nothing retries — and is retried on the
+next unlock, without the post-apply sweep re-dispatching it in a loop.
+
+**Not carried by a rotation, by design:** `bee_continue` continuation files (`McpResponseManager`,
+temp files sealed under the Master DEK). They expire after 24 hours; one written before a rotation
+simply answers "could not decrypt — re-run the original tool call" afterwards.
 
 **Why a single transaction?** A partial state where some rows genuinely needing a rewrap end up
 split between the old and new DEK is unrecoverable — the sentinel can only verify one DEK. Atomic
