@@ -517,7 +517,7 @@ DEK rotation uses the same peer-acceptance pattern as snapshot restore (see "Res
 
 **Auto-accept toggle:** `tbl_whitelist.auto_accept_dek_rotation` — a per-peer boolean flag (default: false). Set via the Admin UI or `POST /api/whitelist/{nodeId}/auto-accept-dek-rotation`.
 
-- **Auto-accept enabled:** when the COMMIT event arrives, `EventApplier` fires `IDekRotationApplier.AutoAcceptCommitAsync()` in the background. The peer applies the full destructive re-wrap (all DEK columns, agent deletion, sentinel update) without human intervention. If the session is locked at the time, auto-accept is deferred and retried on the next unlock (`RetryPendingAutoAcceptsAsync`).
+- **Auto-accept enabled:** when the COMMIT event arrives, `EventApplier` fires `IDekRotationApplier.AutoAcceptCommitAsync()` in the background. The peer applies the full destructive re-wrap (all DEK columns, node data keys, removal of agents that carry a wrapped Master DEK, sentinel update) without human intervention. If the session is locked at the time, auto-accept is deferred and retried on the next unlock (`RetryPendingAutoAcceptsAsync`).
 - **Auto-accept disabled:** the COMMIT is recorded in `tbl_dek_rotation_state` as `Committing`. The Admin UI shows a pending banner with Apply (`POST /api/dek-rotation/peer-accept/{id}`) and Reject (`POST /api/dek-rotation/peer-reject/{id}`) buttons. A pending list is available via `GET /api/dek-rotation/peer-pending`.
 
 **Reject:** marks the rotation as `Rejected`. The peer's DEK diverges from the network — it can no longer decrypt new events. The peer must eventually accept a rotation or be re-joined.
@@ -537,7 +537,7 @@ After a peer rotates its DEK but before this node has accepted, the sentinel val
 
 ### Lazy Slot Rewrap After Peer Auto-Accept
 
-When a peer auto-accepts a rotation, the destructive part on the PEER side keeps all user key slots intact (still wrapped with the old DEK) and only deletes `tbl_agent` rows and `recovery`-type slots. The initiator-side flow is different — there, all OTHER user slots are dropped because the initiator's local users are the canonical set. On the peer, a user's slot stays around so that on the next login, lazy rewrap can migrate it transparently:
+When a peer auto-accepts a rotation, the destructive part on the PEER side keeps all user key slots intact (still wrapped with the old DEK) and only deletes the `tbl_agent` rows that carry a wrapped Master DEK (auto-unlock agents) and `recovery`/`os_auto_unlock` slots. The initiator-side flow is different — there, all OTHER user slots are dropped because the initiator's local users are the canonical set. On the peer, a user's slot stays around so that on the next login, lazy rewrap can migrate it transparently:
 
 1. The system detects the sentinel doesn't match the DEK derived from the user's password.
 2. `LazySlotRewrapService` walks `tbl_dek_rotation_state.Applied` rows chronologically.

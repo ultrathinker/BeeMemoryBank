@@ -146,6 +146,23 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### DEK rotation no longer destroys agent keys and chat.db it has no reason to touch (2026-09-24)
+
+- **Every agent key was deleted on every rotation.** The rewrap ran `DELETE FROM tbl_agent`, on the
+  initiator and on every auto-accepting peer — so on a shared node every teammate's MCP client was
+  silently disconnected. Only agents that carry a wrapped Master DEK (superadmin-owned auto-unlock
+  agents) are now removed and must be re-issued; every other agent holds no key material and keeps
+  working. The progress/audit texts, the MCP "agent key not recognized" message and the Admin
+  rotation dialog say so.
+- **Chat history, attachments and stored LLM provider keys became undecryptable after a rotation.**
+  chat.db is a separate file the rotation transaction cannot reach, and its rows were sealed
+  directly under the Master DEK. They are now sealed under a node chat key whose wrapped form lives
+  in the new node-local `tbl_node_data_key` table (migration 026) and is re-wrapped inside the
+  rotation transaction on the initiator and on peers. Existing rows are migrated in the background
+  (and forcibly right before every rotation); until then they still open with the current or a
+  retired Master DEK. A restored database whose chat key no longer matches chat.db degrades to
+  placeholders rather than errors.
+
 #### Security review findings, 2026-09-03/04: key material, node reset, chat history, write races
 
 - **Critical: a recovery key's own bytes were its key slot's salt.** `AddRecoveryKeyAsync` derived

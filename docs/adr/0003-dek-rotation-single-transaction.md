@@ -100,3 +100,16 @@ need to fall back to the prior state.
 - The pre-rotation snapshot is the only supported way to walk back a rotation that committed
   successfully; there is no in-place "undo rotation" operation once the transaction has
   committed and the in-memory DEK has been swapped.
+
+## Amendment (2026-09-24): what the transaction does and does not need to touch
+- **Agents.** The transaction deletes only the `tbl_agent` rows that carry a wrapped master DEK
+  (`encrypted_dek IS NOT NULL`, i.e. superadmin-owned auto-unlock agents). Every other agent holds
+  no key material and is left alone; deleting them too disconnected every ordinary user's MCP
+  client on every rotation for no cryptographic reason.
+- **Data outside the vault database.** The single-transaction guarantee cannot extend to another
+  SQLite file, which is why chat.db used to be orphaned by every rotation. Such data is now sealed
+  under a node data key (`tbl_node_data_key`, migration 026) whose wrapped form lives in the vault
+  database and is re-wrapped inside this same transaction; the data itself never needs touching.
+  Anything still sealed directly under the master DEK is moved onto that key by an
+  `IDekRotationHook` immediately before the transaction starts (best-effort by design — a failure
+  there must not leave a peer stranded on a retired DEK).

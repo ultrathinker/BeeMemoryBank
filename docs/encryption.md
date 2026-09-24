@@ -154,6 +154,44 @@ ed25519_private_key_v:  INT  -- 0 or 1
 
 **Migration:** `UpgradePrivateKeyToV1Async` runs on every successful unlock — fresh nodes are always created v=1 (`InitializationService` and the mobile `NodeSetupService.JoinAsync` both call `NodeIdentityCrypto.EncryptPrivateKey` before persist). Legacy v=0 nodes get upgraded the first time the user unlocks. The `SignWithIdentity` helper dispatches by `Ed25519PrivateKeyV`.
 
+### Node data keys (`tbl_node_data_key`) and chat.db
+
+Data a host keeps **outside** `beememorybank.db` is sealed under a random 32-byte *node data key*
+rather than under the Master DEK, and only the wrapped key lives in the vault database (migration
+026):
+
+```sql
+key_name:    TEXT  -- primary key; 'chat' is the Api's chat.db key
+wrapped_key: BLOB  -- DekManager.WrapDek framing, AAD = "bmb-node-data-key-v1:" || key_name
+iv:          BLOB  -- 12 bytes
+created_at:  TEXT
+```
+
+**Why:** chat.db (AI chat transcripts, tool-call arguments, attachments, stored LLM provider keys) is
+a separate SQLite file. DEK rotation is one transaction in the vault database and cannot re-encrypt
+another file, so chat rows sealed directly under the Master DEK became permanently undecryptable
+after every rotation. Now the rotation re-wraps each `tbl_node_data_key` row inside its transaction
+(initiator and peer alike) and chat.db is never touched: the chat key itself never changes.
+
+**Row markers in chat.db.** Every ciphertext column has a sibling key-version column
+(`content_key_v`, `tool_calls_key_v`, `chat_attachment.key_v`, `chat_api_key.key_v`): `1` = chat
+key; `NULL` = legacy (Master-DEK ciphertext, or plaintext from before chat encryption); `-1` = legacy
+ciphertext that no available Master DEK opened when it was migrated (left intact, never rescanned).
+`ChatHistoryBackfillProcessor` moves legacy rows onto the chat key in the background, and
+`ChatDekRotationHook` runs the same migration to completion right before every rotation. Until a
+row is moved, readers open it with the current or a retired Master DEK.
+
+**Node-local.** Never synced, not in `SnapshotTables.Replicated` (so a peer/join package carries an
+empty table — a joiner creates its own key), wiped by a node reset. The unwrapped chat key is cached
+in memory while unlocked and wiped on `SessionService.Locked`.
+
+**Restores.** A local snapshot restore brings back the key row as it was when the snapshot was
+taken — the same key if the snapshot post-dates its creation. Restoring a snapshot from before the
+key existed (or a database whose key row is damaged) makes the Api create a fresh key on next use;
+chat rows sealed under the previous key then read as `[unable to decrypt …]` placeholders (blank
+attachments, skipped provider keys) instead of failing. A network restore only imports replicated
+tables, so the local key row survives it.
+
 ### Sentinel (`tbl_node_identity.sentinel_value`)
 
 ```sql
@@ -285,7 +323,12 @@ The accept phase:
      silently relabelled `v1` and permanently corrupted. Uses keyset pagination (500 rows/batch) for
      linear performance. A completion tally reports rewrapped / already-on-new-key / unreadable counts
      by name, rather than a bare pass/fail.
-   - Deletes all rows from `tbl_agent` (agents hold DEKs encrypted with the old Master DEK; the server cannot re-wrap them without the plaintext API keys).
+   - Re-wraps every node data key in `tbl_node_data_key` (see "Node data keys" below) — the only
+     thing chat.db needs from a rotation.
+   - Deletes the `tbl_agent` rows that carry a wrapped Master DEK (`encrypted_dek IS NOT NULL` —
+     superadmin-owned auto-unlock agents): their wrap is keyed by the plaintext API key, which the
+     server never stores, so it cannot be re-wrapped; they must be re-issued. Every other agent holds
+     no key material (`Agent.CanAutoUnlock` is false) and keeps working unchanged.
    - Re-wraps the initiator's key slot with the new DEK. **Deletes all other key slots** (users must re-register).
    - Deletes recovery-type key slots.
    - Persists the chain material `LazySlotRewrapService` needs to walk this rotation later (see below), inside the same transaction that marks the rotation `Applied`.
@@ -293,6 +336,11 @@ The accept phase:
    - Marks the rotation state as `APPLIED` inside the same transaction.
 5. Swaps the in-memory Master DEK in `SessionService`.
 6. Runs a post-rotation compaction (log cleanup, non-fatal if it fails).
+
+Immediately before step 4, every registered `IDekRotationHook` runs while the session still holds
+the old DEK. The Api's hook moves any chat.db row still sealed directly under the Master DEK onto
+the node chat key, so nothing in chat.db is left under the retiring DEK when the transaction commits.
+The same hook runs on the peer auto-accept path.
 
 **Why a single transaction?** A partial state where some rows genuinely needing a rewrap end up
 split between the old and new DEK is unrecoverable — the sentinel can only verify one DEK. Atomic
@@ -328,7 +376,7 @@ During login, the sentinel is used to detect whether the user's key slot is wrap
 
 ### Lazy Slot Rewrap
 
-When DEK rotation completes on a peer node via auto-accept (or manual peer-accept), the peer's existing user key slots remain in place but are still wrapped with the old DEK. **Only `tbl_agent` rows and `recovery`-type slots are deleted** on the peer — user slots are deliberately preserved so that on the next login, lazy rewrap can transparently migrate them to the new DEK. (Initiator-side acceptance is different: there, all OTHER user slots are dropped because the initiator's local users are the canonical set.) When a peer's user logs in after auto-accept, the system detects a sentinel mismatch:
+When DEK rotation completes on a peer node via auto-accept (or manual peer-accept), the peer's existing user key slots remain in place but are still wrapped with the old DEK. **Only DEK-bearing `tbl_agent` rows (auto-unlock agents) and `recovery`/`os_auto_unlock` slots are deleted** on the peer — user slots are deliberately preserved so that on the next login, lazy rewrap can transparently migrate them to the new DEK. (Initiator-side acceptance is different: there, all OTHER user slots are dropped because the initiator's local users are the canonical set.) When a peer's user logs in after auto-accept, the system detects a sentinel mismatch:
 
 - `LazySlotRewrapService.TryRewrapAsync()` walks `tbl_dek_rotation_state` rows with state `Applied`, sorted by creation time.
 - For each rotation, it unwraps the next DEK from the commit event payload using the current candidate DEK.
