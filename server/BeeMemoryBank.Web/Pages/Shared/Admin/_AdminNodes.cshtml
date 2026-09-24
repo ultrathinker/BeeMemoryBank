@@ -1,0 +1,325 @@
+@using System.Text.Json
+@model BeeMemoryBank.Web.Pages.AdminModel
+
+<!-- Node Identity -->
+<h3 style="margin-bottom:12px;"><sl-icon name="fingerprint"></sl-icon> Node Identity</h3>
+@if (Model.Identity != null)
+{
+    <div class="card" style="margin-bottom:32px;">
+        <div class="article-meta">
+            <span><strong>ID:</strong>
+                <span class="article-id-badge" title="Click to copy" data-bmb-copy="@Model.Identity.NodeId">
+                    @Model.Identity.NodeId
+                </span>
+            </span>
+            <span><strong>Name:</strong> @Model.Identity.DisplayName</span>
+        </div>
+        <div style="margin-top:12px;">
+            <label style="font-size:0.85rem;color:var(--text-secondary);">Ed25519 Public Key</label>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <code style="font-size:0.78rem;word-break:break-all;flex:1;" id="pubkey-val">@Model.Identity.Ed25519PublicKeyB64</code>
+                <sl-icon-button id="btn-copy-pubkey" name="clipboard" label="Copy"></sl-icon-button>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <sl-alert variant="warning" open style="margin-bottom:32px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Could not retrieve node identity. Check API connection.
+    </sl-alert>
+}
+
+<!-- Internet Access — shortcut to the DDNS + HTTPS + reachability wizard -->
+<h3 style="margin-bottom:12px;"><sl-icon name="globe"></sl-icon> Internet Access</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Expose this node over the internet: port forwarding, dynamic DNS, a Let's Encrypt HTTPS
+        certificate, and a reachability self-test (with a CGNAT diagnosis). Configure it in the
+        dedicated wizard.
+    </p>
+    <sl-button variant="primary" size="small" href="/InternetAccess">
+        <sl-icon slot="prefix" name="globe"></sl-icon> Open Internet Access wizard
+    </sl-button>
+</div>
+
+<!-- Software Updates -->
+<h3 style="margin-bottom:12px;"><sl-icon name="arrow-up-circle"></sl-icon> Software Updates</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+    <p style="margin:0 0 12px;">
+        Current version: <strong>v@(Model.CurrentVersion ?? "unknown")</strong>
+    </p>
+
+    @if (Model.UpdateStatus is { } st)
+    {
+        var step = st.TryGetProperty("currentStep", out var cs) && cs.ValueKind == JsonValueKind.String ? cs.GetString() : "Idle";
+        var availableVersion = st.TryGetProperty("availableVersion", out var av) && av.ValueKind == JsonValueKind.String ? av.GetString() : null;
+        var percentageComplete = st.TryGetProperty("percentageComplete", out var pc) && pc.ValueKind == JsonValueKind.Number ? pc.GetInt32() : 0;
+        var statusMessage = st.TryGetProperty("statusMessage", out var sm) && sm.ValueKind == JsonValueKind.String ? sm.GetString() : null;
+        var errorMessage = st.TryGetProperty("errorMessage", out var em) && em.ValueKind == JsonValueKind.String ? em.GetString() : null;
+        var isUpdating = step == "Checking" || step == "Downloading" || step == "Applying";
+
+        List<string> blockedGates = new();
+        if (st.TryGetProperty("blockedGates", out var bg) && bg.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in bg.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                    blockedGates.Add(item.GetString()!);
+            }
+        }
+
+        <div style="margin-bottom:16px;">
+            <strong>State:</strong> <sl-badge id="update-state-badge" variant="@(step == "Failed" ? "danger" : (step == "Completed" ? "success" : (step == "Idle" ? "neutral" : "primary")))">@step</sl-badge>
+        </div>
+
+        @if (percentageComplete > 0 && percentageComplete <= 100)
+        {
+            <div style="margin-bottom:16px;">
+                <sl-progress-bar value="@percentageComplete" style="margin-top:8px;"></sl-progress-bar>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(statusMessage))
+        {
+            <p class="text-muted" style="margin-top:4px;margin-bottom:12px;">@statusMessage</p>
+        }
+
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <sl-alert variant="danger" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                <strong>Error:</strong> @errorMessage
+            </sl-alert>
+        }
+
+        @if (blockedGates.Count > 0)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+                <strong>Blocked by safety gates:</strong>
+                <ul style="margin:4px 0 0 16px;padding:0;">
+                    @foreach (var gate in blockedGates)
+                    {
+                        <li>@gate</li>
+                    }
+                </ul>
+            </sl-alert>
+        }
+
+        <!-- Action buttons based on state -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;" @(isUpdating ? "data-is-updating=\"true\"" : "")>
+            @if (step == "Idle")
+            {
+                <sl-button variant="default" size="small" id="btn-open-check-update">
+                    <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Check for updates
+                </sl-button>
+            }
+            else if (step == "UpdateAvailable")
+            {
+                <form method="post" asp-page-handler="DownloadUpdate" style="display:inline;">
+                    <input type="hidden" name="manifestJson" value="@Model.CheckedManifestJson" />
+                    <sl-button type="submit" variant="primary" size="small" id="btn-download-update">
+                        <sl-icon slot="prefix" name="download"></sl-icon> Download update
+                    </sl-button>
+                </form>
+            }
+            else if (step == "ReadyToApply")
+            {
+                <form method="post" asp-page-handler="ApplyUpdate" style="display:inline;"
+                      class="form-confirm" data-confirm="Apply update to v@(availableVersion)?&#10;&#10;The server will fetch the new version, rebuild, and restart.&#10;&#10;Continue?">
+                    <sl-button type="submit" variant="success" size="small" id="btn-apply-update">
+                        <sl-icon slot="prefix" name="play-fill"></sl-icon> Apply update
+                    </sl-button>
+                </form>
+            }
+            else if (step == "Failed" || step == "Completed")
+            {
+                <form method="post" asp-page-handler="ResetUpdate" style="display:inline;">
+                    <sl-button type="submit" variant="warning" size="small" id="btn-reset-update">
+                        <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Reset state
+                    </sl-button>
+                </form>
+            }
+        </div>
+    }
+</div>
+
+<!-- Trusted Nodes -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+    <h3 style="margin:0;"><sl-icon name="people"></sl-icon> Trusted Nodes</h3>
+    <span id="local-events-counter" class="text-muted text-sm"></span>
+</div>
+
+@if (Model.Whitelist != null && Model.Whitelist.Count > 0)
+{
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+        <table class="version-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Node ID</th>
+                    <th>API Address</th>
+                    <th>Status</th>
+                    <th>
+                        Auto-restore
+                        <sl-tooltip content="When ON, snapshot restores initiated by this peer apply automatically without your confirmation. The peer can replace your articles, folders, and tags. Enable only for peers you fully trust (e.g. your own devices). For peers that belong to other people, leave OFF — you'll get a UI prompt before restore applies." placement="top">
+                            <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
+                        </sl-tooltip>
+                    </th>
+                    <th>
+                        Auto-DEK rotation
+                        <sl-tooltip content="When ON, DEK rotation events initiated by this peer apply automatically without your confirmation. DEK rotation is more destructive than snapshot restore — it re-encrypts ALL article bodies, versions, and media with a new key. Enable only for peers you fully trust." placement="top">
+                            <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
+                        </sl-tooltip>
+                    </th>
+                    <th>Added</th>
+                    <th>Last Sync</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var entry in Model.Whitelist)
+                {
+                    var isSelf = Model.Identity != null && entry.NodeId == Model.Identity.NodeId;
+                    DateTime lastSync = DateTime.MinValue;
+                    if (!isSelf && Model.NodeSyncStatus != null)
+                        Model.NodeSyncStatus.TryGetValue(entry.NodeId, out lastSync);
+                    <tr>
+                        <td><strong>@entry.DisplayName</strong></td>
+                        <td><code class="text-sm">@entry.NodeId.ToString()[..8]&hellip;</code></td>
+                        <td class="text-muted text-sm">@(entry.ApiAddress ?? "\u2014")</td>
+                        <td>
+                            <sl-badge variant="@(entry.Status == "active" ? "success" : "neutral")" pill>
+                                @entry.Status
+                            </sl-badge>
+                            @if (entry.CanGenerateEmbeddings)
+                            {
+                                <sl-badge variant="primary" pill style="margin-left:4px;">embeddings</sl-badge>
+                            }
+                            @if (entry.IsSuperadmin && !isSelf)
+                            {
+                                <sl-tooltip content="This peer can revoke other peers, hard-delete content across the whole network, and restore every node from its own snapshot. New joins no longer start this way — this peer was explicitly promoted, or joined before that change." placement="top">
+                                    <sl-badge variant="warning" pill style="margin-left:4px;">superadmin</sl-badge>
+                                </sl-tooltip>
+                            }
+                        </td>
+                        <td>
+                            @if (!isSelf)
+                            {
+                                <form method="post" asp-page-handler="SetAutoAcceptRestore" style="display:inline;" id="autoaccept-form-@entry.NodeId">
+                                    <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                    <input type="hidden" name="autoAccept" value="@((!entry.AutoAcceptRestore).ToString().ToLower())" id="autoaccept-value-@entry.NodeId" />
+                                    <sl-switch
+                                        @(entry.AutoAcceptRestore ? "checked" : "")
+                                        data-node-id="@entry.NodeId"
+                                        data-node-name="@entry.DisplayName"
+                                        class="switch-auto-accept">
+                                    </sl-switch>
+                                </form>
+                            }
+                            else
+                            {
+                                <span class="text-muted text-sm">—</span>
+                            }
+                        </td>
+                        <td>
+                            @if (!isSelf)
+                            {
+                                <form method="post" asp-page-handler="SetAutoAcceptDekRotation" style="display:inline;" id="autoaccept-dek-form-@entry.NodeId">
+                                    <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                    <input type="hidden" name="autoAccept" value="@((!entry.AutoAcceptDekRotation).ToString().ToLower())" id="autoaccept-dek-value-@entry.NodeId" />
+                                    <sl-switch
+                                        @(entry.AutoAcceptDekRotation ? "checked" : "")
+                                        data-node-id="@entry.NodeId"
+                                        data-node-name="@entry.DisplayName"
+                                        class="switch-auto-accept-dek">
+                                    </sl-switch>
+                                </form>
+                            }
+                            else
+                            {
+                                <span class="text-muted text-sm">—</span>
+                            }
+                        </td>
+                        <td class="text-muted text-sm">@entry.CreatedAt.ToString("d")</td>
+                        <td class="text-muted text-sm">@(isSelf ? "\u2014" : AdminModel.RelativeTime(lastSync))</td>
+                        <td style="text-align:right;">
+                            @if (!isSelf)
+                            {
+                                <sl-icon-button name="link-45deg" label="Change URL"
+                                    class="btn-open-change-url"
+                                    data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress">
+                                </sl-icon-button>
+                                <form method="post" asp-page-handler="SetPeerSuperadmin" style="display:inline;">
+                                    <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                    <input type="hidden" name="isSuperadmin" value="@((!entry.IsSuperadmin).ToString().ToLower())" />
+                                    <sl-icon-button
+                                        name="@(entry.IsSuperadmin ? "shield-slash" : "shield-check")"
+                                        label="@(entry.IsSuperadmin ? "Demote from superadmin" : "Promote to superadmin")"
+                                        class="btn-confirm-superadmin"
+                                        data-node-name="@entry.DisplayName"
+                                        data-demote="@(entry.IsSuperadmin.ToString().ToLower())">
+                                    </sl-icon-button>
+                                </form>
+                                <form method="post" asp-page-handler="RevokeNode" style="display:inline;">
+                                    <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                    <sl-icon-button name="trash" label="Revoke"
+                                        class="btn-confirm-submit"
+                                        data-confirm-pattern="Revoke node {name}?"
+                                        data-name="@entry.DisplayName">
+                                    </sl-icon-button>
+                                </form>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else
+{
+    <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+        <sl-icon name="people" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+        <p class="text-muted">No trusted nodes</p>
+    </div>
+}
+
+<!-- Change Node URL Dialog -->
+<sl-dialog id="dlg-change-url" label="Change Node URL">
+    <form method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
+        <input type="hidden" id="change-url-node-id" name="nodeId" />
+        <p id="change-url-node-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
+        <div style="margin-bottom:16px;">
+            <sl-input id="change-url-input" name="newApiAddress" label="New API Address" placeholder="https://example.com" required></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input name="password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+        </div>
+        <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-change-url">Cancel</sl-button>
+        <sl-button type="submit" slot="footer" variant="primary">
+            <sl-icon slot="prefix" name="link-45deg"></sl-icon> Change URL
+        </sl-button>
+    </form>
+</sl-dialog>
+
+<!-- Check for updates dialog -->
+<sl-dialog id="dlg-check-update" label="Check for Updates">
+    <form method="post" asp-page-handler="CheckUpdate">
+        <p class="text-muted text-sm" style="margin-bottom:16px;">
+            Checking for updates requires a signed manifest. Since no feed is configured, you can paste manifest JSON and its Base64 signature below, or leave them empty to perform a dummy check (which will fail and allow you to test the Reset action).
+        </p>
+        <div style="margin-bottom:16px;">
+            <sl-textarea name="manifestJson" label="Manifest JSON" placeholder='e.g. {"schemaVersion": 1, ...}'></sl-textarea>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input name="manifestSignatureBase64" label="Manifest Signature (Base64)" placeholder="e.g. AAAA..."></sl-input>
+        </div>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-check-update">Cancel</sl-button>
+        <sl-button type="submit" slot="footer" variant="primary">
+            <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Check
+        </sl-button>
+    </form>
+</sl-dialog>
