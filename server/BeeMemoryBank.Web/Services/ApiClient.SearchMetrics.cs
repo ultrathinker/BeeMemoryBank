@@ -4,7 +4,7 @@ namespace BeeMemoryBank.Web.Services;
 
 public partial class ApiClient
 {
-    // ─── Search metrics (WP-18) ─────────────────────────────────────────────────
+    // ─── Search metrics ─────────────────────────────────────────────────────────
     // Fetched by the Admin page's "Search" diagnostics section. Returns null on any transport
     // error / non-2xx (locked session, non-superadmin, API down) so the page degrades to a quiet
     // "unavailable" instead of a 500. The body is shapes/counts/timings only -- never query text
@@ -22,9 +22,9 @@ public partial class ApiClient
         }
     }
 
-    // ─── Embeddings self-toggle (2026-08-12 fix) ────────────────────────────────
-    // Whether THIS node generates its own embeddings (tbl_node_identity.can_generate_embeddings).
-    // Previously had no toggle at all after node init -- see SearchMetricsEndpoints.cs.
+    // ─── Embeddings self-toggle ─────────────────────────────────────────────────
+    // Whether THIS node generates its own embeddings (tbl_node_identity.can_generate_embeddings),
+    // switchable after node init -- see SearchMetricsEndpoints.cs.
 
     public async Task<bool?> GetEmbeddingsEnabledAsync()
     {

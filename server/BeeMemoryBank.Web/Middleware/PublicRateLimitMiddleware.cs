@@ -10,8 +10,8 @@ namespace BeeMemoryBank.Web.Middleware;
 /// key, not by IP — so the Web process's loopback hop does not double-throttle browser traffic.
 /// The split is deliberate: the API's limiter keys on the trusted-inside exception (the key the
 /// Web layer presents), and this limiter keys on the real remote client IP that
-/// <c>ForwardedHeadersExtensions</c> already rewrote. That left two unbounded password oracles
-/// open to the internet, both of which spend a full Argon2id derivation (64 MiB, t=3) per guess:
+/// <c>ForwardedHeadersExtensions</c> already rewrote. Without it, two password oracles would be
+/// unbounded from the internet, each spending a full Argon2id derivation (64 MiB, t=3) per guess:
 /// </para>
 /// <list type="bullet">
 /// <item><description>
@@ -23,8 +23,8 @@ namespace BeeMemoryBank.Web.Middleware;
 /// <c>POST /Admin?handler=ResetNode</c> — WIPES THE NODE on a correct master password. Not
 /// anonymous (the page is superadmin-only), but throttled anyway: the master password is a second
 /// credential in front of a destructive action, and a hijacked admin session must not get unlimited
-/// guesses at it. The two anonymous vectors onto this same wipe — <c>/Login?handler=Reset</c> and
-/// <c>/api-proxy/init/reset</c> — are gone.
+/// guesses at it. There is deliberately no anonymous route onto this wipe (no
+/// <c>/Login?handler=Reset</c>, no <c>/api-proxy/init/reset</c>); do not add one.
 /// </description></item>
 /// </list>
 ///
@@ -59,9 +59,8 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
         // here are silent ones. The same page serves several handlers and they are not equally
         // dangerous — on /Admin the default POST is routine config, ?handler=ResetNode WIPES THE NODE.
         //
-        // The bucket key is the ROUTE CLASS, not the path, so any future second vector onto the same
-        // destructive action shares one budget instead of doubling it — which is what happened while
-        // /Login?handler=Reset and /api-proxy/init/reset were two doors to the identical wipe.
+        // The bucket key is the ROUTE CLASS, not the path, so any second route onto the same
+        // destructive action shares one budget instead of doubling it.
         var route = RateLimitPath.Classify(path, context.Request.Query["handler"]);
         var (limiter, label, keySuffix) = route switch
         {

@@ -7,10 +7,10 @@ using Microsoft.Extensions.Options;
 namespace BeeMemoryBank.Web.Endpoints;
 
 /// <summary>
-/// The two proxy routes here survived the catch-all migration because they carry Web-side logic
-/// the table cannot express; everything else in this file (snapshots, compact, activity list,
-/// comments, session status/settings reads, embeddings admin, sync status) moved into
-/// ProxyRouteTable and is served by the forwarder in MiscProxyEndpoints.
+/// The two proxy routes here stay explicit because they carry Web-side logic the table cannot
+/// express. Snapshots, compact, activity list, comments, session status/settings reads,
+/// embeddings admin and sync status are ProxyRouteTable entries served by the forwarder in
+/// MiscProxyEndpoints.
 /// </summary>
 public static class SnapshotProxyEndpoints
 {

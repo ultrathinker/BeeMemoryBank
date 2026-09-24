@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Web.Services;
 
 public partial class ApiClient
 {
-    // ─── Internet-access wizard (superplan §5 Ярус 2, Этап 5) ────────────────────
+    // ─── Internet-access wizard ───────────────────────────────────────────────────
     // These wrap the /api/internet-access/* and /api/sync/probe endpoints so the
     // InternetAccess PageModel can call them through InternalKeyHandler (server-side),
     // matching how the Admin update section's calls are wired. No browser-side proxy

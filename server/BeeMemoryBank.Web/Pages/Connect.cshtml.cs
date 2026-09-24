@@ -15,9 +15,9 @@ namespace BeeMemoryBank.Web.Pages;
 /// </summary>
 /// <remarks>
 /// The LAN-IP enumeration deliberately duplicates <c>LocalCaService.GetLanIPv4Addresses</c>'s logic
-/// rather than calling it: that method is private on <c>LocalCaService</c>, and the task brief
-/// forbids modifying <c>LocalCaService.cs</c>. The duplication is kept byte-for-byte consistent
-/// (same adapter filters) so the QR's hosts always match the leaf certificate's SAN list.
+/// rather than calling it, because that method is private on <c>LocalCaService</c>. Keep the two
+/// byte-for-byte consistent (same adapter filters) so the QR's hosts always match the leaf
+/// certificate's SAN list; a change to one must be made to the other.
 /// </remarks>
 [Authorize]
 public class ConnectModel : PageModel

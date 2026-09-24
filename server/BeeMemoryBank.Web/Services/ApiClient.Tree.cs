@@ -13,10 +13,9 @@ public partial class ApiClient
 
     public async Task<TreeChildrenDto?> GetChildrenAsync(string path = "/")
     {
-        // Use raw GetAsync so ACL-denied (404 from API) returns null instead of throwing —
-        // the caller's contract is "null → 404 for the user". Previously GetFromJsonAsync<T>
-        // threw HttpRequestException on non-success, which bubbled up as a 500 to the browser
-        // when a user tried to list a folder they don't have access to.
+        // Raw GetAsync, not GetFromJsonAsync<T>: that throws on non-success, which would surface
+        // an ACL-denied folder (404 from the API) as a 500. The caller's contract is
+        // "null → 404 for the user".
         var resp = await http.GetAsync($"/api/tree/children?path={Uri.EscapeDataString(path)}");
         if (!resp.IsSuccessStatusCode) return null;
         return await resp.Content.ReadFromJsonAsync<TreeChildrenDto>(JsonOpts);
@@ -102,8 +101,9 @@ public partial class ApiClient
         return (dto, (int)resp.StatusCode, null);
     }
 
-    // Edit-load helper: returns whether the article is protected and, if it was unlocked in the last
-    // ~60s by this user (server-side cache), the decrypted body so the editor opens without a re-prompt.
+    // Edit-load helper: returns whether the article is protected and, if this user unlocked it
+    // within ProtectedUnlockCache.Ttl (server-side cache), the decrypted body so the editor opens
+    // without a re-prompt.
     public async Task<EditContentDto?> GetEditContentAsync(Guid id)
     {
         var resp = await http.GetAsync($"/api/articles/{id}/edit-content");

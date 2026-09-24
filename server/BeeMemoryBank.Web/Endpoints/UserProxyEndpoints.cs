@@ -1,11 +1,10 @@
 namespace BeeMemoryBank.Web.Endpoints;
 
 /// <summary>
-/// Every route here was a pure passthrough and moved into ProxyRouteTable
-/// ("users" incl. "users/me/change-password", "restrictions", "hard-delete", "keys", "agents") —
-/// the catch-all forwarder in MiscProxyEndpoints serves them now, with the same superadmin gates
-/// the explicit routes carried (the API enforces them as well; error bodies now come through
-/// verbatim instead of being re-wrapped).
+/// No explicit routes: user administration is a pure passthrough served from ProxyRouteTable
+/// ("users" incl. "users/me/change-password", "restrictions", "hard-delete", "keys/add-recovery",
+/// "agents") by the catch-all forwarder in MiscProxyEndpoints, with superadmin gates in the table
+/// (the API enforces them as well) and API error bodies passed through verbatim.
 /// </summary>
 public static class UserProxyEndpoints
 {

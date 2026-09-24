@@ -5,8 +5,8 @@ namespace BeeMemoryBank.Web.Services;
 
 public partial class ApiClient
 {
-    // The role CRUD + folder-rule methods went with their proxy routes into ProxyRouteTable; only
-    // the roles LIST (rendered server-side by the Admin page) still flows through ApiClient.
+    // Role CRUD + folder rules go through ProxyRouteTable from the browser; only the roles LIST
+    // (rendered server-side by the Admin page) flows through ApiClient.
 
     public async Task<List<RoleDto>?> GetRolesAsync()
     {

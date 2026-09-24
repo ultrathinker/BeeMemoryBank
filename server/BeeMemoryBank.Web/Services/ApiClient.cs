@@ -11,8 +11,8 @@ public partial class ApiClient(HttpClient http)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    // Auth headers (X-Internal-Key, X-User-Role) are added automatically
-    // by InternalKeyHandler registered as a DelegatingHandler on the HttpClient.
+    // Identity headers (X-Internal-Key, X-User-Role, X-User-Id, X-Web-Session) are added
+    // automatically by InternalKeyHandler, registered as a DelegatingHandler on the HttpClient.
 
     /// <summary>
     /// The upstream base address, exposed for the catch-all forwarder's canonical-path backstop:
@@ -181,18 +181,15 @@ public partial class ApiClient(HttpClient http)
         return (false, error ?? $"HTTP {(int)resp.StatusCode}");
     }
 
-    // W3 (Option A): fetch this user's node-local security stamp for cookie revalidation.
-    // userId is passed EXPLICITLY (not read from HttpContext) because this is called from
-    // OnValidatePrincipal, where HttpContext.User is not yet the authenticated principal —
-    // so InternalKeyHandler cannot forward X-User-Id. We set it manually here; InternalKeyHandler
-    // still injects X-Internal-Key (from env) and skips its own X-User-Id when it is absent
-    // (HttpContext.User is empty during validation, and now also skips it if the header was
-    // already set by this caller — see InternalKeyHandler).
+    // Fetches this user's node-local security stamp for cookie revalidation. userId is passed
+    // EXPLICITLY (not read from HttpContext) because this runs in OnValidatePrincipal, where
+    // HttpContext.User is not yet the authenticated principal, so InternalKeyHandler cannot
+    // forward X-User-Id. It is set here; InternalKeyHandler still injects X-Internal-Key and
+    // skips its own X-User-Id when the request already carries one.
     //
-    // F2: returns a tri-state outcome so OnValidatePrincipal can distinguish an AUTHORITATIVE
-    // "user no longer exists" (HTTP 404 → must REJECT) from a transport error / 5xx (→ FAIL OPEN).
-    // Previously both collapsed to null → fail-open, which wrongly kept a deleted/demoted user's
-    // session alive on a 404.
+    // Tri-state, so OnValidatePrincipal can tell an AUTHORITATIVE "user no longer exists"
+    // (HTTP 404 → must REJECT) from a transport error / 5xx (→ FAIL OPEN). Collapsing both into
+    // one "unknown" would keep a deleted/demoted user's session alive.
     //   Found        — 200 with a real stamp body; compare against the cookie claim.
     //   NotFound     — HTTP 404; the API definitively says the user is gone → RejectPrincipal.
     //   Unavailable  — transport error / 5xx / other non-success / malformed 200 body → fail OPEN.
@@ -223,8 +220,7 @@ public partial class ApiClient(HttpClient http)
         => await PostRawAsync(path, json, method: "POST");
 
     /// <summary>Generic JSON passthrough with a selectable HTTP method (POST/PATCH/PUT/DELETE).
-    /// Identity headers are injected by InternalKeyHandler. Used by the AI chat proxy routes that
-    /// need PATCH/DELETE on /api/chat/*. Keeps status + body verbatim.</summary>
+    /// Identity headers are injected by InternalKeyHandler. Keeps status + body verbatim.</summary>
     public async Task<(bool Ok, string? Body, int Status)> PostRawAsync(string path, string json, string method)
     {
         var req = new HttpRequestMessage(new HttpMethod(method), "/api/" + path)
@@ -236,13 +232,10 @@ public partial class ApiClient(HttpClient http)
         return (resp.IsSuccessStatusCode, body, (int)resp.StatusCode);
     }
 
-    // W2: unified pass-through for the hand-written proxy routes that survive W1. Reads the
-    // upstream response and preserves status + body + content-type VERBATIM, so an API 403/409
-    // (and its error text) reaches the browser unchanged instead of being collapsed to a 502.
-    // Identity headers (X-Internal-Key / X-User-*) are still injected by InternalKeyHandler.
-    // F3: guard the send so that an API-down (HttpRequestException / TaskCanceledException)
-    // returns a graceful 502 like the W1 catch-all forwarder, instead of bubbling up as an
-    // unhandled 500.
+    // Verbatim GET pass-through. Preserves status + body + content-type VERBATIM, so an API 403/409 (and its error text) reaches the browser unchanged instead of
+    // being collapsed to a 502. Identity headers are injected by InternalKeyHandler. An API-down
+    // send (HttpRequestException / TaskCanceledException) returns a graceful 502, like the
+    // catch-all forwarder, instead of bubbling up as an unhandled 500.
     public async Task<(int Status, string Body, string? ContentType)> ForwardGetAsync(string path)
     {
         try
@@ -256,16 +249,16 @@ public partial class ApiClient(HttpClient http)
         catch (TaskCanceledException) { return (502, "", null); }
     }
 
-    // W1: low-level forward used by the catch-all forwarder. Sends an already-built
+    // Low-level forward used by the catch-all forwarder. Sends an already-built
     // HttpRequestMessage through this client (so InternalKeyHandler still injects identity
     // headers) and returns the raw upstream response. The caller copies status/body/headers.
     public Task<HttpResponseMessage> SendForwardAsync(HttpRequestMessage request) =>
         http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
 
-    // Phase 2: same as above but forwards the caller's CancellationToken so a browser disconnect
+    // Same as above but forwards the caller's CancellationToken so a browser disconnect
     // (ctx.RequestAborted) cancels the upstream API call. Used ONLY by the dedicated SSE streaming
-    // passthrough — the W1 catch-all keeps the parameterless overload. ResponseHeadersRead means the
-    // timeout/return is at headers, then the body streams unbounded (plan §2 Phase 2, §6).
+    // passthroughs — the catch-all keeps the parameterless overload. ResponseHeadersRead means the
+    // timeout/return is at headers, then the body streams unbounded.
     public Task<HttpResponseMessage> SendForwardAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
         http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
@@ -299,7 +292,7 @@ public partial class ApiClient(HttpClient http)
     }
 }
 
-// W3 (Option A) / F2: tri-state outcome for GetSecurityStampAsync, so OnValidatePrincipal can
+// Tri-state outcome for GetSecurityStampAsync, so OnValidatePrincipal can
 // distinguish an authoritative "user gone" (NotFound → reject) from a transport error / 5xx
 // (Unavailable → fail open) from a real lookup (Found → compare stamps).
 public enum SecurityStampLookupOutcome { Found, NotFound, Unavailable }

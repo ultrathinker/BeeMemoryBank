@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Web.Services;
 /// immediately whenever an admin saves new settings via the Admin page.
 /// </summary>
 /// <remarks>
-/// AUDIT NOTE: No locking needed. Same reasoning as InvisibleModeService — a plain mutable
+/// No locking needed. Same reasoning as InvisibleModeService — a plain mutable
 /// singleton read across request scopes is fine here; worst case on a torn read is one request
 /// using a slightly stale value, which self-corrects on the very next request.
 /// </remarks>
