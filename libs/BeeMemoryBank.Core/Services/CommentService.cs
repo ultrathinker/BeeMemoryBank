@@ -30,6 +30,7 @@ public class CommentService(
             EnvelopeFraming.Article.UnwrapDek(articleId, body.EncryptedDek, body.DekIV, masterDek));
         try
         {
+            // Always the current comment framing (with AAD), whatever the parent body's framing is.
             (ciphertext, iv) = ArticleEncryptor.Encrypt(plaintext, articleDek, CommentAad(articleId, commentId));
         }
         finally
@@ -55,20 +56,47 @@ public class CommentService(
         if (body == null)
             return "[encrypted — article key unavailable]";
 
-        var articleDek = session.TryUnwrapWithCandidates(masterDek =>
-            EnvelopeFraming.Article.UnwrapDek(comment.ArticleId, body.EncryptedDek, body.DekIV, masterDek));
+        var ciphertext = comment.Ciphertext;
+        var iv = comment.IV;
+        // Whole attempt per candidate master DEK, in the session's candidate order (current, then
+        // retired): unwrap the article DEK, then open the comment with it.
+        return session.TryUnwrapWithCandidates(masterDek =>
+        {
+            var articleDek = EnvelopeFraming.Article.UnwrapDek(comment.ArticleId, body.EncryptedDek, body.DekIV, masterDek);
+            try
+            {
+                return DecryptCommentText(comment.ArticleId, comment.CommentId, ciphertext, iv, articleDek);
+            }
+            finally
+            {
+                Array.Clear(articleDek);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Opens one comment ciphertext with its article DEK. A comment row carries no framing marker,
+    /// and its framing is independent of the parent body's (a body update re-seals the body as v1
+    /// but never touches its comments), so the comment's own framing is detected by trial: the
+    /// current framing (<see cref="CommentAad"/>) first, and only on an authentication-tag failure
+    /// the legacy framing with no AAD.
+    /// <para>
+    /// Invariant: the no-AAD fallback accepts only ciphertexts that were sealed without AAD, i.e.
+    /// legacy comments. Those carry no article/comment binding in the first place, so the fallback
+    /// grants an attacker with DB write access nothing beyond what those rows already allowed;
+    /// every comment written now is sealed with AAD and cannot be opened by the fallback under a
+    /// different article or comment id.
+    /// </para>
+    /// </summary>
+    private static string DecryptCommentText(Guid articleId, Guid commentId, byte[] ciphertext, byte[] iv, byte[] articleDek)
+    {
         try
         {
-            // A comment row has no framing marker of its own; the reader infers it from the parent
-            // article body's framing (v1 body → comment sealed with AAD, v0 → without).
-            var commentAad = EnvelopeFraming.IsVersioned(body.EncryptedDek)
-                ? CommentAad(comment.ArticleId, comment.CommentId)
-                : null;
-            return ArticleEncryptor.Decrypt(comment.Ciphertext, comment.IV, articleDek, commentAad);
+            return ArticleEncryptor.Decrypt(ciphertext, iv, articleDek, CommentAad(articleId, commentId));
         }
-        finally
+        catch (System.Security.Cryptography.AuthenticationTagMismatchException)
         {
-            Array.Clear(articleDek);
+            return ArticleEncryptor.Decrypt(ciphertext, iv, articleDek, aad: null);
         }
     }
 
