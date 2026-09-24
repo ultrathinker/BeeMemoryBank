@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;

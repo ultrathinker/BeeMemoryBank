@@ -1,8 +1,9 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.McpTools;
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;

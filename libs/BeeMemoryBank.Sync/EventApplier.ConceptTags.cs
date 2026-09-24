@@ -1,5 +1,4 @@
 using System.Text.Json;
-using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -22,12 +21,12 @@ public partial class EventApplier
                 // Concept-tag matching is symmetric similarity, not asymmetric retrieval -- see
                 // ConceptTagService's identical GenerateQuery usage for why. The stored version
                 // must be the real active model version, not a stale placeholder: it's compared
-                // against OnnxEmbeddingGenerator.Version to detect embeddings from a since-replaced
+                // against IEmbeddingGenerator.Version to detect embeddings from a since-replaced
                 // model (e.g. after a model swap) and flag them for re-generation.
                 var embedding = embeddingGenerator.GenerateQuery(p.NewName);
                 var bytes = new byte[embedding.Length * 4];
                 Buffer.BlockCopy(embedding, 0, bytes, 0, bytes.Length);
-                await conceptTagRepo.UpdateEmbeddingAsync(p.NewName, bytes, OnnxEmbeddingGenerator.Version);
+                await conceptTagRepo.UpdateEmbeddingAsync(p.NewName, bytes, embeddingGenerator.Version);
             }
             catch (Exception ex)
             {

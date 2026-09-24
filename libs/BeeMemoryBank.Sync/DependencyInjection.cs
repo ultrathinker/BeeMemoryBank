@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Embeddings;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -23,6 +24,11 @@ public static class DependencyInjection
         services.AddScoped<EventApplier>();
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
+        // Wave 2 A2: EmbeddingProjectionService + ArticleChunker live in BeeMemoryBank.Embeddings
+        // now (Core no longer registers them). AddEmbeddingServices is called from every host that
+        // wants semantic search; Sync itself scopes EmbeddingProjectionService through here because
+        // PendingEmbeddingProcessor / EventApplier resolve it per cycle.
+        services.AddEmbeddingServices();
 
         // M5: registered here (Sync's own DI) rather than Storage's AddStorage(), unlike the other
         // repositories this project consumes — this one is Sync-specific (only ever consumed by

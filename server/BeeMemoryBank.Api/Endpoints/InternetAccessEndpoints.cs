@@ -10,7 +10,9 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
-using BeeMemoryBank.Core.Services.Acme;
+using BeeMemoryBank.Infrastructure.Acme;
+using BeeMemoryBank.Infrastructure.Ddns;
+using BeeMemoryBank.Infrastructure.Network;
 
 namespace BeeMemoryBank.Api.Endpoints;
 

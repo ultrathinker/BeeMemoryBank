@@ -2,6 +2,7 @@ using System;
 using System.Net;
 using System.Net.Http;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.Ddns;
 
 namespace BeeMemoryBank.Core.Tests;
 

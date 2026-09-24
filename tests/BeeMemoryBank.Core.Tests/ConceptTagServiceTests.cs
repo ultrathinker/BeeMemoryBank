@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -15,6 +16,7 @@ namespace BeeMemoryBank.Core.Tests;
 internal sealed class ThrowingEmbeddingGenerator : IEmbeddingGenerator
 {
     public int Dimension => 384;
+    public string Version => "fake-v1";
     public float[] Generate(string text) => throw new ModelUnavailableException("Model is missing");
 }
 

@@ -1,9 +1,10 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.McpTools;
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
@@ -894,6 +895,7 @@ public class McpAclTests : IAsyncLifetime
     private sealed class ConstantEmbeddingGenerator : IEmbeddingGenerator
     {
         public int Dimension => 384;
+    public string Version => "fake-v1";
         public float[] Generate(string text) => Enumerable.Repeat(1f, Dimension).ToArray();
     }
 }

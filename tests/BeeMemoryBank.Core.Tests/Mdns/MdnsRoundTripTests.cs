@@ -1,5 +1,6 @@
 using System.Net;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.Mdns;
 using Makaretu.Dns;
 
 namespace BeeMemoryBank.Core.Tests.Mdns;

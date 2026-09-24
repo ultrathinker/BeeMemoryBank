@@ -13,7 +13,7 @@ namespace BeeMemoryBank.Storage.Search;
 /// which say so explicitly) -- everything about disk I/O and encryption for segments lives here.
 ///
 /// <para>
-/// <b>The index key is wrapped exactly the way <c>BeeMemoryBank.Core.Embeddings.ProjectionMatrix</c>
+/// <b>The index key is wrapped exactly the way <c>BeeMemoryBank.Embeddings.ProjectionMatrix</c>
 /// wraps its own secret matrix bytes</b> -- and, more precisely, exactly the way
 /// <c>ArticleService</c>/<c>MediaService</c>/<c>CommentService</c> wrap their own per-entity DEKs
 /// (the more common, tested instance of this same pattern): a random 32-byte "index key" is

@@ -56,6 +56,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <!-- Wave 2 A2: mobile is the one consumer of the new Embeddings project (OnnxEmbeddingGenerator
+         for offline semantic search) and of the new Infrastructure project (IImageTranscoder for
+         the camera-roll upload path). ACME / mDNS / firewall / local CA stay on the server side. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Embeddings\BeeMemoryBank.Embeddings.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Infrastructure\BeeMemoryBank.Infrastructure.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />

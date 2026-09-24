@@ -3,11 +3,12 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using BeeMemoryBank.Infrastructure.Acme;
 using Certes;
 using FluentAssertions;
 using Xunit;
 
-namespace BeeMemoryBank.Core.Services.Acme.Tests;
+namespace BeeMemoryBank.Infrastructure.Acme.Tests;
 
 public class AcmeSecretsEncryptionTests : IDisposable
 {

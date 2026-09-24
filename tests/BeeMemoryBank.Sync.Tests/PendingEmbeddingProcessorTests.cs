@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -71,5 +72,6 @@ public class PendingEmbeddingProcessorTests : SyncTestFixture
 internal sealed class ThrowingEmbeddingGenerator : IEmbeddingGenerator
 {
     public int Dimension => 384;
+    public string Version => "fake-v1";
     public float[] Generate(string text) => throw new ModelUnavailableException("Model is missing");
 }

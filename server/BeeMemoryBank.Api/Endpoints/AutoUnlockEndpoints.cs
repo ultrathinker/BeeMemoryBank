@@ -2,6 +2,7 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.OsAutoUnlock;
 
 namespace BeeMemoryBank.Api.Endpoints;
 

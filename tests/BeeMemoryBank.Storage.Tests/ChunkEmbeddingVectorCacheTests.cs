@@ -1,4 +1,4 @@
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
 

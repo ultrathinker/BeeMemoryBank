@@ -3,9 +3,6 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Processing;
 
 namespace BeeMemoryBank.Core.Services;
 
@@ -20,6 +17,13 @@ public class MediaService(
     IEventLogger eventLogger,
     MediaStorageOptions options,
     IDbConnectionFactory connFactory,
+    // Wave 2 A2: image transcoding moved behind IImageTranscoder (SixLabors.ImageSharp now
+    // lives in BeeMemoryBank.Infrastructure). Optional and last for the same reason the
+    // previous fields are: the many direct constructions in tests keep compiling without it;
+    // when null, the create path still rejects oversize inputs but does NOT transcode, so
+    // over-limit uploads surface as a clean ArgumentException instead of silently keeping a
+    // 50 MB PNG in the vault.
+    IImageTranscoder? imageTranscoder = null,
     // Optional and last so the many direct constructions in tests keep compiling; DI supplies the
     // real one. Only used to report a media row whose file is gone, which is not a normal state
     // and must not pass silently.
@@ -40,8 +44,6 @@ public class MediaService(
     private const long MaxFileSize = 20 * 1024 * 1024;
     private const long MaxAttachmentFileSize = 20 * 1024 * 1024;
     private const int MaxImageDimension = 4096;
-    private const int JpegQuality = 90;
-    private const int JpegQualityDownscale = 85;
 
     /// <param name="isAttachment">False (default) = inline image: restricted to
     /// <see cref="AllowedContentTypes"/>, re-encoded/downscaled to fit <see cref="MaxFileSize"/>.
@@ -86,19 +88,31 @@ public class MediaService(
             // Convert raster images to JPEG (except SVG and animated GIF). Downscale if still oversized.
             if (contentType != "image/svg+xml" && !IsAnimatedGif(plaintext, contentType))
             {
-                var (jpegBytes, converted) = ConvertToJpeg(plaintext, contentType);
-                if (converted)
+                if (imageTranscoder == null)
                 {
-                    plaintext = jpegBytes;
-                    contentType = "image/jpeg";
-                    fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
+                    // No transcoder registered: accept the bytes as-is if they already fit, reject
+                    // otherwise. Tests that construct MediaService directly without an IImageTranscoder
+                    // land here; production hosts (Api, Mobile) wire the Infrastructure one in.
+                    if (plaintext.Length > MaxFileSize)
+                        throw new ArgumentException(
+                            $"File size exceeds {MaxFileSize / (1024 * 1024)} MB limit and no image transcoder is registered to downscale it.");
                 }
-
-                if (plaintext.Length > MaxFileSize)
+                else
                 {
-                    plaintext = DownscaleJpeg(plaintext);
-                    contentType = "image/jpeg";
-                    fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
+                    var (jpegBytes, converted) = imageTranscoder.ConvertToJpeg(plaintext, contentType);
+                    if (converted)
+                    {
+                        plaintext = jpegBytes;
+                        contentType = "image/jpeg";
+                        fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
+                    }
+
+                    if (plaintext.Length > MaxFileSize)
+                    {
+                        plaintext = imageTranscoder.DownscaleJpeg(plaintext, MaxImageDimension);
+                        contentType = "image/jpeg";
+                        fileName = Path.GetFileNameWithoutExtension(fileName) + ".jpg";
+                    }
                 }
             }
 
@@ -349,35 +363,5 @@ public class MediaService(
             if (data[i] == 0x2C) frameCount++;
         }
         return frameCount > 1;
-    }
-
-    private static (byte[] data, bool converted) ConvertToJpeg(byte[] input, string contentType)
-    {
-        using var image = Image.Load(input);
-        using var ms = new MemoryStream();
-        image.SaveAsJpeg(ms, new JpegEncoder { Quality = JpegQuality });
-        var result = ms.ToArray();
-
-        if (contentType == "image/jpeg" && result.Length >= input.Length)
-            return (input, false);
-
-        return (result, true);
-    }
-
-    private static byte[] DownscaleJpeg(byte[] input)
-    {
-        using var image = Image.Load(input);
-        if (image.Width > MaxImageDimension || image.Height > MaxImageDimension)
-        {
-            var scale = Math.Min(
-                (double)MaxImageDimension / image.Width,
-                (double)MaxImageDimension / image.Height);
-            var newWidth = (int)Math.Round(image.Width * scale);
-            var newHeight = (int)Math.Round(image.Height * scale);
-            image.Mutate(ctx => ctx.Resize(newWidth, newHeight));
-        }
-        using var ms = new MemoryStream();
-        image.SaveAsJpeg(ms, new JpegEncoder { Quality = JpegQualityDownscale });
-        return ms.ToArray();
     }
 }

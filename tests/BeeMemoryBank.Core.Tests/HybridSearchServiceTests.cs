@@ -1,7 +1,8 @@
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
@@ -215,6 +216,7 @@ public class HybridSearchServiceTests : IAsyncLifetime
     private sealed class SynonymAwareEmbeddingGenerator : IEmbeddingGenerator
     {
         public int Dimension => 2;
+    public string Version => "fake-v1";
 
         public float[] Generate(string text) =>
             text.Contains(KeywordTerm, StringComparison.OrdinalIgnoreCase) ||

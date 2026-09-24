@@ -1,22 +1,47 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>BeeMemoryBank.Web</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.AppPaths\BeeMemoryBank.AppPaths.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <!-- Wave 2 A2: Web's connect-wizard page consumes the local CA / certificate material (LocalCaService
+         via /api/connect/ca.crt, StoredCertificate) and registers AddMdnsBrowser via the Infrastructure
+         DI extensions. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Infrastructure\BeeMemoryBank.Infrastructure.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Hosting.AspNetCore\BeeMemoryBank.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- QR-code generation for the "Connect a device" page (Connect.cshtml). Pure-managed,
          dependency-free; PngByteQRCode produces a PNG byte array rendered as a data URI. -->
     <PackageReference Include="QRCoder" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <PackageReference Include="Velopack" />
+  </ItemGroup>
+
+  <!-- Test-only seam: lets BeeMemoryBank.Integration.Tests call
+       RestoreInitiatorService.DownloadFromWhitelistedSeederAsync directly, so it can drive the
+       real V2 challenge/authenticate handshake against a real peer server without exercising the
+       full destructive restore-apply path. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="BeeMemoryBank.Integration.Tests" />
+  </ItemGroup>
+
+  <!-- model.onnx is NOT in git — download separately (see docs/deployment.md). Wave 2 A2 moved the
+       model directory from Core/Embeddings/Models to Embeddings/Models; the path below is updated
+       accordingly. -->
+  <ItemGroup>
+    <Content Include="..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx" Condition="Exists('..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>model.onnx</Link>
+    </Content>
   </ItemGroup>
 
 </Project>

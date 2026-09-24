@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.Ddns;
 
 namespace BeeMemoryBank.Core.Tests;
 

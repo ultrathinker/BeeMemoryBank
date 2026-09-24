@@ -2,7 +2,7 @@ using System.Formats.Asn1;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using BeeMemoryBank.Core.Services.Acme;
+using BeeMemoryBank.Infrastructure.Acme;
 using Certes;
 
 namespace BeeMemoryBank.Core.Acme.Tests;

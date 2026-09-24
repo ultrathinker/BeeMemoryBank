@@ -1,5 +1,5 @@
 using BeeMemoryBank.Core;
-using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Services;

@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
-using BeeMemoryBank.Core.Services.Acme;
+using BeeMemoryBank.Infrastructure.Acme;
 using Certes;
 
 namespace BeeMemoryBank.Core.Acme.Tests;

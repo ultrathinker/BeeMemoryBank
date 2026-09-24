@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Http;
-using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.Tls;
 
 namespace BeeMemoryBank.Web.Endpoints;
 

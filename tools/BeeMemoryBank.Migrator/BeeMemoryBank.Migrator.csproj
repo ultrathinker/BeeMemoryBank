@@ -16,14 +16,18 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <!-- Wave 2 A2: AddOnnxEmbeddings now lives in Embeddings. The migrator imports article
+         content; ConceptTagService pulls IEmbeddingGenerator, so it must be registered. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Embeddings\BeeMemoryBank.Embeddings.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
   </ItemGroup>
 
-  <!-- model.onnx is NOT in git — download separately (see docs/deployment.md) -->
+  <!-- model.onnx is NOT in git — download separately (see docs/deployment.md). Wave 2 A2 moved
+       the model directory to Embeddings/Models; path updated. -->
   <ItemGroup>
-    <Content Include="..\..\libs\BeeMemoryBank.Core\Embeddings\Models\model.onnx"
-             Condition="Exists('..\..\libs\BeeMemoryBank.Core\Embeddings\Models\model.onnx')">
+    <Content Include="..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx"
+             Condition="Exists('..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>model.onnx</Link>
     </Content>

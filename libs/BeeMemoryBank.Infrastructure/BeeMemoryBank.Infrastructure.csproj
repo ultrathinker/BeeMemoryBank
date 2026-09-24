@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Wave 2 A2: hosts that only need the kernel (Core + Crypto + Search) no longer pay for
+         ACME, mDNS, ImageSharp, DPAPI or UPnP through Core. Each package below came from
+         Core.csproj; the comment there still explains the choice, but Core no longer pulls
+         any of them. -->
+    <PackageReference Include="Certes" />
+    <PackageReference Include="Makaretu.Dns.Multicast" />
+    <!-- SixLabors.ImageSharp was on Core for MediaService's convert/downscale path. That logic
+         moved behind an IImageTranscoder interface (in Core); this package follows it here. -->
+    <PackageReference Include="SixLabors.ImageSharp" />
+    <!-- DPAPI was on Core for OsAutoUnlockService (Windows-only DPAPI slot). Same move: the
+         OsAutoUnlockService class itself now lives here. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+</Project>

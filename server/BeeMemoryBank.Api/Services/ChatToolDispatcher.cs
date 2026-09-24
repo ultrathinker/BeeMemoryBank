@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 
 namespace BeeMemoryBank.Api.Services;
 

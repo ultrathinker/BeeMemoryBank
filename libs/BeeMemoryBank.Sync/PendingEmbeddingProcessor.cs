@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -91,6 +92,7 @@ public class PendingEmbeddingProcessor(
         var articleRepo = scope.ServiceProvider.GetRequiredService<IArticleRepository>();
         var bodyRepo = scope.ServiceProvider.GetRequiredService<IArticleBodyRepository>();
         var projectionService = scope.ServiceProvider.GetRequiredService<EmbeddingProjectionService>();
+        var embeddingGenerator = scope.ServiceProvider.GetRequiredService<IEmbeddingGenerator>();
 
         await projectionService.EnsureProjectionMatrixAsync();
 
@@ -99,7 +101,7 @@ public class PendingEmbeddingProcessor(
         // stale vectors (dimension-based staleness checks elsewhere don't catch a same-dimension
         // model swap). ConceptTagService.BackfillEmbeddingsAsync does the equivalent check for
         // concept tags on its own call a few lines up.
-        await articleRepo.MarkStaleEmbeddingsPendingUnscopedAsync(OnnxEmbeddingGenerator.Version);
+        await articleRepo.MarkStaleEmbeddingsPendingUnscopedAsync(embeddingGenerator.Version);
 
         var pending = await articleRepo.GetEmbeddingPendingAsync(_batchSize);
         if (pending.Count == 0) return 0;

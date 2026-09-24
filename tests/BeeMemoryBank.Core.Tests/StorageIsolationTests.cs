@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Infrastructure.OsAutoUnlock;
 using BeeMemoryBank.Storage.Sqlite;
 
 namespace BeeMemoryBank.Core.Tests;

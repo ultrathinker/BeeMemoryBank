@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Storage.Search;
 /// <para>
 /// <b>Why this exists instead of calling <see cref="DekManager.WrapDek"/>/<see cref="DekManager.UnwrapDek"/>
 /// directly</b> (as this WP's index-key wrapping does, and as
-/// <c>BeeMemoryBank.Core.Embeddings.ProjectionMatrix</c>'s own doc comment claims it does for its
+/// <c>BeeMemoryBank.Embeddings.ProjectionMatrix</c>'s own doc comment claims it does for its
 /// matrix bytes): <c>DekManager.UnwrapDek</c>'s current implementation dispatches on the wrapped
 /// blob's exact byte LENGTH (48 bytes for its legacy v0 framing, 49 for v1) to decide how to frame
 /// the AES-GCM call -- hardening added to eliminate ambiguity between the two wire formats. That
