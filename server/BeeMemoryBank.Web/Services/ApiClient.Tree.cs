@@ -136,15 +136,15 @@ public partial class ApiClient
 
     // ─── Protected ("second-layer") articles ───────────────────────────────────
 
-    public async Task<(bool ok, int status, string? content, string? error)> UnlockArticleAsync(Guid id, string passphrase)
+    public async Task<(bool ok, int status, string? content, int? expiresInSeconds, string? error)> UnlockArticleAsync(Guid id, string passphrase)
     {
         var resp = await http.PostAsync($"/api/articles/{id}/unlock", Body(new { passphrase }));
         if (resp.IsSuccessStatusCode)
         {
-            var dto = await resp.Content.ReadFromJsonAsync<ArticleContentDto>(JsonOpts);
-            return (true, (int)resp.StatusCode, dto?.Content, null);
+            var dto = await resp.Content.ReadFromJsonAsync<UnlockArticleDto>(JsonOpts);
+            return (true, (int)resp.StatusCode, dto?.Content, dto?.UnlockExpiresInSeconds, null);
         }
-        return (false, (int)resp.StatusCode, null, await ReadErrorAsync(resp));
+        return (false, (int)resp.StatusCode, null, null, await ReadErrorAsync(resp));
     }
 
     public async Task<(bool ok, int status, string? error)> ProtectArticleAsync(Guid id, string passphrase, string? hint)

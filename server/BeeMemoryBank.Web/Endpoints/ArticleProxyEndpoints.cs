@@ -50,8 +50,10 @@ public static class ArticleProxyEndpoints
         {
             var req = await ctx.Request.ReadFromJsonAsync<UnlockArticleProxyRequest>();
             if (req == null) return Results.BadRequest();
-            var (ok, status, content, error) = await api.UnlockArticleAsync(id, req.Passphrase);
-            return ok ? Results.Ok(new { content }) : Results.Json(new { error = error ?? "Unlock failed" }, statusCode: status);
+            var (ok, status, content, expiresInSeconds, error) = await api.UnlockArticleAsync(id, req.Passphrase);
+            return ok
+                ? Results.Ok(new { content, unlockExpiresInSeconds = expiresInSeconds })
+                : Results.Json(new { error = error ?? "Unlock failed" }, statusCode: status);
         }).RequireAuthorization();
 
         app.MapPost("/api-proxy/article/{id:guid}/relock", async (Guid id, ApiClient api) =>

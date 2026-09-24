@@ -924,6 +924,31 @@ a.search-result-title:hover {
     margin: 0 0 12px;
 }
 
+/* "Temporarily unlocked · locks in N min · Lock now" strip above a protected article's body. */
+.unlock-banner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    border: 1px solid var(--sl-color-warning-300);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--sl-color-warning-500) 10%, transparent);
+    color: var(--sl-color-neutral-700);
+    font-size: 0.9rem;
+}
+.unlock-banner sl-icon {
+    color: var(--sl-color-warning-600);
+}
+.unlock-banner a {
+    margin-left: auto;
+    color: var(--sl-color-warning-700);
+    font-weight: 600;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
 .article-content h1, .article-content h2, .article-content h3 {
     margin-top: 1.4em;
     margin-bottom: 0.5em;

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using BeeMemoryBank.Api.Helpers;
+using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
@@ -354,9 +355,13 @@ public static class ArticleEndpoints
                 var content = await svc.UnlockContentAsync(id, req.Passphrase);
                 // Remember the verified passphrase server-side (see ProtectedUnlockCache.Ttl) so the
                 // View and Edit pages can both open without re-prompting. Never returned to the browser.
-                if (meta.Protected)
-                    unlockCache.Remember(CallerKey(ctx), id, req.Passphrase);
-                return Results.Ok(new ArticleContentResponse(id, content));
+                // No caller key (browser request without a Web session) → nothing is cached, and the
+                // page gets no countdown because the next load will prompt again anyway.
+                int? expiresIn = null;
+                var callerKey = CallerKey(ctx);
+                if (meta.Protected && callerKey != null)
+                    expiresIn = SecondsUntil(unlockCache.Remember(callerKey, id, req.Passphrase));
+                return Results.Ok(new UnlockArticleResponse(id, content, expiresIn));
             }
             catch (CryptographicException)
             {
@@ -403,13 +408,13 @@ public static class ArticleEndpoints
                 return Results.Ok(new EditContentResponse(id, false, true, plain));
             }
 
-            var cached = unlockCache.TryGet(CallerKey(ctx), id);
+            var cached = unlockCache.TryGet(CallerKey(ctx), id, out var expiresUtc);
             if (cached == null)
                 return Results.Ok(new EditContentResponse(id, true, false, null));
             try
             {
                 var content = await svc.UnlockContentAsync(id, cached);
-                return Results.Ok(new EditContentResponse(id, true, true, content));
+                return Results.Ok(new EditContentResponse(id, true, true, content, SecondsUntil(expiresUtc)));
             }
             catch (CryptographicException)
             {
@@ -420,12 +425,26 @@ public static class ArticleEndpoints
         });
     }
 
-    // Stable per-caller key for the unlock cache so one user's unlock can't be reused by another.
-    private static string CallerKey(HttpContext ctx)
+    // Stable per-caller key for the unlock cache so one caller's unlock can't be reused by another.
+    // A browser caller (Web proxy, internal key) is further scoped to its own login session: the Web
+    // app mints a random id per sign-in and forwards it as X-Web-Session (see InternalKeyHandler).
+    // Without it, the same user signed in on a second device or browser would see the article open
+    // there too. A non-agent request that lacks the header gets no key at all — the cache is then
+    // bypassed and the user is re-prompted, rather than falling back to a user-wide entry.
+    private static string? CallerKey(HttpContext ctx)
     {
         var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
-        return $"u{userId}:a{agentId}:s{isSuperadmin}";
+        var key = $"u{userId}:a{agentId}:s{isSuperadmin}";
+        if (agentId != null) return key;
+
+        var webSession = ctx.Request.Headers["X-Web-Session"].FirstOrDefault();
+        if (string.IsNullOrEmpty(webSession) || webSession.Length > 128 || !InternalKeyValidator.Validate(ctx))
+            return null;
+        return $"{key}:w{webSession}";
     }
+
+    private static int SecondsUntil(DateTime utc) =>
+        Math.Max(0, (int)Math.Ceiling((utc - DateTime.UtcNow).TotalSeconds));
 
     // Shared gate for protected-article WRITE operations: internal key + unlocked session + write ACL.
     // Returns the metadata on success, or the IResult to return on failure.

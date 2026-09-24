@@ -21,6 +21,8 @@ public class ViewModel(ApiClient api) : PageModel
     // a passphrase the user just typed on this page load — lets the page open straight to the
     // unlocked view instead of the passphrase gate.
     public bool IsUnlockedFromCache { get; private set; }
+    // Seconds left in that recent-unlock window, for the "locks automatically in N min" countdown.
+    public int? UnlockExpiresInSeconds { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(Guid id)
     {
@@ -46,6 +48,7 @@ public class ViewModel(ApiClient api) : PageModel
                 {
                     Content = ec.Content;
                     IsUnlockedFromCache = true;
+                    UnlockExpiresInSeconds = ec.UnlockExpiresInSeconds;
                 }
                 else
                 {

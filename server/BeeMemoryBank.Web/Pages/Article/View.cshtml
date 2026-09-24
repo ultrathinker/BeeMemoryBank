@@ -125,6 +125,11 @@
             </div>
         </div>
         <div class="card" id="unlocked-card" style="@(Model.IsUnlockedFromCache ? "" : "display:none;")">
+            <div class="unlock-banner" id="unlock-banner" style="display:none;">
+                <sl-icon name="unlock"></sl-icon>
+                <span>Temporarily unlocked &middot; locks automatically in <strong id="unlock-remaining"></strong></span>
+                <a href="#" id="lnk-lock-now">Lock now</a>
+            </div>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px;">
                 @if (!Model.IsReadOnly)
                 {
@@ -440,6 +445,7 @@ else
     var treePath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"));
     var isProtected = @(Model.Article?.Protected == true ? "true" : "false");
     var isUnlockedFromCache = @(Model.IsUnlockedFromCache ? "true" : "false");
+    var unlockExpiresInSeconds = @(Model.UnlockExpiresInSeconds?.ToString() ?? "null");
 
     function renderMarkdown(md) {
         var body = document.getElementById('article-body');
@@ -467,6 +473,45 @@ else
         var unlockError = document.getElementById('unlock-error');
         var btnUnlock = document.getElementById('btn-unlock');
         var btnRelock = document.getElementById('btn-relock');
+        var unlockBanner = document.getElementById('unlock-banner');
+        var unlockRemaining = document.getElementById('unlock-remaining');
+        var lnkLockNow = document.getElementById('lnk-lock-now');
+        var unlockTimer = null;
+
+        function formatRemaining(sec) {
+            return sec >= 60 ? Math.ceil(sec / 60) + ' min' : sec + ' s';
+        }
+
+        // Countdown to the server-side unlock window closing. Deadline-based rather than a decrementing
+        // counter, so a throttled background tab (or a bfcache restore) still re-locks on time.
+        function startUnlockCountdown(seconds) {
+            if (unlockTimer) { clearInterval(unlockTimer); unlockTimer = null; }
+            if (seconds == null) { unlockBanner.style.display = 'none'; return; }
+            var deadline = Date.now() + seconds * 1000;
+            unlockBanner.style.display = '';
+            function tick() {
+                var left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+                unlockRemaining.textContent = formatRemaining(left);
+                if (left <= 0) relock();
+            }
+            tick();
+            unlockTimer = setInterval(tick, 1000);
+        }
+
+        // Clear the decrypted DOM and show the lock card again. Also drop the server-side
+        // unlock-cache entry - otherwise the next reload (within its TTL) would show the
+        // article unlocked again, silently undoing this. (When the countdown ran out the entry
+        // has already expired; the call is then just a harmless no-op.)
+        function relock() {
+            if (unlockTimer) { clearInterval(unlockTimer); unlockTimer = null; }
+            fetch('/api-proxy/article/' + articleId + '/relock', { method: 'POST' });
+            var body = document.getElementById('article-body');
+            if (body) body.innerHTML = '';
+            unlockBanner.style.display = 'none';
+            unlockedCard.style.display = 'none';
+            lockCard.style.display = '';
+            if (unlockPass) unlockPass.focus();
+        }
 
         function doUnlock() {
             var pass = unlockPass.value || '';
@@ -487,6 +532,7 @@ else
                 unlockPass.value = '';
                 lockCard.style.display = 'none';
                 unlockedCard.style.display = '';
+                startUnlockCountdown(data.unlockExpiresInSeconds);
             }).catch(function(err) {
                 unlockError.textContent = err.message;
                 unlockError.style.display = '';
@@ -500,17 +546,9 @@ else
         if (unlockPass) unlockPass.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') { e.preventDefault(); doUnlock(); }
         });
-        if (btnRelock) btnRelock.addEventListener('click', function() {
-            // Clear the decrypted DOM and show the lock card again. Also drop the server-side
-            // unlock-cache entry - otherwise the next reload (within its TTL) would show the
-            // article unlocked again, silently undoing this button.
-            fetch('/api-proxy/article/' + articleId + '/relock', { method: 'POST' });
-            var body = document.getElementById('article-body');
-            if (body) body.innerHTML = '';
-            unlockedCard.style.display = 'none';
-            lockCard.style.display = '';
-            if (unlockPass) unlockPass.focus();
-        });
+        if (btnRelock) btnRelock.addEventListener('click', relock);
+        if (lnkLockNow) lnkLockNow.addEventListener('click', function(e) { e.preventDefault(); relock(); });
+        if (isUnlockedFromCache) startUnlockCountdown(unlockExpiresInSeconds);
     }
 
     // ── Protect / change password / remove protection ──

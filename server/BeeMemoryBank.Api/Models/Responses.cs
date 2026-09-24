@@ -33,8 +33,13 @@ public record ArticleContentResponse(Guid Id, string Content);
 
 // Edit-load helper for protected articles: Unlocked=true means Content holds the plaintext (either
 // a non-protected body or one unlocked from the recent-unlock cache). Unlocked=false → Edit shows the
-// passphrase gate (Content is null).
-public record EditContentResponse(Guid Id, bool Protected, bool Unlocked, string? Content);
+// passphrase gate (Content is null). UnlockExpiresInSeconds is set only when a protected body came
+// from the recent-unlock cache: how long until that window closes (relative, so a skewed browser
+// clock can't distort the countdown the page shows).
+public record EditContentResponse(Guid Id, bool Protected, bool Unlocked, string? Content, int? UnlockExpiresInSeconds = null);
+
+// POST /api/articles/{id}/unlock: the plaintext plus how long the recent-unlock window now lasts.
+public record UnlockArticleResponse(Guid Id, string Content, int? UnlockExpiresInSeconds);
 
 public record SessionStatusResponse(bool IsUnlocked);
 

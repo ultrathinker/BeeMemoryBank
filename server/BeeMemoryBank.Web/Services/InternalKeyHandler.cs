@@ -8,6 +8,9 @@ namespace BeeMemoryBank.Web.Services;
 /// </summary>
 public class InternalKeyHandler(IHttpContextAccessor httpContextAccessor) : DelegatingHandler
 {
+    /// <summary>Claim holding the random per-sign-in id forwarded as X-Web-Session.</summary>
+    public const string WebSessionClaim = "WebSessionId";
+
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -29,6 +32,12 @@ public class InternalKeyHandler(IHttpContextAccessor httpContextAccessor) : Dele
         var displayName = httpContextAccessor.HttpContext?.User.FindFirst("DisplayName")?.Value;
         if (!string.IsNullOrEmpty(displayName))
             request.Headers.TryAddWithoutValidation("X-User-DisplayName", displayName);
+
+        // Per-sign-in id (see LoginModel): the API scopes its protected-article unlock cache by it.
+        // Cookies minted before this claim existed carry none — the API then just re-prompts.
+        var webSession = httpContextAccessor.HttpContext?.User.FindFirst(WebSessionClaim)?.Value;
+        if (!string.IsNullOrEmpty(webSession))
+            request.Headers.TryAddWithoutValidation("X-Web-Session", webSession);
 
         return base.SendAsync(request, cancellationToken);
     }
