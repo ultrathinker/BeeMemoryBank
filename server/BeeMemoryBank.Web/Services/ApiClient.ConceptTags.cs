@@ -17,10 +17,10 @@ public partial class ApiClient
             $"/api/search?q={Uri.EscapeDataString(query)}&content={content}&page={page}&pageSize={pageSize}", JsonOpts);
 
     /// <summary>
-    /// WP-16: ranked article results from <c>/api/search/hybrid</c> (RRF-combined BM25 keyword +
+    /// Ranked article results from <c>/api/search/hybrid</c> (RRF-combined BM25 keyword +
     /// chunk-based semantic ranking). Returns null on any transport error or non-2xx (locked
     /// session, semantic search not yet initialized for this vault, API down) so callers can fall
-    /// back to the older content-search path rather than surfacing a raw failure.
+    /// back to the linear content-search path rather than surfacing a raw failure.
     /// </summary>
     public async Task<List<ArticleDto>?> SearchHybridArticlesAsync(string query, string mode = "hybrid", int topK = 20)
     {

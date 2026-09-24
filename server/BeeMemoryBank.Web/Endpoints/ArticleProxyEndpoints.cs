@@ -3,9 +3,8 @@ using BeeMemoryBank.Web.Services;
 namespace BeeMemoryBank.Web.Endpoints;
 
 /// <summary>
-/// Hand-written proxy routes that survived the catch-all forwarder migration, plus one-liners
-/// noting the routes that moved into <see cref="ProxyRouteTable"/>. Everything here carries real
-/// Web-side logic the forwarder cannot express:
+/// Hand-written article proxy routes. Everything here carries real Web-side logic the
+/// catch-all forwarder cannot express:
 /// <list type="bullet">
 /// <item>GET /api-proxy/article/{id} composes two upstream calls (metadata + content) into one shape.</item>
 /// <item>PUT /api-proxy/article/{id} branches on the passphrase (protected-article re-wrap).</item>
@@ -16,9 +15,8 @@ namespace BeeMemoryBank.Web.Endpoints;
 /// <item>GET/PUT /api-proxy/article/{id}/concept-tags reshape {"conceptTags":[...]} into a bare
 /// array / 204, which the API does not do.</item>
 /// </list>
-/// Migrated to the table (GET/POST/DELETE/PATCH on /api-proxy/tree, /search, /article (move),
-/// /articles (versions, media list), /concept-tags, /media, /media/upload, /import/*):
-/// pure passthroughs — see ProxyRouteTable.
+/// The pure passthroughs (/api-proxy/tree, /search, /article (move), /articles (versions, media
+/// list), /concept-tags, /media, /media/upload, /import/*) are <see cref="ProxyRouteTable"/> entries.
 /// </summary>
 public static class ArticleProxyEndpoints
 {

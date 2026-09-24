@@ -71,8 +71,8 @@ builder.Services.AddRazorPages();
 // mDNS browser: powers the "Found nodes on your network" list in the Setup join wizard.
 // Web only browses (the API does the announcing); the manual-URL-entry path stays fully functional.
 builder.Services.AddMdnsBrowser();
-// W3 (Option A): Web-side cache for security-stamp lookups so OnValidatePrincipal does not
-// round-trip the API on every authenticated request. TTL 5 minutes bounds staleness.
+// Caches security-stamp lookups so OnValidatePrincipal does not round-trip the API on every
+// authenticated request. The 5-minute TTL bounds how stale a revocation can be.
 builder.Services.AddMemoryCache();
 
 builder.Services.AddAuthentication("BeeWebCookie")
@@ -89,30 +89,26 @@ builder.Services.AddAuthentication("BeeWebCookie")
         // Development can still log in over http://localhost because Chrome
         // exempts localhost from the Secure cookie restriction.
         options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
-        // W3 (Option B): the actual ExpireTimeSpan/SlidingExpiration values are admin-
-        // configurable (default 48h, sliding ON) — see the AddOptions<CookieAuthenticationOptions>
-        // .Configure<WebSessionSettingsService> registration below, which runs AFTER this
-        // delegate and overrides these two properties with the current DB-backed values.
-        // Option A (security-stamp revalidation) adds independent per-event revocation on top,
-        // regardless of the configured lifetime.
+        // ExpireTimeSpan/SlidingExpiration are admin-configurable (default 48h, sliding ON): the
+        // AddOptions<CookieAuthenticationOptions>.Configure<WebSessionSettingsService> registration
+        // below runs AFTER this delegate and overrides both with the DB-backed values. Security-stamp
+        // revalidation adds per-event revocation on top, regardless of the configured lifetime.
 
-        // W3 (Option A): revalidate the cookie's embedded security stamp against the API.
-        // Runs on every AUTHENTICATED request (static files run before auth, so never on
-        // CSS/JS). The stamp lookup is cached per-user for 5 minutes (IMemoryCache) so the
-        // hot path normally hits memory. Behaviour rule (F2): the lookup distinguishes three
-        // outcomes so an authoritative 404 is not conflated with a transport error:
-        //   * absent stamp claim (cookie from before this feature) → REJECT → forced re-login;
+        // Revalidate the cookie's embedded security stamp against the API on every AUTHENTICATED
+        // request (static files run before auth, so never on CSS/JS). Lookups are cached per user
+        // for 5 minutes. An authoritative 404 must not be conflated with a transport error:
+        //   * absent stamp claim → REJECT → forced re-login;
         //   * stamp mismatch (password/role change, deletion) → REJECT;
         //   * HTTP 404 / user definitively gone → REJECT (authoritative answer, not fail-open);
-        //   * API unreachable / 5xx / lookup throws → FAIL OPEN (an API hiccup must not log out
-        //     the whole site; the 8h cookie ceiling already bounds exposure).
+        //   * API unreachable / 5xx / lookup throws → FAIL OPEN: an API hiccup must not log out
+        //     the whole site, and nothing is cached, so revocation resumes on the next lookup.
         options.Events = new CookieAuthenticationEvents
         {
             OnValidatePrincipal = async context =>
             {
                 var principal = context.Principal;
                 var stampClaim = principal?.FindFirst("SecurityStamp")?.Value;
-                // Absent claim → old cookie from before this feature → reject (safe, one-time).
+                // Absent claim → reject: a stampless cookie cannot be revalidated, so it forces a re-login.
                 if (string.IsNullOrEmpty(stampClaim))
                 {
                     context.RejectPrincipal();
@@ -126,12 +122,11 @@ builder.Services.AddAuthentication("BeeWebCookie")
                     return;
                 }
 
-                // Cookies minted before the per-sign-in WebSessionId claim existed carry none, and
-                // without it the API never caches a protected-article unlock (so no "locks in N min"
-                // countdown, and every reload re-prompts). Upgrade such a cookie in place instead of
-                // forcing a re-login: add a fresh id and re-issue the cookie. Two concurrent requests
-                // on the same old cookie may each mint one; the last Set-Cookie wins, which at worst
-                // costs one extra passphrase prompt. A later RejectPrincipal below still wins.
+                // Without the per-sign-in WebSessionId claim the API never caches a protected-article
+                // unlock (no "locks in N min" countdown, every reload re-prompts). Upgrade such a
+                // cookie in place instead of forcing a re-login: add a fresh id and re-issue it. Two
+                // concurrent requests on the same cookie may each mint one; the last Set-Cookie wins,
+                // costing at worst one extra passphrase prompt. A later RejectPrincipal still wins.
                 if (principal!.FindFirst(InternalKeyHandler.WebSessionClaim) == null
                     && principal.Identity is ClaimsIdentity oldIdentity)
                 {
@@ -164,10 +159,9 @@ builder.Services.AddAuthentication("BeeWebCookie")
                         return;
                     }
 
-                    // F2: HTTP 404 / definitive "user no longer exists" → REJECT. Unlike a transport
-                    // error, a 404 is an authoritative answer from the API, so failing open would
-                    // wrongly keep a deleted/demoted user's session alive. Not cached (next request
-                    // would just reject again anyway).
+                    // HTTP 404 / definitive "user no longer exists" → REJECT. Unlike a transport
+                    // error, a 404 is an authoritative answer, so failing open would keep a
+                    // deleted/demoted user's session alive. Not cached (the next request rejects too).
                     if (lookup.Outcome == SecurityStampLookupOutcome.NotFound)
                     {
                         logger.LogWarning("Security-stamp lookup 404 for user {UserId}; rejecting principal.", userId);
@@ -176,8 +170,8 @@ builder.Services.AddAuthentication("BeeWebCookie")
                     }
 
                     // Transport error / 5xx / unreachable / malformed body → FAIL OPEN. Do NOT log
-                    // everyone out on an API hiccup; the 8h cookie ceiling already bounds exposure.
-                    // The 5-min cache is NOT populated so the next request retries the lookup.
+                    // everyone out on an API hiccup. The 5-min cache is NOT populated, so the next
+                    // request retries the lookup.
                     if (lookup.Outcome != SecurityStampLookupOutcome.Found || string.IsNullOrEmpty(lookup.Stamp))
                         return;
 
@@ -341,10 +335,9 @@ app.Use(async (ctx, next) =>
     headers["Content-Security-Policy"] =
         "default-src 'self'; " +
         "script-src 'self'; " +
-        // W5b: removed https://maxcdn.bootstrapcdn.com (EasyMDE's FontAwesome CDN). EasyMDE is
-        // pointed away from the CDN via autoDownloadFontAwesome:false, and its toolbar icons are
-        // swapped for the app's own vendored Shoelace <sl-icon> set immediately after construction
-        // (see replaceToolbarIcons in Article/Edit.cshtml) — no FontAwesome vendoring needed.
+        // No FontAwesome CDN origin: EasyMDE runs with autoDownloadFontAwesome:false and its
+        // toolbar icons are swapped for the vendored Shoelace <sl-icon> set right after
+        // construction (see replaceToolbarIcons in Article/Edit.cshtml).
         "style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data: blob:; " +
         "font-src 'self' data:; " +
@@ -391,10 +384,9 @@ app.Run();
 
 public partial class Program { }
 
-// Request DTOs for the hand-written proxy routes that survived the catch-all migration
-// (ArticleProxyEndpoints / SnapshotProxyEndpoints). The routes that became ProxyRouteTable
-// entries needed no DTO — the forwarder streams request bodies through unparsed.
-// DisposingStreamWrapper is still used by the snapshot download in Admin.cshtml.cs.
+// Request DTOs for the hand-written proxy routes (ArticleProxyEndpoints / SnapshotProxyEndpoints).
+// ProxyRouteTable entries need none: the forwarder streams request bodies through unparsed.
+// DisposingStreamWrapper backs the snapshot download in Admin.cshtml.cs.
 
 internal record UpdateArticleProxyRequest(
     string? Title,

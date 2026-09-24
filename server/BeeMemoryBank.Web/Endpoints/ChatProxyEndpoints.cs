@@ -3,7 +3,7 @@ using BeeMemoryBank.Web.Services;
 namespace BeeMemoryBank.Web.Endpoints;
 
 /// <summary>
-/// The two SSE passthroughs survived the catch-all migration — they are NOT plain forwards:
+/// The two SSE passthroughs stay explicit because they are NOT plain forwards:
 /// <list type="bullet">
 /// <item>Streaming requires HttpCompletionOption.ResponseHeadersRead plus a per-chunk copy with a
 /// flush after each write, so the browser receives SSE frames incrementally (a buffered forward
@@ -15,7 +15,7 @@ namespace BeeMemoryBank.Web.Endpoints;
 /// UI verbatim instead of being served as a dead event-stream.</item>
 /// </list>
 /// All the JSON chat routes (models, keys, settings, conversations, home-pinned, attachments)
-/// were pure passthroughs and moved into ProxyRouteTable — the forwarder serves them.
+/// are pure passthroughs served from ProxyRouteTable by the forwarder.
 /// </summary>
 public static class ChatProxyEndpoints
 {
@@ -32,7 +32,7 @@ public static class ChatProxyEndpoints
                 if (!string.IsNullOrEmpty(ctx.Request.ContentType))
                     // Raw copy, NOT via the MediaTypeHeaderValue constructor: it rejects parameters
                     // ("application/json; charset=utf-8" — exactly what every browser fetch sends),
-                    // which turned each streaming request into a FormatException / 500.
+                    // which would turn every streaming request into a FormatException / 500.
                     upstreamReq.Content.Headers.TryAddWithoutValidation(
                         "Content-Type", ctx.Request.ContentType);
             }
@@ -80,7 +80,7 @@ public static class ChatProxyEndpoints
             }
         }).RequireAuthorization();
 
-        // Phase 3 human-in-the-loop: the /stream loop pauses on a write tool call (confirm_required)
+        // Human-in-the-loop: the /stream loop pauses on a write tool call (confirm_required)
         // and the user picks Allow/Deny. This forwards that decision to the Api confirm endpoint,
         // which executes the write (or denial) and streams the CONTINUATION as a fresh SSE response.
         // Same passthrough contract as /stream above.
@@ -93,7 +93,7 @@ public static class ChatProxyEndpoints
                 if (!string.IsNullOrEmpty(ctx.Request.ContentType))
                     // Raw copy, NOT via the MediaTypeHeaderValue constructor: it rejects parameters
                     // ("application/json; charset=utf-8" — exactly what every browser fetch sends),
-                    // which turned each streaming request into a FormatException / 500.
+                    // which would turn every streaming request into a FormatException / 500.
                     upstreamReq.Content.Headers.TryAddWithoutValidation(
                         "Content-Type", ctx.Request.ContentType);
             }

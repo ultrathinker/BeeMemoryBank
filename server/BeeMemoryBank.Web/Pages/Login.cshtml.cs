@@ -73,9 +73,9 @@ public class LoginModel(ApiClient api) : PageModel
             new(ClaimTypes.Role, result.Role!),
             new("DisplayName", result.DisplayName ?? result.Username!),
             new("UserId", result.UserId ?? ""),
-            // W3 (Option A): node-local security stamp. OnValidatePrincipal revalidates this
-            // against the API periodically; a mismatch (password/role change, deletion) rejects
-            // the cookie. Absent claim (cookie minted before this feature) → reject → re-login.
+            // Node-local security stamp. OnValidatePrincipal revalidates this against the API
+            // periodically; a mismatch (password/role change, deletion) rejects the cookie, and
+            // so does a cookie without the claim (→ re-login).
             new("SecurityStamp", result.SecurityStamp ?? ""),
             // Random per-sign-in id, forwarded to the API as X-Web-Session. It scopes the
             // protected-article unlock window to this browser's login, so unlocking an article here

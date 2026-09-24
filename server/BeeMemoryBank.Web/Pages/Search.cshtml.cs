@@ -15,7 +15,7 @@ public class SearchModel(ApiClient api) : PageModel
 
     /// <summary>
     /// True when hybrid/keyword/semantic search was unavailable for this request and the page fell
-    /// back to the old linear content scan instead. The view uses this to disclose the fallback
+    /// back to the linear content scan instead. The view uses this to disclose the fallback
     /// rather than silently showing results under a mode label that isn't actually what ran.
     /// </summary>
     public bool IsFallback { get; private set; }
@@ -43,10 +43,9 @@ public class SearchModel(ApiClient api) : PageModel
 
         Query = q;
 
-        // Article body content is always searched now -- the mode selector controls HOW (exact
-        // match, meaning, or both via RRF), not WHETHER. This search is fast enough (BM25 + the
-        // in-memory chunk cache) that there is no longer a reason to make it opt-in the way the
-        // old linear body scan was.
+        // Article body content is always searched -- the mode selector controls HOW (exact match,
+        // meaning, or both via RRF), not WHETHER. BM25 + the in-memory chunk cache make it fast
+        // enough that it need not be opt-in.
         // Folders + a title/tag metadata supplement to merge under the hybrid results. Request a
         // full page of metadata (pageSize 100) so the supplement isn't clipped; folders always
         // accompany page 1. This call is not itself paged — it augments the relevance-ranked set.
@@ -56,12 +55,10 @@ public class SearchModel(ApiClient api) : PageModel
         if (articles is null)
         {
             // Hybrid/keyword/semantic search unavailable for this vault or session (e.g. locked,
-            // or semantic search was never initialized on this node) -- fall back to the old
-            // linear content scan rather than surfacing a broken page. IsFallback lets the view
-            // disclose this: without it, a user who picked "meaning only" and got zero results
-            // would have no way to tell "no conceptual matches exist" apart from "semantic search
-            // never actually ran for this request" -- silently swapping in a plain substring scan
-            // under a mode label that no longer describes what happened is misleading.
+            // or semantic search was never initialized on this node) -- fall back to the linear
+            // content scan rather than surfacing a broken page. IsFallback lets the view disclose
+            // this, so a user who picked "meaning only" and got zero results can tell "no
+            // conceptual matches" from "semantic search never ran for this request".
             IsFallback = true;
             Results = await api.SearchAsync(q, content: true, page: Page);
             return;

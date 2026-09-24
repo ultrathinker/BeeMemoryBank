@@ -29,8 +29,8 @@ public static class MiscProxyEndpoints
             return Results.Ok(result);
         }).RequireAuthorization(policy => policy.RequireRole(UserRoles.Superadmin));
 
-        // Remote accounts and /maintenance are table entries now — see ProxyRouteTable
-        // ("remote-accounts", "maintenance"); the API surface they forward to is unchanged.
+        // Remote accounts and /maintenance are ProxyRouteTable entries ("remote-accounts",
+        // "maintenance"), served by the forwarder below.
 
         // Backfill Orphan Media Links proxy — disabled. Auto-link on save handles new uploads.
         // Uncomment together with the UI in Admin.cshtml and the API endpoint if ever needed.
@@ -83,10 +83,9 @@ public static class MiscProxyEndpoints
                     return Results.StatusCode(StatusCodes.Status405MethodNotAllowed);
             }
 
-            // Role gate — the per-route RequireRole("superadmin") semantics that a single
-            // catch-all registration cannot attach per method. The API enforces roles too; this
-            // is the same Web-layer gate the hand-written routes carried (defense in depth, and
-            // it keeps the round-trip local for the obvious case).
+            // Role gate: the per-route RequireRole("superadmin") that a single catch-all
+            // registration cannot attach per method. The API enforces roles too; this is defense
+            // in depth, and it keeps the obvious refusal local.
             if (rule!.RequiredRole != null && !ctx.User.IsInRole(rule.RequiredRole))
                 return Results.Json(new { error = "Forbidden — superadmin only" }, statusCode: 403);
 

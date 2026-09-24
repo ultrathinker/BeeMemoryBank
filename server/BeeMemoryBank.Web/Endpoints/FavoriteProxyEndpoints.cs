@@ -4,11 +4,10 @@ using BeeMemoryBank.Web.Services;
 namespace BeeMemoryBank.Web.Endpoints;
 
 /// <summary>
-/// The favorites LIST route survived the catch-all migration: it degrades an API failure to an
-/// empty list instead of an error, so the sidebar block just stays hidden while the tree below it
-/// still renders. The mutations (add / remove / move / reset-order) were pure passthroughs and
-/// moved into ProxyRouteTable ("favorites") — the forwarder in MiscProxyEndpoints serves them,
-/// and unlike these old handlers it passes the API's error bodies through so the UI can show why.
+/// The favorites LIST route stays explicit: it degrades an API failure to an empty list instead
+/// of an error, so the sidebar block just stays hidden while the tree below it still renders. The
+/// mutations (add / remove / move / reset-order) are ProxyRouteTable passthroughs ("favorites"),
+/// which pass the API's error bodies through so the UI can show why.
 /// </summary>
 public static class FavoriteProxyEndpoints
 {

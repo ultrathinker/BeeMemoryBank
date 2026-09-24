@@ -18,21 +18,21 @@ public enum ProxyRouteFlags
 
     /// <summary>
     /// Apply <see cref="BeeMemoryBank.Hosting.AspNetCore.UserContentResponseHeaders"/> to the
-    /// browser response (CSP <c>sandbox</c> + nosniff), the way the hand-written media GET did.
-    /// The API sets these on its own media responses, but the forwarder relays only a small
-    /// header allow-list, and the Web's global security middleware would otherwise win — media
-    /// bytes opened directly as a document would run under the site CSP (script-src 'unsafe-inline',
-    /// same origin as the session cookie) instead of the sandbox that closes stored-SVG XSS.
+    /// browser response (CSP <c>sandbox</c> + nosniff). The API sets these on its own media
+    /// responses, but the forwarder relays only a small header allow-list, and the Web's global
+    /// security middleware would otherwise win — media bytes opened directly as a document would
+    /// run under the site CSP (same origin as the session cookie) instead of the sandbox that
+    /// closes stored-SVG XSS.
     /// </summary>
     UserContent = 2,
 }
 
 /// <summary>
-/// One method policy inside a route entry. <see cref="RequiredRole"/> mirrors the Web-side
-/// <c>RequireAuthorization(policy =&gt; policy.RequireRole(...))</code> gate the hand-written
-/// routes carried: null = any authenticated user, <see cref="UserRoles.Superadmin"/> = superadmin
-/// only. The API enforces roles independently (X-User-Role via InternalKeyHandler → endpoint
-/// filters); this gate is the same defense-in-depth the explicit routes had.
+/// One method policy inside a route entry. <see cref="RequiredRole"/> is the Web-side equivalent
+/// of <c>RequireAuthorization(policy =&gt; policy.RequireRole(...))</c> on an explicit route:
+/// null = any authenticated user, <see cref="UserRoles.Superadmin"/> = superadmin only. The API
+/// enforces roles independently (X-User-Role via InternalKeyHandler → endpoint filters); this
+/// gate is defense in depth.
 /// </summary>
 /// <param name="Method">Uppercase HTTP method this rule applies to.</param>
 /// <param name="RequiredRole">Required role claim; null = any authenticated user.</param>
@@ -66,31 +66,31 @@ public sealed record ProxyRouteEntry(
 /// unlisted method returns 405 (never a blind forward). This mirrors CallerScopeMiddleware's
 /// deny-all: a forgotten prefix fails safe, and a new route must be added explicitly.
 ///
-/// <para>Entries replicate what the migrated hand-written routes did, per route: URL mapping,
-/// the role gate, and any special response shaping. The API remains the authority for roles and
-/// ACLs — this table is the Web layer's own gate (same layering the explicit routes had).</para>
+/// <para>Each entry states, per route: URL mapping, the role gate, and any special response
+/// shaping. The API remains the authority for roles and ACLs — this table is the Web layer's
+/// own gate, the same layering the explicit routes have.</para>
 ///
 /// <para>Identity headers (X-Internal-Key / X-User-*) are injected automatically by
 /// <see cref="InternalKeyHandler"/> on every forwarded call, so the table only expresses role
-/// gating — not auth. Every hand-written route that carried actual Web-side logic (response
-/// reshaping, composed calls, SSE, caches) is intentionally NOT in this table and stays an
-/// explicit route; see MiscProxyEndpoints for the forwarder and the kept routes' own files.</para>
+/// gating — not auth. A route with real Web-side logic (response reshaping, composed calls, SSE,
+/// caches) is intentionally NOT in this table and stays an explicit route; see
+/// MiscProxyEndpoints for the forwarder and the explicit routes' own files.</para>
 /// </summary>
 public static class ProxyRouteTable
 {
     // path-prefix (relative to /api-proxy, no leading slash, case-insensitive) → entry.
     // Role conventions: null = any authenticated user; UserRoles.Superadmin = superadmin only.
-    // Where the Web gate was looser than the API's (e.g. remote-accounts used to reach the API
-    // and get 403), the entry carries the EFFECTIVE policy — the API already enforced superadmin,
-    // so the Web gate now says so instead of letting the request die as a 502-shaped failure.
+    // An entry carries the EFFECTIVE policy: where the API enforces superadmin (e.g.
+    // remote-accounts), the Web gate says so too, so a refusal is a local 403 instead of an
+    // upstream failure.
     private static readonly Dictionary<string, ProxyRouteEntry> _entries = new(StringComparer.OrdinalIgnoreCase)
     {
         // ── Tree / search / folders / articles (any authenticated user) ──────────
         ["tree"] = new("/api/tree", [new("GET", null)]),
         ["search"] = new("/api/search", [new("GET", null)]),
         // No GET on the collection itself: the API has no GET /api/folders (reads go through
-        // /tree) and no old route served one. The one folder read the UI makes lives at
-        // /folders/search (used by the tree move dialogs and the access dialog).
+        // /tree). The one folder read the UI makes is /folders/search (tree move dialogs and the
+        // access dialog).
         ["folders"] = new("/api/folders", [new("POST", null), new("PATCH", null), new("DELETE", null)]),
         ["folders/search"] = new("/api/folders/search", [new("GET", null)]),
         ["article"] = new("/api/articles", [new("POST", null), new("DELETE", null)]),
@@ -108,8 +108,8 @@ public static class ProxyRouteTable
         ["import/obsidian"] = new("/api/import/obsidian", [new("POST", null)]),
         ["import/bee"] = new("/api/import/bee", [new("POST", null)]),
 
-        // ── Downloads: prepare (POST) + single-use token fetch (GET, token is the credential,
-        //    but the explicit route kept RequireAuthorization — preserved here). ──
+        // ── Downloads: prepare (POST) + single-use token fetch (GET). The token is the
+        //    credential, but authentication is still required on top of it. ──
         ["downloads"] = new("/api/downloads", [new("GET", null), new("POST", null)]),
 
         // ── Concept tags: reads for everyone, mutations superadmin (the API enforces too). ──
@@ -129,9 +129,8 @@ public static class ProxyRouteTable
         ["maintenance"] = new("/api/session/status", [new("GET", null)]),
 
         // ── Sync (the API is superadmin-only for these, GET and POST alike, and returns the
-        //    same {isInvisible} shape the old Web wrapper did; the old Web gates were looser
-        //    only because the API's 403 surfaced as a quiet `false` — the table states the
-        //    real policy, so refusals are local and explicit) ──
+        //    {isInvisible} shape the UI expects; the table states that real policy, so refusals
+        //    are local and explicit rather than an upstream 403) ──
         ["sync/status"] = new("/api/sync/status", [new("GET", UserRoles.Superadmin)]),
         ["sync/delivery-status"] = new("/api/sync/delivery-status", [new("GET", UserRoles.Superadmin)]),
         ["sync/invisible"] = new("/api/sync/invisible",
@@ -147,7 +146,7 @@ public static class ProxyRouteTable
             [new("POST", UserRoles.Superadmin)]),
 
         // ── Chat: JSON routes. The SSE passthroughs (chat/stream, chat/{id}/confirm) stay
-        //    explicit — see ChatProxyEndpoints. Role split mirrors the old per-route gates. ──
+        //    explicit — see ChatProxyEndpoints. Role split is per method. ──
         ["chat/models/all"] = new("/api/chat/models/all", [new("GET", UserRoles.Superadmin)]),
         ["chat/models"] = new("/api/chat/models",
             [new("GET", null), new("POST", UserRoles.Superadmin), new("PATCH", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
@@ -176,14 +175,14 @@ public static class ProxyRouteTable
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("PUT", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
         ["hard-delete"] = new("/api/hard-delete",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin)]),
-        // Scoped to the ONE route the old hand-written proxy served (Admin's add-recovery
-        // button). A bare "keys" prefix would re-expose change-password, password-notice and
-        // auto-unlock endpoints to the browser-facing table — the API still gates them
-        // superadmin-only, but deny-by-default is the point.
+        // Scoped to the ONE keys route the browser needs (Admin's add-recovery button). A bare
+        // "keys" prefix would expose change-password, password-notice and auto-unlock endpoints
+        // to the browser-facing table — the API still gates them superadmin-only, but
+        // deny-by-default is the point.
         ["keys/add-recovery"] = new("/api/keys/add-recovery", [new("POST", UserRoles.Superadmin)]),
 
-        // ── Remote accounts: the whole API surface is superadmin-only (its group filter);
-        //    the entries now state that instead of relaying a 403-shaped 502. ──
+        // ── Remote accounts: the whole API surface is superadmin-only (its group filter),
+        //    and the entry states that so refusals stay local. ──
         ["remote-accounts"] = new("/api/remote-accounts",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
     };

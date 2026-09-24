@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 namespace BeeMemoryBank.Web.Pages;
 
 /// <summary>
-/// "Access from the internet" wizard (superplan §5 Ярус 2, Этап 5) — ties together DDNS,
+/// "Access from the internet" wizard — ties together DDNS,
 /// ACME cert issuance and the reachability self-test behind one superadmin-only page.
 /// Mirrors the Admin page model's conventions: ApiClient is injected, every action is a
 /// POST handler that round-trips through TempData + RedirectToPage, and the view renders

@@ -41,14 +41,10 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
             return Page();
         }
 
-        // Guard: if Api is already running it has the destination db open.
-        // Overwriting the file while Api holds it causes a silent no-op — Api's
-        // connection pool keeps serving the old in-memory state and never notices
-        // the file changed. The only safe fix is to ensure nothing has the db open
-        // before copying. Since coordinating a full orchestrator stop/restart is
-        // out of scope here, we detect this condition honestly and ask the user to
-        // restart the app before migrating (so Api's first boot opens the just-copied
-        // file instead of its own auto-created empty one).
+        // Guard: a running Api has the destination db open, and overwriting the file then is a
+        // silent no-op — Api's connection pool keeps serving the old state. Nothing may hold the
+        // db while copying, and this page cannot stop the Api, so refuse and ask the user to
+        // restart first (Api's first boot then opens the copied file, not a fresh empty one).
         var apiReachable = await api.GetInitStatusAsync();
         if (apiReachable != null)
         {

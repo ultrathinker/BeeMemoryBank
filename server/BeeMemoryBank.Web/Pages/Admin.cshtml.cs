@@ -44,7 +44,7 @@ public class AdminModel(ApiClient api) : PageModel
     public JsonElement? UpdateCheck { get; set; }
     public string? CheckedManifestJson { get; set; }
 
-    // WP-18: search-subsystem latency + index-health diagnostics. Shapes/counts/timings only --
+    // Search-subsystem latency + index-health diagnostics. Shapes/counts/timings only --
     // the API never returns query text or article content here (see SearchMetricsEndpoints).
     public JsonElement? SearchMetrics { get; set; }
 
@@ -331,9 +331,9 @@ public class AdminModel(ApiClient api) : PageModel
 
     /// <summary>
     /// Wipes this node back to the pre-Setup state. Lives here — behind the page's
-    /// <c>[Authorize(Roles = "superadmin")]</c> — rather than on the anonymous Login screen where it
-    /// used to sit: the master password was the only credential, so an unauthenticated visitor could
-    /// grind it and, on a correct guess, destroy the node. The password is still required as
+    /// <c>[Authorize(Roles = "superadmin")]</c> — and never on an anonymous page: with the master
+    /// password as the only credential, an unauthenticated visitor could grind it and, on a
+    /// correct guess, destroy the node. The password is still required as
     /// re-authentication (the API verifies it without unlocking the vault); a locked-out admin with
     /// no way to sign in uses `bmb init reset` on the host instead — see docs/deployment.md.
     /// </summary>

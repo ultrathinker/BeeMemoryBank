@@ -1,10 +1,9 @@
 namespace BeeMemoryBank.Web.Endpoints;
 
 /// <summary>
-/// Every route here was a pure passthrough and moved into ProxyRouteTable
-/// ("roles" and role folder rules under the "restrictions" prefix) — the catch-all forwarder in
-/// MiscProxyEndpoints serves them now, superadmin-gated in the table the same way these explicit
-/// routes were, with the API's own error bodies passed through verbatim.
+/// No explicit routes: role administration is a pure passthrough served from ProxyRouteTable
+/// ("roles", plus role folder rules under "restrictions") by the catch-all forwarder in
+/// MiscProxyEndpoints — superadmin-gated in the table, API error bodies passed through verbatim.
 /// </summary>
 public static class RoleProxyEndpoints
 {

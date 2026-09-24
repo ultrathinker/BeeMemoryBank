@@ -26,7 +26,7 @@ public sealed class BrandingService(IServiceScopeFactory scopeFactory)
 
     // The layout awaits this on every render, and the API HttpClient carries a 30-minute timeout.
     // A hung (not refused) API would otherwise stall page rendering for half an hour, including the
-    // login page, which had no API dependency at all before this cache existed.
+    // login page, which otherwise needs no API to render.
     private static readonly TimeSpan RefreshTimeout = TimeSpan.FromSeconds(3);
 
     private string _name = Branding.DefaultName;

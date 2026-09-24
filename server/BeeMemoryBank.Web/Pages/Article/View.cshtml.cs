@@ -42,7 +42,7 @@ public class ViewModel(ApiClient api) : PageModel
                 // Protected article: same cache-aware helper the Edit page uses. If this caller
                 // verified the passphrase recently (within ProtectedUnlockCache.Ttl), the page opens
                 // straight to the unlocked view instead of the passphrase gate. On a cache miss it
-                // falls back to the gate, same as before.
+                // shows the gate.
                 var ec = await api.GetEditContentAsync(id);
                 if (ec is { Unlocked: true })
                 {
