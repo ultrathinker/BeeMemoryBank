@@ -22,7 +22,7 @@ public static partial class ChatEndpoints
 {
     private static void MapConfirmEndpoint(RouteGroupBuilder group)
     {
-        // ── Phase 3: human-in-the-loop confirm gate ──────────────────────────────────
+        // ── human-in-the-loop confirm gate ───────────────────────────────────────────
         //
         // Resumes a turn that paused on a write tool call (the /stream loop emitted confirm_required
         // and returned without executing the write). The client posts {toolCallId, allow,
@@ -127,7 +127,7 @@ public static partial class ChatEndpoints
                 await JsonError(404, "Pending tool call not found in this conversation.");
                 return;
             }
-            // L5 fix: a pending write used to be confirmable forever — a stale confirm_required
+            // A pending write must not stay confirmable forever — a stale confirm_required
             // card from any earlier turn (possibly one the UI never even rendered — the browser
             // reloaded, the tab was left open for days) could still be clicked "Allow" and execute
             // the model's ORIGINAL proposed write with today's approval, even though the model has
@@ -152,7 +152,7 @@ public static partial class ChatEndpoints
                 return;
             }
 
-            // In-flight guard (Phase 3): prevents two concurrent /confirm requests for the SAME tool
+            // In-flight guard: prevents two concurrent /confirm requests for the SAME tool
             // call from both executing the write (two tabs / a rapid double-click that races the
             // idempotency check above — both load history before either persists a tool result). The
             // TryAdd sits immediately after that check (no await between them) so a concurrent request

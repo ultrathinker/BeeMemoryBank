@@ -39,7 +39,7 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory, Chat
             $"SELECT {KeyCols} FROM chat_api_key ORDER BY priority ASC, created_at ASC")).ToList();
     }
 
-    /// <summary>Phase 4: enabled keys that are ALSO eligible right now — i.e. not currently in a
+    /// <summary>Enabled keys that are ALSO eligible right now — i.e. not currently in a
     /// cooldown window (<c>disabled_until</c> NULL or in the past), ordered by priority then age. This
     /// is the failover candidate list: a 402/429 sets a future <c>disabled_until</c>, dropping the key
     /// out of this set until the cooldown elapses. A 401 disables the row entirely (enabled=0) so it
@@ -155,7 +155,7 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory, Chat
             new { id, now = UtcNow(), lastError });
     }
 
-    /// <summary>Phase 4: records the outcome of using a key for egress on the failover path.
+    /// <summary>Records the outcome of using a key for egress on the failover path.
     /// <list type="bullet">
     /// <item><c>disable=true</c> (HTTP 401 — unauthorized/revoked) → sets <c>enabled=0</c> so the key
     /// is dropped from the candidate list until an admin re-enables it; clears <c>disabled_until</c>
@@ -194,7 +194,7 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory, Chat
         }
     }
 
-    /// <summary>Phase 4: a key served a request successfully — clear its cooldown window + last error
+    /// <summary>A key served a request successfully — clear its cooldown window + last error
     /// so a recovered key shows a clean status, and stamp <c>last_used_at</c>.</summary>
     public async Task RecordKeySuccessAsync(Guid id)
     {
@@ -343,9 +343,9 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory, Chat
             new { textId, visionId, imageGenId });
     }
 
-    // ── chat_user_settings (per-user; M1 fix) ───────────────────────────────────
+    // ── chat_user_settings (per-user) ───────────────────────────────────
 
-    /// <summary>Per-user opt-in (redesigned from a superadmin-only node-global toggle — see M1):
+    /// <summary>Per-user opt-in:
     /// when true, the streaming tool loop executes THIS USER's write tool calls immediately (still
     /// ACL-checked, still destructive-op-capped, still audit-tagged) instead of pausing for a human
     /// Allow/Deny. Off by default; no row for a user means false, not a table miss.</summary>

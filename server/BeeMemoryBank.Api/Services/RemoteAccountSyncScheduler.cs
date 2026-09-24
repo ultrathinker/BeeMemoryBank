@@ -88,7 +88,7 @@ public class RemoteAccountSyncScheduler(
                     // the subscription on the first failure — record the status
                     // and let the user explicitly detach via the Remote Accounts
                     // page. The applier's safety-net also blocks mass cleanup in
-                    // the empty-snapshot case (caught by Claude+kilo round-3).
+                    // the empty-snapshot case.
                     await accountRepo.UpdateStatusAsync(account.Id, "access_lost",
                         $"Owner returned HTTP {(int)resp.StatusCode} for {sub.RemoteFolderPath}. " +
                         "If permanent, detach the subscription manually.", DateTime.UtcNow);

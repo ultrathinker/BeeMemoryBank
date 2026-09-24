@@ -17,8 +17,8 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
         "/api/session/unlock",
         "/api/session/login",
         "/api/join",
-        // Cross-instance Phase 3 token issuance — same brute-force risk as
-        // /login but bypasses InternalKeyValidator entirely (Claude round-3).
+        // Cross-instance token issuance — same brute-force risk as
+        // /login but bypasses InternalKeyValidator entirely.
         "/api/auth/remote-token",
         // Verifies a master password and, when it matches, WIPES THE NODE. The Web layer's
         // PublicRateLimitMiddleware covers the browser route into this; listing it here closes
@@ -48,9 +48,9 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
             // and CLI (DekRotateCommand/SnapshotCommand → X-Internal-Key) all carry it on the calls
             // they make to these protected paths. Loopback WITHOUT the key is just an anonymous
             // caller that happens to be local — exactly the shape a reverse proxy on the same host
-            // produces when BMB_TRUST_LOOPBACK_FORWARDED_HEADERS is not set, and exactly the case
-            // B3 fixes: previously every loopback caller skipped the limiter, so an internet client
-            // reaching the API through such a proxy got an unlimited password oracle.
+            // produces when BMB_TRUST_LOOPBACK_FORWARDED_HEADERS is not set. Skipping the limiter
+            // for those would hand an internet client reaching the API through such a proxy an
+            // unlimited password oracle.
             //
             // Browser traffic reaches this hop through the Web layer (which presents the key), so
             // it is still keyed correctly by the key check, not by IP. The Web's own

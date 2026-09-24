@@ -20,15 +20,15 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static partial class ChatEndpoints
 {
-    // ── Phase 4: multi-key failover ────────────────────────────────────────────
+    // ── multi-key failover ────────────────────────────────────────────
     //
     // The chat egress path no longer pins one "highest-priority enabled key". Instead it decrypts
     // every AVAILABLE key (enabled AND not currently in a cooldown window) and tries them in priority
     // order. A key-specific HTTP failure triggers a per-key circuit breaker; a transient failure just
     // advances to the next key. When every key is exhausted, a clear AllKeysExhaustedException bubbles
     // up (→ 502 JSON for the non-streaming endpoints, → an `event: error` SSE frame for the streaming
-    // loop). Plan §2 Phase 4: "per-key circuit breaker (401→session-disable, 402/429→cooldown,
-    // 5xx→retry-next); structured event: error when exhausted."
+    // loop). Per-key circuit breaker: 401→session-disable, 402/429→cooldown,
+    // 5xx→retry-next; structured event: error when exhausted.
 
     /// <summary>A decrypted egress key held transiently for one chat turn. The plaintext lives only in
     /// memory for the duration of the failover attempt(s); the caller nulls the list reference when the

@@ -21,10 +21,9 @@ public static class SnapshotEndpoints
         // /restore/progress below are SkipInternalKey and authenticate as a sync peer (Bearer) or
         // not at all, so a group-wide gate would break them.
         //
-        // RequireNonAgent rides along on every one of them. These handlers previously compared the
-        // X-User-Role header directly, which no agent request carries; without it the switch to
-        // CallerIdentity would newly let a superadmin-owned MCP key restore, upload or delete a
-        // snapshot — i.e. read and replace the whole vault. Same pairing as /api/keys.
+        // RequireNonAgent rides along on every one of them: role checks alone no longer stop
+        // agent requests — without it a superadmin-owned MCP key could restore, upload or
+        // delete a snapshot, i.e. read and replace the whole vault. Same pairing as /api/keys.
         var group = app.MapGroup("/api/snapshots").WithTags("Snapshots").RequireInternalKey();
 
         group.MapGet("/", (SnapshotService svc, HttpContext ctx) =>

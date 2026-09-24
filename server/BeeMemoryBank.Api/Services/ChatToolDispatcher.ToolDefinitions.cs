@@ -20,7 +20,7 @@ public sealed partial class ChatToolDispatcher
             Tool("bee_search_content", "Ranked search inside article BODIES, plus title/folder matches merged in (same as bee_search). mode: 'hybrid' (default) combines exact-term and meaning-based matching; 'keyword' is exact-term only; 'semantic' is meaning-based only (needs embeddings generated on this node). An unrecognized mode value is an error. Degrades to title-only search (with a 'notice' explaining why) when the vault is locked or ranked/semantic search is unavailable.",
                 P("keywords", "string", "Keywords to find in article body text.", required: true),
                 P("mode", "string", "Search mode: 'hybrid' (default), 'keyword', or 'semantic'. Omit for hybrid.")),
-            // ── Phase 3 write tools (confirm-gated: the user is shown an Allow/Deny card before any of these run) ──
+            // ── write tools (confirm-gated: the user is shown an Allow/Deny card before any of these run) ──
             Tool("bee_save_article", "Create a new article (title, treePath, content, optional tags). Folders in treePath are auto-created. The user will be asked to APPROVE this before it runs.",
                 P("title", "string", "Article title.", required: true),
                 P("treePath", "string", "Tree path, e.g. '/Work/Dev'. Must start with '/'.", required: true),

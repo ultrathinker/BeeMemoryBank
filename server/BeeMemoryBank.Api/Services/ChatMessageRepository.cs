@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Api.Services;
 /// CRUD for <c>chat_message</c> (chat.db). Node-local — never synced, never snapshotted.
 /// </summary>
 /// <remarks>
-/// H3 fix: <c>content_text</c> routinely carries decrypted vault content — a <c>role="tool"</c>
+/// <c>content_text</c> routinely carries decrypted vault content — a <c>role="tool"</c>
 /// row's content is a tool RESULT, and for read tools that's a full decrypted article body (see
 /// <c>ChatEndpoints.ToolLoop.SafePersistToolMessage</c>). This repository is the single choke
 /// point every chat_message write and read goes through, so encryption lives here rather than at
@@ -24,8 +24,8 @@ namespace BeeMemoryBank.Api.Services;
 /// which key a column is under; legacy master-DEK rows keep opening through the current or a retired
 /// master DEK until <see cref="MigrateLegacyBatchAsync"/> moves them.
 ///
-/// H3b fix: <c>tool_calls_json</c> was left out of the original H3 fix, but it carries the SAME
-/// class of decrypted vault content whenever the assistant calls a WRITE tool (bee_save_article,
+/// <c>tool_calls_json</c> carries the SAME class of decrypted vault content whenever the
+/// assistant calls a WRITE tool (bee_save_article,
 /// bee_update_article, bee_append_to_article, bee_replace_in_article) — the tool arguments ARE the
 /// article body/patch being written. It is encrypted exactly like content_text, under its OWN
 /// AAD (<see cref="ToolCallsAad"/>) so a ciphertext cannot be moved between the two columns. Pure
@@ -33,8 +33,8 @@ namespace BeeMemoryBank.Api.Services;
 /// call carry vault content" per-tool would be one more place to get wrong, and uniform encryption
 /// costs nothing and cannot leak by misclassification.
 ///
-/// H3a fix: rows written before either of the above shipped — including rows written BETWEEN the
-/// two (content_text encrypted, tool_calls_json still plaintext) — are migrated by
+/// Rows written before chat encryption — including rows written BETWEEN the two passes
+/// (content_text encrypted, tool_calls_json still plaintext) — are migrated by
 /// <see cref="MigrateLegacyBatchAsync"/>, driven by <c>ChatHistoryBackfillProcessor</c>.
 /// </remarks>
 public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatDataProtector protector)
@@ -45,7 +45,7 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
     // column, not the AAD, says which key a ciphertext is under.
     private static readonly byte[] ContentAad = "bmb-chat-message-content-v1"u8.ToArray();
 
-    // H3b fix: distinct from ContentAad (and every other AAD tag) so a ciphertext captured from
+    // Distinct from ContentAad (and every other AAD tag) so a ciphertext captured from
     // one column can never be replayed into the other, even though both live on the same row and
     // share the same key.
     private static readonly byte[] ToolCallsAad = "bmb-chat-message-toolcalls-v1"u8.ToArray();
@@ -53,7 +53,7 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
     private const string ContentDecryptFailurePlaceholder =
         "[unable to decrypt — this message was sealed under a key this node no longer has]";
 
-    // H3b fix: a tool_calls_json row that fails to decrypt must degrade to something every caller
+    // A tool_calls_json row that fails to decrypt must degrade to something every caller
     // can still deserialize. Unlike ContentText's free-text placeholder, this one MUST stay valid
     // JSON matching the ChatToolCall[] shape: ChatEndpoints.Stream/.Confirm both do
     // JsonSerializer.Deserialize<List<ChatToolCall>>(row.ToolCallsJson, ...) with no per-row
@@ -112,7 +112,7 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
             using var key = await protector.AcquireAsync();
             if (message.ContentText is { Length: > 0 })
                 (contentCiphertext, contentIv) = key.EncryptText(message.ContentText, ContentAad);
-            // H3b fix: encrypted uniformly, including pure-read tool calls — see class remarks.
+            // Encrypted uniformly, including pure-read tool calls — see class remarks.
             if (message.ToolCallsJson is { Length: > 0 })
                 (toolCallsCiphertext, toolCallsIv) = key.EncryptText(message.ToolCallsJson, ToolCallsAad);
         }
@@ -192,8 +192,8 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
 
     /// <summary>
     /// Moves up to <paramref name="batchSize"/> legacy rows onto the chat key and returns how many
-    /// rows it looked at (0 = nothing left). A legacy column is either plaintext (written before the
-    /// H3/H3b fixes) or ciphertext sealed directly under the master DEK (written before the chat
+    /// rows it looked at (0 = nothing left). A legacy column is either plaintext (written before
+    /// chat encryption) or ciphertext sealed directly under the master DEK (written before the chat
     /// key); both end up as chat-key ciphertext with <c>*_key_v = 1</c> and the plaintext column
     /// NULL. Each column is migrated independently, mirroring <see cref="DecryptInPlaceAsync"/>.
     ///

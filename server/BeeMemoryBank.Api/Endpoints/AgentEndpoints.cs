@@ -89,7 +89,7 @@ public static class AgentEndpoints
 
             var apiKey = AgentKeyHelper.GenerateApiKey();
 
-            // H6 hybrid model: only a superadmin's agents get a wrapped master DEK, i.e. only
+            // Hybrid model: only a superadmin's agents get a wrapped master DEK, i.e. only
             // they can auto-unlock the vault (AgentAuthMiddleware). Superadmins can already
             // unlock the vault through the web UI, so an agent that does it on their behalf
             // adds no new capability; an ordinary user cannot ("Server is locked" in

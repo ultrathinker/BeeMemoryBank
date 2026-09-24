@@ -35,9 +35,9 @@ public static class InitCommand
     /// <summary>
     /// Wipes the node back to the pre-Setup state. The web UI has the same operation on the
     /// superadmin-only Admin page; this exists as the host-only path for when nobody can sign in
-    /// any more (every superadmin account lost, or the Web layer itself broken) — the situation the
-    /// old anonymous "Reset &amp; rejoin" form on the Login screen used to cover, at the cost of
-    /// exposing a node-wiping master-password oracle to anyone who could load that page.
+    /// any more (every superadmin account lost, or the Web layer itself broken). A node-wiping
+    /// master-password check must never exist as an anonymous, unauthenticated form — that is a
+    /// master-password oracle.
     /// Returns 0 on success, 1 on error.
     /// </summary>
     public static async Task<int> ResetAsync(

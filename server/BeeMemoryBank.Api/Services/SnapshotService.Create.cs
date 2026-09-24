@@ -43,8 +43,8 @@ public partial class SnapshotService
                 var requiredBytes = dbSize * 2;
                 // Typed, not a message the caller has to recognise: the network-restore flow routes
                 // a disk-space refusal to a "continue without a backup?" admin prompt and every
-                // other refusal to a plain failure. It used to tell them apart with
-                // Message.Contains("disk space"), which made this literal a wire contract.
+                // other refusal to a plain failure — the exception type is the contract; never rely
+                // on message text.
                 if (tempDriveInfo.AvailableFreeSpace < requiredBytes)
                     throw new InsufficientDiskSpaceException(
                         $"Insufficient disk space for snapshot: need ~{requiredBytes / (1024 * 1024)}MB in {tempDriveInfo.Name}, have {tempDriveInfo.AvailableFreeSpace / (1024 * 1024)}MB");
@@ -72,12 +72,12 @@ public partial class SnapshotService
             bool dbEncrypted = false;
             if (encryptDb)
             {
-                // Refuse rather than silently downgrade. This used to fall through to "write it
-                // unencrypted" whenever the vault happened to be locked, which is precisely when
-                // nobody is watching — a snapshot taken right after a restart, or by a scheduled
-                // job, landed on disk as a plain SQLite file holding every article body, key slot
-                // and user row. The caller asked for an encrypted snapshot; if that is impossible
-                // the honest answer is an error, not a weaker file with the same name.
+                // Refuse rather than silently downgrade: falling back to "write it unencrypted"
+                // whenever the vault happens to be locked would land a plain SQLite file holding
+                // every article body, key slot and user row on disk at exactly the moments
+                // nobody is watching (right after a restart, scheduled job). The caller asked for
+                // an encrypted snapshot; if that is impossible the honest answer is an error, not
+                // a weaker file with the same name.
                 //
                 // Callers that legitimately need plaintext pass encryptDb: false and say why —
                 // the join snapshot does, because the joining node has no master DEK yet and the

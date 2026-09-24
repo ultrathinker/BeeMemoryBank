@@ -41,7 +41,7 @@ public static class ArticleEndpoints
 
             var conceptTags = await conceptTagRepo.GetByArticleIdAsync(id);
             // ETag mirrors LamportTs so clients can send If-Match on the next PUT
-            // and get a 409 on concurrent edits (Phase 4 conflict-resolution).
+            // and get a 409 on concurrent edits (conflict-resolution).
             ctx.Response.Headers["ETag"] = $"\"v{article.LamportTs}\"";
             return Results.Ok(ArticleResponse.From(article, conceptTags));
         });
@@ -138,7 +138,7 @@ public static class ArticleEndpoints
             // The 409 body contains currentContent (plaintext) so we must NOT
             // serve it before confirming the caller can read this article —
             // otherwise anyone could probe arbitrary GUIDs and exfiltrate content
-            // through forced version-mismatch responses. (kilo security review)
+            // through forced version-mismatch responses.
             var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
             if (!isSuperadmin)
             {
@@ -167,7 +167,7 @@ public static class ArticleEndpoints
                 if (expected.StartsWith("v", StringComparison.OrdinalIgnoreCase))
                     expected = expected[1..];
                 // Fail-closed on malformed If-Match so a client can't bypass
-                // optimistic concurrency by sending garbage (kilo/gemini review).
+                // optimistic concurrency by sending garbage.
                 if (!long.TryParse(expected, out var expectedVersion))
                     return Results.BadRequest(new ErrorResponse(
                         "Invalid If-Match header (expected ETag like \"v12345\")."));

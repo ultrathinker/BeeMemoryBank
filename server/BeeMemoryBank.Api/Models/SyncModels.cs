@@ -20,7 +20,7 @@ public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed255
 /// The pusher MUST use this — not batch[^1].SequenceNum — when advancing its push cursor.
 /// Otherwise events that the remote skipped get permanently lost: the cursor steps over
 /// them and the pusher will never re-send. null means no events applied (all-skipped or
-/// empty batch); pusher should leave its cursor unchanged. (Brainstorm bug #3.)
+/// empty batch); pusher should leave its cursor unchanged.
 /// </param>
 public record SyncApplyResult(int Applied, int Skipped, long? LastAppliedSequence = null, int Dropped = 0);
 

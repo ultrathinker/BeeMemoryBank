@@ -24,9 +24,9 @@ public partial class DekRotationService
 {
     public async Task<Guid> ProposeRotationAsync(string masterPassword, int? initiatorUserId = null)
     {
-        // ConflictException, not a bare InvalidOperationException: /api/dek-rotation/propose has to
-        // answer 409 for "already running" and 400 for every other refusal, and it used to decide
-        // that with Message.Contains("in progress") — one reworded sentence away from a 400.
+        // ConflictException, not a bare InvalidOperationException: /api/dek-rotation/propose must
+        // answer 409 for "already running" and 400 for every other refusal — match on the
+        // exception type, never on Message text (one reworded sentence away from a 400).
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
             throw new ConflictException("Another rotation is in progress.");
         try

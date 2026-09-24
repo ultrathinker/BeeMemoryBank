@@ -121,10 +121,9 @@ public static class WhitelistEndpoints
             if (req.CanGenerateEmbeddings.HasValue) entry.CanGenerateEmbeddings = req.CanGenerateEmbeddings.Value;
 
             // Tell the mesh, and stamp the row with the version that event published — the same
-            // shape the /superadmin and /address handlers below already use. This route used to
-            // write the row and log nothing, so renaming a peer or changing its address here was a
-            // purely local edit: every other node kept the old values forever, with nothing to
-            // indicate the change had not travelled. Found by the repository-write guardrail.
+            // shape the /superadmin and /address handlers below already use. The event IS the
+            // sync: without it, renaming a peer or changing its address here stays a purely
+            // local edit and every other node keeps the old values forever.
             var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, entry.ApiAddress, entry.DisplayName);
 
             entry.UpdatedAt = DateTime.UtcNow;

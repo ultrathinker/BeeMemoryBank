@@ -32,8 +32,8 @@ app.UseExceptionHandler(errorApp =>
     errorApp.Run(async context =>
     {
         var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
-        // The switch this used to inline now lives in ExceptionStatusMap so a test can assert the
-        // type→status pairs directly, rather than the pairs being reachable only through a request.
+        // The type→status pairs live in ExceptionStatusMap so a test can assert them
+        // directly, rather than the pairs being reachable only through a request.
         var (statusCode, message) = BeeMemoryBank.Api.Helpers.ExceptionStatusMap.Map(feature?.Error);
         context.Response.StatusCode = statusCode;
         await context.Response.WriteAsJsonAsync(new ErrorResponse(message));

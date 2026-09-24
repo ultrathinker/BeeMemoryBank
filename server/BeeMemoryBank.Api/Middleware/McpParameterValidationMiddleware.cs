@@ -193,7 +193,7 @@ public class McpParameterValidationMiddleware(RequestDelegate next, McpToolRegis
             // malformed value and the SDK. A non-GUID string (a tree path is the common case:
             // agents that only know an article by its path in the tree, not its GUID) throws
             // deep inside the SDK's binder with the same opaque "An error occurred invoking
-            // {tool}" message that missing/unknown params used to produce, so it needs the
+            // {tool}" message the same way missing/unknown params do, so it needs the
             // same up-front check.
             var invalid = new List<string>();
             if (argsIsObject)

@@ -22,7 +22,7 @@ public static partial class ChatEndpoints
 {
     private static void MapConversationEndpoints(RouteGroupBuilder group)
     {
-        // ── Phase 2: conversation history (all scoped to the caller's own user_id) ──
+        // ── conversation history (all scoped to the caller's own user_id) ──────────
 
         // List the caller's conversations, newest first.
         group.MapGet("/conversations", async (HttpContext ctx, ChatConversationRepository convoRepo) =>
@@ -65,7 +65,7 @@ public static partial class ChatEndpoints
         });
 
         // Load a conversation's transcript (messages oldest-first). Ownership is re-checked by the
-        // user-scoped repo lookup; a foreign conversation id yields 404, never a leak. Phase 5: each
+        // user-scoped repo lookup; a foreign conversation id yields 404, never a leak. Each
         // message carries its attachment refs (user-upload on a user turn, generated-image on an
         // assistant turn) so the UI renders inline images when reopening a conversation. The blobs
         // are NOT inlined here — the UI fetches them via GET /attachments/{id} (ownership-checked).
@@ -81,10 +81,9 @@ public static partial class ChatEndpoints
             if (convo is null)
                 return Results.NotFound(new ErrorResponse("Conversation not found"));
 
-            // H3 fix: content_text/attachment blobs are encrypted under the master DEK now, so
-            // this plaintext transcript cache can no longer be read while the vault is locked —
-            // previously it had NO unlock check at all, so a locked node still handed out every
-            // decrypted article body the AI had ever read in this conversation.
+            // content_text/attachment blobs are encrypted under the master DEK, so this plaintext
+            // transcript cache must not be readable while the vault is locked — a locked node
+            // handing out decrypted article bodies the AI previously read would defeat the lock.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
 
@@ -138,7 +137,7 @@ public static partial class ChatEndpoints
             }));
         });
 
-        // ── Phase 5: serve a chat attachment's bytes (ownership-checked) ────────────────────
+        // ── serve a chat attachment's bytes (ownership-checked) ────────────────────────────
         // Renders inline images in the transcript. Ownership is enforced by the join
         // chat_attachment → chat_message → chat_conversation(user_id) inside GetByIdForUserAsync,
         // so a foreign id yields 404, never a leak. Cacheable (immutable content). The CSP allows
@@ -151,10 +150,10 @@ public static partial class ChatEndpoints
                 return Results.Json(new ErrorResponse("Unauthorized"), statusCode: 401);
             var userId = identity.UserId.Value;
 
-            // H3 fix: the blob is ciphertext under the master DEK now (see ChatAttachmentRepository)
-            // — this endpoint had NO unlock check at all before, so a locked node still served the
-            // raw image bytes (a user-uploaded photo, or a generated image derived from vault
-            // content) to anyone who still held a valid session cookie/agent key.
+            // The blob is ciphertext under the master DEK (see ChatAttachmentRepository), so a
+            // locked node must not serve the raw image bytes (a user-uploaded photo, or a
+            // generated image derived from vault content) to anyone still holding a valid
+            // session cookie/agent key.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
 

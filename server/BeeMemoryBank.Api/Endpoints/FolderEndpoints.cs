@@ -111,11 +111,10 @@ public static class FolderEndpoints
             if (folder == null)
                 return Results.NotFound(new ErrorResponse($"Folder '{path}' not found"));
 
-            // L6: TrimEnd('/') before splitting -- "/Foo/" used to split into ["", "Foo", ""],
-            // so .Last() picked up the trailing EMPTY segment as the new name. RenameAsync then
-            // threw ArgumentException("Folder name cannot be empty.") for a request that looks
-            // completely reasonable to the caller, and (see the catch clauses below) nothing
-            // caught ArgumentException here, so it surfaced as an unhandled 500.
+            // TrimEnd('/') before splitting: the trailing empty segment of "/Foo/"
+            // would otherwise become the new name, which RenameAsync rejects with
+            // ArgumentException — an unhandled 500 for a request that looks
+            // completely reasonable to the caller.
             var newName = req.NewPath.TrimEnd('/').Split('/').Last();
 
             if (!isSuperadmin)
@@ -196,11 +195,11 @@ public static class FolderEndpoints
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
-            // L6: the pre-checks above re-validate against a cache snapshot (GetFullAccessInfoAsync,
-            // 60s TTL) that can be stale relative to what folderSvc.MoveAsync itself enforces at
-            // write time -- and MoveAsync's own descendant-rewrite path can throw for reasons the
-            // pre-checks never model at all. Without this, that throw propagated as an unhandled
-            // 500 instead of the 403 every other ACL denial in this file returns.
+            // The pre-checks above re-validate against a 60s-TTL cache snapshot
+            // (GetFullAccessInfoAsync) that can be stale relative to what folderSvc.MoveAsync
+            // itself enforces at write time, and MoveAsync's own descendant-rewrite can throw
+            // for reasons they never model — without this catch those denials surface as
+            // unhandled 500s instead of the 403 every other ACL denial in this file returns.
             catch (UnauthorizedAccessException ex)
             {
                 WriteAclDenial.TryClassify(ex, out var kind, out var deniedPath);
@@ -238,7 +237,7 @@ public static class FolderEndpoints
             // and THEN tries FolderService.DeleteAsync which throws when the
             // folder is system/remote — leaving us with deleted articles but a
             // surviving folder, and the next remote-sync poll resurrects the
-            // articles under new GUIDs. Caught by Phase 3 E2E test.
+            // articles under new GUIDs.
             var existing = await folderRepo.GetByPathAsync(path);
             if (existing != null && existing.IsSystem)
                 return Results.Json(new ErrorResponse($"System folder {PathHelper.Display(path)} cannot be deleted."), statusCode: 403);
@@ -261,19 +260,19 @@ public static class FolderEndpoints
                         statusCode: 403);
             }
 
-            // L6: folderSvc.DeleteAsync (via SoftDeleteByPathPrefixAsync's H1 descendant walk) and
+            // folderSvc.DeleteAsync (via SoftDeleteByPathPrefixAsync's descendant walk) and
             // EnsureNoRemoteDescendantsAsync can both still throw here even after the pre-checks
-            // above -- the pre-checks re-validate against a 60s-TTL cache snapshot and, for the
-            // descendant-deny case, only ever covered the allowPaths.Count == 0 shape. Without a
-            // catch here those exceptions propagated as unhandled 500s instead of the 403/409 every
-            // other ACL/business-rule denial in this file returns.
+            // above — the pre-checks re-validate against a 60s-TTL cache snapshot and, for the
+            // descendant-deny case, only covered the allowPaths.Count == 0 shape. Without a
+            // catch here those exceptions surface as unhandled 500s instead of the 403/409
+            // every other ACL/business-rule denial in this file returns.
             try
             {
                 var folder = await folderRepo.GetByPathAsync(path);
 
                 // Validate BEFORE destroying anything. DeleteByPathAsync below removes this
                 // folder's articles, and folderSvc.DeleteAsync's own guards (system, remote mirror,
-                // remote descendants, and the H1 descendant write-ACL walk) would otherwise not run
+                // remote descendants, and the descendant write-ACL walk) would otherwise not run
                 // until after that — turning a correctly-denied 403 into a 403 that already deleted
                 // the caller's articles. Same trap the system/remote pre-check above was added for;
                 // EnsureDeletableAsync is the authoritative, non-mutating form of every guard

@@ -9,7 +9,7 @@ namespace BeeMemoryBank.Api.Models;
 /// <c>ArticleEncryptor.Encrypt(plaintext, key, aad)</c> (AES-256-GCM) — under the node chat key when
 /// <see cref="KeyVersion"/> is 1, under the master DEK for a legacy row (see ChatDataProtector).
 /// The plaintext key is held in memory only at creation/decryption time and is NEVER persisted,
-/// logged, or returned to the browser after creation (plan §1).
+/// logged, or returned to the browser after creation.
 /// </summary>
 public class ChatApiKey
 {
@@ -133,7 +133,7 @@ public class ChatMessage
     // Plaintext content. On the way IN to ChatMessageRepository.CreateAsync this is the value
     // that gets encrypted (into ContentCiphertext/ContentIv) before the row is ever written. On
     // the way OUT of ListByConversationAsync this is already decrypted -- callers never see
-    // ciphertext. See H3 fix in ChatMessageRepository.
+    // ciphertext (see ChatMessageRepository).
     public string? ContentText { get; set; }
     /// <summary>On-disk ciphertext for <see cref="ContentText"/> (AES-256-GCM under the key
     /// <see cref="ContentKeyVersion"/> names). Populated by Dapper on read; never set directly by
@@ -142,9 +142,9 @@ public class ChatMessage
     public byte[]? ContentIv { get; set; }
     /// <summary>chat_message.content_key_v — see ChatDataProtector. Read-side only, cleared after decrypt.</summary>
     public int? ContentKeyVersion { get; set; }
-    // H3b fix: ToolCallsJson carries the assistant's raw tool-call arguments, which for any WRITE
+    // ToolCallsJson carries the assistant's raw tool-call arguments, which for any WRITE
     // tool (bee_save_article, bee_update_article, bee_append_to_article, bee_replace_in_article)
-    // ARE decrypted vault content -- the exact gap the original H3 fix (ContentText only) missed.
+    // ARE decrypted vault content -- the exact gap a content-only encryption pass would miss.
     // Same in/out contract as ContentText: plaintext going IN to CreateAsync (encrypted into
     // ToolCallsCiphertext/ToolCallsIv before the row is written), already-decrypted coming OUT of
     // ListByConversationAsync.
@@ -168,9 +168,9 @@ public class ChatMessage
     public DateTime CreatedAt { get; set; }
 }
 
-// ── chat_attachment row (Phase 5: vision + image generation) ──────────────────
-// Schema is unchanged from Phase 0 (id, message_id, kind, mime, blob, created_at) — Phase 5
-// added NO migration and NO additive column. `kind` distinguishes a user-uploaded image sent to
+// ── chat_attachment row (vision + image generation) ──────────────────
+// Schema (id, message_id, kind, mime, blob, created_at) gained NO migration and NO additive
+// column when vision/image generation arrived. `kind` distinguishes a user-uploaded image sent to
 // a vision model ("user-upload") from an image produced by an image-gen model ("generated-image").
 public class ChatAttachment
 {
@@ -179,10 +179,10 @@ public class ChatAttachment
     public string Kind { get; set; } = ""; // "user-upload" | "generated-image"
     public string Mime { get; set; } = "";
     // Plaintext bytes going IN to ChatAttachmentRepository.CreateAsync (encrypted before the row
-    // is written); already-decrypted bytes coming OUT of a repository read. See H3 fix.
+    // is written); already-decrypted bytes coming OUT of a repository read.
     public byte[]? Blob { get; set; }
-    /// <summary>AES-256-GCM IV for <see cref="Blob"/>. Null means a legacy row written before the
-    /// H3 encryption fix, whose Blob is still plaintext.</summary>
+    /// <summary>AES-256-GCM IV for <see cref="Blob"/>. Null means a legacy row whose Blob is
+    /// still plaintext.</summary>
     public byte[]? Iv { get; set; }
     /// <summary>chat_attachment.key_v — which key an encrypted <see cref="Blob"/> is under
     /// (ChatDataProtector). Read-side only, cleared after decrypt.</summary>
@@ -219,7 +219,7 @@ public record ChatCompleteResponse(
     int CompletionTokens,
     string Model);
 
-// ── Phase 2: streaming + conversation persistence ──────────────────────────
+// ── Streaming + conversation persistence ────────────────────────────────────
 
 /// <summary>Streaming tool-loop turn request. The server owns persistence: if
 /// <see cref="ConversationId"/> is null it creates a conversation, otherwise it loads that
@@ -261,7 +261,7 @@ public record HomePinnedResponse(
 
 /// <summary>One stored message in a conversation transcript. Only <c>user</c>/<c>assistant</c>
 /// text turns are rendered as bubbles; <c>tool</c> and assistant tool-call turns are kept for
-/// reconstruction but surfaced collapsed/hidden by the UI. <c>Attachments</c> (Phase 5) lists any
+/// reconstruction but surfaced collapsed/hidden by the UI. <c>Attachments</c> lists any
 /// images linked to the message (user-upload on a user turn, generated-image on an assistant
 /// turn) so the UI renders them inline and offers a "Save to Bee" action.</summary>
 public record ChatMessageRowResponse(

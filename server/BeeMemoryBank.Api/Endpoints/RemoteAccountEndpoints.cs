@@ -18,13 +18,11 @@ public static class RemoteAccountEndpoints
         // Remote accounts are node-wide configuration: any guest could otherwise list
         // owner-configured mirrors, delete subscriptions, or mount a foreign owner's folder under
         // their own writable tree. Restrict the whole surface to superadmin until per-user
-        // ownership is added (security review 2026-05-25). Stated once on the group — it used to
-        // be the same comment plus the same header compare copy-pasted into all seven handlers.
-        // RequireNonAgent alongside the role gate, to keep the reach these routes had before it.
-        // The old check compared X-User-Role directly, which no agent ever sends, so every agent
-        // was refused; CallerIdentity gives an agent its owner's role, so the filter alone would
-        // hand a superadmin's MCP agent the ability to mint and delete credentials for other
-        // people's nodes. Same pairing, and the same reason, as /api/keys.
+        // ownership is added. RequireNonAgent rides along with the role gate: role checks alone
+        // no longer stop agent requests — a superadmin-owned agent resolves through CallerIdentity
+        // with its owner's role, so the filter alone would hand a superadmin's MCP agent the
+        // ability to mint and delete credentials for other people's nodes. Same pairing, and the
+        // same reason, as /api/keys.
         var group = app.MapGroup("/api/remote-accounts").WithTags("RemoteAccount")
             .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 

@@ -32,10 +32,10 @@ public static class SyncEndpoints
         Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
     };
 
-    // L9: /api/sync/challenge is intentionally unauthenticated (a peer needs a challenge before it
+    // /api/sync/challenge is intentionally unauthenticated (a peer needs a challenge before it
     // can prove anything) and, unlike every other sync endpoint, has no Bearer-token gate to bound
     // request volume. Each call allocates a ChallengeEntry plus a CSPRNG-filled 32-byte buffer; the
-    // 60s TTL bounds how long any one entry lives, but nothing previously bounded the ALLOCATION
+    // 60s TTL bounds how long any one entry lives, but nothing else bounds the ALLOCATION
     // rate within that window. Reuses the same SlidingWindowRateLimiter the API's RateLimitMiddleware
     // and the Web layer's public-endpoint limiter use, keyed per-IP like RateLimitMiddleware — a
     // generous budget, since this endpoint is legitimately hit once per sync cycle by every peer in
@@ -54,13 +54,13 @@ public static class SyncEndpoints
         public bool TryAcquire(string key) => _limiter.TryAcquire(key);
     }
 
-    // M5a: sized to comfortably fit a single legitimate event — MediaService's 20MB max file size,
+    // Sized to comfortably fit a single legitimate event — MediaService's 20MB max file size,
     // base64-expanded (~4/3x, ~27MB), plus JSON envelope overhead for the rest of the SyncEvent's
     // fields and the enclosing array. Matches what SyncClient's own size-aware push batching
     // (SplitIntoByteBoundedBatches / PushChunkWithSplitAsync) assumes "too large" means.
     private const long PushMaxRequestBytes = 32L * 1024 * 1024;
 
-    // M5b: pull responses are also bounded by cumulative payload size, not just event count — see
+    // Pull responses are also bounded by cumulative payload size, not just event count — see
     // the /api/sync/events GET handler below.
     private const long PullResponseByteTarget = 32L * 1024 * 1024;
 
@@ -93,7 +93,7 @@ public static class SyncEndpoints
             SyncChallengeRateLimiter challengeLimiter,
             INodeIdentityRepository nodeRepo) =>
         {
-            // L9: per-IP throttle — see SyncChallengeRateLimiter's doc comment. Uses the raw
+            // Per-IP throttle — see SyncChallengeRateLimiter's doc comment. Uses the raw
             // connection IP, same as RateLimitMiddleware, not the GDPR-masked one MaskIp produces
             // for logging (that would bucket a whole /24 together and let one IP in a subnet
             // exhaust another's budget).
@@ -152,8 +152,8 @@ public static class SyncEndpoints
                 return Results.BadRequest("Invalid base64 format.");
             }
 
-            // M6: domain-separated Ed25519 signature, now bound to OUR OWN NodeId (serverNodeId,
-            // above) as well as the challenge bytes. Before this, the signed payload was just
+            // Domain-separated Ed25519 signature, bound to OUR OWN NodeId (serverNodeId,
+            // above) as well as the challenge bytes. Without the NodeId binding, the signed payload is just
             // "BMB-CHALLENGE-V1\0" + challenge with no audience binding at all — a malicious peer
             // (or a LAN MITM; plain-HTTP peers are realistic given mDNS discovery) that a victim
             // node authenticates TO could fetch a challenge from some unrelated third node C and
@@ -163,13 +163,13 @@ public static class SyncEndpoints
             // our real NodeId into what's verified means a signature only verifies at the node it
             // was actually made for.
             //
-            // V1 (unbound) used to be accepted here as an interop fallback for peers that had not
-            // upgraded yet. That acceptance is what made the relay attack redeemable: an attacker
-            // only had to get SOME node to produce an unbound signature over a challenge fetched
-            // from here, and this branch would honour it. The client half of that downgrade is
-            // gone (PeerAuthenticator no longer signs V1 at all, and refuses a challenge with no
-            // ServerNodeId), so keeping the verifier would only preserve the attack surface
-            // without preserving any peer that still needs it. Both ends changed together: every
+            // An UNBOUND V1 signature must never be honoured here, even as an interop fallback:
+            // that acceptance is exactly what would make the relay attack redeemable — an attacker
+            // only has to get SOME node to produce an unbound signature over a challenge fetched
+            // from here, and this branch would honour it. The client half is gone too
+            // (PeerAuthenticator no longer signs V1 at all, and refuses a challenge with no
+            // ServerNodeId), so a verifier here would preserve only attack surface
+            // and no peer that still needs it. Both ends changed together: every
             // node in the mesh must run this build or newer to authenticate.
             var domainTagV2 = "BMB-CHALLENGE-V2\0"u8.ToArray();
             var taggedPayloadV2 = domainTagV2.Concat(serverNodeId.ToByteArray()).Concat(challengeBytes).ToArray();
@@ -198,7 +198,7 @@ public static class SyncEndpoints
             if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
-            // M5b: clamp the caller-suppliable page size — a peer requesting an arbitrarily large
+            // Clamp the caller-suppliable page size — a peer requesting an arbitrarily large
             // `limit` would otherwise force a correspondingly large single DB fetch before we ever
             // get a chance to size-bound the response below.
             limit = Math.Clamp(limit, 1, 1000);
@@ -218,7 +218,7 @@ public static class SyncEndpoints
 
             var events = await eventLogRepo.GetAfterSequenceAsync(afterSequence, limit);
 
-            // M5b: even at the count-based `limit` (1000 by default), events aren't uniformly
+            // Even at the count-based `limit` (1000 by default), events aren't uniformly
             // sized — a burst of near-max-size media_create events (~27MB each once base64-encoded)
             // could otherwise balloon this single response to tens of gigabytes. Trim to a
             // cumulative byte budget, always keeping at least one event so pull still makes forward
@@ -359,13 +359,13 @@ public static class SyncEndpoints
             if (await AuthenticatePeerAsync(ctx, store) is null) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
-            // M5a: `ctx.Request.ContentLength is > 10MB` used to be the only guard here, and it
-            // did nothing against the real client — HttpClient sends a JsonContent body chunked,
-            // with no Content-Length header at all, so this check silently never fired against a
-            // normal push. It only ever fired behind a buffering proxy that added a Content-Length
-            // header, and even then 10MB was too small: a single legitimate media_create event can
+            // `ctx.Request.ContentLength is > 10MB` is NOT a usable guard here:
+            // HttpClient sends a JsonContent body chunked,
+            // with no Content-Length header at all, so that check silently never fires against a
+            // normal push. It only fires behind a buffering proxy that adds a Content-Length
+            // header, and even then 10MB is too small: a single legitimate media_create event can
             // carry up to ~20MB of base64 ciphertext (~27MB once JSON-encoded) alone, so a WORKING
-            // guard at that size would have permanently 413'd every push containing it (SyncClient
+            // guard at that size would permanently 413 every push containing it (SyncClient
             // would retry the identical batch forever — see PushChunkWithSplitAsync's doc comment).
             //
             // Fix: set the actual Kestrel per-request body size limit, which is enforced against
@@ -439,9 +439,9 @@ public static class SyncEndpoints
                     }
                     catch (Exception ex)
                     {
-                        // A pushed event that fails to apply was previously only logged and counted as
-                        // skipped, leaving no persistent trace: a permanently-broken push (bad
-                        // signature, an unmet dependency that never arrives, ...) was invisible to the
+                        // A pushed event that fails to apply must leave a persistent trace, not just
+                        // a log line: a permanently-broken push (bad
+                        // signature, an unmet dependency that never arrives, ...) would otherwise be invisible to the
                         // operator and silently re-pushed every cycle. Record the failure through the
                         // SAME quarantine the pull path uses, so it surfaces in GET /api/sync/quarantine
                         // once it exhausts its retry budget. This does NOT change what the receiver does
@@ -706,9 +706,9 @@ public static class SyncEndpoints
         // to notice it by. Internal-key-gated like the other diagnostic endpoints above (exposes
         // node/event topology, not sensitive content — event payloads aren't included).
         //
-        // M5 follow-up: reads through ISyncQuarantineRepository now (persisted), not the static
-        // in-memory dictionary this used to be — see SyncEventQuarantine's updated doc comment for
-        // why that was a real gap (a restart re-opened a stall it looked like it had just fixed).
+        // Reads through ISyncQuarantineRepository (persisted), not an in-memory dictionary —
+        // see SyncEventQuarantine's doc comment for why in-memory is a real gap (a restart
+        // re-opens a stall it looked like it had just fixed).
         app.MapGet("/api/sync/quarantine", async (ISyncQuarantineRepository quarantineRepo) =>
         {
             var entries = await SyncEventQuarantine.ListAllAsync(quarantineRepo);
@@ -716,7 +716,7 @@ public static class SyncEndpoints
         // Network topology — peer node ids, display names and, in /status, their API addresses. Every browser consumer already reaches it through an /api-proxy route that requires the superadmin role, so this only stops a signed-in user calling the API directly.
         }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
 
-        // ─── Clear / retry a quarantined event (M5 follow-up: operator-triggered) ────
+        // ─── Clear / retry a quarantined event (operator-triggered) ────
         // Deletes the tracking row so the event's failure streak starts fresh (FailureCount back
         // to 0) — the same state transition ClearFailureAsync already performs automatically the
         // moment an event applies/pushes cleanly (SyncClient.cs), just triggered by an operator
@@ -735,9 +735,9 @@ public static class SyncEndpoints
         // (deciding which peer/sequence to rewind to, and re-validating everything applied after
         // that point) that's out of scope here — this endpoint only ever needed to stop requiring
         // manual DB surgery for the tracking row itself.
-        // Superadmin: clearing the quarantine row makes this node retry an event that previously
-        // failed to apply — operator surgery on sync state, not something a regular user should
-        // be able to trigger. It had NO role gate at all until the endpoint-filter sweep.
+        // Superadmin: clearing the quarantine row makes this node retry an event that failed
+        // to apply — operator surgery on sync state, not something a regular user should
+        // be able to trigger.
         app.MapDelete("/api/sync/quarantine/{eventId:guid}", async (Guid eventId, ISyncQuarantineRepository quarantineRepo) =>
         {
             await SyncEventQuarantine.ClearFailureAsync(quarantineRepo, eventId);

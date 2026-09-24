@@ -25,7 +25,7 @@ public partial class DekRotationService
     /// Scans tbl_dek_rotation_state for Committing rows whose originator has
     /// auto_accept_dek_rotation enabled, and re-dispatches AutoAcceptCommitAsync for each.
     /// Called after a successful unlock to handle the case where COMMIT arrived while the
-    /// session was locked. (Claude R2 prod review CRIT-1.)
+    /// session was locked.
     /// </summary>
     public async Task RetryPendingAutoAcceptsAsync()
     {
@@ -139,7 +139,7 @@ public partial class DekRotationService
             // together would only apply the first; the second would throw "Another rotation
             // in progress" and never retry (its event is already in tbl_event so sync won't
             // redeliver). Fire-and-forget — recursion is bounded by the lock + state row count.
-            // (Found by E2E multi-rotation test on 2026-04-26.) Not after a deferral: that row is
+            // Not after a deferral: that row is
             // still Committing, so the sweep would pick it straight back up, fail the same
             // precondition and sweep again, forever. A deferral instead schedules one bounded,
             // backed-off retry (so an always-unlocked server does not wait for an unlock that never
@@ -185,9 +185,9 @@ public partial class DekRotationService
         _progress.Update(DekRotationFlowStep.Committing, 15, "Auto-accept: decrypting new DEK...", eventId: commitEvent.EventId.ToString());
         _progress.ClearError();
 
-        // Decrypt new DEK INSIDE the state-setting try-catch (parallel to AcceptCommitCoreAsync
-        // fix). A CryptographicException from a corrupted payload otherwise stuck _progress at
-        // Committing and leaked oldDek. (Gemini R3 reviewer of god-class refactor.)
+        // Decrypt new DEK INSIDE the state-setting try-catch, parallel to AcceptCommitCoreAsync:
+        // a CryptographicException from a corrupted payload would otherwise stick _progress at
+        // Committing and leak oldDek.
         byte[]? oldDek = null;
         byte[]? newDek = null;
         string? chainEncB64 = null;
@@ -236,7 +236,7 @@ public partial class DekRotationService
         }
         finally
         {
-            // Clear key material on the error path. (Kilo R1 security review CRIT-1.)
+            // Clear key material on the error path.
             // Success path already cleared oldDek + transferred newDek to SessionService. Keyed on
             // the rewrap having returned: Completed is published later, after maintenance ends.
             if (!rewrapped)

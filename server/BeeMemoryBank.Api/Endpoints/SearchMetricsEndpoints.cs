@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace BeeMemoryBank.Api.Endpoints;
 
 /// <summary>
-/// WP-18: admin-only endpoint exposing the search subsystem's process-wide metrics and index-health
+/// Admin-only endpoint exposing the search subsystem's process-wide metrics and index-health
 /// signals so the Admin page can render a "Search" diagnostics section. Mirrors the gating every
 /// other admin endpoint uses (internal key via the route-group filter, plus an unlocked session and
 /// a superadmin role checked in-handler as defense-in-depth) so even coarse metrics never reach an
@@ -30,9 +30,9 @@ public static class SearchMetricsEndpoints
         // GET /api/admin/search/metrics -- latency histograms + index-health numbers.
         //
         // The body is composed entirely of timings, counts, and coarse buckets surfaced from already
-        // existing diagnostics (SearchMetrics from WP-18, IndexBuilder's public counters,
+        // existing diagnostics (SearchMetrics, IndexBuilder's public counters,
         // SearchIndexRuntimeState's warm-start flag). No query text, article title, or article
-        // content is ever placed in the response -- see wp-18-report.md for the privacy audit.
+        // content is ever placed in the response.
         group.MapGet("/metrics", (
             SessionService session,
             SearchMetrics metrics,
@@ -71,8 +71,8 @@ public static class SearchMetricsEndpoints
         });
 
         // GET/PUT /api/admin/search/embeddings-enabled -- the missing self-toggle for
-        // tbl_node_identity.can_generate_embeddings. Found 2026-08-12: this flag could previously
-        // only be flipped by hand-editing the database directly -- no CLI command, Admin UI control,
+        // tbl_node_identity.can_generate_embeddings. The only other way to flip this flag is
+        // hand-editing the database directly -- no CLI command, Admin UI control,
         // or REST endpoint touched it after node init (PUT /api/whitelist/{nodeId} looks similar but
         // edits tbl_whitelist, i.e. what this node believes about OTHER nodes, never its own row).
         group.MapGet("/embeddings-enabled", async (SessionService session, INodeIdentityRepository nodeRepo) =>
@@ -163,9 +163,9 @@ public sealed record SearchTypeMetricsDto(
 }
 
 /// <summary>
-/// Cross-cutting diagnostics for the in-memory encrypted search index (WP-08..13). Every field here
+/// Cross-cutting diagnostics for the in-memory encrypted search index. Every field here
 /// is read straight off already-public properties on <see cref="IndexBuilder"/> / the warm-start
-/// flag on <see cref="SearchIndexRuntimeState"/>; this WP adds no new counters to either of those.
+/// flag on <see cref="SearchIndexRuntimeState"/>; adds no new counters to either of those.
 /// </summary>
 public sealed record SearchIndexHealthDto(
     int SealCount,

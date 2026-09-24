@@ -14,11 +14,11 @@ namespace BeeMemoryBank.Api.Services;
 /// caller's <c>user_id</c>, mirroring <see cref="ChatConversationRepository.GetByIdForUserAsync"/>.
 /// A foreign conversation's attachment id yields null, never a leak.</para>
 ///
-/// <para><b>H3 fix:</b> <c>blob</c> used to be stored and served as plaintext image bytes.
-/// <see cref="CreateAsync"/> now encrypts it (AES-256-GCM, under the node chat key — see
+/// <para><c>blob</c> is never stored or served as plaintext image bytes:
+/// <see cref="CreateAsync"/> encrypts it (AES-256-GCM, under the node chat key — see
 /// <see cref="ChatDataProtector"/> for why not the master DEK) before the row is written; every read
 /// method decrypts it back, so callers only ever see plaintext bytes. A NULL <c>iv</c> column means
-/// a legacy row written before this fix — its <c>blob</c> is read as-is; <c>iv</c> set with a NULL
+/// a legacy plaintext row — its <c>blob</c> is read as-is; <c>iv</c> set with a NULL
 /// <c>key_v</c> means a legacy row sealed directly under the master DEK. Both are moved onto the
 /// chat key by <see cref="MigrateLegacyBatchAsync"/>.</para>
 /// </summary>
@@ -121,7 +121,7 @@ public sealed class ChatAttachmentRepository(ChatDbConnectionFactory factory, Ch
 
     /// <summary>
     /// Moves up to <paramref name="batchSize"/> legacy attachment blobs onto the chat key — plaintext
-    /// ones (<c>iv IS NULL</c>, written before the H3 fix) and ones sealed directly under the master
+    /// ones (<c>iv IS NULL</c>, written before chat encryption) and ones sealed directly under the master
     /// DEK. Mirrors <c>ChatMessageRepository.MigrateLegacyBatchAsync</c>, including the <c>-1</c>
     /// marker for a ciphertext no available master DEK opens and the idempotency guard; see its doc
     /// comment. Returns the number of rows looked at (0 = nothing left).

@@ -80,7 +80,7 @@ public sealed class ProtectedUnlockCache
     /// <see cref="BeeMemoryBank.Core.Services.SessionService.Locked"/> (see
     /// SessionEndpoints.MapSessionEndpoints) so a vault lock also ends this cache's TTL window
     /// immediately, instead of letting it keep handing back plaintext for up to
-    /// <see cref="Ttl"/> after the lock (finding M8). SessionService.Lock() is called from
+    /// <see cref="Ttl"/> after the lock. SessionService.Lock() is called from
     /// several places besides the /lock endpoint (node reset, snapshot/network restore, the
     /// process-shutdown hook) — wiring through the event means all of them are covered by this
     /// one subscription rather than each caller having to remember to clear this cache too.

@@ -9,7 +9,7 @@ namespace BeeMemoryBank.Api.Services;
 /// <c>Storage/Migrations/*.sql</c> (that folder is glob-embedded into the Storage assembly and
 /// Ghost-Hunter-managed), and is NOT registered via <c>AddStorage()</c>. It is invoked from a
 /// dedicated <c>using</c> scope block in <c>Api/Program.cs</c> placed AFTER the beedb migration
-/// blocks. See plan §1 ("Chat DB") + §3 (schema) + §4 (guardrails).
+/// blocks.
 /// </summary>
 public sealed class ChatDbInitializer
 {
@@ -65,9 +65,9 @@ public sealed class ChatDbInitializer
             "ALTER TABLE chat_message ADD COLUMN tool_calls_count INTEGER");
         await EnsureColumnAsync(conn, "chat_message", "duration_ms",
             "ALTER TABLE chat_message ADD COLUMN duration_ms INTEGER");
-        // H3 fix: content_text used to be stored (and read/written) as plaintext, even though it
-        // routinely carries decrypted vault content (a tool result JSON is a full article body —
-        // see ChatToolLoop.SafePersistToolMessage). New rows are now encrypted under the master
+        // content_text routinely carries decrypted vault content (a tool result JSON is a full
+        // article body — see ChatToolLoop.SafePersistToolMessage), so it must never sit in the DB
+        // as plaintext. New rows are encrypted under the master
         // DEK (AES-256-GCM, see ChatMessageRepository) into these two columns instead, and
         // content_text is left NULL going forward. Existing rows are NOT retroactively
         // re-encrypted (there is no reliable point in startup to do that — the vault may still be
@@ -78,9 +78,9 @@ public sealed class ChatDbInitializer
             "ALTER TABLE chat_message ADD COLUMN content_ciphertext BLOB");
         await EnsureColumnAsync(conn, "chat_message", "content_iv",
             "ALTER TABLE chat_message ADD COLUMN content_iv BLOB");
-        // H3b fix: tool_calls_json was left out of the original H3 fix even though it carries the
-        // same class of decrypted vault content (a WRITE tool's arguments ARE the article body
-        // being saved) — see ChatMessageRepository's class remarks. Same shape as content_text's
+        // tool_calls_json carries the same class of decrypted vault content (a WRITE tool's
+        // arguments ARE the article body being saved) — see ChatMessageRepository's class
+        // remarks. Same shape as content_text's
         // pair above: new rows encrypt into these two columns and leave tool_calls_json NULL;
         // ChatMessageRepository reads tool_calls_ciphertext when present and falls back to legacy
         // plaintext tool_calls_json otherwise.
@@ -88,7 +88,7 @@ public sealed class ChatDbInitializer
             "ALTER TABLE chat_message ADD COLUMN tool_calls_ciphertext BLOB");
         await EnsureColumnAsync(conn, "chat_message", "tool_calls_iv",
             "ALTER TABLE chat_message ADD COLUMN tool_calls_iv BLOB");
-        // H3 fix: chat_attachment.blob used to hold raw image bytes unencrypted. New rows encrypt
+        // chat_attachment.blob must never hold raw image bytes unencrypted. New rows encrypt
         // the blob under the master DEK and record the IV here; NULL iv (legacy rows) means the
         // blob column still holds plaintext bytes, read as-is for backward compatibility.
         await EnsureColumnAsync(conn, "chat_attachment", "iv",
@@ -114,7 +114,7 @@ public sealed class ChatDbInitializer
         // needing migration, so it self-shrinks to empty as rows get migrated and stays empty
         // forever after — a node with nothing legacy left pays an empty-index lookup per scan,
         // never a full table scan, regardless of how large chat.db grows. The first three served
-        // the original plaintext-only (H3a) backfill; the *_legacy_key pair now covers that case
+        // the plaintext-only backfill; the *_legacy_key pair now covers that case
         // too and is what the scans use. CREATE INDEX IF NOT EXISTS is unconditionally idempotent
         // (unlike ALTER TABLE ADD COLUMN), so these run every startup with no existence check.
         foreach (var indexDdl in new[]
@@ -162,7 +162,7 @@ public sealed class ChatDbInitializer
         await alterCmd.ExecuteNonQueryAsync();
     }
 
-    // Schema per plan §3. chat_api_key stores only (ciphertext, iv) plus its key-version marker —
+    // chat_api_key stores only (ciphertext, iv) plus its key-version marker —
     // ArticleEncryptor.Encrypt(secret, chatKey, aad) yields exactly those two artifacts (AES-256-GCM
     // with a constant AAD), so there is no salt/kdf_version. The ciphertext/key_v columns of every
     // table below are covered by the key-version comment in InitializeAsync.
@@ -258,10 +258,10 @@ public sealed class ChatDbInitializer
         // the rest of chat.db; never synced. The old category/enabled/default_for_category columns
         // on chat_model are kept for backward compatibility but are no longer read or written by
         // application code — same for auto_approve_writes here (see chat_user_settings below):
-        // M1 fix, a single node-global auto-approve toggle removed the human confirm gate for
-        // EVERY user at once (and required superadmin to touch it on everyone's behalf); the
-        // column is kept only so an upgrade from an older chat.db doesn't need a destructive
-        // migration, never read or written by current code.
+        // auto-approval must be a per-user choice; a single node-global toggle removed the human
+        // confirm gate for EVERY user at once and required superadmin to touch it on everyone's
+        // behalf. The column is kept only so an upgrade from an older chat.db doesn't need a
+        // destructive migration, never read or written by current code.
         """
         CREATE TABLE IF NOT EXISTS chat_settings (
             id                         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -272,7 +272,7 @@ public sealed class ChatDbInitializer
             default_image_gen_model_id TEXT
         );
         """,
-        // M1 fix: auto-approve-writes is now per-user, not a single node-global toggle — each user
+        // Auto-approve-writes is per-user, not a single node-global toggle — each user
         // controls only their OWN confirm-gate bypass for their OWN chat writes (still fully ACL
         // + destructive-cap + audit-tag gated regardless; this only skips the human Allow/Deny
         // click). No row for a user means "off" (see ChatSettingsRepository.GetAutoApproveWritesAsync's

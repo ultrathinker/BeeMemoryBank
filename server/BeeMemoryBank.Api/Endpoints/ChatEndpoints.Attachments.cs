@@ -20,9 +20,9 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static partial class ChatEndpoints
 {
-    // ── Phase 5 helpers (vision + image generation) ────────────────────────────
+    // ── vision + image-generation helpers ────────────────────────────
 
-    // MIME allow-list for chat image attachments (plan §2 Phase 5). Validated server-side as well
+    // MIME allow-list for chat image attachments. Validated server-side as well
     // as client-side — never trust the client alone. GIF is accepted even though vision models see
     // only the first frame.
     private static readonly HashSet<string> AllowedImageMimes = new(StringComparer.OrdinalIgnoreCase)
@@ -73,7 +73,7 @@ public static partial class ChatEndpoints
 
     /// <summary>Builds the egress vision data URL for an image, downscaling to
     /// <see cref="VisionMaxDimension"/> on the longest side and re-encoding as JPEG q85 to keep the
-    /// OpenRouter payload reasonable (plan §2 Phase 5: "a simple max-dimension resize is enough").
+    /// OpenRouter payload reasonable (a simple max-dimension resize is enough).
     /// Reuses ImageSharp (already a Core dependency). Falls back to the original bytes (as a data
     /// URL) if ImageSharp cannot load/encode them.</summary>
     private static string BuildVisionDataUrl(byte[] blob, string mime)

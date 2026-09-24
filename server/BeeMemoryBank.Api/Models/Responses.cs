@@ -3,7 +3,7 @@ using BeeMemoryBank.Core.Models;
 namespace BeeMemoryBank.Api.Models;
 
 /// <param name="CanAutoUnlock">
-/// True only for an agent owned by a superadmin (see AGENTS.md H6 fix / Agent.CanAutoUnlock).
+/// True only for an agent owned by a superadmin (see Agent.CanAutoUnlock).
 /// Such a key can wake a locked node by itself; an ordinary user's agent cannot — it only
 /// ever works while someone else has already unlocked the vault. Surfaced so the agent
 /// list/creation UI can say so plainly instead of leaving it as an invisible difference.
@@ -265,7 +265,7 @@ public record DekRotationInitiationResponse(
     string Message
 );
 
-// ─── Reachability self-test: probe (superplan §5 Ярус 2, Этап 5) ──────────
+// ─── Reachability self-test: probe ──────────────────────────────────────────
 
 /// <summary>
 /// Request body for <c>POST /api/sync/probe</c> — the candidate public URL the user wants

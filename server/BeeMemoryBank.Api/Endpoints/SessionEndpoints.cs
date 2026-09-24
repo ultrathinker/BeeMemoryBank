@@ -12,7 +12,7 @@ public static class SessionEndpoints
 {
     public static void MapSessionEndpoints(this WebApplication app)
     {
-        // Finding M8: clear any cached protected-article passphrases the instant the vault
+        // Clear any cached protected-article passphrases the instant the vault
         // locks, from ANY call site — not just the /lock handler below. SessionService.Locked
         // fires for node reset, snapshot/network restore, and the shutdown hook too, and all of
         // them equally invalidate a cached passphrase (it was only ever "trustworthy" for as

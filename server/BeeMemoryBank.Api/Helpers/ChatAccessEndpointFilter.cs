@@ -14,17 +14,17 @@ namespace BeeMemoryBank.Api.Helpers;
 /// points is a UX nicety on top of this, never a substitute for it.
 /// </summary>
 /// <remarks>
-/// M2 fix: this used to also wave through any agent caller unconditionally
-/// (<c>caller.AgentId.HasValue</c>), on the theory that agent bearer keys are "a separate,
-/// already-authenticated auth path". That reasoning conflated AUTHENTICATION (is this a real
-/// key) with AUTHORIZATION (should ITS OWNER be allowed to use chat) — an agent key is scoped to
+/// An agent bearer-key caller must NOT be waved through unconditionally
+/// (<c>caller.AgentId.HasValue</c>): agent bearer keys are not "a separate,
+/// already-authenticated auth path" — that conflates AUTHENTICATION (is this a real
+/// key) with AUTHORIZATION (should ITS OWNER be allowed to use chat). An agent key is scoped to
 /// its owning user's account, so it should never be MORE privileged than that user is at the
-/// web UI. In practice it meant disabling chat for a user (chat_access=false) or for the whole
-/// node (chat_globally_enabled=false) did nothing for that user's agent keys, which could keep
-/// using chat right through both kill switches. <see cref="CallerIdentity.Extract"/> already
-/// resolves an agent's <c>UserId</c> to its OWNER (see AgentAuthMiddleware), so simply removing
-/// the agent-specific branch makes an agent's chat access inherit its owner's — including the
-/// IsSuperadmin case, which already carries through the owner's role.
+/// web UI. Otherwise, disabling chat for a user (chat_access=false) or for the whole
+/// node (chat_globally_enabled=false) would do nothing for that user's agent keys, which could
+/// keep using chat right through both kill switches. <see cref="CallerIdentity.Extract"/> already
+/// resolves an agent's <c>UserId</c> to its OWNER (see AgentAuthMiddleware), so an agent's
+/// chat access inherits its owner's — including the
+/// IsSuperadmin case, which carries through the owner's role.
 /// </remarks>
 public sealed class ChatAccessEndpointFilter(IUserRepository userRepo, ChatSettingsRepository chatSettingsRepo) : IEndpointFilter
 {
