@@ -166,7 +166,12 @@ revoke rows that predate the row-versioning migration above and never got their 
   peer the rotation stays pending and is retried on the next unlock.
 - **Remote-account tokens were broken by every rotation.** `tbl_remote_account` bearer tokens are
   sealed directly under the Master DEK and were never re-encrypted; they are now re-encrypted inside
-  the rotation transaction.
+  the rotation transaction, and a token write that races a rotation re-checks the sentinel inside
+  its own transaction and re-seals under the new DEK.
+- **A deferred rotation no longer strands a node.** If the mandatory pre-rotation step fails at the
+  initiator's accept (after the COMMIT is public), the commit stays pending and can be accepted
+  again; a deferred peer retries on its own with bounded backoff while it stays unlocked.
+- **"Completed" is reported only after maintenance mode ends**, so acting on it never gets a 503.
 
 #### Security review findings, 2026-09-03/04: key material, node reset, chat history, write races
 

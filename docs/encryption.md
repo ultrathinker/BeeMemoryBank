@@ -326,7 +326,10 @@ The accept phase:
    - Re-wraps every node data key in `tbl_node_data_key` (see "Node data keys" below) — the only
      thing chat.db needs from a rotation.
    - Re-encrypts every remote-account bearer token (`tbl_remote_account.encrypted_token`, sealed
-     directly under the Master DEK by `RemoteAccountService`) under the new DEK.
+     directly under the Master DEK by `RemoteAccountService`) under the new DEK. A token write that
+     raced the rotation cannot slip past this: `RemoteAccountService` writes tokens in a
+     `BEGIN IMMEDIATE` transaction that re-checks the sentinel against the DEK it sealed with, and
+     re-seals under the swapped-in DEK if the rotation committed in between.
    - Deletes the `tbl_agent` rows that carry a wrapped Master DEK (`encrypted_dek IS NOT NULL` —
      superadmin-owned auto-unlock agents): their wrap is keyed by the plaintext API key, which the
      server never stores, so it cannot be re-wrapped; they must be re-issued. Every other agent holds
@@ -344,9 +347,17 @@ propose (before any event is published) and again immediately before step 4. The
 any chat.db row still sealed directly under the Master DEK onto the node chat key, then re-counts and
 requires zero such rows. Hooks are **mandatory**: any failure (vault locked, an I/O error, rows left
 over) aborts with `DekRotationPreconditionException` before the transaction opens, with nothing
-changed. On the initiator that is a 400 from propose (nothing published) or a Failed accept; on a
-peer the rotation stays `Committing` — not `Failed`, which nothing retries — and is retried on the
-next unlock, without the post-apply sweep re-dispatching it in a loop.
+changed. On the initiator a refusal at propose is a 400 with nothing published; a refusal at
+accept (after the COMMIT is public) leaves the commit `Committing` — marking it `Failed` would split
+the initiator from peers that already applied it — and the same commit is accepted again, with the
+master password, once the cause is gone. A commit that is already `Applied`, `Cancelled` or
+`Rejected` is refused by accept. On a peer the rotation also stays `Committing`; it is retried on the
+next unlock and, while the node stays unlocked, by a bounded automatic retry (30 s doubling up to
+30 min, 10 attempts; reset after a successful apply) — never by the immediate post-apply sweep, which
+would re-dispatch it in a tight loop.
+
+The progress endpoint reports `Completed` only after the accept path has left maintenance mode, so a
+caller acting on it is never answered 503.
 
 **Not carried by a rotation, by design:** `bee_continue` continuation files (`McpResponseManager`,
 temp files sealed under the Master DEK). They expire after 24 hours; one written before a rotation
