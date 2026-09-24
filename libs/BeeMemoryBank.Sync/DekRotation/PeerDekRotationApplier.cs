@@ -46,6 +46,7 @@ public sealed class PeerDekRotationApplier(
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
             throw new InvalidOperationException("Another rotation is in progress.");
 
+        var deferred = false;
         try
         {
             // A locked node cannot rewrap: it has no master DEK to unwrap the new one with. This
@@ -77,6 +78,11 @@ public sealed class PeerDekRotationApplier(
                 {
                     await ApplyCoreAsync(commitEvent, payload);
                 }
+                catch (DekRotationPreconditionException)
+                {
+                    deferred = true;
+                    throw;
+                }
                 finally
                 {
                     maintenance.Exit();
@@ -94,12 +100,17 @@ public sealed class PeerDekRotationApplier(
             // Two COMMITs delivered in one sync batch: the second would hit "another rotation in
             // progress" and never retry, because its event is already in tbl_event and sync will
             // not redeliver it. Sweep once the lock is free. Bounded by the lock plus the number
-            // of Committing rows.
-            _ = Task.Run(async () =>
+            // of Committing rows. Not after a deferral: this row is still Committing, so the sweep
+            // would pick it straight back up, fail the same precondition, and sweep again, forever.
+            // Deferred rows are retried on the next unlock instead.
+            if (!deferred)
             {
-                try { await RetryPendingAutoAcceptsAsync(); }
-                catch (Exception ex) { logger.LogWarning(ex, "Post-auto-accept retry sweep failed"); }
-            });
+                _ = Task.Run(async () =>
+                {
+                    try { await RetryPendingAutoAcceptsAsync(); }
+                    catch (Exception ex) { logger.LogWarning(ex, "Post-auto-accept retry sweep failed"); }
+                });
+            }
         }
     }
 
@@ -118,7 +129,8 @@ public sealed class PeerDekRotationApplier(
         try
         {
             // Host-side data still sealed under the outgoing DEK is moved first, while that DEK is
-            // still the session's current one. None registered on mobile/CLI today; see IDekRotationHook.
+            // still the session's current one; a failure aborts before anything is changed. None
+            // registered on mobile/CLI today; see IDekRotationHook.
             await DekRewrapper.RunPreRewrapHooksAsync(scope.ServiceProvider, logger);
 
             oldDek = sessionService.GetMasterDek();
@@ -142,6 +154,14 @@ public sealed class PeerDekRotationApplier(
             logger.LogInformation(
                 "DEK rotation auto-accept completed. Epoch {OldEpoch}→{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, agentsDeleted, recoveryDeleted);
+        }
+        catch (DekRotationPreconditionException ex)
+        {
+            // Nothing was changed (the rewrap never started), so this is "not yet", not "failed":
+            // the row stays Committing and the next unlock retries it. Failed is terminal — nothing
+            // retries it — which would strand this node on the retired DEK for good.
+            logger.LogError(ex, "DEK rotation auto-accept deferred for commit event {CommitEventId}; it stays pending and is retried on the next unlock", commitEvent.EventId);
+            throw;
         }
         catch (Exception ex)
         {

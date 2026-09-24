@@ -74,12 +74,12 @@ public sealed class ChatDataProtector : IDisposable
     /// </summary>
     public async Task<ChatKeyLease> AcquireAsync(CancellationToken ct = default)
     {
-        if (TryCloneCached() is { } cached) return new ChatKeyLease(cached);
+        if (TryCloneCached(out var cachedGeneration) is { } cached) return IssueLease(cached, cachedGeneration);
 
         await _loadGate.WaitAsync(ct);
         try
         {
-            if (TryCloneCached() is { } raced) return new ChatKeyLease(raced);
+            if (TryCloneCached(out var racedGeneration) is { } raced) return IssueLease(raced, racedGeneration);
 
             long generation;
             lock (_cacheLock) generation = _generation;
@@ -93,12 +93,36 @@ public sealed class ChatDataProtector : IDisposable
                     _cachedKey = (byte[])key.Clone();
                 }
             }
-            return new ChatKeyLease(key);
+            return IssueLease(key, generation);
         }
         finally
         {
             _loadGate.Release();
         }
+    }
+
+    /// <summary>
+    /// The last gate before a key copy leaves this class. SessionService.Lock() clears the master
+    /// DEK first and raises <see cref="SessionService.Locked"/> (which wipes the cache) only
+    /// afterwards, so a copy taken from the cache in between would otherwise be handed out while the
+    /// vault is already locked. Checking <see cref="SessionService.IsUnlocked"/> AFTER the copy is
+    /// held closes that: if locking had begun by the time of the check, the copy is wiped and the
+    /// caller gets <see cref="SessionLockedException"/>; if it had not, the lease predates the lock,
+    /// exactly like any in-flight operation holding a master DEK clone. The generation check covers
+    /// a full lock → unlock in between (a restore swapping the database, say): the Locked handler
+    /// bumped the generation, so a key copied or loaded before it is refused too.
+    /// </summary>
+    private ChatKeyLease IssueLease(byte[] key, long generation)
+    {
+        bool current;
+        lock (_cacheLock)
+            current = generation == _generation && _session.IsUnlocked;
+        if (current)
+            return new ChatKeyLease(key);
+
+        Array.Clear(key);
+        WipeCache();
+        throw new SessionLockedException("The vault was locked while the chat key was being obtained. Unlock and retry.");
     }
 
     /// <summary>
@@ -155,10 +179,13 @@ public sealed class ChatDataProtector : IDisposable
         }
     }
 
-    private byte[]? TryCloneCached()
+    private byte[]? TryCloneCached(out long generation)
     {
         lock (_cacheLock)
+        {
+            generation = _generation;
             return _cachedKey is null ? null : (byte[])_cachedKey.Clone();
+        }
     }
 
     private void WipeCache()
@@ -270,8 +297,8 @@ public sealed class ChatDataProtector : IDisposable
 
     private sealed class KeyRow
     {
-        public byte[] Wrapped { get; set; } = [];
-        public byte[] Iv { get; set; } = [];
+        public byte[]? Wrapped { get; set; }
+        public byte[]? Iv { get; set; }
     }
 
     public void Dispose()

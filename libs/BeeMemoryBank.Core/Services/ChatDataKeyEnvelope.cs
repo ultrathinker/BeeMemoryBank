@@ -15,6 +15,6 @@ public static class ChatDataKeyEnvelope
     public static (byte[] wrapped, byte[] iv) Wrap(byte[] chatKey, byte[] masterDek)
         => NodeDataKeyEnvelope.Wrap(KeyName, chatKey, masterDek);
 
-    public static byte[]? TryUnwrap(byte[] wrapped, byte[] iv, byte[] masterDek)
+    public static byte[]? TryUnwrap(byte[]? wrapped, byte[]? iv, byte[] masterDek)
         => NodeDataKeyEnvelope.TryUnwrap(KeyName, wrapped, iv, masterDek);
 }

@@ -164,6 +164,13 @@ public sealed class ChatAttachmentRepository(ChatDbConnectionFactory factory, Ch
         return legacyRows.Count;
     }
 
+    /// <summary>Attachments still waiting to move onto the chat key (same predicate as the migration scan).</summary>
+    public async Task<int> CountLegacyAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*) FROM chat_attachment WHERE {LegacyKeyPredicate}");
+    }
+
     /// <summary>Row shape for <see cref="MigrateLegacyBatchAsync"/>'s scan query.</summary>
     private sealed class LegacyAttachmentRow
     {

@@ -1,3 +1,10 @@
+-- NOTE ON THE FILE NAME: despite "chat" in the name, this migration creates the GENERIC table
+-- tbl_node_data_key. chat.db is its first (and today only) user, but the DEK-rotation rewrap that
+-- re-seals these rows lives in BeeMemoryBank.Sync, which must not know about chat
+-- (ChatIsolationGuardTests) — so the table is keyed by name and the rewrap walks every row without
+-- knowing what each one protects. Migration files are never renamed (MigrationRunner tracks the
+-- (version, filename) pair), so the name stays.
+--
 -- Node data keys: random 32-byte AES keys, each wrapped under the master DEK, that encrypt data a
 -- host keeps OUTSIDE this database. The first (and today only) one is key_name = 'chat', which
 -- encrypts everything in the API's chat.db (message content, tool-call arguments, attachments, LLM

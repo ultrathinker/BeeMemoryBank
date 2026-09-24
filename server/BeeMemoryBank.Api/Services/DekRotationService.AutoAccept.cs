@@ -72,6 +72,7 @@ public partial class DekRotationService
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
             throw new ConflictException("Another rotation is in progress.");
 
+        var deferred = false;
         try
         {
             if (!_sessionService.IsUnlocked)
@@ -98,6 +99,11 @@ public partial class DekRotationService
                 {
                     await AutoAcceptCommitCoreAsync(commitEvent, payload);
                     runPostCompaction = true;
+                }
+                catch (DekRotationPreconditionException)
+                {
+                    deferred = true;
+                    throw;
                 }
                 finally
                 {
@@ -132,12 +138,17 @@ public partial class DekRotationService
             // together would only apply the first; the second would throw "Another rotation
             // in progress" and never retry (its event is already in tbl_event so sync won't
             // redeliver). Fire-and-forget — recursion is bounded by the lock + state row count.
-            // (Found by E2E multi-rotation test on 2026-04-26.)
-            _ = Task.Run(async () =>
+            // (Found by E2E multi-rotation test on 2026-04-26.) Not after a deferral: that row is
+            // still Committing, so the sweep would pick it straight back up, fail the same
+            // precondition and sweep again, forever. Deferred rows wait for the next unlock.
+            if (!deferred)
             {
-                try { await RetryPendingAutoAcceptsAsync(); }
-                catch (Exception ex) { _logger.LogWarning(ex, "Post-auto-accept retry sweep failed"); }
-            });
+                _ = Task.Run(async () =>
+                {
+                    try { await RetryPendingAutoAcceptsAsync(); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "Post-auto-accept retry sweep failed"); }
+                });
+            }
         }
     }
 
@@ -179,6 +190,17 @@ public partial class DekRotationService
             _logger.LogInformation(
                 "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, agentsDeleted, recoveryDeleted);
+        }
+        catch (DekRotationPreconditionException ex)
+        {
+            // Nothing was changed (the rewrap never started), so this is "not yet", not "failed":
+            // the row stays Committing and the next unlock retries it (or an admin applies it from
+            // the pending-rotation banner). Failed is terminal — nothing retries it — which would
+            // strand this node on the retired DEK for good.
+            _progress.Update(DekRotationFlowStep.Failed, err: ex.Message,
+                msg: "DEK rotation auto-accept deferred; it stays pending and is retried on the next unlock.");
+            _logger.LogError(ex, "DEK rotation auto-accept deferred for commit event {CommitEventId}", commitEvent.EventId);
+            throw;
         }
         catch (Exception ex)
         {

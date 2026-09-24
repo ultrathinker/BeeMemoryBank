@@ -139,6 +139,15 @@ public sealed class ChatHistoryBackfillProcessor(
     }
 
     /// <summary>
+    /// How many chat.db records (message rows, attachments, provider keys) are still waiting to move
+    /// onto the chat key. Zero is what <see cref="ChatDekRotationHook"/> requires before a rotation.
+    /// </summary>
+    internal static async Task<int> CountLegacyAsync(IServiceProvider services)
+        => await services.GetRequiredService<ChatMessageRepository>().CountLegacyAsync()
+           + await services.GetRequiredService<ChatAttachmentRepository>().CountLegacyAsync()
+           + await services.GetRequiredService<ChatSettingsRepository>().CountLegacyAsync();
+
+    /// <summary>
     /// One-shot catch-up: repeatedly runs <see cref="ProcessPendingAsync"/> back-to-back (no
     /// inter-batch delay) until a batch makes no progress — either because nothing is left
     /// pending, or because the session locked mid-drain (in which case the periodic

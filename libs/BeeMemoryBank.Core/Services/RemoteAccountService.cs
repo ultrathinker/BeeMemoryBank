@@ -80,12 +80,22 @@ public class RemoteAccountService(
         await accountRepo.UpdateTokenAsync(accountId, encrypted, iv, body.ExpiresAt);
     }
 
+    /// <summary>
+    /// Decrypts the stored bearer token. Tries the current master DEK first, then any retired one
+    /// still in memory: a DEK rotation re-encrypts every token inside its own transaction
+    /// (DekRewrapper), but a token written by a request that raced the rotation can still be under
+    /// the key that was just retired.
+    /// </summary>
     public string DecryptToken(RemoteAccount account)
+        => session.TryUnwrapWithCandidates(dek =>
+            ArticleEncryptor.Decrypt(account.EncryptedToken, account.TokenIv, dek, TokenAad));
+
+    private (byte[] cipher, byte[] iv) EncryptToken(string token)
     {
         var masterDek = session.GetMasterDek();
         try
         {
-            return ArticleEncryptor.Decrypt(account.EncryptedToken, account.TokenIv, masterDek, TokenAad);
+            return SealToken(token, masterDek);
         }
         finally
         {
@@ -93,16 +103,29 @@ public class RemoteAccountService(
         }
     }
 
-    private (byte[] cipher, byte[] iv) EncryptToken(string token)
+    /// <summary>
+    /// Seals a remote-account bearer token under <paramref name="masterDek"/>. Public so the DEK
+    /// rotation (DekRewrapper) re-encrypts tokens with exactly the framing and AAD used here.
+    /// </summary>
+    public static (byte[] cipher, byte[] iv) SealToken(string token, byte[] masterDek)
+        => ArticleEncryptor.Encrypt(token, masterDek, TokenAad);
+
+    /// <summary>
+    /// Opens a sealed token with <paramref name="masterDek"/>, or returns null when that is not the
+    /// key it was sealed under or the stored bytes are malformed — the rotation's "try old, then
+    /// new, else count it unreadable" walk depends on a wrong key being an answer, not an exception.
+    /// </summary>
+    public static string? TryOpenToken(byte[]? cipher, byte[]? iv, byte[] masterDek)
     {
-        var masterDek = session.GetMasterDek();
+        if (cipher is null || iv is not { Length: CryptoConstants.IvSize })
+            return null;
         try
         {
-            return ArticleEncryptor.Encrypt(token, masterDek, TokenAad);
+            return ArticleEncryptor.Decrypt(cipher, iv, masterDek, TokenAad);
         }
-        finally
+        catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or ArgumentException)
         {
-            Array.Clear(masterDek);
+            return null;
         }
     }
 

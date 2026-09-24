@@ -31,8 +31,11 @@ public static class DekRewrapper
 
     /// <summary>
     /// Runs every registered <see cref="IDekRotationHook"/> while the session still holds the
-    /// outgoing DEK. Call immediately before <see cref="RewrapAllAsync"/> on every apply path.
-    /// Best-effort per the hook contract: a failure is logged and the rotation goes ahead.
+    /// outgoing DEK. Call before <see cref="RewrapAllAsync"/> on every apply path (and before a
+    /// proposal is published). Mandatory per the hook contract: the first failure is logged and
+    /// rethrown as <see cref="Core.Exceptions.DekRotationPreconditionException"/>, so the rotation
+    /// stops before its transaction opens and can be retried — committing with a hook's data still
+    /// under the retiring DEK would make that data unreadable after the next restart.
     /// </summary>
     public static async Task RunPreRewrapHooksAsync(
         IServiceProvider services, Microsoft.Extensions.Logging.ILogger? logger, CancellationToken ct = default)
@@ -44,10 +47,15 @@ public static class DekRewrapper
             {
                 await hook.BeforeRewrapAsync(ct);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
-                logger?.LogWarning(ex,
-                    "DEK rotation pre-rewrap hook {Hook} failed; the rotation continues", hook.GetType().Name);
+                logger?.LogError(ex,
+                    "DEK rotation pre-rewrap hook {Hook} failed; the rotation is not applied and can be retried",
+                    hook.GetType().Name);
+                if (ex is Core.Exceptions.DekRotationPreconditionException) throw;
+                throw new Core.Exceptions.DekRotationPreconditionException(
+                    $"DEK rotation was not started: preparing host data outside the vault database failed ({ex.Message}). "
+                    + "Nothing was changed; retry once the cause is fixed.", ex);
             }
         }
     }
@@ -107,6 +115,11 @@ public static class DekRewrapper
                 isInitiator ? "Re-wrapping node data keys..." : "Auto-accept: re-wrapping node data keys...");
 
             ReWrapNodeDataKeys(conn, tx, oldDek, newDek, tally, logger);
+
+            Report(progress, DekRotationFlowStep.ReWrappingPerItem, 74,
+                isInitiator ? "Re-encrypting remote-account tokens..." : "Auto-accept: re-encrypting remote-account tokens...");
+
+            ReEncryptRemoteAccountTokens(conn, tx, oldDek, newDek, tally, logger);
 
             Report(progress, DekRotationFlowStep.InvalidatingAgents, 75,
                 isInitiator ? "Removing agent keys that carry the old master key..." : "Auto-accept: removing agent keys that carry the old master key...");
@@ -385,11 +398,61 @@ public static class DekRewrapper
         }
     }
 
+    /// <summary>
+    /// Re-encrypts every remote-account bearer token (<c>tbl_remote_account.encrypted_token</c>),
+    /// which <c>RemoteAccountService</c> seals directly under the master DEK. The table lives in this
+    /// database, so the tokens are simply carried forward inside the rotation transaction; before
+    /// this pass existed every rotation left every remote account unable to authenticate.
+    /// Same three outcomes as the other passes — re-sealed, already on the new key (a token written
+    /// by a request that raced the rotation), or counted unreadable and left alone, never thrown.
+    /// </summary>
+    internal static void ReEncryptRemoteAccountTokens(
+        System.Data.IDbConnection conn, System.Data.IDbTransaction tx, byte[] oldDek, byte[] newDek,
+        RewrapTally tally, Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        var rows = conn.Query<RemoteTokenRow>(
+            "SELECT id AS Id, encrypted_token AS Token, token_iv AS Iv FROM tbl_remote_account",
+            transaction: tx).ToList();
+
+        foreach (var row in rows)
+        {
+            var token = RemoteAccountService.TryOpenToken(row.Token, row.Iv, oldDek);
+            if (token is null)
+            {
+                if (RemoteAccountService.TryOpenToken(row.Token, row.Iv, newDek) is not null)
+                {
+                    tally.AlreadyOnNewKey++;
+                    continue;
+                }
+
+                tally.Unreadable++;
+                tally.UnreadableExamples.Add($"tbl_remote_account:{row.Id}");
+                logger?.LogError(
+                    "DEK rotation: remote account {Id} has a token that opened under neither the old nor the new master key. "
+                    + "The rotation continues; re-enter that account's credentials.", row.Id);
+                continue;
+            }
+
+            var (cipher, iv) = RemoteAccountService.SealToken(token, newDek);
+            conn.Execute(
+                "UPDATE tbl_remote_account SET encrypted_token = @cipher, token_iv = @iv WHERE id = @id",
+                new { cipher, iv, id = row.Id }, tx);
+            tally.Rewrapped++;
+        }
+    }
+
+    private sealed class RemoteTokenRow
+    {
+        public string Id { get; set; } = "";
+        public byte[]? Token { get; set; }
+        public byte[]? Iv { get; set; }
+    }
+
     private sealed class NodeDataKeyRow
     {
         public string Name { get; set; } = "";
-        public byte[] Wrapped { get; set; } = [];
-        public byte[] Iv { get; set; } = [];
+        public byte[]? Wrapped { get; set; }
+        public byte[]? Iv { get; set; }
     }
 
     /// <summary>

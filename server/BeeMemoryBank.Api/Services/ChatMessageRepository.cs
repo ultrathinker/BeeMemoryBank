@@ -244,6 +244,13 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
         return legacyRows.Count;
     }
 
+    /// <summary>Rows still waiting to move onto the chat key (same predicate as the migration scan).</summary>
+    public async Task<int> CountLegacyAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<int>($"SELECT COUNT(*) FROM chat_message WHERE {LegacyKeyPredicate}");
+    }
+
     private async Task MigrateColumnAsync(
         System.Data.IDbConnection conn, ChatKeyLease key, Guid id,
         byte[]? legacyCiphertext, byte[]? legacyIv, string? legacyPlaintext, byte[] aad,

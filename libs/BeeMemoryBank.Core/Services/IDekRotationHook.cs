@@ -1,9 +1,9 @@
 namespace BeeMemoryBank.Core.Services;
 
 /// <summary>
-/// Host-specific work that must happen immediately BEFORE a DEK rotation's destructive rewrap, while
+/// Host-specific work that must be COMPLETE before a DEK rotation's destructive rewrap starts, while
 /// the session still holds the outgoing master DEK. Runs on every apply path — the initiator's
-/// accept and a peer's auto-accept alike.
+/// propose and accept, and a peer's auto-accept alike.
 ///
 /// <para>
 /// The case it exists for: data a host keeps OUTSIDE the vault database but still sealed directly
@@ -15,9 +15,12 @@ namespace BeeMemoryBank.Core.Services;
 /// </para>
 ///
 /// <para>
-/// Best-effort by contract: a failing hook is logged and the rotation proceeds. Aborting a peer's
-/// rotation over host-side data would leave the whole node on a retired DEK — every article synced
-/// afterwards unreadable — which is far worse than whatever the hook failed to move.
+/// Mandatory by contract. A hook returns only once its data is fully moved, and throws otherwise;
+/// any exception aborts the rotation BEFORE the rewrap transaction opens, surfaced as
+/// <see cref="Exceptions.DekRotationPreconditionException"/>. Nothing has changed at that point, so
+/// the rotation can be retried: a peer keeps the rotation at Committing and retries it on the next
+/// unlock. Letting the rotation commit anyway would make the unmoved data permanently unreadable
+/// after a restart.
 /// </para>
 /// </summary>
 public interface IDekRotationHook

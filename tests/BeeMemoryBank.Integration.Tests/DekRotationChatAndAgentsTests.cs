@@ -259,7 +259,14 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
         {
             var progress = await (await _client.GetAsync("/api/dek-rotation/progress")).Content.ReadFromJsonAsync<JsonElement>();
             var step = Enum.Parse<DekRotationFlowStep>(progress.GetProperty("currentStep").GetString()!);
-            if (step == DekRotationFlowStep.Completed) return;
+            if (step == DekRotationFlowStep.Completed)
+            {
+                // Progress reads Completed a moment before the accept path leaves maintenance mode;
+                // HTTP calls in that gap get 503. Wait for the node to be fully back.
+                var maintenance = _factory.Services.GetRequiredService<MaintenanceModeService>();
+                while (maintenance.IsInMaintenance && DateTime.UtcNow < deadline) await Task.Delay(50);
+                return;
+            }
             step.Should().NotBe(DekRotationFlowStep.Failed, progress.ToString());
             await Task.Delay(200);
         }
@@ -556,5 +563,124 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
         if (sessionId != null) req.Headers.TryAddWithoutValidation("Mcp-Session-Id", sessionId);
         req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {bearer}");
         return await _client.SendAsync(req);
+    }
+
+    // ───── Fix round 1 ───────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ChatRotationHook_RefusesWhenLegacyRowsRemain_AndPassesOnceTheyAreMoved()
+    {
+        var seed = await SeedChatAsync(); // leaves 4 legacy records: 2 messages, 1 attachment, 1 provider key
+        var scopeFactory = _factory.Services.GetRequiredService<IServiceScopeFactory>();
+        var logger = _factory.Services.GetRequiredService<ILogger<ChatDekRotationHook>>();
+
+        // Starved of batches, the drain cannot finish; the recount must catch that, not report success.
+        var starved = new ChatDekRotationHook(scopeFactory, logger, maxBatches: 1, batchSize: 1);
+        var act = () => starved.BeforeRewrapAsync(CancellationToken.None);
+        (await act.Should().ThrowAsync<BeeMemoryBank.Core.Exceptions.DekRotationPreconditionException>())
+            .Which.Message.Should().Contain("still sealed directly under the current master key");
+
+        await new ChatDekRotationHook(scopeFactory, logger).BeforeRewrapAsync(CancellationToken.None);
+        await AssertNoChatRowLeftUnderTheMasterDekAsync();
+        await AssertChatReadableAsync(seed, _factory.Services.GetRequiredService<SessionService>(),
+            _factory.Services.GetRequiredService<ChatDataProtector>(), "after the hook moved everything");
+    }
+
+    [Fact]
+    public async Task ChatRotationHook_RefusesWhileLocked()
+    {
+        _factory.Services.GetRequiredService<SessionService>().Lock();
+        var hook = new ChatDekRotationHook(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            _factory.Services.GetRequiredService<ILogger<ChatDekRotationHook>>());
+        var act = () => hook.BeforeRewrapAsync(CancellationToken.None);
+        await act.Should().ThrowAsync<BeeMemoryBank.Core.Exceptions.DekRotationPreconditionException>();
+    }
+
+    [Fact]
+    public async Task MalformedChatKeyRow_IsTreatedAsUnreadable_NotAServerError()
+    {
+        var seed = await SeedChatAsync();
+        var session = _factory.Services.GetRequiredService<SessionService>();
+        var protector = _factory.Services.GetRequiredService<ChatDataProtector>();
+
+        // An IV of the wrong size makes AesGcm throw ArgumentException rather than a tag mismatch.
+        using (var conn = _factory.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_node_data_key SET iv = x'0102030405' WHERE key_name = 'chat'");
+        session.Lock();
+        (await session.UnlockAsync(Password)).Should().BeTrue();
+
+        var chatDb = _factory.Services.GetRequiredService<ChatDbConnectionFactory>();
+        var msgRepo = new ChatMessageRepository(chatDb, protector);
+        var loaded = async () => await msgRepo.ListByConversationAsync(seed.ConversationId, session);
+        (await loaded.Should().NotThrowAsync()).Subject.Should().HaveCount(seed.Messages.Count);
+
+        var fresh = Guid.NewGuid();
+        await msgRepo.CreateAsync(new ChatMessage
+        {
+            Id = fresh, ConversationId = seed.ConversationId, Role = "user", ContentText = "after repair", CreatedAt = DateTime.UtcNow.AddMinutes(1)
+        }, session);
+        (await msgRepo.ListByConversationAsync(seed.ConversationId, session)).Single(m => m.Id == fresh)
+            .ContentText.Should().Be("after repair");
+    }
+
+    [Fact]
+    public async Task CachedChatKey_IsNotHandedOut_InTheWindowBetweenLockAndTheLockedEvent()
+    {
+        await SeedChatAsync(); // creates the chat key row
+        var session = new SessionService(
+            _factory.Services.GetRequiredService<IKeySlotRepository>(),
+            _factory.Services.GetRequiredService<IServiceScopeFactory>());
+        (await session.UnlockAsync(Password)).Should().BeTrue();
+
+        // Subscribed BEFORE the protector, so it runs after the master DEK is cleared but before the
+        // protector's own cache wipe — exactly the window a concurrent request can hit.
+        Exception? inWindow = null;
+        ChatDataProtector? protector = null;
+        session.Locked += () =>
+        {
+            try { using var _ = protector!.AcquireAsync().GetAwaiter().GetResult(); }
+            catch (Exception ex) { inWindow = ex; }
+        };
+        protector = new ChatDataProtector(
+            _factory.Services.GetRequiredService<IDbConnectionFactory>(), session, NullLogger<ChatDataProtector>.Instance);
+        using (await protector.AcquireAsync()) { } // the key is now cached
+
+        session.Lock();
+
+        inWindow.Should().BeOfType<BeeMemoryBank.Core.Exceptions.SessionLockedException>(
+            "no chat key lease may be issued once the vault has started locking");
+        protector.Dispose();
+    }
+
+    [Fact]
+    public async Task RemoteAccountToken_SurvivesRotation_AndRestart()
+    {
+        var session = _factory.Services.GetRequiredService<SessionService>();
+        var dek = session.GetMasterDek();
+        var (token, iv) = RemoteAccountService.SealToken("bmbrt_remote_secret", dek);
+        Array.Clear(dek);
+        await _factory.Services.GetRequiredService<IRemoteAccountRepository>().CreateAsync(new RemoteAccount
+        {
+            Id = Guid.NewGuid(), DisplayName = "Remote", BaseUrl = "https://remote.example", RemoteUsername = "u",
+            EncryptedToken = token, TokenIv = iv, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+
+        await RotateAsInitiatorAsync();
+
+        var (freshSession, freshProtector) = await SimulateRestartAsync();
+        freshProtector.Dispose();
+        var account = (await _factory.Services.GetRequiredService<IRemoteAccountRepository>().ListAllAsync()).Single();
+        var current = freshSession.GetMasterDek();
+        try
+        {
+            RemoteAccountService.TryOpenToken(account.EncryptedToken, account.TokenIv, current)
+                .Should().Be("bmbrt_remote_secret", "the rotation must carry remote-account tokens forward");
+        }
+        finally
+        {
+            Array.Clear(current);
+            freshSession.Lock();
+        }
     }
 }

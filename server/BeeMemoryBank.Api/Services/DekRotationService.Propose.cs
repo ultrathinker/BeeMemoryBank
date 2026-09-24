@@ -13,6 +13,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.DekRotation;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -113,6 +114,14 @@ public partial class DekRotationService
                 Array.Clear(currentDek);
                 Array.Clear(kek);
             }
+
+            // Run the mandatory pre-rewrap hooks here too, before anything is published. Proposing
+            // emits the commit event that peers act on, so a hook that is going to fail (chat.db
+            // rows that cannot be moved off the master DEK, say) must fail NOW — a clean 400 with
+            // nothing emitted — rather than at accept, after peers may already have rotated. Accept
+            // runs them again; by then there is normally nothing left to move.
+            using (var hookScope = _scopeFactory.CreateScope())
+                await DekRewrapper.RunPreRewrapHooksAsync(hookScope.ServiceProvider, _logger);
 
             var newDek = MasterKeyManager.GenerateMasterDek();
             var oldDek = _sessionService.GetMasterDek();

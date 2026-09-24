@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Services;
+using Microsoft.Extensions.DependencyInjection;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Sync.DekRotation;
 using Dapper;
@@ -176,5 +178,120 @@ public class DekRewrapperAgentsAndNodeDataKeysTests : SyncTestFixture
         // An article DEK wrap (v1 framing, different AAD) must not open either.
         var (articleWrap, articleIv) = DekManager.WrapDek(dataKey, masterDek, "bmb-art-dek"u8.ToArray());
         NodeDataKeyEnvelope.TryUnwrap("chat", articleWrap, articleIv, masterDek).Should().BeNull();
+    }
+
+    // ───── Fix round 1 ───────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void NodeDataKeyEnvelope_MalformedInput_IsUnreadable_NeverAnException()
+    {
+        var masterDek = RandomNumberGenerator.GetBytes(32);
+        var (wrapped, iv) = NodeDataKeyEnvelope.Wrap("chat", NodeDataKeyEnvelope.Generate(), masterDek);
+
+        // AesGcm answers a wrong nonce size with ArgumentException, not CryptographicException.
+        NodeDataKeyEnvelope.TryUnwrap("chat", wrapped, iv[..5], masterDek).Should().BeNull("invalid IV length");
+        NodeDataKeyEnvelope.TryUnwrap("chat", wrapped, [.. iv, 0, 0, 0, 0], masterDek).Should().BeNull("oversized IV");
+        NodeDataKeyEnvelope.TryUnwrap("chat", wrapped, null, masterDek).Should().BeNull("null IV");
+        NodeDataKeyEnvelope.TryUnwrap("chat", null, iv, masterDek).Should().BeNull("null wrapped key");
+        NodeDataKeyEnvelope.TryUnwrap("chat", wrapped[..20], iv, masterDek).Should().BeNull("truncated framing");
+        var wrongVersion = (byte[])wrapped.Clone();
+        wrongVersion[0] = 0x02;
+        NodeDataKeyEnvelope.TryUnwrap("chat", wrongVersion, iv, masterDek).Should().BeNull("unknown version byte");
+    }
+
+    [Fact]
+    public async Task Rotation_WithMalformedNodeDataKeyRows_CountsThemUnreadable_AndStillCompletes()
+    {
+        await InitService.InitializeAsync("admin", "TestNode", Password);
+        await Session.UnlockAsync(Password);
+        var oldDek = Session.GetMasterDek();
+        var newDek = RandomNumberGenerator.GetBytes(32);
+
+        var good = NodeDataKeyEnvelope.Generate();
+        var (goodWrapped, goodIv) = NodeDataKeyEnvelope.Wrap("good", good, oldDek);
+        var (w, iv) = NodeDataKeyEnvelope.Wrap("short-iv", NodeDataKeyEnvelope.Generate(), oldDek);
+        using (var conn = Factory.CreateConnection())
+        {
+            const string sql = "INSERT INTO tbl_node_data_key (key_name, wrapped_key, iv, created_at) VALUES (@name, @wrapped, @iv, 'x')";
+            await conn.ExecuteAsync(sql, new { name = "good", wrapped = goodWrapped, iv = goodIv });
+            await conn.ExecuteAsync(sql, new { name = "short-iv", wrapped = w, iv = iv[..5] });
+            await conn.ExecuteAsync(sql, new { name = "garbage", wrapped = new byte[] { 1, 2, 3 }, iv = new byte[] { 4 } });
+        }
+
+        var (_, _, tally) = await DekRewrapper.RewrapAllAsync(
+            Factory, Session, (byte[])oldDek.Clone(), (byte[])newDek.Clone(),
+            newEpoch: 2, commitEventId: Guid.NewGuid().ToString(), isInitiator: false);
+
+        tally.Unreadable.Should().Be(2, "malformed rows are reported like undecryptable ones, not thrown");
+        using (var conn = Factory.CreateConnection())
+        {
+            var row = await conn.QuerySingleAsync<(byte[] W, byte[] Iv)>(
+                "SELECT wrapped_key, iv FROM tbl_node_data_key WHERE key_name = 'good'");
+            NodeDataKeyEnvelope.TryUnwrap("good", row.W, row.Iv, newDek).Should().Equal(good);
+        }
+        Session.GetMasterDek().Should().Equal(newDek, "the rotation committed despite the malformed rows");
+    }
+
+    [Fact]
+    public async Task Rotation_ReEncryptsRemoteAccountTokens_UnderTheNewKey()
+    {
+        await InitService.InitializeAsync("admin", "TestNode", Password);
+        await Session.UnlockAsync(Password);
+        var oldDek = Session.GetMasterDek();
+        var newDek = RandomNumberGenerator.GetBytes(32);
+
+        async Task InsertAsync(string id, byte[] token, byte[] iv)
+        {
+            using var conn = Factory.CreateConnection();
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_remote_account (id, display_name, base_url, remote_username, encrypted_token, token_iv, created_at, updated_at)
+                  VALUES (@id, 'r', 'https://remote.example', 'u', @token, @iv, 'x', 'x')",
+                new { id, token, iv });
+        }
+
+        var (t1, iv1) = RemoteAccountService.SealToken("bmbrt_token_one", oldDek);
+        await InsertAsync("A1", t1, iv1);
+        var (t2, iv2) = RemoteAccountService.SealToken("bmbrt_token_raced", newDek);
+        await InsertAsync("A2", t2, iv2);
+        var (t3, iv3) = RemoteAccountService.SealToken("bmbrt_token_lost", RandomNumberGenerator.GetBytes(32));
+        await InsertAsync("A3", t3, iv3);
+
+        var (_, _, tally) = await DekRewrapper.RewrapAllAsync(
+            Factory, Session, (byte[])oldDek.Clone(), (byte[])newDek.Clone(),
+            newEpoch: 2, commitEventId: Guid.NewGuid().ToString(), isInitiator: false);
+
+        tally.AlreadyOnNewKey.Should().Be(1);
+        tally.UnreadableExamples.Should().Contain("tbl_remote_account:A3");
+
+        using var check = Factory.CreateConnection();
+        var rows = (await check.QueryAsync<(string Id, byte[] Token, byte[] Iv)>(
+            "SELECT id, encrypted_token, token_iv FROM tbl_remote_account")).ToDictionary(r => r.Id);
+        RemoteAccountService.TryOpenToken(rows["A1"].Token, rows["A1"].Iv, newDek).Should().Be("bmbrt_token_one");
+        RemoteAccountService.TryOpenToken(rows["A1"].Token, rows["A1"].Iv, oldDek).Should().BeNull(
+            "nothing may stay sealed under the retired master DEK");
+        RemoteAccountService.TryOpenToken(rows["A2"].Token, rows["A2"].Iv, newDek).Should().Be("bmbrt_token_raced");
+    }
+
+    private sealed class ThrowingHook(Exception ex) : IDekRotationHook
+    {
+        public Task BeforeRewrapAsync(CancellationToken ct) => Task.FromException(ex);
+    }
+
+    [Fact]
+    public async Task PreRewrapHooks_AreMandatory_AnyFailureSurfacesAsAPreconditionFailure()
+    {
+        var io = new IOException("disk I/O error");
+        var sp = new ServiceCollection().AddSingleton<IDekRotationHook>(new ThrowingHook(io)).BuildServiceProvider();
+        var act = () => DekRewrapper.RunPreRewrapHooksAsync(sp, logger: null);
+        (await act.Should().ThrowAsync<DekRotationPreconditionException>())
+            .Which.InnerException.Should().BeSameAs(io);
+
+        var own = new DekRotationPreconditionException("rows left");
+        var sp2 = new ServiceCollection().AddSingleton<IDekRotationHook>(new ThrowingHook(own)).BuildServiceProvider();
+        var act2 = () => DekRewrapper.RunPreRewrapHooksAsync(sp2, logger: null);
+        (await act2.Should().ThrowAsync<DekRotationPreconditionException>()).Which.Should().BeSameAs(own);
+
+        // No hooks registered (mobile, CLI): nothing to do.
+        await DekRewrapper.RunPreRewrapHooksAsync(new ServiceCollection().BuildServiceProvider(), logger: null);
     }
 }

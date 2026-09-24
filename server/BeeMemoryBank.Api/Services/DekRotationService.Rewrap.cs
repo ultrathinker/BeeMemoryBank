@@ -31,6 +31,8 @@ public partial class DekRotationService
         // chat.db lives outside the rewrap transaction. Its remaining legacy rows (sealed directly
         // under the master DEK) are moved onto the node chat key now, while the session still holds
         // the outgoing DEK; the chat key itself is then carried forward inside the transaction.
+        // Mandatory: if anything is left unmoved this throws DekRotationPreconditionException and
+        // the rotation stops here, before the transaction, with nothing changed.
         _progress.Update(DekRotationFlowStep.ReWrappingPerItem, 18,
             isInitiator ? "Moving chat history onto the node chat key..." : "Auto-accept: moving chat history onto the node chat key...");
         using (var hookScope = _scopeFactory.CreateScope())

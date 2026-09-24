@@ -29,18 +29,26 @@ public static class NodeDataKeyEnvelope
     /// the key it was sealed under. A tag mismatch is the normal answer for a wrong candidate, not an
     /// error, so it is not propagated.
     /// </summary>
-    public static byte[]? TryUnwrap(string keyName, byte[] wrapped, byte[] iv, byte[] masterDek)
+    /// <remarks>
+    /// A malformed row — null or wrong-length blob or IV, wrong version byte — is answered the same
+    /// way as a wrong key: null, never an exception. Both callers depend on that: a throw inside the
+    /// rotation's rewrap would roll back the whole rotation on every retry, and a throw from the
+    /// chat key provider would turn the documented repair/placeholder path into an HTTP 500.
+    /// </remarks>
+    public static byte[]? TryUnwrap(string keyName, byte[]? wrapped, byte[]? iv, byte[] masterDek)
     {
         // Only the v1 framing Wrap produces is accepted. DekManager.UnwrapDek would also take a
         // 48-byte legacy v0 blob and open it with NO AAD — a node data key has never had that form,
-        // so accepting it would only let a foreign wrapped DEK be substituted into a row.
-        if (wrapped.Length != WrappedLength)
+        // so accepting it would only let a foreign wrapped DEK be substituted into a row. The IV is
+        // checked up front because AesGcm rejects a wrong nonce size with ArgumentException, not a
+        // CryptographicException.
+        if (wrapped is not { Length: WrappedLength } || wrapped[0] != 0x01 || iv is not { Length: CryptoConstants.IvSize })
             return null;
         try
         {
             return DekManager.UnwrapVersioned(wrapped, iv, masterDek, Aad(keyName));
         }
-        catch (CryptographicException)
+        catch (Exception ex) when (ex is CryptographicException or ArgumentException)
         {
             return null;
         }

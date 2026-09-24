@@ -98,6 +98,13 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory, Chat
     /// it is. Same contract as <c>ChatMessageRepository.MigrateLegacyBatchAsync</c>. The table
     /// holds a handful of rows, so no partial index backs the scan.
     /// </summary>
+    /// <summary>Provider keys still sealed directly under the master DEK.</summary>
+    public async Task<int> CountLegacyAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM chat_api_key WHERE key_v IS NULL");
+    }
+
     public async Task<int> MigrateLegacyBatchAsync(int batchSize, SessionService session, CancellationToken ct)
     {
         using var conn = OpenConnection();
