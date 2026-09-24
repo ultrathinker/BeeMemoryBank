@@ -228,7 +228,7 @@ public static class FolderEndpoints
                 if (allowPaths.Count == 0)
                 {
                     var pathPrefix = path.TrimEnd('/') + "/";
-                    if (denyPaths.Any(rp => rp.StartsWith(pathPrefix, StringComparison.OrdinalIgnoreCase)))
+                    if (denyPaths.Any(rp => rp.StartsWith(pathPrefix, StringComparison.Ordinal)))
                         return Results.Json(new ErrorResponse("Cannot delete: folder contains restricted sub-folders"), statusCode: 403);
                 }
             }

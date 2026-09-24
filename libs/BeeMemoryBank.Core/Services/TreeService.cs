@@ -12,7 +12,7 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
         // Determine which system-folder roots are empty (no descendants and no
         // direct articles) — they get hidden from the tree to keep the UI quiet
         // until the first time backend code writes into them.
-        var hiddenSystemPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hiddenSystemPaths = new HashSet<string>(StringComparer.Ordinal);
         if (!includeEmptySystemFolders)
         {
             var systemRoots = folders.Where(f => f.IsSystem).Select(f => f.Path).ToList();

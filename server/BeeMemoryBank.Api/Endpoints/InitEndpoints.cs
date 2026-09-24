@@ -183,6 +183,10 @@ public static class InitEndpoints
                         slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
                     masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, remoteIv, remoteKek);
                 }
+                catch (KdfBusyException)
+                {
+                    throw; // "busy, retry" (503), not "wrong password"
+                }
                 catch
                 {
                     return Results.Json(

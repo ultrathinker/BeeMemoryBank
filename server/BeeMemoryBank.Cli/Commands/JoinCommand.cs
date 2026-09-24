@@ -118,6 +118,11 @@ public static class JoinCommand
                 slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
             masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, iv, kek);
         }
+        catch (KdfBusyException)
+        {
+            await output.WriteLineAsync("Error: too many password checks in progress, try again in a moment");
+            return 1;
+        }
         catch
         {
             await output.WriteLineAsync("Error: failed to decrypt Master DEK (incorrect password?)");

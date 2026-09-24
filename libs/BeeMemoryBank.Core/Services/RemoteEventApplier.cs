@@ -63,7 +63,7 @@ public class RemoteEventApplier(
             seenFolderOriginIds.Add(originId);
 
             string localPath;
-            if (string.Equals(rf.Path, rootRemote, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(rf.Path, rootRemote, StringComparison.Ordinal))
             {
                 localPath = rootLocal;
             }
@@ -77,8 +77,8 @@ public class RemoteEventApplier(
                 var suffix = rf.Path[rootRemote.Length..];
                 var candidate = TreePathCanonicalizer.Canonicalize(rootLocal + suffix);
                 var rootLocalPrefix = rootLocal.TrimEnd('/') + "/";
-                if (!candidate.Equals(rootLocal, StringComparison.OrdinalIgnoreCase)
-                    && !candidate.StartsWith(rootLocalPrefix, StringComparison.OrdinalIgnoreCase))
+                if (!candidate.Equals(rootLocal, StringComparison.Ordinal)
+                    && !candidate.StartsWith(rootLocalPrefix, StringComparison.Ordinal))
                     continue;
                 localPath = candidate;
             }

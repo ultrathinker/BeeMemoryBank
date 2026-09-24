@@ -117,11 +117,21 @@ public class UserService(
     /// </summary>
     public static void BurnPasswordVerification(string password)
     {
-        _ = VerifyPassword(password, DummyPasswordHash.Value);
+        _ = VerifyPassword(password, GetDummyPasswordHash());
     }
 
-    private static readonly Lazy<string> DummyPasswordHash =
-        new(() => HashPassword(Convert.ToHexString(SecureRandom.GetBytes(32))), isThreadSafe: true);
+    // Not Lazy<T>: Lazy caches an exception, so a first call that met a saturated KDF gate
+    // (KdfBusyException) would poison every later unknown-user login until restart. This retries
+    // until one derivation succeeds; a lost race only costs one extra derivation.
+    private static string? _dummyPasswordHash;
+
+    private static string GetDummyPasswordHash()
+    {
+        var existing = Volatile.Read(ref _dummyPasswordHash);
+        if (existing != null) return existing;
+        var created = HashPassword(Convert.ToHexString(SecureRandom.GetBytes(32)));
+        return Interlocked.CompareExchange(ref _dummyPasswordHash, created, null) ?? created;
+    }
 
     /// <summary>
     /// Throws unless some OTHER active superadmin would still hold a key slot after this user
