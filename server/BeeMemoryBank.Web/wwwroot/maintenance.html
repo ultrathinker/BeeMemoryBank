@@ -61,26 +61,7 @@
         }
         .refresh-btn:hover { background: #273449; }
     </style>
-    <script>
-        function checkSite() {
-            fetch('/', { method: 'HEAD', cache: 'no-store' })
-                .then(res => {
-                    if (res.status !== 502 && res.status !== 503) {
-                        location.href = '/';
-                    }
-                })
-                .catch(() => {});
-        }
-        var delay = 5000;
-        var titleText = 'Maintenance in progress';
-        if (location.search.indexOf('restore') >= 0) {
-            titleText = 'Snapshot restore in progress';
-            document.getElementById('title-text').textContent = titleText;
-        }
-        setTimeout(function() {
-            setInterval(checkSite, 3000);
-        }, delay);
-    </script>
+    <script src="/js/maintenance.js" defer></script>
 </head>
 <body>
     <div class="container">

@@ -1,0 +1,280 @@
+@using System.Text.Json
+@model BeeMemoryBank.Web.Pages.AdminModel
+
+<!-- Snapshots -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
+    <h3 style="margin:0;"><sl-icon name="archive"></sl-icon> Snapshots</h3>
+    <div style="display:flex;gap:8px;">
+        <sl-button size="small" variant="default" id="btn-show-upload">
+            <sl-icon slot="prefix" name="cloud-upload"></sl-icon> Upload
+        </sl-button>
+        <sl-button size="small" variant="success" id="btn-create-snapshot">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Snapshot
+        </sl-button>
+    </div>
+</div>
+
+<div id="snapshot-upload-zone"
+     style="display:none;border:2px dashed var(--text-secondary);padding:20px;text-align:center;border-radius:8px;margin-bottom:16px;cursor:pointer;transition:background 0.15s;">
+    <sl-icon name="cloud-upload" style="font-size:1.6rem;color:var(--text-secondary);"></sl-icon>
+    <p style="margin:8px 0 4px 0;">
+        Drag &amp; drop a snapshot file (<code>.tar.gz</code> / <code>.bin</code>)
+        or <sl-button variant="text" id="btn-pick-file">browse</sl-button>
+    </p>
+    <p class="text-muted text-sm" style="margin:0;">Uploaded snapshots appear in the list below and can be restored.</p>
+    <input type="file" id="snapshot-file-input" accept=".tar.gz,.bin" style="display:none;" />
+    <div id="upload-progress" style="display:none;margin-top:12px;">
+        <sl-progress-bar id="upload-progress-bar" value="0"></sl-progress-bar>
+        <span id="upload-status" class="text-sm text-muted"></span>
+    </div>
+</div>
+
+@if (Model.Snapshots != null && Model.Snapshots.Count > 0)
+{
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+        <table class="version-table">
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Size</th>
+                    <th>Date</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var snap in Model.Snapshots)
+                {
+                    <tr>
+                        <td><code class="text-sm">@snap.FileName</code></td>
+                        <td class="text-muted text-sm">@(snap.SizeBytes / 1024) KB</td>
+                        <td class="text-muted text-sm">@snap.CreatedAt.ToString("g")</td>
+                        <td style="text-align:right;">
+                            <a href="/Admin?handler=DownloadSnapshot&fileName=@Uri.EscapeDataString(snap.FileName)"
+                               title="Download snapshot">
+                                <sl-icon-button name="download" label="Download"></sl-icon-button>
+                            </a>
+                            <sl-icon-button name="arrow-counterclockwise" label="Restore"
+                                class="btn-open-restore-snapshot"
+                                data-filename="@snap.FileName">
+                            </sl-icon-button>
+                            <form method="post" asp-page-handler="DeleteSnapshot" style="display:inline;">
+                                <input type="hidden" name="fileName" value="@snap.FileName" />
+                                <sl-icon-button name="trash" label="Delete"
+                                    class="btn-confirm-submit"
+                                    data-confirm-pattern="Delete snapshot {name}?"
+                                    data-name="@snap.FileName">
+                                </sl-icon-button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else
+{
+    <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+        <sl-icon name="archive" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+        <p class="text-muted">No snapshots</p>
+    </div>
+}
+
+<!-- Event Log & Compaction -->
+<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;margin-top:32px;">
+    <h3 style="margin:0;"><sl-icon name="archive"></sl-icon> Event Log &amp; Compaction</h3>
+    <sl-icon-button name="question-circle" label="About compaction"
+        id="compaction-info-btn"
+        style="font-size:1.2rem;color:var(--text-secondary);"></sl-icon-button>
+</div>
+
+@if (Model.CompactionPreview != null)
+{
+    var p = Model.CompactionPreview;
+    <div class="card" style="margin-bottom:16px;">
+        <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:16px;margin-bottom:16px;">
+            <div>
+                <div class="text-muted text-sm">Events in log</div>
+                <div style="font-size:1.4rem;font-weight:600;">@p.TotalEvents</div>
+            </div>
+            <div>
+                <div class="text-muted text-sm">Peers online</div>
+                <div style="font-size:1.4rem;font-weight:600;">@p.ActivePeerCount</div>
+            </div>
+        </div>
+
+        @if (p.PeerPositions != null && p.PeerPositions.Count > 0)
+        {
+            <div style="margin-bottom:16px;">
+                <div class="text-muted text-sm" style="margin-bottom:4px;">Peers status:</div>
+                @foreach (var peer in p.PeerPositions)
+                {
+                    var behind = peer.LastSequenceNum < 0 ? -1 : p.HeadSeq - peer.LastSequenceNum;
+                    <div style="font-size:0.85rem;">
+                        <code>@peer.NodeId</code> —
+                        @if (behind < 0)
+                        {
+                            <span>never synced</span>
+                        }
+                        else if (behind == 0)
+                        {
+                            <span>fully synced</span>
+                            <span>, last contact @AdminModel.RelativeTime(peer.UpdatedAt)</span>
+                        }
+                        else
+                        {
+                            <span>@behind operation(s) behind</span>
+                            <span>, last contact @AdminModel.RelativeTime(peer.UpdatedAt)</span>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @if (p.Warnings != null && p.Warnings.Count > 0)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>Warnings:</strong>
+                <ul style="margin:8px 0 0 20px;">
+                    @foreach (var w in p.Warnings) { <li>@w</li> }
+                </ul>
+            </sl-alert>
+        }
+
+        @if (p.CanCompact)
+        {
+            <sl-alert variant="primary" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                <strong>Ready to compact.</strong>
+                <div style="margin-top:8px;font-size:0.9rem;">
+                    <div>Will delete the oldest <strong>@p.EventsToDelete</strong> events and replace them with one signed snapshot.</div>
+                    <div>Will keep <strong>@p.EventsRemaining</strong> of the most recent events as a tail for continued sync.</div>
+                    <div class="text-muted" style="margin-top:6px;">@(p.ActivePeerCount > 0
+                        ? "Safe: every active peer has already received all the events we're about to delete."
+                        : "No active peers — safe to compact.")</div>
+                </div>
+            </sl-alert>
+
+            <form method="post" asp-page-handler="Compact" style="display:inline;"
+                  class="form-confirm" data-confirm="Compact event log?&#10;&#10;Will delete the oldest @p.EventsToDelete events (kept as one signed snapshot).&#10;Will keep @p.EventsRemaining of the most recent events for continued sync.&#10;&#10;Continue?">
+                <sl-button type="submit" variant="warning">
+                    <sl-icon slot="prefix" name="archive"></sl-icon>
+                    Compact now (delete @p.EventsToDelete events)
+                </sl-button>
+            </form>
+        }
+        else
+        {
+            <sl-alert variant="neutral" open>
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                @p.Reason
+            </sl-alert>
+        }
+    </div>
+}
+else
+{
+    <sl-alert variant="warning" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Could not load compaction preview.
+    </sl-alert>
+}
+
+<sl-dialog id="compaction-info-dialog" label="About event log compaction" style="--width: 560px;">
+    <div style="line-height:1.55;">
+        <p><strong>What is the event log?</strong></p>
+        <p>Every operation on this node (create article, rename folder, add tag, delete, …) is written as a numbered event into a journal. Nodes synchronize with each other by exchanging events — if peer B is at operation #500 and we're at #1800, peer B pulls events 501–1800 to catch up.</p>
+
+        <p style="margin-top:12px;"><strong>Why compact?</strong></p>
+        <p>The journal grows forever — 25 000+ events per year for an active user. New nodes joining the network would have to replay all of it. Compaction truncates the old part of the journal and replaces it with a <em>signed snapshot</em>: the full state at that point, packaged into one file. Invariant preserved: <code>current state = snapshot + operations after it</code>. Nothing is lost semantically, only the journal becomes short again.</p>
+
+        <p style="margin-top:12px;"><strong>How many events are kept?</strong></p>
+        <p>Target: keep the <strong>1500</strong> most recent events. Older events get folded into a signed snapshot and removed from the log. If there are fewer than 1500 events total, nothing happens.</p>
+
+        <p style="margin-top:12px;"><strong>When is compaction refused?</strong></p>
+        <p>If any active peer is more than 1500 events behind the newest one, or if any peer is in the whitelist but has never synced, compaction is refused — those peers would be cut off. Resolve by waiting for them to sync, or by revoking them from the whitelist.</p>
+
+        <p style="margin-top:12px;"><strong>What happens after?</strong></p>
+        <ul style="margin:6px 0 0 20px;">
+            <li>A <code>.tar.gz</code> snapshot file is created in the server's data dir (signed with this node's key).</li>
+            <li>Operations 1…N are deleted from <code>tbl_event</code>. The most recent ones remain.</li>
+            <li>A tamper-proof <code>snapshot_checkpoint</code> marker is appended to the journal. It records the snapshot hash and references the previous checkpoint (Merkle chain). These markers never get compacted away.</li>
+            <li>Peers already at or past position <em>N</em> continue syncing normally.</li>
+            <li>Peers that fall behind position <em>N</em> later (e.g. offline for weeks) will need a <strong>Wipe &amp; Rejoin</strong> — they'll pull the fresh snapshot instead of trying to catch up via the journal.</li>
+        </ul>
+
+        <p style="margin-top:12px;"><strong>How often?</strong></p>
+        <p>Admin-triggered only — no automatic background compaction. For a personal knowledge base, running it once a month or when the event log passes 5–10k is fine. Always check the peer list above first: if any peer is close to being cut off, wait for it to sync or revoke it.</p>
+    </div>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="compaction-info-dialog">Cancel</sl-button>
+    <sl-button slot="footer" variant="primary" id="compaction-info-close">Got it</sl-button>
+</sl-dialog>
+
+@if (Model.SnapshotCheckpoints != null && Model.SnapshotCheckpoints.Count > 0)
+{
+    <details style="margin-bottom:32px;">
+        <summary style="cursor:pointer;padding:8px;"><strong>Compaction history</strong> (@Model.SnapshotCheckpoints.Count checkpoints)</summary>
+        <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>Sequence</th>
+                        <th>CP</th>
+                        <th>Events removed</th>
+                        <th>Snapshot</th>
+                        <th>Created at</th>
+                        <th>Chain</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var cp in Model.SnapshotCheckpoints)
+                {
+                    var payload = cp.Payload;
+                    var cpSeq = payload.TryGetProperty("cp_seq", out var cps) ? cps.GetInt64() : 0;
+                    var evRemoved = payload.TryGetProperty("events_removed", out var er) ? er.GetInt32() : 0;
+                    var snapFile = payload.TryGetProperty("snapshot_file_name", out var sf) ? sf.GetString() : null;
+                    var prevHash = payload.TryGetProperty("prev_checkpoint_sha256", out var ph) ? ph.GetString() : null;
+                    <tr>
+                        <td>@cp.SequenceNum</td>
+                        <td>@cpSeq</td>
+                        <td>@evRemoved</td>
+                        <td><code style="font-size:0.8rem;">@snapFile</code></td>
+                        <td>@cp.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>@(prevHash != null ? $"→ {prevHash[..Math.Min(8, prevHash.Length)]}\u2026" : "(first)")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </details>
+}
+
+<!-- Restore Snapshot Dialog -->
+<sl-dialog id="dlg-restore-snapshot" label="Restore Snapshot">
+    <sl-alert variant="danger" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>Warning:</strong> This will replace ALL data with the snapshot. Current data will be lost.
+        The server will be temporarily unavailable during restore.
+    </sl-alert>
+    <input type="hidden" name="fileName" id="restore-file-name" />
+    <div style="margin-bottom:16px;">
+        <sl-input name="masterPassword" id="restore-master-password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+    </div>
+    <div style="margin-bottom:16px;">
+        <sl-checkbox name="createBackupFirst" id="restore-backup-checkbox" checked>Create backup before restore</sl-checkbox>
+    </div>
+    <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-restore-snapshot">Cancel</sl-button>
+    <sl-button type="button" slot="footer" variant="danger" id="btn-restore-confirm">
+        <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Restore
+    </sl-button>
+</sl-dialog>
+
+<!-- Snapshot progress dialog (non-closable) -->
+<sl-dialog id="dlg-snapshot-progress" no-header>
+    <div style="text-align:center;padding:24px 0;">
+        <sl-spinner style="font-size:2rem;margin-bottom:16px;"></sl-spinner>
+        <p id="snapshot-progress-label" style="margin:0;color:var(--text-primary);font-size:1.05rem;font-weight:600;">Creating snapshot…</p>
+        <p id="snapshot-progress-detail" class="text-muted text-sm" style="margin-top:8px;">This may take a while for large databases.</p>
+    </div>
+</sl-dialog>

@@ -9,82 +9,17 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="bmb-user" content="@(User.Identity?.Name ?? "")" />
     <title>@Model.Article?.Title - Preview</title>
-    <script type="module">
-        import { setBasePath } from '/lib/shoelace/shoelace-bundle.js';
-        setBasePath('/lib/shoelace');
-    </script>
+    <script type="module" src="/js/shoelace-init.js"></script>
+    <script src="/js/theme-init.js"></script>
     <link rel="stylesheet" href="/lib/shoelace/themes/light.css" />
     <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
     <link href="/css/site.css" rel="stylesheet" />
     <script src="/lib/marked/marked.umd.js"></script>
     <script src="/lib/dompurify/purify.min.js"></script>
-    <script>
-        // Kept in sync with the copy in Pages/Shared/_Layout.cshtml - this page opts out of the
-        // shared layout (Layout = null) so it can't reuse that one. See its comment for why this
-        // preprocessing exists: marked collapses any run of blank lines to a single paragraph break.
-        window.bmbPreserveBlankLines = function (md) {
-            // Line endings may be "\n" or "\r\n" (textareas on Windows submit CRLF) - count actual
-            // line-break units, not raw characters, or a CRLF body never matches at all.
-            return (md || '').replace(/(?:\r\n|\n){3,}/g, function (run) {
-                var units = run.match(/\r\n|\n/g).length;
-                return '\n\n' + '&nbsp;\n\n'.repeat(units - 2);
-            });
-        };
-        window.bmbRenderMarkdown = function (md, opts) {
-            opts = opts || {};
-            var parseOpts = { breaks: true };
-            if (opts.renderer) parseOpts.renderer = opts.renderer;
-            return DOMPurify.sanitize(marked.parse(window.bmbPreserveBlankLines(md), parseOpts));
-        };
-    </script>
-    @{var previewUser = User.Identity?.Name ?? "";}
-    <script>
-        (function(){
-            try {
-                var u = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(previewUser));
-                var k = 'bee-theme' + (u ? '-' + u : '');
-                var t = localStorage.getItem(k) || 'crimson';
-                document.documentElement.setAttribute('data-theme', t);
-                window.__beePreviewTheme = t;
-            } catch(e) {}
-        })();
-    </script>
 </head>
 <body class="sl-theme-dark" style="padding: 24px; margin: 0; background: var(--bg-primary); height: auto; min-height: 100vh; overflow: visible; display: block;">
-    <script>
-        (function(){
-            var html = document.documentElement;
-            var body = document.body;
-            if (window.__beePreviewTheme === 'light') {
-                html.classList.remove('sl-theme-dark'); html.classList.add('sl-theme-light');
-                body.classList.remove('sl-theme-dark'); body.classList.add('sl-theme-light');
-            } else {
-                html.classList.remove('sl-theme-light'); html.classList.add('sl-theme-dark');
-                body.classList.remove('sl-theme-light'); body.classList.add('sl-theme-dark');
-            }
-        })();
-        document.addEventListener('click', function(e){
-            var el = e.target.closest('[data-bmb-copy]');
-            if (!el) return;
-            var text = el.getAttribute('data-bmb-copy');
-            function flash(){
-                el.style.transition = 'outline-color 0.2s';
-                el.style.outline = '2px solid var(--sl-color-primary-500)';
-                el.style.outlineOffset = '2px';
-                setTimeout(function(){ el.style.outline = ''; }, 500);
-            }
-            if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(text).then(flash, function(){});
-            } else {
-                var ta = document.createElement('textarea');
-                ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-                document.body.appendChild(ta); ta.select();
-                try { document.execCommand('copy'); } catch(e){}
-                document.body.removeChild(ta); flash();
-            }
-        });
-    </script>
 @if (Model.Article != null)
 {
     <h1 class="article-title">@Model.Article.Title</h1>
@@ -146,23 +81,10 @@
             </div>
         }
     </div>
-    <script>
-        (function(){
-            var content = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""));
-            if (content) {
-                var body = document.getElementById('article-body');
-                var renderer = new marked.Renderer();
-                var origImage = renderer.image.bind(renderer);
-                renderer.image = function(token){
-                    if (token && token.href && token.href.startsWith('/api/media/')) {
-                        token.href = '/api-proxy/media/' + token.href.substring('/api/media/'.length);
-                    }
-                    return origImage(token);
-                };
-                body.innerHTML = window.bmbRenderMarkdown(content, { renderer: renderer });
-            }
-        })();
+    <script type="application/json" id="article-preview-data">
+        {"content":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""))}
     </script>
+    <script src="/js/pages/article-preview.js"></script>
 }
 else
 {

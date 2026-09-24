@@ -42,15 +42,15 @@
                 </sl-button>
                 @if (!isSystemFolder)
                 {
-                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-rename-folder').show()">
+                    <sl-button id="btn-open-rename-folder" size="small" variant="default">
                         <sl-icon slot="prefix" name="pencil"></sl-icon> Rename
                     </sl-button>
-                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-folder').show()">
+                    <sl-button id="btn-open-move-folder" size="small" variant="default">
                         <sl-icon slot="prefix" name="folder-symlink"></sl-icon> Move
                     </sl-button>
                 }
             }
-            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-copy-folder').show()">
+            <sl-button id="btn-open-copy-folder" size="small" variant="default">
                 <sl-icon slot="prefix" name="copy"></sl-icon> Copy To
             </sl-button>
             <sl-button id="btn-export-folder" size="small" variant="default">
@@ -58,7 +58,7 @@
             </sl-button>
             @if (!isReadOnly && !isSystemFolder)
             {
-                <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-folder').show()">
+                <sl-button id="btn-open-delete-folder" size="small" variant="danger">
                     <sl-icon slot="prefix" name="trash"></sl-icon> Delete
                 </sl-button>
             }
@@ -155,14 +155,14 @@
         <sl-input class="bmb-fp-input" placeholder="Type to search folders, or pick / for root" autocomplete="off"></sl-input>
         <div class="bmb-fp-dropdown" hidden></div>
     </div>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-move-folder').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-move-folder">Cancel</sl-button>
     <sl-button id="btn-move-folder" slot="footer" variant="primary">Move</sl-button>
 </sl-dialog>
 
 <!-- Rename folder dialog -->
 <sl-dialog id="dlg-rename-folder" label="Rename Folder">
     <sl-input id="rename-folder-name" label="Folder name" value="@System.IO.Path.GetFileName(Model.CurrentPath.TrimEnd('/'))" required autofocus></sl-input>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-rename-folder').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-rename-folder">Cancel</sl-button>
     <sl-button id="btn-rename-folder" slot="footer" variant="primary">Rename</sl-button>
 </sl-dialog>
 
@@ -184,7 +184,7 @@
         <span id="add-subfolder-error-msg"></span>
     </sl-alert>
     <sl-input id="add-subfolder-name" label="Folder name" placeholder="New Folder" required autofocus></sl-input>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-subfolder').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-add-subfolder">Cancel</sl-button>
     <sl-button id="btn-add-subfolder" slot="footer" variant="primary">Create</sl-button>
 </sl-dialog>
 
@@ -194,7 +194,7 @@
         <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
         All articles in <strong>@Model.CurrentPath</strong> and subfolders will be deleted!
     </sl-alert>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-delete-folder').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-delete-folder">Cancel</sl-button>
     <sl-button id="btn-confirm-delete-folder" slot="footer" variant="danger">Delete All</sl-button>
 </sl-dialog>
 
@@ -207,282 +207,12 @@
     </sl-alert>
     <sl-input id="copy-folder-target" label="Target parent path" placeholder="/" autocomplete="off" autofocus></sl-input>
     <small class="text-muted">A deep copy is created at <code>&lt;target&gt;/@System.IO.Path.GetFileName(Model.CurrentPath.TrimEnd('/'))</code>. Name collisions get a " (N)" suffix.</small>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-copy-folder').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-copy-folder">Cancel</sl-button>
     <sl-button id="btn-copy-folder" slot="footer" variant="primary">Copy</sl-button>
 </sl-dialog>
-<script>
-(function() {
-    var dlg = document.getElementById('dlg-copy-folder');
-    var btn = document.getElementById('btn-copy-folder');
-    var input = document.getElementById('copy-folder-target');
-    if (!dlg || !btn) return;
-    btn.addEventListener('click', async function() {
-        var target = (input.value || '').trim() || '/';
-        var folderId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
-            Model.Children != null && Model.Children.Folders.Count > 0
-                ? "" // we don't have current folder ID directly; use API by path instead
-                : ""));
-        // Look up folder id by path via search endpoint, then call copy.
-        try {
-            var lookupResp = await fetch('/api-proxy/folders/search?q=' + encodeURIComponent(@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath))) + '&limit=20');
-            var lookup = await lookupResp.json();
-            var match = (lookup.folders || []).find(function(f) { return f.path === @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath)); });
-            if (!match) { showCopyErr('Could not locate source folder'); return; }
-            var resp = await fetch('/api-proxy/folder/' + match.id + '/copy', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ targetParentPath: target })
-            });
-            if (resp.ok) {
-                dlg.hide();
-                window.location.href = '/Folder?path=' + encodeURIComponent(target);
-            } else {
-                var data = {}; try { data = await resp.json(); } catch {}
-                showCopyErr(data.error || ('Copy failed (HTTP ' + resp.status + ')'));
-            }
-        } catch (e) { showCopyErr(String(e)); }
-    });
-    function showCopyErr(msg) {
-        var box = document.getElementById('copy-folder-error');
-        document.getElementById('copy-folder-error-msg').textContent = msg;
-        box.style.display = '';
-        box.open = true;
-    }
-})();
+<script type="application/json" id="folder-page-data">
+    {"currentPath":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath))}
 </script>
-
-<script>
-(function() {
-    var currentPath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.CurrentPath));
-
-    // Attribute-safe: escapes quotes as well as angle brackets. The
-    // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
-    // value it produced was unsafe the moment it landed inside an HTML attribute.
-    function escapeHtml(text) {
-        return String(text == null ? '' : text)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-
-    var exportFolderBtn = document.getElementById('btn-export-folder');
-    if (exportFolderBtn) {
-        exportFolderBtn.addEventListener('click', function() {
-            openDownloadDialog({ kind: 'folder', path: currentPath });
-        });
-    }
-
-    // New-article toolbar button: NEVER show a popup. Jump straight to the
-    // editor with the current folder pre-filled. The user can change the
-    // target folder there via the clickable breadcrumb under the title.
-    var openNewArticleBtn = document.getElementById('btn-open-new-article-folder');
-    if (openNewArticleBtn) {
-        openNewArticleBtn.addEventListener('click', function() {
-            window.location.href = '/Article/Edit?treePath=' + encodeURIComponent(currentPath || '/');
-        });
-    }
-
-    var addSubfolderSelector = null;
-    var openAddSubBtn = document.getElementById('btn-open-add-subfolder');
-    if (openAddSubBtn) {
-        openAddSubBtn.addEventListener('click', function() {
-            addSubfolderSelector = window.bmbInitPathSelector({
-                rootEl: document.getElementById('folder-add-subfolder-path-selector'),
-                basePath: currentPath
-            });
-            document.getElementById('dlg-add-subfolder').show();
-        });
-    }
-
-    // Move-folder dialog uses the shared bmbFolderPicker. Initialise on the
-    // dialog's sl-show event — by that point Shoelace has the panel in the
-    // DOM and any deferred site.js init has finished, so we don't need a
-    // setTimeout magic-number poll.
-    var moveFolderPicker = null;
-    function initMovePicker() {
-        if (moveFolderPicker || typeof window.bmbFolderPicker !== 'function') return;
-        var pickerRoot = document.getElementById('move-folder-picker');
-        if (!pickerRoot) return;
-        moveFolderPicker = window.bmbFolderPicker({
-            rootEl: pickerRoot,
-            initialPath: '/'
-        });
-    }
-    var moveDlg = document.getElementById('dlg-move-folder');
-    if (moveDlg) moveDlg.addEventListener('sl-show', initMovePicker);
-
-    var moveBtn = document.getElementById('btn-move-folder');
-    if (moveBtn) {
-        moveBtn.addEventListener('click', function() {
-            initMovePicker();
-            var newParentPath = (moveFolderPicker ? moveFolderPicker.getPath() : null) || '/';
-            var folderName = currentPath.replace(/\/$/, '').split('/').pop();
-            var newPath = newParentPath.replace(/\/$/, '') + '/' + folderName;
-            if (newPath === currentPath) { alert('Already in that folder'); return; }
-            moveBtn.loading = true;
-            fetch('/api-proxy/folders/move?path=' + encodeURIComponent(currentPath), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ newParentPath: newParentPath })
-            }).then(function(r) {
-                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
-                else r.json().then(function(d) { alert(d.error || 'Move failed'); }).catch(function() { alert('Move failed'); });
-            }).catch(function() { alert('Error'); }).finally(function() { moveBtn.loading = false; });
-        });
-    }
-
-    var renameBtn = document.getElementById('btn-rename-folder');
-    if (renameBtn) {
-        renameBtn.addEventListener('click', function() {
-            var newName = document.getElementById('rename-folder-name').value.trim();
-            if (!newName) return;
-            var parentPath = currentPath.substring(0, currentPath.replace(/\/$/, '').lastIndexOf('/'));
-            var newPath = parentPath + '/' + newName;
-            if (newPath === currentPath) return;
-            renameBtn.loading = true;
-            fetch('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ newPath: newPath })
-            }).then(function(r) {
-                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
-                else r.json().then(function(d) { alert(d.error || 'Rename failed'); }).catch(function() { alert('Rename failed'); });
-            }).catch(function() { alert('Error'); }).finally(function() { renameBtn.loading = false; });
-        });
-    }
-
-    var addSubBtn = document.getElementById('btn-add-subfolder');
-    if (addSubBtn) {
-        var addSubDlg = document.getElementById('dlg-add-subfolder');
-        var addSubErrBox = document.getElementById('add-subfolder-error');
-        var addSubErrMsg = document.getElementById('add-subfolder-error-msg');
-        function showAddSubError(msg) {
-            addSubErrMsg.textContent = msg || 'Failed to create folder';
-            addSubErrBox.style.display = 'block';
-            addSubErrBox.open = true;
-        }
-        function clearAddSubError() {
-            addSubErrBox.style.display = 'none';
-            addSubErrMsg.textContent = '';
-        }
-        if (addSubDlg) addSubDlg.addEventListener('sl-show', clearAddSubError);
-
-        addSubBtn.addEventListener('click', async function() {
-            clearAddSubError();
-            var nameInput = document.getElementById('add-subfolder-name');
-            var name = (nameInput.value || '').trim();
-            if (!name) {
-                showAddSubError('Folder name is required.');
-                return;
-            }
-            addSubBtn.loading = true;
-            var basePath = addSubfolderSelector ? addSubfolderSelector.getEffectivePath() : currentPath;
-            var newPath = basePath.replace(/\/$/, '') + '/' + name;
-            try {
-                var r = await fetch('/api-proxy/folders', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: newPath })
-                });
-                if (r.ok) {
-                    addSubDlg.hide();
-                    window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
-                    return;
-                }
-                var d = null;
-                try { d = await r.json(); } catch (_) {}
-                showAddSubError((d && d.error) || 'Failed to create folder');
-            } catch (_) {
-                showAddSubError('Network error. Please try again.');
-            } finally {
-                addSubBtn.loading = false;
-            }
-        });
-    }
-
-    var deleteBtn = document.getElementById('btn-confirm-delete-folder');
-    if (deleteBtn) {
-        deleteBtn.addEventListener('click', function() {
-            deleteBtn.loading = true;
-            fetch('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
-                method: 'DELETE'
-            }).then(function(r) {
-                if (r.ok) window.location.href = '/Tree';
-                else r.json().then(function(d) { alert(d.error || 'Delete failed'); }).catch(function() { alert('Delete failed'); });
-            }).catch(function() { alert('Error'); }).finally(function() { deleteBtn.loading = false; });
-        });
-    }
-
-    var collator = new Intl.Collator(undefined, { sensitivity: 'base' });
-
-    function initSortableTable(tableId, columns) {
-        var table = document.getElementById(tableId);
-        if (!table) return;
-        var headers = table.querySelectorAll('.bmb-sort-th');
-        var tbody = table.querySelector('tbody');
-        var currentSort = null;
-        var currentDir = null;
-
-        headers.forEach(function(th) {
-            th.addEventListener('click', function() {
-                var sortKey = th.dataset.sort;
-                var defaultDir = th.dataset.default || 'asc';
-                if (currentSort === sortKey) {
-                    currentDir = currentDir === 'asc' ? 'desc' : 'asc';
-                } else {
-                    currentSort = sortKey;
-                    currentDir = defaultDir;
-                }
-                var col = columns[sortKey];
-                var rows = Array.from(tbody.querySelectorAll('.bmb-sort-row'));
-                rows.sort(function(a, b) {
-                    var va = col.extract(a);
-                    var vb = col.extract(b);
-                    var cmp = col.compare(va, vb);
-                    return currentDir === 'asc' ? cmp : -cmp;
-                });
-                rows.forEach(function(r) { tbody.appendChild(r); });
-                headers.forEach(function(h) {
-                    var arrow = h.querySelector('.bmb-sort-arrow');
-                    arrow.textContent = '';
-                    h.style.opacity = '0.7';
-                });
-                var activeArrow = th.querySelector('.bmb-sort-arrow');
-                activeArrow.textContent = currentDir === 'asc' ? ' \u25B2' : ' \u25BC';
-                th.style.opacity = '1';
-            });
-        });
-    }
-
-    initSortableTable('folders-table', {
-        name: {
-            extract: function(r) { return r.dataset.name; },
-            compare: function(a, b) { return collator.compare(a, b); }
-        },
-        count: {
-            extract: function(r) { return parseInt(r.dataset.count, 10) || 0; },
-            compare: function(a, b) { return a - b; }
-        },
-        updated: {
-            extract: function(r) { return new Date(r.dataset.updatedTs).getTime(); },
-            compare: function(a, b) { return a - b; }
-        }
-    });
-
-    initSortableTable('articles-table', {
-        title: {
-            extract: function(r) { return r.dataset.title; },
-            compare: function(a, b) { return collator.compare(a, b); }
-        },
-        created: {
-            extract: function(r) { return new Date(r.dataset.createdTs).getTime(); },
-            compare: function(a, b) { return a - b; }
-        },
-        updated: {
-            extract: function(r) { return new Date(r.dataset.updatedTs).getTime(); },
-            compare: function(a, b) { return a - b; }
-        }
-    });
-})();
-</script>
+<script src="/js/pages/folder.js"></script>
 </div>
 </div>

@@ -328,17 +328,18 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 
 // Security response headers — defense-in-depth for XSS / clickjacking / MIME sniffing.
-// script-src 'unsafe-inline' is currently required because Razor pages embed JS in
-// inline <script> blocks (Article/View, Edit, Folder, Layout, …). Migrate to
-// nonce-based CSP later for full defense-in-depth. style-src 'unsafe-inline' is
-// required by Shoelace components. data:/blob: support encrypted media rendering.
+// script-src is 'self' only: no page carries inline JavaScript (pages load wwwroot/js files
+// and pass server data through non-executable JSON blocks), which WebCspComplianceGuardTests
+// enforces. That turns a markdown-sanitizer slip into a dead end instead of script execution.
+// style-src 'unsafe-inline' is still required by Shoelace components. data:/blob: support
+// encrypted media rendering.
 app.Use(async (ctx, next) =>
 {
     var headers = ctx.Response.Headers;
     var framable = ctx.Request.Path.StartsWithSegments("/Article/Preview");
     headers["Content-Security-Policy"] =
         "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline'; " +
+        "script-src 'self'; " +
         // W5b: removed https://maxcdn.bootstrapcdn.com (EasyMDE's FontAwesome CDN). EasyMDE is
         // pointed away from the CDN via autoDownloadFontAwesome:false, and its toolbar icons are
         // swapped for the app's own vendored Shoelace <sl-icon> set immediately after construction

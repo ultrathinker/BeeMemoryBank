@@ -77,7 +77,7 @@
     <!-- AI Agents Section -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <h3 style="margin:0;"><sl-icon name="robot"></sl-icon> My AI Agents</h3>
-        <sl-button size="small" variant="success" onclick="document.getElementById('dlg-create-agent').show()">
+        <sl-button size="small" variant="success" id="btn-open-create-agent">
             <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Agent
         </sl-button>
     </div>
@@ -125,7 +125,7 @@
     <div style="margin-bottom:16px;">
         <sl-input id="agent-desc" label="Description" placeholder="Optional"></sl-input>
     </div>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-create-agent').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" id="btn-cancel-create-agent">Cancel</sl-button>
     <sl-button slot="footer" variant="primary" id="btn-do-create-agent">Create</sl-button>
 </sl-dialog>
 
@@ -137,9 +137,8 @@
     </sl-alert>
     <div style="background:var(--bg-app);padding:16px;border-radius:8px;border:1px solid var(--border);position:relative;margin-bottom:16px;">
         <code id="secret-key-code" style="word-break:break-all;font-family:var(--font-mono);font-size:0.9rem;display:block;padding-right:40px;"></code>
-        <sl-icon-button name="clipboard" label="Copy"
-            style="position:absolute;top:10px;right:10px;font-size:1.2rem;"
-            onclick="copySecret()">
+        <sl-icon-button name="clipboard" label="Copy" id="btn-copy-secret"
+            style="position:absolute;top:10px;right:10px;font-size:1.2rem;">
         </sl-icon-button>
     </div>
 
@@ -163,7 +162,7 @@
             <code id="mcp-cli-code" style="word-break:break-all;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.85rem;display:block;padding-right:40px;"></code>
             <sl-icon-button name="clipboard" label="Copy"
                 style="position:absolute;top:10px;right:10px;font-size:1.2rem;"
-                onclick="copyEl('mcp-cli-code', 'Claude Code command copied')">
+                data-copy-target="mcp-cli-code" data-copy-msg="Claude Code command copied">
             </sl-icon-button>
         </div>
     </div>
@@ -174,235 +173,15 @@
             <code id="mcp-cursor-code" style="white-space:pre;font-family:var(--font-mono);font-size:0.85rem;display:block;padding-right:40px;overflow-x:auto;"></code>
             <sl-icon-button name="clipboard" label="Copy"
                 style="position:absolute;top:10px;right:10px;font-size:1.2rem;"
-                onclick="copyEl('mcp-cursor-code', 'Cursor config copied')">
+                data-copy-target="mcp-cursor-code" data-copy-msg="Cursor config copied">
             </sl-icon-button>
         </div>
     </div>
 
-    <sl-button slot="footer" variant="primary" onclick="document.getElementById('dlg-show-secret').hide()">I have copied it</sl-button>
+    <sl-button slot="footer" variant="primary" id="btn-close-secret-dlg">I have copied it</sl-button>
 </sl-dialog>
 
-<script>
-var mcpBaseUrl = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.McpBaseUrl));
-
-function copyEl(id, message) {
-    navigator.clipboard.writeText(document.getElementById(id).textContent);
-    showAlert('success', message);
-}
-
-function copySecret() {
-    copyEl('secret-key-code', 'Key copied to clipboard');
-}
-
-document.getElementById('btn-change-password').addEventListener('click', function() {
-    var btn = this;
-    var oldPw = document.getElementById('cp-old').value;
-    var newPw = document.getElementById('cp-new').value;
-    var confirmPw = document.getElementById('cp-confirm').value;
-
-    if (!oldPw || !newPw || !confirmPw) {
-        showAlert('danger', 'All fields are required.');
-        return;
-    }
-    if (newPw !== confirmPw) {
-        showAlert('danger', 'New passwords do not match.');
-        return;
-    }
-    if (newPw.length < 8 || !/[A-Z]/.test(newPw) || !/[a-z]/.test(newPw) || !/[0-9]/.test(newPw)) {
-        showAlert('danger', 'Password must be at least 8 characters and contain uppercase, lowercase, and digit.');
-        return;
-    }
-
-    btn.loading = true;
-    fetch('/api-proxy/users/me/change-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
-    }).then(function(r) {
-        if (r.ok) {
-            showAlert('success', 'Password changed successfully.');
-            document.getElementById('cp-old').value = '';
-            document.getElementById('cp-new').value = '';
-            document.getElementById('cp-confirm').value = '';
-        } else {
-            return r.json().then(function(data) {
-                showAlert('danger', data.error || 'Failed to change password.');
-            });
-        }
-    }).catch(function() {
-        showAlert('danger', 'Network error.');
-    }).finally(function() {
-        btn.loading = false;
-    });
-});
-
-function loadAgents() {
-    document.getElementById('agents-loading').style.display = 'block';
-    document.getElementById('agents-table-container').style.display = 'none';
-    document.getElementById('agents-empty').style.display = 'none';
-
-    fetch('/api-proxy/agents')
-        .then(r => r.json())
-        .then(data => {
-            document.getElementById('agents-loading').style.display = 'none';
-            document.getElementById('agents-count').textContent = 'Used ' + data.length + ' of 20 agents';
-            
-            if (!data || data.length === 0) {
-                document.getElementById('agents-empty').style.display = 'block';
-                return;
-            }
-
-            var tbody = document.getElementById('agents-tbody');
-            tbody.innerHTML = '';
-            data.forEach(a => {
-                var tr = document.createElement('tr');
-                var autoUnlockCell = a.canAutoUnlock
-                    ? '<sl-badge variant="warning" pill>Yes</sl-badge>'
-                    : '<span class="text-muted text-sm">No</span>';
-                tr.innerHTML = '<td><strong>' + escapeHtml(a.name) + '</strong><br/><small class="text-muted">' + escapeHtml(a.description || '') + '</small></td>' +
-                               '<td><code class="text-sm">' + escapeHtml(a.keyPrefix) + '</code></td>' +
-                               '<td>' + autoUnlockCell + '</td>' +
-                               '<td class="text-muted text-sm">' + new Date(a.createdAt).toLocaleDateString() + '</td>' +
-                               '<td class="text-muted text-sm">' + (a.lastAccessedAt ? timeAgo(new Date(a.lastAccessedAt)) : 'never') + '</td>' +
-                               // Name carried on a data-attribute rather than interpolated into
-                               // inline JS. HTML-escaping cannot secure a JS string literal inside
-                               // an attribute: the browser decodes entities BEFORE the JS is
-                               // parsed, so even an escaped apostrophe closes the literal again.
-                               '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" class="agent-delete-btn" data-agent-id="' + escapeHtml(a.id) + '" data-agent-name="' + escapeHtml(a.name) + '"></sl-icon-button></td>';
-                tbody.appendChild(tr);
-            });
-            tbody.querySelectorAll('.agent-delete-btn').forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    deleteAgent(btn.dataset.agentId, btn.dataset.agentName);
-                });
-            });
-            document.getElementById('agents-table-container').style.display = 'block';
-        });
-}
-
-function deleteAgent(id, name) {
-    if (!confirm('Revoke agent "' + name + '"? Any applications using this key will lose access.')) return;
-    
-    fetch('/api-proxy/agents/' + id, { method: 'DELETE' })
-        .then(r => {
-            if (r.ok) {
-                showAlert('success', 'Agent revoked');
-                loadAgents();
-            } else {
-                showAlert('danger', 'Failed to revoke agent');
-            }
-        });
-}
-
-document.getElementById('btn-do-create-agent').addEventListener('click', function() {
-    var name = document.getElementById('agent-name').value;
-    var desc = document.getElementById('agent-desc').value;
-    var btn = this;
-
-    if (!name) {
-        alert('Name is required');
-        return;
-    }
-
-    btn.loading = true;
-    fetch('/api-proxy/agents', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name, description: desc })
-    }).then(r => {
-        if (r.ok) {
-            return r.json();
-        } else {
-            return r.json().then(data => { throw new Error(data.error || 'Failed to create agent'); });
-        }
-    }).then(data => {
-        document.getElementById('dlg-create-agent').hide();
-        document.getElementById('agent-name').value = '';
-        document.getElementById('agent-desc').value = '';
-
-        var key = data.apiKey;
-        var mcpUrl = mcpBaseUrl + '/mcp';
-
-        document.getElementById('secret-key-code').textContent = key;
-        document.getElementById('secret-autounlock-note').variant = data.canAutoUnlock ? 'warning' : 'neutral';
-        document.getElementById('secret-autounlock-text').textContent = data.canAutoUnlock
-            ? 'This key can wake a locked node by itself, the same as your own login.'
-            : 'This key cannot unlock a locked node by itself — it only works while the vault is already unlocked by someone else.';
-        document.getElementById('mcp-cli-code').textContent =
-            'claude mcp add --transport http bee-memory-bank ' + mcpUrl + ' --header "Authorization: Bearer ' + key + '"';
-        document.getElementById('mcp-cursor-code').textContent =
-            '{\n  "mcpServers": {\n    "bee-memory-bank": {\n      "type": "http",\n      "url": "' + mcpUrl + '",\n      "headers": {\n        "Authorization": "Bearer ' + key + '"\n      }\n    }\n  }\n}';
-
-        document.getElementById('dlg-show-secret').show();
-        loadAgents();
-    }).catch(err => {
-        alert(err.message);
-    }).finally(() => {
-        btn.loading = false;
-    });
-});
-
-function timeAgo(date) {
-    var sec = Math.floor((Date.now() - date.getTime()) / 1000);
-    if (sec < 60) return sec + 's ago';
-    if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
-    if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
-    return Math.floor(sec / 86400) + 'd ago';
-}
-
-// Attribute-safe: escapes quotes as well as angle brackets. The
-// textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
-// value it produced was unsafe the moment it landed inside an HTML attribute.
-function escapeHtml(text) {
-    return String(text == null ? '' : text)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-function showAlert(variant, message) {
-    var alertEl = document.getElementById('cp-alert');
-    var icon = variant === 'success' ? 'check-circle' : 'exclamation-triangle';
-    alertEl.innerHTML = '<sl-alert variant="' + variant + '" open closable><sl-icon slot="icon" name="' + icon + '"></sl-icon>' + escapeHtml(message) + '</sl-alert>';
-    alertEl.style.display = 'block';
-    setTimeout(() => { alertEl.style.display = 'none'; }, 5000);
-}
-
-loadAgents();
-
-// Auto-approve writes — the caller's own setting; the API resolves the user from the session, so
-// this never touches anyone else's preference.
-(function () {
-    var autoApproveToggle = document.getElementById('chat-auto-approve-toggle');
-    if (!autoApproveToggle) return;
-
-    fetch('/api-proxy/chat/settings/auto-approve', { headers: { 'Accept': 'application/json' } })
-        .then(function (r) { return r.ok ? r.json() : { autoApproveWrites: false }; })
-        .then(function (data) { autoApproveToggle.checked = !!data.autoApproveWrites; })
-        .catch(function () {});
-
-    autoApproveToggle.addEventListener('sl-change', function () {
-        var enabled = autoApproveToggle.checked;
-        fetch('/api-proxy/chat/settings/auto-approve', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enabled })
-        }).then(function (r) {
-            // Revert the switch if the server refused, so it never shows a state that isn't stored.
-            if (!r.ok) autoApproveToggle.checked = !enabled;
-        }).catch(function () { autoApproveToggle.checked = !enabled; });
-    });
-})();
-
-// Auto-open the Create Agent dialog when arriving from the Setup wizard (?createAgent=1).
-(function () {
-    if (new URLSearchParams(window.location.search).get('createAgent') === '1') {
-        var dlg = document.getElementById('dlg-create-agent');
-        if (dlg && typeof dlg.show === 'function') {
-            dlg.show();
-        } else if (dlg) {
-            // Shoelace not yet upgraded — wait for it
-            customElements.whenDefined('sl-dialog').then(function () { dlg.show(); });
-        }
-    }
-})();
+<script type="application/json" id="profile-page-data">
+    {"mcpBaseUrl":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.McpBaseUrl))}
 </script>
+<script src="/js/pages/profile.js"></script>

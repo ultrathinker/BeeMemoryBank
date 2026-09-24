@@ -14,7 +14,7 @@
             <sl-button size="small" variant="default" href="/Users">
                 <sl-icon slot="prefix" name="people"></sl-icon> Users
             </sl-button>
-            <sl-button size="small" variant="success" onclick="openAddRole()">
+            <sl-button size="small" variant="success" id="btn-open-add-role">
                 <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Role
             </sl-button>
         </div>
@@ -94,19 +94,19 @@
                                 {
                                     <sl-icon-button name="shield-lock" label="Folder rules"
                                         data-name="@role.Name" data-display="@role.DisplayName"
-                                        onclick="openRoleFolderAccess(this.dataset.name, this.dataset.display)">
+                                        class="btn-role-folder-access">
                                     </sl-icon-button>
                                     <sl-icon-button name="pencil" label="Edit"
                                         data-name="@role.Name" data-display="@role.DisplayName"
                                         data-description="@role.Description" data-policy="@role.BasePolicy"
-                                        onclick="openEditRole(this.dataset.name, this.dataset.display, this.dataset.description, this.dataset.policy)">
+                                        class="btn-role-edit">
                                     </sl-icon-button>
                                 }
                                 @if (!role.IsSystem)
                                 {
                                     <sl-icon-button name="trash" label="Delete"
                                         data-name="@role.Name" data-users="@role.UserCount"
-                                        onclick="deleteRole(this.dataset.name, this.dataset.users)">
+                                        class="btn-role-delete">
                                     </sl-icon-button>
                                 }
                             </td>
@@ -129,7 +129,7 @@
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             <span class="msg"></span>
         </sl-alert>
-        <form id="form-add-role" onsubmit="return false;">
+        <form id="form-add-role">
             <div style="margin-bottom:16px;">
                 <sl-input id="add-role-name" label="Name" required autocomplete="off"
                     help-text="Stored lower-case; spaces become '-'. Permanent — it is written on every user who holds the role."></sl-input>
@@ -154,8 +154,8 @@
                 </p>
             </div>
         </form>
-        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-role').hide()">Cancel</sl-button>
-        <sl-button id="btn-add-role-submit" slot="footer" variant="primary" onclick="submitAddRole()">Create Role</sl-button>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-add-role">Cancel</sl-button>
+        <sl-button id="btn-add-role-submit" slot="footer" variant="primary">Create Role</sl-button>
     </sl-dialog>
 
     <sl-dialog id="dlg-edit-role" label="Edit Role">
@@ -163,7 +163,7 @@
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             <span class="msg"></span>
         </sl-alert>
-        <form id="form-edit-role" onsubmit="return false;">
+        <form id="form-edit-role">
             <input type="hidden" id="edit-role-name" />
             <p id="edit-role-name-label" class="text-muted text-sm" style="margin:0 0 16px;"></p>
             <div style="margin-bottom:16px;">
@@ -183,8 +183,8 @@
                 </p>
             </div>
         </form>
-        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-edit-role').hide()">Cancel</sl-button>
-        <sl-button id="btn-edit-role-submit" slot="footer" variant="primary" onclick="submitEditRole()">Save</sl-button>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-edit-role">Cancel</sl-button>
+        <sl-button id="btn-edit-role-submit" slot="footer" variant="primary">Save</sl-button>
     </sl-dialog>
 
     <partial name="_FolderAccessDialog" />
@@ -192,178 +192,4 @@
 </div>
 </div>
 
-<script>
-// Whether the role being edited has any ALLOW rules. base_policy only decides what an EMPTY
-// allow list means, so a role with deny rules but no allow rules still goes dark when switched
-// to "closed" — counting all rules would suppress the warning exactly there. Fetched when the
-// dialog opens rather than embedded from the page model, so it cannot go stale against the
-// rules editor. null = not known yet.
-var editRoleHasAllowRules = null;
-
-async function postJson(url, body, method) {
-    var resp = await fetch(url, {
-        method: method || 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: body === null ? undefined : JSON.stringify(body)
-    });
-    if (resp.ok) return { ok: true };
-    // Never a bare "Request failed": if the body is not JSON with an `error`, show the status and
-    // whatever text came back, so an opaque failure is still diagnosable from the dialog.
-    var msg = 'Request failed (HTTP ' + resp.status + ')';
-    try {
-        var text = await resp.text();
-        if (text) {
-            try {
-                var data = JSON.parse(text);
-                if (data && data.error) msg = data.error;
-                else msg += ': ' + text.slice(0, 300);
-            } catch (e) { msg += ': ' + text.slice(0, 300); }
-        }
-    } catch (e) { }
-    return { ok: false, error: msg };
-}
-
-// Mirrors RoleService's own rule: lower-case, [a-z0-9_-], starting alphanumeric. Applied to the
-// field as the operator types so the name they see is the name that gets stored — the server
-// lower-cases too, this just removes the surprise.
-function normalizeRoleName(raw) {
-    return (raw || '')
-        .toLowerCase()
-        .replace(/[\s.]+/g, '-')
-        .replace(/[^a-z0-9_-]/g, '')
-        .replace(/^[^a-z0-9]+/, '');
-}
-
-function roleNameProblem(name) {
-    if (name.length < 2) return 'Name must be at least 2 characters.';
-    if (name.length > 32) return 'Name must be at most 32 characters.';
-    return null;
-}
-
-(function () {
-    var input = document.getElementById('add-role-name');
-    var preview = document.getElementById('add-role-name-preview');
-    if (!input) return;
-    input.addEventListener('sl-input', function () {
-        var raw = input.value;
-        var norm = normalizeRoleName(raw);
-        if (norm !== raw) input.value = norm;
-        if (preview) {
-            preview.textContent = norm ? "Will be created as '" + norm + "'." : '';
-            preview.style.display = norm ? '' : 'none';
-        }
-    });
-})();
-
-function openAddRole() {
-    hideDlgError('add-role-error');
-    document.getElementById('add-role-name').value = '';
-    document.getElementById('add-role-display').value = '';
-    document.getElementById('add-role-description').value = '';
-    document.getElementById('add-role-policy').value = 'closed';
-    var preview = document.getElementById('add-role-name-preview');
-    if (preview) { preview.textContent = ''; preview.style.display = 'none'; }
-    document.getElementById('dlg-add-role').show();
-    setTimeout(function () { document.getElementById('add-role-name').focus(); }, 100);
-}
-
-async function submitAddRole() {
-    hideDlgError('add-role-error');
-    var name = normalizeRoleName(document.getElementById('add-role-name').value.trim());
-    if (!name) { showDlgError('add-role-error', 'Name is required.'); return; }
-    var problem = roleNameProblem(name);
-    if (problem) { showDlgError('add-role-error', problem); return; }
-
-    var btn = document.getElementById('btn-add-role-submit');
-    btn.loading = true;
-    var result = await postJson('/api-proxy/roles', {
-        name: name,
-        displayName: document.getElementById('add-role-display').value.trim() || name,
-        description: document.getElementById('add-role-description').value.trim() || null,
-        basePolicy: document.getElementById('add-role-policy').value
-    });
-    btn.loading = false;
-    if (result.ok) window.location = '?msg=' + encodeURIComponent("Role '" + name + "' created");
-    else showDlgError('add-role-error', result.error);
-}
-
-function updatePolicyWarning() {
-    var warn = document.getElementById('edit-role-policy-warning');
-    if (!warn) return;
-    var closing = document.getElementById('edit-role-policy').value === 'closed';
-    // Until the fetch lands, stay quiet rather than warn wrongly in either direction.
-    warn.style.display = (closing && editRoleHasAllowRules === false) ? '' : 'none';
-}
-
-document.getElementById('edit-role-policy').addEventListener('sl-change', updatePolicyWarning);
-
-function openEditRole(name, displayName, description, basePolicy) {
-    hideDlgError('edit-role-error');
-    document.getElementById('edit-role-name').value = name;
-    document.getElementById('edit-role-name-label').textContent = 'Name: ' + name + ' (cannot be changed)';
-    document.getElementById('edit-role-display').value = displayName || '';
-    document.getElementById('edit-role-description').value = description || '';
-    document.getElementById('edit-role-policy').value = basePolicy || 'closed';
-    editRoleHasAllowRules = null;
-    updatePolicyWarning();
-    document.getElementById('dlg-edit-role').show();
-
-    fetch('/api-proxy/restrictions/role/' + encodeURIComponent(name))
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (rules) {
-            if (!rules) return;
-            editRoleHasAllowRules = rules.some(function (x) { return x.effect === 'allow'; });
-            // Only apply if the dialog is still showing this role.
-            if (document.getElementById('edit-role-name').value === name) updatePolicyWarning();
-        }).catch(function () {});
-}
-
-async function submitEditRole() {
-    hideDlgError('edit-role-error');
-    var name = document.getElementById('edit-role-name').value;
-    var displayName = document.getElementById('edit-role-display').value.trim();
-    if (!displayName) { showDlgError('edit-role-error', 'Display Name is required.'); return; }
-
-    var btn = document.getElementById('btn-edit-role-submit');
-    btn.loading = true;
-    var result = await postJson('/api-proxy/roles/' + encodeURIComponent(name), {
-        displayName: displayName,
-        description: document.getElementById('edit-role-description').value.trim() || null,
-        basePolicy: document.getElementById('edit-role-policy').value
-    }, 'PUT');
-    btn.loading = false;
-    if (result.ok) window.location = '?msg=' + encodeURIComponent('Role updated');
-    else showDlgError('edit-role-error', result.error);
-}
-
-async function deleteRole(name, userCount) {
-    var count = parseInt(userCount, 10) || 0;
-    if (count > 0) {
-        alert("'" + name + "' is still assigned to " + count + " user(s). Reassign them first — " +
-              "a user whose role no longer exists loses access to every folder.");
-        return;
-    }
-    if (!confirm("Delete role '" + name + "' and all of its folder rules?")) return;
-
-    var result = await postJson('/api-proxy/roles/' + encodeURIComponent(name), null, 'DELETE');
-    if (result.ok) window.location = '?msg=' + encodeURIComponent("Role '" + name + "' deleted");
-    else window.location = '?err=' + encodeURIComponent(result.error);
-}
-
-function openRoleFolderAccess(name, displayName) {
-    folderAccess.open('role', name,
-        'Role: ' + displayName + '  —  applies to every user with this role');
-}
-
-['form-add-role', 'form-edit-role'].forEach(function (fid) {
-    var handlers = { 'form-add-role': submitAddRole, 'form-edit-role': submitEditRole };
-    var form = document.getElementById(fid);
-    if (!form) return;
-    form.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' && e.target.tagName && e.target.tagName.toLowerCase() !== 'textarea') {
-            e.preventDefault();
-            handlers[fid]();
-        }
-    });
-});
-</script>
+<script src="/js/pages/roles.js"></script>

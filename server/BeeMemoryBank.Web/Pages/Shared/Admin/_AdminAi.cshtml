@@ -1,0 +1,173 @@
+@model BeeMemoryBank.Web.Pages.AdminModel
+
+<!-- AI / Chat (OpenRouter) — node-global keys + model catalogue. Superadmin-only (whole page is). -->
+<h3 style="margin-bottom:12px;"><sl-icon name="chat-left-text"></sl-icon> AI / Chat</h3>
+<sl-alert variant="neutral" open size="small" style="margin-bottom:16px;max-width:640px;">
+    <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+    Keys are encrypted at rest under the master DEK and only usable while the vault is unlocked.
+    The full key is shown <strong>once</strong> at creation; afterwards only a short prefix.
+    Everything the AI reads is sent to your configured OpenRouter model/provider.
+</sl-alert>
+
+<!-- Allow AI chat: node-wide kill switch. When off, no one except superadmins can use the
+     AI chat feature (web UI), regardless of each user's individual "Can use AI chat" setting
+     on the Users page. Per-user settings are preserved while this is off — turning it back on
+     restores whatever each user had configured. -->
+<div class="card" style="max-width:640px;margin-bottom:24px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+    <div>
+        <strong>Allow AI chat for users</strong>
+        <p class="text-muted text-sm" style="margin:4px 0 0 0;">
+            When off, only superadmins can use the AI chat — everyone else is blocked regardless
+            of their individual chat-access setting (see <a href="/Users">Users</a>). Turning this
+            back on restores each user's own setting, nothing is lost while it's off.
+        </p>
+    </div>
+    <sl-switch id="chat-globally-enabled-toggle" style="flex-shrink:0;"></sl-switch>
+</div>
+
+<!-- Keys -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+    <strong>OpenRouter API keys</strong>
+    <sl-button size="small" variant="primary" id="btn-add-chat-key">
+        <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add key
+    </sl-button>
+</div>
+<div class="card" style="padding:0;overflow:hidden;margin-bottom:24px;">
+    <table class="version-table">
+        <thead>
+            <tr>
+                <th>Label</th>
+                <th>Prefix</th>
+                <th>Priority</th>
+                <th>Enabled</th>
+                <th>Status</th>
+                <th>Last used</th>
+                <th style="text-align:right;">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="chat-keys-body">
+            <tr><td colspan="7" class="text-muted text-sm" style="text-align:center;padding:16px;">Loading…</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Models -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+    <strong>Model catalogue</strong>
+    <sl-button size="small" variant="primary" id="btn-add-chat-model">
+        <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add model
+    </sl-button>
+</div>
+<div class="card" style="padding:0;overflow:hidden;margin-bottom:24px;">
+    <table class="version-table">
+        <thead>
+            <tr>
+                <th>Label</th>
+                <th>Model ID</th>
+                <th style="text-align:center;">Text</th>
+                <th style="text-align:center;">Vision</th>
+                <th style="text-align:center;">Image gen</th>
+                <th style="text-align:right;">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="chat-models-body">
+            <tr><td colspan="6" class="text-muted text-sm" style="text-align:center;padding:16px;">Loading…</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Default models: three pinned-default dropdowns. "Default" = oldest model with the matching
+     property; picking a specific model pins it. -->
+<div style="margin-bottom:8px;">
+    <strong>Default models</strong>
+    <p class="text-muted text-sm" style="margin:4px 0 0 0;">
+        Pin a specific model for each role, or leave on "Default" to use the oldest model with
+        that capability. The text model is the entry point for every chat turn.
+    </p>
+</div>
+<div class="card" style="padding:16px;margin-bottom:32px;">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+        <div>
+            <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default text model</label>
+            <sl-select id="default-text-model" size="small" placeholder="Default">
+                <sl-option value="">Default</sl-option>
+            </sl-select>
+        </div>
+        <div>
+            <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default vision model</label>
+            <sl-select id="default-vision-model" size="small" placeholder="Default">
+                <sl-option value="">Default</sl-option>
+            </sl-select>
+        </div>
+        <div>
+            <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default image-gen model</label>
+            <sl-select id="default-imagegen-model" size="small" placeholder="Default">
+                <sl-option value="">Default</sl-option>
+            </sl-select>
+        </div>
+    </div>
+    <p id="chat-defaults-hint" class="text-muted" style="font-size:0.74rem;margin:8px 0 0 0;"></p>
+</div>
+
+<sl-dialog id="dlg-add-chat-key" label="Add OpenRouter key" style="--width:480px;">
+    <div style="margin-bottom:16px;">
+        <sl-input id="chat-key-label" label="Label" placeholder="e.g. personal" required></sl-input>
+    </div>
+    <div style="margin-bottom:16px;">
+        <sl-input id="chat-key-value" label="API key" type="password" password-toggle placeholder="sk-or-…" required autocomplete="off"></sl-input>
+    </div>
+    <div style="margin-bottom:16px;">
+        <sl-input id="chat-key-priority" label="Priority (lower = used first)" type="number" value="0"></sl-input>
+    </div>
+    <p class="text-muted text-sm">The key needs an unlocked vault to be encrypted. Copy the full key now — it won't be shown again.</p>
+    <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-add-chat-key">Cancel</sl-button>
+    <sl-button slot="footer" type="button" variant="primary" id="btn-save-chat-key">
+        <sl-icon slot="prefix" name="save"></sl-icon> Save key
+    </sl-button>
+</sl-dialog>
+
+<sl-dialog id="dlg-add-chat-model" label="Add model" style="--width:480px;">
+    <div style="margin-bottom:16px;">
+        <sl-input id="chat-model-id" label="Model ID" placeholder="e.g. openai/gpt-4o-mini" required></sl-input>
+    </div>
+    <div style="margin-bottom:16px;">
+        <sl-input id="chat-model-label" label="Label" placeholder="e.g. GPT-4o mini" required></sl-input>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
+        <sl-checkbox id="chat-model-text" checked>Text</sl-checkbox>
+        <sl-checkbox id="chat-model-vision">Vision (accepts images)</sl-checkbox>
+        <sl-checkbox id="chat-model-imagegen">Image generation</sl-checkbox>
+    </div>
+    <div style="margin-bottom:16px;">
+        <sl-input id="chat-model-context" label="Context window (tokens)" type="number" min="1"
+                  placeholder="e.g. 128000 (optional)"></sl-input>
+    </div>
+    <p class="text-muted text-sm">A model can have multiple capabilities (e.g. both text AND vision).</p>
+    <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-add-chat-model">Cancel</sl-button>
+    <sl-button slot="footer" type="button" variant="primary" id="btn-save-chat-model">
+        <sl-icon slot="prefix" name="save"></sl-icon> Save model
+    </sl-button>
+</sl-dialog>
+
+<sl-dialog id="dlg-edit-chat-model" label="Edit model" style="--width:480px;">
+    <div style="margin-bottom:16px;">
+        <sl-input id="edit-chat-model-id" label="Model ID" disabled></sl-input>
+    </div>
+    <div style="margin-bottom:16px;">
+        <sl-input id="edit-chat-model-label" label="Label" disabled></sl-input>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
+        <sl-checkbox id="edit-chat-model-text">Text</sl-checkbox>
+        <sl-checkbox id="edit-chat-model-vision">Vision (accepts images)</sl-checkbox>
+        <sl-checkbox id="edit-chat-model-imagegen">Image generation</sl-checkbox>
+    </div>
+    <div style="margin-bottom:16px;">
+        <sl-input id="edit-chat-model-context" label="Context window (tokens)" type="number" min="1"
+                  placeholder="e.g. 128000 (optional)"></sl-input>
+    </div>
+    <p class="text-muted text-sm">Toggle which capabilities this model provides.</p>
+    <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-edit-chat-model">Cancel</sl-button>
+    <sl-button slot="footer" type="button" variant="primary" id="btn-save-edit-chat-model">
+        <sl-icon slot="prefix" name="save"></sl-icon> Save
+    </sl-button>
+</sl-dialog>

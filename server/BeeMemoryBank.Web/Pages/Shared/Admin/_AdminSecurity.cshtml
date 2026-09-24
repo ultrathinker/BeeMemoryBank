@@ -1,0 +1,364 @@
+@model BeeMemoryBank.Web.Pages.AdminModel
+
+<!-- Master Password -->
+<h3 style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> Master Password</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:560px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        The master password unwraps this node's copy of the vault key. Changing it re-wraps
+        <strong>this node's key slot only</strong> — key slots are never synced and are stripped
+        from join packages, so every other node keeps accepting the old password, including at
+        its own join endpoint. Change it on each node separately; the others are told that it
+        happened, but no key material crosses the wire, so a human has to type it there too.
+    </p>
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        A password change does <strong>not</strong> evict a node or an agent that already holds
+        the vault key. That needs revoking the peer and rotating the DEK.
+    </p>
+    <form method="post" asp-page-handler="ChangeMasterPassword" style="display:flex;flex-direction:column;gap:12px;">
+        <sl-input name="oldPassword" type="text" inputmode="text" autocomplete="off"
+                  class="bmb-secret" data-1p-ignore data-lpignore="true" required
+                  label="Current master password"></sl-input>
+        <sl-input name="newPassword" type="text" inputmode="text" autocomplete="off"
+                  class="bmb-secret" data-1p-ignore data-lpignore="true" required
+                  label="New master password"></sl-input>
+        <div>
+            <sl-button type="submit" variant="warning" class="btn-confirm-click"
+                data-confirm="Change the master password on THIS node? Other nodes keep accepting the old one until you change it there too.">
+                <sl-icon slot="prefix" name="key"></sl-icon> Change master password
+            </sl-button>
+        </div>
+    </form>
+</div>
+
+<!-- Lock Server -->
+<h3 style="margin-bottom:12px;"><sl-icon name="lock"></sl-icon> Lock Server</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Locking erases the master encryption key from memory. Everyone is immediately logged out —
+        you, other users, MCP agents, and mobile apps. No one can read or edit articles until any
+        superadmin logs back in — after that the server is open for everyone again.
+        Use this when you're leaving the server unattended and want to make sure nobody — not even
+        an already-connected agent — can access your data while you're away.
+        Think of it as pulling the key out of the lock and taking it with you.
+    </p>
+    @if (Model.LockImpact != null)
+    {
+        var reopeners = Model.LockImpact.Agents;
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            @if (reopeners.Count > 0)
+            {
+                <text>
+                    @reopeners.Count agent @(reopeners.Count == 1 ? "key" : "keys") can unlock this node
+                    again on @(reopeners.Count == 1 ? "its" : "their") next request:
+                    @string.Join(", ", reopeners.Select(a => a.OwnerName != null ? $"{a.Name} ({a.OwnerName})" : a.Name)).
+                    Revoke a key in the Agents list above if the lock has to hold.
+                </text>
+            }
+            else
+            {
+                <text>Nothing can auto-unlock this node — no agent key here carries the master key.</text>
+            }
+        </p>
+        @if (Model.LockImpact.OsAutoUnlockEnabled)
+        {
+            <p class="text-muted text-sm" style="margin-bottom:12px;">
+                OS auto-unlock is enabled, so restarting this node opens the vault again without a
+                password. It does not undo a lock while the node keeps running.
+            </p>
+        }
+    }
+    <sl-button variant="warning" size="small" href="/Lock" class="btn-confirm-click"
+        data-confirm="Lock the server? The decryption key will be cleared from memory. All users will need to re-authenticate to access encrypted content.">
+        <sl-icon slot="prefix" name="lock"></sl-icon> Lock Server
+    </sl-button>
+</div>
+
+<!-- Branding -->
+<h3 style="margin-bottom:12px;"><sl-icon name="type"></sl-icon> Branding</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        The name shown in the header next to the logo and in the browser tab title. Leave it
+        empty to keep the built-in name. This is a setting of THIS node only — it is never
+        synced, so every installation can carry its own company name.
+    </p>
+    <sl-input id="brand-name-input" size="small" maxlength="40" clearable
+              label="Product name" style="max-width:320px;"></sl-input>
+    <p class="text-muted text-sm" style="margin:10px 0 16px;">
+        Header preview: <strong id="brand-preview" style="color:var(--text-primary);"></strong>
+    </p>
+    <sl-button id="btn-save-branding" variant="primary" size="small">
+        <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
+    </sl-button>
+    <sl-button id="btn-reset-branding" variant="text" size="small">Reset to default</sl-button>
+    <span id="branding-saved-msg" style="display:none;margin-left:8px;color:var(--sl-color-success-600);font-size:0.85rem;">Saved.</span>
+</div>
+
+<!-- Web Session -->
+<h3 style="margin-bottom:12px;"><sl-icon name="clock-history"></sl-icon> Web Session</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Controls how long a browser login (the "bee_session" cookie) stays valid before
+        requiring a fresh sign-in on the <a href="/Login">Login</a> page. This has no effect
+        on AI/MCP agents connected via a bearer token — those never use or extend this cookie.
+    </p>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <sl-input id="session-expire-hours" type="number" min="1" max="720" size="small"
+            label="Session duration (hours)" style="max-width:160px;"></sl-input>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <sl-switch id="session-sliding-toggle" size="small">Extend on activity (sliding)</sl-switch>
+    </div>
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        When sliding is on, each web visit resets the countdown — someone active every day
+        never gets logged out. When off, the session expires exactly N hours after login no
+        matter how often they visit.
+    </p>
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Changes apply only to new logins going forward — sessions already signed in keep the
+        expiry they were given at sign-in and are not shortened or revoked.
+    </p>
+    <sl-button id="btn-save-session-settings" variant="primary" size="small">
+        <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
+    </sl-button>
+    <span id="session-settings-saved-msg" style="display:none;margin-left:8px;color:var(--sl-color-success-600);font-size:0.85rem;">Saved.</span>
+</div>
+
+<!-- Hard Delete -->
+<h3 style="margin-bottom:12px;"><sl-icon name="trash"></sl-icon> Hard Delete</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:480px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Physically remove folders, articles, and their media from this node and propagate
+        the deletion to every synced node. Unlike regular delete (which keeps items in the
+        trash), this is permanent and cannot be undone. Use for cleaning up junk imports
+        or data that must not persist anywhere.
+    </p>
+    <sl-button variant="danger" size="small" href="/HardDelete">
+        <sl-icon slot="prefix" name="trash"></sl-icon> Open Hard Delete
+    </sl-button>
+</div>
+
+<!-- Reset node -->
+<h3 style="margin-bottom:12px;"><sl-icon name="exclamation-octagon"></sl-icon> Reset This Node</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Wipes every article, folder, user, key and sync-state row on this node and returns it to
+        the first-run Setup screen, ready to initialize a new vault or join a different network.
+        Other nodes are not affected — but this node loses its identity, so it rejoins as a new
+        one. Use it when the sync status says "Snapshot required", or when repurposing the node.
+    </p>
+    <sl-alert variant="danger" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>This cannot be undone.</strong> If this node holds the only copy of anything,
+        take a snapshot first.
+    </sl-alert>
+    <form method="post" asp-page-handler="ResetNode"
+          class="form-confirm" data-confirm="This will DELETE all local articles, folders, users, keys, and sync state on this node. Proceed?">
+        @Html.AntiForgeryToken()
+        <sl-input name="masterPassword" type="password" required password-toggle
+                  label="Master password (confirmation)" placeholder="required to confirm"
+                  style="margin-bottom:12px;"></sl-input>
+        <sl-button type="submit" variant="danger" size="small">
+            <sl-icon slot="prefix" name="trash"></sl-icon> Wipe this node
+        </sl-button>
+    </form>
+    <p class="text-muted text-sm" style="margin-top:12px;">
+        Locked out and unable to sign in at all? Run <code>bmb init reset</code> on the host
+        instead — see <em>docs/deployment.md</em>.
+    </p>
+</div>
+
+@if (Model.OsAutoUnlockSupported)
+{
+    <h3 style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> OS Auto-Unlock</h3>
+    <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Lets this node unlock itself automatically on startup — no password prompt — using a
+            secret protected by Windows DPAPI under this Windows user account. Useful for a
+            server node that runs unattended.
+        </p>
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Anyone with access to this Windows user account will be able to open the
+            vault without a password</strong> once this is enabled. Only enable it on a machine
+            you trust and control physically.
+        </sl-alert>
+
+        @if (Model.OsAutoUnlockEnabled)
+        {
+            <sl-badge variant="success" pill style="margin-bottom:12px;">enabled</sl-badge>
+            <form method="post" asp-page-handler="DisableAutoUnlock">
+                <sl-button type="submit" variant="danger" size="small" class="btn-confirm-click"
+                           data-confirm="Disable OS auto-unlock? The vault will require a password on next unlock.">
+                    <sl-icon slot="prefix" name="key"></sl-icon> Disable auto-unlock
+                </sl-button>
+            </form>
+        }
+        else
+        {
+            <sl-badge variant="neutral" pill style="margin-bottom:12px;">not configured</sl-badge>
+            <form method="post" asp-page-handler="EnableAutoUnlock">
+                <sl-button type="submit" variant="primary" size="small" class="btn-confirm-click"
+                           data-confirm="Enable OS auto-unlock? Anyone with access to this Windows account will be able to open the vault without a password.">
+                    <sl-icon slot="prefix" name="key"></sl-icon> Enable auto-unlock
+                </sl-button>
+            </form>
+        }
+    </div>
+}
+
+<!-- DEK Rotation -->
+@{
+    var dekActive = Model.DekRotationProgress != null
+        && Model.DekRotationProgress.CurrentStep != "Idle"
+        && Model.DekRotationProgress.CurrentStep != "Completed"
+        && Model.DekRotationProgress.CurrentStep != "Failed";
+}
+
+<h3 style="margin-bottom:12px;"><sl-icon name="shield-lock"></sl-icon> DEK Rotation</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:640px;" @(dekActive ? "data-dek-active=\"true\"" : "")>
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Rotates the encryption key for all article bodies, versions, and media. Generates a new master DEK;
+        old DEK is securely retired.
+    </p>
+
+    @if (Model.ShowRecoveryKeyReminder)
+    {
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Issue a new recovery key!</strong> All previous recovery keys were invalidated by the DEK rotation.
+            Use the button below.
+        </sl-alert>
+    }
+
+    <div style="margin-bottom:16px;">
+        <sl-button id="issue-recovery-key-btn" variant="default" size="small">
+            <sl-icon slot="prefix" name="key"></sl-icon>
+            Issue new recovery key
+        </sl-button>
+        <div class="text-muted text-sm" style="margin-top:6px;">
+            A recovery key unlocks the vault if the master password is lost. It is shown once and cannot be
+            retrieved later — only a key derived from it is stored. Issuing a new one does not invalidate
+            existing passwords.
+        </div>
+    </div>
+
+    <sl-dialog id="recovery-key-dialog" label="Your new recovery key" style="--width:560px;">
+        <sl-alert variant="warning" open style="margin-bottom:12px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            Save this now. It is not stored anywhere in recoverable form and will never be shown again.
+        </sl-alert>
+        <sl-input id="recovery-key-value" readonly filled></sl-input>
+        <sl-button slot="footer" id="recovery-key-copy" variant="primary">
+            <sl-icon slot="prefix" name="clipboard"></sl-icon>
+            Copy
+        </sl-button>
+        <sl-button slot="footer" id="recovery-key-close">Done</sl-button>
+    </sl-dialog>
+
+    @if (dekActive)
+    {
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="arrow-clockwise"></sl-icon>
+            <strong>DEK Rotation in Progress</strong>
+            <div style="margin-top:8px;">
+                <strong>Step:</strong> @Model.DekRotationProgress!.CurrentStep
+            </div>
+            <sl-progress-bar value="@Model.DekRotationProgress.PercentageComplete" style="margin-top:8px;"></sl-progress-bar>
+            @if (!string.IsNullOrEmpty(Model.DekRotationProgress.StatusMessage))
+            {
+                <p class="text-muted text-sm" style="margin-top:4px;">@Model.DekRotationProgress.StatusMessage</p>
+            }
+            @if (!string.IsNullOrEmpty(Model.DekRotationProgress.ErrorMessage))
+            {
+                <p style="color:var(--sl-color-danger-600);margin-top:4px;">@Model.DekRotationProgress.ErrorMessage</p>
+            }
+            @if (Model.DekRotationProgress.EventId.HasValue)
+            {
+                <form method="post" asp-page-handler="CancelDekRotation" style="margin-top:12px;">
+                    <input type="hidden" name="eventId" value="@Model.DekRotationProgress.EventId" />
+                    <sl-button type="submit" variant="danger" size="small">
+                        <sl-icon slot="prefix" name="x-lg"></sl-icon> Cancel Rotation
+                    </sl-button>
+                </form>
+            }
+            <p class="text-muted text-sm" style="margin-top:8px;">This page refreshes automatically every 3 seconds.</p>
+        </sl-alert>
+    }
+    else if (!string.IsNullOrEmpty(Model.DekRotationCommitId))
+    {
+        <sl-alert variant="primary" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="info-circle"></sl-icon>
+            <strong>DEK rotation proposed.</strong> Enter your master password to confirm and begin re-encryption.
+        </sl-alert>
+        <form method="post" asp-page-handler="AcceptDekRotation" style="margin-bottom:16px;">
+            <input type="hidden" name="commitEventId" value="@Model.DekRotationCommitId" />
+            <div style="margin-bottom:12px;">
+                <sl-input name="masterPassword" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <sl-button type="submit" variant="warning">
+                    <sl-icon slot="prefix" name="shield-lock"></sl-icon> Confirm DEK Rotation
+                </sl-button>
+                <form method="post" asp-page-handler="CancelDekRotation" style="display:inline;">
+                    <input type="hidden" name="eventId" value="@Model.DekRotationCommitId" />
+                    <sl-button type="submit" variant="default">Cancel</sl-button>
+                </form>
+            </div>
+        </form>
+    }
+    else if (Model.DekRotationProgress?.CurrentStep == "Failed")
+    {
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>DEK rotation failed.</strong>
+            @if (!string.IsNullOrEmpty(Model.DekRotationProgress.ErrorMessage))
+            {
+                <p style="margin-top:4px;">@Model.DekRotationProgress.ErrorMessage</p>
+            }
+        </sl-alert>
+        <div style="display:flex;gap:8px;">
+            <sl-button variant="warning" size="small" class="btn-open-dek-rotation">
+                <sl-icon slot="prefix" name="shield-lock"></sl-icon> Retry Rotation
+            </sl-button>
+            @if (Model.DekRotationProgress?.EventId != null)
+            {
+                <form method="post" asp-page-handler="CancelDekRotation" style="display:inline;">
+                    <input type="hidden" name="eventId" value="@Model.DekRotationProgress.EventId" />
+                    <sl-button type="submit" variant="default" size="small">Dismiss</sl-button>
+                </form>
+            }
+        </div>
+    }
+    else
+    {
+        <sl-button variant="warning" size="small" class="btn-open-dek-rotation">
+            <sl-icon slot="prefix" name="shield-lock"></sl-icon> Rotate DEK
+        </sl-button>
+    }
+</div>
+
+<!-- DEK Rotation Dialog -->
+<sl-dialog id="dlg-dek-rotation" label="Rotate DEK" style="--width:580px;">
+    <sl-alert variant="danger" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>This is a destructive, network-wide operation.</strong>
+    </sl-alert>
+    <p style="margin-bottom:12px;">Before proceeding, understand the impact:</p>
+    <ul style="margin:0 0 16px 20px;line-height:1.8;">
+        <li>All article bodies, version history, conflict copies, and media files will be <strong>re-encrypted</strong> (one big transaction; node enters maintenance for the duration).</li>
+        <li><strong>Agents that can auto-unlock the vault</strong> (superadmin-owned agents that carry the master key) will be deleted and must be re-issued after rotation completes — their wrapped copy of the old key cannot be re-wrapped server-side. All other agents keep working unchanged.</li>
+        <li>All <strong>other user key slots</strong> will be removed — other users will need to re-register their passwords against the new DEK.</li>
+        <li>All <strong>recovery keys</strong> will be invalidated — issue a new recovery key immediately after rotation.</li>
+        <li>A <strong>pre-rotation snapshot</strong> is created automatically before any destructive change.</li>
+        <li><strong>Do not close the browser, restart the node, or interrupt the process</strong> until it completes.</li>
+    </ul>
+    <form method="post" asp-page-handler="ProposeDekRotation" class="sl-form">
+        <div style="margin-bottom:16px;">
+            <sl-input name="masterPassword" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+        </div>
+        <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-dek-rotation">Cancel</sl-button>
+        <sl-button type="submit" slot="footer" variant="danger">
+            <sl-icon slot="prefix" name="shield-lock"></sl-icon> Propose DEK Rotation
+        </sl-button>
+    </form>
+</sl-dialog>

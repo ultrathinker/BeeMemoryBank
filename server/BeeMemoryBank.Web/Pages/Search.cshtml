@@ -56,23 +56,7 @@
         }
     </style>
 
-    <script>
-(function() {
-    var toggle = document.getElementById('searchModeToggle');
-    var dropdown = document.getElementById('searchModeDropdown');
-    var select = document.getElementById('searchModeSelect');
-
-    toggle.addEventListener('click', function() {
-        var isOpen = dropdown.style.display !== 'none';
-        dropdown.style.display = isOpen ? 'none' : 'flex';
-        toggle.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
-    });
-
-    select.addEventListener('sl-change', function() {
-        document.getElementById('searchForm').submit();
-    });
-})();
-    </script>
+    <script src="~/js/pages/search.js" asp-append-version="true"></script>
 
     @if (Model.IsFallback)
     {

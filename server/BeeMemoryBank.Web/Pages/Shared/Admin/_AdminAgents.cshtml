@@ -1,0 +1,77 @@
+@model BeeMemoryBank.Web.Pages.AdminModel
+
+<!-- Agents -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
+    <h3 style="margin:0;"><sl-icon name="robot"></sl-icon> Agents</h3>
+    <span class="text-muted text-sm" style="display:inline-flex;align-items:center;gap:6px;">
+        <sl-icon name="info-circle"></sl-icon>
+        To add a new agent, go to <a href="/Profile">Profile</a>.
+    </span>
+</div>
+
+@if (Model.Agents != null && Model.Agents.Count > 0)
+{
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
+        <table class="version-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>Owner</th>
+                    <th>API Key</th>
+                    <th>
+                        Auto-unlock
+                        <sl-tooltip content="Whether this key can wake a locked node by itself. Only a superadmin's agent can — an ordinary user's agent only works while the vault is already unlocked by someone else.">
+                            <sl-icon name="info-circle"></sl-icon>
+                        </sl-tooltip>
+                    </th>
+                    <th>Created</th>
+                    <th>Last Access</th>
+                    <th>Requests</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var agent in Model.Agents)
+                {
+                    <tr>
+                        <td><strong>@agent.Name</strong></td>
+                        <td class="text-muted text-sm">@(agent.Description ?? "—")</td>
+                        <td class="text-muted text-sm">@(agent.OwnerName ?? (agent.OwnerUserId > 0 ? $"#{agent.OwnerUserId}" : "—"))</td>
+                        <td><code class="text-sm">@agent.KeyPrefix</code></td>
+                        <td>
+                            @if (agent.CanAutoUnlock)
+                            {
+                                <sl-badge variant="warning" pill>Yes</sl-badge>
+                            }
+                            else
+                            {
+                                <span class="text-muted text-sm">No</span>
+                            }
+                        </td>
+                        <td class="text-muted text-sm">@agent.CreatedAt.ToString("g")</td>
+                        <td class="text-muted text-sm">@AdminModel.RelativeTime(agent.LastAccessedAt)</td>
+                        <td class="text-muted text-sm">@(agent.RequestCount == 0 ? "—" : agent.RequestCount.ToString("N0"))</td>
+                        <td style="text-align:right;">
+                            <form method="post" asp-page-handler="DeleteAgent" style="display:inline;">
+                                <input type="hidden" name="agentId" value="@agent.Id" />
+                                <sl-icon-button name="trash" label="Delete"
+                                    class="btn-confirm-submit"
+                                    data-confirm-pattern="Delete agent {name}?"
+                                    data-name="@agent.Name">
+                                </sl-icon-button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else
+{
+    <div class="card" style="text-align:center;padding:40px;margin-bottom:32px;">
+        <sl-icon name="robot" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+        <p class="text-muted">No agents</p>
+    </div>
+}

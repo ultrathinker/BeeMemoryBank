@@ -4,17 +4,15 @@
     // "Bee Memory Bank" when the node has never set one, so an untouched install looks
     // exactly as it always did. Cached in BrandingService, not fetched per render.
     var brandName = await BrandingSvc.GetNameAsync();
+    var themeUser = User.Identity?.Name ?? "";
 }
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-username="@themeUser">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>@ViewData["Title"] - @brandName</title>
-    <script type="module">
-        import { setBasePath } from '/lib/shoelace/shoelace-bundle.js';
-        setBasePath('/lib/shoelace');
-    </script>
+    <script type="module" src="/js/shoelace-init.js"></script>
     <link rel="stylesheet" href="/lib/shoelace/themes/light.css" />
     <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
     <link href="/css/site.css" rel="stylesheet" asp-append-version="true" />
@@ -22,82 +20,9 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <script src="/lib/marked/marked.umd.js"></script>
     <script src="/lib/dompurify/purify.min.js"></script>
-    <script>
-        // marked (like all CommonMark-based renderers) collapses any run of blank lines down to a
-        // single paragraph break - typing 3 blank lines looks identical to typing 1. Users expect
-        // extra blank lines to add extra vertical space, so before handing text to marked, every
-        // run of 2+ blank lines beyond the first (which is the normal paragraph break) is expanded
-        // into its own near-empty paragraph ("&nbsp;") to make that space show up.
-        window.bmbPreserveBlankLines = function (md) {
-            // Line endings may be "\n" or "\r\n" (textareas on Windows submit CRLF) - count actual
-            // line-break units, not raw characters, or a CRLF body never matches at all.
-            return (md || '').replace(/(?:\r\n|\n){3,}/g, function (run) {
-                var units = run.match(/\r\n|\n/g).length;
-                return '\n\n' + '&nbsp;\n\n'.repeat(units - 2);
-            });
-        };
-        // Shared entry point for rendering article/comment markdown to sanitized HTML. `opts.renderer`
-        // is passed straight through to marked (used by pages that rewrite inline /api/media/ image
-        // URLs to /api-proxy/media/ for the proxy's auth cookie).
-        window.bmbRenderMarkdown = function (md, opts) {
-            opts = opts || {};
-            var parseOpts = { breaks: true };
-            if (opts.renderer) parseOpts.renderer = opts.renderer;
-            return DOMPurify.sanitize(marked.parse(window.bmbPreserveBlankLines(md), parseOpts));
-        };
-        // Wires a file drop zone (article attachments): highlights while files are dragged over it,
-        // hands dropped files to onFiles(File[]), and opens pickerInput on click / Enter / Space.
-        // aria-disabled="true" on the zone switches all of that off.
-        window.bmbAttachDropZone = function (zone, pickerInput, onFiles) {
-            if (!zone) return;
-            var depth = 0; // dragenter/dragleave fire for every child element crossed
-            function disabled() { return zone.getAttribute('aria-disabled') === 'true'; }
-            function hasFiles(e) {
-                var t = e.dataTransfer && e.dataTransfer.types;
-                return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0;
-            }
-            zone.addEventListener('dragenter', function (e) {
-                if (!hasFiles(e)) return;
-                e.preventDefault();
-                depth++;
-                if (!disabled()) zone.classList.add('is-dragover');
-            });
-            zone.addEventListener('dragover', function (e) {
-                if (!hasFiles(e)) return;
-                e.preventDefault(); // without this the browser opens the file instead of dropping it
-                e.dataTransfer.dropEffect = disabled() ? 'none' : 'copy';
-            });
-            zone.addEventListener('dragleave', function () {
-                depth = Math.max(0, depth - 1);
-                if (!depth) zone.classList.remove('is-dragover');
-            });
-            zone.addEventListener('drop', function (e) {
-                if (!hasFiles(e)) return;
-                e.preventDefault();
-                depth = 0;
-                zone.classList.remove('is-dragover');
-                if (disabled()) return;
-                var files = Array.prototype.slice.call(e.dataTransfer.files || []);
-                if (files.length) onFiles(files);
-            });
-            if (pickerInput) {
-                zone.addEventListener('click', function () { if (!disabled()) pickerInput.click(); });
-                zone.addEventListener('keydown', function (e) {
-                    if ((e.key === 'Enter' || e.key === ' ') && !disabled()) { e.preventDefault(); pickerInput.click(); }
-                });
-                pickerInput.addEventListener('change', function () {
-                    var files = Array.prototype.slice.call(pickerInput.files || []);
-                    pickerInput.value = '';
-                    if (files.length) onFiles(files);
-                });
-            }
-        };
-    </script>
+    <script src="/js/theme-init.js"></script>
+    <script src="/js/layout.js" asp-append-version="true"></script>
 </head>
-@{var themeUser = User.Identity?.Name ?? "";}
-<script>
-    (function(){var u=@Html.Raw(System.Text.Json.JsonSerializer.Serialize(themeUser));var k='bee-theme'+(u?'-'+u:'');var t=localStorage.getItem(k)||'crimson';document.documentElement.setAttribute('data-theme',t);})();
-</script>
 <body data-username="@themeUser">
 @*
     Decoy username input to absorb Chrome's native password-manager autofill.
@@ -113,9 +38,6 @@
 *@
 <input type="text" name="fake-user" autocomplete="username" tabindex="-1" aria-hidden="true"
        style="position:absolute;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;" />
-<script>
-    (function(){var u=@Html.Raw(System.Text.Json.JsonSerializer.Serialize(themeUser));var k='bee-theme'+(u?'-'+u:'');var t=localStorage.getItem(k)||'crimson';var html=document.documentElement;var body=document.body;if(t==='light'){html.classList.remove('sl-theme-dark');html.classList.add('sl-theme-light');body.classList.remove('sl-theme-dark');body.classList.add('sl-theme-light');}else{html.classList.remove('sl-theme-light');html.classList.add('sl-theme-dark');body.classList.remove('sl-theme-light');body.classList.add('sl-theme-dark');}})();
-</script>
     <header class="app-header">
         <div class="header-left">
             <a href="/Tree" class="app-logo">
@@ -129,15 +51,6 @@
             <a href="/AI" id="nav-ai-link" class="header-link" style="margin-right:16px;font-weight:700;color:var(--accent);background:color-mix(in srgb, var(--accent) 14%, transparent);padding:4px 10px;border-radius:var(--sl-border-radius-medium,6px);">
                 <sl-icon name="chat-left-text"></sl-icon> AI
             </a>
-            <script>
-            (function () {
-                var link = document.getElementById('nav-ai-link');
-                if (!link) return;
-                fetch('/api-proxy/chat/access').then(function (r) { return r.ok ? r.json() : { allowed: true }; })
-                    .then(function (data) { if (!data.allowed) link.style.display = 'none'; })
-                    .catch(function () {});
-            })();
-            </script>
             <div class="theme-picker">
                 <sl-dropdown id="theme-dropdown" placement="bottom-end">
                     <sl-button slot="trigger" size="small" variant="text" caret>
@@ -232,20 +145,10 @@
             </ul>
             <p style="margin:0 0 16px;">Include images?</p>
             <div style="display:flex;gap:8px;justify-content:flex-end;">
-                <sl-button size="small" variant="default" onclick="bmbDownloadChoice(false)">Without images</sl-button>
-                <sl-button size="small" variant="primary" onclick="bmbDownloadChoice(true)">With images</sl-button>
+                <sl-button size="small" variant="default" data-download-choice="false">Without images</sl-button>
+                <sl-button size="small" variant="primary" data-download-choice="true">With images</sl-button>
             </div>
         </sl-dialog>
-        <script>
-        function bmbDownloadChoice(withImages) {
-            var dlg = document.getElementById('dlg-download-choice');
-            if (!dlg) return;
-            var payload = JSON.parse(dlg.dataset.payload || '{}');
-            payload.withImages = withImages;
-            dlg.hide();
-            window.bmbDownload(payload);
-        }
-        </script>
     </header>
 
     <div class="app-body">
@@ -261,6 +164,12 @@
     </div>
 
     <script src="/lib/vendor.min.js"></script>
+    <script src="/js/site-tree.js" asp-append-version="true"></script>
+    <script src="/js/site-search.js" asp-append-version="true"></script>
+    <script src="/js/site-dialogs.js" asp-append-version="true"></script>
+    <script src="/js/site-sync-status.js" asp-append-version="true"></script>
+    <script src="/js/site-favorites.js" asp-append-version="true"></script>
+    <script src="/js/site-spa.js" asp-append-version="true"></script>
     <script src="/js/site.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>

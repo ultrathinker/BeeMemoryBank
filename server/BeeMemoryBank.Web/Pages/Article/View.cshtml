@@ -53,7 +53,7 @@
                 </sl-button>
                 @if (!Model.Article.Protected)
                 {
-                    <sl-button size="small" variant="default" onclick="document.getElementById('dlg-protect').show()" title="Encrypt this article with a separate password">
+                    <sl-button size="small" variant="default" id="btn-open-protect" title="Encrypt this article with a separate password">
                         <sl-icon slot="prefix" name="shield-lock"></sl-icon> Protect
                     </sl-button>
                 }
@@ -63,10 +63,10 @@
             <sl-button size="small" variant="default" href="/Article/History?id=@Model.Article.Id">
                 <sl-icon slot="prefix" name="clock-history"></sl-icon> History
             </sl-button>
-            <sl-button size="small" variant="default" onclick="document.getElementById('dlg-copy-article').show()">
+            <sl-button size="small" variant="default" id="btn-open-copy-article">
                 <sl-icon slot="prefix" name="copy"></sl-icon> Copy To
             </sl-button>
-            <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'article',id:'@Model.Article.Id'})">
+            <sl-button size="small" variant="default" id="btn-export-article">
                 <sl-icon slot="prefix" name="upload"></sl-icon> Export
             </sl-button>
             <sl-button size="small" variant="default" id="btn-print-article">
@@ -77,10 +77,10 @@
             </sl-button>
             @if (!Model.IsReadOnly)
             {
-                <sl-button size="small" variant="default" onclick="document.getElementById('dlg-move-article').show()">
+                <sl-button size="small" variant="default" id="btn-open-move-article">
                     <sl-icon slot="prefix" name="arrows-move"></sl-icon> Move
                 </sl-button>
-                <sl-button size="small" variant="danger" onclick="document.getElementById('dlg-delete-article').show()">
+                <sl-button size="small" variant="danger" id="btn-open-delete-article">
                     <sl-icon slot="prefix" name="trash"></sl-icon> Delete
                 </sl-button>
             }
@@ -114,10 +114,10 @@
                 @if (!Model.IsReadOnly)
                 {
                     <div style="display:flex;gap:8px;justify-content:center;margin-top:4px;">
-                        <sl-button size="small" variant="text" onclick="document.getElementById('dlg-change-pass').show()" title="Change the password">
+                        <sl-button size="small" variant="text" class="btn-open-change-pass" title="Change the password">
                             <sl-icon slot="prefix" name="key"></sl-icon> Change password
                         </sl-button>
-                        <sl-button size="small" variant="text" onclick="document.getElementById('dlg-unprotect').show()" title="Remove password protection">
+                        <sl-button size="small" variant="text" class="btn-open-unprotect" title="Remove password protection">
                             <sl-icon slot="prefix" name="unlock"></sl-icon> Unprotect
                         </sl-button>
                     </div>
@@ -133,10 +133,10 @@
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px;">
                 @if (!Model.IsReadOnly)
                 {
-                    <sl-button size="small" variant="text" onclick="document.getElementById('dlg-change-pass').show()" title="Change the password">
+                    <sl-button size="small" variant="text" class="btn-open-change-pass" title="Change the password">
                         <sl-icon slot="prefix" name="key"></sl-icon> Change password
                     </sl-button>
-                    <sl-button size="small" variant="text" onclick="document.getElementById('dlg-unprotect').show()" title="Remove password protection">
+                    <sl-button size="small" variant="text" class="btn-open-unprotect" title="Remove password protection">
                         <sl-icon slot="prefix" name="unlock"></sl-icon> Unprotect
                     </sl-button>
                 }
@@ -215,7 +215,7 @@
                         @if (!Model.IsReadOnly)
                         {
                             <sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;flex-shrink:0;"
-                                onclick="deleteAttachment('@att.Id')"></sl-icon-button>
+                                class="btn-delete-attachment" data-attachment-id="@att.Id"></sl-icon-button>
                         }
                     </div>
                 }
@@ -248,7 +248,7 @@
                         <span class="comment-date">@comment.CreatedAt.ToString("g")</span>
                     </div>
                     <sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;"
-                        onclick="deleteComment(@comment.Id)"></sl-icon-button>
+                        class="btn-delete-comment" data-comment-id="@comment.Id"></sl-icon-button>
                 </div>
                 <p class="comment-text">@comment.Text</p>
             </div>
@@ -338,7 +338,7 @@ else
         <sl-switch id="print-page-numbers" size="small">Page numbers</sl-switch>
         <span class="spacer"></span>
         <span id="print-page-status" style="color:var(--sl-color-neutral-600);">Rendering…</span>
-        <sl-button size="small" variant="default" onclick="document.getElementById('dlg-print-article').hide()">Close</sl-button>
+        <sl-button size="small" variant="default" data-dlg-cancel="dlg-print-article">Close</sl-button>
         <sl-button size="small" variant="primary" id="btn-do-print">
             <sl-icon slot="prefix" name="printer"></sl-icon> Print
         </sl-button>
@@ -359,7 +359,7 @@ else
         <sl-input id="move-article-search" label="Destination folder" placeholder="Type to search or leave empty for root (/)" autocomplete="off"></sl-input>
         <div id="move-article-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:0;max-height:240px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
     </div>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-move-article').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-move-article">Cancel</sl-button>
     <sl-button id="btn-move-article" slot="footer" variant="primary">Move</sl-button>
 </sl-dialog>
 
@@ -369,7 +369,7 @@ else
         <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
         Delete «@Model.Article?.Title»?
     </sl-alert>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-delete-article').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-delete-article">Cancel</sl-button>
     <sl-button id="btn-confirm-delete-article" slot="footer" variant="danger">Delete</sl-button>
 </sl-dialog>
 
@@ -388,7 +388,7 @@ else
             <sl-input id="protect-hint" label="Hint (optional)" placeholder="A reminder shown before unlocking — do NOT put the password here"></sl-input>
             <div id="protect-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
         </div>
-        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-protect').hide()">Cancel</sl-button>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-protect">Cancel</sl-button>
         <sl-button id="btn-protect" slot="footer" variant="primary">Protect</sl-button>
     </sl-dialog>
 
@@ -401,7 +401,7 @@ else
             <sl-input id="cp-hint" label="Hint (optional)" placeholder="A reminder shown before unlocking"></sl-input>
             <div id="cp-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
         </div>
-        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-change-pass').hide()">Cancel</sl-button>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-change-pass">Cancel</sl-button>
         <sl-button id="btn-change-pass" slot="footer" variant="primary">Change password</sl-button>
     </sl-dialog>
 
@@ -412,10 +412,26 @@ else
             <sl-input id="up-pass" type="text" inputmode="text" autocomplete="off" class="bmb-secret" data-1p-ignore data-lpignore="true" label="Current password"></sl-input>
             <div id="up-error" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;"></div>
         </div>
-        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-unprotect').hide()">Cancel</sl-button>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-unprotect">Cancel</sl-button>
         <sl-button id="btn-unprotect" slot="footer" variant="danger">Remove protection</sl-button>
     </sl-dialog>
 }
+
+<!-- Copy article dialog -->
+<sl-dialog id="dlg-copy-article" label="Copy Article To">
+    @if (Model.Article != null)
+    {
+        <p class="text-muted text-sm">Copying: <strong>@Model.Article.Title</strong> from <code>@Model.Article.TreePath</code></p>
+    }
+    <sl-alert id="copy-article-error" variant="danger" closable style="margin-bottom:12px;display:none;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        <span id="copy-article-error-msg"></span>
+    </sl-alert>
+    <sl-input id="copy-article-target" label="Target folder path" placeholder="/" autocomplete="off" autofocus></sl-input>
+    <small class="text-muted">If the target already contains an article with the same title, the copy is renamed with a " (N)" suffix.</small>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-copy-article">Cancel</sl-button>
+    <sl-button id="btn-copy-article" slot="footer" variant="primary">Copy</sl-button>
+</sl-dialog>
 
 @* Sync delivery status is superadmin-only at the API (/api/sync/delivery-status names every
    peer and its address), and the proxy route enforces the same role. Rendering the toast for
@@ -433,1017 +449,23 @@ else
 
 <sl-dialog label="Sync Delivery Status" id="syncModal" class="sync-modal">
     <div id="syncModalContent" class="sync-modal-content">Loading...</div>
-    <sl-button slot="footer" variant="primary" onclick="document.getElementById('syncModal').hide()">Close</sl-button>
+    <sl-button slot="footer" variant="primary" data-dlg-cancel="syncModal">Close</sl-button>
 </sl-dialog>
 }
 
-<script>
-(function() {
-    var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
-    var content = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""));
-    var treePath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"));
-    var isProtected = @(Model.Article?.Protected == true ? "true" : "false");
-    var isUnlockedFromCache = @(Model.IsUnlockedFromCache ? "true" : "false");
-    var unlockExpiresInSeconds = @(Model.UnlockExpiresInSeconds?.ToString() ?? "null");
-
-    function renderMarkdown(md) {
-        var body = document.getElementById('article-body');
-        if (!body) return;
-        var renderer = new marked.Renderer();
-        var origImage = renderer.image.bind(renderer);
-        renderer.image = function(token) {
-            if (token && token.href && token.href.startsWith('/api/media/')) {
-                token.href = '/api-proxy/media/' + token.href.substring('/api/media/'.length);
-            }
-            return origImage(token);
-        };
-        body.innerHTML = window.bmbRenderMarkdown(md, { renderer: renderer });
-    }
-
-    if (content && (!isProtected || isUnlockedFromCache)) {
-        renderMarkdown(content);
-    }
-
-    // ── Protected article: unlock / re-lock (re-locks once the server-side unlock cache expires) ──
-    if (isProtected) {
-        var lockCard = document.getElementById('lock-card');
-        var unlockedCard = document.getElementById('unlocked-card');
-        var unlockPass = document.getElementById('unlock-pass');
-        var unlockError = document.getElementById('unlock-error');
-        var btnUnlock = document.getElementById('btn-unlock');
-        var btnRelock = document.getElementById('btn-relock');
-        var unlockBanner = document.getElementById('unlock-banner');
-        var unlockRemaining = document.getElementById('unlock-remaining');
-        var lnkLockNow = document.getElementById('lnk-lock-now');
-        var unlockTimer = null;
-
-        function formatRemaining(sec) {
-            return sec >= 60 ? Math.ceil(sec / 60) + ' min' : sec + ' s';
-        }
-
-        // Countdown to the server-side unlock window closing. Deadline-based rather than a decrementing
-        // counter, so a throttled background tab (or a bfcache restore) still re-locks on time.
-        function startUnlockCountdown(seconds) {
-            if (unlockTimer) { clearInterval(unlockTimer); unlockTimer = null; }
-            if (seconds == null) { unlockBanner.style.display = 'none'; return; }
-            var deadline = Date.now() + seconds * 1000;
-            unlockBanner.style.display = '';
-            function tick() {
-                var left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
-                unlockRemaining.textContent = formatRemaining(left);
-                if (left <= 0) relock();
-            }
-            tick();
-            unlockTimer = setInterval(tick, 1000);
-        }
-
-        // Clear the decrypted DOM and show the lock card again. Also drop the server-side
-        // unlock-cache entry - otherwise the next reload (within its TTL) would show the
-        // article unlocked again, silently undoing this. (When the countdown ran out the entry
-        // has already expired; the call is then just a harmless no-op.)
-        function relock() {
-            if (unlockTimer) { clearInterval(unlockTimer); unlockTimer = null; }
-            fetch('/api-proxy/article/' + articleId + '/relock', { method: 'POST' });
-            var body = document.getElementById('article-body');
-            if (body) body.innerHTML = '';
-            unlockBanner.style.display = 'none';
-            unlockedCard.style.display = 'none';
-            lockCard.style.display = '';
-            if (unlockPass) unlockPass.focus();
-        }
-
-        function doUnlock() {
-            var pass = unlockPass.value || '';
-            if (!pass) { unlockPass.focus(); return; }
-            unlockError.style.display = 'none';
-            btnUnlock.loading = true;
-            fetch('/api-proxy/article/' + articleId + '/unlock', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ passphrase: pass })
-            }).then(function(r) {
-                if (r.ok) return r.json();
-                return r.json().catch(function(){ return {}; }).then(function(j) {
-                    throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Unlock failed.'));
-                });
-            }).then(function(data) {
-                renderMarkdown(data.content || '');
-                unlockPass.value = '';
-                lockCard.style.display = 'none';
-                unlockedCard.style.display = '';
-                startUnlockCountdown(data.unlockExpiresInSeconds);
-            }).catch(function(err) {
-                unlockError.textContent = err.message;
-                unlockError.style.display = '';
-                unlockPass.focus();
-            }).finally(function() {
-                btnUnlock.loading = false;
-            });
-        }
-
-        if (btnUnlock) btnUnlock.addEventListener('click', doUnlock);
-        if (unlockPass) unlockPass.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') { e.preventDefault(); doUnlock(); }
-        });
-        if (btnRelock) btnRelock.addEventListener('click', relock);
-        if (lnkLockNow) lnkLockNow.addEventListener('click', function(e) { e.preventDefault(); relock(); });
-        if (isUnlockedFromCache) startUnlockCountdown(unlockExpiresInSeconds);
-    }
-
-    // ── Protect / change password / remove protection ──
-    function postProtection(url, payload, errEl, btn) {
-        errEl.style.display = 'none';
-        btn.loading = true;
-        return fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        }).then(function(r) {
-            if (r.ok) { location.reload(); return; }
-            return r.json().catch(function(){ return {}; }).then(function(j) {
-                throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Operation failed.'));
-            });
-        }).catch(function(err) {
-            errEl.textContent = err.message;
-            errEl.style.display = '';
-        }).finally(function() {
-            btn.loading = false;
-        });
-    }
-
-    var btnProtect = document.getElementById('btn-protect');
-    if (btnProtect) {
-        btnProtect.addEventListener('click', function() {
-            var p1 = document.getElementById('protect-pass').value || '';
-            var p2 = document.getElementById('protect-pass2').value || '';
-            var hint = document.getElementById('protect-hint').value || '';
-            var err = document.getElementById('protect-error');
-            if (p1.length < 4) { err.textContent = 'Password must be at least 4 characters.'; err.style.display = ''; return; }
-            if (p1 !== p2) { err.textContent = 'Passwords do not match.'; err.style.display = ''; return; }
-            postProtection('/api-proxy/article/' + articleId + '/protect', { passphrase: p1, hint: hint }, err, btnProtect);
-        });
-    }
-
-    var btnChangePass = document.getElementById('btn-change-pass');
-    if (btnChangePass) {
-        btnChangePass.addEventListener('click', function() {
-            var oldp = document.getElementById('cp-old').value || '';
-            var n1 = document.getElementById('cp-new').value || '';
-            var n2 = document.getElementById('cp-new2').value || '';
-            var hint = document.getElementById('cp-hint').value || '';
-            var err = document.getElementById('cp-error');
-            if (n1.length < 4) { err.textContent = 'New password must be at least 4 characters.'; err.style.display = ''; return; }
-            if (n1 !== n2) { err.textContent = 'New passwords do not match.'; err.style.display = ''; return; }
-            postProtection('/api-proxy/article/' + articleId + '/change-passphrase', { oldPassphrase: oldp, newPassphrase: n1, hint: hint }, err, btnChangePass);
-        });
-    }
-
-    var btnUnprotect = document.getElementById('btn-unprotect');
-    if (btnUnprotect) {
-        btnUnprotect.addEventListener('click', function() {
-            var pass = document.getElementById('up-pass').value || '';
-            var err = document.getElementById('up-error');
-            postProtection('/api-proxy/article/' + articleId + '/unprotect', { passphrase: pass }, err, btnUnprotect);
-        });
-    }
-
-    // Move
-    var moveArticleSelectedPath = null;
-    var moveArticleSearchTimer = null;
-    var moveArticleSearch = document.getElementById('move-article-search');
-    var moveArticleDropdown = document.getElementById('move-article-dropdown');
-
-    // Attribute-safe: escapes quotes as well as angle brackets. The
-    // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
-    // value it produced was unsafe the moment it landed inside an HTML attribute.
-    function escapeHtmlMove(text) {
-        return String(text == null ? '' : text)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-
-    if (moveArticleSearch) {
-        moveArticleSearch.addEventListener('sl-input', function() {
-            moveArticleSelectedPath = null;
-            clearTimeout(moveArticleSearchTimer);
-            var q = moveArticleSearch.value.trim();
-            if (q.length < 1) { moveArticleDropdown.style.display = 'none'; return; }
-            moveArticleSearchTimer = setTimeout(function() {
-                fetch('/api-proxy/folders/search?q=' + encodeURIComponent(q) + '&limit=12')
-                    .then(function(r) { return r.json(); })
-                    .then(function(data) {
-                        var folders = data.folders || [];
-                        if (folders.length === 0) {
-                            moveArticleDropdown.innerHTML = '<div style="padding:8px 12px;color:var(--sl-color-neutral-500);font-size:0.9rem;">No matching folders</div>';
-                        } else {
-                            moveArticleDropdown.innerHTML = folders.map(function(f) {
-                                return '<div class="move-article-item" data-path="' + escapeHtmlMove(f.path) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);">' +
-                                    '<sl-icon name="folder2" style="margin-right:6px;"></sl-icon>' + escapeHtmlMove(f.path) + '</div>';
-                            }).join('');
-                            if (data.hasMore) {
-                                moveArticleDropdown.innerHTML += '<div style="padding:6px 12px;color:var(--sl-color-neutral-400);font-size:0.8rem;text-align:center;">Type more to narrow results...</div>';
-                            }
-                        }
-                        moveArticleDropdown.style.display = 'block';
-                    });
-            }, 250);
-        });
-
-        moveArticleDropdown.addEventListener('click', function(e) {
-            var item = e.target.closest('.move-article-item');
-            if (!item) return;
-            moveArticleSelectedPath = item.dataset.path;
-            moveArticleSearch.value = moveArticleSelectedPath;
-            moveArticleDropdown.style.display = 'none';
-        });
-
-        moveArticleDropdown.addEventListener('mouseover', function(e) {
-            var item = e.target.closest('.move-article-item');
-            if (item) item.style.background = 'var(--sl-color-primary-50)';
-        });
-        moveArticleDropdown.addEventListener('mouseout', function(e) {
-            var item = e.target.closest('.move-article-item');
-            if (item) item.style.background = '';
-        });
-
-        document.addEventListener('click', function(e) {
-            if (!e.target.closest('#move-article-search') && !e.target.closest('#move-article-dropdown')) {
-                moveArticleDropdown.style.display = 'none';
-            }
-        });
-    }
-
-    var moveBtn = document.getElementById('btn-move-article');
-    if (moveBtn) {
-        moveBtn.addEventListener('click', function() {
-            var inputVal = moveArticleSearch.value.trim();
-            if (inputVal && !moveArticleSelectedPath) {
-                alert('Please select a folder from the search results.');
-                return;
-            }
-            var newPath = moveArticleSelectedPath || '/';
-            if (newPath === treePath) { alert('Article is already in that folder'); return; }
-            moveBtn.loading = true;
-            fetch('/api-proxy/article/' + articleId + '/move', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ newPath: newPath })
-            }).then(function(r) {
-                if (r.ok) window.location.reload();
-                else r.json().then(function(e) { alert(e.error || 'Move failed'); }).catch(function() { alert('Move failed'); });
-            }).catch(function() { alert('Error'); }).finally(function() { moveBtn.loading = false; });
-        });
-    }
-
-    // Delete
-    var deleteBtn = document.getElementById('btn-confirm-delete-article');
-    if (deleteBtn) {
-        deleteBtn.addEventListener('click', function() {
-            deleteBtn.loading = true;
-            fetch('/api-proxy/article/' + articleId, {
-                method: 'DELETE'
-            }).then(function(r) {
-                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(treePath);
-                else r.json().then(function(d) { alert(d.error || 'Delete failed'); }).catch(function() { alert('Delete failed'); });
-            }).catch(function() { alert('Error'); }).finally(function() { deleteBtn.loading = false; });
-        });
-    }
-
-    // Add comment
-    var addCommentBtn = document.getElementById('btn-add-comment');
-    if (addCommentBtn) {
-        addCommentBtn.addEventListener('click', function() {
-            var textarea = document.getElementById('new-comment-text');
-            var text = textarea.value.trim();
-            if (!text) return;
-            addCommentBtn.loading = true;
-            fetch('/api-proxy/comments', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ articleId: articleId, text: text })
-            }).then(function(r) {
-                if (r.ok) return r.json();
-                throw new Error('Failed');
-            }).then(function(comment) {
-                textarea.value = '';
-                var list = document.getElementById('comments-list');
-                var div = document.createElement('div');
-                div.className = 'comment-item';
-                div.id = 'comment-' + comment.id;
-                var d = new Date(comment.createdAt);
-                div.innerHTML =
-                    '<div style="display:flex;align-items:center;justify-content:space-between;">' +
-                    '<div><span class="comment-author">owner</span>' +
-                    '<span class="comment-date">' + d.toLocaleString() + '</span></div>' +
-                    '<sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;" onclick="deleteComment(' + comment.id + ')"></sl-icon-button>' +
-                    '</div>' +
-                    '<p class="comment-text">' + escHtml(comment.text) + '</p>';
-                list.appendChild(div);
-                // Update count heading
-                var h4 = list.closest('.card').querySelector('h4');
-                if (h4) {
-                    var cnt = list.querySelectorAll('.comment-item').length;
-                    h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
-                }
-            }).catch(function() { alert('Error adding comment'); })
-            .finally(function() { addCommentBtn.loading = false; });
-        });
-    }
-
-    window.deleteComment = function(id) {
-        if (!confirm('Delete this comment?')) return;
-        fetch('/api-proxy/comments/' + id, { method: 'DELETE' })
-            .then(function(r) {
-                if (r.ok || r.status === 204) {
-                    var el = document.getElementById('comment-' + id);
-                    if (el) el.remove();
-                    var list = document.getElementById('comments-list');
-                    var h4 = list.closest('.card').querySelector('h4');
-                    if (h4) {
-                        var cnt = list.querySelectorAll('.comment-item').length;
-                        h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
-                    }
-                } else { alert('Delete failed'); }
-            });
-    };
-
-    // ─── Attachments ───
-    function formatFileSize(bytes) {
-        var units = ['B', 'KB', 'MB', 'GB'];
-        var size = bytes, i = 0;
-        while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
-        return (i === 0 ? size.toFixed(0) : size.toFixed(1)) + ' ' + units[i];
-    }
-
-    function attachmentsListEl() { return document.getElementById('attachments-list'); }
-
-    function updateAttachmentsCount() {
-        var list = attachmentsListEl();
-        if (!list) return;
-        var countEl = document.getElementById('attachments-count');
-        if (countEl) countEl.textContent = list.querySelectorAll('.attachment-item').length;
-    }
-
-    function appendAttachmentRow(att) {
-        var list = attachmentsListEl();
-        if (!list) return;
-        var div = document.createElement('div');
-        div.className = 'attachment-item';
-        div.id = 'attachment-' + att.id;
-        div.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);';
-        div.innerHTML =
-            '<a href="/api-proxy/media/' + att.id + '" download="' + escHtml(att.fileName) + '" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">' +
-            '<sl-icon name="file-earmark"></sl-icon>' +
-            '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(att.fileName) + '</span>' +
-            '<span style="font-size:0.78rem;color:var(--sl-color-neutral-500);flex-shrink:0;">(' + formatFileSize(att.fileSize) + ')</span>' +
-            '</a>' +
-            '<sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;flex-shrink:0;" onclick="deleteAttachment(\'' + att.id + '\')"></sl-icon-button>';
-        list.appendChild(div);
-        updateAttachmentsCount();
-    }
-
-    var attachmentFileInput = document.getElementById('attachment-file-input');
-    var attachmentDropzone = document.getElementById('attachment-dropzone');
-    if (attachmentDropzone && attachmentFileInput) {
-        var dropzoneText = document.getElementById('attachment-dropzone-text');
-        var dropzoneIdleText = dropzoneText.textContent;
-        var uploadQueue = Promise.resolve();
-        var queued = 0;
-        var failures = [];
-
-        function uploadAttachment(file) {
-            var formData = new FormData();
-            formData.append('file', file);
-            formData.append('attachment', 'true');
-            if (articleId) formData.append('articleId', articleId);
-            return fetch('/api-proxy/media/upload', { method: 'POST', body: formData })
-                .then(function(r) {
-                    if (!r.ok) return r.json().catch(function(){ return {}; }).then(function(e) {
-                        throw new Error((e.error || 'Upload failed') + ' (' + file.name + ')');
-                    });
-                    return r.json();
-                })
-                .then(function(media) { appendAttachmentRow(media); });
-        }
-
-        function setBusyText() {
-            dropzoneText.textContent = 'Uploading ' + queued + (queued === 1 ? ' file…' : ' files…');
-        }
-
-        // One at a time, in pick/drop order; a second drop while a batch is running just queues up.
-        // Failures are collected and reported once the queue drains, so one bad file doesn't stop the rest.
-        window.bmbAttachDropZone(attachmentDropzone, attachmentFileInput, function(files) {
-            files.forEach(function(f) {
-                queued++;
-                attachmentDropzone.classList.add('is-busy');
-                setBusyText();
-                uploadQueue = uploadQueue.then(function() {
-                    return uploadAttachment(f).catch(function(e) { failures.push(e.message || 'Upload failed'); });
-                }).then(function() {
-                    queued--;
-                    if (queued > 0) { setBusyText(); return; }
-                    attachmentDropzone.classList.remove('is-busy');
-                    dropzoneText.textContent = dropzoneIdleText;
-                    if (failures.length) { alert(failures.join('\n')); failures = []; }
-                });
-            });
-        });
-    }
-
-    window.deleteAttachment = function(id) {
-        if (!confirm('Delete this attachment?')) return;
-        fetch('/api-proxy/media/' + id, { method: 'DELETE' })
-            .then(function(r) {
-                if (r.ok || r.status === 204) {
-                    var el = document.getElementById('attachment-' + id);
-                    if (el) el.remove();
-                    updateAttachmentsCount();
-                } else { alert('Delete failed'); }
-            });
-    };
-
-    function escHtml(s) {
-        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    }
-
-    // ─── Print preview (paged.js inside an iframe) ───
-    var printBtn = document.getElementById('btn-print-article');
-    var printDlg = document.getElementById('dlg-print-article');
-    if (printBtn && printDlg) {
-        var printIframe = document.getElementById('print-iframe');
-        var pageStatus = document.getElementById('print-page-status');
-        var zoomLabel = document.getElementById('print-zoom-label');
-        var zoomIn = document.getElementById('print-zoom-in');
-        var zoomOut = document.getElementById('print-zoom-out');
-        var doPrintBtn = document.getElementById('btn-do-print');
-        var fontSelect = document.getElementById('print-font');
-        var marginsSelect = document.getElementById('print-margins');
-        var sizeUp = document.getElementById('print-size-up');
-        var sizeDown = document.getElementById('print-size-down');
-        var sizeLabel = document.getElementById('print-size-label');
-        var pageNumbersSwitch = document.getElementById('print-page-numbers');
-
-        // Settings — visual zoom is just a CSS transform on the preview;
-        // font/size/margins/page-numbers require a re-pagination, so changing
-        // them rebuilds the iframe (debounced).
-        var settings = {
-            zoom: 1.0,
-            fontScale: 1.0,
-            font: 'serif',
-            margins: 'normal',
-            pageNumbers: false
-        };
-        var rendered = false;
-        var rebuildTimer = null;
-
-        var articleTitle = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Title ?? ""));
-        var articleTreePath = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"));
-
-        var FONT_STACKS = {
-            serif:   'Georgia, "Times New Roman", serif',
-            sans:    'Helvetica, Arial, sans-serif',
-            times:   '"Times New Roman", Times, serif',
-            verdana: 'Verdana, Geneva, sans-serif',
-            mono:    '"Courier New", Courier, monospace'
-        };
-        var MARGIN_VALUES = {
-            narrow: '12mm 12mm',
-            normal: '20mm 18mm',
-            wide:   '28mm 25mm'
-        };
-
-        function buildPrintDoc(title, bodyHtml, footerMeta) {
-            return '<!doctype html><html><head><meta charset="utf-8">' +
-                '<base href="/">' +
-                '<title>' + escAttr(title) + '</title>' +
-                '<style>' + printCss() + '</style>' +
-                '<script>' + previewBridgeJs() + '<\/script>' +
-                '<script src="/lib/pagedjs/paged.polyfill.js"><\/script>' +
-                '</head><body>' +
-                '<article class="print-article">' +
-                '<header class="print-header"><h1>' + escAttr(title) + '</h1>' +
-                '<div class="print-meta">' + escAttr(footerMeta) + '</div></header>' +
-                bodyHtml +
-                '</article>' +
-                '</body></html>';
-        }
-
-        function printCss() {
-            var fontFamily = FONT_STACKS[settings.font] || FONT_STACKS.serif;
-            var margins = MARGIN_VALUES[settings.margins] || MARGIN_VALUES.normal;
-            var scale = settings.fontScale;
-            // Express every typographic size as calc(Xpt * scale) so the slider
-            // multiplies them all uniformly.
-            var s = function(pt) { return 'calc(' + pt + 'pt * ' + scale + ')'; };
-            var pageNumbersRule = settings.pageNumbers
-                ? '@@page { @@bottom-center { content: counter(page) " / " counter(pages); font-family: ' + fontFamily + '; font-size: 9pt; color: #666; } }'
-                : '';
-            return [
-                '@@page { size: A4; margin: ' + margins + '; }',
-                pageNumbersRule,
-                'html, body { margin: 0; padding: 0; }',
-                // Grey backdrop in the preview so the white A4 sheets stand out.
-                // (Real print doesn't render the html backdrop — browsers print page boxes.)
-                'html { background: #e5e7eb; }',
-                'body { font-family: ' + fontFamily + '; color: #111; font-size: ' + s(11) + '; line-height: 1.4; background: transparent; }',
-                '.print-header { margin-bottom: 10pt; padding-bottom: 5pt; border-bottom: 1pt solid #888; }',
-                '.print-header h1 { margin: 0 0 3pt 0; font-size: ' + s(18) + '; }',
-                '.print-meta { color: #555; font-size: ' + s(9) + '; }',
-                'h1, h2, h3, h4 { color: #000; page-break-after: avoid; margin: 12pt 0 4pt 0; font-family: ' + fontFamily + '; }',
-                'h1 { font-size: ' + s(16) + '; } h2 { font-size: ' + s(14) + '; } h3 { font-size: ' + s(12) + '; }',
-                'p { margin: 0 0 4pt 0; orphans: 3; widows: 3; }',
-                'p:empty { display: none; }',
-                'br + br { display: none; }',
-                'pre, code { font-family: "Courier New", monospace; font-size: ' + s(9.5) + '; }',
-                'pre { background: #f4f4f4; padding: 6pt 8pt; border: 1pt solid #ddd; border-radius: 3pt; white-space: pre-wrap; word-wrap: break-word; page-break-inside: avoid; margin: 4pt 0; }',
-                'code { background: #f4f4f4; padding: 0 3pt; border-radius: 2pt; }',
-                'pre code { background: none; padding: 0; }',
-                'blockquote { border-left: 2pt solid #888; margin: 4pt 0; padding-left: 10pt; color: #444; }',
-                'ul, ol { padding-left: 22pt; margin: 2pt 0 4pt 0; }',
-                'li { margin: 0; }',
-                'li > p { margin: 0 0 2pt 0; }',
-                'li > p:only-child { margin: 0; }',
-                'img { max-width: 100%; }',
-                'table { border-collapse: collapse; width: 100%; margin: 8pt 0; font-size: ' + s(10) + '; page-break-inside: avoid; }',
-                'th, td { border: 1pt solid #ccc; padding: 4pt 8pt; text-align: left; }',
-                'th { background: #f0f0f0; }',
-                'a { color: inherit; text-decoration: underline; }',
-                // Paged.js's own stylesheet ships a flex+wrap layout that fuses pages
-                // into one continuous block — we force vertical block stacking with a
-                // grey gutter between sheets so each A4 page reads as its own card.
-                //
-                // Important: do NOT wrap any preview-only resets in @@media print. Paged.js
-                // ACTIVATES print media inside the polyfill so the preview is true-to-print;
-                // that means our @@media print rules win over the default ones during preview
-                // (we accidentally turned the backdrop white and killed centering this way).
-                // The real print path uses browser-native @@page from the polyfill output —
-                // we don't need to override anything for it.
-                '.pagedjs_pages { display: block !important; padding: 24px 0 !important; background: #e5e7eb !important; min-height: 100vh !important; }',
-                '.pagedjs_page { display: block !important; margin: 0 auto 24px auto !important; background: white !important; box-shadow: 0 4px 14px rgba(0,0,0,0.25) !important; border: 1px solid rgba(0,0,0,0.08) !important; }',
-                '.pagedjs_page:last-child { margin-bottom: 24px !important; }',
-
-                // Real-print path. Activated by the beforeprint handler adding
-                // html.bmb-printing — we deliberately do NOT use @@media print here,
-                // because paged.js partially activates print media during preview and
-                // would break the screen layout. The .bmb-printing class is added
-                // only during the actual window.print() pass.
-                //
-                // Strip every screen-only decoration that would otherwise eat space
-                // on the physical page (grey backdrop, padding around sheets, gap
-                // between sheets, shadow, border). Force one .pagedjs_page = one
-                // printer page so we don't get the "page 2 is blank grey gap" effect.
-                'html.bmb-printing, html.bmb-printing body { background: white !important; }',
-                'html.bmb-printing .pagedjs_pages { padding: 0 !important; background: white !important; min-height: 0 !important; }',
-                'html.bmb-printing .pagedjs_page { margin: 0 !important; box-shadow: none !important; border: 0 !important; page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }',
-                'html.bmb-printing .pagedjs_page:last-child { page-break-after: auto; break-after: auto; }'
-            ].join('\n');
-        }
-
-        function previewBridgeJs() {
-            // Runs inside the iframe BEFORE paged.polyfill.js. Two jobs:
-            //   1. PagedConfig.after — fires when pagination finishes; we report page count up.
-            //   2. beforeprint/afterprint — swap the screen decoration off and override
-            //      @@page margin to zero while the browser is printing, then swap back.
-            //      Done via a class on <html> and a temporary <style> rather than
-            //      @@media print, because paged.js partially activates print media
-            //      inside the preview and would break the screen layout.
-            return [
-                "window.PagedConfig = {",
-                "  after: function(flow){",
-                "    var pages = (flow && flow.total) ? flow.total",
-                "      : document.querySelectorAll('.pagedjs_page').length;",
-                "    parent.postMessage({ type: 'bmb-print-rendered', pages: pages }, '*');",
-                "  }",
-                "};",
-                "window.addEventListener('beforeprint', function(){",
-                "  document.documentElement.classList.add('bmb-printing');",
-                // Paged.js's pages already include the requested margin inside the
-                // .pagedjs_page content area. Letting the browser apply @@page margin
-                // on top would double the margins and push the sheet off the page.
-                // Inject a zero-margin @@page override for the print pass only.
-                "  if (!document.getElementById('bmb-print-page')) {",
-                "    var s = document.createElement('style');",
-                "    s.id = 'bmb-print-page';",
-                "    s.textContent = '\\u0040page { size: A4; margin: 0; }';",
-                "    document.head.appendChild(s);",
-                "  }",
-                "});",
-                "window.addEventListener('afterprint', function(){",
-                "  document.documentElement.classList.remove('bmb-printing');",
-                "  var s = document.getElementById('bmb-print-page');",
-                "  if (s) s.remove();",
-                "});"
-            ].join('\n');
-        }
-
-        function escAttr(s) {
-            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-        }
-
-        function applyZoom() {
-            try {
-                var doc = printIframe.contentDocument;
-                if (!doc) return;
-                var pages = doc.querySelector('.pagedjs_pages');
-                if (pages) {
-                    pages.style.transform = 'scale(' + settings.zoom + ')';
-                    pages.style.transformOrigin = 'top center';
-                }
-                zoomLabel.textContent = Math.round(settings.zoom * 100) + '%';
-            } catch (e) { /* ignore */ }
-        }
-
-        function rebuildIframe() {
-            var body = document.getElementById('article-body');
-            if (!body) return;
-            rendered = false;
-            pageStatus.textContent = 'Rendering…';
-            var meta = articleTreePath + '   ·   ' + new Date().toLocaleString();
-            printIframe.srcdoc = buildPrintDoc(articleTitle, body.innerHTML, meta);
-        }
-
-        function rebuildDebounced() {
-            clearTimeout(rebuildTimer);
-            rebuildTimer = setTimeout(rebuildIframe, 250);
-        }
-
-        window.addEventListener('message', function(e) {
-            if (!e.data || e.data.type !== 'bmb-print-rendered') return;
-            rendered = true;
-            pageStatus.textContent = e.data.pages + (e.data.pages === 1 ? ' page' : ' pages');
-            applyZoom();
-        });
-
-        printBtn.addEventListener('click', function() {
-            settings.zoom = 1.0;
-            zoomLabel.textContent = '100%';
-            rebuildIframe();
-            printDlg.show();
-        });
-
-        zoomIn.addEventListener('click', function() {
-            if (settings.zoom < 2.0) { settings.zoom = Math.round((settings.zoom + 0.1) * 10) / 10; applyZoom(); }
-        });
-        zoomOut.addEventListener('click', function() {
-            if (settings.zoom > 0.4) { settings.zoom = Math.round((settings.zoom - 0.1) * 10) / 10; applyZoom(); }
-        });
-
-        function updateSizeLabel() { sizeLabel.textContent = Math.round(settings.fontScale * 100) + '%'; }
-        sizeUp.addEventListener('click', function() {
-            if (settings.fontScale < 1.6) {
-                settings.fontScale = Math.round((settings.fontScale + 0.1) * 10) / 10;
-                updateSizeLabel(); rebuildDebounced();
-            }
-        });
-        sizeDown.addEventListener('click', function() {
-            if (settings.fontScale > 0.6) {
-                settings.fontScale = Math.round((settings.fontScale - 0.1) * 10) / 10;
-                updateSizeLabel(); rebuildDebounced();
-            }
-        });
-
-        fontSelect.addEventListener('sl-change', function() {
-            settings.font = fontSelect.value;
-            rebuildDebounced();
-        });
-        marginsSelect.addEventListener('sl-change', function() {
-            settings.margins = marginsSelect.value;
-            rebuildDebounced();
-        });
-        pageNumbersSwitch.addEventListener('sl-change', function() {
-            settings.pageNumbers = pageNumbersSwitch.checked;
-            rebuildDebounced();
-        });
-
-        function doPrint() {
-            if (!rendered) return;
-            try {
-                printIframe.contentWindow.focus();
-                printIframe.contentWindow.print();
-            } catch (e) { alert('Print failed: ' + e.message); }
-        }
-        doPrintBtn.addEventListener('click', doPrint);
-    }
-})();
-
-(function() {
-    var params = new URLSearchParams(window.location.search);
-    if (!params.has('justSaved')) return;
-
-    var url = new URL(window.location);
-    url.searchParams.delete('justSaved');
-    history.replaceState(null, '', url);
-
-    var toast = document.getElementById('syncToast');
-    if (!toast) return;
-
-    toast.style.display = 'flex';
-    var polling = true;
-    var fadeTimer = setTimeout(function() {
-        if (!toast.classList.contains('sync-toast-pinned')) {
-            toast.style.display = 'none';
-            polling = false;
-        }
-    }, 5000);
-
-    toast.addEventListener('click', function() {
-        toast.classList.add('sync-toast-pinned');
-        clearTimeout(fadeTimer);
-        toast.style.display = 'none';
-        polling = false;
-        var modal = document.getElementById('syncModal');
-        if (modal) {
-            modal.show();
-            if (typeof updateSyncModal === 'function') updateSyncModal();
-        }
-    });
-
-    function updateSyncToast() {
-        if (!polling) return;
-        fetch('/api-proxy/sync/delivery-status')
-            .then(function(r) {
-                // Stop, don't retry, on anything that is not a success. A 403 (not a superadmin)
-                // or a redirect to the access-denied page is a permanent answer — retrying it
-                // every five seconds is a loop that can only ever fail, and r.json() on the HTML
-                // it returns throws into the catch below, which is what used to keep it going.
-                if (!r.ok) { polling = false; return null; }
-                return r.json();
-            })
-            .then(function(data) {
-                if (!data) return;
-                var circles = document.getElementById('syncToastCircles');
-                if (!circles || !data.nodes) return;
-                circles.innerHTML = data.nodes.map(function(n) {
-                    var color = n.isSynced ? 'var(--sl-color-success-600)' : 'var(--sl-color-warning-500)';
-                    var title = escHtml(n.displayName) + (n.isSynced ? ' ✓' : ' pending');
-                    return '<span class="sync-circle" style="background:' + color + ';" title="' + title + '"></span>';
-                }).join('');
-                if (polling) setTimeout(updateSyncToast, 3000);
-            })
-            .catch(function() { if (polling) setTimeout(updateSyncToast, 5000); });
-    }
-    updateSyncToast();
-})();
-
-(function() {
-    var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
-    if (!articleId) return;
-
-    var chipsEl = document.getElementById('concept-tags-chips');
-    var btnAdd = document.getElementById('btn-add-concept');
-    var inputWrap = document.getElementById('concept-tag-input-wrap');
-    var searchInput = document.getElementById('concept-tag-search');
-    var dropdown = document.getElementById('concept-tag-dropdown');
-    if (!chipsEl || !btnAdd || !searchInput || !dropdown) return;
-
-    var currentTags = Array.from(chipsEl.querySelectorAll('sl-tag[data-concept]'))
-        .map(function(el) { return el.getAttribute('data-concept'); });
-
-    var searchTimer = null;
-
-    function putTags(tags) {
-        return fetch('/api-proxy/article/' + articleId + '/concept-tags', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ conceptTags: tags })
-        });
-    }
-
-    // Attribute-safe: escapes quotes as well as angle brackets. The
-    // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
-    // value it produced was unsafe the moment it landed inside an HTML attribute.
-    function escConceptHtml(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-
-    function renderChips() {
-        chipsEl.innerHTML = currentTags.map(function(t) {
-            return '<sl-tag size="small" variant="warning" pill removable data-concept="'+escConceptHtml(t)+'" style="margin-right:4px;">'+escConceptHtml(t)+'</sl-tag>';
-        }).join('');
-        attachRemoveHandlers();
-    }
-
-    function attachRemoveHandlers() {
-        chipsEl.querySelectorAll('sl-tag[data-concept]').forEach(function(el) {
-            el.addEventListener('sl-remove', function() {
-                var name = el.getAttribute('data-concept');
-                var idx = currentTags.indexOf(name);
-                if (idx === -1) return;
-                var prev = currentTags.slice();
-                currentTags.splice(idx, 1);
-                renderChips();
-                putTags(currentTags).then(function(r) {
-                    if (!r.ok) { currentTags = prev; renderChips(); alert('Failed to remove tag'); }
-                });
-            });
-        });
-    }
-
-    attachRemoveHandlers();
-
-    function addTag(name) {
-        name = (name || '').trim();
-        if (!name) return;
-        if (currentTags.some(function(t) { return t.toLowerCase() === name.toLowerCase(); })) {
-            searchInput.value = '';
-            dropdown.style.display = 'none';
-            return;
-        }
-        var prev = currentTags.slice();
-        currentTags.push(name);
-        renderChips();
-        putTags(currentTags).then(function(r) {
-            if (!r.ok) { currentTags = prev; renderChips(); alert('Failed to add tag'); }
-        });
-        searchInput.value = '';
-        dropdown.style.display = 'none';
-    }
-
-    btnAdd.addEventListener('click', function() {
-        inputWrap.style.display = 'block';
-        btnAdd.style.display = 'none';
-        setTimeout(function() { searchInput.focus(); }, 50);
-    });
-
-    searchInput.addEventListener('sl-input', function() {
-        clearTimeout(searchTimer);
-        var q = searchInput.value.trim();
-        if (q.length < 1) { dropdown.style.display = 'none'; return; }
-        searchTimer = setTimeout(function() {
-            fetch('/api-proxy/concept-tags?q=' + encodeURIComponent(q) + '&limit=20')
-                .then(function(r) { return r.ok ? r.json() : []; })
-                .then(function(data) {
-                    var tags = (data || []).filter(function(t) {
-                        return !currentTags.some(function(c) { return c.toLowerCase() === t.name.toLowerCase(); });
-                    });
-                    var items = tags.map(function(t) {
-                        return '<div class="concept-tag-item" data-name="' + escConceptHtml(t.name) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);">' +
-                            '<sl-icon name="diagram-3" style="margin-right:6px;"></sl-icon>' +
-                            escConceptHtml(t.name) +
-                            '<span style="float:right;color:var(--sl-color-neutral-500);font-size:0.8rem;">' + t.articleCount + '</span>' +
-                            '</div>';
-                    });
-                    var exactMatch = tags.some(function(t) { return t.name.toLowerCase() === q.toLowerCase(); });
-                    var alreadyOnArticle = currentTags.some(function(c) { return c.toLowerCase() === q.toLowerCase(); });
-                    if (!exactMatch && !alreadyOnArticle) {
-                        items.unshift('<div class="concept-tag-item concept-tag-new" data-name="' + escConceptHtml(q) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sl-color-neutral-100);background:var(--sl-color-primary-50);">' +
-                            '<sl-icon name="plus-lg" style="margin-right:6px;"></sl-icon>Create <strong>' + escConceptHtml(q) + '</strong>' +
-                            '</div>');
-                    }
-                    dropdown.innerHTML = items.length === 0
-                        ? '<div style="padding:8px 12px;color:var(--sl-color-neutral-500);font-size:0.9rem;">No matches.</div>'
-                        : items.join('');
-                    dropdown.style.display = 'block';
-                });
-        }, 200);
-    });
-
-    searchInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            var q = searchInput.value.trim();
-            if (q) addTag(q);
-        } else if (e.key === 'Escape') {
-            dropdown.style.display = 'none';
-            inputWrap.style.display = 'none';
-            btnAdd.style.display = '';
-            searchInput.value = '';
-        }
-    });
-
-    var suppressBlurHide = false;
-    dropdown.addEventListener('mousedown', function(e) {
-        if (e.target.closest('.concept-tag-item')) suppressBlurHide = true;
-    });
-
-    dropdown.addEventListener('click', function(e) {
-        var item = e.target.closest('.concept-tag-item');
-        if (!item) return;
-        addTag(item.getAttribute('data-name'));
-        setTimeout(function() { searchInput.focus(); }, 0);
-    });
-
-    dropdown.addEventListener('mouseover', function(e) {
-        var item = e.target.closest('.concept-tag-item');
-        if (item) item.style.background = 'var(--sl-color-primary-50)';
-    });
-    dropdown.addEventListener('mouseout', function(e) {
-        var item = e.target.closest('.concept-tag-item');
-        if (item) item.style.background = item.classList.contains('concept-tag-new') ? 'var(--sl-color-primary-50)' : '';
-    });
-
-    document.addEventListener('click', function(e) {
-        if (!e.target.closest('#concept-tag-input-wrap')) {
-            dropdown.style.display = 'none';
-        }
-    });
-
-    searchInput.addEventListener('sl-blur', function() {
-        setTimeout(function() {
-            if (suppressBlurHide) {
-                suppressBlurHide = false;
-                return;
-            }
-            if (searchInput.value.trim() === '' && inputWrap.style.display !== 'none') {
-                dropdown.style.display = 'none';
-                inputWrap.style.display = 'none';
-                btnAdd.style.display = '';
-            }
-        }, 150);
-    });
-})();
-
-(function() {
-    var prev = document.getElementById('related-prev');
-    var next = document.getElementById('related-next');
-    if (!prev || !next) return;
-    var list = document.getElementById('related-list');
-    var info = document.getElementById('related-pager-info');
-    var articleIdLocal = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
-    if (!articleIdLocal) return;
-    var page = 1, pageSize = 5, totalPages = 1;
-    // Attribute-safe: escapes quotes as well as angle brackets. The
-    // textContent-then-innerHTML idiom this replaces does NOT escape " or ', so any
-    // value it produced was unsafe the moment it landed inside an HTML attribute.
-    function escRel(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-    function load(p) {
-        prev.loading = next.loading = true;
-        fetch('/api-proxy/article/' + articleIdLocal + '/related?page=' + p + '&pageSize=' + pageSize)
-            .then(function(r){ return r.json(); })
-            .then(function(d){
-                page = d.page; totalPages = d.totalPages;
-                list.innerHTML = (d.items || []).map(function(r) {
-                    return '<div class="related-item" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">'
-                        + '<div><a href="/Article/View?id=' + r.id + '" style="font-weight:500;">' + escRel(r.title) + '</a>'
-                        + '<div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">' + escRel((r.sharedConcepts||[]).join(', ')) + '</div></div>'
-                        + '<sl-badge variant="neutral" pill>' + r.strength + '</sl-badge>'
-                        + '</div>';
-                }).join('');
-                info.textContent = 'Page ' + page + ' of ' + totalPages + ' \u00B7 ' + d.total + ' items';
-                prev.disabled = page <= 1;
-                next.disabled = page >= totalPages;
-            })
-            .finally(function() { prev.loading = next.loading = false; });
-    }
-    prev.addEventListener('click', function() { if (page > 1) load(page - 1); });
-    next.addEventListener('click', function() { load(page + 1); });
-})();
+<script type="application/json" id="article-view-data">
+{
+    "articleId": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? "")),
+    "content": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? "")),
+    "treePath": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/")),
+    "isProtected": @(Model.Article?.Protected == true ? "true" : "false"),
+    "isUnlockedFromCache": @(Model.IsUnlockedFromCache ? "true" : "false"),
+    "unlockExpiresInSeconds": @(Model.UnlockExpiresInSeconds?.ToString() ?? "null"),
+    "articleTitle": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Title ?? "")),
+    "articleTreePath": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"))
+}
 </script>
+<script src="/js/pages/article-view.js"></script>
 
-<!-- Copy article dialog -->
-<sl-dialog id="dlg-copy-article" label="Copy Article To">
-    @if (Model.Article != null)
-    {
-        <p class="text-muted text-sm">Copying: <strong>@Model.Article.Title</strong> from <code>@Model.Article.TreePath</code></p>
-    }
-    <sl-alert id="copy-article-error" variant="danger" closable style="margin-bottom:12px;display:none;">
-        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
-        <span id="copy-article-error-msg"></span>
-    </sl-alert>
-    <sl-input id="copy-article-target" label="Target folder path" placeholder="/" autocomplete="off" autofocus></sl-input>
-    <small class="text-muted">If the target already contains an article with the same title, the copy is renamed with a " (N)" suffix.</small>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-copy-article').hide()">Cancel</sl-button>
-    <sl-button id="btn-copy-article" slot="footer" variant="primary">Copy</sl-button>
-</sl-dialog>
-<script>
-(function() {
-    var btn = document.getElementById('btn-copy-article');
-    if (!btn) return;
-    var dlg = document.getElementById('dlg-copy-article');
-    var input = document.getElementById('copy-article-target');
-    var articleId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""));
-    btn.addEventListener('click', async function() {
-        var target = (input.value || '').trim() || '/';
-        try {
-            var resp = await fetch('/api-proxy/article/' + articleId + '/copy', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ targetFolderPath: target })
-            });
-            if (resp.ok) {
-                dlg.hide();
-                window.location.href = '/Folder?path=' + encodeURIComponent(target);
-            } else {
-                var data = {}; try { data = await resp.json(); } catch {}
-                var box = document.getElementById('copy-article-error');
-                document.getElementById('copy-article-error-msg').textContent = data.error || ('Copy failed (HTTP ' + resp.status + ')');
-                box.style.display = '';
-                box.open = true;
-            }
-        } catch (e) {
-            var box = document.getElementById('copy-article-error');
-            document.getElementById('copy-article-error-msg').textContent = String(e);
-            box.style.display = '';
-            box.open = true;
-        }
-    });
-})();
-</script>
 </div>
 </div>

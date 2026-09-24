@@ -236,7 +236,6 @@
         }
     </style>
 }
-<script>document.body.classList.add('home-chat-page', 'chat-ui');</script>
 <partial name="_Sidebar" />
 <div id="page-content">
 <div class="main-content">
@@ -255,16 +254,16 @@
                 <sl-button size="small" variant="success" href="/Article/Edit?treePath=%2F">
                     <sl-icon slot="prefix" name="file-earmark-plus"></sl-icon> New Article
                 </sl-button>
-                <sl-button size="small" variant="success" onclick="document.getElementById('dlg-add-folder-home').show()">
+                <sl-button size="small" variant="success" id="btn-open-add-folder-home">
                     <sl-icon slot="prefix" name="folder-plus"></sl-icon> Add Folder
                 </sl-button>
-                <sl-button size="small" variant="default" onclick="openDownloadDialog({kind:'all'})">
+                <sl-button size="small" variant="default" id="btn-export-all-home">
                     <sl-icon slot="prefix" name="upload"></sl-icon> Export All
                 </sl-button>
-                <sl-button size="small" variant="default" onclick="document.getElementById('dlg-import-obsidian').show()">
+                <sl-button size="small" variant="default" id="btn-open-import-obsidian">
                     <sl-icon slot="prefix" name="download"></sl-icon> Import from Obsidian
                 </sl-button>
-                <sl-button size="small" variant="default" onclick="document.getElementById('dlg-import-bee').show()">
+                <sl-button size="small" variant="default" id="btn-open-import-bee">
                     <sl-icon slot="prefix" name="download"></sl-icon> Bee-Import
                 </sl-button>
             </div>
@@ -307,79 +306,9 @@
         <span id="add-folder-home-error-msg"></span>
     </sl-alert>
     <sl-input id="add-folder-home-name" label="Folder name" placeholder="My Folder" required autofocus></sl-input>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-folder-home').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-add-folder-home">Cancel</sl-button>
     <sl-button id="btn-add-folder-home" slot="footer" variant="primary">Create</sl-button>
 </sl-dialog>
-
-<script>
-// UX-only chat gating (the API filter is the real boundary). If this caller isn't allowed to
-// use chat, hide the homepage chat entry points — the welcome hint, the collapse-to-chat tab,
-// the message area, the composer, and the new/close chat actions — leaving the four article
-// buttons untouched. Surgical per-element (no restructuring of the collapse/expand mechanics).
-(function () {
-    fetch('/api-proxy/chat/access').then(function (r) { return r.ok ? r.json() : { allowed: true }; })
-        .then(function (data) {
-            if (data.allowed) return;
-            var selectors = ['.welcome-chat-hint', '#home-welcome-collapse-tab', '#chat-messages', '.chat-composer-outer', '#home-chat-actions'];
-            selectors.forEach(function (sel) {
-                document.querySelectorAll(sel).forEach(function (el) { el.style.display = 'none'; });
-            });
-        }).catch(function () {});
-})();
-</script>
-
-<script>
-(function() {
-    var btn = document.getElementById('btn-add-folder-home');
-    var dlg = document.getElementById('dlg-add-folder-home');
-    var errBox = document.getElementById('add-folder-home-error');
-    var errMsg = document.getElementById('add-folder-home-error-msg');
-
-    function showError(msg) {
-        errMsg.textContent = msg || 'Failed to create folder';
-        errBox.style.display = 'block';
-        errBox.open = true;
-    }
-    function clearError() {
-        errBox.style.display = 'none';
-        errMsg.textContent = '';
-    }
-    if (dlg) dlg.addEventListener('sl-show', clearError);
-
-    if (btn) {
-        btn.addEventListener('click', async function() {
-            clearError();
-            var nameInput = document.getElementById('add-folder-home-name');
-            var name = (nameInput.value || '').trim();
-            if (!name) {
-                showError('Folder name is required.');
-                return;
-            }
-            btn.loading = true;
-            var path = '/' + name.replace(/^\/+/, '');
-            try {
-                var r = await fetch('/api-proxy/folders', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: path })
-                });
-                if (r.ok) {
-                    dlg.hide();
-                    window.location.href = '/Folder?path=' + encodeURIComponent(path);
-                    return;
-                }
-                var d = null;
-                try { d = await r.json(); } catch (_) {}
-                showError((d && d.error) || 'Failed to create folder');
-            } catch (_) {
-                showError('Network error. Please try again.');
-            } finally {
-                btn.loading = false;
-            }
-        });
-    }
-})();
-</script>
 
 <sl-dialog id="dlg-import-obsidian" label="Import from Obsidian">
     <sl-alert id="import-obsidian-error" variant="danger" closable style="margin-bottom:12px;display:none;">
@@ -389,7 +318,7 @@
     <p>Upload a ZIP file exported from an Obsidian vault.</p>
     <input type="file" id="import-obsidian-file" accept=".zip" style="margin-bottom:16px;" />
     <sl-button id="btn-import-obsidian" slot="footer" variant="primary">Import</sl-button>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-import-obsidian').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-import-obsidian">Cancel</sl-button>
 </sl-dialog>
 
 <sl-dialog id="dlg-import-bee" label="Bee-Import" class="bmb-fp-host">
@@ -413,146 +342,9 @@
         </div>
     </div>
     <sl-button id="btn-import-bee" slot="footer" variant="primary">Import</sl-button>
-    <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-import-bee').hide()">Cancel</sl-button>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-import-bee">Cancel</sl-button>
 </sl-dialog>
 
-<script>
-(function() {
-    var btn = document.getElementById('btn-import-obsidian');
-    var dlg = document.getElementById('dlg-import-obsidian');
-    var errBox = document.getElementById('import-obsidian-error');
-    var errMsg = document.getElementById('import-obsidian-error-msg');
-    var fileInput = document.getElementById('import-obsidian-file');
-
-    function showError(msg) {
-        errMsg.textContent = msg || 'Import failed';
-        errBox.style.display = 'block';
-        errBox.open = true;
-    }
-    function clearError() {
-        errBox.style.display = 'none';
-        errMsg.textContent = '';
-    }
-    if (dlg) dlg.addEventListener('sl-show', function() {
-        clearError();
-        fileInput.value = '';
-    });
-
-    if (btn) {
-        btn.addEventListener('click', async function() {
-            clearError();
-            var file = fileInput.files[0];
-            if (!file) {
-                showError('Please select a ZIP file.');
-                return;
-            }
-            btn.loading = true;
-            dlg.hide();
-            window.bmbShowBusyModal('Importing…', "This can take a while for large vaults — please don't close this window.");
-            try {
-                var formData = new FormData();
-                formData.append('file', file);
-                var r = await fetch('/api-proxy/import/obsidian', {
-                    method: 'POST',
-                    body: formData
-                });
-                var d = null;
-                try { d = await r.json(); } catch (_) {}
-                window.bmbHideBusyModal();
-                if (r.ok && d) {
-                    var msg = 'Imported ' + (d.articlesCreated || 0) + ' articles, '
-                        + (d.imagesImported || 0) + ' images, '
-                        + (d.filesSkipped || 0) + ' files skipped.';
-                    alert(msg);
-                    window.location.reload();
-                    return;
-                }
-                dlg.show();
-                showError((d && d.error) || 'Import failed');
-            } catch (_) {
-                window.bmbHideBusyModal();
-                dlg.show();
-                showError('Network error. Please try again.');
-            } finally {
-                btn.loading = false;
-            }
-        });
-    }
-})();
-</script>
-
-<script>
-(function() {
-    var btn = document.getElementById('btn-import-bee');
-    var dlg = document.getElementById('dlg-import-bee');
-    var errBox = document.getElementById('import-bee-error');
-    var errMsg = document.getElementById('import-bee-error-msg');
-    var fileInput = document.getElementById('import-bee-file');
-    var pathSelectorRoot = document.getElementById('import-bee-path-selector');
-    var pathSelector = null;
-
-    function showError(msg) {
-        errMsg.textContent = msg || 'Import failed';
-        errBox.style.display = 'block';
-        errBox.open = true;
-    }
-    function clearError() {
-        errBox.style.display = 'none';
-        errMsg.textContent = '';
-    }
-    if (dlg) dlg.addEventListener('sl-show', function() {
-        clearError();
-        fileInput.value = '';
-        pathSelector = window.bmbInitPathSelector({ rootEl: pathSelectorRoot, basePath: '/' });
-    });
-
-    if (btn) {
-        btn.addEventListener('click', async function() {
-            clearError();
-            var file = fileInput.files[0];
-            if (!file) {
-                showError('Please select a ZIP file.');
-                return;
-            }
-            btn.loading = true;
-            dlg.hide();
-            window.bmbShowBusyModal('Importing…', "This can take a while for large vaults — please don't close this window.");
-            try {
-                var formData = new FormData();
-                formData.append('file', file);
-                formData.append('destinationPath', pathSelector ? pathSelector.getEffectivePath() : '/');
-                var r = await fetch('/api-proxy/import/bee', {
-                    method: 'POST',
-                    body: formData
-                });
-                var d = null;
-                try { d = await r.json(); } catch (_) {}
-                window.bmbHideBusyModal();
-                if (r.ok && d) {
-                    var msg = 'Imported into ' + (d.rootFolderPath || '/') + ': '
-                        + (d.foldersCreated || 0) + ' folders, '
-                        + (d.articlesCreated || 0) + ' articles, '
-                        + (d.imagesImported || 0) + ' images.'
-                        + (d.articlesSkippedProtected ? ' ' + d.articlesSkippedProtected + ' password-protected article(s) skipped.' : '');
-                    alert(msg);
-                    window.location.reload();
-                    return;
-                }
-                dlg.show();
-                showError((d && d.error) || 'Import failed');
-            } catch (_) {
-                window.bmbHideBusyModal();
-                dlg.show();
-                showError('Network error. Please try again.');
-            } finally {
-                btn.loading = false;
-            }
-        });
-    }
-})();
-</script>
-
-@section Scripts {
-    <script src="/js/chat.js" asp-append-version="true"></script>
-}
+<script src="/js/pages/tree.js"></script>
+<script src="/js/chat.js" asp-append-version="true"></script>
 </div>

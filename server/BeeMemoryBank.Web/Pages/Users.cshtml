@@ -14,7 +14,7 @@
             <sl-button size="small" variant="default" href="/Roles">
                 <sl-icon slot="prefix" name="shield-lock"></sl-icon> Roles
             </sl-button>
-            <sl-button size="small" variant="success" onclick="openAddUser()">
+            <sl-button size="small" variant="success" id="btn-open-add-user">
                 <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add User
             </sl-button>
         </div>
@@ -73,23 +73,20 @@
                                 {
                                     <sl-icon-button name="shield-lock" label="Folder access"
                                         data-uid="@user.Id" data-name="@user.Username" data-role="@user.Role"
-                                        onclick="openUserFolderAccess(this.dataset.uid, this.dataset.name, this.dataset.role)">
+                                        class="btn-user-folder-access">
                                     </sl-icon-button>
                                 }
                                 <sl-icon-button name="key" label="Change Password"
                                     data-uid="@user.Id" data-name="@user.Username"
-                                    onclick="openChangePassword(this.dataset.uid, this.dataset.name)">
+                                    class="btn-user-change-pw">
                                 </sl-icon-button>
                                 <sl-icon-button name="pencil" label="Edit"
                                     data-uid="@user.Id" data-display="@user.DisplayName" data-role="@user.Role" data-chat-access="@user.ChatAccess.ToString().ToLower()"
-                                    onclick="openEditUser(this.dataset.uid, this.dataset.display, this.dataset.role, this.dataset.chatAccess)">
+                                    class="btn-user-edit">
                                 </sl-icon-button>
-                                @* Gemini review flagged this confirm() as an apostrophe-in-username JS bug — not a bug:
-                                   `this.dataset.name` reads the DOM attribute at runtime, it is not interpolated into
-                                   the onclick source string at build time. Razor HTML-encodes the attribute value
-                                   (`'` → `&#x27;`) so quotes don't break parsing either. Kept as-is. *@
                                 <sl-icon-button name="trash" label="Delete"
-                                    data-name="@user.Username" onclick="if(confirm('Delete user ' + this.dataset.name + '?')) { document.getElementById('form-del-@user.Id').submit(); }">
+                                    data-name="@user.Username" data-form-id="form-del-@user.Id"
+                                    class="btn-user-delete">
                                 </sl-icon-button>
                                 <form id="form-del-@user.Id" method="post" asp-page-handler="Delete" style="display:none;">
                                     <input type="hidden" name="id" value="@user.Id" />
@@ -119,7 +116,7 @@
             This user's password is local to this node only. To allow this user to log in on other nodes,
             add them on each node separately.
         </sl-alert>
-        <form id="form-add-user" onsubmit="return false;">
+        <form id="form-add-user">
             <div style="margin-bottom:16px;">
                 <sl-input id="add-username" name="username" label="Username" required autocomplete="off"></sl-input>
             </div>
@@ -138,8 +135,8 @@
                 </sl-select>
             </div>
         </form>
-        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-add-user').hide()">Cancel</sl-button>
-        <sl-button id="btn-add-user-submit" slot="footer" variant="primary" onclick="submitAddUser()">Create User</sl-button>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-add-user">Cancel</sl-button>
+        <sl-button id="btn-add-user-submit" slot="footer" variant="primary">Create User</sl-button>
     </sl-dialog>
 
     <sl-dialog id="dlg-change-password" label="Change Password">
@@ -147,7 +144,7 @@
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             <span class="msg"></span>
         </sl-alert>
-        <form id="form-change-password" onsubmit="return false;">
+        <form id="form-change-password">
             <input type="hidden" id="cp-user-id" name="id" />
             <p id="cp-user-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
             <div style="margin-bottom:16px;">
@@ -155,8 +152,8 @@
                     help-text="At least 8 characters, with an uppercase letter, a lowercase letter, and a digit."></sl-input>
             </div>
         </form>
-        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-change-password').hide()">Cancel</sl-button>
-        <sl-button id="btn-change-password-submit" slot="footer" variant="primary" onclick="submitChangePassword()">Change Password</sl-button>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-change-password">Cancel</sl-button>
+        <sl-button id="btn-change-password-submit" slot="footer" variant="primary">Change Password</sl-button>
     </sl-dialog>
 
     <sl-dialog id="dlg-edit-user" label="Edit User">
@@ -164,7 +161,7 @@
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             <span class="msg"></span>
         </sl-alert>
-        <form id="form-edit-user" onsubmit="return false;">
+        <form id="form-edit-user">
             <input type="hidden" id="edit-user-id" name="id" />
             <div style="margin-bottom:16px;">
                 <sl-input id="edit-display-name" name="displayName" label="Display Name" required></sl-input>
@@ -188,8 +185,8 @@
                 </p>
             </div>
         </form>
-        <sl-button slot="footer" variant="default" onclick="document.getElementById('dlg-edit-user').hide()">Cancel</sl-button>
-        <sl-button id="btn-edit-user-submit" slot="footer" variant="primary" onclick="submitEditUser()">Save</sl-button>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-edit-user">Cancel</sl-button>
+        <sl-button id="btn-edit-user-submit" slot="footer" variant="primary">Save</sl-button>
     </sl-dialog>
 
     <partial name="_FolderAccessDialog" />
@@ -197,233 +194,4 @@
 </div>
 </div>
 
-<script>
-var chatGloballyEnabled = true;
-fetch('/api-proxy/chat/settings/chat-enabled').then(function (r) { return r.ok ? r.json() : { chatGloballyEnabled: true }; })
-    .then(function (data) {
-        chatGloballyEnabled = !!data.chatGloballyEnabled;
-        var cb = document.getElementById('edit-chat-access');
-        var hint = document.getElementById('edit-chat-access-hint');
-        if (cb) cb.disabled = !chatGloballyEnabled;
-        if (hint) hint.style.display = chatGloballyEnabled ? 'none' : '';
-    }).catch(function () {});
-
-function validatePasswordClient(pwd) {
-    if (!pwd || pwd.length < 8) return 'Password must be at least 8 characters long.';
-    if (!/[A-Z]/.test(pwd)) return 'Password must contain at least one uppercase letter.';
-    if (!/[a-z]/.test(pwd)) return 'Password must contain at least one lowercase letter.';
-    if (!/[0-9]/.test(pwd)) return 'Password must contain at least one digit.';
-    return null;
-}
-
-async function postJson(url, body, method) {
-    var resp = await fetch(url, {
-        method: method || 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-    });
-    if (resp.ok) return { ok: true };
-    // Never a bare "Request failed": if the body is not JSON with an `error`, show the status and
-    // whatever text came back, so an opaque failure is still diagnosable from the dialog.
-    var msg = 'Request failed (HTTP ' + resp.status + ')';
-    try {
-        var text = await resp.text();
-        if (text) {
-            try {
-                var data = JSON.parse(text);
-                if (data && data.error) msg = data.error;
-                else msg += ': ' + text.slice(0, 300);
-            } catch (e) { msg += ': ' + text.slice(0, 300); }
-        }
-    } catch (e) {}
-    return { ok: false, error: msg };
-}
-
-function openAddUser() {
-    hideDlgError('add-user-error');
-    document.getElementById('add-username').value = '';
-    document.getElementById('add-display-name').value = '';
-    document.getElementById('add-password').value = '';
-    document.getElementById('add-role').value = 'user';
-    document.getElementById('dlg-add-user').show();
-    setTimeout(function() { document.getElementById('add-username').focus(); }, 100);
-}
-
-async function submitAddUser() {
-    hideDlgError('add-user-error');
-    var username = document.getElementById('add-username').value.trim();
-    var displayName = document.getElementById('add-display-name').value.trim();
-    var password = document.getElementById('add-password').value;
-    var role = document.getElementById('add-role').value;
-
-    if (!username) { showDlgError('add-user-error', 'Username is required.'); return; }
-    if (!displayName) displayName = username;
-    var pwdErr = validatePasswordClient(password);
-    if (pwdErr) { showDlgError('add-user-error', pwdErr); return; }
-
-    var btn = document.getElementById('btn-add-user-submit');
-    btn.loading = true;
-    var result = await postJson('/api-proxy/users', { username: username, displayName: displayName, password: password, role: role });
-    btn.loading = false;
-    if (result.ok) {
-        window.location = '?msg=' + encodeURIComponent("User '" + username + "' created");
-    } else {
-        showDlgError('add-user-error', result.error);
-    }
-}
-
-function openChangePassword(userId, username) {
-    hideDlgError('change-password-error');
-    document.getElementById('cp-user-id').value = userId;
-    document.getElementById('cp-user-name').textContent = 'User: ' + username;
-    document.getElementById('cp-new-password').value = '';
-    document.getElementById('dlg-change-password').show();
-    setTimeout(function() { document.getElementById('cp-new-password').focus(); }, 100);
-}
-
-async function submitChangePassword() {
-    hideDlgError('change-password-error');
-    var id = document.getElementById('cp-user-id').value;
-    var newPassword = document.getElementById('cp-new-password').value;
-    var pwdErr = validatePasswordClient(newPassword);
-    if (pwdErr) { showDlgError('change-password-error', pwdErr); return; }
-
-    var btn = document.getElementById('btn-change-password-submit');
-    btn.loading = true;
-    var result = await postJson('/api-proxy/users/' + id + '/change-password', { newPassword: newPassword });
-    btn.loading = false;
-    if (result.ok) {
-        window.location = '?msg=' + encodeURIComponent('Password changed');
-    } else {
-        showDlgError('change-password-error', result.error);
-    }
-}
-
-// Role the edit dialog opened with — the promote hint only applies when the pending change
-// would actually promote someone. A user who is already a superadmin has their key slot.
-var editUserOriginalRole = null;
-
-// name -> RoleDto, filled from the API. Empty until the fetch lands; every reader tolerates that.
-var rolesByName = {};
-
-function updatePromoteHint() {
-    var hint = document.getElementById('edit-promote-hint');
-    if (!hint) return;
-    var promoting = document.getElementById('edit-role').value === 'superadmin'
-        && editUserOriginalRole !== 'superadmin';
-    hint.style.display = promoting ? '' : 'none';
-}
-
-// Says where the user's folder rules will come from after the change. Without it, assigning a
-// custom role looks like it does nothing — its rules live on the Roles page, not here.
-function updateRoleHint() {
-    var hint = document.getElementById('edit-role-hint');
-    if (!hint) return;
-    var name = document.getElementById('edit-role').value;
-    var role = rolesByName[name];
-    if (!role || role.isSystem) { hint.style.display = 'none'; return; }
-    hint.textContent = "Folder access comes from the '" + role.displayName + "' role (" +
-        role.ruleCount + (role.ruleCount === 1 ? ' rule' : ' rules') +
-        (role.basePolicy === 'closed' ? ', hidden by default' : '') +
-        '). Edit it on the Roles page.';
-    hint.style.display = '';
-}
-
-document.getElementById('edit-role').addEventListener('sl-change', function () {
-    updatePromoteHint();
-    updateRoleHint();
-});
-
-function optionsHtmlFor(roles) {
-    return roles.map(function (r) {
-        var label = escapeHtml(r.displayName || r.name);
-        if (!r.isSystem) label += ' <small style="opacity:.65;">(' + escapeHtml(r.name) + ')</small>';
-        return '<sl-option value="' + escapeHtml(r.name) + '">' + label + '</sl-option>';
-    }).join('');
-}
-
-// Populate both role dropdowns from the API. The hard-coded superadmin/user options in the
-// markup are the fallback: if this fetch fails the dialogs still work for the built-in roles
-// rather than offering an empty list.
-fetch('/api-proxy/roles').then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (roles) {
-        if (!roles || roles.length === 0) return;
-        roles.forEach(function (r) { rolesByName[r.name] = r; });
-        var html = optionsHtmlFor(roles);
-        ['add-role', 'edit-role'].forEach(function (id) {
-            var sel = document.getElementById(id);
-            if (!sel) return;
-            // Re-applying `value` after swapping the options matters: sl-select clears its value
-            // when the matching option disappears mid-swap.
-            var keep = sel.value;
-            sel.innerHTML = html;
-            sel.value = keep && rolesByName[keep] ? keep : 'user';
-        });
-        updateRoleHint();
-    }).catch(function () {});
-
-// Always the USER's dialog, whichever role they hold — their role's rules appear greyed out
-// alongside their own. For a custom-role user the API refuses to create new per-user rules, so
-// the add row is hidden; existing ones stay listed and removable. Routing those users straight
-// to the role editor instead would hide a rule that is still being enforced: rules created
-// while they were on the built-in role keep applying after a reassignment.
-function openUserFolderAccess(userId, username, roleName) {
-    var managedByRole = roleName && roleName !== 'user' && roleName !== 'superadmin';
-    folderAccess.open('user', userId,
-        managedByRole
-            ? 'User: ' + username + '  —  folder access comes from the ' + roleName + ' role'
-            : 'User: ' + username,
-        { inheritedRole: roleName || 'user', readOnly: managedByRole });
-}
-
-function openEditUser(userId, displayName, role, chatAccess) {
-    hideDlgError('edit-user-error');
-    document.getElementById('edit-user-id').value = userId;
-    document.getElementById('edit-display-name').value = displayName;
-    document.getElementById('edit-role').value = role;
-    editUserOriginalRole = role;
-    updatePromoteHint();
-    updateRoleHint();
-    var cb = document.getElementById('edit-chat-access');
-    var hint = document.getElementById('edit-chat-access-hint');
-    if (cb) {
-        cb.checked = (chatAccess === 'true');
-        cb.disabled = !chatGloballyEnabled;
-    }
-    if (hint) hint.style.display = chatGloballyEnabled ? 'none' : '';
-    document.getElementById('dlg-edit-user').show();
-}
-
-async function submitEditUser() {
-    hideDlgError('edit-user-error');
-    var id = document.getElementById('edit-user-id').value;
-    var displayName = document.getElementById('edit-display-name').value.trim();
-    var role = document.getElementById('edit-role').value;
-    var chatAccess = document.getElementById('edit-chat-access').checked;
-    if (!displayName) { showDlgError('edit-user-error', 'Display Name is required.'); return; }
-
-    var btn = document.getElementById('btn-edit-user-submit');
-    btn.loading = true;
-    var result = await postJson('/api-proxy/users/' + id, { displayName: displayName, role: role, chatAccess: chatAccess }, 'PUT');
-    btn.loading = false;
-    if (result.ok) {
-        window.location = '?msg=' + encodeURIComponent('User updated');
-    } else {
-        showDlgError('edit-user-error', result.error);
-    }
-}
-
-// Enter key submits the active dialog
-['form-add-user', 'form-change-password', 'form-edit-user'].forEach(function(fid) {
-    var handlers = { 'form-add-user': submitAddUser, 'form-change-password': submitChangePassword, 'form-edit-user': submitEditUser };
-    var form = document.getElementById(fid);
-    form.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter' && e.target.tagName && e.target.tagName.toLowerCase() !== 'textarea') {
-            e.preventDefault();
-            handlers[fid]();
-        }
-    });
-});
-
-
-</script>
+<script src="/js/pages/users.js"></script>
