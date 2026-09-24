@@ -79,10 +79,9 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-            // The caller retries this with a fresh suffix, so it needs to recognise it — but the
-            // message used to BE the signal ("username_conflict"), which meant the one message an
-            // operator could actually see, when all the retries ran out, was that machine token.
-            // The type carries the signal now; the message is for humans.
+            // The caller retries this with a fresh suffix, so it needs to recognise it: the
+            // exception TYPE carries that signal, and the message is for humans (it is what an
+            // operator sees when all the retries run out) -- don't turn it into a machine token.
             throw new UsernameConflictException(
                 $"Username '{releasedUsername}' is already taken.", ex);
         }

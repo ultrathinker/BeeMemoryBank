@@ -74,7 +74,7 @@ public sealed record RescueResult(
 }
 
 // ---------------------------------------------------------------------------
-// Tri-state for SQLite file validation (Fix #1)
+// Tri-state for SQLite file validation
 // ---------------------------------------------------------------------------
 
 /// <summary>
@@ -131,11 +131,9 @@ public static class LegacyDataRescue
     // Suffix pattern for *.ready transient files (checked separately, not by exact name).
     private const string ReadySuffix = ".ready";
 
-    // Minimum byte threshold for a "real" SQLite file (checked after magic bytes).
-    // Per spec: SQLite header is sufficient — size > 4096 is optional extra signal.
-    // We do validate both: header magic must be present, and that implicitly means at
-    // least 16 bytes, which is enough. The spec says "> 4096 bytes as minimum signal,
-    // but not hard" — we don't block on size alone, only require valid header.
+    // No minimum-size threshold: the SQLite header magic alone decides whether a file is a
+    // "real" database (which implies at least 16 bytes). File size is at most a weak signal,
+    // so it never blocks a rescue on its own.
 
     // -----------------------------------------------------------------------
     // Public API
@@ -159,7 +157,7 @@ public static class LegacyDataRescue
         // ----------------------------------------------------------------
         var legacyDbPath = Path.Combine(legacyDir, "beememorybank.db");
 
-        // Fix #1: tri-state probe — distinguish "file absent" from "file unreadable".
+        // Tri-state probe — distinguish "file absent" from "file unreadable".
         var legacyStatus = ProbeSqliteFile(legacyDbPath);
 
         if (legacyStatus == SqliteFileStatus.Unreadable)
@@ -183,7 +181,7 @@ public static class LegacyDataRescue
             return RescueResult.NoLegacy();
         }
 
-        // Fix #2: Acquire an exclusive hold on node.lock and keep it open throughout the copy,
+        // Acquire an exclusive hold on node.lock and keep it open throughout the copy,
         // preventing the legacy node from starting between the check and the copy completing.
         var legacyLockPath = Path.Combine(legacyDir, "node.lock");
         FileStream? lockHold = null;
@@ -238,7 +236,7 @@ public static class LegacyDataRescue
         }
         finally
         {
-            // Fix #2: release the lock hold after the copy is fully done (or failed).
+            // Release the lock hold after the copy is fully done (or failed).
             lockHold?.Dispose();
         }
     }
@@ -315,7 +313,7 @@ public static class LegacyDataRescue
                 }
                 else
                 {
-                    // Fix #5: Non-empty target appeared unexpectedly — could be a concurrent rescue
+                    // Non-empty target appeared unexpectedly — could be a concurrent rescue
                     // that already succeeded. Re-validate before treating as failure.
                     var targetDbPath = Path.Combine(targetVaultDir, "beememorybank.db");
                     var recheck = ProbeSqliteFile(targetDbPath);
@@ -390,7 +388,7 @@ public static class LegacyDataRescue
 
         foreach (var subDir in Directory.EnumerateDirectories(sourceDir))
         {
-            // Fix #3: Skip reparse points (junctions/symlinks) to prevent infinite
+            // Skip reparse points (junctions/symlinks) to prevent infinite
             // recursion and runaway disk usage from looped or huge external trees.
             var dirInfo = new DirectoryInfo(subDir);
             if ((dirInfo.Attributes & FileAttributes.ReparsePoint) != 0)
@@ -427,7 +425,7 @@ public static class LegacyDataRescue
     }
 
     /// <summary>
-    /// Fix #1: Three-way probe of a SQLite file path.
+    /// Three-way probe of a SQLite file path.
     /// Distinguishes "file absent" from "file unreadable" from "file valid/invalid".
     /// </summary>
     internal static SqliteFileStatus ProbeSqliteFile(string path)
@@ -479,9 +477,9 @@ public static class LegacyDataRescue
     }
 
     /// <summary>
-    /// Fix #6: Conservative "same database" check. Returns false (different) if ANY of the
+    /// Conservative "same database" check. Returns false (different) if ANY of the
     /// following differ: file size, last-write time, or full-file SHA-256.
-    /// Per spec: when in doubt, treat as different.
+    /// When in doubt, treat as different.
     /// </summary>
     private static bool AreSameDatabase(string pathA, string pathB)
     {
@@ -500,7 +498,7 @@ public static class LegacyDataRescue
                 return false;
             }
 
-            // Fix #6: Hash the ENTIRE file (streaming, not buffered into memory at once)
+            // Hash the ENTIRE file (streaming, not buffered into memory at once)
             // to avoid false-positive "same" decisions on files that differ only beyond 64 KB.
             var hashA = HashFullFile(pathA);
             var hashB = HashFullFile(pathB);
@@ -521,7 +519,7 @@ public static class LegacyDataRescue
     }
 
     /// <summary>
-    /// Fix #6: Computes SHA-256 over the entire file content by streaming it, so that large
+    /// Computes SHA-256 over the entire file content by streaming it, so that large
     /// files are never loaded fully into memory.
     /// </summary>
     private static byte[]? HashFullFile(string path)
@@ -557,8 +555,8 @@ public static class LegacyDataRescue
     }
 
     /// <summary>
-    /// Fix #7: Writes the migration log to BOTH <see cref="BmbPaths.MigrationDir"/> and
-    /// <see cref="BmbPaths.LogsDir"/> as required by the spec (§3.2 point 5).
+    /// Writes the migration log to BOTH <see cref="BmbPaths.MigrationDir"/> and
+    /// <see cref="BmbPaths.LogsDir"/>.
     /// </summary>
     private static void WriteMigrationLog(
         string legacyDir,
@@ -589,7 +587,7 @@ public static class LegacyDataRescue
             var migrationDir = BmbPaths.MigrationDir;
             File.WriteAllText(Path.Combine(migrationDir, $"rescue-{timestamp}.log"), content);
 
-            // Secondary location: logs\ (spec §3.2 point 5)
+            // Secondary location: logs\
             var logsDir = BmbPaths.LogsDir;
             File.WriteAllText(Path.Combine(logsDir, $"rescue-{timestamp}.log"), content);
         }

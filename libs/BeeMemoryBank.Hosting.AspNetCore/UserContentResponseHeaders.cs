@@ -15,8 +15,8 @@ public static class UserContentResponseHeaders
     /// <c>Content-Security-Policy: sandbox</c> — with no allow-tokens — is the load-bearing one.
     /// Uploads accept <c>image/svg+xml</c>, and an SVG document is an active document: script
     /// inside it runs when the file is opened directly by URL. The site's own CSP allows
-    /// <c>script-src 'self' 'unsafe-inline'</c>, and media is served from the same origin that
-    /// holds the session cookie, so a stored SVG was a full session-takeover primitive — a
+    /// same-origin script, and media is served from the same origin that holds the session
+    /// cookie, so without the sandbox a stored SVG is a full session-takeover primitive — a
     /// folder-restricted agent could plant one and have it run in a superadmin's browser.
     /// An empty sandbox denies scripts and drops the response to an opaque origin, closing that
     /// without touching how the file renders: sandbox applies to DOCUMENT loads, and an

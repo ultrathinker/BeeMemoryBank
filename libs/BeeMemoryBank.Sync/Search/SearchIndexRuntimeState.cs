@@ -33,8 +33,8 @@ public sealed class SearchIndexRuntimeState
     // Guards against two overlapping "the persisted index is untrustworthy" triggers (e.g. two
     // segments both failing to load in the same warm-start pass) launching two redundant
     // concurrent full rebuilds. Deliberately not BeeMemoryBank.Api's HeavyOperationLock: that type
-    // is internal to the Api assembly and not reachable from BeeMemoryBank.Sync, and per wp-11.md
-    // this is a narrower, self-contained concern anyway (scoped to just this WP's own rebuild
+    // is internal to the Api assembly and not reachable from BeeMemoryBank.Sync, and this is a
+    // narrower, self-contained concern anyway (scoped to just the search index's own rebuild
     // trigger) that does not need to be unified with the Api-layer coordination primitive that
     // guards snapshot restore / DEK rotation.
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
@@ -48,7 +48,7 @@ public sealed class SearchIndexRuntimeState
     public bool TryBeginWarmStart() => Interlocked.CompareExchange(ref _warmStartAttempted, 1, 0) == 0;
 
     /// <summary>
-    /// WP-18: read-only diagnostic accessor exposing whether the unlock warm-start has already been
+    /// Read-only diagnostic accessor exposing whether the unlock warm-start has already been
     /// attempted this process lifetime (either it loaded persisted segments, or it fell back to a
     /// full rebuild). Lets the admin metrics surface distinguish "index not yet warm-started" from
     /// "warm-started / building from pending" without exposing any of the internal coordination
@@ -64,7 +64,7 @@ public sealed class SearchIndexRuntimeState
         _persistedSegmentIds.TryGetValue(internalSegmentId, out persistedSegmentId);
 
     /// <summary>
-    /// WP-19 (merge persistence): drops one internal-id -> persisted-Guid mapping, called once
+    /// Drops one internal-id -> persisted-Guid mapping, called once
     /// <see cref="SearchIndexLifecycleService.PersistMostRecentlyMergedSegmentAsync"/> has durably
     /// retired that internal id's on-disk manifest/tombstone rows as part of a merge. Unlike the
     /// "a merged-away internal id just stops appearing in future tombstone reports" case this

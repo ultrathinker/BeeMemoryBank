@@ -19,8 +19,8 @@ namespace BeeMemoryBank.Infrastructure.Acme;
 /// does not control the DNS zone (rules out DNS-01). TLS-ALPN-01 answers the challenge over the same
 /// TLS listener (port 443) that already serves real traffic: when the CA connects with the
 /// <c>acme-tls/1</c> ALPN protocol, the listener's certificate selector returns the ephemeral
-/// challenge certificate (registered in <see cref="TlsAlpnChallengeResponder"/>). A separate
-/// front-wiring task plugs <see cref="TlsAlpnChallengeResponder"/> into that selector.
+/// challenge certificate (registered in <see cref="TlsAlpnChallengeResponder"/>), so that selector
+/// must consult <see cref="TlsAlpnChallengeResponder"/> first.
 /// </para>
 /// <para>
 /// <b>Storage.</b> Certs + keys live under <c>&lt;dataDir&gt;/certs/acme/</c>:
@@ -36,14 +36,14 @@ namespace BeeMemoryBank.Infrastructure.Acme;
 /// <b>Renewal.</b> <see cref="CheckRenewalsAsync"/> is the callable renewal operation (it re-issues
 /// any cert whose remaining validity is at or below
 /// <see cref="AcmeOptions.RenewalDaysThreshold"/>). It is deliberately <i>not</i> a timer — the
-/// host-wiring task decides how often to call it.
+/// host decides how often to call it.
 /// </para>
 /// <para>
-/// <b>Verification level (spike).</b> The TLS-ALPN-01 challenge certificate construction and the
-/// storage/renewal logic are covered by offline unit tests. The live ACME protocol round-trip was
-/// <i>not</i> exercised in this environment (no owned domain; production rate limits; no Pebble
-/// available) — see the task report. The <see cref="RequestCertificateAsync"/> flow uses the
-/// verified Certes 3.0.4 API surface but its end-to-end behavior against a live CA is unverified.
+/// <b>Verification level.</b> The TLS-ALPN-01 challenge certificate construction and the
+/// storage/renewal logic are covered by offline unit tests. The live ACME protocol round-trip is
+/// <i>not</i> covered by automated tests (it needs an owned domain; production rate limits; no
+/// Pebble). The <see cref="RequestCertificateAsync"/> flow uses the verified Certes 3.0.4 API
+/// surface but its end-to-end behavior against a live CA is unverified.
 /// </para>
 /// </remarks>
 public sealed class AcmeCertificateService

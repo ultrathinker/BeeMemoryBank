@@ -27,8 +27,7 @@ public class SyncQuarantineRepository(DbConnectionFactory factory) : BaseReposit
         // succession (see the table's own comment on origin_node_id), and SQLite's single-writer
         // model makes this statement atomic without needing an app-level lock. FirstFailedAtUtc is
         // deliberately left OUT of the UPDATE clause — only the INSERT branch sets it, so it never
-        // moves once a row exists, matching SyncEventQuarantine's original in-memory AddOrUpdate
-        // semantics exactly. Only the counter matching THIS attempt's kind is incremented — a
+        // moves once a row exists. Only the counter matching THIS attempt's kind is incremented — a
         // deferred attempt must never advance the permanent counter and vice versa, since the two
         // budgets exist precisely so one kind can't exhaust the other's threshold.
         await conn.ExecuteAsync($@"

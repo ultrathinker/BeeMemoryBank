@@ -105,13 +105,13 @@ public partial class EventApplier
         // Validate that the matching PROPOSED event exists locally before accepting the COMMIT.
         // Without this, a malicious peer with a still-trusted Ed25519 key could craft a
         // dek_rotation_commit referencing an arbitrary ProposedEventId that was never proposed,
-        // bypassing the propose-then-commit protocol. (Found by Kilo R1 security review HIGH-4.)
+        // bypassing the propose-then-commit protocol.
         //
         // CRITICAL: throw (don't return) so ApplyAsync's outer pattern doesn't record the event
         // into tbl_event via AppendIfNotExistsAsync. If we returned, the COMMIT would be marked
         // processed and never retried even when PROPOSED later arrives — peer would be stuck
         // permanently out of sync. Throw → sync caller retries → eventually PROPOSED arrives
-        // first and COMMIT gets accepted on the next delivery. (Found by Gemini R2 prod review.)
+        // first and COMMIT gets accepted on the next delivery.
         var proposedRow = await dekRotationStateRepo.GetAsync(payload.ProposedEventId);
         if (proposedRow == null)
         {

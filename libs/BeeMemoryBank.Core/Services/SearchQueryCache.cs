@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Core.Services;
 
 /// <summary>
 /// Single-flight coalescing + short-TTL result cache for <see cref="SearchService"/>'s query
-/// methods (WP-17).
+/// methods.
 ///
 /// <para>
 /// <b>Why this is a singleton.</b> The cache lives across requests so that concurrent callers in
@@ -27,8 +27,8 @@ namespace BeeMemoryBank.Core.Services;
 /// </para>
 ///
 /// <para>
-/// <b>"Re-run after expiry" without eager removal.</b> The brief asks that a fresh call after the
-/// in-flight work settles re-executes rather than forever serving the settled task. This design
+/// <b>"Re-run after expiry" without eager removal.</b> A fresh call after the in-flight work
+/// settles must re-execute rather than forever serve the settled task. This design
 /// keeps the settled entry (it is now the TTL cache) and instead <em>replaces</em> it atomically
 /// (via <see cref="ConcurrentDictionary{TKey,TValue}.TryUpdate"/>) when a caller finds it expired.
 /// The effect is identical — a post-expiry call recomputes — but without the race, and the settled
@@ -44,8 +44,8 @@ namespace BeeMemoryBank.Core.Services;
 /// </para>
 ///
 /// <para>
-/// <b>Invalidation.</b> Freshness is bounded solely by <see cref="_ttl"/> (default 30s). See the
-/// WP-17 report for why a proactive write-hook was rejected: the obvious candidate (the Lamport
+/// <b>Invalidation.</b> Freshness is bounded solely by <see cref="_ttl"/> (default 30s). There is
+/// deliberately no proactive write-hook: the obvious candidate (the Lamport
 /// clock) does NOT tick on concept-tag mutations, which DO affect FTS5 search results, so it is an
 /// incomplete invalidation signal. A clean, honest TTL is preferred over a fragile half-signal.
 /// </para>
@@ -53,7 +53,7 @@ namespace BeeMemoryBank.Core.Services;
 public sealed class SearchQueryCache
 {
     /// <summary>
-    /// Default result TTL. 30s sits at the top of the brief's suggested 20-30s range: long enough
+    /// Default result TTL. 30s is long enough
     /// to absorb a read burst (several users/agents issuing the same popular query back-to-back)
     /// and let both single-flight and the TTL cache pay off, short enough that a user re-running a
     /// search shortly after an edit sees fresh results within "feels live" time for a 20-user

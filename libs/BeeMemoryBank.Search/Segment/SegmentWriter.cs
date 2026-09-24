@@ -6,8 +6,8 @@ namespace BeeMemoryBank.Search.Segment;
 /// <summary>
 /// Builds an immutable "BMBI" inverted-index segment from an in-memory set of documents and their
 /// already-tokenized terms. Pure in-memory, single allocation of the final result: no file I/O,
-/// no encryption, no SQLite -- persistence to disk and encryption of that persisted form are later
-/// work packages' job, not this one's.
+/// no encryption, no SQLite -- persisting and encrypting the result is the caller's job
+/// (<c>EncryptedSegmentStore</c>).
 ///
 /// <para>
 /// Byte layout (all multi-byte integers little-endian; see <see cref="SegmentLayout"/> for the
@@ -43,17 +43,14 @@ namespace BeeMemoryBank.Search.Segment;
 /// </code>
 ///
 /// <para>
-/// <b>Deviation from the original design sketch:</b> the term dictionary record grew from 20 to
-/// 28 bytes (adding termTextOffset/termTextLength), and postingsOffset/termTextOffset are absolute
-/// segment offsets rather than block-relative. This implements collision-handling choice (a) from
-/// the design brief: since termHash is a lossy 64-bit digest, two distinct terms can in theory
-/// collide, and colliding terms sort into adjacent dictionary entries. Storing each term's actual
-/// UTF-8 text lets <see cref="SegmentReader"/> disambiguate by exact byte comparison instead of
-/// silently treating the hash as a unique key and merging two unrelated terms' postings (choice
-/// (b) from the brief) -- correctness over the extra ~8-12 bytes/term this costs. Absolute offsets
-/// were chosen over block-relative ones purely to keep the reader simple: every offset is
-/// self-sufficient, so there is no separate "where does block X start" bookkeeping to keep in sync
-/// with the writer.
+/// <b>Why each term record carries the term text, and why offsets are absolute:</b> termHash is a
+/// lossy 64-bit digest, so two distinct terms can in theory collide (colliding terms sort into
+/// adjacent dictionary entries). Storing each term's actual UTF-8 text (termTextOffset/termTextLength)
+/// lets <see cref="SegmentReader"/> disambiguate by exact byte comparison instead of treating the
+/// hash as a unique key and silently merging two unrelated terms' postings -- correctness over the
+/// extra ~8-12 bytes/term. postingsOffset/termTextOffset are absolute segment offsets rather than
+/// block-relative to keep the reader simple: every offset is self-sufficient, so there is no
+/// separate "where does block X start" bookkeeping to keep in sync with the writer.
 /// </para>
 ///
 /// <para>

@@ -8,7 +8,7 @@ namespace BeeMemoryBank.Search.Indexing;
 /// <paramref name="ArticleId"/>'s occurrence tombstoned. <paramref name="SegmentId"/> is
 /// <see cref="SealedSegment"/>'s own internal, process-lifetime-only id -- it means nothing outside
 /// this <see cref="IndexBuilder"/> instance. A caller that separately persists sealed segments to
-/// disk (WP-11's <c>SearchIndexLifecycleService</c>) is expected to keep its own mapping from this
+/// disk (<c>SearchIndexLifecycleService</c>) is expected to keep its own mapping from this
 /// id to whatever external identifier (e.g. a Guid) it used when it persisted that segment, so it
 /// can write a durable tombstone row against the right file. <see cref="IndexBuilder"/> itself has
 /// no concept of persistence -- this is purely a correlation key, returned synchronously (not
@@ -142,7 +142,7 @@ public sealed class IndexBuilder
     private readonly Dictionary<Guid, HotBufferEntry> _hotBuffer = new();
     private int _nextSegmentId;
 
-    // WP-11: the most recently sealed segment's raw bytes, kept around purely so a caller can
+    // The most recently sealed segment's raw bytes, kept around purely so a caller can
     // persist it right after the AddOrUpdateDocument call that triggered the seal (see
     // GetMostRecentlySealedSegmentForPersistence). Only ever reflects the LAST seal -- callers
     // avoid missing an earlier one by checking SealCount before/after every single
@@ -152,15 +152,11 @@ public sealed class IndexBuilder
     private int _lastSealedSegmentId;
     private int _lastSealedSegmentDocumentCount;
 
-    // WP-19 (merge persistence): the merge twin of the three fields just above -- same "only ever
-    // reflects the LAST merge" contract as _lastSealedSegmentBytes, for the same reason
-    // (GetMostRecentlyMergedSegmentForPersistence's own doc comment spells out why that is safe for
-    // a caller that checks MergeCount before/after every single call that can trigger a merge --
-    // AddOrUpdateDocument, RemoveDocument, or AdoptPersistedSegment -- each of which runs
-    // MaybeMergeLocked at most once). Starts null (no merge has ever happened); once non-null it
-    // stays non-null (a merge that happens to leave zero surviving documents still records a
-    // MergedSegmentPersistenceInfo with a null NewSegment -- see that type's own doc comment -- so
-    // this field's null-ness alone distinguishes "no merge yet" from "the last merge kept nothing").
+    // The merge twin of the three fields above, with the same "only reflects the LAST merge"
+    // contract: safe because callers check MergeCount before/after every call that can trigger a
+    // merge (AddOrUpdateDocument, RemoveDocument, AdoptPersistedSegment), and each runs
+    // MaybeMergeLocked at most once. Null means "no merge yet"; once set it stays non-null, since a
+    // merge that kept nothing still records a MergedSegmentPersistenceInfo with a null NewSegment.
     private MergedSegmentPersistenceInfo? _lastMergedInfo;
 
     // The copy-on-write published view of sealed segments. Always replaced wholesale (never
@@ -238,7 +234,7 @@ public sealed class IndexBuilder
     /// ends up with both stale and fresh postings matching afterward.
     /// </summary>
     /// <returns>
-    /// WP-11: every currently-live sealed segment that had <paramref name="articleId"/>'s prior
+    /// Every currently-live sealed segment that had <paramref name="articleId"/>'s prior
     /// occurrence tombstoned as a side effect of this call (empty if the article had no prior
     /// occurrence in any sealed segment). See <see cref="SegmentTombstoneEvent"/> for how a caller
     /// that persists segments to disk is expected to use this.
@@ -322,7 +318,7 @@ public sealed class IndexBuilder
     }
 
     /// <summary>
-    /// WP-12: BM25 term-frequency saturation parameter. 1.2 is the classic default from Robertson &amp;
+    /// BM25 term-frequency saturation parameter. 1.2 is the classic default from Robertson &amp;
     /// Zaragoza, "The Probabilistic Relevance Framework: BM25 and Beyond" (2009) -- the standard
     /// reference for BM25 defaults, also used unchanged by Lucene/Elasticsearch's BM25Similarity.
     /// Controls how quickly additional occurrences of a term stop adding to its score (higher = more
@@ -331,27 +327,21 @@ public sealed class IndexBuilder
     private const double Bm25K1 = 1.2;
 
     /// <summary>
-    /// WP-12: BM25 document-length normalization parameter. 0.75 is the same source's classic
+    /// BM25 document-length normalization parameter. 0.75 is the same source's classic
     /// default. 0 disables length normalization entirely; 1 fully normalizes by document length.
     /// </summary>
     private const double Bm25B = 0.75;
 
-    // WP-12: running total of term occurrences (with duplicates -- i.e. summed document lengths)
-    // across every document ever folded into a currently-live sealed segment, maintained
-    // incrementally by SealLocked/MergeLocked at essentially zero extra cost (both already hold
-    // every sealed document's full term list in hand at the moment they compute this), and by
-    // AdoptPersistedSegment (WP-11's warm-start path -- a one-time O(that segment's postings) walk
-    // paid once at adoption, since a segment reloaded from disk was never sealed/merged in THIS
-    // process's lifetime and would otherwise silently contribute 0 here despite being just as live
-    // as a freshly-sealed one; see that method's own comment for why this matters in practice, not
-    // just in theory). This is the numerator SearchRanked uses to approximate the corpus's average
-    // document length -- see that method's doc comment for exactly how precise this is and where it
-    // goes stale between merges (a tombstoned sealed document's length is not subtracted here until
-    // the next merge recomputes this field exactly from the surviving population).
+    // Running total of term occurrences (with duplicates, i.e. summed document lengths) across every
+    // document in a currently-live sealed segment. Maintained by SealLocked/MergeLocked (which already
+    // hold every term list) and by AdoptPersistedSegment (a one-time postings walk: a segment reloaded
+    // from disk is just as live as a freshly sealed one and must contribute too). SearchRanked's avgdl
+    // numerator. Goes stale between merges: a tombstoned sealed document's length stays counted until
+    // the next merge recomputes this exactly from the surviving population.
     private long _sealedTotalTermOccurrencesApprox;
 
     /// <summary>
-    /// WP-12: ranks documents matching every one of <paramref name="stemmedTerms"/> (implicit AND --
+    /// Ranks documents matching every one of <paramref name="stemmedTerms"/> (implicit AND --
     /// see remarks) by BM25 score, across both the hot buffer and every sealed segment, and returns
     /// the top <paramref name="topK"/> by descending score. <paramref name="stemmedTerms"/> must
     /// already be tokenized+stemmed by the caller exactly like <see cref="Lookup"/> requires -- this
@@ -361,8 +351,8 @@ public sealed class IndexBuilder
     /// <remarks>
     /// <para>
     /// <b>Multi-term semantics: implicit AND.</b> A document is only a candidate at all if it
-    /// contains every distinct term in <paramref name="stemmedTerms"/> -- matching WP-07's identical
-    /// choice for FTS metadata search (see <c>FtsQueryBuilder</c>), for consistency across
+    /// contains every distinct term in <paramref name="stemmedTerms"/> -- matching the identical
+    /// choice made for FTS metadata search (see <c>FtsQueryBuilder</c>), for consistency across
     /// BeeMemoryBank's two independent search subsystems. Duplicate terms in the input are
     /// deduplicated before matching; a repeated query word does not change which documents qualify
     /// or get scored twice for the same term.
@@ -410,13 +400,11 @@ public sealed class IndexBuilder
     /// </description></item>
     /// <item><description>
     /// For a sealed-segment document, <c>|D|</c> is not retrievable at all without that full scan
-    /// (the segment format stores postings, not per-document lengths -- and this WP does not modify
-    /// that fixed format). This method assumes such a document has exactly the corpus's average
+    /// (the fixed segment format stores postings, not per-document lengths). This method assumes such a document has exactly the corpus's average
     /// length, i.e. <c>|D| = avgdl</c>, which makes its length-normalization factor
     /// <c>(1 - b + b*|D|/avgdl)</c> collapse to exactly <c>1</c> -- equivalent to scoring it with
     /// length normalization turned off. This under-rewards long-but-genuinely-more-relevant sealed
-    /// documents and under-penalizes short ones relative to true BM25, but per the brief's own
-    /// framing, BM25 rankings are usually reasonably robust to this kind of length-normalization
+    /// documents and under-penalizes short ones relative to true BM25, but BM25 rankings are usually reasonably robust to this kind of length-normalization
     /// slack, and it is far better than paying an O(corpus) cost per query.
     /// </description></item>
     /// <item><description>
@@ -618,10 +606,10 @@ public sealed class IndexBuilder
     /// Efficiency-only reimplementation of <see cref="SearchRankedReference"/>. For any query, it
     /// returns results that are bit-for-bit identical to that authoritative reference -- the same
     /// articleIds, the same BM25 scores, and the same descending-score order including tie ordering --
-    /// while avoiding the reference's per-posting cost that made broad or common-term queries slow and
-    /// allocation-heavy at 100k-article scale. This is a pure performance refactor; the scoring
-    /// contract (implicit-AND, the exact BM25 arithmetic, N/avgdl/df, the hot-buffer-exact-length vs
-    /// sealed-length-1.0 rule, tombstone filtering) is unchanged and documented on the reference.
+    /// while avoiding the reference's per-posting cost, which makes broad or common-term queries slow
+    /// and allocation-heavy at 100k-article scale. The scoring contract (implicit-AND, the exact BM25
+    /// arithmetic, N/avgdl/df, the hot-buffer-exact-length vs sealed-length-1.0 rule, tombstone
+    /// filtering) is the reference's and is documented there.
     /// <para>
     /// <b>How it stays identical.</b> It computes the exact same scalar inputs -- <c>N</c>
     /// (corpusSize), <c>avgdl</c>, and each term's exact live <c>df</c> -- and scores the exact same
@@ -653,7 +641,7 @@ public sealed class IndexBuilder
     /// <item><description><see cref="Segment.SegmentReader.GetDocument"/> (a Guid construction) is
     /// called ONLY for the &lt;= <paramref name="topK"/> survivors, never once per posting.</description></item>
     /// </list>
-    /// The concurrency-safety pattern is unchanged: the hot buffer and
+    /// The concurrency-safety pattern matches the reference: the hot buffer and
     /// <see cref="_sealedTotalTermOccurrencesApprox"/> are snapshotted under <see cref="_writeLock"/>,
     /// and <see cref="_sealedSegments"/> is read once via its single volatile access.
     /// </para>
@@ -1070,7 +1058,7 @@ public sealed class IndexBuilder
     /// and to fully enumerate afterward, concurrently with writes on another thread (including
     /// merges): the returned list and its entries never change underneath the caller, because a
     /// merge always publishes a brand-new list/segments rather than mutating a previously-published
-    /// one. This is the primitive a future query engine would fan a multi-term query out across.
+    /// one. This is the primitive a query engine fans a multi-term query out across.
     /// </summary>
     public IReadOnlyList<SealedSegmentSnapshot> GetSealedSegments()
     {
@@ -1106,7 +1094,7 @@ public sealed class IndexBuilder
     /// segment's tombstone set changed as a result.
     /// </summary>
     /// <returns>
-    /// WP-11: one <see cref="SegmentTombstoneEvent"/> per segment actually tombstoned by this call,
+    /// One <see cref="SegmentTombstoneEvent"/> per segment actually tombstoned by this call,
     /// or null if none were (kept nullable internally to avoid an allocation on the common
     /// no-prior-occurrence path; the public AddOrUpdateDocument/RemoveDocument callers normalize
     /// null to an empty list).
@@ -1155,8 +1143,7 @@ public sealed class IndexBuilder
         var vocabulary = new HashSet<string>();
         var articleToDocId = new Dictionary<Guid, int>(_hotBuffer.Count);
 
-        // WP-12: accumulated alongside the existing per-document work above at essentially zero
-        // extra cost -- see SearchRanked's remarks for how this feeds the avgdl approximation.
+        // Accumulated alongside the per-document work below at essentially zero extra cost -- see SearchRanked's remarks for how this feeds the avgdl approximation.
         long sealedLength = 0;
 
         int docId = 0;
@@ -1191,7 +1178,7 @@ public sealed class IndexBuilder
     }
 
     /// <summary>
-    /// WP-11: returns the most recently sealed segment's own id, raw bytes, and document count, or
+    /// Returns the most recently sealed segment's own id, raw bytes, and document count, or
     /// null if no seal has ever happened. A narrow accessor for a caller that wants to persist a
     /// freshly sealed segment to disk (see <c>EncryptedSegmentStore.StoreAsync</c>) right after the
     /// <see cref="AddOrUpdateDocument"/> call that triggered it -- the caller's own before/after
@@ -1212,7 +1199,7 @@ public sealed class IndexBuilder
     }
 
     /// <summary>
-    /// WP-19: the merge-persistence twin of <see cref="GetMostRecentlySealedSegmentForPersistence"/>
+    /// The merge-persistence twin of <see cref="GetMostRecentlySealedSegmentForPersistence"/>
     /// -- returns the most recent merge's output segment (if it produced one) plus the internal ids
     /// of every input segment that merge consumed, or null if no merge has ever happened in this
     /// builder's lifetime. A caller that persists segments to disk uses this to durably replace the
@@ -1234,25 +1221,18 @@ public sealed class IndexBuilder
     /// it checks per-adopt rather than once at the end of its loop).
     /// </para>
     /// <para>
-    /// <b>Residual gap, not closed by this WP:</b> a single <see cref="AddOrUpdateDocument"/> call
-    /// can -- in principle -- trigger two merges back to back: one from
-    /// <see cref="RetireExistingOccurrenceLocked"/>'s own tombstone-fraction check (run first, before
-    /// the new content is even added to the hot buffer), and a second from <see cref="SealLocked"/>'s
-    /// trailing <see cref="MaybeMergeLocked"/> call if adding the new seal on top of the first
-    /// merge's single output segment ALSO happens to cross the count threshold. Under this class's
-    /// documented defaults (<see cref="DefaultMergeSegmentCountThreshold"/> = 8) this second trigger
-    /// can never actually fire in the same call -- a merge always collapses the sealed-segment list
-    /// down to exactly one segment, and adding one more via a single seal can only ever bring the
-    /// count to two, nowhere near crossing a threshold of 8 -- so it is unreachable with realistic
-    /// configuration. It would require an artificially tiny
-    /// <paramref name="mergeSegmentCountThreshold"/> (effectively 1) to reach, which no caller in
-    /// this codebase configures. Because <see cref="AddOrUpdateDocument"/> is one atomic call from
-    /// its caller's perspective, there is no way for that caller to check <see cref="MergeCount"/>
-    /// between the two internal merge triggers the way <c>EnsureWarmStartedAsync</c> checks between
-    /// its own per-segment adopt calls -- closing this would need a different return shape from
-    /// <see cref="AddOrUpdateDocument"/> itself, out of this WP's scope. Documented here, exactly
-    /// like the sibling "Gap 2" residual gap already documented on
-    /// <c>SearchIndexLifecycleService.PersistTombstonesAsync</c>, rather than silently left unstated.
+    /// <b>Residual gap:</b> a single <see cref="AddOrUpdateDocument"/> call can in principle trigger
+    /// two merges back to back: one from <see cref="RetireExistingOccurrenceLocked"/>'s
+    /// tombstone-fraction check (run before the new content reaches the hot buffer), and a second
+    /// from <see cref="SealLocked"/>'s trailing <see cref="MaybeMergeLocked"/> if the new seal on top
+    /// of the first merge's single output segment also crosses the count threshold. A merge always
+    /// leaves exactly one segment and one seal makes it two, so this needs an artificially tiny
+    /// <paramref name="mergeSegmentCountThreshold"/> (effectively 1) that no caller configures; with
+    /// the default (<see cref="DefaultMergeSegmentCountThreshold"/> = 8) it is unreachable. The caller
+    /// cannot check <see cref="MergeCount"/> between the two internal triggers (the way
+    /// <c>EnsureWarmStartedAsync</c> checks between adopt calls); closing this would need a different
+    /// return shape from <see cref="AddOrUpdateDocument"/>. See the sibling residual gap documented on
+    /// <c>SearchIndexLifecycleService.PersistTombstonesAsync</c>.
     /// </para>
     /// </summary>
     public MergedSegmentPersistenceInfo? GetMostRecentlyMergedSegmentForPersistence()
@@ -1264,7 +1244,7 @@ public sealed class IndexBuilder
     }
 
     /// <summary>
-    /// WP-11: folds a segment reloaded from disk (via <c>EncryptedSegmentStore.LoadAsync</c> plus a
+    /// Folds a segment reloaded from disk (via <c>EncryptedSegmentStore.LoadAsync</c> plus a
     /// fresh <see cref="Segment.SegmentReader"/> over its decrypted bytes) back into this
     /// <see cref="IndexBuilder"/>'s live sealed-segment list, so its content is immediately
     /// findable without waiting for a reindex. Reconstructs the <c>Vocabulary</c>/<c>ArticleToDocId</c>
@@ -1301,21 +1281,12 @@ public sealed class IndexBuilder
             articleIdByDocId[docId] = articleId;
         }
 
-        // WP-12 fix: SearchRanked's avgdl approximation relies on _sealedTotalTermOccurrencesApprox
-        // covering every currently-live sealed segment, not just ones this process produced itself
-        // via SealLocked/MergeLocked. An adopted segment -- folded in here from persisted disk
-        // content, which is what happens on every normal warm-start after a restart, not just some
-        // edge case -- is exactly as "currently sealed" as a freshly-built one, so it must
-        // contribute its live documents' total length here too. Skipping this would leave
-        // _sealedTotalTermOccurrencesApprox at whatever it was before adoption (typically 0 right
-        // after a fresh process start), making avgdl computed far too low whenever adopted content
-        // dominates the corpus -- which artificially inflates the length-normalization ratio for
-        // hot-buffer documents (whose lengths ARE exact) relative to sealed documents (always scored
-        // at lengthRatio == 1 regardless), skewing rankings between the two tiers. This is a one-time
-        // O(this segment's postings) walk paid once at adoption time -- not per query -- so it does
-        // not violate SearchRanked's own "must not scale with corpus size per query" constraint; it
-        // costs no more than the vocabulary/articleToDocId reconstruction just above, which already
-        // pays a similar one-time price.
+        // SearchRanked's avgdl relies on _sealedTotalTermOccurrencesApprox covering EVERY live sealed
+        // segment, and adoption is the normal warm-start path after every restart, so an adopted
+        // segment must contribute its live documents' length too. Otherwise avgdl is far too low
+        // whenever adopted content dominates, inflating the length ratio of hot-buffer documents
+        // (exact lengths) relative to sealed ones (always lengthRatio == 1) and skewing rankings
+        // between the two tiers. This is a one-time O(postings) walk at adoption, not per query.
         long adoptedTermOccurrences = 0;
         foreach (string term in vocabulary)
         {
@@ -1387,8 +1358,8 @@ public sealed class IndexBuilder
     /// documents. This is the crux of the "no re-tokenizing" requirement: segments only ever store
     /// terms and postings, never the original plaintext, so a merge cannot re-run the tokenizer even
     /// if it wanted to. Instead, for every segment being merged, it walks that segment's known
-    /// <see cref="SealedSegment.Vocabulary"/> (captured at seal time, since <see cref="SegmentReader"/>
-    /// itself has no "enumerate every term" method) and for each term reads its postings
+    /// <see cref="SealedSegment.Vocabulary"/> (captured at seal time, or rebuilt from
+    /// <see cref="SegmentReader.EnumerateTerms"/> on adoption) and for each term reads its postings
     /// (<c>docId</c>, <c>termFrequency</c>) via <see cref="SegmentReader.GetPostings"/>, translates
     /// each posting's local <c>docId</c> back to a real <see cref="SegmentReader.GetDocument"/>
     /// (articleId, folderId), skips it if that articleId is tombstoned in this segment, and
@@ -1450,12 +1421,10 @@ public sealed class IndexBuilder
             _sealedTotalTermOccurrencesApprox = 0;
             MergeCount++;
 
-            // WP-19: every input segment's every document was tombstoned -- there is no surviving
-            // content to write anywhere, but a caller that persists segments still needs to know
-            // these inputs are now moot so it can retire their on-disk manifest/tombstone rows (see
-            // MergedSegmentPersistenceInfo.NewSegment's own doc comment for why null is the correct
-            // signal here, not an empty/zero-doc segment -- there is a real difference between "an
-            // empty segment exists" and "no new segment was produced").
+            // Every input document was tombstoned: nothing survives to write, but a caller that
+            // persists segments still needs to know these inputs are moot so it can retire their
+            // on-disk manifest/tombstone rows. A null NewSegment (not an empty segment) is the signal
+            // for "no new segment was produced".
             _lastMergedInfo = new MergedSegmentPersistenceInfo(null, segments.Select(s => s.Id).ToList());
             return;
         }
@@ -1464,7 +1433,7 @@ public sealed class IndexBuilder
         var mergedVocabulary = new HashSet<string>();
         var mergedArticleToDocId = new Dictionary<Guid, int>(termFrequenciesByArticle.Count);
 
-        // WP-12: recomputed exactly from the surviving (live) population -- this is the point where
+        // Recomputed exactly from the surviving (live) population -- this is the point where
         // any staleness accumulated since the last seal/merge (from documents tombstoned out of a
         // sealed segment without yet being physically removed) is corrected back to exact. See
         // SearchRanked's remarks.
@@ -1503,12 +1472,9 @@ public sealed class IndexBuilder
         _sealedSegments = [mergedSegment];
         MergeCount++;
 
-        // WP-19: record this merge's output for a caller that durably persists segments to disk --
-        // see GetMostRecentlyMergedSegmentForPersistence's own doc comment for the full contract.
-        // `segments` (this method's own parameter) is exactly the input list MaybeMergeLocked
-        // captured before calling here, i.e. every SealedSegment this merge consumed -- its `.Id`
-        // values are what the caller looks up against its own internal-id -> persisted-Guid map to
-        // know which on-disk rows this merge just made moot.
+        // Record this merge's output for a caller that durably persists segments (contract on
+        // GetMostRecentlyMergedSegmentForPersistence). `segments` is every SealedSegment this merge
+        // consumed; the caller maps their ids to persisted Guids to retire the now-moot on-disk rows.
         _lastMergedInfo = new MergedSegmentPersistenceInfo(
             new SealedSegmentPersistenceInfo(mergedSegment.Id, mergedBytes, mergedDocs.Count),
             segments.Select(s => s.Id).ToList());

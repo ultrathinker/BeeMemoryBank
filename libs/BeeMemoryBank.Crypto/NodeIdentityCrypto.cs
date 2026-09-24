@@ -53,7 +53,8 @@ public static class NodeIdentityCrypto
 
     /// <summary>
     /// Decrypts the node's private key, signs the payload, clears the plaintext seed.
-    /// Use this in callsites that previously did Ed25519Signer.Sign(identity.Ed25519PrivateKey, ...).
+    /// Use this instead of passing identity.Ed25519PrivateKey to Ed25519Signer.Sign directly: a v=1
+    /// stored key is ciphertext.
     /// Caller still owns masterDek lifecycle.
     /// </summary>
     public static byte[] SignWithIdentity(

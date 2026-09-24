@@ -25,9 +25,9 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
                 // Ask the DB "is there any (visible) article at or under this root?" instead of
                 // loading the ENTIRE vault and scanning it in memory just to answer it for a handful
                 // of system roots. CountAsync pushes the same treePath narrowing and ACL filter into
-                // SQL that ListAsync does (item 10), so this stays correct per-caller while dropping
-                // an O(vault) materialisation from every /api/tree call — the last full-vault load on
-                // that path. Bounded work: one count per system root, and there are only a few.
+                // SQL that ListAsync does, so this stays correct per-caller without an O(vault)
+                // materialisation on every /api/tree call. Bounded work: one count per system root,
+                // and there are only a few.
                 var hasArticle = await articleRepo.CountAsync(root) > 0;
                 if (!hasArticle)
                     hiddenSystemPaths.Add(root);
@@ -84,16 +84,14 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
         int? limit = null,
         int offset = 0)
     {
-        // Same fetch + scope semantics as the legacy BeeReadTools.GetTree inline implementation:
-        // both articles and folders are path-filtered (subtree prefix) AND ACL-filtered directly
-        // in SQL now (see ArticleRepository.ListAsync / FolderRepository.GetAllActiveAsync) rather
-        // than fetching the whole vault and filtering here — this is the fix for "a scoped or
-        // restricted bee_get_tree call still materialized every row in the vault". The
-        // PathFilterMatches re-check below stays in place regardless: it is the pre-existing,
-        // authoritative subtree filter (its own StartsWith-based semantics), and re-applying it to
-        // an already-narrowed result is a cheap no-op that keeps this method's observable behavior
-        // byte-for-byte unchanged even if the SQL-side prefix match and the C# one ever disagreed
-        // on some edge case.
+        // Same fetch + scope semantics as the legacy BeeReadTools.GetTree inline implementation,
+        // but both articles and folders are path-filtered (subtree prefix) AND ACL-filtered in SQL
+        // (see ArticleRepository.ListAsync / FolderRepository.GetAllActiveAsync), so a scoped or
+        // restricted bee_get_tree call never materializes every row in the vault. The
+        // PathFilterMatches re-check below stays regardless: it is the authoritative subtree
+        // filter (its own StartsWith-based semantics), and re-applying it to an already-narrowed
+        // result is a cheap no-op that keeps observable behavior byte-for-byte stable even if the
+        // SQL-side prefix match and the C# one ever disagree on some edge case.
         var articles = await articleRepo.ListAsync(path);
         var folders = await folderRepo.GetAllActiveAsync(path);
 
@@ -194,16 +192,15 @@ public class TreeService(IArticleRepository articleRepo, IFolderRepository folde
         var childFolders = await folderRepo.GetChildrenAsync(parentPathForQuery);
 
         // For the system-folder hide check we need EVERY active folder, not just
-        // direct siblings — checking inside childFolders alone (gemini round-3
-        // bug) would always return false and hide non-empty `_Drafts` whenever
-        // its content lives in subfolders rather than directly under it.
+        // direct siblings — checking inside childFolders alone would always
+        // return false and hide non-empty `_Drafts` whenever its content lives
+        // in subfolders rather than directly under it.
         var allFoldersForHide = await folderRepo.GetAllActiveAsync();
 
         // Recursive article count per child folder via CountAsync — same at-or-under-prefix
-        // semantics and the same ACL/treePath SQL as ListAsync (item 10), so it stays correct
-        // per-caller while dropping the full-vault materialisation this method used to do on every
-        // /api/tree/children call. Bounded work: one count per child folder at this one level,
-        // never the whole tree.
+        // semantics and the same ACL/treePath SQL as ListAsync, so it stays correct per-caller
+        // without a full-vault materialisation on every /api/tree/children call. Bounded work: one
+        // count per child folder at this one level, never the whole tree.
         var folders = new List<FolderInfo>();
         foreach (var f in childFolders.OrderBy(f => f.Name, UnderscoreFirstComparer.Instance))
         {

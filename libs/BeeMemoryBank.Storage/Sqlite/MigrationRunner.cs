@@ -41,8 +41,8 @@ public class MigrationRunner
         //       happens when a later squash reassigns numbers (e.g. old v3 was
         //       '003_add_hash_fail_count' but the current v3 is '003_system_folders').
         //       Same number does NOT mean same schema change — comparing by version
-        //       alone made the runner believe the migration was applied and the new
-        //       statements never ran, producing schema drift like a missing column.
+        //       alone would treat the migration as applied and never run the new
+        //       statements, producing schema drift like a missing column.
         // Either way: drop the row, the main loop below re-applies the current file.
         // IsIdempotentError handles overlap with statements that already ran.
         var assemblyByVersion = new Dictionary<int, string>();
@@ -102,7 +102,7 @@ public class MigrationRunner
             //                              unrelated child tables to `REFERENCES parent_old(id)`,
             //                              and when we then DROP parent_old the children are
             //                              left with dangling FKs pointing at a non-existent
-            //                              table. This bit us in old migration 020.
+            //                              table.
             bool needsFkOff = sqlStatements.Any(s =>
                 s.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) ||
                 s.Contains("RENAME TO", StringComparison.OrdinalIgnoreCase));

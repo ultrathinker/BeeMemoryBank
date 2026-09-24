@@ -46,19 +46,17 @@ public class LazySlotRewrapService(
             {
                 // The local copy first, the event log only as a fallback.
                 //
-                // This walk used to read the dek_rotation_commit event out of tbl_event, and those
-                // rows do not survive: CompactionService deletes everything at or below the
-                // checkpoint, and the initiator compacts automatically right after rotating. Once
-                // the row was gone the chain could not be walked, reachedTarget stayed false, and
-                // the user whose slot needed re-wrapping could never unlock this node again. The
-                // material now lives in tbl_dek_rotation_state, written in the same statement that
-                // marked the rotation Applied (see DekRewrapper and migration 020) -- a local table
-                // that is never synced and that nothing compacts.
+                // Do not rely on the dek_rotation_commit event in tbl_event: CompactionService
+                // deletes everything at or below the checkpoint, and the initiator compacts right
+                // after rotating. Once that row is gone the chain cannot be walked, reachedTarget
+                // stays false, and the user whose slot needs re-wrapping can never unlock this node
+                // again. The material lives in tbl_dek_rotation_state, written in the same
+                // statement that marked the rotation Applied (see DekRewrapper and migration 020)
+                // -- a local table that is never synced and that nothing compacts.
                 //
                 // The fallback is not dead code: rotations applied before migration 020 have no
                 // local copy and never will, so for those the event log is still the only source.
-                // If it has already been compacted away, they are in exactly the state they were
-                // in before this change -- no worse, and nothing here can make them better.
+                // If it has already been compacted away, nothing here can recover them.
                 var (encB64, ivB64) = await LoadChainMaterialAsync(rotation.EventId);
                 if (encB64 == null || ivB64 == null)
                     continue;
@@ -134,8 +132,7 @@ public class LazySlotRewrapService(
     /// <summary>
     /// The wrapped-new-DEK and IV for one Applied rotation, as base64, from the local state row if
     /// migration 020 captured it and from the commit event in <c>tbl_event</c> otherwise. Returns
-    /// <c>(null, null)</c> when neither has it — the caller skips that link, which is the same
-    /// thing it did before when the event was missing.
+    /// <c>(null, null)</c> when neither has it — the caller skips that link.
     /// </summary>
     private async Task<(string? EncryptedNewDekB64, string? IvB64)> LoadChainMaterialAsync(string eventId)
     {

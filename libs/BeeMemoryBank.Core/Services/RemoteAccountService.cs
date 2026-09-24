@@ -200,7 +200,7 @@ public class RemoteAccountService(
         };
         await subscriptionRepo.CreateAsync(sub);
 
-        // TOCTOU close-out (kilo security review): synchronously stake out the
+        // TOCTOU close-out: synchronously stake out the
         // mount path with the subscription's tag, so another user can't race
         // between the CreateAsync above and the first poll cycle to create
         // /MountPath manually and have the poller adopt their folder.
@@ -281,7 +281,7 @@ public class RemoteAccountService(
     // Additionally blocks private and link-local IP literals (10/8, 172.16/12,
     // 192.168/16, 169.254/16, etc.) to prevent the friend node's background
     // scheduler from being used as a probe / metadata-endpoint attacker once
-    // an account is configured. Loopback stays allowed (Claude+gemini+kilo).
+    // an account is configured. Loopback stays allowed.
     private static void ValidateBaseUrl(string baseUrl)
     {
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))

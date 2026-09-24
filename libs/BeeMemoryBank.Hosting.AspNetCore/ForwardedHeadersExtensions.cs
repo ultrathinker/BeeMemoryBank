@@ -101,8 +101,7 @@ public static class ForwardedHeadersExtensions
                 // declared its proxy as 172.16.0.0/12 would silently have its X-Forwarded-For
                 // ignored and fall right back into the one-bucket-for-everyone failure this
                 // variable exists to fix. The mapped form covers exactly the same hosts, so this
-                // widens nothing. (The loopback branch above already does the same thing, which is
-                // where the pattern comes from.)
+                // widens nothing. (The loopback branch above does the same.)
                 foreach (var entry in trustedProxies)
                 {
                     if (entry.Address is { } addr)

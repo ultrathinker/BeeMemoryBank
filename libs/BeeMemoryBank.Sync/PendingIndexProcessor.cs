@@ -18,7 +18,7 @@ namespace BeeMemoryBank.Sync;
 /// index_pending once done.
 ///
 /// <para>
-/// Unlike embeddings, this WP's ingestion also has two extra jobs on every cycle: (1) run the
+/// Unlike embeddings, this ingestion also has two extra jobs on every cycle: (1) run the
 /// unlock warm-start once (see <see cref="SearchIndexLifecycleService.EnsureWarmStartedAsync"/>,
 /// invoked unconditionally every cycle the same way
 /// <c>EmbeddingProjectionService.EnsureProjectionMatrixAsync</c> is -- both are idempotent no-ops
@@ -43,10 +43,10 @@ public class PendingIndexProcessor(
     private readonly int _batchSize = batchSize ?? 50;
 
     // Guards against the periodic tick and a manual DrainAllPendingAsync (or two concurrent
-    // manual drains) running ProcessPendingCoreAsync at the same time. AGY review 2026-08-12:
-    // two concurrent runs pull the same pending batch, both seal+persist the same hot-buffer
-    // contents as separate segments with distinct GUIDs, and the next merge finds the same
-    // article live in two sealed segments and throws (tombstoning invariant violation) --
+    // manual drains) running ProcessPendingCoreAsync at the same time. Two concurrent runs
+    // would pull the same pending batch, both seal+persist the same hot-buffer
+    // contents as separate segments with distinct GUIDs, and the next merge would find the same
+    // article live in two sealed segments and throw (tombstoning invariant violation) --
     // permanently wedging the indexer until the duplicate manifest rows are pruned by hand.
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
@@ -146,7 +146,7 @@ public class PendingIndexProcessor(
                     await lifecycle.PersistMostRecentlySealedSegmentAsync(ct);
                 }
 
-                // WP-19: a single AddOrUpdateDocument call can also trigger a merge (either directly,
+                // A single AddOrUpdateDocument call can also trigger a merge (either directly,
                 // by crossing the seal-count threshold above, or via a tombstone-fraction check run
                 // earlier inside the same call) -- persist that merge's output the same way a fresh
                 // seal's is persisted just above, checking MergeCount before/after this one call

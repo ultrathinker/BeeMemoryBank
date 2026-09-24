@@ -60,12 +60,11 @@ public class SearchService(
     /// </summary>
     /// <remarks>
     /// <para>This bound is what makes broad-term content search scale. Without it,
-    /// <see cref="SearchWebContentUncachedAsync"/> asked <c>SearchIndexedContentAsync</c> for
-    /// <c>int.MaxValue</c> matches, so a common term on a 100k-article vault hydrated tens of
-    /// thousands of rows through <c>GetByIdsAsync</c>. That is an <c>IN</c> list long enough to blow
-    /// past SQLite's parameter limit (the source of the concurrency errors seen under load), plus an
-    /// O(matches) ACL filter and per-result concept-tag fetch — all wasted, since no page shows more
-    /// than <c>pageSize</c> of them. <c>SearchRanked</c> already returns matches in descending BM25
+    /// <see cref="SearchWebContentUncachedAsync"/> would hydrate every match of a common term (tens of
+    /// thousands of rows on a 100k-article vault) through <c>GetByIdsAsync</c>: an <c>IN</c> list
+    /// past SQLite's parameter limit (errors under concurrent load), plus an O(matches) ACL filter
+    /// and per-result concept-tag fetch — all wasted, since no page shows more than
+    /// <c>pageSize</c> of them. <c>SearchRanked</c> already returns matches in descending BM25
     /// order, so capping at the top <c>MaxContentResults</c> keeps the most relevant results and
     /// drops only the long, never-viewed tail.</para>
     /// <para>This is a result-count bound, NOT a relaxation of the index-completeness invariant the
@@ -76,19 +75,19 @@ public class SearchService(
     /// </remarks>
     internal const int MaxContentResults = 500;
 
-    // WP-12: the same tokenizer/stemmer pipeline IndexBuilder uses at ingestion (see
+    // The same tokenizer/stemmer pipeline IndexBuilder uses at ingestion (see
     // IndexBuilder.TokenizeAndStem) -- a query must go through the identical pipeline so its stems
     // exactly match the stemmed dictionary IndexBuilder.SearchRanked looks up against. Stateless and
     // thread-safe, so one shared instance per pipeline stage is fine to reuse across calls.
     private static readonly ITokenizer IndexedSearchTokenizer = new DefaultTokenizer();
     private static readonly IStemmer IndexedSearchStemmer = new DefaultStemmer();
 
-    // M11: hard cap on query length. The query string is embedded verbatim in the query-cache key,
+    // Hard cap on query length. The query string is embedded verbatim in the query-cache key,
     // fed to the FTS5 MATCH builder, and (for content search) compared against every candidate
     // body via a substring scan -- none of that is bounded by anything else, and a legitimate
-    // search query has no reason to be long. Throwing here is deliberate: it's an ArgumentException,
-    // which Program.cs's global exception handler already maps to 400 for every REST caller, and
-    // MCP tool callers get the usual tool-error surface -- no new plumbing needed anywhere else.
+    // search query has no reason to be long. Throwing an ArgumentException is deliberate: the
+    // global exception handler maps it to 400 for REST callers, and MCP callers get the usual
+    // tool-error surface.
     private const int MaxQueryLength = 1000;
 
     private static void ThrowIfQueryTooLong(string query)
@@ -102,11 +101,11 @@ public class SearchService(
     {
         ThrowIfQueryTooLong(query);
 
-        // WP-17: every call goes through the single-flight + TTL cache. The cache key embeds the
+        // Every call goes through the single-flight + TTL cache. The cache key embeds the
         // caller's read-scope fingerprint so two callers with different folder ACLs can never share
         // a result (see SearchQueryCache). On a miss the underlying logic below runs unchanged.
         //
-        // WP-18: wrap the call (cache included -- this is what the caller experiences) with a timing
+        // Wrap the call (cache included -- this is what the caller experiences) with a timing
         // measurement. The query string is NEVER passed to the metrics component; only the elapsed
         // time and the coarse result count leave this method. `metrics` is null only in direct-`new`
         // test construction (DI always injects the singleton).
@@ -156,11 +155,11 @@ public class SearchService(
     {
         ThrowIfQueryTooLong(query);
 
-        // WP-17: same single-flight + TTL cache as SearchAsync. Body-content search is by far the
+        // Same single-flight + TTL cache as SearchAsync. Body-content search is by far the
         // most expensive query path (it decrypts every active body), so coalescing concurrent
         // identical calls and caching near-repeat calls is where the cache pays off most.
         //
-        // WP-18: timing/counting wrapper, identical contract to SearchAsync -- only elapsed time and
+        // Timing/counting wrapper, identical contract to SearchAsync -- only elapsed time and
         // the coarse result count are recorded; the query string stays local to this method.
         var sw = metrics is null ? null : Stopwatch.StartNew();
         var result = await queryCache.ExecuteAsync(
@@ -192,16 +191,11 @@ public class SearchService(
         if (!session.IsUnlocked)
             return new SearchResults(folderResults, metadataResults);
 
-        // M11: resolve the caller's full visible-article set BEFORE touching any encrypted body,
-        // so the decrypt pass below is proportional to what THIS CALLER can actually see instead of
-        // the whole vault. Previously ACL filtering only happened at the very end (GetByIdsAsync on
-        // the matched ids), which meant every uncached content search -- including one from a
-        // caller whose scope denies everything -- streamed and AES-decrypted every active article
-        // body in the vault first and only threw the invisible results away afterwards. N distinct
-        // (cache-missing) queries meant N full-vault decrypt passes, independent of what the caller
-        // was ever going to be allowed to see. ListAsync() here is metadata-only (no ciphertext) and
-        // already applies scopeHolder.Scope.FilterArticles, so this costs one cheap query instead of
-        // decrypting every article outside the caller's scope.
+        // Resolve the caller's full visible-article set BEFORE touching any encrypted body, so the
+        // decrypt pass below is proportional to what THIS CALLER can see, not the whole vault.
+        // Filtering only the matched ids at the end would make every uncached query -- even from a
+        // deny-everything scope -- decrypt every active body in the vault. ListAsync() is
+        // metadata-only (no ciphertext) and already applies scopeHolder.Scope.FilterArticles.
         var visibleArticleIds = new HashSet<Guid>((await articleRepo.ListAsync()).Select(a => a.Id));
         if (visibleArticleIds.Count == 0)
             return new SearchResults(folderResults, metadataResults);
@@ -242,13 +236,13 @@ public class SearchService(
             // Single producer: sequential read off ONE long-lived SQLite connection (SQLite
             // connections aren't safely shared across threads). WAL holds a consistent snapshot for
             // the life of this single statement/connection, so concurrent creates/soft-deletes on
-            // other connections can't shift a row out of this read the way the old LIMIT/OFFSET
-            // batches over fresh connections could.
+            // other connections can't shift a row out of this read the way LIMIT/OFFSET batches
+            // over fresh connections would.
             try
             {
                 await foreach (var body in bodyRepo.StreamActiveAsync())
                 {
-                    // M11: skip bodies the caller cannot see at all -- never even hand them to a
+                    // Skip bodies the caller cannot see at all -- never even hand them to a
                     // worker for decryption, rather than filtering the match set after the fact.
                     if (!visibleArticleIds.Contains(body.ArticleId))
                         continue;
@@ -359,29 +353,25 @@ public class SearchService(
     }
 
     /// <summary>
-    /// WP-12: ranked full-text search over <see cref="BeeMemoryBank.Search.Indexing.IndexBuilder"/>'s
-    /// in-memory inverted index. Originally an additive, standalone capability independent of
-    /// <see cref="SearchWithContentAsync"/>'s linear body scan; now also the primary source
+    /// Ranked full-text search over <see cref="BeeMemoryBank.Search.Indexing.IndexBuilder"/>'s
+    /// in-memory inverted index. Usable on its own, and the primary source
     /// <see cref="SearchWebContentAsync"/> composes into the web content-search path (see that
     /// method's own remarks for how completeness is verified before trusting the index alone).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Why this was not wired into the web content-search path when it was first built.</b>
-    /// <c>PendingIndexProcessor</c> (WP-11) indexes articles into <paramref name="indexBuilder"/>'s
-    /// backing <c>IndexBuilder</c> progressively in the background (<c>index_pending</c>), so at any
-    /// given moment some articles may not yet be reflected in it. Silently making this the primary
-    /// search path without a completeness check could make search return *fewer* correct results
-    /// than the existing always-complete-but-slower linear scan -- a regression a user might not
-    /// notice until they go looking for something specific that just has not been indexed yet.
-    /// <see cref="SearchWebContentAsync"/> is what closes that gap: it consults
-    /// <c>IArticleRepository.GetIndexPendingIdsUnscopedAsync</c> (backed by the indexed
+    /// <b>No completeness guarantee.</b> <c>PendingIndexProcessor</c> indexes articles into
+    /// <paramref name="indexBuilder"/>'s backing <c>IndexBuilder</c> progressively in the background
+    /// (<c>index_pending</c>), so at any given moment some articles may not yet be reflected in it.
+    /// Used alone as a primary search path, it could return *fewer* correct results than the
+    /// always-complete-but-slower linear scan. <see cref="SearchWebContentAsync"/> closes that gap:
+    /// it consults <c>IArticleRepository.GetIndexPendingIdsUnscopedAsync</c> (backed by the indexed
     /// <c>index_pending</c> column) and only trusts this method's results alone once that backlog is
-    /// empty, falling back to a linear scan restricted to just the still-pending ids otherwise. This
-    /// method itself is unchanged by that -- it still has no opinion on completeness and simply
-    /// returns whatever the index currently knows, which is exactly why it remains directly usable
-    /// on its own too (e.g. by <c>HybridSearchService</c>'s MCP-facing keyword mode, where a
-    /// momentarily-incomplete index has always been an accepted tradeoff for tool-call latency).
+    /// empty, falling back to a linear scan restricted to the still-pending ids otherwise. This
+    /// method has no opinion on completeness and simply returns whatever the index currently knows,
+    /// which is why it is also directly usable (e.g. by <c>HybridSearchService</c>'s MCP-facing
+    /// keyword mode, where a momentarily-incomplete index is an accepted tradeoff for tool-call
+    /// latency).
     /// </para>
     /// <para>
     /// <b>Pipeline.</b> Tokenizes+stems <paramref name="query"/> with the exact same
@@ -389,16 +379,14 @@ public class SearchService(
     /// (required -- this index stores stemmed terms and matches by exact stem, no prefix/wildcard),
     /// asks <c>IndexBuilder.SearchRanked</c> for a BM25-ranked candidate list, hydrates full
     /// <see cref="Article"/> rows for those ids, then applies <see cref="ICallerScope.FilterArticles"/>
-    /// -- the same, already-audited folder-scope ACL enforcement every other read in this codebase
-    /// uses, not a bespoke check reimplemented inside the index engine. Results are returned in
+    /// -- the same folder-scope ACL enforcement every other read in this codebase uses, not a
+    /// bespoke check reimplemented inside the index engine. Results are returned in
     /// descending-score order (re-sorted after ACL filtering, since neither <c>GetByIdsAsync</c> nor
     /// <c>FilterArticles</c> is required to preserve input order).
     /// </para>
     /// <para>
-    /// <b>No snippets.</b> This WP's optional snippet extension (decrypting just the top results to
-    /// show a matched-text preview) was not implemented -- a correct ranked-id-list is a complete,
-    /// acceptable deliverable per the brief, and it kept the scope focused on the load-bearing
-    /// ranking correctness tests. See the WP-12 report for the full reasoning.
+    /// <b>No snippets.</b> Returns ranked rows only; no body is decrypted to build a matched-text
+    /// preview.
     /// </para>
     /// </remarks>
     public async Task<List<Article>> SearchIndexedContentAsync(string query, int topK = 20)
@@ -545,7 +533,7 @@ public class SearchService(
     /// <param name="pendingIds">
     /// The GLOBAL, unscoped index_pending backlog from <c>GetIndexPendingIdsUnscopedAsync</c> -- may
     /// include articles this caller cannot see at all, which is why this method still resolves its
-    /// own caller-visible id set below before touching any ciphertext (same M11 principle
+    /// own caller-visible id set below before touching any ciphertext (same principle
     /// <see cref="SearchWithContentUncachedAsync"/> already applies to its own, much larger, scan).
     /// </param>
     private async Task<List<Article>> ScanPendingArticlesAsync(

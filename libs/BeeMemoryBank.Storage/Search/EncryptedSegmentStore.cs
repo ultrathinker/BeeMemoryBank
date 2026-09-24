@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Storage.Search;
 
 /// <summary>
 /// Persists <c>SegmentWriter.Build</c>'s raw segment bytes to disk, encrypted at rest, and loads
-/// them back. This is the WP-09 piece that neither
+/// them back. This is the piece that neither
 /// <c>BeeMemoryBank.Search.Segment.SegmentWriter</c>/<c>SegmentReader</c> nor
 /// <c>BeeMemoryBank.Search.Indexing.IndexBuilder</c> touch by design (see their own XML docs,
 /// which say so explicitly) -- everything about disk I/O and encryption for segments lives here.
@@ -23,14 +23,11 @@ namespace BeeMemoryBank.Storage.Search;
 /// </para>
 ///
 /// <para>
-/// <b>Deviation from the brief, found and documented during implementation:</b> segment BLOCKS
-/// (~64 KiB each) are NOT wrapped via <c>DekManager.WrapDek</c>/<c>UnwrapDek</c>, even though the
-/// brief calls for exactly that. <c>DekManager.UnwrapDek</c> dispatches on the wrapped blob's
-/// exact byte length (48/49 bytes) to pick its unwrap path -- correct for the 32-byte secrets it
-/// is tested against, but it throws <c>CryptographicException</c> for any other payload length,
-/// verified empirically while building this WP. A 64 KiB block (or, e.g., a real ProjectionMatrix
-/// of a few hundred KB) cannot round-trip through it. Fixing that dispatch lives in
-/// <c>libs/BeeMemoryBank.Crypto/</c>, out of this WP's scope to touch. Blocks are instead
+/// <b>Segment BLOCKS (~64 KiB each) are NOT wrapped via <c>DekManager.WrapDek</c>/<c>UnwrapDek</c>.</b>
+/// <c>DekManager.UnwrapDek</c> dispatches on the wrapped blob's exact byte length (48/49 bytes) to
+/// pick its unwrap path -- correct for the 32-byte secrets it is meant for, but it throws
+/// <c>CryptographicException</c> for any other payload length, so a 64 KiB block (or, e.g., a real
+/// ProjectionMatrix of a few hundred KB) cannot round-trip through it. Blocks are instead
 /// encrypted via <see cref="BlockCipher"/> -- see that class's doc comment for the full
 /// explanation; it uses the identical AES-256-GCM primitive/sizing/framing, just called directly
 /// instead of through the size-limited wrapper. The index key itself (exactly 32 bytes) still
@@ -51,8 +48,8 @@ namespace BeeMemoryBank.Storage.Search;
 /// artifact in this codebase: never synced, never authoritative, always safe to discard and
 /// rebuild from source article content. This class never throws an unhandled exception out of
 /// <see cref="LoadAsync"/> for a segment that simply can't be read back for a known reason --
-/// see <see cref="SegmentLoadResult"/>/<see cref="SegmentRebuildReason"/>. Actually triggering a
-/// rebuild on that signal is a later work package's (WP-11) job.
+/// see <see cref="SegmentLoadResult"/>/<see cref="SegmentRebuildReason"/>. Triggering the
+/// rebuild on that signal is the caller's job (<c>SearchIndexLifecycleService</c>).
 /// </para>
 /// </summary>
 public sealed class EncryptedSegmentStore(
@@ -85,7 +82,7 @@ public sealed class EncryptedSegmentStore(
     }
 
     /// <summary>
-    /// WP-19 (merge persistence): writes ONLY the encrypted segment file for a merge's output --
+    /// Merge persistence: writes ONLY the encrypted segment file for a merge's output --
     /// deliberately does NOT touch the manifest table, unlike <see cref="StoreAsync"/>. The
     /// merge-persistence path (<c>SearchIndexLifecycleService.PersistMostRecentlyMergedSegmentAsync</c>)
     /// needs this new segment's manifest row to be inserted in the SAME database transaction that
@@ -114,17 +111,13 @@ public sealed class EncryptedSegmentStore(
     {
         Directory.CreateDirectory(segmentsDirectory);
 
-        // WP-13 finding: WriteFileAtomicAsync's temp-file-then-rename dance makes a torn write at
-        // the FINAL path structurally impossible (a same-filesystem File.Move is atomic), but it
-        // does NOT protect the intermediate temp file itself -- a real process kill/power loss
-        // between the temp file's write completing and the rename leaves that "*.tmp" file behind
-        // forever, because the process dies before its own `finally` cleanup block ever runs.
-        // Nothing previously swept these up: they are never referenced by any manifest row (so
-        // they can never be loaded/misread -- this is a disk-space leak, not a correctness bug),
-        // but left unbounded they accumulate across repeated crashes. Swept here, best-effort, on
-        // every store rather than only at startup, so the fix does not need its own separate
-        // lifecycle hook. Age-gated (see OrphanedTempFileMinAge) so a temp file genuinely being
-        // written by a concurrent StoreAsync call right now is never mistaken for an orphan.
+        // WriteFileAtomicAsync's temp-file-then-rename makes a torn write at the FINAL path
+        // impossible (a same-filesystem File.Move is atomic), but a process kill/power loss between
+        // the temp write and the rename leaves the "*.tmp" file behind (its `finally` never runs).
+        // No manifest row references it, so it is a disk-space leak, not a correctness bug; swept
+        // here, best-effort, on every store so no separate lifecycle hook is needed. Age-gated (see
+        // OrphanedTempFileMinAge) so a temp file being written by a concurrent StoreAsync call right
+        // now is never mistaken for an orphan.
         CleanupOrphanedTempFilesBestEffort();
 
         var masterDek = session.GetMasterDek();
@@ -400,7 +393,7 @@ public sealed class EncryptedSegmentStore(
     }
 
     /// <summary>
-    /// WP-13: minimum age a "*.tmp" file in <see cref="segmentsDirectory"/> must have before it is
+    /// Minimum age a "*.tmp" file in <see cref="segmentsDirectory"/> must have before it is
     /// considered an orphan safe to delete. Comfortably longer than any real
     /// <see cref="WriteFileAtomicAsync"/> call should ever take (writing/renaming one ~64 KiB-block
     /// segment file), so a temp file actively being written by a concurrent, legitimate

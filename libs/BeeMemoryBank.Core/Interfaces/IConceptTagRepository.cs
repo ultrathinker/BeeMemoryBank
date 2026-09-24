@@ -12,7 +12,7 @@ public interface IConceptTagRepository
     Task<List<RelatedArticle>> GetRelatedArticlesAsync(Guid articleId);
     Task<List<(Guid Id, string Title, string TreePath)>> SearchByConceptAsync(string concept);
 
-    // Phase 2 methods
+    // Tag management, embeddings and graph
     Task<List<ConceptTagInfo>> ListAsync(string? filter, int limit, int offset = 0);
     Task<List<ConceptTagWithEmbedding>> GetWithEmbeddingsAsync();
     Task<List<ConceptGraphEdge>> GetGraphDataAsync();

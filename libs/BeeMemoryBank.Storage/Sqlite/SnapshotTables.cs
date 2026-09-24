@@ -3,17 +3,15 @@ namespace BeeMemoryBank.Storage.Sqlite;
 /// <summary>
 /// What travels between nodes in a snapshot, in one place.
 ///
-/// <para>This list used to exist three times — in <c>SnapshotJoinClient</c> and twice in
-/// <c>SnapshotService.NetworkRestore</c> — and the copies had already drifted: two of them omitted
-/// <c>tbl_comment</c> and <c>tbl_article_version</c>, so a node that JOINED a network silently
-/// received no comments and no article history, while a node seeded by a network-wide RESTORE got
-/// both. Nothing failed; the joiner simply had less content than everyone else, permanently.</para>
+/// <para>Keep this the single list: <c>SnapshotJoinClient</c> and <c>SnapshotService.NetworkRestore</c>
+/// both read it. Separate copies drift silently — a join path missing <c>tbl_comment</c> or
+/// <c>tbl_article_version</c> leaves the joiner permanently short of content with nothing
+/// failing.</para>
 ///
-/// <para>The other half of the problem was that filtering worked by deny-list: name the secret
-/// tables, ship everything else. Every table added since then shipped to peers by default, and
-/// several nobody ever revisited — <c>tbl_remote_api_token</c>, <c>tbl_search_index_key</c>,
-/// <c>tbl_dek_rotation_state</c> — went out with their contents. A new table is now stripped unless
-/// it is listed here, so the failure mode of forgetting is missing content, not leaked data.</para>
+/// <para>Filtering is an allow-list, not a deny-list: a new table is stripped unless it is listed
+/// here, so the failure mode of forgetting is missing content, not leaked data (a deny-list ships
+/// every new table by default, secrets such as <c>tbl_remote_api_token</c>,
+/// <c>tbl_search_index_key</c> or <c>tbl_dek_rotation_state</c> included).</para>
 /// </summary>
 public static class SnapshotTables
 {

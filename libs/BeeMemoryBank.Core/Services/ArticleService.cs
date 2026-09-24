@@ -117,15 +117,13 @@ public partial class ArticleService(
         }
 
         // No embedding-vector-cache invalidation here on purpose: this freshly-created Article's
-        // EmbeddingProjection is never set anywhere above (embeddings are generated asynchronously,
-        // later, by PendingEmbeddingProcessor), so the row lands in tbl_article with a NULL
-        // projection and the cache's rebuild query (`WHERE embedding_projection IS NOT NULL`) would
-        // never have picked it up anyway. The path that actually gives this article a projection --
-        // EmbeddingProjectionService.ProjectArticleAsync, via ArticleRepository.UpdateEmbeddingUnscopedAsync
-        // -- already invalidates (incrementally) the moment it happens. Invalidating here too used to
-        // force a full corpus-wide cache rebuild (~150MB of SQLite reads at 100k articles) on every
-        // single create, for a row the rebuild wouldn't even include. Do not "restore" this call --
-        // see EmbeddingVectorCache's own doc comment for the full reasoning.
+        // EmbeddingProjection is never set above (embeddings are generated asynchronously, later,
+        // by PendingEmbeddingProcessor), so the row lands with a NULL projection that the cache's
+        // rebuild query (`WHERE embedding_projection IS NOT NULL`) would not pick up anyway. The
+        // path that gives it a projection -- EmbeddingProjectionService.ProjectArticleAsync, via
+        // ArticleRepository.UpdateEmbeddingUnscopedAsync -- invalidates incrementally. Invalidating
+        // here would force a full corpus-wide cache rebuild (~150MB of SQLite reads at 100k
+        // articles) on every create. Do not add this call -- see EmbeddingVectorCache's doc comment.
         eventLogger.SignalSync();
 
         await LinkOrphanMediaAsync(article.Id, plaintext);
@@ -221,15 +219,15 @@ public partial class ArticleService(
         if (title != null)
         {
             // Same rule CreateAsync enforces: null means "keep the current title", but a provided
-            // title may never be blank — accepting "   " here saved articles whose title was only
-            // whitespace, invisible in every tree/list view that trims.
+            // title may never be blank — a whitespace-only title is invisible in every tree/list
+            // view that trims.
             if (string.IsNullOrWhiteSpace(title)) throw new ArgumentException("Title cannot be empty.");
             article.Title = title;
         }
         if (treePath != null)
         {
             treePath = TreePathCanonicalizer.Canonicalize(treePath);
-            // Note: Folder auto-vivification stays outside the transaction (Correction 4)
+            // Note: Folder auto-vivification stays outside the transaction (see CreateAsync)
             var folder = await EnsureFolderExistsAsync(treePath);
             article.FolderId = folder?.Id;
             article.TreePath = treePath;
@@ -241,10 +239,9 @@ public partial class ArticleService(
         // Single clock read shared with the version snapshot below (if any) - bee_get_article_diff's
         // baseline rule ("earliest version with CreatedAt > baselineAt") depends on version.CreatedAt
         // never being later than the article.UpdatedAt from the SAME write. Two separate
-        // DateTime.UtcNow calls straddling the DB round-trips in between (folder lookup, article
-        // update, tag set, body fetch) reliably drift by ~1ms, which made a diff called with
-        // baselineAt == that exact updatedAt see the version as "created after" and re-report the
-        // edit that produced it as pending.
+        // DateTime.UtcNow calls straddling the DB round-trips in between reliably drift by ~1ms,
+        // so a diff with baselineAt == that exact updatedAt would see the version as "created
+        // after" and re-report the edit that produced it as pending.
         var now = DateTime.UtcNow;
         article.UpdatedAt = now;
 
@@ -257,19 +254,16 @@ public partial class ArticleService(
             // Re-flag both derived-search-artifact pending flags together whenever content
             // actually changes -- EmbeddingPending/IndexPending both mean "stale, needs
             // reprocessing," they just drive two independent background processors
-            // (PendingEmbeddingProcessor / PendingIndexProcessor). Note: prior to WP-11, nothing
-            // in this method re-set EmbeddingPending on an edit either (only the Article model's
-            // constructor default covered brand-new articles) -- a pre-existing gap that meant an
-            // edited article's embedding silently went stale after its first successful
-            // generation. Fixed here alongside adding IndexPending, since the correct shared
-            // behavior for "content changed" is the same for both flags.
+            // (PendingEmbeddingProcessor / PendingIndexProcessor). The Article model's constructor
+            // default only covers brand-new articles; without re-flagging here an edited article's
+            // embedding and index entry would silently go stale after their first generation.
             article.EmbeddingPending = true;
             article.IndexPending = true;
         }
         if (updateHint)
             article.ProtectionHint = protectionHint;
 
-        // Precompute new tag embeddings in memory before starting the SQLite transaction (Correction 1)
+        // Precompute new tag embeddings in memory before starting the SQLite transaction
         var precomputedTagEmbeddings = tags != null
             ? await conceptTagService.PrecomputeNewTagEmbeddingsAsync(tags)
             : null;
@@ -403,11 +397,10 @@ public partial class ArticleService(
         // The one path that actually rewrites projection bytes --
         // EmbeddingProjectionService.ProjectArticleAsync via
         // ArticleRepository.UpdateEmbeddingUnscopedAsync -- already invalidates (incrementally, see
-        // EmbeddingVectorCache.UpdateOne) the moment it happens. Invalidating here too used to force a
-        // full corpus-wide cache rebuild (~150MB of SQLite reads at 100k articles) on every single
-        // edit -- from ~20 people editing constantly, that made the cache "essentially never warm".
-        // Do not "restore" this call -- see EmbeddingVectorCache's own doc comment for the full
-        // reasoning.
+        // EmbeddingVectorCache.UpdateOne) the moment it happens. Invalidating here would force a
+        // full corpus-wide cache rebuild (~150MB of SQLite reads at 100k articles) on every edit,
+        // so with many concurrent editors the cache would essentially never be warm. Do not add
+        // this call -- see EmbeddingVectorCache's own doc comment for the full reasoning.
         eventLogger.SignalSync();
 
         if (plaintext != null)
@@ -420,9 +413,8 @@ public partial class ArticleService(
     /// <para>
     /// Lives here rather than in the calling tool for a reason: a caller that fetched the body
     /// itself and then called <see cref="UpdateAsync"/> would leave a window between the two in
-    /// which another writer's change lands and is then overwritten wholesale. With ~20 people plus
-    /// agents on one node, two appends arriving together silently dropped one of them — recoverable
-    /// only by digging through version history, if anyone noticed at all.
+    /// which another writer's change lands and is then overwritten wholesale: of two appends
+    /// arriving together, one would be silently dropped (recoverable only from version history).
     /// </para>
     /// </summary>
     /// <returns>The new body length, for the caller's confirmation message.</returns>
@@ -484,9 +476,8 @@ public partial class ArticleService(
                 await mediaRepo.SoftDeleteByArticleIdAsync(id, tx);
                 // Log first, delete second: the log mints the version and the row has to carry
                 // exactly it. Deleting first would mean inventing a version here and hoping the
-                // logger picked the same one — which is the bug this ordering removes, not a
-                // hypothetical. Both writes are inside the caller's transaction, so nothing is
-                // observable in between.
+                // logger picks the same one. Both writes are inside the caller's transaction, so
+                // nothing is observable in between.
                 var version = await eventLogger.LogDeleteAsync(id, tx);
                 await articleRepo.SoftDeleteAsync(id, version, tx);
 
@@ -576,7 +567,7 @@ public partial class ArticleService(
         // wrapped by the MASTER DEK, not the article passphrase, so a body-embedded image linked
         // here would be readable without the passphrase — the exact guarantee
         // MediaService.CreateAsync refuses to undermine for directly-attached media. Embedding via
-        // the body slipped past that check; refuse it here too by leaving the media unlinked (it
+        // the body bypasses that check, so refuse it here too by leaving the media unlinked (it
         // stays an orphan and is swept by the media GC), so a protected article never carries a
         // master-DEK-readable attachment.
         var target = await articleRepo.GetByIdAsync(articleId);

@@ -17,8 +17,8 @@ namespace BeeMemoryBank.Infrastructure.Mdns;
 /// <remarks>
 /// <para>
 /// Identity (<c>nodeId</c>/<c>name</c>) is polled from <see cref="INodeIdentityRepository"/> and the
-/// invisible flag from <see cref="InvisibleModeService"/> on each refresh cycle — per TASK_BRIEF this
-/// is a polling check (no change-notification plumbing is added to <c>InvisibleModeService</c>).
+/// invisible flag from <see cref="InvisibleModeService"/> on each refresh cycle — a deliberate
+/// polling check (<c>InvisibleModeService</c> has no change-notification plumbing).
 /// </para>
 /// <para>
 /// <b>Invisible mode:</b> when <see cref="InvisibleModeService.IsInvisible"/> is <c>true</c> the

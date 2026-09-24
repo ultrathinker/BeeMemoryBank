@@ -7,12 +7,12 @@ using Microsoft.Extensions.Logging;
 namespace BeeMemoryBank.Sync.Search;
 
 /// <summary>
-/// WP-11: the integration glue between three already-merged pieces --
+/// The integration glue between three pieces --
 /// <see cref="BeeMemoryBank.Search.Segment"/>'s segment format,
 /// <see cref="BeeMemoryBank.Search.Indexing.IndexBuilder"/>'s LSM-lite lifecycle, and
 /// <see cref="EncryptedSegmentStore"/>'s encrypted-at-rest persistence. Owns the unlock warm-start
 /// flow (reload every persisted segment back into a live <see cref="IndexBuilder"/>, or fall back
-/// to a full rebuild) and the tombstone-durability plumbing (Gap 2 from wp-11.md): every place
+/// to a full rebuild) and the tombstone-durability plumbing: every place
 /// <see cref="IndexBuilder"/> tombstones a sealed segment in memory needs a corresponding durable
 /// write for segments that are actually persisted.
 ///
@@ -38,23 +38,23 @@ public sealed class SearchIndexLifecycleService(
     public IndexBuilder Builder { get; } = builder;
 
     /// <summary>
-    /// Unlock warm-start (see wp-11.md Task 4). Idempotent per process: the first call to actually
+    /// Unlock warm-start. Idempotent per process: the first call to actually
     /// run this (across every <see cref="PendingIndexProcessor"/> cycle, since it is invoked
     /// unconditionally every cycle just like
     /// <c>EmbeddingProjectionService.EnsureProjectionMatrixAsync</c>) enumerates the current
     /// manifest and attempts to load every recorded segment:
     /// <list type="bullet">
     /// <item><description>
-    /// If every segment loads successfully, each is reconstructed (Gap 1's fix,
-    /// <see cref="SegmentReader.EnumerateTerms"/> + <see cref="IndexBuilder.AdoptPersistedSegment"/>)
-    /// and adopted into <see cref="Builder"/> along with its durably-persisted tombstones (Gap 2's
-    /// fix), so previously-indexed content is immediately findable without waiting for a reindex.
+    /// If every segment loads successfully, each is reconstructed
+    /// (<see cref="SegmentReader.EnumerateTerms"/> + <see cref="IndexBuilder.AdoptPersistedSegment"/>)
+    /// and adopted into <see cref="Builder"/> along with its durably-persisted tombstones, so
+    /// previously-indexed content is immediately findable without waiting for a reindex.
     /// </description></item>
     /// <item><description>
     /// If ANY segment fails to load (missing, corrupted, wrong version, stale dek_epoch -- any
     /// <see cref="SegmentRebuildReason"/>), no segment is adopted at all -- this deliberately does
-    /// NOT attempt partial recovery. See <see cref="TriggerFullRebuildAsync"/> and wp-11.md's
-    /// "full-rebuild-on-any-failure" tradeoff.
+    /// NOT attempt partial recovery. See <see cref="TriggerFullRebuildAsync"/> for the
+    /// full-rebuild-on-any-failure tradeoff.
     /// </description></item>
     /// </list>
     /// </summary>
@@ -112,10 +112,9 @@ public sealed class SearchIndexLifecycleService(
                 // (via EnumerateTerms/GetPostings/GetDocument) is what walks the real byte offsets,
                 // so a segment with a valid header but corrupted body (truncated postings, an
                 // out-of-bounds text/postings offset, a doc count that no longer matches the real
-                // table) only throws once THAT runs -- an independent finding from an adversarial
-                // review (2026-08-12) of this same fix, confirmed by reading SegmentReader.cs: those
-                // methods raise plain framework exceptions (ArgumentOutOfRangeException from
-                // Span.Slice, etc.), not a specific, easily-filtered type. Both steps must therefore
+                // table) only throws once THAT runs, and those methods raise plain framework
+                // exceptions (ArgumentOutOfRangeException from Span.Slice, etc.), not a specific,
+                // easily-filtered type. Both steps must therefore
                 // share one try/catch and one broad `catch (Exception)` -- this is a trust boundary
                 // for externally-persisted, potentially-corrupted binary data (the same "any load
                 // failure means the whole persisted index is untrustworthy" reasoning the
@@ -127,25 +126,16 @@ public sealed class SearchIndexLifecycleService(
                 int internalId = Builder.AdoptPersistedSegment(reader, tombstones);
                 runtimeState.RegisterPersistedSegment(internalId, manifest.SegmentId);
 
-                // WP-19: AdoptPersistedSegment ends with its own MaybeMergeLocked call (same as a
-                // fresh seal), so folding this one segment in on top of whatever was already
-                // adopted so far can itself cross a merge threshold. Persisting that merge's output
-                // immediately -- right here, per segment -- rather than waiting until this whole
-                // loop finishes matters whenever the manifest holds more un-merged segments than a
-                // single merge threshold's worth (the expected shape of the very first warm-start
-                // after upgrading to this WP, against a vault whose manifest accumulated many
-                // never-persisted historical merges under the old, buggy behavior): adopting could
-                // then trigger SEVERAL merges back to back across this one loop, and IndexBuilder's
-                // "only remembers the LAST merge" contract (see
-                // GetMostRecentlyMergedSegmentForPersistence's own doc comment) would otherwise
-                // silently lose every merge except the final one -- stranding the earlier merges'
-                // now-superseded inputs in the manifest, which is exactly the "same article live in
-                // more than one sealed segment" state this whole WP exists to eliminate. Checking
-                // after every individual AdoptPersistedSegment call (which, like AddOrUpdateDocument,
-                // can trigger at most one merge per call) guarantees none of them is ever missed,
-                // and also means a merge that folds in THIS segment's own just-registered internal
-                // id (adopted moments ago, immediately above) is retired correctly too -- its mapping
-                // is already registered by the time this check runs.
+                // AdoptPersistedSegment ends with its own MaybeMergeLocked call (same as a fresh
+                // seal), so adopting this segment can itself cross a merge threshold. Persist that
+                // merge's output right here, per segment, not after the loop: a manifest holding
+                // more un-merged segments than one threshold's worth triggers SEVERAL merges across
+                // this loop, and IndexBuilder only remembers the LAST merge (see
+                // GetMostRecentlyMergedSegmentForPersistence), so every earlier merge would be lost
+                // and its superseded inputs stranded in the manifest -- the same article live in
+                // more than one sealed segment. AdoptPersistedSegment triggers at most one merge per
+                // call, so checking after each call misses none; and because this segment's mapping
+                // is registered just above, a merge that folds it in is retired correctly too.
                 if (Builder.MergeCount > mergeCountBeforeAdopt)
                 {
                     await PersistMostRecentlyMergedSegmentAsync(ct);
@@ -157,8 +147,8 @@ public sealed class SearchIndexLifecycleService(
                 // this is the plaintext payload's OWN inner format being unreadable or corrupted
                 // (e.g. written by a newer node version, or damaged on disk), a failure mode
                 // EncryptedSegmentStore.LoadAsync cannot see since it only validates the outer
-                // encrypted container. See WP-13's SearchIndexLifecycleFormatVersionResilienceTests
-                // for the format-version scenario this originally closed.
+                // encrypted container. SearchIndexLifecycleFormatVersionResilienceTests covers the
+                // format-version scenario.
                 logger.LogWarning(
                     ex,
                     "Warm-start: segment {SegmentId} could not be read or adopted; treating the whole persisted search index as untrustworthy and triggering a full rebuild instead of a partial recovery.",
@@ -192,21 +182,16 @@ public sealed class SearchIndexLifecycleService(
     }
 
     /// <summary>
-    /// Gap 2's fix: for every <see cref="SegmentTombstoneEvent"/> IndexBuilder just reported (from
+    /// For every <see cref="SegmentTombstoneEvent"/> IndexBuilder just reported (from
     /// an <see cref="IndexBuilder.AddOrUpdateDocument"/> or <see cref="IndexBuilder.RemoveDocument"/>
     /// call), durably records the tombstone IF that segment has a known persisted Guid. A segment
     /// with no known mapping is skipped: there is no on-disk file to write a tombstone row against.
     ///
     /// <para>
-    /// <b>WP-19 update:</b> "no known mapping" used to mean, in practice, ANY merge output -- WP-11
-    /// persisted fresh seals but never a merge's output, so a merge-output segment (and therefore
-    /// every tombstone against it) had no durable counterpart at all, and every restart re-adopted
-    /// and re-merged the same un-collapsed seals from scratch (the very bug this WP fixes). Since a
-    /// merge's output is now durably persisted too (see <see cref="PersistMostRecentlyMergedSegmentAsync"/>),
-    /// this skip is no longer a standing gap for merge outputs specifically -- it now only fires for
-    /// the genuinely transient case the rest of this doc comment already describes: an actual
-    /// failure/crash between an in-memory tombstone (or merge) and its corresponding durable write
-    /// finishing. Losing that one durable write means one stale result could transiently reappear
+    /// Both fresh seals and merge outputs are persisted (see
+    /// <see cref="PersistMostRecentlyMergedSegmentAsync"/>), so the skip only fires in the
+    /// transient case: a failure/crash between an in-memory tombstone (or merge) and its durable
+    /// write finishing. Losing that one durable write means one stale result could transiently reappear
     /// after a restart, until the next full rebuild -- never silent data corruption, since the
     /// tombstone is a filter, not the source of truth for content.
     /// </para>
@@ -223,7 +208,7 @@ public sealed class SearchIndexLifecycleService(
     }
 
     /// <summary>
-    /// WP-19: persists the segment <see cref="Builder"/> most recently merged, if any, replacing its
+    /// Persists the segment <see cref="Builder"/> most recently merged, if any, replacing its
     /// consumed inputs' on-disk manifest/tombstone rows with the merge's output in one atomic
     /// database transaction -- see <see cref="SegmentManifestRepository.ReplaceMergedSegmentsAsync"/>
     /// for why that transaction is the crash-safety-critical piece. Callers detect "a merge just
@@ -254,13 +239,13 @@ public sealed class SearchIndexLifecycleService(
     /// <para>
     /// A crash between steps 1 and 2 leaves the new file an unreferenced orphan and every OLD
     /// segment's manifest/tombstone rows fully intact -- the next warm-start simply reloads the
-    /// pre-merge segments exactly as it would have before this WP existed, and the merge is retried
+    /// pre-merge segments unchanged, and the merge is retried
     /// next time its threshold trips. No document is lost, and no article ends up live in more than
     /// one persisted segment. A crash between steps 2 and 3 leaves the manifest already correctly
     /// reflecting the merged-only state (the old rows are gone, durably), so warm-start correctly
     /// adopts only the new merged segment; the old files are just wasted, unreferenced disk space --
     /// the same category of harmless leftover <see cref="EncryptedSegmentStore"/>'s own orphaned-
-    /// temp-file sweep already tolerates elsewhere in this WP's surrounding code.
+    /// temp-file sweep already tolerates.
     /// </para>
     /// <para>
     /// The ordering this deliberately rules out is deleting the old rows/files FIRST and writing the
@@ -270,8 +255,8 @@ public sealed class SearchIndexLifecycleService(
     /// turns into <see cref="SegmentRebuildReason.FileMissing"/> -- and per
     /// <see cref="EnsureWarmStartedAsync"/>'s own "any single load failure means the whole persisted
     /// index is untrustworthy" policy, that forces a full rebuild of the ENTIRE vault on the very
-    /// next restart. That full-rebuild-on-every-crash outcome is exactly the wall this WP exists to
-    /// remove, so this ordering must never be reversed.
+    /// next restart. A full rebuild on every crash is what this ordering exists to prevent, so it
+    /// must never be reversed.
     /// </para>
     /// </summary>
     public async Task PersistMostRecentlyMergedSegmentAsync(CancellationToken ct = default)
@@ -361,12 +346,12 @@ public sealed class SearchIndexLifecycleService(
     }
 
     /// <summary>
-    /// wp-11.md Task 4/5: treats the whole persisted search index as no longer trustworthy --
+    /// Treats the whole persisted search index as no longer trustworthy --
     /// clears the manifest and tombstone tables and re-flags every active article as
     /// index_pending, so <see cref="PendingIndexProcessor"/> reindexes from scratch in the
     /// background. Deliberately conservative: a single bad segment costs a full rebuild rather than
     /// attempting to reconstruct "which specific articles were in the one segment that failed,"
-    /// which nothing currently tracks -- see wp-11-report.md for the full tradeoff discussion.
+    /// which nothing currently tracks.
     ///
     /// <para>
     /// Coordinated by <see cref="SearchIndexRuntimeState.RebuildLock"/> (a plain

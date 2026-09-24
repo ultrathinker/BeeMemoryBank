@@ -4,7 +4,7 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Search;
 
 /// <summary>
-/// WP-11 (Gap 2): local-only durable bookkeeping for search-index segment tombstones
+/// Local-only durable bookkeeping for search-index segment tombstones
 /// (tbl_search_segment_tombstone), a sibling table to <see cref="SegmentManifestRepository"/>'s
 /// tbl_search_index_manifest. <see cref="Indexing.IndexBuilder"/> (in
 /// <c>BeeMemoryBank.Search</c>) tracks tombstones purely in memory
@@ -57,7 +57,7 @@ public sealed class SegmentTombstoneRepository(DbConnectionFactory factory) : Ba
             new { segmentId = segmentId.ToString() });
     }
 
-    /// <summary>WP-11: clears every tombstone row. Used only by the search-index full-rebuild path.</summary>
+    /// <summary>Clears every tombstone row. Used only by the search-index full-rebuild path.</summary>
     public async Task DeleteAllAsync()
     {
         using var conn = OpenConnection();

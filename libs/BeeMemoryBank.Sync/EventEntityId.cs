@@ -18,9 +18,9 @@ namespace BeeMemoryBank.Sync;
 /// hard-deleted and an innocent event is silently dropped instead of applied. The forged value is
 /// then persisted in <c>tbl_event</c> and relayed onward.</para>
 ///
-/// <para>The fix is not to sign one more field — that would change the signature format and break
-/// every peer that has not upgraded, while old events would still need verifying under the old
-/// rule. It is that <c>EntityId</c> never needed to be transported at all: every event's entity is
+/// <para>Do not address this by signing one more field — that would change the signature format
+/// and break every peer that has not upgraded, while old events would still need verifying under
+/// the old rule. <c>EntityId</c> never needs to be transported at all: every event's entity is
 /// already derivable from fields the signature DOES cover. So derive it, on both the writing and
 /// the reading side, and let the transported value be advisory at most.</para>
 /// </summary>

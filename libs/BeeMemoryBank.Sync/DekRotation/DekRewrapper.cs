@@ -18,10 +18,8 @@ namespace BeeMemoryBank.Sync.DekRotation;
 /// <para>
 /// Lives in Sync, not the API project, because it is not server-only work. Every node in a cluster
 /// has to perform this same rewrap when a peer rotates — including mobile and CLI nodes, which have
-/// no API layer. While this code was API-private, those hosts fell back to a no-op applier: they
-/// logged a warning, stayed on the retired DEK forever, and every article that arrived afterwards
-/// was wrapped under a key they did not have. Two copies of a routine this dangerous is not an
-/// option either, so the server calls exactly this one.
+/// no API layer; a node that skips it stays on the retired DEK and cannot open anything wrapped
+/// afterwards. Keep one copy of a routine this dangerous: the server calls exactly this one.
 /// </para>
 /// </summary>
 public static class DekRewrapper
@@ -132,7 +130,7 @@ public static class DekRewrapper
             // being retired and must be re-issued. Every other agent holds no key material at all
             // (encrypted_dek/dek_iv/salt are NULL — Agent.CanAutoUnlock is false, migration 014),
             // so the rotation has nothing to take from it: it keeps authenticating as its owner,
-            // exactly as before. Deleting those too used to disconnect every teammate's MCP client
+            // exactly as before; deleting those too would disconnect every teammate's MCP client
             // on every rotation. Not filtered by status: a soft-deleted row that somehow still
             // holds a wrapped DEK is exactly the kind of leftover that must not survive.
             agentsDeleted = await conn.ExecuteAsync(
@@ -164,9 +162,9 @@ public static class DekRewrapper
                 // DPAPI secret file is unchanged, but its slot still wraps the OLD (now invalid)
                 // DEK, and the server has no access to the plaintext secret to re-wrap it here.
                 // Leaving it would make IsEnabledAsync() report "enabled" while auto-unlock
-                // silently fails sentinel verification and returns false forever afterward — a
-                // Codex-reviewed finding (leaving the feature enabled-looking but non-functional
-                // is worse than requiring the admin to notice and re-enable it).
+                // silently fails sentinel verification and returns false forever afterward. An
+                // enabled-looking but non-functional feature is worse than requiring the admin to
+                // notice and re-enable it.
                 slotsDeleted = await conn.ExecuteAsync(
                     "DELETE FROM tbl_key_slot WHERE slot_type IN ('recovery', 'os_auto_unlock')", transaction: tx);
             }
@@ -183,11 +181,10 @@ public static class DekRewrapper
             // transaction. Without this the seed stays sealed under the pre-rotation DEK forever:
             // the FIRST rotation still opens it (oldDek is the key it was sealed under), but every
             // subsequent rotation — and every event signature after this one, which decrypts the
-            // seed under the now-current new DEK — then fails. That is the "confidential rotation
-            // works once, then wedges every v1 node" bug. v=0 rows hold a plaintext seed that does
-            // not depend on the DEK, so they are left untouched. Follows the same never-roll-back
-            // philosophy as the per-row rewrap: a seed that opens under neither key is a node
-            // already broken by a pre-fix rotation, and aborting only makes it unrecoverable.
+            // seed under the now-current new DEK — then fails. v=0 rows hold a plaintext seed that
+            // does not depend on the DEK, so they are left untouched. Same never-roll-back rule as
+            // the per-row rewrap: a seed that opens under neither key cannot be fixed here, and
+            // aborting would only make the node unrecoverable.
             ReWrapNodeIdentitySeed(conn, tx, oldDek, newDek, tally, logger);
 
             // Mark Applied INSIDE the rotation tx. If the process crashes between
@@ -200,10 +197,10 @@ public static class DekRewrapper
             // without the material to walk past it is the state that locks that user out. One
             // statement, so the two facts cannot disagree.
             //
-            // It used to read the same values back from the dek_rotation_commit event in
-            // tbl_event. Compaction deletes those (the initiator compacts right after rotating),
-            // and once the row is gone the walk cannot start and the user can never unlock this
-            // node again. tbl_dek_rotation_state is local, never synced, and nothing compacts it.
+            // Do not read these values back from the dek_rotation_commit event in tbl_event
+            // instead: compaction deletes those (the initiator compacts right after rotating), and
+            // once the row is gone the walk cannot start and the user can never unlock this node
+            // again. tbl_dek_rotation_state is local, never synced, and nothing compacts it.
             // See migration 020, including why copying this material here adds no exposure that
             // tbl_event did not already have.
             await conn.ExecuteAsync(
@@ -265,10 +262,10 @@ public static class DekRewrapper
     /// DEK (ProjectionMatrix.Wrap, no AAD) rather than under a per-row DEK — so it is invisible to
     /// ReWrapTableAsync's encrypted_dek/dek_iv shape and needs its own pass.
     /// <para>
-    /// Omitting it used to leave the matrix sealed under the RETIRED DEK after a successful
-    /// rotation: EmbeddingProjectionService.LoadMatrixAsync unwraps with the current master DEK,
-    /// so every semantic query and every background re-embed threw CryptographicException from
-    /// then on, permanently and with no recovery path.
+    /// Without it the matrix stays sealed under the RETIRED DEK after a successful rotation:
+    /// EmbeddingProjectionService.LoadMatrixAsync unwraps with the current master DEK, so every
+    /// semantic query and every background re-embed would throw CryptographicException from then
+    /// on, permanently and with no recovery path.
     /// </para>
     /// Runs inside the rotation transaction, so a failure here rolls the whole rotation back
     /// rather than leaving a half-rotated vault.
@@ -305,10 +302,9 @@ public static class DekRewrapper
                     continue;
                 }
 
-                // Readable under neither key. The comment used to say aborting was worse than
-                // losing the matrix and then aborted anyway — a throw here propagates out of the
-                // rotation transaction and rolls the whole thing back, on every retry, which is the
-                // exact lockout the rest of this class was rewritten to remove.
+                // Readable under neither key. Do not throw: a throw here propagates out of the
+                // rotation transaction and rolls the whole thing back on every retry — the
+                // permanent lockout this class exists to avoid.
                 //
                 // So: count it, say so, and carry on. Leaving the row alone is deliberate rather
                 // than deleting it — EmbeddingProjectionService.EnsureProjectionMatrixAsync already
@@ -401,8 +397,8 @@ public static class DekRewrapper
     /// <summary>
     /// Re-encrypts every remote-account bearer token (<c>tbl_remote_account.encrypted_token</c>),
     /// which <c>RemoteAccountService</c> seals directly under the master DEK. The table lives in this
-    /// database, so the tokens are simply carried forward inside the rotation transaction; before
-    /// this pass existed every rotation left every remote account unable to authenticate.
+    /// database, so the tokens are simply carried forward inside the rotation transaction; without
+    /// this pass every rotation would leave every remote account unable to authenticate.
     /// Same three outcomes as the other passes — re-sealed, already on the new key (a token written
     /// by a request that raced the rotation), or counted unreadable and left alone, never thrown.
     /// </summary>
@@ -464,7 +460,7 @@ public static class DekRewrapper
     /// <para>
     /// Runs inside the rotation transaction. A seed that opens under neither key is counted as
     /// unreadable and logged rather than thrown — a throw here would roll the whole rotation back on
-    /// every retry, the exact lockout the rest of this class was rewritten to avoid.
+    /// every retry, the permanent lockout this class exists to avoid.
     /// </para>
     /// </summary>
     internal static void ReWrapNodeIdentitySeed(
@@ -539,7 +535,7 @@ public static class DekRewrapper
 
     /// <summary>
     /// Builds AAD for a per-row DEK wrap. Format must match the encrypt-side AAD used
-    /// when the row was created. For Wave 1 v=1 rows, AAD includes a table-specific
+    /// when the row was created. For v=1 rows, AAD includes a table-specific
     /// prefix and the OWNING ENTITY's id bytes — the article_id for every article-scoped
     /// DEK, the media_id for media. For v=0 rows (legacy plaintext wrap) returns null —
     /// DekManager.UnwrapDek handles that path.
@@ -551,8 +547,8 @@ public static class DekRewrapper
     /// a byte-for-byte copy of the article body's wrapped DEK (ArticleService.UpdateAsync,
     /// EventApplier.Article's conflict paths), so they must be unwrapped with the article's
     /// AAD, exactly as every reader does (BeeReadTools.GetArticleVersion, VersionEndpoints).
-    /// Deriving it from the row PK instead made rotation throw AuthenticationTagMismatch on
-    /// any vault whose articles had ever been edited.
+    /// Deriving it from the row PK instead makes rotation throw AuthenticationTagMismatch on
+    /// any vault whose articles have ever been edited.
     /// </param>
     internal static byte[]? BuildPerRowAadForTable(string tableName, string aadId, byte[] wrapped)
     {
@@ -597,7 +593,7 @@ public static class DekRewrapper
     {
         var tally = new RewrapTally();
         aadIdColumn ??= pkColumn;
-        // Roadmap p7: keyset pagination instead of OFFSET. SQLite scans+discards rows on
+        // Keyset pagination instead of OFFSET. SQLite scans+discards rows on
         // OFFSET, making each batch progressively slower (O(n²) for the whole rewrap). Keyset
         // (WHERE pk > @lastPk ORDER BY pk LIMIT N) is O(n) total. PK columns here are TEXT
         // (article_id, id) — no special collation needed since rows we just UPDATE'd retain
@@ -632,13 +628,11 @@ public static class DekRewrapper
                 // good. Rotation is the one place that must preserve v0.
                 var aad = BuildPerRowAadForTable(tableName, aadId, encDek);
 
-                // A row that does not unwrap under the OLD DEK used to throw straight out of this
-                // loop, roll the whole rotation back, and do it again on every retry — leaving the
-                // node permanently unable to finish the rotation, with wiping and re-joining as the
-                // only way out. That is not a hypothetical: it is the expected outcome whenever a
-                // peer ships an article written AFTER the rotation but BEFORE this node applied it.
-                // The body arrives with its DEK already wrapped under the NEW master key, and this
-                // loop then insists on opening it with the old one.
+                // A row that does not unwrap under the OLD DEK must not throw out of this loop: that
+                // rolls the whole rotation back on every retry and leaves the node permanently unable
+                // to finish it. It is the expected case whenever a peer ships an article written
+                // AFTER the rotation but BEFORE this node applied it — its DEK is already wrapped
+                // under the NEW master key.
                 //
                 // So the failure of one row must not be able to destroy the node. Try the old key
                 // (the normal case), then the new one (the row raced ahead of us and is already

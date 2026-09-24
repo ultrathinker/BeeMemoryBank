@@ -1,15 +1,14 @@
 namespace BeeMemoryBank.Core.Services;
 
 /// <remarks>
-/// AUDIT NOTE (revised after Kilo R1 security review HIGH-2): originally a single bool flag
-/// without synchronization. Safe under the original assumption that only ONE flow at a time
-/// (restore) entered maintenance mode. After DEK rotation landed, both rotation and restore
-/// share this service AND share HeavyOperationLock — but HeavyOperationLock guards different
-/// operations (rotation Accept vs restore Apply) and the auto-accept peer rotation path enters
-/// maintenance from EventApplier, which is a different code path than the restore flow.
+/// AUDIT NOTE: refcounted, not a single bool flag, because maintenance windows can overlap.
+/// DEK rotation and restore both share this service AND HeavyOperationLock — but
+/// HeavyOperationLock guards different operations (rotation Accept vs restore Apply), and the
+/// auto-accept peer rotation path enters maintenance from EventApplier, a different code path
+/// than the restore flow. A plain flag would let the first Exit end another flow's window.
 ///
-/// Now: refcounted. Enter increments; only the first Enter sets IsInMaintenance and Reason.
-/// Exit decrements; only the last Exit clears them. Concurrent enter+exit pairs nest correctly.
+/// Enter increments; only the first Enter sets IsInMaintenance and Reason. Exit decrements;
+/// only the last Exit clears them. Concurrent enter+exit pairs nest correctly.
 /// </remarks>
 public class MaintenanceModeService
 {

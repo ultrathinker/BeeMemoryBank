@@ -8,12 +8,10 @@ namespace BeeMemoryBank.Core.Services;
 /// <para>
 /// Article writes are read-modify-write at several layers: the MCP append/prepend/replace tools
 /// fetch the body, mutate it in memory and save it back, and <see cref="ArticleService"/>'s own
-/// update allocates the next version number by reading the current maximum. Neither was serialized,
-/// so two concurrent writers — two agents, or an agent racing a human's web edit — could both read
-/// the same body and have the second save silently discard the first's change. The version-number
-/// read had a sharper edge: the unique index on (article_id, version_number) makes the loser throw
-/// AFTER its metadata UPDATE has already committed, leaving a torn article (bumped timestamp, old
-/// body, no event).
+/// update allocates the next version number by reading the current maximum. Unserialized, two
+/// concurrent writers — two agents, or an agent racing a human's web edit — could both read the
+/// same body and have the second save silently discard the first's change, and the unique index on
+/// (article_id, version_number) would make the loser of the version-number race throw.
 /// </para>
 ///
 /// <para>

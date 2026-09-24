@@ -7,9 +7,8 @@ namespace BeeMemoryBank.Infrastructure.Mdns;
 /// The node's identity (<c>nodeId</c>/<c>name</c>) is read LIVE from
 /// <c>INodeIdentityRepository</c> on every refresh cycle, so the announcement always reflects
 /// the initialised node (and only starts once one exists). <see cref="Port"/> and
-/// <see cref="Https"/> are deployment facts the host supplies: the HTTPS flag's real wiring
-/// (Ярус-1 local CA) is a later task — see TASK_BRIEF §5 Этап 5. For now it is a settable
-/// property with a sensible default, as the brief requires.
+/// <see cref="Https"/> are deployment facts the host supplies; the HTTPS flag is not yet derived
+/// automatically from the Tier-1 local CA, so it is a plain settable property with a safe default.
 /// </remarks>
 public sealed class MdnsAnnouncerOptions
 {
@@ -20,15 +19,15 @@ public sealed class MdnsAnnouncerOptions
     public int Port { get; set; } = 5301;
 
     /// <summary>
-    /// Whether this node exposes HTTPS via the Ярус-1 local CA. Default <c>false</c>; flipped to
-    /// <c>true</c> by a later task once local-CA HTTPS is wired in.
+    /// Whether this node exposes HTTPS via the Tier-1 local CA. Default <c>false</c>; the host
+    /// sets it explicitly (it is not detected from the local-CA configuration).
     /// </summary>
     public bool Https { get; set; } = false;
 
     /// <summary>
     /// How often to re-evaluate the announce/withdraw decision (identity + invisible mode).
-    /// Polling is the agreed approach — see TASK_BRIEF: no change-notification plumbing is added
-    /// to <see cref="InvisibleModeService"/>. Default 60s.
+    /// Polling is deliberate: <see cref="InvisibleModeService"/> has no change-notification
+    /// plumbing. Default 60s.
     /// </summary>
     public TimeSpan RefreshInterval { get; set; } = TimeSpan.FromSeconds(60);
 

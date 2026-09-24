@@ -177,8 +177,7 @@ public static class KeyDerivation
         finally
         {
             // Zero the UTF-8 password bytes so the plaintext doesn't linger on the heap until
-            // GC. Argon2id does NOT take ownership; we own the buffer. (Found by Kilo R1
-            // security review HIGH-3.)
+            // GC. Argon2id does NOT take ownership; we own the buffer.
             Array.Clear(passwordBytes);
         }
     }

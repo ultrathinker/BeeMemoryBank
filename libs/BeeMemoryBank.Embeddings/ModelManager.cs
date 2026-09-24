@@ -5,8 +5,8 @@ using System.Text.Json.Serialization;
 namespace BeeMemoryBank.Embeddings;
 
 /// <summary>
-/// Resolves, verifies (SHA-256), and caches the ONNX embedding model. Standalone and not yet
-/// wired into DI: a future caller resolves the path here, then hands
+/// Resolves, verifies (SHA-256), and caches the ONNX embedding model. The caller
+/// (<see cref="EmbeddingModelWiring"/> for DI) resolves the path here, then hands
 /// <see cref="ModelResolution.Path"/> to <see cref="OnnxEmbeddingGenerator(string?)"/> when
 /// <see cref="ModelResolution.Status"/> is <see cref="ModelStatus.Valid"/>.
 ///

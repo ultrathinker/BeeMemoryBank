@@ -15,8 +15,8 @@ public sealed record TrustedProxyEntry(IPAddress? Address, IPNetwork? Network, s
 /// (<c>172.x.0.1</c>) for EVERY external client, so login, join, node-reset and sync-challenge
 /// budgets all collapse into a single global bucket: one anonymous client can exhaust the
 /// challenge budget and stop synchronization for every peer in the mesh, or burn the login budget
-/// for every user at once. The pre-existing loopback-only trust never helped there — Docker's DNAT
-/// arrives on the container's bridge interface, not its loopback, so the header was never believed.
+/// for every user at once. Loopback-only trust does not help there: Docker's DNAT arrives on the
+/// container's bridge interface, not its loopback, so the header would never be believed.
 /// </para>
 ///
 /// <para>

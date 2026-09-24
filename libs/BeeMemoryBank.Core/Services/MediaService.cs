@@ -146,16 +146,16 @@ public class MediaService(
             // The bytes go into the content-addressed blob store below (via LogMediaCreateAsync →
             // EnsureBlobAsync), under exactly this hash. Recording it on the row lets the read path
             // resolve the blob directly instead of only from the .enc file. Same hash function
-            // (BlobHash.Compute), so the row and the blob agree by construction. Item 16a.
+            // (BlobHash.Compute), so the row and the blob agree by construction.
             CiphertextSha256 = BlobHash.Compute(ciphertext)
         };
 
-        // Media ciphertext lives in the content-addressed blob store ONLY (16b) — no .enc file is
-        // written any more. The blob is stored in the SAME transaction as the media row and its
+        // Media ciphertext is written to the content-addressed blob store ONLY — no .enc file.
+        // The blob is stored in the SAME transaction as the media row and its
         // sync event (LogMediaCreateAsync → EnsureBlobAsync), so there is no second store to keep
         // consistent and no cross-store ordering to get wrong: a crash before the commit leaves
         // nothing behind, and a commit persists blob + row + event atomically — the same shape
-        // EventApplier's article create/update uses (EventApplier.Article.cs, H5).
+        // EventApplier's article create/update uses (EventApplier.Article.cs).
         using (var conn = connFactory.CreateConnection())
         using (var tx = conn.BeginTransaction())
         {
@@ -239,12 +239,11 @@ public class MediaService(
 
     private async Task<(byte[] data, string contentType, string fileName)?> ReadContentAsync(Media media)
     {
-        // Item 16a: resolve the ciphertext from the content-addressed blob store first, by the hash
-        // recorded on the row, and fall back to the .enc file. The blob is the store the create path
-        // and the sync pusher already fill; the file is the legacy home. Preferring the blob is what
-        // lets a node serve media it received purely over sync (blob shipped ahead of the event) or
-        // through a snapshot/join that carried the database but not the media directory — cases the
-        // file-only path could only answer with a 404.
+        // Resolve the ciphertext from the content-addressed blob store first, by the hash recorded
+        // on the row, and fall back to the .enc file. The blob is the store the create path and the
+        // sync pusher fill; the file is the legacy home. Preferring the blob lets a node serve media
+        // it received purely over sync (blob shipped ahead of the event) or through a snapshot/join
+        // that carried the database but not the media directory.
         byte[]? ciphertext = null;
         if (blobRepo != null && !string.IsNullOrEmpty(media.CiphertextSha256))
         {
@@ -257,9 +256,9 @@ public class MediaService(
             // not to a 500. The two are reachable states, both from outside this node: a snapshot
             // restore or a join that brought the database across without the media directory, and an
             // event applied while MediaStorageOptions was not configured, which writes the row and no
-            // file. Reading it blind threw FileNotFoundException, which nothing catches and
-            // ExceptionStatusMap does not recognise — every broken image on the page became a server
-            // error in the log, hiding the one fact an operator needs, which media is missing.
+            // file. Reading it blind throws FileNotFoundException, which ExceptionStatusMap does not
+            // recognise — every broken image would become a server error, hiding the one fact an
+            // operator needs: which media is missing (logged below).
             var filePath = Path.Combine(options.MediaDir, $"{media.Id}.enc");
             if (!File.Exists(filePath))
             {

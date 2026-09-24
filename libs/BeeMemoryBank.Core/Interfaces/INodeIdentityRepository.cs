@@ -58,8 +58,8 @@ public interface INodeIdentityRepository
 
     /// <summary>
     /// Admin-configurable toggle for whether THIS node generates its own embeddings
-    /// (gates <see cref="BeeMemoryBank.Sync.PendingEmbeddingProcessor"/>). There was previously no
-    /// way to change this after node init -- see <see cref="Models.NodeIdentity.CanGenerateEmbeddings"/>.
+    /// (gates <see cref="BeeMemoryBank.Sync.PendingEmbeddingProcessor"/>), changeable after
+    /// node init -- see <see cref="Models.NodeIdentity.CanGenerateEmbeddings"/>.
     /// </summary>
     Task SetCanGenerateEmbeddingsAsync(bool enabled);
 }

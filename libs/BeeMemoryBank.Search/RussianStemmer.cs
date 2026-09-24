@@ -7,8 +7,8 @@ namespace BeeMemoryBank.Search;
 /// algorithms, this does not group endings into grammatical "measure" classes (adjectival vs.
 /// verbal vs. noun paradigms with participle/reflexive handling) or apply them in staged passes;
 /// it is a single flat table of common case/number/tense endings, tried longest-first to a fixed
-/// point (see <see cref="SuffixStripper"/>). That is a deliberate simplification: the brief calls
-/// for "good-enough recall over perfect precision", not full academic-grade morphology.
+/// point (see <see cref="SuffixStripper"/>). That is a deliberate simplification: the goal is
+/// good-enough recall over perfect precision, not full academic-grade morphology.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -17,7 +17,7 @@ namespace BeeMemoryBank.Search;
 /// true prefix of the input by construction. This means some rules occasionally strip a real
 /// root's trailing letters when they happen to coincide with a case ending (e.g. "остров"
 /// (island) ends in "-ов" and stems to "остр", even though "-ов" isn't a suffix there) — an
-/// accepted false positive, not a bug, per the brief's stated recall-over-precision tradeoff.
+/// accepted false positive, not a bug, given the recall-over-precision tradeoff.
 /// </para>
 /// <para>
 /// Grouped below by grammatical role purely for readability; <see cref="SuffixStripper"/> only

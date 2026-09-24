@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Infrastructure.Acme;
 /// <summary>
 /// Transient registry that lets the ACME TLS-ALPN-01 challenge certificate be served by an
 /// <i>external</i> TLS listener — i.e. a <c>SslServerAuthenticationOptions</c> /
-/// <c>HttpsConnectionAdapterOptions</c> whose certificate selector the front-wiring task owns.
+/// <c>HttpsConnectionAdapterOptions</c> whose certificate selector lives outside this library.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -21,13 +21,13 @@ namespace BeeMemoryBank.Infrastructure.Acme;
 /// challenge resolves (valid or invalid) the service calls <see cref="RemoveChallenge"/>.
 /// </para>
 /// <para>
-/// <b>ALPN caveat (see also the DoD report).</b> RFC 8737 says the challenge cert should be
+/// <b>ALPN caveat.</b> RFC 8737 says the challenge cert should be
 /// served only when the client negotiates the <c>acme-tls/1</c> ALPN protocol. Unfortunately
 /// <see cref="SslClientHelloInfo"/> exposes only <see cref="SslClientHelloInfo.ServerName"/> and
 /// <see cref="SslClientHelloInfo.SslProtocols"/> — <b>not</b> the client's offered ALPN list — so a
 /// certificate selector cannot, by itself, distinguish a validation probe from an ordinary
 /// client. In practice this is fine: selection is gated on SNI, and a challenge cert is registered
-/// only for the few seconds a validation is actually running. The front-wiring task must still add
+/// only for the few seconds a validation is actually running. The listener must still add
 /// <see cref="TlsAlpn01CertificateBuilder.AcmeTlsAlpnProtocol"/> ("acme-tls/1") to the listener's
 /// <see cref="SslServerAuthenticationOptions.ApplicationProtocols"/> so the TLS stack will
 /// negotiate it during the probe; matching the challenge cert is then done by SNI here.
@@ -92,7 +92,7 @@ public sealed class TlsAlpnChallengeResponder
     }
 
     /// <summary>
-    /// A <see cref="ServerCertificateSelectionCallback"/>-shaped helper that the front-wiring task
+    /// A <see cref="ServerCertificateSelectionCallback"/>-shaped helper that a TLS listener
     /// can embed in its own selector. It returns the challenge cert when one is registered for the
     /// incoming SNI; otherwise it returns <paramref name="fallback"/> (the normal certificate).
     /// </summary>

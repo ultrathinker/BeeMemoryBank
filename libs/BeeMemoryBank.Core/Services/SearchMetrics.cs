@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace BeeMemoryBank.Core.Services;
 
 /// <summary>
-/// WP-18: lightweight, in-process latency + result-count metrics for the search subsystems, so an
+/// Lightweight, in-process latency + result-count metrics for the search subsystems, so an
 /// administrator can see p50/p95 latency, request volume, and coarse result-count distribution per
 /// search type on the Admin page.
 ///
@@ -18,10 +18,9 @@ namespace BeeMemoryBank.Core.Services;
 /// </para>
 ///
 /// <para>
-/// <b>No observability-framework dependency.</b> This codebase did not already use
-/// <c>System.Diagnostics.Metrics</c> / <c>Meter</c> / OpenTelemetry anywhere (checked before
-/// writing this), so introducing one here would have created a brand-new convention for a single
-/// admin page. Instead this is a plain in-memory rolling window, which is all an admin dashboard
+/// <b>No observability-framework dependency.</b> The codebase uses no
+/// <c>System.Diagnostics.Metrics</c> / <c>Meter</c> / OpenTelemetry elsewhere, and one admin page
+/// does not justify a new convention. A plain in-memory rolling window is all an admin dashboard
 /// needs and keeps the dependency surface at zero.
 /// </para>
 ///

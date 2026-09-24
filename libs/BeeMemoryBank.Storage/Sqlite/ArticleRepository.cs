@@ -15,18 +15,18 @@ public class ArticleRepository(
 {
     private readonly CallerScopeHolder _holder = scopeHolder;
 
-    // WP-18: optional search-metrics recorder (DI injects the process-wide singleton; direct `new`
+    // Optional search-metrics recorder (DI injects the process-wide singleton; direct `new`
     // callers -- tests -- get null and recording is a no-op). Records only timings + coarse result
     // counts for semantic search; the query projection vector is never handed to it.
     private readonly SearchMetrics? _searchMetrics = searchMetrics;
 
-    // WP-14: embedding vector cache. DI injects the shared singleton; direct `new` callers (tests)
+    // Embedding vector cache. DI injects the shared singleton; direct `new` callers (tests)
     // get a per-instance cache when they omit the argument. The cache is the only state this
     // otherwise-stateless, scoped repository carries, and it is process-wide by design so an
     // embedding write in one scope invalidates the cache every other scope's next search sees.
     private readonly EmbeddingVectorCache _vectorCache = vectorCache ?? new EmbeddingVectorCache(factory);
 
-    // WP-15: chunk-embedding cache, same optional-DI/per-instance-fallback pattern as _vectorCache.
+    // Chunk-embedding cache, same optional-DI/per-instance-fallback pattern as _vectorCache.
     private readonly ChunkEmbeddingVectorCache _chunkCache = chunkCache ?? new ChunkEmbeddingVectorCache(factory);
     private const string SelectCols = @"
         a.id              AS Id,
@@ -151,12 +151,11 @@ public class ArticleRepository(
 
     public async Task<List<Article>> SearchAsync(string query)
     {
-        // WP-07: FTS5-backed search. The query string is run through the same
+        // FTS5-backed search. The query string is run through the same
         // DefaultTokenizer/DefaultStemmer pipeline the index is designed around, then each stem
         // is emitted as a quoted prefix token (see FtsQueryBuilder). Empty/whitespace-only input
-        // has no usable terms and returns an empty result — a deliberate change from the old
-        // unicode_contains("") path, which (because "".Contains("") is true) returned the entire
-        // active corpus; an empty search box returning everything is not useful behavior.
+        // has no usable terms and deliberately returns an empty result, not the entire active
+        // corpus (which a substring match on "" would produce).
         var matchExpr = FtsQueryBuilder.BuildMatchExpression(query);
         if (matchExpr == null)
         {
@@ -170,7 +169,7 @@ public class ArticleRepository(
         //   * fts_tag       — concept-tag hits joined through tbl_article_concept_tag.
         // Soft-deleted rows stay in the FTS index (the delete trigger only fires on a real
         // DELETE, not a status-flip UPDATE), so every join back to tbl_article re-applies
-        // status = 'A' — same filter the old non-FTS code applied, now load-bearing here.
+        // status = 'A' — load-bearing here.
         //
         // Ranking: title/path hits (tier 0) rank above tag-only hits (tier 1). Within tier 0,
         // bm25 ASC (more negative = better) orders by relevance. Tag-only hits get a fixed score
@@ -210,10 +209,10 @@ public class ArticleRepository(
     }
 
     /// <summary>
-    /// The pre-WP-07 <see cref="SearchAsync"/> implementation: a per-row managed-code
-    /// <c>unicode_contains</c> substring scan over title and tag name, no morphology. Kept
-    /// available (currently unused by <c>SearchService</c>) for a possible future "exact
-    /// substring" search mode. Wiring a UI/API toggle for it is out of WP-07's scope.
+    /// Legacy exact-substring search (the implementation before the FTS5 index): a per-row
+    /// managed-code <c>unicode_contains</c> substring scan over title and tag name, no morphology.
+    /// Kept available (currently unused by <c>SearchService</c>) for a possible future "exact
+    /// substring" search mode; no UI/API toggle is wired to it yet.
     /// </summary>
     public async Task<List<Article>> SearchByExactSubstringAsync(string query)
     {
@@ -297,7 +296,7 @@ public class ArticleRepository(
 
             tx.Commit();
 
-            // WP-14: a brand-new row may carry an embedding_projection (sync create, or a create with
+            // A brand-new row may carry an embedding_projection (sync create, or a create with
             // an inline projection), so the cache must be rebuilt on next search to pick it up.
             _vectorCache.Invalidate();
         }
@@ -329,8 +328,7 @@ public class ArticleRepository(
         if (transaction != null)
         {
             // Caller-supplied transaction: the guard and the write already share the
-            // caller's connection, so just run them against it in order -- unchanged
-            // from before this fix.
+            // caller's connection, so just run them against it in order.
             if (!_holder.Scope.IsSuperadmin)
             {
                 await CheckStoredPathGuardAsync(transaction.Connection!, transaction, article);
@@ -342,22 +340,16 @@ public class ArticleRepository(
             // SECURITY: the pre-update stored-path guard (CheckStoredPathGuardAsync) reads
             // the article's CURRENT path, and the UPDATE below is only safe to run under
             // the authorization that read produced if NOTHING can move the row between the
-            // two. This used to open a short-lived connection for the guard, read, and
-            // dispose it BEFORE the UPDATE even began on a second, independent
-            // connection/transaction -- a concurrent UpdateAsync/move for the same article
-            // could land in that gap, and this call would then write against a stored path
-            // that was already stale by the time its own transaction opened.
+            // two (TOCTOU: a concurrent UpdateAsync/move could otherwise land in the gap).
             //
             // BeginTransaction() on this provider issues BEGIN IMMEDIATE, which takes
             // SQLite's write lock the instant the transaction opens (see
-            // DbConnectionFactory.CreateConnection). Opening the connection+transaction
-            // FIRST and running BOTH the guard query and the UPDATE against it closes that
-            // window: any other writer touching this article row blocks on the write lock
-            // until this transaction commits or rolls back, so the stored path the guard
-            // just verified is guaranteed to still be the path the UPDATE acts on. Do not
-            // split these back onto separate connections "to simplify" -- that's exactly
-            // what reopened the race before. Keep everything between BeginTransaction() and
-            // Commit() cheap: the write lock is held for the whole span.
+            // DbConnectionFactory.CreateConnection). Running BOTH the guard query and the
+            // UPDATE on this one connection+transaction means any other writer blocks until
+            // commit/rollback, so the path the guard verified is the path the UPDATE acts on.
+            // Do not split these onto separate connections "to simplify" -- that reopens the
+            // race. Keep everything between BeginTransaction() and Commit() cheap: the write
+            // lock is held for the whole span.
             using var conn = OpenConnection();
             using var tx = conn.BeginTransaction();
 
@@ -367,18 +359,18 @@ public class ArticleRepository(
             }
 
             // Note: no `status = 'A'` filter — must allow resurrecting soft-deleted rows
-            // when LWW says incoming Create wins over an older Delete (Wave 2 audit
-            // claude-A #7). The caller sets Status explicitly via the @Status param.
+            // when LWW says incoming Create wins over an older Delete. The caller sets
+            // Status explicitly via the @Status param.
             // deleted_at is reset when transitioning back to 'A'.
             await conn.ExecuteAsync(updateSql, article, tx);
 
             tx.Commit();
 
-            // WP-14: UpdateAsync rewrites embedding_projection with whatever the Article model carries.
+            // UpdateAsync rewrites embedding_projection with whatever the Article model carries.
             // Every current caller load-then-modify-then-save (so the bytes are usually unchanged), but
             // the column is written unconditionally here and a future caller could change it -- bumping
             // unconditionally keeps the "cache never silently goes stale" guarantee simple at the cost
-            // of a redundant rebuild on metadata-only edits. See the WP-14 report for the tradeoff.
+            // of a redundant rebuild on metadata-only edits.
             _vectorCache.Invalidate();
         }
     }
@@ -388,7 +380,7 @@ public class ArticleRepository(
     /// caller with write permission on /Public could call UpdateAsync with article.Id pointing at
     /// a /Secrets article and article.TreePath = "/Public" — the ordinary guard at the top of
     /// <see cref="UpdateAsync"/> only sees the NEW path and passes, and the row would be moved
-    /// (with full plaintext attached) into the caller's reach. Gemini security review 2026-05-25.
+    /// (with full plaintext attached) into the caller's reach.
     ///
     /// Must run against the SAME connection AND transaction as the UPDATE it protects -- see the
     /// SECURITY comment in the self-managed branch of <see cref="UpdateAsync"/> for why a
@@ -435,8 +427,7 @@ public class ArticleRepository(
         if (transaction != null)
         {
             // Caller-supplied transaction: guard and write already share the caller's
-            // connection, so just run them against it in order -- unchanged from before
-            // this fix.
+            // connection, so just run them against it in order.
             if (!_holder.Scope.IsSuperadmin)
             {
                 await CheckSoftDeleteGuardAsync(transaction.Connection!, transaction, id);
@@ -451,19 +442,14 @@ public class ArticleRepository(
             return;
         }
 
-        // SECURITY: same TOCTOU shape as the stored-path guard in UpdateAsync above (not
-        // called out in the original review comment, but identical bug): the pre-delete
-        // ACL/read-only/remote-share guard (CheckSoftDeleteGuardAsync) reads this article's
-        // CURRENT path, and that read only stays valid for the UPDATE below if nothing else
-        // can move or reassign the row in the meantime. This used to run the guard on its
-        // own short-lived connection and then the UPDATE on a second connection with NO
-        // explicit transaction at all -- a concurrent move could land in the gap and this
-        // call would delete/keep based on a stale path. Opening the connection+transaction
-        // FIRST (BEGIN IMMEDIATE takes the write lock immediately, see
-        // DbConnectionFactory.CreateConnection) and running both the guard query and the
-        // UPDATE against it closes that window the same way UpdateAsync's fix does. Keep
-        // the span between BeginTransaction() and Commit() cheap -- the write lock is held
-        // for the whole span.
+        // SECURITY: same TOCTOU shape as the stored-path guard in UpdateAsync above: the
+        // pre-delete ACL/read-only/remote-share guard (CheckSoftDeleteGuardAsync) reads this
+        // article's CURRENT path, and that read only stays valid for the UPDATE below if
+        // nothing else can move or reassign the row in the meantime. So both run on ONE
+        // connection+transaction opened first (BEGIN IMMEDIATE takes the write lock
+        // immediately, see DbConnectionFactory.CreateConnection); do not split them onto
+        // separate connections. Keep the span between BeginTransaction() and Commit() cheap
+        // -- the write lock is held for the whole span.
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
 
@@ -494,7 +480,7 @@ public class ArticleRepository(
         // Dapper maps ValueTuple by position (Item1/Item2), not by alias, so
         // `(string?, string?)` would receive nulls regardless of SELECT — the
         // ACL/Read-only guard would silently no-op. Use a dedicated record so
-        // properties bind by name. Caught by Claude+gemini third review.
+        // properties bind by name.
         var meta = await conn.QuerySingleOrDefaultAsync<ArticleDeleteMeta>(
             @"SELECT COALESCE(f.path, '/') AS TreePath, a.remote_subscription_id AS RemoteSubId
               FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id
@@ -537,7 +523,7 @@ public class ArticleRepository(
               WHERE id = @id",
             new { id, projection, modelVersion });
 
-        // WP-14/perf follow-up: this is the one write path that actually changes embedding bytes
+        // This is the one write path that actually changes embedding bytes
         // during normal operation (the background PendingEmbeddingProcessor). Patch the single
         // changed row into the cache directly -- we already have `projection` in hand, so there is
         // nothing left to read from the DB, unlike a blind Invalidate() which would force the next
@@ -547,7 +533,7 @@ public class ArticleRepository(
         _vectorCache.UpdateOne(id, projection);
     }
 
-    // WP-11: mirrors GetEmbeddingPendingAsync exactly, for PendingIndexProcessor.
+    // Mirrors GetEmbeddingPendingAsync exactly, for PendingIndexProcessor.
     public async Task<List<Article>> GetIndexPendingAsync(int limit = 100)
     {
         using var conn = OpenConnection();
@@ -626,15 +612,11 @@ public class ArticleRepository(
             new { currentModelVersion });
     }
 
-    // Narrow projection used only to rank candidates by cosine similarity. Deliberately not
-    // the full Article model: SearchByEmbeddingAsync used to hydrate every column (including
-    // embedding_projection's BLOB sibling columns and all remote-sync metadata) for every
-    // article with an embedding, just to throw away all but `topK` of them.
-    //
-    // WP-14: kept for the independent reference cosine computation in Storage tests (and as
-    // documentation of the pre-WP-14 first-pass shape). SearchByEmbeddingAsync itself no longer
-    // issues this SQL per call -- it scores out of the process-wide EmbeddingVectorCache, which
-    // rebuilds this same id+projection result set only on invalidation.
+    // Narrow id+projection shape for ranking candidates by cosine similarity -- deliberately not
+    // the full Article model, so scoring never hydrates every column of every embedded article
+    // just to keep `topK` of them. Kept for the independent reference cosine computation in
+    // Storage tests; SearchByEmbeddingAsync itself scores out of the process-wide
+    // EmbeddingVectorCache, which rebuilds this same id+projection result set only on invalidation.
     private sealed class EmbeddingCandidate
     {
         public Guid Id { get; set; }
@@ -643,11 +625,10 @@ public class ArticleRepository(
 
     public async Task<List<Article>> SearchByEmbeddingAsync(float[] queryProjection, int topK = 10)
     {
-        // WP-18: timing/counting wrapper around the semantic-search path. Only elapsed time and the
+        // Timing/counting wrapper around the semantic-search path. Only elapsed time and the
         // coarse result count are recorded; the query projection vector (and any query text it was
-        // derived from upstream) is never passed to the metrics component. Behavior is unchanged on
-        // every path -- the recording runs only on the success return, and exceptions propagate
-        // exactly as before.
+        // derived from upstream) is never passed to the metrics component. The recording runs only
+        // on the success return; exceptions propagate untouched.
         var sw = _searchMetrics is null ? null : Stopwatch.StartNew();
         var results = await SearchByEmbeddingCoreAsync(queryProjection, topK);
         if (_searchMetrics is not null)
@@ -660,11 +641,11 @@ public class ArticleRepository(
 
     private async Task<List<Article>> SearchByEmbeddingCoreAsync(float[] queryProjection, int topK)
     {
-        // WP-14: pass 1 (score every active article's projection) now runs out of the in-memory
-        // EmbeddingVectorCache instead of a fresh full-table SQL scan on every call. The cache is
-        // rebuilt (from the same `status = 'A' AND embedding_projection IS NOT NULL` query) only
-        // when an embedding write has invalidated it since the last build. Scoring itself moved
-        // into EmbeddingVectorCache.Snapshot.Score, which uses TensorPrimitives (SIMD) for the dot
+        // Pass 1 (score every active article's projection) runs out of the in-memory
+        // EmbeddingVectorCache instead of a full-table SQL scan on every call. The cache is
+        // rebuilt (from a `status = 'A' AND embedding_projection IS NOT NULL` query) only
+        // when an embedding write has invalidated it since the last build. Scoring lives in
+        // EmbeddingVectorCache.Snapshot.Score, which uses TensorPrimitives (SIMD) for the dot
         // product and reuses precomputed candidate norms + a once-per-query query norm.
         EmbeddingVectorCache.Snapshot snapshot = _vectorCache.GetOrRebuild();
 
@@ -672,19 +653,17 @@ public class ArticleRepository(
 
         if (topIds.Count == 0) return [];
 
-        // Pass 2: hydrate the full Article rows for just the surviving top-K ids. Unchanged from
-        // pre-WP-14: only the embedding vectors are cached, not full rows.
+        // Pass 2: hydrate the full Article rows for just the surviving top-K ids. Only the
+        // embedding vectors are cached, not full rows.
         using var conn = OpenConnection();
         var fullArticles = (await conn.QueryAsync<Article>(
             $"SELECT {SelectCols} {FromClause} WHERE a.id IN @ids AND a.status = 'A'",
             new { ids = topIds })).ToList();
 
-        // `IN` does not preserve order, so re-assemble the ranked order from topIds. This also
-        // preserves the pre-existing quirk: _holder.Scope.FilterArticles runs AFTER Take(topK)
-        // (inside Snapshot.Score), same as before this change, so an ACL-restricted caller can
-        // still get back fewer than topK (or zero) visible results if invisible articles ranked
-        // highest. That is not fixed here — it's a separate, bigger decision outside this
-        // perf-only WP.
+        // `IN` does not preserve order, so re-assemble the ranked order from topIds. Known
+        // limitation: _holder.Scope.FilterArticles runs AFTER Take(topK) (inside Snapshot.Score),
+        // so an ACL-restricted caller can get back fewer than topK (or zero) visible results if
+        // invisible articles ranked highest. Changing that is a separate, bigger decision.
         var byId = fullArticles.ToDictionary(a => a.Id);
         var scored = topIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
 
@@ -692,14 +671,13 @@ public class ArticleRepository(
     }
 
     /// <summary>
-    /// WP-15: semantic search over per-chunk embeddings instead of one embedding per article, so a
+    /// Semantic search over per-chunk embeddings instead of one embedding per article, so a
     /// "needle" past <c>OnnxEmbeddingGenerator.MaxSequenceLength</c> tokens into a long article is
     /// findable via its own chunk. An article's score is the max cosine score over its own chunks
     /// (<see cref="ChunkEmbeddingVectorCache.Snapshot.ScoreMaxPerArticle"/>). An article that has no
-    /// chunk rows yet (not (re)chunked since WP-15 shipped) falls back to its old full-document
-    /// score from <see cref="EmbeddingVectorCache"/>, so this method never regresses an
-    /// not-yet-backfilled article to "invisible" relative to the pre-WP-15
-    /// <see cref="SearchByEmbeddingAsync"/>.
+    /// chunk rows yet (not yet (re)chunked into per-chunk embeddings) falls back to its
+    /// full-document score from <see cref="EmbeddingVectorCache"/>, so a not-yet-backfilled article
+    /// is never less visible than it is to <see cref="SearchByEmbeddingAsync"/>.
     /// </summary>
     public async Task<List<Article>> SearchByChunkEmbeddingAsync(float[] queryProjection, int topK = 10)
     {
@@ -726,9 +704,8 @@ public class ArticleRepository(
         // version upgrade, before background reprocessing has re-chunked anything), every chunk
         // score is a meaningless 0 for this query -- treating those articles as "already handled by
         // chunk scoring" would incorrectly withhold their full-document fallback from every single
-        // one of them, not just the ones that genuinely have no better answer. Found during an
-        // independent adversarial review (2026-08-12); see ChunkEmbeddingVectorCache.Snapshot.
-        // ChunkedArticleIds's own doc comment for the full reasoning.
+        // one of them, not just the ones that genuinely have no better answer. See
+        // ChunkEmbeddingVectorCache.Snapshot.ChunkedArticleIds's doc comment for the full reasoning.
         HashSet<Guid> chunkedIds = queryProjection.Length == chunkSnapshot.Dimension
             ? chunkSnapshot.ChunkedArticleIds
             : [];
@@ -773,11 +750,10 @@ public class ArticleRepository(
         return _holder.Scope.FilterArticles(articles);
     }
 
-    // Unguarded (no caller-scope check) and, since this is exactly the shape that once let a
-    // user-facing folder-delete path relocate ACL-denied articles to the vault root (see
-    // ClearFolderIdUnscopedAsync below), marked `internal` on the interface rather than just
-    // documented: BeeMemoryBank.Api/Web cannot reference this member at all, by construction, not
-    // by convention. See IArticleRepository's doc comment for the InternalsVisibleTo grants this
+    // Unguarded (no caller-scope check). Reached from a user-facing folder-delete path, this shape
+    // relocates ACL-denied articles to the vault root (see ClearFolderIdUnscopedAsync below), so it
+    // is marked `internal` on the interface rather than just documented: BeeMemoryBank.Api/Web cannot reference this
+    // member at all, by construction, not by convention. See IArticleRepository's doc comment for the InternalsVisibleTo grants this
     // relies on. Reachable only from FolderBootstrapper (startup migration, same assembly) and
     // EventApplier folder-delete replay (Sync, granted access) — both run under SystemCallerScope.
     async Task IArticleRepository.SetFolderIdUnscopedAsync(Guid articleId, Guid folderId)
@@ -788,13 +764,13 @@ public class ArticleRepository(
             new { articleId, folderId });
     }
 
-    // Unguarded (no caller-scope check) — the exact method a user-facing folder-delete path once
-    // called directly, relocating ACL-denied articles to the vault root instead of being blocked.
+    // Unguarded (no caller-scope check): called directly from a user-facing folder-delete path,
+    // it would relocate ACL-denied articles to the vault root instead of being blocked.
     // Marked `internal` on the interface (see IArticleRepository's doc comment) so the compiler,
     // not a comment someone has to notice, keeps it off the API/MCP surface. The two remaining
     // callers are safe DESPITE the missing check: FolderService.DeleteAsync (Core, same assembly)
     // calls folderRepo.SoftDeleteByPathPrefixAsync first, which walks every descendant and throws
-    // on the first ACL violation — see the H1 comment there — so a denied descendant aborts the
+    // on the first ACL violation — see the descendant-scan comment there — so a denied descendant aborts the
     // whole cascade before this is ever reached; EventApplier.Folder (Sync, granted access) runs
     // under SystemCallerScope, where every check would be a no-op anyway. Do not add a new call
     // site ahead of an equivalent guard.

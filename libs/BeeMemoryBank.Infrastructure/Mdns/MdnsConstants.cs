@@ -17,7 +17,7 @@ public static class MdnsConstants
     /// </summary>
     public const string QualifiedServiceName = "_beememorybank._tcp.local";
 
-    // ── TXT record keys (per TASK_BRIEF) ──────────────────────────────────────
+    // ── TXT record keys ───────────────────────────────────────────────────────
     public const string TxtNodeId = "nodeId";
     public const string TxtVersion = "ver";
     public const string TxtName = "name";

@@ -14,12 +14,11 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     private byte[]? _pendingClearDek;
     private readonly object _lock = new();
 
-    // Retired DEK cache for bug #1 (DEK rotation race). When SwapMasterDek runs, the
-    // outgoing DEK goes here for a bounded window. If a peer-applied event was wrapped
-    // with the old DEK during the rotation window, EventApplier's wrap/unwrap path can
-    // ask GetCandidateDeks() and try them in order until one succeeds. This is the
-    // "tolerate the race" approach (gemini brainstorm A) — the alternative (write-fence
-    // lock around every wrap, claude-B) is more invasive and has no upside in practice
+    // Retired-DEK cache for the DEK rotation race. When SwapMasterDek runs, the outgoing
+    // DEK goes here for a bounded window. If a peer-applied event was wrapped with the old
+    // DEK during the rotation window, EventApplier's wrap/unwrap path can ask
+    // GetCandidateDeks() and try them in order until one succeeds. Tolerating the race
+    // beats a write-fence lock around every wrap: that is more invasive and buys nothing,
     // because AES-GCM unwrap with a wrong key fails fast (~microseconds). Cap is small:
     // 3 retired DEKs ≈ at most 3 rotations within the retention window. Older entries
     // are evicted from the front so memory exposure stays bounded. All retired DEKs are
@@ -30,7 +29,6 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     // Serialize concurrent UnlockAsync calls. Without this, two parallel attempts (browser
     // auto-retry, mobile + web simultaneously) both reach the lazy-rewrap branch and both
     // call UpdateSlotKeyAsync — wasted Argon2 work + last-writer-wins UPDATE on tbl_key_slot.
-    // (Claude R2 prod review HIGH-5.)
     private readonly SemaphoreSlim _unlockSemaphore = new(1, 1);
 
     public LegacyPasswordSlotMigrationService.MigrationResult? LastMigrationResult { get; private set; }
@@ -39,7 +37,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     /// Raised at the end of <see cref="Lock"/>, after every in-memory key has been wiped.
     /// Api-layer code subscribes to this (see SessionEndpoints.MapSessionEndpoints) to clear
     /// state that Core has no business knowing about but that must not outlive a lock either —
-    /// e.g. ProtectedUnlockCache's cached per-article passphrases (finding M8) — without giving
+    /// e.g. ProtectedUnlockCache's cached per-article passphrases — without giving
     /// Core a dependency on Api-layer types. Fires for every caller of Lock(), not just the
     /// /api/session/lock endpoint: node reset, snapshot/network restore, and the process-shutdown
     /// hook all call it directly too, and each of those needs the same cleanup.
@@ -59,10 +57,10 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     /// <para>
     /// Only call this where unlocking is the actual intent. To find out whether a password is
     /// correct — re-authentication before a dangerous operation, say — use
-    /// <see cref="VerifyMasterPasswordAsync"/> instead. Using this method as a password check is how
-    /// a destructive endpoint once became a master-password oracle that unlocked the vault globally
-    /// as a side effect of merely being asked, even when the operation itself then failed. The set
-    /// of call sites is pinned by SessionUnlockCallSiteGuardTests in BeeMemoryBank.Core.Tests.
+    /// <see cref="VerifyMasterPasswordAsync"/> instead. Used as a password check, this method turns
+    /// the endpoint into a master-password oracle that unlocks the vault globally as a side effect
+    /// of merely being asked, even when the operation itself then fails. The set of call sites is
+    /// pinned by SessionUnlockCallSiteGuardTests in BeeMemoryBank.Core.Tests.
     /// </para>
     /// </summary>
     public async Task<bool> UnlockAsync(string password)
@@ -82,9 +80,9 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     /// Proves that <paramref name="password"/> opens a key slot this node accepts for unlocking
     /// (superadmin "user" slot, recovery, or legacy "password" slot) WITHOUT unlocking the shared
     /// session. For re-authentication before a dangerous operation (node reset, snapshot restore,
-    /// whitelist revoke) — those used to call <see cref="UnlockAsync"/> as a password check, which
-    /// left the vault unlocked for every user and agent as a side effect of merely asking, even when
-    /// the operation itself then failed. Same candidate-slot policy and the same "wrong password and
+    /// whitelist revoke) — calling <see cref="UnlockAsync"/> there as a password check would leave
+    /// the vault unlocked for every user and agent as a side effect of merely asking, even when the
+    /// operation itself then failed. Same candidate-slot policy and the same "wrong password and
     /// not-permitted slot are indistinguishable" property as the real unlock; the derived DEK is wiped
     /// before returning.
     /// </summary>
@@ -194,7 +192,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                     {
                         // VerifySentinel decrypts the stored sentinel using the candidate DEK —
                         // ComputeSentinel can't be byte-compared because it generates a fresh random
-                        // IV every call. (Found by Gemini reviewer at p3.3.)
+                        // IV every call.
                         sentinelMatch = MasterKeyManager.VerifySentinel(sentinel, currentCandidate);
 
                         if (!sentinelMatch)
@@ -218,31 +216,26 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                     }
 
                     // SECURITY: only a superadmin may unlock the shared, process-wide vault
-                    // session — the same policy SessionEndpoints' /login already enforces (a
+                    // session — the same policy SessionEndpoints' /login enforces (a
                     // non-superadmin gets 403 "Server is locked" there instead of ever reaching
-                    // UnlockAsync). /unlock itself had no such gate: it accepted ANY slot whose
-                    // password matched, including — in principle — an ordinary user's "user"
-                    // slot. Checked HERE rather than via an X-User-Role header or any other
-                    // caller-supplied claim, because this is the one point that cannot be lied
-                    // to: the password has just been cryptographically proven (KEK unwrap +
-                    // sentinel match) to belong to THIS row in tbl_key_slot, so asking "whose
-                    // slot is this, really?" against tbl_user directly is authoritative
-                    // regardless of what the caller claims about itself.
+                    // UnlockAsync); without this check /unlock would accept ANY slot whose
+                    // password matched. Checked HERE rather than via an X-User-Role header or any
+                    // other caller-supplied claim, because this is the one point that cannot be
+                    // lied to: the password has just been cryptographically proven (KEK unwrap +
+                    // sentinel match) to belong to THIS row in tbl_key_slot, so asking tbl_user
+                    // who owns the slot is authoritative regardless of what the caller claims.
                     //
                     // Only "user" slots need this check. "recovery" and legacy pre-migration
                     // "password" slots are intentionally exempt: a recovery key is never tied to
-                    // any user account (it's the user's sole break-glass path back into the
-                    // vault — rejecting it here would be a self-inflicted lockout), and a legacy
-                    // "password" slot predates the whole user table / role concept — it IS the
+                    // any user account (it's the sole break-glass path back into the vault —
+                    // rejecting it here would be a self-inflicted lockout), and a legacy
+                    // "password" slot predates the user table / role concept — it IS the
                     // superadmin-equivalent credential until LegacyPasswordSlotMigrationService
-                    // (below) converts it to a "user" slot on a synthetic admin account. Under
-                    // the current invariants (UserService only ever creates/keeps a "user" slot
-                    // for a superadmin — see CreateUserAsync / RewrapOrProvisionKeySlotAsync /
-                    // ProvisionMissingKeySlotAsync, and UpdateUserAsync deletes the slot the
-                    // instant its owner is demoted) no non-superadmin should ever hold a "user"
-                    // slot, so this is defence in depth against a future bug or hand-edited DB
-                    // row, not a fix for a reachable path — but it's cheap enough to check
-                    // unconditionally rather than rely on that invariant never being violated.
+                    // converts it to a "user" slot on a synthetic admin account. UserService only
+                    // ever keeps a "user" slot for a superadmin (CreateUserAsync /
+                    // RewrapOrProvisionKeySlotAsync / ProvisionMissingKeySlotAsync; UpdateUserAsync
+                    // deletes the slot on demotion), so this is defence in depth against a future
+                    // bug or hand-edited DB row — cheap enough to check unconditionally.
                     if (sentinelMatch && slot.SlotType == "user")
                     {
                         // GetRequiredService, not GetService: if IUserRepository is somehow not
@@ -310,13 +303,12 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     }
 
     /// <summary>
-    /// Fires the same catch-up work UnlockCoreAsync always ran after a password unlock, but from
-    /// a single shared place so <see cref="UnlockWithDek"/> callers (OS auto-unlock, agent-token
-    /// unlock) get it too. Without this, a node that ONLY ever unlocks via one of those paths —
-    /// exactly the auto-unlock server-mode use case — would never retry a DEK rotation
-    /// auto-accept or network-restore that was pending while it was locked, and would never
-    /// migrate a legacy v=0 plaintext node identity key. All three are already documented
-    /// idempotent/safe-to-retry, so running them unconditionally on every unlock is safe.
+    /// Post-unlock catch-up work, shared by the password unlock and <see cref="UnlockWithDek"/>
+    /// (OS auto-unlock, agent-token unlock). A node that ONLY ever unlocks via one of the latter —
+    /// exactly the auto-unlock server-mode use case — must still retry a DEK rotation auto-accept
+    /// or network-restore that was pending while it was locked, and migrate a legacy v=0
+    /// plaintext node identity key. All three are idempotent/safe-to-retry, so running them
+    /// unconditionally on every unlock is safe.
     /// </summary>
     private void TriggerPostUnlockCatchUp()
     {
@@ -324,7 +316,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         var capturedScopeFactory = scopeFactory;
 
         // Retry any deferred auto-accept DEK rotations whose COMMIT arrived while the
-        // session was locked. (Claude R2 prod review CRIT-1.)
+        // session was locked.
         _ = Task.Run(async () =>
         {
             try
@@ -339,9 +331,8 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         // Same pattern for stuck network-restore events. EventApplier auto-accepts
         // restore via fire-and-forget Task.Run — if that Task throws (network blip
         // mid-download, locked session at apply time, process crash before startup
-        // sweep), state stays Pending/Downloading/Applying with no automatic retry.
-        // Brainstorm consensus (kilo, claude, gemini): bug #5 restore-retry mirrors
-        // DEK rotation retry. AcceptRestoreAsync is idempotent.
+        // sweep), state stays Pending/Downloading/Applying with no automatic retry, so it
+        // is retried here like the DEK rotation above. AcceptRestoreAsync is idempotent.
         _ = Task.Run(async () =>
         {
             try
@@ -390,15 +381,13 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
 
     public void SwapMasterDek(byte[] newMasterDek)
     {
-        // Bug #1 (DEK rotation race): the old approach was Task.Delay(2s) then Array.Clear —
-        // a heuristic drain window for in-flight wrap operations holding a Clone() of the old
-        // DEK. The drain was racy under load (slow IO could exceed 2s) and worse, didn't help
-        // peers receiving an event encrypted with the old DEK after they'd rotated. Now: push
-        // the outgoing DEK to a small retired cache (capped, evicted FIFO). EventApplier's
-        // unwrap path queries GetCandidateDeks() and tries them on CryptographicException, so
-        // late-arriving cross-DEK events decrypt naturally. Local in-flight writes still
-        // complete with their captured Clone (no semantic change there). ClearPendingDek
-        // remains as a no-op for callers (kept for ABI compat) but the timed-clear is gone.
+        // DEK rotation race: the outgoing DEK goes to a small retired cache (capped, evicted
+        // FIFO), not a timed "drain then Array.Clear" — a timed drain is racy under load (slow
+        // IO outlasts it) and does not help peers receiving an event encrypted with the old DEK
+        // after they rotated. EventApplier's unwrap path queries GetCandidateDeks() and tries
+        // them on CryptographicException, so late-arriving cross-DEK events decrypt naturally.
+        // Local in-flight writes complete with their captured Clone. ClearPendingDek is kept
+        // for API compatibility; there is no timed clear.
         byte[]? oldDek;
         lock (_lock)
         {
@@ -424,7 +413,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     /// the current master DEK first, then up to MaxRetiredDeks previous ones in
     /// most-recently-retired order. Caller MUST Array.Clear each returned buffer in a
     /// finally block. Used by EventApplier on CryptographicException to walk the rotation
-    /// chain. Returns empty if locked. (Bug #1 retired-DEK cache.)
+    /// chain. Returns empty if locked.
     /// </summary>
     public byte[][] GetCandidateDeks()
     {
@@ -443,10 +432,10 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     }
 
     /// <summary>
-    /// Wipes any oldDek pending the 2s drain window. ONLY for the host shutdown hook —
-    /// any other caller can race with rotation by clearing before in-flight ops finish
-    /// reading their `GetMasterDek().Clone()` snapshot. Kept internal-by-convention via
-    /// the doc comment until/unless we add InternalsVisibleTo. (Claude security review.)
+    /// Wipes the pending-clear DEK slot, if set (<see cref="SwapMasterDek"/> never sets it; see
+    /// there). ONLY for the host shutdown hook — any other caller can race with rotation by
+    /// clearing before in-flight ops finish reading their `GetMasterDek().Clone()` snapshot.
+    /// Internal by convention (this doc comment), since there is no InternalsVisibleTo.
     /// </summary>
     public void ClearPendingDek()
     {
@@ -481,7 +470,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                 _masterDek = null;
             }
             // Wipe retired-DEK cache: explicit lock means "evict ALL key material" so a
-            // process memory dump after lock yields no usable keys. (Bug #1 cache.)
+            // process memory dump after lock yields no usable keys.
             foreach (var retired in _retiredDeks)
                 Array.Clear(retired);
             _retiredDeks.Clear();
@@ -513,7 +502,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     /// CryptographicException during cross-node article-body decryption: a peer that just
     /// rotated may receive an event wrapped with the local node's old master DEK during the
     /// rotation window. Returns the unwrap result, or throws the LAST exception if none worked.
-    /// Each candidate DEK is wiped after use. (Bug #1 retired-DEK cache.)
+    /// Each candidate DEK is wiped after use.
     /// </summary>
     public T TryUnwrapWithCandidates<T>(Func<byte[], T> unwrap)
     {

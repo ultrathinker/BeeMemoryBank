@@ -22,7 +22,7 @@ public sealed class LamportClock : ILamportClock
         // Use max(current, maxKnownTs): if Tick()/Update() have already run before
         // Initialize completes (e.g., a sync pull happens during startup before the DB
         // read finishes), Interlocked.Exchange would clobber a higher counter and
-        // produce non-monotonic timestamps. (kilo-sync R2 finding F5.)
+        // produce non-monotonic timestamps.
         long current;
         do
         {
@@ -40,7 +40,6 @@ public sealed class LamportClock : ILamportClock
     /// a malicious or buggy peer sending long.MaxValue would otherwise wrap to
     /// long.MinValue (unchecked Math.Max + 1) and corrupt the local clock forever.
     /// Cap = current + MaxJump (10 million ticks, ~115 days at 1 tick/sec).
-    /// (Wave 2 audit claude-C #3 / gemini #4.)
     /// </summary>
     public void Update(long remoteTs)
     {

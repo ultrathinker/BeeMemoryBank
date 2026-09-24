@@ -5,7 +5,7 @@ using BeeMemoryBank.Core.Models;
 namespace BeeMemoryBank.Core.Services;
 
 /// <summary>
-/// No-op implementation for Phase 1 and tests without sync.
+/// No-op implementation for hosts and tests without sync.
 /// </summary>
 public sealed class NullEventLogger : IEventLogger
 {

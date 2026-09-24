@@ -23,7 +23,7 @@ namespace BeeMemoryBank.Hosting.AspNetCore;
 /// would be waiting on the vault. It is likewise not wrapped with DPAPI — that is Windows-only
 /// (Linux and Docker run this same code, and <c>OsAutoUnlockService</c> shows what guarding a
 /// Windows-only path costs), and it would bind the ring to a single Windows account, so running
-/// the node as a different service user would resurrect the exact failure this fixes. The keys
+/// the node as a different service user would bring back the exact failure this prevents. The keys
 /// rest on the filesystem permissions of the data directory, the same protection the
 /// <c>.internal-key</c> file sitting next to them already relies on.
 /// </para>

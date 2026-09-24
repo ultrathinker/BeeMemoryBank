@@ -21,8 +21,8 @@ namespace BeeMemoryBank.Search;
 /// <b>No consonant-doubling undo</b> (Porter: <c>running</c> -&gt; <c>run</c> by dropping "-ing"
 /// and then one of the doubled "n"s). Undoing the double is itself a pure deletion and would be
 /// safe to add, but it requires detecting "the stem now ends in a doubled consonant" as a special
-/// case beyond a fixed suffix table, which is the generic-rule-engine complexity this WP's brief
-/// asked to avoid. Skipped: "running" stems to "runn", not "run".
+/// case beyond a fixed suffix table, which is the generic-rule-engine complexity this stemmer
+/// deliberately avoids. Skipped: "running" stems to "runn", not "run".
 /// </item>
 /// <item>
 /// <b>"-tion"/"-sion" collapsed into a single generic "-ion" (3 chars) rule</b> instead of two
@@ -49,8 +49,8 @@ namespace BeeMemoryBank.Search;
 /// </list>
 /// <para>
 /// All remaining suffixes (-ing, -ed, -er, -est, -ly, -ness, -ment, plain -s/-es) are deleted
-/// outright with only a minimum-remaining-length guard, exactly as the brief asks: "reasonable
-/// recall over perfect precision".
+/// outright with only a minimum-remaining-length guard, by design: reasonable recall over perfect
+/// precision.
 /// </para>
 /// </remarks>
 public sealed class EnglishStemmer : IStemmer

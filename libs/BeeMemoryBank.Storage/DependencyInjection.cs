@@ -16,14 +16,14 @@ public static class DependencyInjection
         // Registered through a factory delegate, NOT as a pre-built instance. The DI container
         // only disposes what it creates itself: an object handed to AddSingleton(instance) is
         // never disposed, so DbConnectionFactory.Dispose — which clears the SQLite connection
-        // pool — simply never ran. Every pooled handle stayed open on the database file, and on
-        // Windows that made "delete the data directory" fail long after the provider was gone.
+        // pool — would never run. Every pooled handle would stay open on the database file, and
+        // on Windows "delete the data directory" fails long after the provider is gone.
         // Both registrations resolve the same instance; Dispose is idempotent.
         services.AddSingleton(_ => new DbConnectionFactory(dataPath));
         services.AddSingleton<Core.Interfaces.IDbConnectionFactory>(sp => sp.GetRequiredService<DbConnectionFactory>());
         services.AddSingleton<MigrationRunner>();
 
-        // WP-09: encrypted-at-rest search index segments. Files live in a sibling directory next
+        // Encrypted-at-rest search index segments. Files live in a sibling directory next
         // to the sqlite DB (dataPath may itself be a directory or a ".db" file path -- mirror
         // DbConnectionFactory's own handling of both shapes rather than duplicating its logic).
         var segmentsDirectory = Path.Combine(
@@ -38,7 +38,7 @@ public static class DependencyInjection
             sp.GetRequiredService<SessionService>(),
             segmentsDirectory));
 
-        // WP-14: process-wide semantic-search vector cache, shared by every scoped
+        // Process-wide semantic-search vector cache, shared by every scoped
         // ArticleRepository instance (see EmbeddingVectorCache's own doc comment for why this
         // must be a singleton — without this registration, ArticleRepository's optional
         // constructor parameter would fall back to `new EmbeddingVectorCache(factory)` per
@@ -46,10 +46,10 @@ public static class DependencyInjection
         services.AddSingleton<EmbeddingVectorCache>();
         services.AddScoped<IArticleRepository, ArticleRepository>();
 
-        // WP-15: same reasoning as EmbeddingVectorCache above, for the chunk-embedding cache.
-        // ArticleChunkEmbeddingRepository queries the DB directly (not through
+        // Same reasoning as EmbeddingVectorCache above, for the chunk-embedding cache.
+        // ChunkEmbeddingVectorCache queries the DB directly (not through
         // IArticleChunkEmbeddingRepository) rather than depending on the repository interface --
-        // see its own constructor doc comment for why (the repository's write path needs to call
+        // see its constructor comment for why (the repository's write path needs to call
         // Invalidate() on this cache, and a two-way dependency isn't resolvable by the container).
         services.AddSingleton<ChunkEmbeddingVectorCache>();
         services.AddScoped<IArticleChunkEmbeddingRepository, ArticleChunkEmbeddingRepository>();

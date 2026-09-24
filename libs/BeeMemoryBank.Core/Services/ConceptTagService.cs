@@ -114,9 +114,8 @@ public class ConceptTagService(
         {
             // Falling through to PrecomputeNewTagEmbeddingsAsync here would run ONNX model
             // inference while the caller's transaction is open, holding its SQLite write lock for
-            // however long inference takes — exactly the bug a prior review caught and fixed by
-            // moving embedding generation out of the transactional path. A caller inside a
-            // transaction must precompute first and pass the result in.
+            // however long inference takes. A caller inside a transaction must precompute first
+            // and pass the result in.
             if (transaction != null)
                 throw new InvalidOperationException(
                     $"{nameof(SetForArticleAsync)} requires precomputed embeddings when called with a transaction — " +
@@ -165,7 +164,7 @@ public class ConceptTagService(
         // Built with a loop (not ToDictionary) because tbl_concept_tag.name is UNIQUE but not
         // COLLATE NOCASE at the DB level -- every current write path enforces case-insensitive
         // uniqueness before insert, but older rows predating that enforcement can still collide
-        // under OrdinalIgnoreCase, which made ToDictionary throw in production. Last one wins,
+        // under OrdinalIgnoreCase, which would make ToDictionary throw. Last one wins,
         // which is fine here: this is only a "do I already have a current version?" lookup, not
         // the source of truth.
         var currentVersions = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);

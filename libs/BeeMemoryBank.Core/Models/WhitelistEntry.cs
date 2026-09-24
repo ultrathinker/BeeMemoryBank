@@ -19,10 +19,9 @@ public class WhitelistEntry
     /// other replicated row carries — read together as a <see cref="RowVersion"/>.
     ///
     /// <para>
-    /// This table was the last replicated one without it, and the gap was not cosmetic: whitelist
-    /// add, revoke and update applied in arrival order, so a stale <c>whitelist_add</c> from a peer
-    /// that had been offline during a revoke put the revoked node back into the mesh on arrival,
-    /// silently. See migration 021 for the full account.
+    /// Without it, whitelist add, revoke and update apply in arrival order, so a stale
+    /// <c>whitelist_add</c> from a peer that was offline during a revoke silently puts the revoked
+    /// node back into the mesh. See migration 021.
     /// </para>
     ///
     /// <para>
@@ -41,8 +40,8 @@ public class WhitelistEntry
 
     /// <summary>
     /// True if this peer is authorized to issue cluster-state-modifying sync events:
-    /// whitelist add/revoke, hard-delete, restore_network. Default false. (Wave 2:
-    /// gemini #1 / #2 / #3 — privilege escalation prevention.)
+    /// whitelist add/revoke, hard-delete, restore_network. Default false, so a
+    /// peer cannot escalate its own privileges.
     ///
     /// <para>Set on every node that joins with the master password, since a join grants full
     /// trust. It can be cleared again from Admin → Nodes, which emits a whitelist_update carrying

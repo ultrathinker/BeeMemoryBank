@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Search.Indexing;
 /// <summary>
 /// A read-only, point-in-time view of one sealed segment as exposed by
 /// <see cref="IndexBuilder.GetSealedSegments"/>: the segment's <see cref="SegmentReader"/> plus
-/// enough tombstone information for a caller (e.g. a future query-engine work package) to filter
+/// enough tombstone information for a caller (e.g. a ranking query engine) to filter
 /// out articleIds whose presence in this segment is stale, without needing to re-derive that from
 /// anywhere else. <see cref="IndexBuilder"/> does that filtering itself for <see cref="IndexBuilder.Lookup"/>;
 /// this type exists so lower-level callers that need direct postings/doc-table access (e.g. for

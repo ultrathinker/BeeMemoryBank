@@ -2,7 +2,7 @@ namespace BeeMemoryBank.Search.Segment;
 
 /// <summary>
 /// One document's contribution to a segment being built by <see cref="SegmentWriter"/>: its
-/// zero-based doc id, the two identifiers a later query engine needs to translate a match back
+/// zero-based doc id, the two identifiers a query engine needs to translate a match back
 /// into a real article and apply folder-based ACL filtering, and its (already tokenized/stemmed)
 /// terms. This format has no opinion on what produced the terms -- tokenization and stemming are
 /// entirely the caller's concern.

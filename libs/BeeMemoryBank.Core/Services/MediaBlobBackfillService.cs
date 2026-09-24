@@ -14,15 +14,15 @@ namespace BeeMemoryBank.Core.Services;
 public readonly record struct MediaBlobBackfillResult(int Stored, int AlreadyDone, int MissingFile);
 
 /// <summary>
-/// Item 16b, phase 1: move every media ciphertext that still lives ONLY as an <c>.enc</c> file on
+/// Phase 1: move every media ciphertext that still lives ONLY as an <c>.enc</c> file on
 /// disk into the content-addressed blob store, and stamp its hash onto the row.
 ///
 /// <para>Why a disk pass and not a SQL migration: migration 023 backfills the hash from surviving
 /// <c>media_create</c> events, but those events are compacted away on a long-lived node, so on a
 /// real deployment it backfills nothing and every legacy media row is left with a null hash and no
 /// blob — its bytes exist only in the <c>.enc</c> file. This pass reads that file and is the only
-/// thing that makes the blob store the complete home for media, which every later step of 16b
-/// (stop writing <c>.enc</c>, then delete the files) depends on.</para>
+/// thing that makes the blob store the complete home for media, which not writing <c>.enc</c>
+/// files and sweeping the old ones (<see cref="SweepRedundantEncFilesAsync"/>) depend on.</para>
 ///
 /// <para>Safety: purely additive and idempotent. It reads ciphertext and writes it to the blob
 /// store under its own SHA-256 (<see cref="IBlobRepository.StoreAsync"/> is idempotent) and sets a
@@ -124,7 +124,7 @@ public class MediaBlobBackfillService(
     }
 
     /// <summary>
-    /// Item 16b, phase 2: delete the now-redundant <c>.enc</c> files. A file is removed ONLY when
+    /// Phase 2: delete the now-redundant <c>.enc</c> files. A file is removed ONLY when
     /// its media row carries a hash AND that blob is actually present in the store — so the blob is
     /// always the surviving copy and the last copy of a media is never deleted. A file whose row is
     /// gone, whose row has no hash, or whose blob is missing is left untouched (a sync pull or the

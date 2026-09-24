@@ -7,10 +7,9 @@ namespace BeeMemoryBank.Sync;
 
 /// <summary>
 /// Default <see cref="INodeAuthSigner"/>: signs using the node identity key derived via the
-/// master DEK held by <see cref="SessionService"/>. This preserves the original sync behaviour
-/// for server, CLI, and the unlocked mobile foreground. For legacy v=0 (plaintext) identity
-/// rows the DEK is not needed; for v=1 rows it is fetched lazily (throws if the session is
-/// locked — same as before this abstraction existed).
+/// master DEK held by <see cref="SessionService"/>. Used by server, CLI, and the unlocked mobile
+/// foreground. For legacy v=0 (plaintext) identity rows the DEK is not needed; for v=1 rows it is
+/// fetched lazily (throws if the session is locked).
 /// </summary>
 public sealed class SessionNodeAuthSigner(SessionService session) : INodeAuthSigner
 {

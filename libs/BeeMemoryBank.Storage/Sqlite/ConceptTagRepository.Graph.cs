@@ -85,8 +85,7 @@ public partial class ConceptTagRepository
 
         // A tag is a "hub" if it's attached to more than half of all visible articles
         // (e.g. meta-tags like "important" or "idea"). We drop hubs from the home view
-        // so they don't dominate. Threshold tuned after initial 20% proved too aggressive
-        // for small vaults.
+        // so they don't dominate. A lower threshold (20%) is too aggressive for small vaults.
         var hubThreshold = totalVisibleArticles * 0.5;
 
         var tagStats = new Dictionary<string, int>();
@@ -437,11 +436,10 @@ public partial class ConceptTagRepository
 
         if (scope.IsSuperadmin)
         {
-            // Superadmin ignores ACL, so this branch originally read tbl_concept_tag_edge
-            // with no article join. To enable folder-scoping we LEFT JOIN tbl_article
-            // (no status filter, LEFT so orphan edges are preserved → identical counts
-            // when @treePath is null) and carry tree_path out of the subquery so the
-            // outer WHERE can filter on it.
+            // Superadmin ignores ACL; the article join exists only for folder-scoping. It is a
+            // LEFT JOIN with no status filter so orphan edges are preserved (counts equal an
+            // unjoined edge scan when @treePath is null), and tree_path is carried out of the
+            // subquery so the outer WHERE can filter on it.
             var rows = await conn.QueryAsync<(int TagId, int Cnt)>(
                 @"SELECT tag_id AS TagId, COUNT(DISTINCT other_tag) AS Cnt
                   FROM (

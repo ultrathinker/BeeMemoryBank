@@ -36,9 +36,9 @@ public class DbConnectionFactory : IDbConnectionFactory, IDisposable
 
     /// <summary>
     /// Creates a factory backed by a temporary file SQLite database (for tests).
-    /// Note: was previously shared-cache in-memory (Mode=Memory;Cache=Shared) but that does
-    /// NOT support VACUUM INTO (silently produces an empty target file), which broke any test
-    /// going through SnapshotService.CreateAsync. /tmp is typically tmpfs on Linux so the
+    /// Deliberately not shared-cache in-memory (Mode=Memory;Cache=Shared): that does NOT support
+    /// VACUUM INTO (silently produces an empty target file), which any test going through
+    /// SnapshotService.CreateAsync needs. /tmp is typically tmpfs on Linux so the
     /// performance hit is negligible. The file is auto-deleted on Dispose.
     /// </summary>
     public static DbConnectionFactory CreateInMemory(string name = "bmb_test")
@@ -96,9 +96,9 @@ public class DbConnectionFactory : IDbConnectionFactory, IDisposable
         // _connectionString, so without this the file remains locked after the factory is gone.
         //
         // On Linux that is harmless (unlink works on an open file) and the process usually exits
-        // anyway. In-process it is not: the temp-file deletes below silently failed and leaked a DB
-        // per test, and a CLI test that removed its data directory after the command returned got
-        // IOException on beememorybank.db. Both looked like flakes and were a leaked handle.
+        // anyway. In-process it is not: the temp-file deletes below would silently fail and leak a
+        // DB per test, and removing the data directory afterwards throws IOException on
+        // beememorybank.db -- both look like flakes but are a leaked handle.
         try { SqliteConnection.ClearPool(new SqliteConnection(_connectionString)); } catch { }
 
         if (_tempFilePath != null)
