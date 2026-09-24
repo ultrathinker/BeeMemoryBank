@@ -18,7 +18,7 @@
 
     <!-- Versions Section -->
     <h3 style="font-size:1rem;margin-bottom:12px;">
-        <sl-icon name="git-branch"></sl-icon> Versions (@Model.Versions.Count)
+        <sl-icon name="clock-history"></sl-icon> Versions (@Model.Versions.Count)
     </h3>
 
     @if (Model.Versions.Count > 0)
@@ -54,7 +54,7 @@
     else
     {
         <div class="card" style="text-align:center;padding:40px;">
-            <sl-icon name="git-branch" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+            <sl-icon name="clock-history" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
             <p class="text-muted">No version history available</p>
         </div>
     }
