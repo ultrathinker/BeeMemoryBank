@@ -43,22 +43,21 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
             // already rewritten RemoteIpAddress by the time this middleware runs.
             var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
-            // AUDIT NOTE: Localhost skip is intentional — the Web proxy calls the API on localhost
-            // and handles its own authentication (cookie-based session + CSRF protection via
-            // SameSite=Strict). Rate limiting the Web→API channel would break normal login flow,
-            // since every browser login would be attributed to the single loopback address.
+            // The "trusted internal caller" exception is the INTERNAL KEY, not loopback. The Web
+            // layer (InternalKeyHandler → X-Internal-Key), desktop tray (App.axaml.cs → X-Internal-Key),
+            // and CLI (DekRotateCommand/SnapshotCommand → X-Internal-Key) all carry it on the calls
+            // they make to these protected paths. Loopback WITHOUT the key is just an anonymous
+            // caller that happens to be local — exactly the shape a reverse proxy on the same host
+            // produces when BMB_TRUST_LOOPBACK_FORWARDED_HEADERS is not set, and exactly the case
+            // B3 fixes: previously every loopback caller skipped the limiter, so an internet client
+            // reaching the API through such a proxy got an unlimited password oracle.
             //
-            // Browser traffic is NOT therefore unthrottled: BeeMemoryBank.Web's
-            // PublicRateLimitMiddleware limits /Login and the Admin node-reset handler per real
-            // client IP before they ever reach this hop. Do not "fix" this skip by removing it —
-            // the two layers are deliberately split, one keyed on the real client and one on the
-            // API peer.
-            //
-            // "0.0.0.0" and "unknown" used to be skipped alongside loopback. They are not a trusted
-            // internal caller: "unknown" means the connection had no remote address the server
-            // could read at all, which is precisely the case where throttling should apply rather
-            // than be waived. They now share one bucket, which is the correct conservative default.
-            if (ip is "127.0.0.1" or "::1")
+            // Browser traffic reaches this hop through the Web layer (which presents the key), so
+            // it is still keyed correctly by the key check, not by IP. The Web's own
+            // PublicRateLimitMiddleware keeps throttling /Login and the Admin node-reset handler
+            // per real client IP, so the key-vs-IP split is unchanged for legitimate browser
+            // traffic.
+            if (InternalKeyValidator.Validate(context))
             {
                 await next(context);
                 return;
@@ -77,4 +76,12 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
 
         await next(context);
     }
+
+    /// <summary>
+    /// TEST-ONLY: drops every recorded attempt so a rate-limit test can start from a clean
+    /// bucket. The limiter is process-wide, so without this hook parallel test classes (or any
+    /// test re-running under xUnit's per-collection default) would share buckets and flake when
+    /// one of them has already burnt the 5-attempt budget for the same IP+path pair.
+    /// </summary>
+    internal static void ResetForTests() => Limiter.ResetAll();
 }
