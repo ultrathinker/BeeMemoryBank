@@ -117,6 +117,8 @@ public partial class DekRotationService
 
             if (runPostCompaction)
             {
+                PublishCompleted();
+                _deferredRetry.Reset();
                 try
                 {
                     using var compactionScope = _scopeFactory.CreateScope();
@@ -140,7 +142,9 @@ public partial class DekRotationService
             // redeliver). Fire-and-forget — recursion is bounded by the lock + state row count.
             // (Found by E2E multi-rotation test on 2026-04-26.) Not after a deferral: that row is
             // still Committing, so the sweep would pick it straight back up, fail the same
-            // precondition and sweep again, forever. Deferred rows wait for the next unlock.
+            // precondition and sweep again, forever. A deferral instead schedules one bounded,
+            // backed-off retry (so an always-unlocked server does not wait for an unlock that never
+            // comes); the next unlock retries too.
             if (!deferred)
             {
                 _ = Task.Run(async () =>
@@ -148,6 +152,10 @@ public partial class DekRotationService
                     try { await RetryPendingAutoAcceptsAsync(); }
                     catch (Exception ex) { _logger.LogWarning(ex, "Post-auto-accept retry sweep failed"); }
                 });
+            }
+            else
+            {
+                _deferredRetry.Schedule(RetryPendingAutoAcceptsAsync, _logger);
             }
         }
     }
@@ -170,6 +178,7 @@ public partial class DekRotationService
         byte[]? newDek = null;
         string? chainEncB64 = null;
         string? chainIvB64 = null;
+        var rewrapped = false;
 
         try
         {
@@ -186,6 +195,7 @@ public partial class DekRotationService
                 isInitiator: false,
                 chainEncryptedNewDekB64: chainEncB64,
                 chainIvB64: chainIvB64);
+            rewrapped = true;
 
             _logger.LogInformation(
                 "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
@@ -194,11 +204,11 @@ public partial class DekRotationService
         catch (DekRotationPreconditionException ex)
         {
             // Nothing was changed (the rewrap never started), so this is "not yet", not "failed":
-            // the row stays Committing and the next unlock retries it (or an admin applies it from
-            // the pending-rotation banner). Failed is terminal — nothing retries it — which would
+            // the row stays Committing and is retried (bounded automatic retry, next unlock, or an
+            // admin applying it from the pending-rotation banner). Failed is terminal — nothing retries it — which would
             // strand this node on the retired DEK for good.
             _progress.Update(DekRotationFlowStep.Failed, err: ex.Message,
-                msg: "DEK rotation auto-accept deferred; it stays pending and is retried on the next unlock.");
+                msg: "DEK rotation auto-accept deferred; it stays pending and is retried automatically.");
             _logger.LogError(ex, "DEK rotation auto-accept deferred for commit event {CommitEventId}", commitEvent.EventId);
             throw;
         }
@@ -212,8 +222,9 @@ public partial class DekRotationService
         finally
         {
             // Clear key material on the error path. (Kilo R1 security review CRIT-1.)
-            // Success path already cleared oldDek + transferred newDek to SessionService.
-            if (_progress.Step != DekRotationFlowStep.Completed)
+            // Success path already cleared oldDek + transferred newDek to SessionService. Keyed on
+            // the rewrap having returned: Completed is published later, after maintenance ends.
+            if (!rewrapped)
             {
                 if (oldDek != null) Array.Clear(oldDek);
                 if (newDek != null) Array.Clear(newDek);

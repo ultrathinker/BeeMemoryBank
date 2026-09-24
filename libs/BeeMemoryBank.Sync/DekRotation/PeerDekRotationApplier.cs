@@ -41,6 +41,9 @@ public sealed class PeerDekRotationApplier(
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
     private readonly SemaphoreSlim _executeLock = new(1, 1);
 
+    // Retries a deferred auto-accept while the node stays unlocked; see DeferredRotationRetry.
+    private readonly DeferredRotationRetry _deferredRetry = new();
+
     public async Task AutoAcceptCommitAsync(SyncEvent commitEvent)
     {
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
@@ -77,6 +80,7 @@ public sealed class PeerDekRotationApplier(
                 try
                 {
                     await ApplyCoreAsync(commitEvent, payload);
+                    _deferredRetry.Reset();
                 }
                 catch (DekRotationPreconditionException)
                 {
@@ -102,7 +106,7 @@ public sealed class PeerDekRotationApplier(
             // not redeliver it. Sweep once the lock is free. Bounded by the lock plus the number
             // of Committing rows. Not after a deferral: this row is still Committing, so the sweep
             // would pick it straight back up, fail the same precondition, and sweep again, forever.
-            // Deferred rows are retried on the next unlock instead.
+            // A deferral schedules one bounded, backed-off retry instead; the next unlock retries too.
             if (!deferred)
             {
                 _ = Task.Run(async () =>
@@ -110,6 +114,10 @@ public sealed class PeerDekRotationApplier(
                     try { await RetryPendingAutoAcceptsAsync(); }
                     catch (Exception ex) { logger.LogWarning(ex, "Post-auto-accept retry sweep failed"); }
                 });
+            }
+            else
+            {
+                _deferredRetry.Schedule(RetryPendingAutoAcceptsAsync, logger);
             }
         }
     }
@@ -158,9 +166,10 @@ public sealed class PeerDekRotationApplier(
         catch (DekRotationPreconditionException ex)
         {
             // Nothing was changed (the rewrap never started), so this is "not yet", not "failed":
-            // the row stays Committing and the next unlock retries it. Failed is terminal — nothing
-            // retries it — which would strand this node on the retired DEK for good.
-            logger.LogError(ex, "DEK rotation auto-accept deferred for commit event {CommitEventId}; it stays pending and is retried on the next unlock", commitEvent.EventId);
+            // the row stays Committing and is retried (bounded automatic retry, next unlock).
+            // Failed is terminal — nothing retries it — which would strand this node on the
+            // retired DEK for good.
+            logger.LogError(ex, "DEK rotation auto-accept deferred for commit event {CommitEventId}; it stays pending and is retried automatically and on the next unlock", commitEvent.EventId);
             throw;
         }
         catch (Exception ex)

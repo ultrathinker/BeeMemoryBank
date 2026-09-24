@@ -76,6 +76,46 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
         return await conn.ExecuteScalarAsync<int>(sql);
     }
 
+    private string _lastTerminal = "";
+
+    /// <summary>
+    /// Waits for the accept that was just fired (it runs in the background) to reach a terminal
+    /// step. A terminal progress identical to the one the previous accept ended on is ignored, so a
+    /// second accept is never mistaken for the first one's leftover result.
+    /// </summary>
+    private async Task<JsonElement> WaitForTerminalProgressAsync()
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        while (true)
+        {
+            await Task.Delay(50);
+            var progress = await (await _client.GetAsync("/api/dek-rotation/progress")).Content.ReadFromJsonAsync<JsonElement>();
+            var step = Enum.Parse<DekRotationFlowStep>(progress.GetProperty("currentStep").GetString()!);
+            var raw = progress.GetRawText();
+            if (step is DekRotationFlowStep.Completed or DekRotationFlowStep.Failed && raw != _lastTerminal)
+            {
+                _lastTerminal = raw;
+                return progress;
+            }
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException("accept did not reach a new terminal step: " + raw);
+        }
+    }
+
+    private static DekRotationFlowStep StepOf(JsonElement progress)
+        => Enum.Parse<DekRotationFlowStep>(progress.GetProperty("currentStep").GetString()!);
+
+    private async Task<string> ProposeAsync()
+    {
+        var resp = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("commitEventId").GetGuid().ToString();
+    }
+
+    private async Task AcceptAsync(string commitEventId)
+        => (await _client.PostAsJsonAsync("/api/dek-rotation/accept", new { commitEventId, masterPassword = Password }))
+            .StatusCode.Should().Be(HttpStatusCode.Accepted);
+
     [Fact]
     public async Task Initiator_FailingHook_RefusesThePropose_PublishesNothing_AndSucceedsOnceFixed()
     {
@@ -88,25 +128,73 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
         (await CountAsync("SELECT COUNT(*) FROM tbl_dek_rotation_state")).Should().Be(0);
 
         _hook.Fail = false;
-        var retry = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
-        retry.StatusCode.Should().Be(HttpStatusCode.OK);
-        var commitEventId = (await retry.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("commitEventId").GetGuid().ToString();
-        (await _client.PostAsJsonAsync("/api/dek-rotation/accept", new { commitEventId, masterPassword = Password }))
-            .StatusCode.Should().Be(HttpStatusCode.Accepted);
-
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
-        DekRotationFlowStep step;
-        do
-        {
-            await Task.Delay(200);
-            var progress = await (await _client.GetAsync("/api/dek-rotation/progress")).Content.ReadFromJsonAsync<JsonElement>();
-            step = Enum.Parse<DekRotationFlowStep>(progress.GetProperty("currentStep").GetString()!);
-        } while (step is not (DekRotationFlowStep.Completed or DekRotationFlowStep.Failed) && DateTime.UtcNow < deadline);
-        step.Should().Be(DekRotationFlowStep.Completed);
+        await AcceptAsync(await ProposeAsync());
+        StepOf(await WaitForTerminalProgressAsync()).Should().Be(DekRotationFlowStep.Completed);
     }
 
     [Fact]
-    public async Task Peer_FailingHook_LeavesTheRotationPending_WithoutARetryStorm_AndItAppliesOnRetry()
+    public async Task Initiator_HookPassesAtProposeButFailsAtAccept_CommitStaysPending_AndTheSameCommitIsRetried()
+    {
+        _hook.Fail = false;
+        var commitEventId = await ProposeAsync(); // hooks pass; the COMMIT is now public
+        (await CountAsync("SELECT COUNT(*) FROM tbl_event WHERE event_type = 'dek_rotation_commit'")).Should().Be(1);
+        var epoch = await CountAsync("SELECT dek_epoch FROM tbl_node_identity");
+
+        _hook.Fail = true; // e.g. chat.db briefly locked by the time the admin accepts
+        await AcceptAsync(commitEventId);
+        var failed = await WaitForTerminalProgressAsync();
+        StepOf(failed).Should().Be(DekRotationFlowStep.Failed);
+        failed.GetProperty("errorMessage").GetString().Should().Contain("not started");
+
+        var stateRepo = _factory.Services.GetRequiredService<IDekRotationStateRepository>();
+        (await stateRepo.GetAsync(commitEventId))!.State.Should().Be(DekRotationState.Committing,
+            "the COMMIT is already public; marking it Failed would split this node from peers that applied it");
+        (await CountAsync("SELECT dek_epoch FROM tbl_node_identity")).Should().Be(epoch, "nothing was changed");
+
+        // The same commit, accepted again with the password once the cause is gone.
+        _hook.Fail = false;
+        await AcceptAsync(commitEventId);
+        StepOf(await WaitForTerminalProgressAsync()).Should().Be(DekRotationFlowStep.Completed);
+        (await stateRepo.GetAsync(commitEventId))!.State.Should().Be(DekRotationState.Applied);
+        (await CountAsync("SELECT dek_epoch FROM tbl_node_identity")).Should().Be(epoch + 1);
+
+        // Once applied it cannot be run a second time (that would treat the new DEK as the old one).
+        await AcceptAsync(commitEventId);
+        var refused = await WaitForTerminalProgressAsync();
+        StepOf(refused).Should().Be(DekRotationFlowStep.Failed);
+        refused.GetProperty("errorMessage").GetString().Should().Contain("already applied");
+        (await CountAsync("SELECT dek_epoch FROM tbl_node_identity")).Should().Be(epoch + 1);
+    }
+
+    [Fact]
+    public async Task Initiator_Completed_IsOnlyReportedOnceMaintenanceModeHasEnded()
+    {
+        _hook.Fail = false;
+        var maintenance = _factory.Services.GetRequiredService<MaintenanceModeService>();
+        await AcceptAsync(await ProposeAsync());
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        while (DateTime.UtcNow < deadline)
+        {
+            var progress = await (await _client.GetAsync("/api/dek-rotation/progress")).Content.ReadFromJsonAsync<JsonElement>();
+            // Sampled right after reading Completed: maintenance must already be off, i.e. a caller
+            // acting on Completed never gets a 503.
+            var inMaintenance = maintenance.IsInMaintenance;
+            if (StepOf(progress) == DekRotationFlowStep.Completed)
+            {
+                inMaintenance.Should().BeFalse("Completed must not be observable while the node still answers 503");
+                (await _client.GetAsync("/api/session/status")).StatusCode.Should().NotBe(HttpStatusCode.ServiceUnavailable);
+                return;
+            }
+            StepOf(progress).Should().NotBe(DekRotationFlowStep.Failed);
+            await Task.Delay(5);
+        }
+        throw new TimeoutException("rotation did not complete");
+    }
+
+    // ───── Peer ─────────────────────────────────────────────────────────────────────────────
+
+    private async Task<(SyncEvent Commit, byte[] OldDek, byte[] NewDek)> ArrivePeerCommitAsync()
     {
         var (peerPub, peerSeed) = Ed25519Signer.GenerateKeyPair();
         var peerNodeId = Guid.NewGuid();
@@ -118,8 +206,7 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
         });
         await whitelist.SetAutoAcceptDekRotationAsync(peerNodeId.ToString(), true);
 
-        var session = _factory.Services.GetRequiredService<SessionService>();
-        var oldDek = session.GetMasterDek();
+        var oldDek = _factory.Services.GetRequiredService<SessionService>().GetMasterDek();
         var newDek = RandomNumberGenerator.GetBytes(32);
         var (enc, iv) = MasterKeyManager.WrapMasterDek(newDek, oldDek);
         var epoch = await CountAsync("SELECT dek_epoch FROM tbl_node_identity");
@@ -138,25 +225,57 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
         await _factory.Services.GetRequiredService<IDekRotationStateRepository>().UpsertAsync(new DekRotationStateRow(
             commit.EventId.ToString(), DekRotationState.Committing, payload.ProposedEventId, payload.RotationTs,
             null, null, null, null, null, null, null, DateTime.UtcNow.ToString("O"), DateTime.UtcNow.ToString("O")));
+        return (commit, oldDek, newDek);
+    }
 
+    private async Task<DekRotationState> StateAsync(SyncEvent commit)
+        => (await _factory.Services.GetRequiredService<IDekRotationStateRepository>().GetAsync(commit.EventId.ToString()))!.State;
+
+    [Fact]
+    public async Task Peer_FailingHook_StaysPending_RetriesWithBoundedBackoff_NoStorm_AndAppliesOnUnlockRetry()
+    {
         var rotation = _factory.Services.GetRequiredService<DekRotationService>();
+        rotation.DeferredRetry.BaseDelay = TimeSpan.FromMilliseconds(100);
+        rotation.DeferredRetry.MaxAttempts = 3;
+        var (commit, oldDek, newDek) = await ArrivePeerCommitAsync();
+
         var act = () => rotation.AutoAcceptCommitAsync(commit);
         await act.Should().ThrowAsync<DekRotationPreconditionException>();
-
-        var stateRepo = _factory.Services.GetRequiredService<IDekRotationStateRepository>();
-        (await stateRepo.GetAsync(commit.EventId.ToString()))!.State.Should().Be(DekRotationState.Committing,
+        (await StateAsync(commit)).Should().Be(DekRotationState.Committing,
             "nothing was changed, so the rotation must stay retryable rather than terminally Failed");
+        var session = _factory.Services.GetRequiredService<SessionService>();
         session.GetMasterDek().Should().Equal(oldDek, "the node must still be on its old DEK");
 
-        // The post-apply sweep must not immediately re-dispatch the deferred row in a loop.
-        await Task.Delay(1500);
-        _hook.Calls.Should().Be(1, "a deferred rotation waits for the next unlock instead of retrying itself forever");
+        // Backoff 100 + 200 + 400 ms, then the budget is spent: 1 initial attempt + 3 retries, no more.
+        await Task.Delay(2500);
+        _hook.Calls.Should().Be(4, "automatic retries are bounded — no storm, no endless loop");
+        (await StateAsync(commit)).Should().Be(DekRotationState.Committing);
 
+        // An unlock (or a manual apply) still retries it after the automatic budget is spent.
         _hook.Fail = false;
         await rotation.RetryPendingAutoAcceptsAsync();
-
-        (await stateRepo.GetAsync(commit.EventId.ToString()))!.State.Should().Be(DekRotationState.Applied);
+        (await StateAsync(commit)).Should().Be(DekRotationState.Applied);
         session.GetMasterDek().Should().Equal(newDek, "the retried rotation applied");
+        Array.Clear(oldDek);
+    }
+
+    [Fact]
+    public async Task Peer_TransientHookFailure_AppliesByItself_WhileTheNodeStaysUnlocked()
+    {
+        var rotation = _factory.Services.GetRequiredService<DekRotationService>();
+        rotation.DeferredRetry.BaseDelay = TimeSpan.FromMilliseconds(200);
+        var (commit, oldDek, newDek) = await ArrivePeerCommitAsync();
+
+        var act = () => rotation.AutoAcceptCommitAsync(commit);
+        await act.Should().ThrowAsync<DekRotationPreconditionException>();
+        _hook.Fail = false; // the transient cause clears; nobody unlocks, nobody clicks Apply
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (await StateAsync(commit) != DekRotationState.Applied && DateTime.UtcNow < deadline)
+            await Task.Delay(100);
+
+        (await StateAsync(commit)).Should().Be(DekRotationState.Applied, "the scheduled retry must apply it on its own");
+        _factory.Services.GetRequiredService<SessionService>().GetMasterDek().Should().Equal(newDek);
         Array.Clear(oldDek);
     }
 }

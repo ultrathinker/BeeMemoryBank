@@ -12,6 +12,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.DekRotation;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -29,6 +30,12 @@ public partial class DekRotationService : IDekRotationApplier
 
     private readonly ProgressState _progress = new();
     private readonly SemaphoreSlim _executeLock = new(1, 1);
+
+    // Retries a deferred peer auto-accept while the node stays unlocked; see DeferredRotationRetry.
+    private readonly DeferredRotationRetry _deferredRetry = new();
+
+    /// <summary>The deferred-auto-accept retry schedule (exposed so tests can shorten its delays).</summary>
+    internal DeferredRotationRetry DeferredRetry => _deferredRetry;
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 

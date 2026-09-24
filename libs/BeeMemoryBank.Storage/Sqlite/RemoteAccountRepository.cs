@@ -74,6 +74,43 @@ public class RemoteAccountRepository(DbConnectionFactory factory) : BaseReposito
             new { id, encryptedToken, tokenIv, expiresAt, now = DateTime.UtcNow });
     }
 
+    public async Task<bool> CreateIfSealedUnderCurrentKeyAsync(RemoteAccount account, Func<byte[]?, bool> sealedUnderCurrentKey)
+    {
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction(); // BEGIN IMMEDIATE: serializes with a rotation's transaction
+        if (!sealedUnderCurrentKey(await ReadSentinelAsync(conn, tx)))
+            return false; // disposing the transaction rolls it back; nothing was written
+        await conn.ExecuteAsync(
+            @"INSERT INTO tbl_remote_account
+              (id, display_name, base_url, remote_username, encrypted_token, token_iv,
+               token_expires_at, last_sync_at, last_sync_status, last_error, created_at, updated_at)
+              VALUES (@Id, @DisplayName, @BaseUrl, @RemoteUsername, @EncryptedToken, @TokenIv,
+                      @TokenExpiresAt, @LastSyncAt, @LastSyncStatus, @LastError, @CreatedAt, @UpdatedAt)",
+            account, tx);
+        tx.Commit();
+        return true;
+    }
+
+    public async Task<bool> UpdateTokenIfSealedUnderCurrentKeyAsync(
+        Guid id, byte[] encryptedToken, byte[] tokenIv, DateTime? expiresAt, Func<byte[]?, bool> sealedUnderCurrentKey)
+    {
+        using var conn = OpenConnection();
+        using var tx = conn.BeginTransaction();
+        if (!sealedUnderCurrentKey(await ReadSentinelAsync(conn, tx)))
+            return false;
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_remote_account
+                 SET encrypted_token = @encryptedToken, token_iv = @tokenIv,
+                     token_expires_at = @expiresAt, updated_at = @now
+               WHERE id = @id",
+            new { id, encryptedToken, tokenIv, expiresAt, now = DateTime.UtcNow }, tx);
+        tx.Commit();
+        return true;
+    }
+
+    private static Task<byte[]?> ReadSentinelAsync(System.Data.IDbConnection conn, System.Data.IDbTransaction tx)
+        => conn.ExecuteScalarAsync<byte[]?>("SELECT sentinel_value FROM tbl_node_identity LIMIT 1", transaction: tx);
+
     public async Task DeleteAsync(Guid id)
     {
         using var conn = OpenConnection();

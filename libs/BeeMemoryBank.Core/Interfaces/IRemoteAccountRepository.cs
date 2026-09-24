@@ -10,6 +10,19 @@ public interface IRemoteAccountRepository
     Task UpdateAsync(RemoteAccount account);
     Task UpdateStatusAsync(Guid id, string status, string? error, DateTime? syncedAt);
     Task UpdateTokenAsync(Guid id, byte[] encryptedToken, byte[] tokenIv, DateTime? expiresAt);
+
+    /// <summary>
+    /// Inserts <paramref name="account"/> only if <paramref name="sealedUnderCurrentKey"/> accepts
+    /// the vault's current sentinel, evaluated INSIDE the write transaction (BEGIN IMMEDIATE, so it
+    /// serializes with a DEK rotation's transaction). Returns false, writing nothing, when it does
+    /// not — the token was sealed under a master DEK a rotation has just retired.
+    /// </summary>
+    Task<bool> CreateIfSealedUnderCurrentKeyAsync(RemoteAccount account, Func<byte[]?, bool> sealedUnderCurrentKey);
+
+    /// <summary>Token-update counterpart of <see cref="CreateIfSealedUnderCurrentKeyAsync"/>.</summary>
+    Task<bool> UpdateTokenIfSealedUnderCurrentKeyAsync(
+        Guid id, byte[] encryptedToken, byte[] tokenIv, DateTime? expiresAt, Func<byte[]?, bool> sealedUnderCurrentKey);
+
     Task DeleteAsync(Guid id);
 }
 

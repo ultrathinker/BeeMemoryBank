@@ -45,21 +45,22 @@ public class RemoteAccountService(
         var body = await ReadJsonAsync<TokenIssueResponse>(resp)
             ?? throw new InvalidOperationException("Remote token endpoint returned an empty body.");
 
-        var (encrypted, iv) = EncryptToken(body.Token);
-
         var account = new RemoteAccount
         {
             Id = Guid.NewGuid(),
             DisplayName = displayName,
             BaseUrl = baseUrl,
             RemoteUsername = username,
-            EncryptedToken = encrypted,
-            TokenIv = iv,
             TokenExpiresAt = body.ExpiresAt,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
-        await accountRepo.CreateAsync(account);
+        await WriteSealedTokenAsync(body.Token, (encrypted, iv, sealedUnderCurrentKey) =>
+        {
+            account.EncryptedToken = encrypted;
+            account.TokenIv = iv;
+            return accountRepo.CreateIfSealedUnderCurrentKeyAsync(account, sealedUnderCurrentKey);
+        });
         return account;
     }
 
@@ -76,8 +77,8 @@ public class RemoteAccountService(
         var body = await ReadJsonAsync<TokenIssueResponse>(resp)
             ?? throw new InvalidOperationException("Remote token endpoint returned an empty body.");
 
-        var (encrypted, iv) = EncryptToken(body.Token);
-        await accountRepo.UpdateTokenAsync(accountId, encrypted, iv, body.ExpiresAt);
+        await WriteSealedTokenAsync(body.Token, (encrypted, iv, sealedUnderCurrentKey) =>
+            accountRepo.UpdateTokenIfSealedUnderCurrentKeyAsync(accountId, encrypted, iv, body.ExpiresAt, sealedUnderCurrentKey));
     }
 
     /// <summary>
@@ -90,17 +91,41 @@ public class RemoteAccountService(
         => session.TryUnwrapWithCandidates(dek =>
             ArticleEncryptor.Decrypt(account.EncryptedToken, account.TokenIv, dek, TokenAad));
 
-    private (byte[] cipher, byte[] iv) EncryptToken(string token)
+    /// <summary>
+    /// Seals <paramref name="token"/> under the current master DEK and persists it through
+    /// <paramref name="write"/>, which re-checks INSIDE its write transaction that the vault's
+    /// sentinel still matches that DEK.
+    /// <para>
+    /// The request can take the DEK before a rotation starts and reach the database after the
+    /// rotation's transaction has committed but before the session swapped to the new DEK. Written
+    /// then, the token would be sealed under the retired key: the rewrap pass has already run, so
+    /// nothing re-encrypts it, and after the next restart it is unreadable. The in-transaction check
+    /// (BEGIN IMMEDIATE serializes with the rotation's transaction) turns that into "not written",
+    /// and the loop re-seals under whatever DEK the session holds once the swap has happened —
+    /// microseconds after the commit, so one retry is the normal case.
+    /// </para>
+    /// </summary>
+    private async Task WriteSealedTokenAsync(string token, Func<byte[], byte[], Func<byte[]?, bool>, Task<bool>> write)
     {
-        var masterDek = session.GetMasterDek();
-        try
+        const int maxAttempts = 100;
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
-            return SealToken(token, masterDek);
+            var masterDek = session.GetMasterDek();
+            try
+            {
+                var (encrypted, iv) = SealToken(token, masterDek);
+                var dek = masterDek;
+                if (await write(encrypted, iv, sentinel => sentinel is not { Length: > 0 } || MasterKeyManager.VerifySentinel(sentinel, dek)))
+                    return;
+            }
+            finally
+            {
+                Array.Clear(masterDek);
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
         }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
+        throw new InvalidOperationException(
+            "The vault's master key changed while the remote-account token was being saved, and did not settle. Retry.");
     }
 
     /// <summary>

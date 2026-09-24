@@ -45,8 +45,33 @@ public partial class DekRotationService
             chainEncryptedNewDekB64, chainIvB64,
             progress: (step, pct, msg) =>
             {
+                if (step == DekRotationFlowStep.Completed)
+                {
+                    // Not yet: the node is still in maintenance mode here and answers 503 to every
+                    // request. A caller that acts on "Completed" must be able to use the node, so
+                    // the terminal step is published by PublishCompleted once the outer accept path
+                    // has left maintenance mode.
+                    _pendingCompletedMessage = msg;
+                    _progress.Update(DekRotationFlowStep.Finalizing, 95, "Rotation committed; leaving maintenance mode...");
+                    return;
+                }
                 _progress.Update(step, pct, msg);
-                if (step == DekRotationFlowStep.Completed) _progress.ClearError();
             });
+    }
+
+    // Completion message held back by RewrapDestructiveCoreAsync until maintenance mode is off.
+    private volatile string? _pendingCompletedMessage;
+
+    /// <summary>
+    /// Publishes the terminal Completed step. Called by the outer accept paths only after
+    /// <see cref="MaintenanceModeService.Exit"/>, so "Completed" is never observable while the node
+    /// still answers 503.
+    /// </summary>
+    private void PublishCompleted()
+    {
+        var msg = _pendingCompletedMessage ?? "DEK rotation completed.";
+        _pendingCompletedMessage = null;
+        _progress.Update(DekRotationFlowStep.Completed, 100, msg);
+        _progress.ClearError();
     }
 }

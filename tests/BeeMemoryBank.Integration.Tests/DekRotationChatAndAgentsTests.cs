@@ -261,10 +261,9 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
             var step = Enum.Parse<DekRotationFlowStep>(progress.GetProperty("currentStep").GetString()!);
             if (step == DekRotationFlowStep.Completed)
             {
-                // Progress reads Completed a moment before the accept path leaves maintenance mode;
-                // HTTP calls in that gap get 503. Wait for the node to be fully back.
-                var maintenance = _factory.Services.GetRequiredService<MaintenanceModeService>();
-                while (maintenance.IsInMaintenance && DateTime.UtcNow < deadline) await Task.Delay(50);
+                // Completed is published only after the accept path has left maintenance mode.
+                _factory.Services.GetRequiredService<MaintenanceModeService>().IsInMaintenance
+                    .Should().BeFalse("Completed must not be observable while the node still answers 503");
                 return;
             }
             step.Should().NotBe(DekRotationFlowStep.Failed, progress.ToString());

@@ -55,6 +55,9 @@ public partial class DekRotationService
                 HeavyOperationLock.Instance.Release();
             }
 
+            if (runPostCompaction)
+                PublishCompleted();
+
             // SemaphoreSlim is non-reentrant; otherwise compaction silently no-ops and we lose
             // the post-rotation log compaction. Rotation tx already committed; DB is consistent
             // for normal use even though we are now out of maintenance mode.
@@ -111,6 +114,19 @@ public partial class DekRotationService
         var sigPayload = EventSignature.BuildPayload(commitEvent);
         if (!Ed25519Signer.Verify(identity.Ed25519PublicKey, sigPayload, commitEvent.Signature))
             throw new InvalidOperationException("Commit event signature verification failed.");
+
+        // A commit this node already applied (or cancelled, or rejected) must not be run again:
+        // re-running it would treat the CURRENT DEK as the old one. A Committing or Failed commit
+        // may be accepted again — that is how a deferred accept (see the precondition catch
+        // below) is retried, with the master password, without a new proposal. Checked before
+        // the pre-rotation snapshot so a refused accept leaves nothing behind.
+        var existingState = await stateRepo.GetAsync(commitEventId);
+        if (existingState?.State is DekRotationState.Applied or DekRotationState.Cancelled or DekRotationState.Rejected)
+        {
+            var refusal = $"DEK rotation {commitEventId} is already {existingState.State.ToString().ToLowerInvariant()}; it cannot be accepted again.";
+            _progress.Update(DekRotationFlowStep.Failed, err: refusal, msg: refusal);
+            throw new ConflictException(refusal);
+        }
 
         _progress.Update(DekRotationFlowStep.PreRotationBackup, 18, "Creating pre-rotation backup...");
 
@@ -220,6 +236,28 @@ public partial class DekRotationService
             throw;
         }
 
+        var rewrapped = false;
+        void RemovePreRotationSnapshot()
+        {
+            // Clean up the pre-rotation snapshot — without this, every failed rotation leaves
+            // a ~DBsize .tar.gz behind. With repeated retries on a 1GB DB, the snapshots
+            // directory fills and the disk-space pre-check then BLOCKS future rotations.
+            // (Claude R2 prod review HIGH-2.) A retried accept takes a fresh one.
+            try
+            {
+                var snapPath = snapshotService.GetSnapshotPath(snap.FileName);
+                if (System.IO.File.Exists(snapPath))
+                {
+                    System.IO.File.Delete(snapPath);
+                    _logger.LogInformation("Removed pre-rotation snapshot {Snap} after rotation failure.", snap.FileName);
+                }
+            }
+            catch (Exception cleanupEx)
+            {
+                _logger.LogWarning(cleanupEx, "Failed to remove pre-rotation snapshot {Snap}", snap.FileName);
+            }
+        }
+
         try
         {
             var (newEncDek, newIv) = MasterKeyManager.WrapMasterDek(newDek, localKek);
@@ -234,6 +272,7 @@ public partial class DekRotationService
                 isInitiator: true, initiatorSlot.SlotId, newEncDek, newIv,
                 chainEncryptedNewDekB64: chainEncB64,
                 chainIvB64: chainIvB64);
+            rewrapped = true;
 
             var auditRepo = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
             await auditRepo.LogAsync(
@@ -247,6 +286,20 @@ public partial class DekRotationService
                 "DEK rotation completed. Epoch {OldEpoch}\u2192{NewEpoch}. Initiator={Initiator} ({InitiatorName}). Snapshot={Snap}. AutoUnlockAgentsRemoved={Agents}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, initiator.Id, initiator.DisplayName, snap.FileName, agentsDeleted);
         }
+        catch (DekRotationPreconditionException ex) when (!rewrapped)
+        {
+            // The mandatory pre-rewrap hooks refused (they passed at propose, but e.g. chat.db is
+            // briefly locked now). Nothing was changed — the rewrap transaction never opened and
+            // the session is still on the old DEK. The COMMIT, however, is already public and
+            // peers may have applied it, so this must NOT become Failed: the row stays Committing
+            // and the same commit is accepted again (master password required) once the cause is
+            // gone. Marking it Failed here is what used to split the initiator from its peers.
+            _progress.Update(DekRotationFlowStep.Failed, err: ex.Message,
+                msg: "DEK rotation not applied yet: the commit is still pending. Fix the cause and accept it again.");
+            RemovePreRotationSnapshot();
+            _logger.LogError(ex, "DEK rotation accept deferred for commit event {CommitEventId}; it stays pending for a retried accept", commitEventId);
+            throw;
+        }
         catch (Exception ex)
         {
             _progress.Update(DekRotationFlowStep.Failed, err: ex.Message, msg: "DEK rotation failed.");
@@ -254,24 +307,7 @@ public partial class DekRotationService
             // AUDIT NOTE: on failure we do NOT swap DEK, so the old DEK remains active.
             // We DO exit maintenance mode so the node is usable (with old DEK).
             // Re-try requires a new Propose+Accept cycle.
-
-            // Clean up the pre-rotation snapshot — without this, every failed rotation leaves
-            // a ~DBsize .tar.gz behind. With repeated retries on a 1GB DB, the snapshots
-            // directory fills and the disk-space pre-check then BLOCKS future rotations.
-            // (Claude R2 prod review HIGH-2.)
-            try
-            {
-                var snapPath = snapshotService.GetSnapshotPath(snap.FileName);
-                if (System.IO.File.Exists(snapPath))
-                {
-                    System.IO.File.Delete(snapPath);
-                    _logger.LogInformation("Removed pre-rotation snapshot {Snap} after rotation failure.", snap.FileName);
-                }
-            }
-            catch (Exception cleanupEx)
-            {
-                _logger.LogWarning(cleanupEx, "Failed to remove pre-rotation snapshot {Snap}", snap.FileName);
-            }
+            RemovePreRotationSnapshot();
 
             _logger.LogError(ex, "DEK rotation failed for commit event {CommitEventId}", commitEventId);
             throw;
@@ -281,8 +317,10 @@ public partial class DekRotationService
             Array.Clear(localKek, 0, localKek.Length);
             // Clear key material on the error path. On success path, oldDek was already cleared
             // inside RewrapDestructiveCoreAsync and newDek ownership transferred to SessionService.SwapMasterDek.
-            // (Found by Kilo R1 security review CRIT-1.)
-            if (_progress.Step != DekRotationFlowStep.Completed)
+            // (Found by Kilo R1 security review CRIT-1.) Keyed on the rewrap having returned, not on
+            // the progress step: Completed is now published later, after maintenance mode ends, and
+            // clearing newDek here would zero the live master DEK.
+            if (!rewrapped)
             {
                 Array.Clear(oldDek, 0, oldDek.Length);
                 Array.Clear(newDek, 0, newDek.Length);

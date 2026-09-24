@@ -18,9 +18,9 @@ namespace BeeMemoryBank.Core.Services;
 /// Mandatory by contract. A hook returns only once its data is fully moved, and throws otherwise;
 /// any exception aborts the rotation BEFORE the rewrap transaction opens, surfaced as
 /// <see cref="Exceptions.DekRotationPreconditionException"/>. Nothing has changed at that point, so
-/// the rotation can be retried: a peer keeps the rotation at Committing and retries it on the next
-/// unlock. Letting the rotation commit anyway would make the unmoved data permanently unreadable
-/// after a restart.
+/// the rotation can be retried: it stays Committing, a peer retries it on the next unlock and on a
+/// bounded automatic schedule, and the initiator accepts the same commit again. Letting the rotation
+/// commit anyway would make the unmoved data permanently unreadable after a restart.
 /// </para>
 /// </summary>
 public interface IDekRotationHook

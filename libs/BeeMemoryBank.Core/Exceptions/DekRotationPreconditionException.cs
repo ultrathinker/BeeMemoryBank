@@ -8,8 +8,9 @@ namespace BeeMemoryBank.Core.Exceptions;
 /// the rotation can simply be retried once the cause is fixed.
 /// </summary>
 /// <remarks>
-/// Apply paths treat it as "not yet", not as "failed": a peer leaves its rotation state at
-/// Committing so the next unlock retries it, instead of marking it Failed (which nothing retries).
+/// Apply paths treat it as "not yet", not as "failed": the rotation state stays Committing — a peer
+/// retries it (next unlock, bounded automatic retry) and the initiator can accept the same commit
+/// again — instead of becoming Failed, which nothing retries.
 /// Derives from <see cref="InvalidOperationException"/> so existing endpoint handlers keep mapping it
 /// to a 400 with its message.
 /// </remarks>
