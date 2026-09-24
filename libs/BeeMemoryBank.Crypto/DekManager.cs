@@ -42,9 +42,8 @@ public static class DekManager
 
     public static byte[] UnwrapDek(byte[] wrapped, byte[] iv, byte[] masterDek, byte[]? aad = null)
     {
-        // Strict length-based dispatch — eliminates ambiguity that previously allowed
-        // an attacker with DB write access to substitute v0 blobs into v1 rows and
-        // bypass AAD via the silent fallback path.
+        // Strict length-based dispatch, with no silent fallback between v1 and v0: otherwise an
+        // attacker with DB write access could substitute a v0 blob into a v1 row and bypass the AAD.
         if (wrapped.Length == LegacyWrappedDekSize)
         {
             // v0 — no version byte, no AAD

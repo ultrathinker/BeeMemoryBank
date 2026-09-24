@@ -17,7 +17,7 @@ public static class CryptoConstants
     // every existing user's password until tbl_user.password_hash is re-hashed.
     // 64 MiB / t=3 / p=4 are the values used to bootstrap existing prod deployments.
     // Bumping requires (a) embedding params into the PHC string, or (b) a lazy re-hash
-    // pass on next successful login. Tracked as audit finding claude-A2 #1 / claude-A2 #7.
+    // pass on next successful login.
     public const int DefaultArgonMemory = 65536;       // 64 MB
     public const int DefaultArgonIterations = 3;
     public const int DefaultArgonParallelism = 4;
