@@ -80,7 +80,7 @@ public static class MediaEndpoints
         }).DisableAntiforgery();
 
         group.MapGet("/{id:guid}", async (
-            Guid id, SessionService session, MediaService mediaService, CallerScopeHolder scopeHolder, HttpContext ctx) =>
+            Guid id, SessionService session, MediaService mediaService, HttpContext ctx) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -88,8 +88,9 @@ public static class MediaEndpoints
             var result = await mediaService.GetContentAsync(id);
             // The folder ACL hides every unlinked row from a non-superadmin — including the files
             // they just uploaded on the "new article" page. Let the uploader through for their own.
-            if (result is null && await IsCallersOwnOrphanAsync(id, mediaService, ctx))
-                result = await scopeHolder.RunAsSystemAsync(() => mediaService.GetContentAsync(id));
+            var owner = CallerIdentity.Extract(ctx).MediaOwnerKey;
+            if (result is null && owner != null)
+                result = await mediaService.GetOwnedOrphanContentAsync(id, owner);
             if (result is null)
                 return Results.NotFound();
 
@@ -100,7 +101,7 @@ public static class MediaEndpoints
         });
 
         group.MapDelete("/{id:guid}", async (
-            Guid id, SessionService session, MediaService mediaService, CallerScopeHolder scopeHolder, HttpContext ctx) =>
+            Guid id, SessionService session, MediaService mediaService, HttpContext ctx) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -114,10 +115,10 @@ public static class MediaEndpoints
             {
                 // Same as GET: an unlinked row is invisible to a non-superadmin's ACL, so the
                 // uploader removing a file from a not-yet-saved article would otherwise get 404.
-                if (!await IsCallersOwnOrphanAsync(id, mediaService, ctx))
-                    return Results.NotFound();
-                await scopeHolder.RunAsSystemAsync(() => mediaService.DeleteAsync(id));
-                return Results.NoContent();
+                var owner = CallerIdentity.Extract(ctx).MediaOwnerKey;
+                return owner != null && await mediaService.DeleteOwnedOrphanAsync(id, owner)
+                    ? Results.NoContent()
+                    : Results.NotFound();
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -147,11 +148,5 @@ public static class MediaEndpoints
                 kind = m.Kind
             }));
         }).RequireInternalKey().WithTags("Media");
-    }
-
-    private static async Task<bool> IsCallersOwnOrphanAsync(Guid id, MediaService mediaService, HttpContext ctx)
-    {
-        var owner = CallerIdentity.Extract(ctx).MediaOwnerKey;
-        return owner != null && await mediaService.IsOwnedOrphanAsync(id, owner);
     }
 }

@@ -31,9 +31,15 @@ public interface IMediaRepository
     Task<List<Guid>> LinkOrphanAttachmentsAsync(IEnumerable<Guid> mediaIds, Guid articleId, string? uploadedBy, long lamportTs, Guid? sourceNodeId);
 
     /// <summary>
-    /// True when <paramref name="id"/> is an active, unlinked row uploaded by
-    /// <paramref name="uploadedBy"/>. Deliberately NOT scoped by the caller's folder ACL: an
-    /// unlinked row has no folder, so the uploader is the only thing that can own it.
+    /// The row <paramref name="id"/> if it is active, unlinked and uploaded by
+    /// <paramref name="uploadedBy"/>; else null. Deliberately NOT scoped by the caller's folder
+    /// ACL: an unlinked row has no folder, so the uploader is the only thing that can own it.
     /// </summary>
-    Task<bool> IsOwnedOrphanAsync(Guid id, string uploadedBy);
+    Task<Media?> GetOwnedOrphanAsync(Guid id, string uploadedBy);
+
+    /// <summary>
+    /// Soft-deletes <paramref name="id"/> only if it is still active, unlinked and uploaded by
+    /// <paramref name="uploadedBy"/> — checked and written in one statement. True if a row changed.
+    /// </summary>
+    Task<bool> SoftDeleteOwnedOrphanAsync(Guid id, string uploadedBy);
 }

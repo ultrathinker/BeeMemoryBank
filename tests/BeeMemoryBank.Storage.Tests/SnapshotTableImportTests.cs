@@ -81,6 +81,44 @@ public class SnapshotTableImportTests : IAsyncLifetime
         data.Should().Equal(Body);
     }
 
+    // tbl_media.uploaded_by is a node-local owner key ("u{userId}"); user ids are per-node, so
+    // carrying it across would let a different person on the importing node pass the uploader
+    // check for someone else's unlinked file (Codex review).
+    [Fact]
+    public async Task MediaUploadedBy_IsNotCarriedAcrossBySnapshotImport()
+    {
+        string createSql;
+        using (var live = _factory.CreateConnection())
+            createSql = await live.QuerySingleAsync<string>(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tbl_media'");
+        var mediaId = Guid.NewGuid().ToString();
+        // The copied DDL keeps its FK to tbl_article, which this bare snapshot doesn't have.
+        using (var snap = new SqliteConnection($"Data Source={_snapPath};Foreign Keys=False"))
+        {
+            snap.Open();
+            await snap.ExecuteAsync(createSql);
+            await snap.ExecuteAsync(
+                @"INSERT INTO tbl_media (id, article_id, file_name, content_type, file_size, encrypted_dek, dek_iv, iv,
+                                         status, lamport_ts, created_at, kind, uploaded_by)
+                  VALUES (@id, NULL, 'pending.txt', 'text/plain', 3, @dek, @dekIv, @iv, 'A', 1, 'now', 'attachment', 'u1')",
+                new { id = mediaId, dek = Dek, dekIv = DekIv, iv = Iv });
+        }
+
+        using var conn = (SqliteConnection)_factory.CreateConnection();
+        await conn.ExecuteAsync($"ATTACH DATABASE '{_snapPath.Replace("'", "''")}' AS snap");
+        using (var tx = conn.BeginTransaction())
+        {
+            var copied = SnapshotTableImport.CopyTable(conn, tx, "tbl_media", orIgnore: true);
+            copied.Should().NotContain("uploaded_by");
+            tx.Commit();
+        }
+
+        var row = await conn.QuerySingleAsync(
+            "SELECT file_name AS FileName, uploaded_by AS UploadedBy FROM tbl_media WHERE id = @id", new { id = mediaId });
+        ((string)row.FileName).Should().Be("pending.txt", "the rest of the row still imports");
+        ((string?)row.UploadedBy).Should().BeNull();
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────
 
     private async Task BuildSnapshotAsync(string schema, string insert, string? hash = null)

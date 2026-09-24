@@ -202,6 +202,35 @@ public class MediaService(
                 return null;
         }
 
+        return await ReadContentAsync(media);
+    }
+
+    /// <summary>
+    /// Content of an unlinked row the caller uploaded (see <see cref="IMediaRepository.GetOwnedOrphanAsync"/>).
+    /// The folder ACL hides unlinked rows from a non-superadmin, so this is how the uploader previews
+    /// a file on the "new article" page. The row is fetched and authorized in one query.
+    /// </summary>
+    public async Task<(byte[] data, string contentType, string fileName)?> GetOwnedOrphanContentAsync(Guid id, string uploadedBy)
+    {
+        var media = await mediaRepo.GetOwnedOrphanAsync(id, uploadedBy);
+        return media == null ? null : await ReadContentAsync(media);
+    }
+
+    /// <summary>
+    /// Deletes an unlinked row the caller uploaded. The ownership predicate lives in the same
+    /// conditional UPDATE that deletes, so a row linked to an article in between is left alone.
+    /// Returns false when nothing matched.
+    /// </summary>
+    public async Task<bool> DeleteOwnedOrphanAsync(Guid id, string uploadedBy)
+    {
+        if (!await mediaRepo.SoftDeleteOwnedOrphanAsync(id, uploadedBy))
+            return false;
+        await eventLogger.LogMediaDeleteAsync(id);
+        return true;
+    }
+
+    private async Task<(byte[] data, string contentType, string fileName)?> ReadContentAsync(Media media)
+    {
         // Item 16a: resolve the ciphertext from the content-addressed blob store first, by the hash
         // recorded on the row, and fall back to the .enc file. The blob is the store the create path
         // and the sync pusher already fill; the file is the legacy home. Preferring the blob is what
@@ -223,13 +252,13 @@ public class MediaService(
             // file. Reading it blind threw FileNotFoundException, which nothing catches and
             // ExceptionStatusMap does not recognise — every broken image on the page became a server
             // error in the log, hiding the one fact an operator needs, which media is missing.
-            var filePath = Path.Combine(options.MediaDir, $"{id}.enc");
+            var filePath = Path.Combine(options.MediaDir, $"{media.Id}.enc");
             if (!File.Exists(filePath))
             {
                 this.logger.LogWarning(
                     "Media {MediaId} ({FileName}) has a row but neither a blob ({Hash}) nor a file at {Path} — " +
                     "serving 404. This node's media store is incomplete; the bytes exist only on a peer that " +
-                    "still has them.", id, media.FileName, media.CiphertextSha256 ?? "(none)", filePath);
+                    "still has them.", media.Id, media.FileName, media.CiphertextSha256 ?? "(none)", filePath);
                 return null;
             }
 
@@ -241,7 +270,7 @@ public class MediaService(
             {
                 // Deleted between the check and the read, or unreadable. Same answer, still logged:
                 // an unreadable file is an operational fact, not a caller error.
-                this.logger.LogWarning(ex, "Media {MediaId} could not be read from {Path}", id, filePath);
+                this.logger.LogWarning(ex, "Media {MediaId} could not be read from {Path}", media.Id, filePath);
                 return null;
             }
         }
@@ -249,13 +278,13 @@ public class MediaService(
         try
         {
             var isV1 = media.EncryptedDek.Length > 48 && media.EncryptedDek[0] == 0x01;
-            var dekAad = isV1 ? "bmb-media-dek"u8.ToArray().Concat(id.ToByteArray()).ToArray() : null;
+            var dekAad = isV1 ? "bmb-media-dek"u8.ToArray().Concat(media.Id.ToByteArray()).ToArray() : null;
 
             var mediaDek = session.TryUnwrapWithCandidates(masterDek =>
                 DekManager.UnwrapDek(media.EncryptedDek, media.DekIV, masterDek, dekAad));
             try
             {
-                var bodyAad = isV1 ? "bmb-media"u8.ToArray().Concat(id.ToByteArray()).ToArray() : null;
+                var bodyAad = isV1 ? "bmb-media"u8.ToArray().Concat(media.Id.ToByteArray()).ToArray() : null;
                 var plaintext = MediaEncryptor.Decrypt(ciphertext, media.IV, mediaDek, bodyAad);
                 return (plaintext, media.ContentType, media.FileName);
             }
@@ -291,9 +320,6 @@ public class MediaService(
 
 
     public Task<List<Media>> GetByArticleIdAsync(Guid articleId) => mediaRepo.GetByArticleIdAsync(articleId);
-
-    /// <summary>See <see cref="IMediaRepository.IsOwnedOrphanAsync"/>.</summary>
-    public Task<bool> IsOwnedOrphanAsync(Guid id, string uploadedBy) => mediaRepo.IsOwnedOrphanAsync(id, uploadedBy);
 
     private static bool IsAnimatedGif(byte[] data, string contentType)
     {

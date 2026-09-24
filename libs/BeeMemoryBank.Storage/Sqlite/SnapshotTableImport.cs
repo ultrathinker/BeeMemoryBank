@@ -19,6 +19,17 @@ namespace BeeMemoryBank.Storage.Sqlite;
 /// </summary>
 public static class SnapshotTableImport
 {
+    /// <summary>
+    /// Columns that only mean something on the node that wrote them and must never travel in a
+    /// snapshot. tbl_media.uploaded_by holds a LOCAL owner key ("u{userId}"): user ids are per-node,
+    /// so on the importing node the same key can name a different person, who would then pass the
+    /// uploader check for someone else's unlinked file. Left to the live default (NULL) instead.
+    /// </summary>
+    private static readonly Dictionary<string, HashSet<string>> NodeLocalColumns = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["tbl_media"] = new(StringComparer.OrdinalIgnoreCase) { "uploaded_by" },
+    };
+
     /// <summary>Whether <c>snap</c> has a table of this name.</summary>
     public static bool SnapshotHasTable(SqliteConnection conn, SqliteTransaction? tx, string table)
     {
@@ -39,7 +50,9 @@ public static class SnapshotTableImport
     {
         var live = ColumnsOf(conn, tx, "main", table);
         var snap = ColumnsOf(conn, tx, "snap", table);
-        var shared = live.Where(snap.Contains).ToList();
+        var shared = live.Where(snap.Contains)
+            .Where(c => !NodeLocalColumns.TryGetValue(table, out var local) || !local.Contains(c))
+            .ToList();
         if (shared.Count == 0)
             throw new InvalidOperationException($"Snapshot table [{table}] shares no columns with the local schema.");
 

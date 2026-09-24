@@ -221,7 +221,8 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         var ids = mediaIds.ToList();
         var linked = await conn.QueryAsync<string>(
             @"UPDATE tbl_media
-              SET article_id = @articleId, lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+              SET article_id = @articleId, lamport_ts = @lamportTs, source_node_id = @sourceNodeId,
+                  uploaded_by = NULL
               WHERE id IN @ids AND article_id IS NULL AND status = 'A'
               RETURNING id",
             new { ids, articleId, lamportTs, sourceNodeId });
@@ -234,7 +235,8 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         var ids = mediaIds.ToList();
         var linked = await conn.QueryAsync<string>(
             @"UPDATE tbl_media
-              SET article_id = @articleId, lamport_ts = @lamportTs, source_node_id = @sourceNodeId
+              SET article_id = @articleId, lamport_ts = @lamportTs, source_node_id = @sourceNodeId,
+                  uploaded_by = NULL
               WHERE id IN @ids AND article_id IS NULL AND status = 'A' AND kind = 'attachment'
                 AND (@uploadedBy IS NULL OR uploaded_by = @uploadedBy)
               RETURNING id",
@@ -242,12 +244,22 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         return linked.Select(Guid.Parse).ToList();
     }
 
-    public async Task<bool> IsOwnedOrphanAsync(Guid id, string uploadedBy)
+    public async Task<Media?> GetOwnedOrphanAsync(Guid id, string uploadedBy)
     {
         using var conn = OpenConnection();
-        return await conn.ExecuteScalarAsync<long>(
-            @"SELECT COUNT(1) FROM tbl_media
+        return await conn.QuerySingleOrDefaultAsync<Media>(
+            $@"SELECT {SelectCols} FROM tbl_media m
+               WHERE m.id = @id AND m.article_id IS NULL AND m.status = 'A' AND m.uploaded_by = @uploadedBy",
+            new { id, uploadedBy });
+    }
+
+    public async Task<bool> SoftDeleteOwnedOrphanAsync(Guid id, string uploadedBy)
+    {
+        using var conn = OpenConnection();
+        var now = UtcNow();
+        return await conn.ExecuteAsync(
+            @"UPDATE tbl_media SET status = 'D', deleted_at = @now
               WHERE id = @id AND article_id IS NULL AND status = 'A' AND uploaded_by = @uploadedBy",
-            new { id, uploadedBy }) > 0;
+            new { id, uploadedBy, now }) > 0;
     }
 }
