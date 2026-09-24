@@ -143,24 +143,9 @@ public static class ProtectedContentCodec
         // anyone with write access to a folder (a restricted agent key included) can save an article
         // whose body is a hand-crafted "BMBENC1:" blob, and the derivation runs on EVERY unlock
         // attempt, right or wrong passphrase. Unbounded, a single article could make the node
-        // allocate gigabytes per attempt. The floor keeps a blob from being weakened; the ceiling
-        // below keeps it from being weaponised.
-        const int MinArgonMemory = 32768; // 32 MiB
-        const int MinArgonIterations = 2;
-        if (memory < MinArgonMemory || iterations < MinArgonIterations)
-            throw new CryptographicException(
-                $"Protected blob has weakened KDF params (memory={memory}, iterations={iterations}); refusing to unwrap.");
-
-        // Tighter than the key-slot bounds on purpose: a key slot is written by the node's own admin,
-        // this blob by whoever can write the article, and every wrong-passphrase attempt pays the
-        // full cost before the GCM tag can reject it. Wrap always writes the defaults (64 MiB, t=3,
-        // p=4), so no legitimate blob comes anywhere near these ceilings.
-        const int MaxArgonMemory = 262_144; // 256 MiB
-        const int MaxArgonIterations = 10;
-        const int MaxArgonParallelism = 8;
-        if (memory > MaxArgonMemory || iterations > MaxArgonIterations || parallelism > MaxArgonParallelism || parallelism < 1)
-            throw new CryptographicException(
-                $"Protected blob has unreasonable KDF params (memory={memory}, iterations={iterations}, parallelism={parallelism}); refusing to unwrap.");
+        // allocate gigabytes per attempt. Bounds are tighter than the key-slot ones on purpose (a
+        // key slot is written by the node's own admin); Wrap always writes the defaults.
+        KeyDerivation.ValidateUntrustedParameters(memory, iterations, parallelism);
 
         int saltLen = ReadByte(span, ref pos);
         var salt = ReadBytes(span, ref pos, saltLen);

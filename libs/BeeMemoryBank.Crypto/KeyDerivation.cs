@@ -106,5 +106,24 @@ public static class KeyDerivation
         }
     }
 
+    /// <summary>
+    /// Rejects Argon2id parameters that did not come from this node itself (a joining node's view of
+    /// a peer's key slot, a protected-article blob anyone with write access can plant) before any
+    /// memory is committed to them. The app only ever writes the defaults (64 MiB, t=3, p=4); the
+    /// floor stops a weakened record, the ceiling stops one that is weaponised to exhaust memory.
+    /// </summary>
+    public static void ValidateUntrustedParameters(int memory, int iterations, int parallelism)
+    {
+        const int MinMemory = 32_768, MaxMemory = 262_144; // 32 MiB .. 256 MiB
+        const int MinIterations = 2, MaxIterations = 10;
+        const int MinParallelism = 1, MaxParallelism = 8;
+        if (memory < MinMemory || iterations < MinIterations)
+            throw new System.Security.Cryptography.CryptographicException(
+                $"Refusing weakened Argon2id parameters (memory={memory}, iterations={iterations}).");
+        if (memory > MaxMemory || iterations > MaxIterations || parallelism < MinParallelism || parallelism > MaxParallelism)
+            throw new System.Security.Cryptography.CryptographicException(
+                $"Refusing unreasonable Argon2id parameters (memory={memory}, iterations={iterations}, parallelism={parallelism}).");
+    }
+
     public static byte[] GenerateSalt() => SecureRandom.GetBytes(CryptoConstants.SaltSize);
 }
