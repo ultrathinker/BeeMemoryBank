@@ -76,9 +76,8 @@ public class NodeFront
     /// separate binding mechanism, so the two listeners always coexist.
     /// </summary>
     /// <param name="enableHttps">
-    /// Opt-in flag for the second HTTPS listener. Defaults to false (OFF), matching the "opt-in via a button" design
-    /// in the superplan — a later task wires an actual UI toggle. When false, behavior is
-    /// byte-for-byte identical to before this method grew these parameters.
+    /// Opt-in flag for the second HTTPS listener. Defaults to false (OFF); a UI toggle can wire
+    /// this up later. When false, behavior is byte-for-byte identical to not passing the flag.
     /// </param>
     /// <param name="dataPath">
     /// Data directory passed to <see cref="LocalCaService"/> for cert generation/reload. Only

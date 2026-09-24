@@ -80,7 +80,7 @@ public static class Program
 
         // All graceful cleanup (lifeline/app/orchestrator disposal) has already run inside the
         // awaited call above - this is purely a defensive belt-and-suspenders exit. Observed
-        // live (Этап 1 regression hunt): after a stdin-triggered graceful shutdown completes
+        // observed in practice: after a stdin-triggered graceful shutdown completes
         // (orchestrator logs "Stopped successfully"), the OS process itself sometimes never
         // actually terminates and `dotnet test`/callers hang waiting on it, even though nothing
         // further executes or logs. Root cause not fully isolated (thread-pool/native-handle
@@ -364,9 +364,9 @@ public static class Program
             // always ends up in .runtime.json/node.status.json regardless.
             const int preferredFrontPort = 5310;
 
-            // Opt-in HTTPS front on :5311. Gated behind BMB_HTTPS_ENABLED=1 (absent/false = OFF),
-            // matching "по кнопке" in the superplan — a later task wires an actual UI toggle. When
-            // disabled (the default) the front is byte-for-byte identical to before: only the
+            // Opt-in HTTPS front on :5311. Gated behind BMB_HTTPS_ENABLED=1 (absent/false = OFF)
+            // so enabling stays a deliberate, explicit act; a UI toggle can wire this up later.
+            // When disabled (the default) the front is byte-for-byte identical to before: only the
             // plain-HTTP listener runs.
             var httpsEnabled = Environment.GetEnvironmentVariable("BMB_HTTPS_ENABLED") == "1";
             if (httpsEnabled)

@@ -99,9 +99,9 @@ public partial class MainWindow : Window
         // The lifecycle service is UI-agnostic: it reports textual progress and returns a
         // plain result. Everything below (Dispatcher.UIThread.Post, UpdateStatus, ShowError,
         // WebView wiring, panel switching) stays in MainWindow - the behavior is identical to
-        // the inlined implementation that used to live here, only the ownership moved.
+        // the original inlined implementation.
         //
-        // §4.6: which profile to start is autostartMode/lastUsed-driven, not the hardcoded
+        // Which profile to start is autostartMode/lastUsed-driven, not the hardcoded
         // default vault - a single-profile installation still resolves to "default" via
         // ProfileService's own first-run fallback, so behavior is unchanged when there is
         // only one profile.
@@ -238,8 +238,8 @@ public partial class MainWindow : Window
             if (!result.Success)
             {
                 // Reverted, not a genuine success - the app is usable again but the
-                // REQUESTED switch did not happen. No dedicated toast UI exists yet
-                // (tracked as Этап 6 polish); log so this is at least diagnosable.
+                // REQUESTED switch did not happen. No dedicated toast UI exists yet;
+                // log so this is at least diagnosable.
                 Debug.WriteLine($"Profile switch reverted: {result.ErrorMessage}");
             }
         }

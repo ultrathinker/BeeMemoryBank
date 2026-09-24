@@ -566,8 +566,8 @@ public class NodeOrchestrator : IDisposable
         // any earlier races the per-child lifecycle loop's own WaitForExitAsync(stoppingToken):
         // that call would observe the cancellation and immediately hard-Kill() the child itself,
         // before the stdin-close-then-wait sequence above ever got a chance to run, defeating
-        // graceful shutdown essentially at random depending on which task got scheduled first
-        // (Codex-reviewed finding). Any child still waiting on its OWN ready-file poll (not yet
+        // graceful shutdown essentially at random depending on which task got scheduled first.
+        // Any child still waiting on its OWN ready-file poll (not yet
         // running) still needs this cancellation to unblock promptly, so it isn't dropped -
         // just deferred until it can no longer race the graceful path above.
         if (cts != null)
