@@ -129,13 +129,6 @@ public partial class ApiClient
         return (dto, (int)resp.StatusCode, null);
     }
 
-    public async Task<(bool ok, int status, string? error)> DeleteArticleAsync(Guid id)
-    {
-        var resp = await http.DeleteAsync($"/api/articles/{id}");
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
-    }
-
     // ─── Protected ("second-layer") articles ───────────────────────────────────
 
     public async Task<(bool ok, int status, string? content, int? expiresInSeconds, string? error)> UnlockArticleAsync(Guid id, string passphrase)
@@ -188,47 +181,4 @@ public partial class ApiClient
         return (dto, (int)resp.StatusCode, null);
     }
 
-    public async Task<(bool ok, int status, string? error)> MoveArticleAsync(Guid id, string newPath)
-    {
-        var resp = await http.PostAsync($"/api/articles/{id}/move", Body(new { newPath }));
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
-    }
-
-    // ─── Folders ──────────────────────────────────────────────────────────────
-
-    public async Task<(bool ok, int status, string? error)> CreateFolderAsync(string path)
-    {
-        var resp = await http.PostAsync("/api/folders", Body(new { path }));
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
-    }
-
-    public async Task<(bool ok, int status, string? error)> RenameFolderAsync(string path, string newPath)
-    {
-        var req = new HttpRequestMessage(new HttpMethod("PATCH"),
-            $"/api/folders?path={Uri.EscapeDataString(path)}")
-        {
-            Content = Body(new { newPath })
-        };
-        var resp = await http.SendAsync(req);
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
-    }
-
-    public async Task<(bool ok, int status, string? error)> DeleteFolderAsync(string path)
-    {
-        var resp = await http.DeleteAsync($"/api/folders?path={Uri.EscapeDataString(path)}");
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
-    }
-
-    public async Task<(bool ok, int status, string? error)> MoveFolderAsync(string path, string newParentPath)
-    {
-        var resp = await http.PostAsync(
-            $"/api/folders/move?path={Uri.EscapeDataString(path)}",
-            Body(new { newParentPath }));
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        return (false, (int)resp.StatusCode, await ReadErrorAsync(resp));
-    }
 }

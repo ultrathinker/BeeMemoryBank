@@ -146,10 +146,6 @@ public record RoleDto(
 public record RoleAclEntryDto(
     string RoleName, Guid FolderId, string FolderPath, string Effect, bool IsReadOnly, DateTime CreatedAt);
 
-public record CreateRoleProxyRequest(string Name, string DisplayName, string? Description, string BasePolicy);
-
-public record UpdateRoleProxyRequest(string DisplayName, string? Description, string BasePolicy);
-
 public record ArticleVersionDto(
     Guid Id,
     int VersionNumber,

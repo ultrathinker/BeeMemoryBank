@@ -10,16 +10,6 @@ namespace BeeMemoryBank.Web.Services;
 
 public partial class ApiClient
 {
-    public async Task<JsonElement?> SearchFoldersAsync(string query, int limit = 12)
-    {
-        try
-        {
-            return await http.GetFromJsonAsync<JsonElement>(
-                $"/api/folders/search?q={Uri.EscapeDataString(query)}&limit={limit}", JsonOpts);
-        }
-        catch { return null; }
-    }
-
     // ─── Search ───────────────────────────────────────────────────────────────
 
     public async Task<SearchResponseDto?> SearchAsync(string query, bool content = false, int page = 1, int pageSize = 50) =>
@@ -105,32 +95,6 @@ public partial class ApiClient
         var resp = await http.PutAsync($"/api/articles/{articleId}/concept-tags",
             Body(new { conceptTags }));
         return resp.IsSuccessStatusCode;
-    }
-
-    public async Task<(bool ok, int status, string? error)> RenameConceptTagAsync(string name, string newName)
-    {
-        var resp = await http.PutAsync($"/api/concept-tags/{Uri.EscapeDataString(name)}",
-            Body(new { newName }));
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        var err = await TryReadErrorAsync(resp);
-        return (false, (int)resp.StatusCode, err ?? "Rename failed");
-    }
-
-    public async Task<(bool ok, int status, string? error)> MergeConceptTagsAsync(string source, string target)
-    {
-        var resp = await http.PostAsync("/api/concept-tags/merge",
-            Body(new { source, target }));
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        var err = await TryReadErrorAsync(resp);
-        return (false, (int)resp.StatusCode, err ?? "Merge failed");
-    }
-
-    public async Task<(bool ok, int status, string? error)> DeleteConceptTagAsync(string name)
-    {
-        var resp = await http.DeleteAsync($"/api/concept-tags/{Uri.EscapeDataString(name)}");
-        if (resp.IsSuccessStatusCode) return (true, (int)resp.StatusCode, null);
-        var err = await TryReadErrorAsync(resp);
-        return (false, (int)resp.StatusCode, err ?? "Delete failed");
     }
 
     public async Task<List<RelatedArticleDto>?> GetRelatedArticlesAsync(Guid articleId)

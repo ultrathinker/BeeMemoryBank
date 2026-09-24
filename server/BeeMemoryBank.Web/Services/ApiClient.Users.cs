@@ -41,26 +41,6 @@ public partial class ApiClient
         }
     }
 
-    /// <summary>
-    /// Issues a new recovery key and returns it. The key is shown to the admin exactly once and is
-    /// NOT recoverable afterwards: only an Argon2id-derived wrapping key is stored, over an
-    /// independent random salt (see KeyManagementService.AddRecoveryKeyAsync). Returns the raw
-    /// response body on failure so the caller can surface the API's own message (e.g. a locked
-    /// session).
-    /// </summary>
-    public async Task<(bool ok, string? recoveryKey, string? error)> AddRecoveryKeyAsync()
-    {
-        var resp = await http.PostAsync("/api/keys/add-recovery", null);
-        var body = await resp.Content.ReadAsStringAsync();
-        if (!resp.IsSuccessStatusCode)
-            return (false, null, body);
-
-        var key = JsonNode.Parse(body)?["recoveryKey"]?.GetValue<string>();
-        return string.IsNullOrEmpty(key)
-            ? (false, null, "API returned no recovery key.")
-            : (true, key, null);
-    }
-
     // ─── Whitelist (sync nodes) ───────────────────────────────────────────────
 
     /// <summary>Promote or demote a peer. Every joined node starts as a superadmin.</summary>
@@ -136,13 +116,6 @@ public partial class ApiClient
     public async Task<List<AgentDto>?> GetAgentsAsync(bool all = false) =>
         await http.GetFromJsonAsync<List<AgentDto>>($"/api/agents?all={(all ? "true" : "false")}", JsonOpts);
 
-    public async Task<AgentCreatedDto?> CreateAgentAsync(string name, string? description)
-    {
-        var resp = await http.PostAsync("/api/agents", Body(new { name, description }));
-        if (!resp.IsSuccessStatusCode) return null;
-        return await resp.Content.ReadFromJsonAsync<AgentCreatedDto>(JsonOpts);
-    }
-
     public async Task<bool> DeleteAgentAsync(int id)
     {
         var resp = await http.DeleteAsync($"/api/agents/{id}");
@@ -179,23 +152,6 @@ public partial class ApiClient
             return (null, err?.Error ?? "Failed to create user", (int)resp.StatusCode);
         }
         catch { return (null, "Failed to create user", (int)resp.StatusCode); }
-    }
-
-    public async Task<(bool Ok, string? Error, int StatusCode)> UpdateUserAsync(int id, string displayName, string? role, bool? chatAccess = null)
-    {
-        var request = new HttpRequestMessage(HttpMethod.Put, $"/api/users/{id}")
-        {
-            Content = Body(new { displayName, role, chatAccess })
-        };
-
-        var resp = await http.SendAsync(request);
-        if (resp.IsSuccessStatusCode) return (true, null, (int)resp.StatusCode);
-        try
-        {
-            var err = await resp.Content.ReadFromJsonAsync<ErrorDto>(JsonOpts);
-            return (false, err?.Error ?? "Failed to update user", (int)resp.StatusCode);
-        }
-        catch { return (false, "Failed to update user", (int)resp.StatusCode); }
     }
 
     public async Task<(bool Ok, string? Error, int StatusCode)> DeleteUserAsync(int id)
@@ -239,48 +195,5 @@ public partial class ApiClient
             return (false, err?.Error ?? "Failed to change password", (int)resp.StatusCode);
         }
         catch { return (false, "Failed to change password", (int)resp.StatusCode); }
-    }
-
-    // ─── Folder Restrictions ────────────────────────────────────────────────
-
-    public async Task<List<AclEntryDto>?> GetUserRestrictionsAsync(int userId)
-    {
-        try
-        {
-            var resp = await http.GetAsync($"/api/restrictions/user/{userId}");
-            if (!resp.IsSuccessStatusCode) return null;
-            return await resp.Content.ReadFromJsonAsync<List<AclEntryDto>>(JsonOpts);
-        }
-        catch { return null; }
-    }
-
-    // Returns the API's own message and status: adding a per-user rule is refused with a 409 for
-    // a user managed by a custom role, and that reason has to reach the operator.
-    public async Task<(AclEntryDto? Entry, string? Error, int StatusCode)> AddUserRestrictionAsync(
-        int userId, Guid folderId, string effect, bool isReadOnly = false)
-    {
-        var resp = await http.PostAsync($"/api/restrictions/user/{userId}", Body(new { folderId, effect, isReadOnly }));
-        if (resp.IsSuccessStatusCode)
-            return (await resp.Content.ReadFromJsonAsync<AclEntryDto>(JsonOpts), null, (int)resp.StatusCode);
-        return (null, await ReadErrorAsync(resp, "Failed to add rule"), (int)resp.StatusCode);
-    }
-
-    public async Task<(bool Ok, string? Error, int StatusCode)> SetUserRestrictionReadOnlyAsync(
-        int userId, Guid folderId, bool isReadOnly)
-    {
-        var req = new HttpRequestMessage(HttpMethod.Patch, $"/api/restrictions/user/{userId}/{folderId}")
-        {
-            Content = Body(new { isReadOnly })
-        };
-        var resp = await http.SendAsync(req);
-        if (resp.IsSuccessStatusCode) return (true, null, (int)resp.StatusCode);
-        return (false, await ReadErrorAsync(resp, "Failed to update rule"), (int)resp.StatusCode);
-    }
-
-    public async Task<(bool Ok, string? Error, int StatusCode)> RemoveUserRestrictionAsync(int userId, Guid folderId)
-    {
-        var resp = await http.DeleteAsync($"/api/restrictions/user/{userId}/{folderId}");
-        if (resp.IsSuccessStatusCode) return (true, null, (int)resp.StatusCode);
-        return (false, await ReadErrorAsync(resp, "Failed to remove rule"), (int)resp.StatusCode);
     }
 }

@@ -1,28 +1,29 @@
-using System.Text;
-using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Web.Services;
 
 namespace BeeMemoryBank.Web.Endpoints;
 
+/// <summary>
+/// Hand-written proxy routes that survived the catch-all forwarder migration, plus one-liners
+/// noting the routes that moved into <see cref="ProxyRouteTable"/>. Everything here carries real
+/// Web-side logic the forwarder cannot express:
+/// <list type="bullet">
+/// <item>GET /api-proxy/article/{id} composes two upstream calls (metadata + content) into one shape.</item>
+/// <item>PUT /api-proxy/article/{id} branches on the passphrase (protected-article re-wrap).</item>
+/// <item>The protected-article POSTs (and both copy routes) reshape the API's response
+/// ({"protected": true} / {"relocked": true} / {"changed": true} / {"newArticleId": ...}) into the
+/// {"ok": true} contract the browser JavaScript relies on.</item>
+/// <item>GET /api-proxy/article/{id}/related does Web-side ordering + pagination.</item>
+/// <item>GET/PUT /api-proxy/article/{id}/concept-tags reshape {"conceptTags":[...]} into a bare
+/// array / 204, which the API does not do.</item>
+/// </list>
+/// Migrated to the table (GET/POST/DELETE/PATCH on /api-proxy/tree, /search, /article (move),
+/// /articles (versions, media list), /concept-tags, /media, /media/upload, /import/*):
+/// pure passthroughs — see ProxyRouteTable.
+/// </summary>
 public static class ArticleProxyEndpoints
 {
     public static void MapArticleProxyEndpoints(this WebApplication app)
     {
-        app.MapGet("/api-proxy/tree/children", async (ApiClient api, string path = "/") =>
-        {
-            var result = await api.GetChildrenAsync(path);
-            // Null means API returned non-success (typically 404 for ACL-denied folders or
-            // paths that don't exist). Surface as 404 so the caller can show "not found"
-            // rather than a 502 or 500.
-            return result != null ? Results.Ok(result) : Results.NotFound();
-        }).RequireAuthorization();
-
-        app.MapGet("/api-proxy/tree", async (ApiClient api) =>
-        {
-            var result = await api.GetFullTreeAsync();
-            return result != null ? Results.Ok(result) : Results.StatusCode(502);
-        }).RequireAuthorization();
-
         app.MapGet("/api-proxy/article/{id:guid}", async (Guid id, ApiClient api) =>
         {
             var article = await api.GetArticleAsync(id);
@@ -104,50 +105,6 @@ public static class ArticleProxyEndpoints
             return ok ? Results.Ok(new { ok = true }) : Results.Json(new { error = error ?? "Copy failed" }, statusCode: status);
         }).RequireAuthorization();
 
-        app.MapDelete("/api-proxy/article/{id:guid}", async (Guid id, ApiClient api) =>
-        {
-            var (ok, status, error) = await api.DeleteArticleAsync(id);
-            return ok ? Results.NoContent() : Results.Json(new { error }, statusCode: status);
-        }).RequireAuthorization();
-
-        app.MapGet("/api-proxy/search", async (ApiClient api, string? q = null, bool content = false) =>
-        {
-            if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest();
-            var results = await api.SearchAsync(q, content);
-            return results != null ? Results.Ok(results) : Results.StatusCode(502);
-        }).RequireAuthorization();
-
-        // Concept tag proxy routes
-        // W1 PILOT: the concept-tags GET family (list, graph, graph/home, graph/search,
-        // graph/neighbors, {name}/articles) is now served by the catch-all forwarder via the
-        // ProxyRouteTable "concept-tags" entry — see the catch-all registered before app.Run().
-        // The superadmin MUTATIONS below stay as explicit routes (they win over the catch-all and
-        // keep their RequireAuthorization("superadmin") gate).
-
-        app.MapPut("/api-proxy/concept-tags/{name}", async (string name, HttpContext ctx, ApiClient api) =>
-        {
-            var req = await ctx.Request.ReadFromJsonAsync<RenameTagDto>();
-            if (req == null || string.IsNullOrWhiteSpace(req.NewName))
-                return Results.BadRequest(new { error = "newName required" });
-            var (ok, status, error) = await api.RenameConceptTagAsync(name, req.NewName);
-            return ok ? Results.NoContent() : Results.Json(new { error }, statusCode: status);
-        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
-
-        app.MapPost("/api-proxy/concept-tags/merge", async (HttpContext ctx, ApiClient api) =>
-        {
-            var req = await ctx.Request.ReadFromJsonAsync<MergeConceptTagDto>();
-            if (req == null || string.IsNullOrWhiteSpace(req.Source) || string.IsNullOrWhiteSpace(req.Target))
-                return Results.BadRequest(new { error = "source and target required" });
-            var (ok, status, error) = await api.MergeConceptTagsAsync(req.Source, req.Target);
-            return ok ? Results.NoContent() : Results.Json(new { error }, statusCode: status);
-        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
-
-        app.MapDelete("/api-proxy/concept-tags/{name}", async (string name, ApiClient api) =>
-        {
-            var (ok, status, error) = await api.DeleteConceptTagAsync(name);
-            return ok ? Results.NoContent() : Results.Json(new { error }, statusCode: status);
-        }).RequireAuthorization(policy => policy.RequireRole("superadmin"));
-
         app.MapGet("/api-proxy/article/{id:guid}/concept-tags", async (Guid id, ApiClient api) =>
         {
             var tags = await api.GetArticleConceptTagsAsync(id);
@@ -162,14 +119,6 @@ public static class ArticleProxyEndpoints
             return ok ? Results.NoContent() : Results.StatusCode(502);
         }).RequireAuthorization();
 
-        app.MapPost("/api-proxy/article/{id:guid}/move", async (Guid id, HttpContext ctx, ApiClient api) =>
-        {
-            var req = await ctx.Request.ReadFromJsonAsync<MoveArticleProxyRequest>();
-            if (req == null) return Results.BadRequest();
-            var (ok, status, error) = await api.MoveArticleAsync(id, req.NewPath);
-            return ok ? Results.Ok() : Results.Json(new { error }, statusCode: status);
-        }).RequireAuthorization();
-
         app.MapGet("/api-proxy/article/{id:guid}/related", async (Guid id, ApiClient api, int page = 1, int pageSize = 5) =>
         {
             var all = await api.GetRelatedArticlesAsync(id) ?? [];
@@ -180,85 +129,6 @@ public static class ArticleProxyEndpoints
             if (page > totalPages) page = totalPages;
             var items = ordered.Skip((page - 1) * pageSize).Take(pageSize);
             return Results.Ok(new { items, total, page, pageSize, totalPages });
-        }).RequireAuthorization();
-
-        app.MapGet("/api-proxy/articles/{id:guid}/versions", async (Guid id, ApiClient api) =>
-        {
-            var versions = await api.GetArticleVersionsAsync(id);
-            return versions != null ? Results.Ok(versions) : Results.NotFound();
-        }).RequireAuthorization();
-
-        app.MapGet("/api-proxy/articles/{id:guid}/versions/{versionNumber:int}", async (Guid id, int versionNumber, ApiClient api) =>
-        {
-            var version = await api.GetArticleVersionContentAsync(id, versionNumber);
-            return version != null ? Results.Ok(version) : Results.NotFound();
-        }).RequireAuthorization();
-
-        app.MapPost("/api-proxy/media/upload", async (HttpRequest req, ApiClient api) =>
-        {
-            var form = await req.ReadFormAsync();
-            var file = form.Files.GetFile("file");
-            if (file == null) return Results.BadRequest(new { error = "No file provided" });
-            var articleId = form["articleId"].FirstOrDefault();
-            var isAttachment = form["attachment"].FirstOrDefault() == "true";
-            var (result, status, error) = await api.UploadMediaAsync(file, articleId, isAttachment);
-            return result != null
-                ? Results.Ok(new { id = result.Id, fileName = result.FileName, contentType = result.ContentType, fileSize = result.FileSize, kind = result.Kind })
-                : Results.Json(new { error = error ?? "Upload failed" }, statusCode: status);
-        }).RequireAuthorization().DisableAntiforgery();
-
-        app.MapGet("/api-proxy/articles/{id:guid}/media", async (Guid id, ApiClient api) =>
-        {
-            var media = await api.ListMediaAsync(id);
-            return media != null ? Results.Ok(media) : Results.StatusCode(502);
-        }).RequireAuthorization();
-
-        app.MapDelete("/api-proxy/media/{id:guid}", async (Guid id, ApiClient api) =>
-        {
-            var ok = await api.DeleteMediaAsync(id);
-            return ok ? Results.NoContent() : Results.StatusCode(502);
-        }).RequireAuthorization();
-
-        app.MapPost("/api-proxy/import/obsidian", async (HttpRequest req, ApiClient api) =>
-        {
-            var form = await req.ReadFormAsync();
-            var file = form.Files.GetFile("file");
-            if (file == null) return Results.BadRequest(new { error = "No file provided" });
-            try
-            {
-                var result = await api.ImportObsidianAsync(file);
-                return Results.Ok(result);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return Results.Json(new { error = ex.Message }, statusCode: 500);
-            }
-        }).RequireAuthorization().DisableAntiforgery();
-
-        app.MapPost("/api-proxy/import/bee", async (HttpRequest req, ApiClient api) =>
-        {
-            var form = await req.ReadFormAsync();
-            var file = form.Files.GetFile("file");
-            if (file == null) return Results.BadRequest(new { error = "No file provided" });
-            var destinationPath = form["destinationPath"].FirstOrDefault() ?? "/";
-            try
-            {
-                var result = await api.ImportBeeAsync(file, destinationPath);
-                return Results.Ok(result);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return Results.Json(new { error = ex.Message }, statusCode: 500);
-            }
-        }).RequireAuthorization().DisableAntiforgery();
-
-        app.MapGet("/api-proxy/media/{id:guid}", async (Guid id, ApiClient api, HttpContext ctx) =>
-        {
-            var result = await api.DownloadMediaAsync(id);
-            if (result == null) return Results.NotFound();
-            ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
-            BeeMemoryBank.Hosting.AspNetCore.UserContentResponseHeaders.ApplyTo(ctx.Response);
-            return Results.File(result.Data, result.ContentType);
         }).RequireAuthorization();
     }
 }
