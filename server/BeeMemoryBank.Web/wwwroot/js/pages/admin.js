@@ -720,6 +720,20 @@
             if (e.target && e.target.id === 'dlg-snapshot-progress') e.preventDefault();
         }, true);
 
+        // Confirm before executing destructive admin actions (.btn-confirm-click) in capture phase
+        document.addEventListener('click', function (e) {
+            var btn = e.target.closest('.btn-confirm-click');
+            if (!btn || btn._bmbConfirmed) return;
+            var msg = btn.dataset.confirm || 'Are you sure?';
+            if (!confirm(msg)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                return;
+            }
+            btn._bmbConfirmed = true;
+            setTimeout(function () { delete btn._bmbConfirmed; }, 500);
+        }, true);
+
         // Document-level clicks
         document.addEventListener('click', function (e) {
             // Upload dropzone toggle
@@ -854,13 +868,61 @@
                 return;
             }
 
+            // Destructive admin actions with confirmation (.btn-confirm-click)
+            var confirmClickBtn = e.target.closest('.btn-confirm-click');
+            if (confirmClickBtn) {
+                if (!confirmClickBtn._bmbConfirmed) {
+                    var msg = confirmClickBtn.dataset.confirm || 'Are you sure?';
+                    if (!confirm(msg)) {
+                        e.preventDefault();
+                        return;
+                    }
+                    confirmClickBtn._bmbConfirmed = true;
+                    setTimeout(function () { delete confirmClickBtn._bmbConfirmed; }, 500);
+                }
+                var href = confirmClickBtn.getAttribute('href');
+                if (href) {
+                    e.preventDefault();
+                    window.location.href = href;
+                    return;
+                }
+                var cform = confirmClickBtn.closest('form');
+                if (cform && !confirmClickBtn._bmbSubmitted) {
+                    confirmClickBtn._bmbSubmitted = true;
+                    setTimeout(function () { delete confirmClickBtn._bmbSubmitted; }, 500);
+                    e.preventDefault();
+                    if (typeof cform.requestSubmit === 'function') {
+                        cform.requestSubmit(confirmClickBtn);
+                    } else {
+                        cform.submit();
+                    }
+                    return;
+                }
+            }
+
+            // Dialog cancel buttons (admin fallback)
+            var cancelDlgBtn = e.target.closest('[data-dlg-cancel]');
+            if (cancelDlgBtn) {
+                var cDlgId = cancelDlgBtn.getAttribute('data-dlg-cancel');
+                if (cDlgId) {
+                    var cDlg = document.getElementById(cDlgId);
+                    if (cDlg && typeof cDlg.hide === 'function') cDlg.hide();
+                }
+                return;
+            }
+
             // Copy public key
-            var copyPubBtn = e.target.closest('.btn-copy-pubkey');
+            var copyPubBtn = e.target.closest('.btn-copy-pubkey, #btn-copy-pubkey');
             if (copyPubBtn) {
-                var tgtId = copyPubBtn.dataset.target;
+                var tgtId = copyPubBtn.dataset.target || 'pubkey-val';
                 var el = document.getElementById(tgtId);
                 if (el) {
-                    navigator.clipboard.writeText(el.textContent.trim()).catch(function () {});
+                    var val = el.textContent.trim();
+                    if (window.bmbCopyToClipboard) {
+                        window.bmbCopyToClipboard(val, copyPubBtn);
+                    } else if (navigator.clipboard) {
+                        navigator.clipboard.writeText(val).catch(function () {});
+                    }
                 }
                 return;
             }

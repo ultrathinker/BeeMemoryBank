@@ -8,31 +8,75 @@
                pathname === '/Admin';
     }
 
-    function executeScripts(container) {
+    var currentPageAbortController = new AbortController();
+    window.bmbGetPageSignal = function () {
+        return currentPageAbortController.signal;
+    };
+
+    function spaCleanup() {
+        if (currentPageAbortController) {
+            currentPageAbortController.abort();
+            currentPageAbortController = new AbortController();
+        }
+        document.dispatchEvent(new CustomEvent('bmb:page-cleanup'));
+    }
+
+    function getSectionScripts(doc) {
+        if (!doc || !doc.body) return [];
+        var bodyScripts = Array.from(doc.body.querySelectorAll('script'));
+        var siteJsIdx = -1;
+        for (var i = 0; i < bodyScripts.length; i++) {
+            var src = bodyScripts[i].getAttribute('src') || '';
+            if (src.includes('site.js')) {
+                siteJsIdx = i;
+                break;
+            }
+        }
+        return siteJsIdx >= 0 ? bodyScripts.slice(siteJsIdx + 1) : [];
+    }
+
+    async function executeScripts(container) {
         var scripts = Array.from(container.querySelectorAll('script'));
         var executable = scripts.filter(function (s) {
             var type = (s.getAttribute('type') || '').toLowerCase();
             return !type || type === 'text/javascript' || type === 'module';
         });
-        var external = executable.filter(function (s) { return s.src; });
 
-        return Promise.all(external.map(function (oldScript) {
-            return new Promise(function (resolve) {
+        for (var i = 0; i < executable.length; i++) {
+            var oldScript = executable[i];
+            await new Promise(function (resolve) {
                 var newScript = document.createElement('script');
                 Array.from(oldScript.attributes).forEach(function (attr) {
                     newScript.setAttribute(attr.name, attr.value);
                 });
                 newScript.onload = resolve;
                 newScript.onerror = resolve;
-                oldScript.parentNode.replaceChild(newScript, oldScript);
+                if (!oldScript.src && oldScript.textContent) {
+                    newScript.textContent = oldScript.textContent;
+                    oldScript.parentNode.replaceChild(newScript, oldScript);
+                    resolve();
+                } else {
+                    oldScript.parentNode.replaceChild(newScript, oldScript);
+                }
             });
-        }));
+        }
     }
 
-    async function spaAfterSwap() {
+    async function spaAfterSwap(doc) {
         document.body.classList.remove('graph-page', 'ai-chat-page', 'home-chat-page', 'chat-ui');
         var pageContent = document.getElementById('page-content');
         if (!pageContent) return;
+
+        // Process target page scripts from @section Scripts outside #page-content
+        var sectionScripts = getSectionScripts(doc);
+        sectionScripts.forEach(function (s) {
+            var clone = document.createElement('script');
+            Array.from(s.attributes).forEach(function (attr) {
+                clone.setAttribute(attr.name, attr.value);
+            });
+            clone.textContent = s.textContent;
+            pageContent.appendChild(clone);
+        });
 
         if (window.bmbInitSlForms) window.bmbInitSlForms(pageContent);
         await executeScripts(pageContent);
@@ -71,11 +115,14 @@
                 var newContent = doc.getElementById('page-content');
                 var currentContent = document.getElementById('page-content');
                 if (!newContent || !currentContent) { window.location.href = targetUrl.href; return; }
+
+                spaCleanup();
+
                 currentContent.innerHTML = newContent.innerHTML;
                 var newTitle = doc.querySelector('title');
                 if (newTitle) document.title = newTitle.textContent;
                 if (pushState !== false) history.pushState({ spa: true }, '', targetUrl.href);
-                await spaAfterSwap();
+                await spaAfterSwap(doc);
             })
             .catch(function (err) {
                 if (err.message === 'redirect') return;

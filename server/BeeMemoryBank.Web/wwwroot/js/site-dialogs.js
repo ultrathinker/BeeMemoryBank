@@ -23,6 +23,20 @@
         });
     }
 
+    if (!window._bmbDlgCancelBound) {
+        window._bmbDlgCancelBound = true;
+        document.addEventListener('click', function (e) {
+            var btn = e.target.closest('[data-dlg-cancel]');
+            if (!btn) return;
+            var dlgId = btn.getAttribute('data-dlg-cancel');
+            if (!dlgId) return;
+            var dlg = document.getElementById(dlgId);
+            if (dlg && typeof dlg.hide === 'function') {
+                dlg.hide();
+            }
+        });
+    }
+
     window.bmbFolderPicker = function (opts) {
         var rootEl = opts.rootEl;
         var state = rootEl._bmbFpState;

@@ -31,33 +31,29 @@ window.bmbHideBusyModal = function () {
 };
 
 window.bmbDownload = async function (payload) {
-    window.bmbShowBusyModal('Preparing archive…', "This can take a while for large exports — please don't close the tab.");
+    window.bmbShowBusyModal('Preparing archive…', "This can take a while for large exports — please don't close this window.");
     try {
-        var resp = await fetch('/api-proxy/export', {
+        var r = await fetch('/api-proxy/downloads/prepare', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        if (!resp.ok) {
-            var err = 'Export failed';
-            try { var j = await resp.json(); err = j.error || err; } catch (e) {}
-            alert(err);
-            window.bmbHideBusyModal();
-            return;
+        if (!r.ok) {
+            var err = 'Download failed';
+            try { var j = await r.json(); err = j.error || err; } catch (_) {}
+            throw new Error(err);
         }
-        var blob = await resp.blob();
-        var cd = resp.headers.get('Content-Disposition') || '';
-        var match = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)/i);
-        var filename = match ? decodeURIComponent(match[1]) : 'export.zip';
+        var data = await r.json();
+        window.bmbHideBusyModal();
         var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
+        a.href = '/api-proxy/downloads/' + encodeURIComponent(data.token);
+        a.download = data.fileName;
+        document.body.appendChild(a);
         a.click();
-        URL.revokeObjectURL(a.href);
-        window.bmbHideBusyModal();
+        a.remove();
     } catch (e) {
-        alert('Export failed: ' + e);
         window.bmbHideBusyModal();
+        alert(e.message || 'Download failed');
     }
 };
 

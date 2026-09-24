@@ -8,6 +8,9 @@
     var originalTitle = pageData.originalTitle || '';
     var originalContent = pageData.originalContent || '';
 
+    var pageSignal = window.bmbGetPageSignal ? window.bmbGetPageSignal() : null;
+    var pageOpts = pageSignal ? { signal: pageSignal } : false;
+
     // Dialog cancel handler
     document.querySelectorAll('[data-dlg-cancel]').forEach(function (btn) {
         btn.addEventListener('click', function () {
@@ -359,14 +362,14 @@
 
     window.addEventListener('beforeunload', function (e) {
         if (isDirty) { e.preventDefault(); e.returnValue = ''; }
-    });
+    }, pageOpts);
 
     document.addEventListener('keydown', function (e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 's') {
             e.preventDefault();
             form.requestSubmit();
         }
-    });
+    }, pageOpts);
 
     // Existing protected article
     if (isProtected) {

@@ -10,6 +10,9 @@
     var articleTitle = pageData.articleTitle || '';
     var articleTreePath = pageData.articleTreePath || '/';
 
+    var pageSignal = window.bmbGetPageSignal ? window.bmbGetPageSignal() : null;
+    var pageOpts = pageSignal ? { signal: pageSignal } : false;
+
     // Dialog opening buttons
     document.getElementById('btn-open-protect')?.addEventListener('click', function () {
         document.getElementById('dlg-protect')?.show();
@@ -57,7 +60,7 @@
             if (aId) deleteAttachment(aId);
             return;
         }
-    });
+    }, pageOpts);
 
     function escHtml(s) {
         return String(s == null ? '' : s)
@@ -115,6 +118,12 @@
             }
             tick();
             unlockTimer = setInterval(tick, 1000);
+        }
+
+        if (pageSignal) {
+            pageSignal.addEventListener('abort', function () {
+                if (unlockTimer) { clearInterval(unlockTimer); unlockTimer = null; }
+            });
         }
 
         function relock() {
@@ -286,7 +295,7 @@
             if (!e.target.closest('#move-article-search') && !e.target.closest('#move-article-dropdown')) {
                 moveArticleDropdown.style.display = 'none';
             }
-        });
+        }, pageOpts);
     }
 
     var moveBtn = document.getElementById('btn-move-article');
@@ -617,7 +626,7 @@
             rendered = true;
             if (pageStatus) pageStatus.textContent = e.data.pages + (e.data.pages === 1 ? ' page' : ' pages');
             applyZoom();
-        });
+        }, pageOpts);
 
         printBtn.addEventListener('click', function () {
             settings.zoom = 1.0;
@@ -875,7 +884,7 @@
             if (!e.target.closest('#concept-tag-input-wrap')) {
                 dropdown.style.display = 'none';
             }
-        });
+        }, pageOpts);
 
         searchInput.addEventListener('sl-blur', function () {
             setTimeout(function () {

@@ -6,6 +6,10 @@
     var graphData = graphDataEl ? JSON.parse(graphDataEl.textContent || '{}') : {};
     const initialFocus = graphData.focusConcept || null;
 
+    var pageSignal = window.bmbGetPageSignal ? window.bmbGetPageSignal() : null;
+    var pageOpts = pageSignal ? { signal: pageSignal } : false;
+    var pageCaptureOpts = pageSignal ? { signal: pageSignal, capture: true } : true;
+
     document.getElementById('btn-graph-refresh')?.addEventListener('click', function () {
         window.location.reload();
     });
@@ -830,7 +834,7 @@
             simulation.force('center', d3.forceCenter(width / 2, height / 2));
             simulation.alpha(0.3).restart();
         }, 100);
-    });
+    }, pageOpts);
 
     window.addEventListener('resize', () => {
         if (cy) { cy.resize(); cy.fit(); }
@@ -839,7 +843,7 @@
         height = graphContainer.clientHeight;
         simulation.force('center', d3.forceCenter(width / 2, height / 2));
         simulation.alpha(0.3).restart();
-    });
+    }, pageOpts);
 
     btnModeHome?.addEventListener('click', () => loadMode('home'));
     btnModeFull?.addEventListener('click', () => {
@@ -1000,7 +1004,14 @@
             conceptPanel.hidden = true;
             return;
         }
-    }, true);
+    }, pageCaptureOpts);
+
+    if (pageSignal) {
+        pageSignal.addEventListener('abort', function () {
+            if (simulation) simulation.stop();
+            if (cy && typeof cy.destroy === 'function') cy.destroy();
+        });
+    }
 
     function escapeHtml(text) {
         return String(text == null ? '' : text)

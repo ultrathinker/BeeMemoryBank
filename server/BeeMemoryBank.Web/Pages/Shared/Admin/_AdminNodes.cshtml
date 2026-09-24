@@ -18,7 +18,7 @@
             <label style="font-size:0.85rem;color:var(--text-secondary);">Ed25519 Public Key</label>
             <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
                 <code style="font-size:0.78rem;word-break:break-all;flex:1;" id="pubkey-val">@Model.Identity.Ed25519PublicKeyB64</code>
-                <sl-icon-button id="btn-copy-pubkey" name="clipboard" label="Copy"></sl-icon-button>
+                <sl-icon-button id="btn-copy-pubkey" class="btn-copy-pubkey" data-target="pubkey-val" name="clipboard" label="Copy"></sl-icon-button>
             </div>
         </div>
     </div>

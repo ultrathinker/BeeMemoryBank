@@ -26,7 +26,7 @@ public class WebCspComplianceGuardTests
             "Could not locate repo root from " + AppContext.BaseDirectory);
     }
 
-    private static IEnumerable<string> RazorPageFiles()
+    private static IEnumerable<string> RazorAndHtmlFiles()
     {
         var pagesDir = Path.Combine(RepoRoot, "server", "BeeMemoryBank.Web", "Pages");
         if (Directory.Exists(pagesDir))
@@ -40,6 +40,19 @@ public class WebCspComplianceGuardTests
                 yield return f;
             }
         }
+
+        var wwwrootDir = Path.Combine(RepoRoot, "server", "BeeMemoryBank.Web", "wwwroot");
+        if (Directory.Exists(wwwrootDir))
+        {
+            var libDir = Path.GetFullPath(Path.Combine(wwwrootDir, "lib")) + Path.DirectorySeparatorChar;
+            foreach (var f in Directory.EnumerateFiles(wwwrootDir, "*.html", SearchOption.AllDirectories))
+            {
+                var full = Path.GetFullPath(f);
+                if (full.StartsWith(libDir, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                yield return f;
+            }
+        }
     }
 
     [Fact]
@@ -49,7 +62,7 @@ public class WebCspComplianceGuardTests
         var scriptTagRegex = new Regex(@"<script\b(?![^>]*\bsrc\b)(?![^>]*\btype=[""']application/json[""'])[^>]*>.*?</script>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         var violations = new List<string>();
 
-        foreach (var file in RazorPageFiles())
+        foreach (var file in RazorAndHtmlFiles())
         {
             var content = File.ReadAllText(file);
             var matches = scriptTagRegex.Matches(content);
@@ -66,11 +79,11 @@ public class WebCspComplianceGuardTests
     [Fact]
     public void RazorPages_ContainNoInlineEventHandlers()
     {
-        // Matches on* attributes like onclick=, onchange=, onsubmit=, onsl-change=, etc.
-        var onHandlerRegex = new Regex(@"(?i)\bon[a-z]+=[^\s>]+");
+        // Matches on* attributes including hyphenated Shoelace events like onsl-change=, onsl-request-close=, onclick=, etc.
+        var onHandlerRegex = new Regex(@"(?i)\bon[a-z-]+\s*=");
         var violations = new List<string>();
 
-        foreach (var file in RazorPageFiles())
+        foreach (var file in RazorAndHtmlFiles())
         {
             var content = File.ReadAllText(file);
             var matches = onHandlerRegex.Matches(content);
@@ -91,7 +104,7 @@ public class WebCspComplianceGuardTests
         var jsUrlRegex = new Regex(@"(?i)href\s*=\s*[""']?javascript:");
         var violations = new List<string>();
 
-        foreach (var file in RazorPageFiles())
+        foreach (var file in RazorAndHtmlFiles())
         {
             var content = File.ReadAllText(file);
             var matches = jsUrlRegex.Matches(content);
@@ -103,5 +116,17 @@ public class WebCspComplianceGuardTests
         }
 
         Assert.Empty(violations);
+    }
+
+    [Theory]
+    [InlineData("<sl-switch onsl-change=\"handleChange()\">")]
+    [InlineData("<sl-dialog onsl-request-close=\"preventClose()\">")]
+    [InlineData("<sl-button onsl-click=\"click()\">")]
+    [InlineData("<button onclick=\"run()\">")]
+    [InlineData("<form onsubmit=\"return false;\">")]
+    public void InlineEventHandlerRegex_DetectsHyphenatedAndStandardEvents(string snippet)
+    {
+        var regex = new Regex(@"(?i)\bon[a-z-]+\s*=");
+        Assert.Matches(regex, snippet);
     }
 }

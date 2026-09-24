@@ -211,13 +211,4 @@
                 }).finally(function () { btn.loading = false; });
         });
     }
-
-    // Dialog cancel buttons
-    document.addEventListener('click', function (e) {
-        var cancelBtn = e.target.closest('[data-dlg-cancel]');
-        if (!cancelBtn) return;
-        var dlgId = cancelBtn.getAttribute('data-dlg-cancel');
-        var dlg = document.getElementById(dlgId);
-        if (dlg) dlg.hide();
-    });
 })();
