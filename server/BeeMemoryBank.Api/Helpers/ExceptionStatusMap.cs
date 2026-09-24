@@ -21,6 +21,7 @@ public static class ExceptionStatusMap
         // InvalidOperationException (see ConflictException's remarks for why), so the generic
         // InvalidOperationException arm below would otherwise swallow all three and hand back 409.
         SessionLockedException e => (403, e.Message),
+        BeeMemoryBank.Crypto.KdfBusyException e => (503, e.Message),
         InsufficientDiskSpaceException e => (507, e.Message),
         ConflictException e => (409, e.Message),
 

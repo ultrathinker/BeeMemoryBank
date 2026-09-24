@@ -46,7 +46,8 @@ public class KeyManagementService(
                 Array.Clear(oldKek);
                 break;
             }
-            catch { Array.Clear(oldKek); }
+            catch (KdfBusyException) { throw; }
+            catch { if (oldKek != null) Array.Clear(oldKek); }
         }
 
         if (masterDek == null || oldSlot == null)

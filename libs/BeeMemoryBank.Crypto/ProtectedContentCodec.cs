@@ -139,25 +139,26 @@ public static class ProtectedContentCodec
         int iterations = ReadInt32(span, ref pos);
         int parallelism = ReadInt32(span, ref pos);
 
-        // SECURITY (fixed finding M4): these three numbers came from inside the blob, which is
-        // attacker-controlled — anyone with write access to a folder (a restricted agent key
-        // included) can save an article whose body is a hand-crafted "BMBENC1:" blob. Without a
-        // bound, a value like memory = int.MaxValue asks Argon2id to allocate multiple terabytes
-        // the instant a human later enters the correct passphrase — an easy way to OOM-kill the
-        // whole node from a single malicious article, with no attacker-side authentication beyond
-        // whatever wrote the article in the first place. Mirrors the exact bounds
-        // SessionService.UnlockCoreAsync already enforces on key-slot KDF params, so the two
-        // "attacker might control these numbers" call sites in the codebase agree on one policy.
+        // SECURITY: these three numbers come from inside the blob, which is attacker-controlled —
+        // anyone with write access to a folder (a restricted agent key included) can save an article
+        // whose body is a hand-crafted "BMBENC1:" blob, and the derivation runs on EVERY unlock
+        // attempt, right or wrong passphrase. Unbounded, a single article could make the node
+        // allocate gigabytes per attempt. The floor keeps a blob from being weakened; the ceiling
+        // below keeps it from being weaponised.
         const int MinArgonMemory = 32768; // 32 MiB
         const int MinArgonIterations = 2;
         if (memory < MinArgonMemory || iterations < MinArgonIterations)
             throw new CryptographicException(
                 $"Protected blob has weakened KDF params (memory={memory}, iterations={iterations}); refusing to unwrap.");
 
-        const int MaxArgonMemory = 1_048_576;
-        const int MaxArgonIterations = 20;
-        const int MaxArgonParallelism = 16;
-        if (memory > MaxArgonMemory || iterations > MaxArgonIterations || parallelism > MaxArgonParallelism)
+        // Tighter than the key-slot bounds on purpose: a key slot is written by the node's own admin,
+        // this blob by whoever can write the article, and every wrong-passphrase attempt pays the
+        // full cost before the GCM tag can reject it. Wrap always writes the defaults (64 MiB, t=3,
+        // p=4), so no legitimate blob comes anywhere near these ceilings.
+        const int MaxArgonMemory = 262_144; // 256 MiB
+        const int MaxArgonIterations = 10;
+        const int MaxArgonParallelism = 8;
+        if (memory > MaxArgonMemory || iterations > MaxArgonIterations || parallelism > MaxArgonParallelism || parallelism < 1)
             throw new CryptographicException(
                 $"Protected blob has unreasonable KDF params (memory={memory}, iterations={iterations}, parallelism={parallelism}); refusing to unwrap.");
 
