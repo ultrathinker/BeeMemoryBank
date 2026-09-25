@@ -190,6 +190,23 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### No firewall prompt on a fresh desktop install; `/api/dek-rotation/accept` answers 409 when busy (2026-09-25)
+
+- **Windows Firewall no longer asks about BeeMemoryBank.Api after installation.** The prompt came
+  from the mDNS announcer's multicast socket, the only one not on 127.0.0.1. On the desktop it was
+  also useless: the announced port (the front's HTTP listener) is loopback-only, so no peer could
+  connect. bmbd now passes `BMB_MDNS_ENABLED=false` to Api unless the front's opt-in HTTPS listener
+  is on, and Api skips the announcer. Standalone and Docker deployments announce as before.
+- **A DEK rotation accept sent while another one holds the lock is refused with 409.** The endpoint
+  claimed the lock inside its background task, answered 202 first, and a refusal was only logged:
+  the accept silently never happened and `/progress` kept showing the previous result. A failed
+  accept publishes Failed just before it releases the lock, so a retry clicked the moment Failed
+  appears hit exactly this. The web UI and CLI already show a 409 as an error. This was also the
+  cause of the intermittent CI failures of `DekRotationHookMandatoryTests`, together with the
+  unlock's background sweep of pending auto-accepts running late on a slow runner.
+- Releases built by CI carry no delta package, so a desktop update downloads the full package
+  (~190 MB); the few-MB deltas mentioned below apply to locally built feeds.
+
 #### Windows desktop install: self-updating, half the size, starts with Windows (2026-09-25, 1.0.5-1.0.6)
 
 - **The desktop app updates itself from GitHub releases.** The tray "Check for updates" item used
