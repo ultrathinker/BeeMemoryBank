@@ -242,6 +242,9 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
+                    // bmbd and its children write UTF-8 (Utf8Console); decode it as such.
+                    StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    StandardErrorEncoding = System.Text.Encoding.UTF8,
                     WorkingDirectory = Path.GetDirectoryName(nodeExePath)
                 };
                 startInfo.EnvironmentVariables["BMB_STDIN_LIFELINE"] = "1";

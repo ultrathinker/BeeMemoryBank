@@ -25,6 +25,7 @@ TaskScheduler.UnobservedTaskException += (sender, e) =>
     e.SetObserved();
 };
 
+BeeMemoryBank.Hosting.Utf8Console.EnableForRedirectedOutput();
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddLoopbackForwardedHeaders(builder.Configuration);

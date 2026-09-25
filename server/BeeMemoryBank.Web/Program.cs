@@ -17,6 +17,7 @@ using System.Text;
 // UseStaticFiles and the UI renders unstyled. In dev (`dotnet run`) there is no
 // wwwroot next to the binary in bin/<cfg>/<tfm>/ — the Web SDK uses a static-web-
 // assets manifest instead, which only works with the default cwd-based ContentRoot.
+BeeMemoryBank.Hosting.Utf8Console.EnableForRedirectedOutput();
 var publishedWwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 var builder = Directory.Exists(publishedWwwroot)
     ? WebApplication.CreateBuilder(new WebApplicationOptions

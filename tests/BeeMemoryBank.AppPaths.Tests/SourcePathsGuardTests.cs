@@ -36,25 +36,17 @@ public class SourcePathsGuardTests
     // and UpdateService's pre-apply guard reads (never writes) the legacy path to refuse
     // applying an update that would still wipe it.
     //
-    // EXCEPTION — feat/4-node-lifecycle:
-    // The Stage 2 MainWindow.axaml.cs rescue call site moved verbatim into the new
-    // NodeLifecycleService.cs during the 1:1 lifecycle extraction; same rationale, new
-    // location. The reported line has shifted THREE times from code added above it in the
-    // same file (feat/4-profile-switching's INodeLifecycleService interface, the
-    // orchestrator's own single-flight-gate fix for the Codex Этап 4 review, and the Этап 6
-    // review fix that added a default-vault guard around the call site) - this is not a
-    // one-time fixup, re-check with `grep -n` every time this file changes above the call
-    // site, not just once. As of the Этап 6 fix, the comment/code gap is wide enough that the
-    // regex now anchors directly to the actual call-site LINE (not an explanatory comment
-    // above it), since the {0,3}-newline lookahead no longer bridges the two.
-    private static readonly HashSet<string> TemporaryAllowlist = new(StringComparer.OrdinalIgnoreCase)
+    // The allow-list counts matches PER FILE instead of pinning file:line: unrelated edits above
+    // a call site kept shifting its line and failing this test. A NEW match in one of these
+    // files still fails, because the count goes over.
+    private static readonly Dictionary<string, int> AllowedPerFile = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Stage 2 rescue sources — intentionally reference the legacy Velopack path as read-only source
-        "desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs:133",
-        "desktop/BeeMemoryBank.Node/Program.cs:157",
-        // Stage 3 transit guards — same rationale
-        "desktop/BeeMemoryBank.Desktop/Program.cs:28",
-        "server/BeeMemoryBank.Api/Services/UpdateService.cs:344",
+        // Stage 2 rescue sources: read the legacy Velopack path as a read-only source
+        ["desktop/BeeMemoryBank.Desktop/Services/NodeLifecycleService.cs"] = 1,
+        ["desktop/BeeMemoryBank.Node/Program.cs"] = 1,
+        // Stage 3 transit guards: same rationale
+        ["desktop/BeeMemoryBank.Desktop/Program.cs"] = 1,
+        ["server/BeeMemoryBank.Api/Services/UpdateService.cs"] = 1,
     };
 
     private static string FindRepoRoot()
@@ -109,6 +101,7 @@ public class SourcePathsGuardTests
     public void AppContextBaseDirectory_MustNotBeUsedWithDataDirectory_ForMutableData()
     {
         var offenders = new List<string>();
+        var hits = new List<(string Path, int Line)>();
 
         foreach (var file in GetSourceFiles())
         {
@@ -125,13 +118,15 @@ public class SourcePathsGuardTests
 
                 int lineNumber = GetLineNumber(content, appDirIndex);
                 var relativePath = Path.GetRelativePath(RepoRoot, file).Replace('\\', '/');
-                var entry = $"{relativePath}:{lineNumber}";
-
-                if (!TemporaryAllowlist.Contains(entry))
-                {
-                    offenders.Add(entry);
-                }
+                hits.Add((relativePath, lineNumber));
             }
+        }
+
+        foreach (var group in hits.GroupBy(h => h.Path, StringComparer.OrdinalIgnoreCase))
+        {
+            AllowedPerFile.TryGetValue(group.Key, out var allowed);
+            if (group.Count() > allowed)
+                offenders.AddRange(group.Select(h => $"{h.Path}:{h.Line} (allowed in this file: {allowed})"));
         }
 
         if (offenders.Count > 0)

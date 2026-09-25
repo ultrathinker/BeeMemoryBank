@@ -21,6 +21,7 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        BeeMemoryBank.Hosting.Utf8Console.EnableForRedirectedOutput();
         Console.WriteLine("=== BeeMemoryBank Node Orchestrator ===");
 
         bool isAutoMode = false;
