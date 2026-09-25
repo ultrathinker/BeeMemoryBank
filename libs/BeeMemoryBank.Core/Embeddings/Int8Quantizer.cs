@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace BeeMemoryBank.Embeddings;
+namespace BeeMemoryBank.Core.Embeddings;
 
 /// <summary>
 /// Per-vector int8 (max-abs) quantization for chunk embeddings. A chunked article can have

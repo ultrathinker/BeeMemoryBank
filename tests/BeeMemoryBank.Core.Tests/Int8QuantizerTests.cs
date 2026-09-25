@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Embeddings;
 
 namespace BeeMemoryBank.Core.Tests;

@@ -1,5 +1,5 @@
+using BeeMemoryBank.Core.Embeddings;
 using System.Runtime.InteropServices;
-using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
