@@ -636,6 +636,11 @@ public static class AutoDiscovery
             ["BMB_DATA_PATH"] = absDataDir,
             ["BMB_MDNS_PORT"] = (httpsEnabled ? frontHttpsPort : frontHttpPort).ToString(),
             ["BMB_MDNS_HTTPS"] = httpsEnabled ? "true" : "false",
+            // The front's HTTP listener is loopback-only; only the opt-in HTTPS listener binds to
+            // the network. Without it no peer could reach the announced port, so Api does not
+            // announce at all — and does not open the multicast socket that triggers the Windows
+            // Firewall prompt on a fresh desktop install.
+            ["BMB_MDNS_ENABLED"] = httpsEnabled ? "true" : "false",
             ["BMB_INTERNAL_KEY"] = internalKey
         };
 

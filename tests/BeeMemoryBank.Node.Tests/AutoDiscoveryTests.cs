@@ -237,6 +237,40 @@ public class AutoDiscoveryTests : IDisposable
         webEnvForKey["BMB_INTERNAL_KEY"].Should().Be(apiEnv["BMB_INTERNAL_KEY"]);
     }
 
+    /// <summary>
+    /// Api announces on the LAN only when the front has a listener the network can reach — the
+    /// opt-in HTTPS one. The HTTP listener is loopback-only, so without HTTPS (the default desktop
+    /// install) there is nothing to announce, and the multicast socket would only make Windows
+    /// Firewall prompt the user right after installation.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "false")]
+    [InlineData("1", "true")]
+    public void Discover_EnablesMdns_OnlyWhenTheFrontIsReachableFromTheNetwork(string? httpsEnabled, string expected)
+    {
+        var baseDir = Path.Combine(_tempTestDir, "bmbd");
+        var apiDir = Path.Combine(_tempTestDir, "api");
+        var webDir = Path.Combine(_tempTestDir, "web");
+        Directory.CreateDirectory(baseDir);
+        Directory.CreateDirectory(apiDir);
+        Directory.CreateDirectory(webDir);
+        File.WriteAllText(Path.Combine(apiDir, "BeeMemoryBank.Api.exe"), "dummy");
+        File.WriteAllText(Path.Combine(webDir, "BeeMemoryBank.Web.exe"), "dummy");
+
+        var original = Environment.GetEnvironmentVariable("BMB_HTTPS_ENABLED");
+        Environment.SetEnvironmentVariable("BMB_HTTPS_ENABLED", httpsEnabled);
+        try
+        {
+            var configs = AutoDiscovery.Discover(baseDir, Path.Combine(_tempTestDir, "data"));
+            var apiEnv = configs.First(c => c.ApplicationName == "BeeMemoryBank.Api").EnvironmentVariables;
+            apiEnv!["BMB_MDNS_ENABLED"].Should().Be(expected);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("BMB_HTTPS_ENABLED", original);
+        }
+    }
+
     // ── Этап 6 final-review fix — reuse an inherited BMB_INTERNAL_KEY ──────────
 
     /// <summary>

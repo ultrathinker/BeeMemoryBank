@@ -79,13 +79,20 @@ builder.Services.AddIndexProcessor(interval: indexInterval, batchSize: indexBatc
 // refresh cycle and withdraws its announcement when invisible mode is on.
 // BMB_MDNS_PORT / BMB_MDNS_HTTPS let the deployment supply the reachable port/HTTPS flag; the HTTPS
 // flag's real wiring (a local CA) is a later task.
-builder.Services.AddMdnsAnnouncer(o =>
+// BMB_MDNS_ENABLED=false turns the announcer off. bmbd sets it when nothing it serves is reachable
+// from the network (the default desktop install listens on loopback only): announcing a port no
+// peer can connect to is useless, and the multicast socket is what makes Windows Firewall ask the
+// user to allow BeeMemoryBank.Api on public and private networks right after installation.
+if (!string.Equals(builder.Configuration["BMB_MDNS_ENABLED"], "false", StringComparison.OrdinalIgnoreCase))
 {
-    if (int.TryParse(Environment.GetEnvironmentVariable("BMB_MDNS_PORT"), out var port) && port > 0)
-        o.Port = port;
-    if (bool.TryParse(Environment.GetEnvironmentVariable("BMB_MDNS_HTTPS"), out var https))
-        o.Https = https;
-});
+    builder.Services.AddMdnsAnnouncer(o =>
+    {
+        if (int.TryParse(Environment.GetEnvironmentVariable("BMB_MDNS_PORT"), out var port) && port > 0)
+            o.Port = port;
+        if (bool.TryParse(Environment.GetEnvironmentVariable("BMB_MDNS_HTTPS"), out var https))
+            o.Https = https;
+    });
+}
 builder.Services.AddHttpClient();
 builder.Services.AddTransient<HttpClient>(sp =>
     sp.GetRequiredService<IHttpClientFactory>().CreateClient());
