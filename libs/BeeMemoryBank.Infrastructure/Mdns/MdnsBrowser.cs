@@ -96,7 +96,8 @@ public sealed class MdnsBrowser
 
         var props = ParseTxt(txt);
         Guid.TryParse(props.GetValueOrDefault(MdnsConstants.TxtNodeId), out var nodeId);
-        var name = props.GetValueOrDefault(MdnsConstants.TxtName) ?? instanceStr;
+        var rawName = props.GetValueOrDefault(MdnsConstants.TxtName);
+        var name = rawName is null ? instanceStr : MdnsConstants.DecodeTxtName(rawName);
         var version = props.GetValueOrDefault(MdnsConstants.TxtVersion) ?? "";
         bool.TryParse(props.GetValueOrDefault(MdnsConstants.TxtHttps), out var https);
 

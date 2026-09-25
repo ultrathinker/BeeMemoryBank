@@ -12,12 +12,26 @@ namespace BeeMemoryBank.Cli;
 public static class CliServiceProvider
 {
     /// <summary>
+    /// The Windows installer ships the CLI in cli\ next to api\ without its own model.onnx; point the
+    /// resolver at the API's copy. An explicit BMB_ONNX_MODEL_PATH or a bundled model always wins.
+    /// </summary>
+    internal static void UseSiblingApiModelIfNotBundled()
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(ModelManager.ModelPathEnvironmentVariable))) return;
+        if (File.Exists(Path.Combine(AppContext.BaseDirectory, "model.onnx"))) return;
+        var sibling = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "api", "model.onnx"));
+        if (File.Exists(sibling))
+            Environment.SetEnvironmentVariable(ModelManager.ModelPathEnvironmentVariable, sibling);
+    }
+
+    /// <summary>
     /// Creates a DI container for CLI commands, runs migrations and initializes Lamport clock.
     /// The caller is responsible for calling Dispose() on the returned ServiceProvider.
     /// </summary>
     public static async Task<ServiceProvider> CreateAsync(string dataPath)
     {
         Directory.CreateDirectory(dataPath);
+        UseSiblingApiModelIfNotBundled();
 
         var services = new ServiceCollection()
             // Console-backed logging at Warning+ level. Surfaces lazy-rewrap warnings,

@@ -21,10 +21,11 @@
   </ItemGroup>
 
   <!-- model.onnx is NOT in git — download separately (see docs/deployment.md). The conditional
-       keeps a clean clone buildable. -->
+       keeps a clean clone buildable. Windows packaging passes BmbBundleModel=false: there the CLI
+       sits next to api\ and uses its copy (see CliServiceProvider), saving 113 MB per install. -->
   <ItemGroup>
     <Content Include="..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx"
-             Condition="Exists('..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx')">
+             Condition="Exists('..\..\libs\BeeMemoryBank.Embeddings\Models\model.onnx') And '$(BmbBundleModel)' != 'false'">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>model.onnx</Link>
     </Content>

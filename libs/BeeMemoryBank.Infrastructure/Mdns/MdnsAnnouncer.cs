@@ -204,7 +204,7 @@ public sealed class MdnsAnnouncer : BackgroundService
         var instance = new DomainName(SanitizeInstanceName(nodeId.ToString()));
         var profile = new ServiceProfile(instance, serviceType, (ushort)port);
         profile.AddProperty(MdnsConstants.TxtNodeId, nodeId.ToString());
-        profile.AddProperty(MdnsConstants.TxtName, name);
+        profile.AddProperty(MdnsConstants.TxtName, MdnsConstants.EncodeTxtName(name));
         profile.AddProperty(MdnsConstants.TxtVersion, version);
         profile.AddProperty(MdnsConstants.TxtHttps, https ? "true" : "false");
         return profile;

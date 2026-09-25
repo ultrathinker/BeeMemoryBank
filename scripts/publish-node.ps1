@@ -52,7 +52,10 @@ foreach ($Proj in $Projects) {
     Write-Host "Destination: $OutPath"
     Write-Host "------------------------------------------------------------"
     
-    dotnet publish $ProjPath -c Release -r win-x64 --self-contained true -o $OutPath
+    # The CLI uses the API's model.onnx from the sibling api\ folder (see CliServiceProvider).
+    $extra = @()
+    if ($Proj.Out -eq "cli") { $extra += "-p:BmbBundleModel=false" }
+    dotnet publish $ProjPath -c Release -r win-x64 --self-contained true -o $OutPath $extra
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to publish $ProjPath"
         exit 1

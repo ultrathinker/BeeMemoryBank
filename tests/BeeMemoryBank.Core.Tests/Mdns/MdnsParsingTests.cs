@@ -107,6 +107,28 @@ public class MdnsParsingTests
     }
 
     [Fact]
+    public void NonAsciiName_IsWrittenAsAscii_AndBrowsedBackUnchanged()
+    {
+        // "Anna Ivanova" in Cyrillic: the mDNS library throws on non-ASCII TXT strings, which used to
+        // abort every announce for a user with a non-Latin display name.
+        const string name = "\u0410\u043d\u043d\u0430 \u0418\u0432\u0430\u043d\u043e\u0432\u0430";
+        var profile = MdnsAnnouncer.BuildProfile(SampleNodeId, name, "1.0.4", https: false, port: 5310);
+        var txt = profile.Resources.OfType<TXTRecord>().Single();
+        txt.Strings.SelectMany(s => s).Should().OnlyContain(c => c < 128);
+
+        var instance = profile.InstanceName.ToString() + "." + profile.QualifiedServiceName;
+        var msg = new Message();
+        msg.Answers.Add(new SRVRecord { Name = new DomainName(instance), Port = 5310, Target = new DomainName("host.local") });
+        msg.Answers.Add(new TXTRecord { Name = new DomainName(instance), Strings = txt.Strings.ToList() });
+        msg.Answers.Add(new ARecord { Name = new DomainName("host.local"), Address = IPAddress.Parse("192.168.1.9") });
+        MdnsBrowser.TryParse(msg, new DomainName(instance), out var rec).Should().BeTrue();
+        rec!.Name.Should().Be(name);
+
+        // ASCII names travel unchanged, so older browsers keep showing them as before.
+        MdnsConstants.EncodeTxtName("My Laptop").Should().Be("My Laptop");
+    }
+
+    [Fact]
     public void BuildProfile_IncludesAllExpectedTxtKeys()
     {
         var profile = MdnsAnnouncer.BuildProfile(SampleNodeId, "Display Name", "2.3.4", https: true, port: 5301);

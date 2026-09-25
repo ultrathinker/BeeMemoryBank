@@ -190,6 +190,17 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### Windows desktop install: starts with Windows, smaller, LAN discovery for non-Latin names (2026-09-25)
+
+- A fresh install now registers autostart (the tray toggle can still turn it off); updates keep the
+  user's choice, and uninstall removes the Run entry instead of leaving it pointing at a deleted exe.
+- The installer no longer ships a second 113 MB copy of `model.onnx` for the CLI: in the installed
+  layout `bmb` uses the API's copy. Setup.exe 441 MB -> 366 MB; the 1.0.4 -> 1.0.5 update is 3.4 MB.
+- mDNS announce no longer fails for a display name with non-ASCII characters (the TXT `name` is sent
+  percent-encoded behind a `u8:` prefix; ASCII names are unchanged).
+- New `release-windows.yml` workflow builds the installer on a `v*` tag and attaches it to a draft
+  GitHub release.
+
 #### Review fixes: auth, KDF, ACL, crypto framing (2026-09-24)
 
 - **Non-ASCII display names broke every Web→API call.** HttpClient rejects non-ASCII header values, and

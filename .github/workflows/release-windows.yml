@@ -1,0 +1,68 @@
+name: Release (Windows installer)
+
+# Builds the per-user Velopack installer and attaches it to a DRAFT GitHub release, so nothing is
+# public until a maintainer reviews the draft and presses Publish. Code signing slots in here (before
+# the upload step) once a signing service is set up.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the draft release and upload assets
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install vpk (Velopack CLI)
+        run: dotnet tool install --global vpk --version 1.2.0
+
+      - name: Cache ONNX model
+        id: onnx-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: libs/BeeMemoryBank.Embeddings/Models/model.onnx
+          key: onnx-multilingual-e5-small-v2-embeddings-path
+
+      - name: Download ONNX model (cache miss only)
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force libs/BeeMemoryBank.Embeddings/Models | Out-Null
+          Invoke-WebRequest -Uri https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx `
+            -OutFile libs/BeeMemoryBank.Embeddings/Models/model.onnx
+
+      - name: Build installer
+        shell: pwsh
+        run: ./scripts/pack-windows.ps1
+
+      - name: Create draft release with the installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$version" }
+          $dir = 'installers/windows/velopack/releases'
+          $assets = @("$dir/BeeMemoryBank-win-Setup.exe", "$dir/BeeMemoryBank-win-Portable.zip") +
+                    (Get-ChildItem $dir -Filter "BeeMemoryBank-$version-full.nupkg").FullName +
+                    @("$dir/releases.win.json", "$dir/RELEASES")
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --draft --title "Bee Memory Bank $version" --notes "Windows installer: download BeeMemoryBank-win-Setup.exe and run it (per-user, no admin rights)." @assets
+          } else {
+            gh release upload $tag --clobber @assets
+          }
