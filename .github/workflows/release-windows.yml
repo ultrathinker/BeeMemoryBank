@@ -62,7 +62,7 @@ jobs:
                     @("$dir/releases.win.json", "$dir/RELEASES")
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --draft --title "Bee Memory Bank $version" --notes "Windows installer: download BeeMemoryBank-win-Setup.exe and run it (per-user, no admin rights)." @assets
+            gh release create $tag --draft --title "Bee Memory Bank $version" --notes "Windows installer: download BeeMemoryBank-win-Setup.exe and run it (per-user, no admin rights). Code signing policy: https://github.com/ultrathinker/BeeMemoryBank#code-signing-policy" @assets
           } else {
             gh release upload $tag --clobber @assets
           }

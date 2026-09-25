@@ -14,6 +14,11 @@
          into the build context or the Docker build (every deploy) would skip it silently. -->
     <Version Condition="Exists('$(MSBuildThisFileDirectory)VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
     <InformationalVersion Condition="Exists('$(MSBuildThisFileDirectory)VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</InformationalVersion>
+
+    <!-- One product name on every binary. SignPath (free code signing for open source) requires
+         the product name attribute of each signed file to be the project's name; without this
+         each exe reports its own assembly name (BeeMemoryBank.Api, BeeMemoryBank.Web, ...). -->
+    <Product>Bee Memory Bank</Product>
   </PropertyGroup>
 
   <!-- Windows packaging (scripts/publish-node.ps1, pack-windows.ps1) publishes every exe

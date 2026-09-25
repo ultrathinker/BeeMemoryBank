@@ -245,8 +245,10 @@ API and Web processes for you — no manual `BMB_INTERNAL_KEY` juggling between 
 **Desktop mode** (recommended for a personal machine/laptop): download
 `BeeMemoryBank-win-Setup.exe` from the [latest release](https://github.com/ultrathinker/BeeMemoryBank/releases/latest)
 and run it. It is a per-user install: no admin rights, nothing else to install (the .NET runtime
-ships inside the app folder), and it starts with Windows. The installer is not code-signed yet, so
-SmartScreen may warn about an unrecognized app: choose **More info → Run anyway**.
+ships inside the app folder), and it starts with Windows (turn that off with **Autostart** in the
+tray menu). Releases up to v1.0.6 are not code-signed, so SmartScreen may warn about an
+unrecognized app: choose **More info → Run anyway**. See the [code signing policy](#code-signing-policy)
+and [what the app sends over the network](PRIVACY.md).
 
 The app lives in the tray. Right-click it for Autostart, Prevent-sleep and **Check for updates**;
 it also checks on its own and offers "Restart to update" when a new release is out. Data is kept
@@ -833,6 +835,26 @@ All inter-node sync is encrypted end-to-end with Ed25519-signed events. Replica 
 - Folder ACLs are enforced **only by the API process**. A user who bypasses the API (e.g., direct SQLite read, RAM dump) can read everything — ACL is app-layer, not cryptographic.
 - Regular users **cannot decrypt data** without the superadmin having unlocked the node first.
 - Sync events are Ed25519-signed and carry article/media bodies end-to-end encrypted, but the same events carry titles and folder paths in plaintext (every peer needs them to keep search and ACLs working locally — see [ADR-0005](docs/adr/0005-plaintext-metadata.md)). Replica nodes cannot join without superadmin credentials during setup.
+
+---
+
+## Code signing policy
+
+Windows release files (`BeeMemoryBank-win-Setup.exe`, `BeeMemoryBank-win-Portable.zip` and the
+update package) are built from this repository by the
+[release workflow](.github/workflows/release-windows.yml) on GitHub Actions, never on a developer
+machine, and a maintainer approves each release by hand before it is signed and published.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [ultrathinker](https://github.com/ultrathinker)
+- Approvers: [ultrathinker](https://github.com/ultrathinker)
+
+Privacy: this program will not transfer any information to other networked systems unless
+specifically requested by the user or the person installing or operating it, with one exception:
+the desktop app checks GitHub for a newer release. See [PRIVACY.md](PRIVACY.md) for exactly what
+connects where.
 
 ---
 
