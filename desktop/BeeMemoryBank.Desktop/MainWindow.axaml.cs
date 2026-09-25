@@ -67,7 +67,19 @@ public partial class MainWindow : Window
         // HostOrAttachAsync will later call into, which is the contract it relies on.
         _profileSwitch = new Services.ProfileSwitchService(_profiles, _nodeLifecycle);
         InitializeComponent();
+        BmbWebView.EnvironmentRequested += OnWebViewEnvironmentRequested;
         Opened += MainWindow_Opened;
+    }
+
+    /// <summary>
+    /// WebView2 keeps its profile next to the exe by default, i.e. inside Velopack's current    /// folder, which every update replaces: the profile would be lost on each update, and its
+    /// files, held open by lingering msedgewebview2 processes, can block the swap. Keep it in
+    /// the data root instead.
+    /// </summary>
+    private static void OnWebViewEnvironmentRequested(object? sender, WebViewEnvironmentRequestedEventArgs e)
+    {
+        if (e is Avalonia.Platform.WindowsWebView2EnvironmentRequestedEventArgs webView2)
+            webView2.UserDataFolder = System.IO.Path.Combine(BeeMemoryBank.AppPaths.BmbPaths.Root, "webview2");
     }
 
     private void MainWindow_Opened(object? sender, EventArgs e)

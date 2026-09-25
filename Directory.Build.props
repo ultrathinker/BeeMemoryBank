@@ -15,4 +15,18 @@
     <Version Condition="Exists('$(MSBuildThisFileDirectory)VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
     <InformationalVersion Condition="Exists('$(MSBuildThisFileDirectory)VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</InformationalVersion>
   </PropertyGroup>
+
+  <!-- Windows packaging (scripts/publish-node.ps1, pack-windows.ps1) publishes every exe
+       framework-dependent and ships ONE .NET runtime in the app's dotnet\ folder. The apphost is
+       told where to find it: components in a subfolder (bmbd\, api\, web\, cli\) use ..\dotnet, the
+       Desktop shell at the root uses dotnet. Set here, not on the command line, because the dotnet
+       CLI mangles a -p: value that starts with "..". -->
+  <PropertyGroup Condition="'$(BmbSharedRuntime)' == 'subfolder'">
+    <AppHostRelativeDotNet>..\dotnet</AppHostRelativeDotNet>
+    <AppHostDotNetSearch>AppRelative</AppHostDotNetSearch>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(BmbSharedRuntime)' == 'root'">
+    <AppHostRelativeDotNet>dotnet</AppHostRelativeDotNet>
+    <AppHostDotNetSearch>AppRelative</AppHostDotNetSearch>
+  </PropertyGroup>
 </Project>

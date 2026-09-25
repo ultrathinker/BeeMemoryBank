@@ -7,6 +7,10 @@
     
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
 
+    <!-- One self-contained .msi: without this WiX writes the files to external cab1.cab/cab2.cab
+         and the .msi alone installs nothing. -->
+    <MediaTemplate EmbedCab="yes" />
+
     <!-- Directory Structure -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="BeeMemoryBank">
@@ -14,6 +18,8 @@
         <Directory Id="ApiFolder" Name="api" />
         <Directory Id="WebFolder" Name="web" />
         <Directory Id="CliFolder" Name="cli" />
+        <!-- Shared .NET runtime: every exe above is framework-dependent and loads it from ..\dotnet. -->
+        <Directory Id="DotnetFolder" Name="dotnet" />
       </Directory>
     </StandardDirectory>
 
@@ -65,6 +71,10 @@
       <Files Include="$(var.PublishFolder)\cli\**" />
     </ComponentGroup>
 
+    <ComponentGroup Id="DotnetFiles" Directory="DotnetFolder">
+      <Files Include="$(var.PublishFolder)\dotnet\**" />
+    </ComponentGroup>
+
     <!-- Firewall Rule Component -->
     <DirectoryRef Id="BmbdFolder">
       <Component Id="FirewallRulesComponent" Guid="A76F32E5-23F7-4180-87F7-BE6CA5F15647">
@@ -84,6 +94,7 @@
       <ComponentGroupRef Id="ApiFiles" />
       <ComponentGroupRef Id="WebFiles" />
       <ComponentGroupRef Id="CliFiles" />
+      <ComponentGroupRef Id="DotnetFiles" />
 
       <!-- Opt-in Firewall Feature (Level 2 = off by default when INSTALLLEVEL=1) -->
       <Feature Id="FirewallFeature" Title="Configure Windows Firewall Exception" Level="2"

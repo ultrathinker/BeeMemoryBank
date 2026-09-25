@@ -4,6 +4,9 @@
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
     <OutputName>BeeMemoryBank.ServerService</OutputName>
+    <!-- The WiX extensions track the WiX SDK version above, not the repo's .NET packages, so this
+         project keeps its own versions instead of Directory.Packages.props. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <InstallerVersion>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\..\..\VERSION').Trim())</InstallerVersion>
     <DefineConstants>InstallerVersion=$(InstallerVersion);PublishFolder=$(MSBuildProjectDirectory)\..\..\..\publish\win-x64</DefineConstants>
   </PropertyGroup>

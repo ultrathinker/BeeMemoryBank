@@ -52,14 +52,47 @@ foreach ($Proj in $Projects) {
     Write-Host "Destination: $OutPath"
     Write-Host "------------------------------------------------------------"
     
+    # Framework-dependent: the apphost loads the shared runtime from ..\dotnet (step 4b).
     # The CLI uses the API's model.onnx from the sibling api\ folder (see CliServiceProvider).
-    $extra = @()
+    $extra = @("-p:BmbSharedRuntime=subfolder")
     if ($Proj.Out -eq "cli") { $extra += "-p:BmbBundleModel=false" }
-    dotnet publish $ProjPath -c Release -r win-x64 --self-contained true -o $OutPath $extra
+    dotnet publish $ProjPath -c Release -r win-x64 --self-contained false -o $OutPath $extra
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to publish $ProjPath"
         exit 1
     }
+}
+
+# 4b. One shared .NET runtime for every component. Each exe is framework-dependent with
+#     AppHostRelativeDotNet, so its apphost loads the runtime from ..\dotnet (the Desktop shell
+#     from .\dotnet) instead of every component carrying its own ~70 MB copy. Nothing is
+#     installed machine-wide: the runtime ships inside the app folder, no admin rights needed.
+$DotnetExe  = (Get-Command dotnet).Source
+$DotnetRoot = if ($env:DOTNET_ROOT) { $env:DOTNET_ROOT } else { Split-Path $DotnetExe -Parent }
+function Get-HighestVersionDir([string]$path, [string]$major) {
+    Get-ChildItem $path -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match "^$major\.\d+\.\d+$" } |
+        Sort-Object { [version]$_.Name } -Descending |
+        Select-Object -First 1
+}
+$CoreDir = Get-HighestVersionDir (Join-Path $DotnetRoot "shared\Microsoft.NETCore.App") "10"
+if (-not $CoreDir) { Write-Error "No Microsoft.NETCore.App 10.x under $DotnetRoot"; exit 1 }
+$RuntimeVersion = $CoreDir.Name
+$AspDir = Join-Path $DotnetRoot "shared\Microsoft.AspNetCore.App\$RuntimeVersion"
+if (-not (Test-Path $AspDir)) { Write-Error "Microsoft.AspNetCore.App $RuntimeVersion missing under $DotnetRoot (it must match NETCore.App)"; exit 1 }
+$FxrDir = Get-HighestVersionDir (Join-Path $DotnetRoot "host\fxr") "10"
+if (-not $FxrDir) { Write-Error "No host\fxr 10.x under $DotnetRoot"; exit 1 }
+
+$RuntimeOut = Join-Path $PublishDir "dotnet"
+Write-Host "Bundling shared .NET runtime $RuntimeVersion (fxr $($FxrDir.Name)) from $DotnetRoot -> $RuntimeOut"
+New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeOut "host\fxr"), (Join-Path $RuntimeOut "shared\Microsoft.NETCore.App"), (Join-Path $RuntimeOut "shared\Microsoft.AspNetCore.App") | Out-Null
+Copy-Item -Recurse -Force $FxrDir.FullName (Join-Path $RuntimeOut "host\fxr\$($FxrDir.Name)")
+Copy-Item -Recurse -Force $CoreDir.FullName (Join-Path $RuntimeOut "shared\Microsoft.NETCore.App\$RuntimeVersion")
+Copy-Item -Recurse -Force $AspDir (Join-Path $RuntimeOut "shared\Microsoft.AspNetCore.App\$RuntimeVersion")
+Copy-Item -Force $DotnetExe $RuntimeOut
+foreach ($notice in "LICENSE.txt", "ThirdPartyNotices.txt") {
+    $n = Join-Path $DotnetRoot $notice
+    if (Test-Path $n) { Copy-Item -Force $n $RuntimeOut }
 }
 
 # 5. Read VERSION file

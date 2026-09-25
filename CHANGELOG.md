@@ -190,16 +190,32 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
-#### Windows desktop install: starts with Windows, smaller, LAN discovery for non-Latin names (2026-09-25)
+#### Windows desktop install: self-updating, half the size, starts with Windows (2026-09-25, 1.0.5-1.0.6)
 
+- **The desktop app updates itself from GitHub releases.** The tray "Check for updates" item used
+  to POST a placeholder manifest to the node's operator update pipeline and could only ever report
+  a signature failure. It now asks Velopack for the newest published release, checks quietly two
+  minutes after start and then daily, downloads only the delta (a few MB), and shows
+  "Restart to update to X"; the update also applies on the next start if the user never clicks it.
+  `BMB_DESKTOP_UPDATE_SOURCE` points it at a local folder or http feed instead, for testing.
+- **One .NET runtime instead of five.** Every exe was self-contained and carried its own ~70 MB
+  runtime. They are now framework-dependent with `AppHostRelativeDotNet`, and the installer ships
+  one runtime in `dotnet\` inside the app folder: nothing is installed machine-wide and no admin
+  rights are needed. The Web process no longer loads the ONNX runtime (`Int8Quantizer` moved to
+  Core, so Storage no longer references Embeddings), and the CLI uses the API's `model.onnx`
+  instead of its own 113 MB copy. Setup.exe 441 MB -> 193 MB, installed payload 874 MB -> 488 MB.
+- The WebView2 profile moved out of the app folder (it sat in Velopack's `current\`, which every
+  update replaces) to `%LOCALAPPDATA%\BeeMemoryBankData\webview2`.
 - A fresh install now registers autostart (the tray toggle can still turn it off); updates keep the
   user's choice, and uninstall removes the Run entry instead of leaving it pointing at a deleted exe.
-- The installer no longer ships a second 113 MB copy of `model.onnx` for the CLI: in the installed
-  layout `bmb` uses the API's copy. Setup.exe 441 MB -> 366 MB; the 1.0.4 -> 1.0.5 update is 3.4 MB.
+- Logs from `bmbd`, Api and Web are UTF-8: a redirected console used the OEM codepage and turned
+  non-Latin text (a Cyrillic display name, for one) into `????`.
 - mDNS announce no longer fails for a display name with non-ASCII characters (the TXT `name` is sent
   percent-encoded behind a `u8:` prefix; ASCII names are unchanged).
+- The server MSI embeds its cabinet (it used to need external `cab1.cab`/`cab2.cab` next to it and
+  installed nothing on its own) and ships the same shared runtime.
 - New `release-windows.yml` workflow builds the installer on a `v*` tag and attaches it to a draft
-  GitHub release.
+  GitHub release. `pack-windows.ps1 -OutputDir` builds into a separate folder.
 
 #### Review fixes: auth, KDF, ACL, crypto framing (2026-09-24)
 

@@ -16,6 +16,7 @@ namespace BeeMemoryBank.Desktop;
 public partial class App : Application
 {
     private TrayIcon? _trayIcon;
+    private DispatcherTimer? _updateTimer;
     private Services.PreventSleepService? _preventSleepService;
     // Single-instance reference for the manage-storages window so re-clicking "Manage…"
     // focuses the already-open window instead of stacking duplicates.
@@ -162,110 +163,73 @@ public partial class App : Application
                 });
             };
 
-            var checkItem = new NativeMenuItem("Check for updates");
-            var statusItem = new NativeMenuItem("Updates: Unknown") { IsEnabled = false };
+            // Desktop self-update from published GitHub releases (see DesktopUpdateService).
+            var updates = new Services.DesktopUpdateService();
+            var checkItem = new NativeMenuItem("Check for updates") { IsEnabled = updates.IsAvailable };
+            var statusItem = new NativeMenuItem(updates.IsAvailable
+                ? $"Version {updates.CurrentVersion}"
+                : "Updates: not an installed build") { IsEnabled = false };
 
-            checkItem.Click += (s, e) =>
+            async Task RunUpdateCheckAsync(bool interactive)
             {
-                Dispatcher.UIThread.Post(async () =>
+                if (!updates.IsAvailable) return;
+                checkItem.IsEnabled = false;
+                if (interactive) statusItem.Header = "Updates: checking...";
+                try
                 {
-                    checkItem.IsEnabled = false;
-                    statusItem.Header = "Updates: Checking...";
-
-                    var frontUrl = mainWindow.FrontUrl;
-                    if (string.IsNullOrEmpty(frontUrl))
+                    var ready = await updates.CheckAndDownloadAsync();
+                    if (ready is not null)
                     {
-                        statusItem.Header = "Updates: Node not ready";
-                        checkItem.IsEnabled = true;
-                        return;
+                        statusItem.Header = $"Restart to update to {ready}";
+                        statusItem.IsEnabled = true;
                     }
+                    else if (interactive)
+                    {
+                        statusItem.Header = $"Up to date ({updates.CurrentVersion})";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (interactive) statusItem.Header = "Updates: check failed";
+                    Console.WriteLine($"Update check failed: {ex.Message}");
+                }
+                finally
+                {
+                    checkItem.IsEnabled = true;
+                }
+            }
 
+            checkItem.Click += (s, e) => Dispatcher.UIThread.Post(async () => await RunUpdateCheckAsync(interactive: true));
+
+            statusItem.Click += (s, e) =>
+            {
+                if (updates.ReadyVersion is null) return;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    // Stop the node first (RealClose -> graceful stdin-EOF shutdown) so the
+                    // database is closed before Velopack swaps the files, then restart into it.
+                    mainWindow.RealClose();
                     try
                     {
-                        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-                        // §4.5: the .internal-key must come from whichever profile's node is
-                        // ACTUALLY being talked to (frontUrl above), not always the default
-                        // vault — after switching to a non-default storage, the default
-                        // vault's key would not authenticate against the active node at all.
-                        string dataDir;
-                        try
-                        {
-                            dataDir = !string.IsNullOrEmpty(mainWindow.ActiveProfileId)
-                                ? mainWindow.Profiles.GetById(mainWindow.ActiveProfileId).DataPath
-                                : BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
-                        }
-                        catch (KeyNotFoundException)
-                        {
-                            dataDir = BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
-                        }
-                        var keyFile = Path.Combine(dataDir, ".internal-key");
-                        var key = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
-                        if (string.IsNullOrEmpty(key) && File.Exists(keyFile))
-                        {
-                            key = File.ReadAllText(keyFile).Trim();
-                        }
-
-                        var request = new HttpRequestMessage(HttpMethod.Post, $"{frontUrl.TrimEnd('/')}/node/update/check");
-                        if (!string.IsNullOrEmpty(key))
-                        {
-                            request.Headers.TryAddWithoutValidation("X-Internal-Key", key);
-                        }
-                        request.Headers.TryAddWithoutValidation("X-User-Role", "superadmin");
-
-                        var reqObj = new
-                        {
-                            manifestJson = "{}",
-                            manifestSignatureBase64 = "AAAA"
-                        };
-                        var json = JsonSerializer.Serialize(reqObj);
-                        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
-
-                        var response = await client.SendAsync(request);
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var statusRequest = new HttpRequestMessage(HttpMethod.Get, $"{frontUrl.TrimEnd('/')}/node/update/status");
-                            if (!string.IsNullOrEmpty(key))
-                            {
-                                statusRequest.Headers.TryAddWithoutValidation("X-Internal-Key", key);
-                            }
-                            statusRequest.Headers.TryAddWithoutValidation("X-User-Role", "superadmin");
-
-                            var statusResponse = await client.SendAsync(statusRequest);
-                            if (statusResponse.IsSuccessStatusCode)
-                            {
-                                var body = await statusResponse.Content.ReadAsStringAsync();
-                                using var doc = JsonDocument.Parse(body);
-                                var step = doc.RootElement.GetProperty("currentStep").GetString();
-                                if (step == "Failed")
-                                {
-                                    statusItem.Header = "Updates: Failed (signature mismatch)";
-                                }
-                                else
-                                {
-                                    statusItem.Header = $"Updates: {step}";
-                                }
-                            }
-                            else
-                            {
-                                statusItem.Header = "Updates: Check succeeded";
-                            }
-                        }
-                        else
-                        {
-                            statusItem.Header = $"Updates: Error {(int)response.StatusCode}";
-                        }
+                        updates.ApplyAndRestart();
                     }
                     catch (Exception ex)
                     {
-                        statusItem.Header = "Updates: Check failed";
-                        Console.WriteLine($"Error checking updates: {ex.Message}");
-                    }
-                    finally
-                    {
-                        checkItem.IsEnabled = true;
+                        Console.WriteLine($"Applying update failed: {ex.Message}");
+                        desktop.Shutdown();
                     }
                 });
             };
+
+            // Quiet background check: shortly after start, then daily. Only downloads; the user
+            // chooses when to restart.
+            _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
+            _updateTimer.Tick += async (s, e) =>
+            {
+                _updateTimer.Interval = TimeSpan.FromHours(24);
+                await RunUpdateCheckAsync(interactive: false);
+            };
+            if (updates.IsAvailable) _updateTimer.Start();
 
             menu.Items.Add(openItem);
             menu.Items.Add(storageItem);

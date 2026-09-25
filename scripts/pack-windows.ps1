@@ -27,10 +27,16 @@
 .PARAMETER SkipNodePublish
     Skip calling publish-node.ps1 (assumes publish/win-x64/{bmbd,api,web,cli}
     already exist from a previous run).  Useful for rapid iteration.
+
+.PARAMETER OutputDir
+    Where vpk writes the release files (default installers/windows/velopack/releases). vpk
+    computes the delta package against the newest release already in this folder, so a clean
+    folder gives a full-only release.
 #>
 [CmdletBinding()]
 param (
-    [switch]$SkipNodePublish
+    [switch]$SkipNodePublish,
+    [string]$OutputDir
 )
 
 Set-StrictMode -Version Latest
@@ -44,7 +50,7 @@ $PayloadDir    = Join-Path $PublishBase "payload"
 $DesktopProj   = Join-Path $RepoRoot "desktop\BeeMemoryBank.Desktop\BeeMemoryBank.Desktop.csproj"
 $SourceIconPng = Join-Path $RepoRoot "desktop\BeeMemoryBank.Desktop\Assets\icon.png"
 $VelopackDir   = Join-Path $RepoRoot "installers\windows\velopack"
-$ReleasesDir   = Join-Path $VelopackDir "releases"
+$ReleasesDir   = if ($OutputDir) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir) } else { Join-Path $VelopackDir "releases" }
 $IconIco       = Join-Path $VelopackDir "icon.ico"
 
 # ---- Step 0: Check prerequisites ---------------------------------------------
@@ -88,10 +94,12 @@ if (Test-Path $DesktopOut) {
     Remove-Item -Recurse -Force $DesktopOut
 }
 
+# Framework-dependent, loading the shared runtime from .\dotnet (bundled by publish-node.ps1).
 dotnet publish $DesktopProj `
     -c Release `
     -r win-x64 `
-    --self-contained true `
+    --self-contained false `
+    -p:BmbSharedRuntime=root `
     -o $DesktopOut
 
 if ($LASTEXITCODE -ne 0) {
@@ -128,7 +136,8 @@ $ServerComponents = @(
     @{ Src = "bmbd"; Dst = "bmbd" },
     @{ Src = "api";  Dst = "api" },
     @{ Src = "web";  Dst = "web" },
-    @{ Src = "cli";  Dst = "cli" }
+    @{ Src = "cli";  Dst = "cli" },
+    @{ Src = "dotnet"; Dst = "dotnet" }
 )
 
 foreach ($c in $ServerComponents) {

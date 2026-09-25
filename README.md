@@ -240,27 +240,30 @@ Data is stored in `./data` on the host (including `model.onnx`). To customize po
 ### Windows Desktop App and Service (native, no NSSM needed)
 
 Windows has two native install modes, built on a small orchestrator (`bmbd`) that manages the
-API and Web processes for you — no manual `BMB_INTERNAL_KEY` juggling between two services. No
-public release binary is published yet, so build from source (requires the
-[.NET 10 SDK](https://dotnet.microsoft.com/download)):
+API and Web processes for you — no manual `BMB_INTERNAL_KEY` juggling between two services.
 
+**Desktop mode** (recommended for a personal machine/laptop): download
+`BeeMemoryBank-win-Setup.exe` from the [latest release](https://github.com/ultrathinker/BeeMemoryBank/releases/latest)
+and run it. It is a per-user install: no admin rights, nothing else to install (the .NET runtime
+ships inside the app folder), and it starts with Windows. The installer is not code-signed yet, so
+SmartScreen may warn about an unrecognized app: choose **More info → Run anyway**.
+
+The app lives in the tray. Right-click it for Autostart, Prevent-sleep and **Check for updates**;
+it also checks on its own and offers "Restart to update" when a new release is out. Data is kept
+in `%LOCALAPPDATA%\BeeMemoryBankData` and survives updates and uninstall.
+
+To build the installer yourself (requires the [.NET 10 SDK](https://dotnet.microsoft.com/download)
+and `dotnet tool install -g vpk`):
 ```powershell
 git clone https://github.com/ultrathinker/BeeMemoryBank.git C:\bee
 cd C:\bee
-```
-
-**Desktop mode** (recommended for a personal machine/laptop) — a per-user install, no admin
-rights needed, tray icon, starts on login:
-```powershell
 .\scripts\pack-windows.ps1
-# Produces installers\windows\velopack\releases\BeeMemoryBank-win-Setup.exe — run it.
+# Produces installers\windows\velopack\releases\BeeMemoryBank-win-Setup.exe
 ```
-This installs to your user profile and runs `bmbd` as a child of the tray app. Right-click the
-tray icon for Autostart, Prevent-sleep, and update-check toggles.
 
 **Server mode** (recommended for an always-on / headless machine) — a machine-wide install that
 registers `bmbd` as a real Windows Service (`NT SERVICE\bmbd`, Automatic/Delayed Start), no tray
-UI, no logged-in user required:
+UI, no logged-in user required. Build it from a clone as above:
 ```powershell
 dotnet tool install --global wix --version 5.0.2
 .\scripts\pack-windows-msi.ps1
@@ -617,7 +620,7 @@ line shown above (Caddy and Apache `mod_proxy` send it by default).
 | Linux/systemd | `git pull` → `dotnet publish ...` → `sudo systemctl restart beememorybank-api beememorybank-web` |
 | macOS/launchd | `git pull` → `dotnet publish ...` → `launchctl kickstart -k gui/$(id -u)/com.beememorybank.api` (and `.web`) |
 | Windows/NSSM | `git pull` → `dotnet publish ...` → `nssm restart BeeMemoryBankApi BeeMemoryBankWeb` |
-| Windows Desktop | Tray icon → Check for updates (or rebuild `pack-windows.ps1` and re-run the new `Setup.exe`) |
+| Windows Desktop | Automatic: the tray offers "Restart to update" when a release is out (or Tray icon → Check for updates) |
 | Windows Server (MSI) | `git pull` → `.\scripts\pack-windows-msi.ps1` → `msiexec /i ...` (the stable `UpgradeCode` lets it upgrade in place; data in `ProgramData` is preserved) |
 
 Tip: take a snapshot via Admin → Snapshots → Create before updating, in case a DB migration goes sideways.
