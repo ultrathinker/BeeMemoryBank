@@ -862,8 +862,6 @@ connects where.
 
 This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 
-For commercial licensing inquiries, please contact: **universeissilent42@gmail.com**
-
 ---
 
 ## :pray: Acknowledgments
