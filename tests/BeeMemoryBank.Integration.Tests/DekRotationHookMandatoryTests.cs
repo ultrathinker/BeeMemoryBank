@@ -31,11 +31,19 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
     {
         public volatile bool Fail = true;
         public int Calls;
+        /// <summary>When set, the hook signals <see cref="Entered"/> and then waits for this gate.</summary>
+        public volatile TaskCompletionSource? Gate;
+        public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task BeforeRewrapAsync(CancellationToken ct)
+        public async Task BeforeRewrapAsync(CancellationToken ct)
         {
             Interlocked.Increment(ref Calls);
-            return Fail ? Task.FromException(new IOException("simulated chat.db I/O failure")) : Task.CompletedTask;
+            if (Gate is { } gate)
+            {
+                Entered.TrySetResult();
+                await gate.Task;
+            }
+            if (Fail) throw new IOException("simulated chat.db I/O failure");
         }
     }
 
@@ -61,6 +69,10 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
         await _factory.InitializeNodeAsync(password: Password);
         (await _client.PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password }))
             .EnsureSuccessStatusCode();
+        // The unlock fires a background sweep of pending auto-accepts. Left running, a slow machine
+        // finishes it after a test has staged its peer COMMIT, and it runs that rotation once more
+        // behind the test's back (a fifth hook call where four are counted).
+        await _factory.Services.GetRequiredService<SessionService>().PostUnlockCatchUp;
     }
 
     public Task DisposeAsync()
@@ -112,9 +124,25 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("commitEventId").GetGuid().ToString();
     }
 
+    /// <summary>
+    /// Accepts, retrying while the node answers 409. A finished accept publishes its terminal step
+    /// before it releases the rotation lock, so an accept sent the moment that step is seen can
+    /// find the lock still held — a client is expected to try again, and so does this one.
+    /// </summary>
     private async Task AcceptAsync(string commitEventId)
-        => (await _client.PostAsJsonAsync("/api/dek-rotation/accept", new { commitEventId, masterPassword = Password }))
-            .StatusCode.Should().Be(HttpStatusCode.Accepted);
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (true)
+        {
+            var resp = await _client.PostAsJsonAsync("/api/dek-rotation/accept", new { commitEventId, masterPassword = Password });
+            if (resp.StatusCode != HttpStatusCode.Conflict || DateTime.UtcNow > deadline)
+            {
+                resp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+                return;
+            }
+            await Task.Delay(50);
+        }
+    }
 
     [Fact]
     public async Task Initiator_FailingHook_RefusesThePropose_PublishesNothing_AndSucceedsOnceFixed()
@@ -164,6 +192,28 @@ public class DekRotationHookMandatoryTests : IAsyncLifetime
         StepOf(refused).Should().Be(DekRotationFlowStep.Failed);
         refused.GetProperty("errorMessage").GetString().Should().Contain("already applied");
         (await CountAsync("SELECT dek_epoch FROM tbl_node_identity")).Should().Be(epoch + 1);
+    }
+
+    [Fact]
+    public async Task Initiator_AcceptWhileAnotherAcceptRuns_IsRefusedWith409_NotDroppedInTheBackground()
+    {
+        _hook.Fail = false;
+        var commitEventId = await ProposeAsync();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _hook.Gate = gate; // the next accept parks inside its pre-rewrap hook, holding the rotation lock
+
+        (await _client.PostAsJsonAsync("/api/dek-rotation/accept", new { commitEventId, masterPassword = Password }))
+            .StatusCode.Should().Be(HttpStatusCode.Accepted);
+        await _hook.Entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        var second = await _client.PostAsJsonAsync("/api/dek-rotation/accept", new { commitEventId, masterPassword = Password });
+        second.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "a 202 here would be a promise nobody keeps: the background accept cannot get the lock and nothing reports it");
+        (await second.Content.ReadAsStringAsync()).Should().Contain("in progress");
+
+        _hook.Gate = null;
+        gate.SetResult();
+        StepOf(await WaitForTerminalProgressAsync()).Should().Be(DekRotationFlowStep.Completed);
     }
 
     [Fact]

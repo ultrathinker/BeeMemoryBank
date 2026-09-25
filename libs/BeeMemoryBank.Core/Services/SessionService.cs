@@ -31,6 +31,25 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     // call UpdateSlotKeyAsync — wasted Argon2 work + last-writer-wins UPDATE on tbl_key_slot.
     private readonly SemaphoreSlim _unlockSemaphore = new(1, 1);
 
+    private Task _postUnlockCatchUp = Task.CompletedTask;
+
+    /// <summary>
+    /// Completes when every post-unlock catch-up started so far has finished. Integration tests
+    /// await it before staging a pending rotation or restore: the unlock sweep is fire-and-forget,
+    /// and on a slow machine it can otherwise run late and act on the row the test just staged.
+    /// </summary>
+    internal Task PostUnlockCatchUp
+    {
+        get { lock (_lock) return _postUnlockCatchUp; }
+    }
+
+    /// <summary>Adds catch-up work to <see cref="PostUnlockCatchUp"/>; finished work is dropped, not chained.</summary>
+    private void TrackPostUnlockCatchUp(Task work)
+    {
+        lock (_lock)
+            _postUnlockCatchUp = _postUnlockCatchUp.IsCompleted ? work : Task.WhenAll(_postUnlockCatchUp, work);
+    }
+
     public LegacyPasswordSlotMigrationService.MigrationResult? LastMigrationResult { get; private set; }
 
     /// <summary>
@@ -317,7 +336,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
 
         // Retry any deferred auto-accept DEK rotations whose COMMIT arrived while the
         // session was locked.
-        _ = Task.Run(async () =>
+        TrackPostUnlockCatchUp(Task.Run(async () =>
         {
             try
             {
@@ -326,14 +345,14 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                 if (dekApplier != null) await dekApplier.RetryPendingAutoAcceptsAsync();
             }
             catch { /* logged inside the applier */ }
-        });
+        }));
 
         // Same pattern for stuck network-restore events. EventApplier auto-accepts
         // restore via fire-and-forget Task.Run — if that Task throws (network blip
         // mid-download, locked session at apply time, process crash before startup
         // sweep), state stays Pending/Downloading/Applying with no automatic retry, so it
         // is retried here like the DEK rotation above. AcceptRestoreAsync is idempotent.
-        _ = Task.Run(async () =>
+        TrackPostUnlockCatchUp(Task.Run(async () =>
         {
             try
             {
@@ -342,7 +361,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
                 if (restoreRetrier != null) await restoreRetrier.RetryPendingRestoresAsync();
             }
             catch { /* logged inside the retrier */ }
-        });
+        }));
 
         // Lazy migration of legacy v=0 plaintext private key in tbl_node_identity.
         // Existing nodes (created before the v=1 flip) have a plaintext seed in
@@ -357,7 +376,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
             if (_masterDek == null) return; // shouldn't happen — caller just set it — but be safe
             migrationDek = (byte[])_masterDek.Clone();
         }
-        _ = Task.Run(async () =>
+        TrackPostUnlockCatchUp(Task.Run(async () =>
         {
             try
             {
@@ -376,7 +395,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
             {
                 Array.Clear(migrationDek);
             }
-        });
+        }));
     }
 
     public void SwapMasterDek(byte[] newMasterDek)

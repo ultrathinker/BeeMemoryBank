@@ -33,6 +33,27 @@ public partial class DekRotationService
     {
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
             throw new ConflictException("Another rotation is in progress.");
+        await AcceptCommitHoldingLockAsync(commitEventId, masterPassword, initiatorUserId);
+    }
+
+    /// <summary>
+    /// Background accept for the /accept endpoint. The rotation lock is claimed HERE, before the
+    /// caller answers, so a busy node can refuse with 409. Claimed inside the background task
+    /// instead, a refusal had nowhere to go: the task only logged it, the caller had already
+    /// answered 202, and /progress kept showing the previous accept's result forever. The window
+    /// is real — a failed accept publishes Failed before it releases the lock, so a retry clicked
+    /// the moment Failed appears lands in it. Returns null, starting nothing, when the lock is busy.
+    /// </summary>
+    public Task? TryStartAcceptCommit(string commitEventId, string masterPassword, int? initiatorUserId)
+    {
+        if (!_executeLock.Wait(TimeSpan.Zero))
+            return null;
+        return Task.Run(() => AcceptCommitHoldingLockAsync(commitEventId, masterPassword, initiatorUserId));
+    }
+
+    /// <summary>Runs the accept; the caller has claimed <c>_executeLock</c>, which this releases.</summary>
+    private async Task AcceptCommitHoldingLockAsync(string commitEventId, string masterPassword, int? initiatorUserId)
+    {
         try
         {
             await HeavyOperationLock.Instance.WaitAsync();

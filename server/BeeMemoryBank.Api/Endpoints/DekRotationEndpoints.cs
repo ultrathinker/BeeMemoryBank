@@ -71,8 +71,9 @@ public static class DekRotationEndpoints
 
         // Roadmap p4: /accept returns 202 immediately and fire-and-forgets the destructive
         // work. For large vaults the rewrap loop takes minutes, longer than nginx/browser
-        // timeouts. UI already polls /progress; password / lock / "already in progress"
-        // errors surface as currentStep=Failed + errorMessage in the next poll.
+        // timeouts. UI already polls /progress; password / "already applied" errors surface as
+        // currentStep=Failed + errorMessage in the next poll. "Another rotation is in progress"
+        // is answered right here with 409: the lock is claimed before this handler returns.
         group.MapPost("/accept", (
             AcceptDekRotationRequest req,
             DekRotationService svc,
@@ -87,11 +88,15 @@ public static class DekRotationEndpoints
             if (int.TryParse(ctx.Request.Headers["X-User-Id"].FirstOrDefault(), out var uid))
                 initiatorUserId = uid;
 
+            var accept = svc.TryStartAcceptCommit(req.CommitEventId, req.MasterPassword, initiatorUserId);
+            if (accept == null)
+                return Results.Json(new ErrorResponse("Another rotation is in progress."), statusCode: 409);
+
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await svc.AcceptCommitAsync(req.CommitEventId, req.MasterPassword, initiatorUserId);
+                    await accept;
                 }
                 catch (Exception ex)
                 {
