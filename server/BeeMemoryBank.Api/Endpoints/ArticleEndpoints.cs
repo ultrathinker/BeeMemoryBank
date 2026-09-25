@@ -129,6 +129,10 @@ public static class ArticleEndpoints
         {
             if (req.Content != null && !session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+            // Validate before any write: a protected article's body is saved before its metadata,
+            // so a blank title rejected later would leave a half-applied edit.
+            if (req.Title != null && string.IsNullOrWhiteSpace(req.Title))
+                return Results.BadRequest(new ErrorResponse("Title cannot be empty."));
 
             var existingMeta = await svc.GetMetadataAsync(id);
             if (existingMeta == null)
@@ -196,7 +200,7 @@ public static class ArticleEndpoints
                     ? req.Passphrase
                     : unlockCache.TryGet(CallerKey(ctx), id);
                 if (string.IsNullOrEmpty(passphrase))
-                    return Results.Json(new ErrorResponse("This article is protected — a passphrase is required to edit its content."), statusCode: 400);
+                    return Results.Json(new ErrorResponse("This article is protected — a passphrase is required to edit its content.", "PassphraseRequired"), statusCode: 400);
                 // Body FIRST: UpdateProtectedContentAsync verifies the passphrase before writing, so a
                 // wrong passphrase aborts with nothing committed. Only then apply title/path — otherwise
                 // a bad passphrase would still have persisted the metadata change (non-atomic edit).

@@ -40,8 +40,10 @@ public static class ArticleProxyEndpoints
                 var (art, status, error) = await api.UpdateProtectedArticleAsync(id, req.Title, req.TreePath, req.Content, req.Passphrase);
                 return art != null ? Results.Ok(art) : Results.Json(new { error = error ?? "Update failed" }, statusCode: status);
             }
-            var result = await api.UpdateArticleAsync(id, req.Title, req.TreePath, req.Content);
-            return result != null ? Results.Ok(result) : Results.StatusCode(502);
+            var (updated, updStatus, updError, updCode) = await api.UpdateArticleForProxyAsync(id, req.Title, req.TreePath, req.Content);
+            return updated != null
+                ? Results.Ok(updated)
+                : Results.Json(new { error = updError ?? "Update failed", code = updCode }, statusCode: updStatus);
         }).RequireAuthorization();
 
         // ─── Protected ("second-layer") articles ───────────────────────────────────

@@ -7,6 +7,7 @@ using System.Text.Json;
 using BeeMemoryBank.Core.Models;
 
 using ProxyMethodRule = WebApp::BeeMemoryBank.Web.Services.ProxyMethodRule;
+using ProxyRouteFlags = WebApp::BeeMemoryBank.Web.Services.ProxyRouteFlags;
 using ProxyRouteTable = WebApp::BeeMemoryBank.Web.Services.ProxyRouteTable;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -452,6 +453,16 @@ public class ProxyForwarderTests
                 ProxyRouteTable.Match(prefix, method).Outcome
                     .Should().Be(ProxyRouteTable.MatchOutcome.MethodNotAllowed, $"{method} {prefix}");
         }
+    }
+
+    [Theory]
+    [InlineData("media")]
+    [InlineData("chat/attachments")]
+    public void Table_UserSuppliedBytes_AreServedUnderTheSandbox(string prefix)
+    {
+        // Anything a user uploaded can be opened directly as a document; it must never run under
+        // the site CSP (same origin as the session cookie).
+        ProxyRouteTable.Entries[prefix].Flags.Should().HaveFlag(ProxyRouteFlags.UserContent);
     }
 
     [Fact]

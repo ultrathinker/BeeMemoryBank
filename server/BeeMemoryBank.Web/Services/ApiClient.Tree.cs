@@ -129,6 +129,23 @@ public partial class ApiClient
         return (dto, (int)resp.StatusCode, null);
     }
 
+    // The JSON proxy passes the API's status, error and code through, so the browser can tell
+    // "passphrase required" (code PassphraseRequired) from a validation error.
+    public async Task<(ArticleDto? Article, int Status, string? Error, string? Code)> UpdateArticleForProxyAsync(
+        Guid id, string? title, string? treePath, string? content)
+    {
+        var resp = await http.PutAsync($"/api/articles/{id}",
+            Body(new { title, treePath, content }));
+        if (resp.IsSuccessStatusCode)
+            return (await resp.Content.ReadFromJsonAsync<ArticleDto>(JsonOpts), (int)resp.StatusCode, null, null);
+        try
+        {
+            var err = await resp.Content.ReadFromJsonAsync<JsonNode>(JsonOpts);
+            return (null, (int)resp.StatusCode, err?["error"]?.GetValue<string>(), err?["code"]?.GetValue<string>());
+        }
+        catch { return (null, (int)resp.StatusCode, null, null); }
+    }
+
     // ─── Protected ("second-layer") articles ───────────────────────────────────
 
     public async Task<(bool ok, int status, string? content, int? expiresInSeconds, string? error)> UnlockArticleAsync(Guid id, string passphrase)

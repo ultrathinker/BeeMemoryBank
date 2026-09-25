@@ -432,17 +432,19 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             }).then(function (r) {
-                if (r.status === 400) {
-                    reauthPending = true;
-                    if (protGate) protGate.hidden = false;
-                    protError.textContent = 'Your unlock expired — re-enter the password to save.';
-                    protError.style.display = '';
-                    protPassInput.focus();
-                    return null;
-                }
                 if (!r.ok) {
                     if (r.status === 401) protPass = null;
                     return r.json().catch(function () { return {}; }).then(function (j) {
+                        // Only this code means the server-side unlock expired; any other 400 is a
+                        // validation error (e.g. a blank title) and is shown as is.
+                        if (r.status === 400 && j.code === 'PassphraseRequired') {
+                            reauthPending = true;
+                            if (protGate) protGate.hidden = false;
+                            protError.textContent = 'Your unlock expired — re-enter the password to save.';
+                            protError.style.display = '';
+                            protPassInput.focus();
+                            return 'reauth';
+                        }
                         throw new Error(r.status === 401 ? 'Wrong password — re-enter to save.' : (j.error || 'Save failed.'));
                     });
                 }

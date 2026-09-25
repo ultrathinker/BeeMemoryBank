@@ -163,7 +163,8 @@ public static class ProxyRouteTable
         ["chat/conversations"] = new("/api/chat/conversations",
             [new("GET", null), new("PATCH", null), new("DELETE", null)]),
         ["chat/home-pinned"] = new("/api/chat/home-pinned", [new("GET", null), new("DELETE", null)]),
-        ["chat/attachments"] = new("/api/chat/attachments", [new("GET", null)]),
+        // Chat attachments are user-supplied bytes like media: same sandbox when opened directly.
+        ["chat/attachments"] = new("/api/chat/attachments", [new("GET", null)], ProxyRouteFlags.UserContent),
 
         // ── User & role administration (superadmin; /me/* password change is per-user) ──
         ["users/me/change-password"] = new("/api/users/me/change-password", [new("POST", null)]),
