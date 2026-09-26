@@ -5,6 +5,23 @@
     // exactly as it always did. Cached in BrandingService, not fetched per render.
     var brandName = await BrandingSvc.GetNameAsync();
     var themeUser = User.Identity?.Name ?? "";
+    var isSuperadmin = User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin");
+    // The header links, once: shown inline on wide windows (icons only on medium ones) and in the
+    // "menu" dropdown on narrow ones. See the .header-nav / .header-menu rules in site.css.
+    var navItems = new List<(string Href, string Icon, string Label)>
+    {
+        ("/Search", "search", "Search"),
+        ("/Graph", "diagram-3", "Graph"),
+        ("/Tags", "tags", "Tags"),
+        ("/Profile", "person-circle", "Profile"),
+    };
+    if (isSuperadmin)
+    {
+        navItems.Add(("/Users", "people", "Users"));
+        navItems.Add(("/Activity", "activity", "Activity"));
+        navItems.Add(("/Admin", "gear", "Admin"));
+        navItems.Add(("/InternetAccess", "globe", "Internet"));
+    }
 }
 <!DOCTYPE html>
 <html lang="en" data-username="@themeUser">
@@ -40,20 +57,25 @@
        style="position:absolute;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;" />
     <header class="app-header">
         <div class="header-left">
-            <a href="/Tree" class="app-logo">
+            @if (User.Identity?.IsAuthenticated == true)
+            {
+                @* Narrow windows only: opens the folder tree drawer (site.js). *@
+                <sl-icon-button id="btn-header-tree" name="layout-sidebar" label="Folders" title="Folders" class="header-tree-button"></sl-icon-button>
+            }
+            <a href="/Tree" class="app-logo" title="@brandName">
                 <img src="/images/web-app-manifest-192x192.png" alt="Bee" class="app-logo-img" />
-                <span>@brandName</span>
+                <span class="app-logo-name">@brandName</span>
             </a>
         </div>
         @if (User.Identity?.IsAuthenticated == true)
         {
         <div class="header-right">
-            <a href="/AI" id="nav-ai-link" class="header-link" style="margin-right:16px;font-weight:700;color:var(--accent);background:color-mix(in srgb, var(--accent) 14%, transparent);padding:4px 10px;border-radius:var(--sl-border-radius-medium,6px);">
+            <a href="/AI" id="nav-ai-link" class="header-link nav-ai" title="AI chat">
                 <sl-icon name="chat-left-text"></sl-icon> AI
             </a>
             <div class="theme-picker">
                 <sl-dropdown id="theme-dropdown" placement="bottom-end">
-                    <sl-button slot="trigger" size="small" variant="text" caret>
+                    <sl-button slot="trigger" size="small" variant="text" caret title="Theme">
                         <sl-icon name="palette" slot="prefix"></sl-icon>
                         <span id="theme-label">Theme</span>
                     </sl-button>
@@ -82,9 +104,9 @@
                     </sl-menu>
                 </sl-dropdown>
             </div>
-            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
+            @if (isSuperadmin)
             {
-            <div class="sync-status-wrapper" id="syncStatusWidget" style="position: relative; margin-right: 8px;">
+            <div class="sync-status-wrapper" id="syncStatusWidget" style="position: relative;">
                 <sl-icon-button name="arrow-repeat" label="Sync status" id="syncStatusBtn" style="font-size: 1.2rem;"></sl-icon-button>
                 <span class="sync-badge" id="syncBadge" style="display:none;"></span>
                 <div class="sync-dropdown" id="syncDropdown" style="display:none;">
@@ -93,46 +115,34 @@
                 </div>
             </div>
             }
-            <a href="/Search" class="header-link">
-                <sl-icon name="search"></sl-icon> Search
-            </a>
-            <a href="/Graph" class="header-link">
-                <sl-icon name="diagram-3"></sl-icon> Graph
-            </a>
-            <a href="/Tags" class="header-link">
-                <sl-icon name="tags"></sl-icon> Tags
-            </a>
-            <a href="/Profile" class="header-link">
-                <sl-icon name="person-circle"></sl-icon> Profile
-            </a>
-            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
-            {
-            <a href="/Users" class="header-link">
-                <sl-icon name="people"></sl-icon> Users
-            </a>
-            }
-            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
-            {
-            <a href="/Activity" class="header-link">
-                <sl-icon name="activity"></sl-icon> Activity
-            </a>
-            }
-            @if (User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin"))
-            {
-            <a href="/Admin" class="header-link">
-                <sl-icon name="gear"></sl-icon> Admin
-            </a>
-            <a href="/InternetAccess" class="header-link">
-                <sl-icon name="globe"></sl-icon> Internet
-            </a>
-            }
-            <form method="post" action="/Logout" class="header-link" style="display:inline;">
-                @Html.AntiForgeryToken()
-                <button type="submit" class="logout-link">
-                    <sl-icon name="box-arrow-right"></sl-icon> Logout
-                </button>
-            </form>
-
+            <nav class="header-nav" aria-label="Main">
+                @foreach (var item in navItems)
+                {
+                    <a href="@item.Href" class="header-link" title="@item.Label">
+                        <sl-icon name="@item.Icon"></sl-icon><span class="header-link-label">@item.Label</span>
+                    </a>
+                }
+                <form method="post" action="/Logout" class="header-link" style="display:inline;">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="logout-link" title="Logout">
+                        <sl-icon name="box-arrow-right"></sl-icon><span class="header-link-label">Logout</span>
+                    </button>
+                </form>
+            </nav>
+            @* Narrow windows: the same links behind one menu button. *@
+            <sl-dropdown class="header-menu" placement="bottom-end" distance="6">
+                <sl-icon-button slot="trigger" name="list" label="Menu" class="header-menu-button"></sl-icon-button>
+                <div class="header-menu-panel">
+                    @foreach (var item in navItems)
+                    {
+                        <a href="@item.Href" class="header-menu-item"><sl-icon name="@item.Icon"></sl-icon> @item.Label</a>
+                    }
+                    <form method="post" action="/Logout" class="header-menu-form">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="header-menu-item"><sl-icon name="box-arrow-right"></sl-icon> Logout</button>
+                    </form>
+                </div>
+            </sl-dropdown>
         </div>
         }
 

@@ -5,8 +5,8 @@
         Title="BeeMemoryBank"
         Width="1200"
         Height="800"
-        MinWidth="800"
-        MinHeight="600"
+        MinWidth="420"
+        MinHeight="480"
         WindowStartupLocation="CenterScreen"
         Background="#111119"
         Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">

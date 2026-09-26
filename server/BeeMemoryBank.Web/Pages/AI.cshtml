@@ -142,6 +142,11 @@
         body.ai-chat-page #chat-sidebar-expand-tab.visible {
             display: flex;
         }
+        /* Narrow windows: the page padding shrinks (site.css), so keep the heading clear of
+           the fixed history tab at the left edge. */
+        @@media (max-width: 719px) {
+            body.ai-chat-page .chat-header-row { padding-left: 16px; }
+        }
 
         /* #app-sidebar (the real folder tree) is hidden on this page via display:none, but
            its sibling expand tab (#sidebar-expand-tab) is NOT covered by that rule. site.js

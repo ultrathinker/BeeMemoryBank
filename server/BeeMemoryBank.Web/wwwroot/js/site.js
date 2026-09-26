@@ -213,8 +213,14 @@ $(function () {
     var expandTab   = document.getElementById('sidebar-expand-tab');
     var SIDEBAR_KEY = 'bee-sidebar-collapsed';
 
-    function setSidebarCollapsed(collapsed) {
+    // Narrow windows show the tree as a drawer over the content (see the max-width: 719px
+    // rules in site.css). There it starts closed, closes itself after a pick, and opening or
+    // closing it is not remembered, so the wide-window preference stays what the user chose.
+    var narrowQuery = window.matchMedia('(max-width: 719px)');
+
+    function setSidebarCollapsed(collapsed, remember) {
         if (!appSidebar) return;
+        if (remember === undefined) remember = !narrowQuery.matches;
         var sp = appSidebar.nextElementSibling;
         if (sp && sp.classList.contains('splitter')) {
             sp.style.display = collapsed ? 'none' : '';
@@ -225,11 +231,11 @@ $(function () {
         if (collapsed) {
             appSidebar.classList.add('sidebar-collapsed');
             if (expandTab) expandTab.classList.add('visible');
-            localStorage.setItem(SIDEBAR_KEY, '1');
+            if (remember) localStorage.setItem(SIDEBAR_KEY, '1');
         } else {
             appSidebar.classList.remove('sidebar-collapsed');
             if (expandTab) expandTab.classList.remove('visible');
-            localStorage.removeItem(SIDEBAR_KEY);
+            if (remember) localStorage.removeItem(SIDEBAR_KEY);
         }
     }
 
@@ -239,8 +245,37 @@ $(function () {
     if (expandTab) {
         expandTab.addEventListener('click', function () { setSidebarCollapsed(false); });
     }
-    if (localStorage.getItem(SIDEBAR_KEY) === '1') {
-        setSidebarCollapsed(true);
+    if (narrowQuery.matches || localStorage.getItem(SIDEBAR_KEY) === '1') {
+        setSidebarCollapsed(true, false);
+    }
+
+    var headerTreeBtn = document.getElementById('btn-header-tree');
+    if (headerTreeBtn) {
+        // Pages without a tree, or that hide it on purpose (the AI chat), get no button.
+        if (!appSidebar || getComputedStyle(appSidebar).display === 'none') headerTreeBtn.style.display = 'none';
+        else headerTreeBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            setSidebarCollapsed(!appSidebar.classList.contains('sidebar-collapsed'), false);
+        });
+    }
+
+    if (appSidebar) {
+        // Drawer mode: picking an article or folder closes the tree so the page is visible.
+        appSidebar.addEventListener('click', function (e) {
+            if (!narrowQuery.matches) return;
+            var link = e.target.closest('a[href]');
+            if (link && link.getAttribute('href') !== '#') setSidebarCollapsed(true, false);
+        });
+        // ...and so does a tap on the content next to it.
+        var content = document.querySelector('.main-content');
+        if (content) content.addEventListener('click', function () {
+            if (narrowQuery.matches && !appSidebar.classList.contains('sidebar-collapsed')) setSidebarCollapsed(true, false);
+        });
+        // Crossing the breakpoint: going narrow closes the drawer; going wide restores the
+        // remembered wide-window state.
+        narrowQuery.addEventListener('change', function (q) {
+            setSidebarCollapsed(q.matches || localStorage.getItem(SIDEBAR_KEY) === '1', false);
+        });
     }
 });
 

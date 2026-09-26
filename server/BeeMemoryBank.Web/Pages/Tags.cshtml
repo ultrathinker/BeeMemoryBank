@@ -6,17 +6,18 @@
 <partial name="_Sidebar" />
 <div id="page-content">
 <div class="main-content">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:space-between;margin-bottom:16px;">
         <h1 style="font-size:1.5rem;margin:0;">
             <sl-icon name="tags"></sl-icon> Tags
         </h1>
-        <sl-input id="tag-search" placeholder="Filter..." clearable size="small" style="width:260px;">
+        <sl-input id="tag-search" placeholder="Filter..." clearable size="small" style="flex:1 1 180px;max-width:260px;min-width:0;">
             <sl-icon slot="prefix" name="search" style="margin-left:8px;"></sl-icon>
         </sl-input>
     </div>
 
     <div id="concept-loading" style="text-align:center;padding:24px;"><sl-spinner></sl-spinner></div>
-    <table id="concept-table" style="display:none;width:100%;border-collapse:collapse;">
+    <div class="table-scroll">
+    <table id="concept-table" style="display:none;width:100%;min-width:480px;border-collapse:collapse;">
         <thead>
             <tr style="border-bottom:1px solid var(--sl-color-neutral-300);">
                 <th style="text-align:left;padding:8px;">Name</th>
@@ -26,6 +27,7 @@
         </thead>
         <tbody id="concept-tbody"></tbody>
     </table>
+    </div>
     <div id="concept-pager" style="display:none;margin-top:12px;align-items:center;justify-content:space-between;gap:12px;">
         <span id="concept-pager-info" style="font-size:0.85rem;color:var(--sl-color-neutral-500);"></span>
         <div style="display:flex;gap:8px;">

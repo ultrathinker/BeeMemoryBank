@@ -549,7 +549,7 @@
                 return r.json().then(function (data) {
                     if (brandInput) brandInput.value = data.isCustom ? data.name : '';
                     renderBrandPreview();
-                    var headerSpan = document.querySelector('.app-logo span');
+                    var headerSpan = document.querySelector('.app-logo-name');
                     if (headerSpan) headerSpan.textContent = data.name;
                     if (brandSavedMsg) {
                         brandSavedMsg.style.display = 'inline';

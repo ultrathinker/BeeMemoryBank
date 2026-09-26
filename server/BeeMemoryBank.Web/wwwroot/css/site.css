@@ -433,6 +433,72 @@ form.header-link {
 }
 .logout-link:hover { color: var(--text-primary); }
 
+/* Header on any window width. The logo never wraps; the links collapse in two steps:
+   icons only (labels become tooltips), then one menu button. Nothing may push the header
+   wider than the window, because body hides overflow and a cut-off link cannot be reached. */
+.app-header { gap: 12px; min-width: 0; }
+.header-left { display: flex; align-items: center; min-width: 0; flex-shrink: 1; }
+.app-logo { white-space: nowrap; min-width: 0; }
+.app-logo-img { flex-shrink: 0; }
+.app-logo-name { overflow: hidden; text-overflow: ellipsis; }
+.header-right { flex-shrink: 0; min-width: 0; }
+.header-link { white-space: nowrap; }
+.header-nav { display: flex; align-items: center; gap: 14px; }
+.nav-ai {
+    font-weight: 700;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    padding: 4px 10px;
+    border-radius: var(--sl-border-radius-medium, 6px);
+}
+.nav-ai:hover { color: var(--accent-hover); }
+.header-menu { display: none; }
+.header-tree-button { display: none; font-size: 1.25rem; margin-right: 2px; }
+.header-menu-button { font-size: 1.35rem; }
+.header-menu-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    padding: 6px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.header-menu-form { margin: 0; }
+.header-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.9rem;
+    text-align: left;
+    cursor: pointer;
+}
+.header-menu-item:hover { background: var(--bg-card); color: var(--accent); }
+
+@media (max-width: 1279px) {
+    .header-link-label { display: none; }
+    .header-nav { gap: 10px; }
+    .header-nav .header-link sl-icon, .header-nav .logout-link sl-icon { font-size: 1.1rem; }
+    #theme-label { display: none; }
+}
+@media (max-width: 719px) {
+    .app-header { padding: 0 12px; }
+    .header-right { gap: 8px; }
+    .header-nav { display: none; }
+    .header-menu { display: inline-block; }
+}
+@media (max-width: 479px) {
+    .app-logo-name { display: none; }
+}
+
 /* ===== App Body ===== */
 .app-body {
     flex: 1;
@@ -850,8 +916,54 @@ a.search-result-title:hover {
 /* ===== Main Content ===== */
 .main-content {
     flex: 1;
+    /* A flex item defaults to min-width:auto, so one wide table or unbreakable title made the
+       whole page wider than the window, and body's overflow:hidden cut the rest off. */
+    min-width: 0;
     overflow-y: auto;
     padding: 24px 32px;
+}
+
+/* ===== Narrow and medium windows =====
+   Every page shares the tree + content layout, so this is where the window width is handled
+   once for all of them. */
+.app-body { position: relative; }
+/* Tables inside cards: the cards clip overflow (for their rounded corners), which cut off the
+   right-hand columns and their action buttons. Let such a card scroll sideways instead. */
+.card:has(> table) { overflow-x: auto !important; }
+.table-scroll { overflow-x: auto; }
+
+@media (max-width: 1023px) {
+    .main-content { padding: 20px 20px; }
+    /* A splitter-dragged width is an inline style; cap it so the content keeps its room. */
+    .sidebar:not(.sidebar-collapsed) { max-width: 260px; }
+}
+@media (max-width: 719px) {
+    .main-content { padding: 16px 14px; }
+    /* The tree becomes a drawer over the content (site.js starts it closed here). */
+    .sidebar {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 30;
+        box-shadow: 6px 0 24px rgba(0, 0, 0, 0.45);
+    }
+    .sidebar:not(.sidebar-collapsed) { max-width: min(86vw, 340px); }
+    /* Dim the page behind the open drawer. pointer-events:none lets the tap reach the content,
+       whose click handler (site.js) closes the drawer. */
+    .app-body:has(> .sidebar:not(.sidebar-collapsed))::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 25;
+        background: rgba(0, 0, 0, 0.45);
+        pointer-events: none;
+    }
+    .splitter { display: none !important; }
+    /* The floating edge tab covered page titles here; the header button opens the tree. */
+    #sidebar-expand-tab, #sidebar-expand-tab.visible { display: none; }
+    .header-tree-button { display: inline-flex; }
+    h1 { font-size: 1.35rem; }
 }
 
 /* ===== Cards ===== */
@@ -1249,7 +1361,7 @@ a.search-result-title:hover {
 .draft-compare-content h3 { margin-top: 0.8em; }
 
 /* ===== Toolbar ===== */
-.toolbar { display: flex; gap: 8px; align-items: center; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 /* Compact toolbar variant — noticeably smaller than sl-button size="small" */
 .toolbar.compact { gap: 4px; }
@@ -1289,7 +1401,7 @@ a.search-result-title:hover {
     color: var(--sl-color-neutral-500);
     margin-right: 6px;
 }
-.article-actions-bar .toolbar.compact { flex: 0 0 auto; margin-left: auto; }
+.article-actions-bar .toolbar.compact { flex: 0 1 auto; min-width: 0; justify-content: flex-end; margin-left: auto; }
 /* Compact tag pills — ~1.5x smaller than sl-tag size="small" */
 .article-actions-bar sl-tag { margin-right: 3px; }
 .article-actions-bar sl-tag::part(base) {
@@ -1313,7 +1425,7 @@ a.search-result-title:hover {
 .folder-header-bar .toolbar.compact { flex: 0 0 auto; margin-left: auto; }
 
 /* ===== Scrollbar ===== */
-::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
