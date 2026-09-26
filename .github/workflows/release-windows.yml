@@ -45,6 +45,31 @@ jobs:
           Invoke-WebRequest -Uri https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx `
             -OutFile libs/BeeMemoryBank.Embeddings/Models/model.onnx
 
+      # vpk pack builds a delta package against the newest release it finds in the output folder.
+      # Seeding that folder with the latest published release makes updates download only the
+      # changes instead of the whole ~190 MB package. The first release (or any fetch failure)
+      # just produces a full-only release, as before.
+      - name: Fetch the previous release (base for the delta package)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dir = 'installers/windows/velopack/releases'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $latest = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName 2>$null
+          if ($LASTEXITCODE -ne 0 -or -not $latest) {
+            Write-Warning 'No published release found: this release will have no delta package.'
+            exit 0
+          }
+          gh release download $latest --repo $env:GITHUB_REPOSITORY --dir $dir --clobber `
+            --pattern '*-full.nupkg' --pattern 'releases.win.json'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Could not download ${latest}: this release will have no delta package."
+            Get-ChildItem $dir -File | Remove-Item -Force
+            exit 0
+          }
+          Get-ChildItem $dir | ForEach-Object { "base: $($_.Name) $($_.Length)" }
+
       - name: Build installer
         shell: pwsh
         run: ./scripts/pack-windows.ps1
@@ -57,9 +82,13 @@ jobs:
           $version = (Get-Content VERSION -Raw).Trim()
           $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$version" }
           $dir = 'installers/windows/velopack/releases'
+          # Only this version's packages are attached; the previous release keeps its own. The
+          # feed (releases.win.json) lists both, and a client applies the delta on top of the
+          # full package it already has locally.
           $assets = @("$dir/BeeMemoryBank-win-Setup.exe", "$dir/BeeMemoryBank-win-Portable.zip") +
-                    (Get-ChildItem $dir -Filter "BeeMemoryBank-$version-full.nupkg").FullName +
+                    (Get-ChildItem $dir -Filter "BeeMemoryBank-$version-*.nupkg").FullName +
                     @("$dir/releases.win.json", "$dir/RELEASES")
+          $assets | ForEach-Object { "asset: $_" }
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag --draft --title "Bee Memory Bank $version" --notes "Windows installer: download BeeMemoryBank-win-Setup.exe and run it (per-user, no admin rights). Code signing policy: https://github.com/ultrathinker/BeeMemoryBank#code-signing-policy" @assets
