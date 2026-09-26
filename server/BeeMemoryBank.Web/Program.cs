@@ -144,7 +144,7 @@ builder.Services.AddAuthentication("BeeWebCookie")
                 var logger = context.HttpContext.RequestServices
                     .GetRequiredService<ILogger<Program>>();
 
-                var cacheKey = $"security_stamp_{userId}";
+                var cacheKey = WebSignIn.StampCacheKey(userId);
                 if (!cache.TryGetValue(cacheKey, out string? currentStamp) || currentStamp is null)
                 {
                     SecurityStampLookup lookup;
@@ -179,7 +179,7 @@ builder.Services.AddAuthentication("BeeWebCookie")
                     currentStamp = lookup.Stamp;
                     // Only cache successful (200) lookups for the TTL.
                     cache.Set(cacheKey, currentStamp,
-                        new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) });
+                        new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = WebSignIn.StampCacheTtl });
                 }
 
                 if (!string.Equals(stampClaim, currentStamp, StringComparison.Ordinal))

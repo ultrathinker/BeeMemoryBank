@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using BeeMemoryBank.Web.Models;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace BeeMemoryBank.Web.Services;
 
@@ -10,8 +11,23 @@ namespace BeeMemoryBank.Web.Services;
 /// </summary>
 public static class WebSignIn
 {
+    /// <summary>Key of the per-user security-stamp cache that OnValidatePrincipal reads.</summary>
+    public static string StampCacheKey(string userId) => $"security_stamp_{userId}";
+
+    /// <summary>How long OnValidatePrincipal trusts a cached stamp before asking the API again.</summary>
+    public static readonly TimeSpan StampCacheTtl = TimeSpan.FromMinutes(5);
+
     public static Task SignInAsync(HttpContext context, LoginResult result)
     {
+        // The API has just handed over the user's CURRENT stamp, so it replaces whatever the cache
+        // holds. Without this a password change (which rotates the stamp) left the old stamp cached
+        // for up to five minutes, and every fresh sign-in with the new password was rejected on the
+        // very next request and bounced back to /Login with no error (BMB-31, scenario 17).
+        if (!string.IsNullOrEmpty(result.UserId) && !string.IsNullOrEmpty(result.SecurityStamp))
+            context.RequestServices.GetRequiredService<IMemoryCache>().Set(
+                StampCacheKey(result.UserId), result.SecurityStamp,
+                new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = StampCacheTtl });
+
         var claims = new List<Claim>
         {
             new(ClaimTypes.Name, result.Username!),
