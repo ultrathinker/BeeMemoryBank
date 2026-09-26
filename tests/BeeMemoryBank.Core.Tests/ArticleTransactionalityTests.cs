@@ -528,6 +528,7 @@ internal sealed class FailingEventLogRepository(IEventLogRepository inner) : IEv
     public Task<long?> GetMinSequenceAsync() => inner.GetMinSequenceAsync();
     public Task<long> GetMaxSequenceAsync() => inner.GetMaxSequenceAsync();
     public Task<int> DeleteUpToAsync(long cpSequenceNum) => inner.DeleteUpToAsync(cpSequenceNum);
+    public Task<int> DeletePlaintextCommentEventsAsync() => inner.DeletePlaintextCommentEventsAsync();
     public Task<long?> GetLastCompactionCpAsync() => inner.GetLastCompactionCpAsync();
     public Task<long?> GetSequenceAtRankAsync(int rank) => inner.GetSequenceAtRankAsync(rank);
     public Task<int> CountEventsAfterSequenceAsync(long seqNum) => inner.CountEventsAfterSequenceAsync(seqNum);

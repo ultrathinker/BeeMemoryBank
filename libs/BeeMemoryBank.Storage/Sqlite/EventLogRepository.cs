@@ -149,6 +149,17 @@ public class EventLogRepository(DbConnectionFactory factory) : BaseRepository(fa
             "SELECT COALESCE(MAX(sequence_num), 0) FROM tbl_event");
     }
 
+    public async Task<int> DeletePlaintextCommentEventsAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteAsync(
+            @"DELETE FROM tbl_event
+               WHERE event_type = 'comment_create'
+                 AND json_valid(payload)
+                 AND COALESCE(json_extract(payload, '$.encrypted'), 0) = 0
+                 AND COALESCE(json_extract(payload, '$.text'), '') <> ''");
+    }
+
     public async Task<int> DeleteUpToAsync(long cpSequenceNum)
     {
         using var conn = OpenConnection();

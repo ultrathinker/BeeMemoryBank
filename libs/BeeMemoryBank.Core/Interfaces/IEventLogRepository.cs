@@ -29,6 +29,13 @@ public interface IEventLogRepository
     Task<long?> GetMinSequenceAsync();
     Task<long> GetMaxSequenceAsync();
     Task<int> DeleteUpToAsync(long cpSequenceNum);
+
+    /// <summary>
+    /// Deletes comment_create events that carry the comment text in clear (encrypted = false with a
+    /// non-empty text). Every peer refuses such an event, so it is dead weight whose only effect is
+    /// keeping the text readable in the log. Returns how many were removed.
+    /// </summary>
+    Task<int> DeletePlaintextCommentEventsAsync();
     Task<long?> GetLastCompactionCpAsync();
     /// <summary>
     /// Returns the sequence_num of the Nth-oldest event (1-indexed). Returns null if the log has fewer than N events.

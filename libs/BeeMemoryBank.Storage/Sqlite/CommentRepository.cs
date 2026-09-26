@@ -89,11 +89,18 @@ public class CommentRepository(DbConnectionFactory factory, CallerScopeHolder sc
             $"SELECT {SelectColumns} FROM tbl_comment WHERE id = @id", new { id }));
     }
 
-    public async Task<Comment> CreateEncryptedAsync(Guid articleId, Guid commentId, byte[] ciphertext, byte[] iv, Guid? sourceNodeId = null)
+    public async Task<List<Comment>> GetPlaintextAsync()
+    {
+        using var conn = OpenConnection();
+        return (await conn.QueryAsync<Comment>(
+            $"SELECT {SelectColumns} FROM tbl_comment WHERE encrypted = 0 AND deleted_at IS NULL")).ToList();
+    }
+
+    public async Task<Comment> CreateEncryptedAsync(Guid articleId, Guid commentId, byte[] ciphertext, byte[] iv, Guid? sourceNodeId = null, DateTime? createdAt = null)
     {
         using var conn = OpenConnection();
         await EnsureWriteAllowedAsync(conn, articleId);
-        var now = UtcNow();
+        var now = createdAt is { } at ? at.ToUniversalTime().ToString("o") : UtcNow();
         var id = await conn.ExecuteScalarAsync<int>(
             @"INSERT INTO tbl_comment (comment_id, article_id, text, source_node_id, created_at, ciphertext, iv, encrypted)
               VALUES (@commentId, @articleId, '', @sourceNodeId, @now, @ciphertext, @iv, 1);

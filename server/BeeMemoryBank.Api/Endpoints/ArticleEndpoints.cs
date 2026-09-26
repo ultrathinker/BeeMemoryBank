@@ -293,6 +293,8 @@ public static class ArticleEndpoints
             try
             {
                 await svc.ProtectAsync(id, req.Passphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
+                // Comments go behind the passphrase too (BMB-36).
+                await ctx.RequestServices.GetRequiredService<CommentService>().ReprotectAsync(id, null, req.Passphrase);
                 // The caller just proved the passphrase — prime the cache so editing right after
                 // protecting doesn't immediately re-prompt.
                 unlockCache.Remember(CallerKey(ctx), id, req.Passphrase);
@@ -313,6 +315,7 @@ public static class ArticleEndpoints
             {
                 await svc.UnprotectAsync(id, req.Passphrase);
                 PassphraseAttemptSucceeded(ctx, id);
+                await ctx.RequestServices.GetRequiredService<CommentService>().ReprotectAsync(id, req.Passphrase, null);
                 unlockCache.Forget(CallerKey(ctx), id); // no longer protected
                 return Results.Ok(new { protected_ = false });
             }
@@ -337,6 +340,7 @@ public static class ArticleEndpoints
             {
                 await svc.ChangePassphraseAsync(id, req.OldPassphrase, req.NewPassphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
                 PassphraseAttemptSucceeded(ctx, id);
+                await ctx.RequestServices.GetRequiredService<CommentService>().ReprotectAsync(id, req.OldPassphrase, req.NewPassphrase);
                 unlockCache.Remember(CallerKey(ctx), id, req.NewPassphrase); // cache the new passphrase
                 return Results.Ok(new { changed = true });
             }
@@ -474,7 +478,7 @@ public static class ArticleEndpoints
     private static void PassphraseAttemptSucceeded(HttpContext ctx, Guid id) =>
         PassphraseAttempts.Reset(PassphraseAttemptKey(ctx, id));
 
-    private static string? CallerKey(HttpContext ctx)
+    internal static string? CallerKey(HttpContext ctx)
     {
         var (userId, agentId, isSuperadmin) = CallerIdentity.Extract(ctx);
         var key = $"u{userId}:a{agentId}:s{isSuperadmin}";

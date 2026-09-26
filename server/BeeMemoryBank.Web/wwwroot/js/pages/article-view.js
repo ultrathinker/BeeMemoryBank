@@ -134,7 +134,10 @@
 
         function relock() {
             if (unlockTimer) { clearInterval(unlockTimer); unlockTimer = null; }
-            fetch('/api-proxy/article/' + articleId + '/relock', { method: 'POST' });
+            // The comments were opened with the passphrase (server-rendered); reload so they lock again.
+            var hasComments = !!document.querySelector('#comments-list .comment-item');
+            fetch('/api-proxy/article/' + articleId + '/relock', { method: 'POST' })
+                .then(function () { if (hasComments) location.reload(); });
             var body = document.getElementById('article-body');
             if (body) body.innerHTML = '';
             if (unlockBanner) unlockBanner.style.display = 'none';
@@ -158,6 +161,9 @@
                     throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Unlock failed.'));
                 });
             }).then(function (data) {
+                // Comments are sealed under the passphrase too and were rendered locked; the server
+                // opens them now that this session unlocked the article.
+                if (document.querySelector('.comment-text.comment-locked')) { location.reload(); return; }
                 renderMarkdown(data.content || '');
                 if (unlockPass) unlockPass.value = '';
                 if (lockCard) lockCard.style.display = 'none';
@@ -354,7 +360,9 @@
                 body: JSON.stringify({ articleId: articleId, text: text })
             }).then(function (r) {
                 if (r.ok) return r.json();
-                throw new Error('Failed');
+                return r.json().catch(function () { return {}; }).then(function (j) {
+                    throw new Error(j.error || 'Error adding comment');
+                });
             }).then(function (comment) {
                 textarea.value = '';
                 var list = document.getElementById('comments-list');
@@ -375,7 +383,7 @@
                     var cnt = list.querySelectorAll('.comment-item').length;
                     h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
                 }
-            }).catch(function () { alert('Error adding comment'); })
+            }).catch(function (err) { alert(err.message || 'Error adding comment'); })
             .finally(function () { addCommentBtn.loading = false; });
         });
     }

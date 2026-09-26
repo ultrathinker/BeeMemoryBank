@@ -7,7 +7,10 @@ public interface ICommentRepository
     Task<Comment?> GetByIdAsync(int id);
     Task<List<Comment>> GetByArticleIdAsync(Guid articleId);
     Task<Comment> CreateAsync(Guid articleId, string text, Guid? sourceNodeId = null);
-    Task<Comment> CreateEncryptedAsync(Guid articleId, Guid commentId, byte[] ciphertext, byte[] iv, Guid? sourceNodeId = null);
+    Task<Comment> CreateEncryptedAsync(Guid articleId, Guid commentId, byte[] ciphertext, byte[] iv, Guid? sourceNodeId = null, DateTime? createdAt = null);
+
+    /// <summary>Live comments still stored as plaintext (encrypted = 0), any article, no caller-scope filter.</summary>
+    Task<List<Comment>> GetPlaintextAsync();
     Task<Comment?> GetByCommentIdAsync(Guid commentId);
     Task CreateFromSyncAsync(Comment comment);
     Task UpdateLamportTsAsync(Guid commentId, long lamportTs, Guid? sourceNodeId);

@@ -380,6 +380,19 @@ public class SessionService(
             catch { /* logged inside the applier */ }
         }));
 
+        // Seal any comment still stored as plaintext and drop plaintext comment events from the log
+        // (an Android build wrote comments unencrypted, BMB-35). Needs the DEK, hence after unlock.
+        TrackPostUnlockCatchUp(Task.Run(async () =>
+        {
+            try
+            {
+                using var s = capturedScopeFactory.CreateScope();
+                var comments = s.ServiceProvider.GetService<CommentService>();
+                if (comments != null) await comments.SealLegacyPlaintextAsync();
+            }
+            catch { /* best effort; retried at the next unlock */ }
+        }));
+
         // Same pattern for stuck network-restore events. EventApplier auto-accepts
         // restore via fire-and-forget Task.Run — if that Task throws (network blip
         // mid-download, locked session at apply time, process crash before startup

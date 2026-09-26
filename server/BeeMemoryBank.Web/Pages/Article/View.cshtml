@@ -250,7 +250,7 @@
                     <sl-icon-button name="trash" label="Delete" style="font-size:0.9rem;"
                         class="btn-delete-comment" data-comment-id="@comment.Id"></sl-icon-button>
                 </div>
-                <p class="comment-text">@comment.Text</p>
+                <p class="comment-text@(comment.Locked ? " comment-locked" : "")">@comment.Text</p>
             </div>
         }
         </div>

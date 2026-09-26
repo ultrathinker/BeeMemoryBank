@@ -78,7 +78,8 @@ public record ActivityResponseDto(
     int Offset,
     int Limit);
 
-public record CommentDto(int Id, Guid ArticleId, string Text, DateTime CreatedAt);
+// Locked: sealed under the article's passphrase and not unlocked in this browser session.
+public record CommentDto(int Id, Guid ArticleId, string Text, DateTime CreatedAt, bool Locked = false);
 
 public record WhitelistEntryDto(
     Guid NodeId,

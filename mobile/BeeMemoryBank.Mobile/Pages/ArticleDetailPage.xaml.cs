@@ -20,6 +20,8 @@ public partial class ArticleDetailPage : ContentPage
     // otherwise the user would edit/overwrite the ciphertext and destroy the data on next sync.
     private bool _isProtected = false;
     private string? _protectedBlob; // the BMBENC1 body; unwrapped on-device after the user enters the passphrase
+    // The passphrase verified by this page's unlock; opens and seals the protected article's comments.
+    private string? _unlockedPassphrase;
     private CancellationTokenSource? _cts;
     private List<RelatedArticle> _relatedAll = new();
     private int _relatedShown;
@@ -71,6 +73,7 @@ public partial class ArticleDetailPage : ContentPage
         UnlockErrorLabel.IsVisible = false;
         _isProtected = false;
         _protectedBlob = null;
+        _unlockedPassphrase = null;
         _rawContent = "";
 
         try
@@ -293,7 +296,9 @@ public partial class ArticleDetailPage : ContentPage
         var comments = await sp.GetRequiredService<ICommentRepository>().GetByArticleIdAsync(articleId);
         foreach (var c in comments)
         {
-            try { c.Text = await commentSvc.DecryptTextAsync(c); }
+            // A protected article's comments are sealed under its passphrase too; without the
+            // unlock they read as CommentService.LockedText.
+            try { c.Text = await commentSvc.DecryptTextAsync(c, _unlockedPassphrase); }
             catch (Exception) { c.Text = "[cannot decrypt this comment]"; }
         }
         CommentsList.ItemsSource = comments.OrderBy(c => c.CreatedAt).ToList();
@@ -309,7 +314,7 @@ public partial class ArticleDetailPage : ContentPage
             using var scope = _services.CreateScope();
             // CommentService encrypts with the article's key and logs the sync event. The repository's
             // plain CreateAsync stored the text unencrypted and shipped it to every peer in clear.
-            await scope.ServiceProvider.GetRequiredService<CommentService>().CreateAsync(_parsedId, text);
+            await scope.ServiceProvider.GetRequiredService<CommentService>().CreateAsync(_parsedId, text, _unlockedPassphrase);
 
             CommentEntry.Text = "";
             await LoadCommentsAsync(_parsedId, scope.ServiceProvider);
@@ -369,6 +374,7 @@ public partial class ArticleDetailPage : ContentPage
         // Hand the verified passphrase to the edit page (short-lived, in-memory) so tapping Edit right
         // after unlocking doesn't re-prompt.
         _services.GetService<Services.MobileUnlockHolder>()?.Remember(_parsedId, pass);
+        _unlockedPassphrase = pass;
 
         // Reset the Raw/Markdown toggle so unlocking after tapping "Raw" (while locked) doesn't land
         // on a blank screen with the stale empty raw label.
@@ -390,6 +396,14 @@ public partial class ArticleDetailPage : ContentPage
         RenderContent(rendered);
         LockCard.IsVisible = false;
         ContentCard.IsVisible = true;
+
+        // The comments were loaded locked; open them with the passphrase just verified.
+        try
+        {
+            using var commentScope = _services.CreateScope();
+            await LoadCommentsAsync(_parsedId, commentScope.ServiceProvider);
+        }
+        catch { /* the article itself is open; comments stay as loaded */ }
     }
 
     private async void OnEditClicked(object? sender, EventArgs e)
@@ -430,6 +444,8 @@ public partial class ArticleDetailPage : ContentPage
             using var scope = _services.CreateScope();
             var articleSvc = scope.ServiceProvider.GetRequiredService<ArticleService>();
             await articleSvc.UnprotectAsync(_parsedId, pass);
+            // Comments were sealed under the passphrase as well; take that layer off them too.
+            await scope.ServiceProvider.GetRequiredService<CommentService>().ReprotectAsync(_parsedId, pass, null);
             _services.GetService<Services.MobileUnlockHolder>()?.Clear();
             _cts = new CancellationTokenSource();
             await LoadAsync(_parsedId, _cts.Token); // reload as a now-plaintext article

@@ -141,7 +141,9 @@ public record ActivityItem(
     string? ActorName,
     string? ViaAgentName);
 
-public record CommentResponse(int Id, Guid ArticleId, string Text, DateTime CreatedAt);
+// Locked: the comment is sealed under the article's passphrase and this caller has not unlocked it;
+// Text is then CommentService.LockedText.
+public record CommentResponse(int Id, Guid ArticleId, string Text, DateTime CreatedAt, bool Locked = false);
 
 public record ActivityResponse(
     List<ActivityItem> Items,
