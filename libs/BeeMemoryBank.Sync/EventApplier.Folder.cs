@@ -136,7 +136,29 @@ public partial class EventApplier
         // above returns early on every retry (only bumping lamport if higher) and never reaches
         // ClearFolderIdUnscopedAsync again, so the orphaned folder_id never self-heals. Detaching first means a crash before the soft-delete just leaves the folder
         // status still 'A', so the retry re-runs this whole method and completes it.
-        await articleRepo.ClearFolderIdUnscopedAsync(folder.Id);
+        //
+        // Only articles the delete outranks go to the root. An article whose last write is newer
+        // than this delete (edited on a node that had not seen it yet) keeps its folder, and so does
+        // the folder: the node that deleted it revives the path the same way when that edit reaches
+        // it (ApplyArticle* -> PlaceArticleAsync). Detaching everything, as this used to, put the
+        // article at '/' here and in the revived folder there - a permanent split decided only by
+        // which of the two events arrived first. A folder with a live subfolder stays for the same
+        // reason: the subfolder was kept by this rule when its own delete (logged first) arrived.
+        var deleteVersion = new RowVersion(evt.LamportTs, evt.NodeId);
+        var attached = await articleRepo.ListByFolderIdUnscopedAsync(folder.Id);
+        var outlive = attached
+            .Where(a => a.Status == "A" &&
+                        ConflictResolver.IncomingWins(deleteVersion, RowVersion.Of(a.LamportTs, a.SourceNodeId)))
+            .Select(a => a.Id)
+            .ToHashSet();
+        await articleRepo.DetachToRootUnscopedAsync(attached.Where(a => !outlive.Contains(a.Id)).Select(a => a.Id).ToList());
+        if (outlive.Count > 0 || (await folderRepo.ListIdsByPathPrefixAsync(folder.Path)).Count > 0)
+        {
+            logger.LogInformation(
+                "FolderDelete {Path} not applied: {Count} article(s) edited after the delete still live in it, or a subfolder does",
+                folder.Path, outlive.Count);
+            return;
+        }
         await folderRepo.SoftDeleteAsync(folder.Id, p.DeletedAt);
         // Same reason as the article path: the already-deleted branch at the top of this method
         // compares against this row's version, so it has to be the delete's, not the last rename's.

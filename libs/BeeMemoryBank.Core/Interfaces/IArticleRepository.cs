@@ -215,5 +215,18 @@ public interface IArticleRepository
     /// site ahead of an equivalent guard.
     /// </summary>
     internal Task ClearFolderIdUnscopedAsync(Guid folderId);
+
+    /// <summary>
+    /// Every article row attached to <paramref name="folderId"/>, any status, with NO caller-scope
+    /// check. Internal for the same reason as <see cref="ClearFolderIdUnscopedAsync"/>; the only
+    /// caller is sync replay of a folder delete, which needs each article's version.
+    /// </summary>
+    internal Task<List<Article>> ListByFolderIdUnscopedAsync(Guid folderId);
+
+    /// <summary>
+    /// <see cref="ClearFolderIdUnscopedAsync"/> for an explicit set of articles: folder_id = NULL,
+    /// tree_path = '/'. Same internal-only, no-scope-check contract.
+    /// </summary>
+    internal Task DetachToRootUnscopedAsync(IReadOnlyCollection<Guid> articleIds);
     Task<List<(Guid Id, string TreePath)>> GetArticlesWithNullFolderIdAsync();
 }

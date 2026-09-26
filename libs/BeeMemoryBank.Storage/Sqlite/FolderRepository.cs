@@ -46,6 +46,17 @@ public class FolderRepository(DbConnectionFactory factory, CallerScopeHolder sco
         return folder;
     }
 
+    public async Task<Folder?> GetLatestDeletedByPathAsync(string path)
+    {
+        using var conn = OpenConnection();
+        // Lamport first, node id as the tiebreak - the same order ConflictResolver uses, so "latest"
+        // here is the delete a comparison against it would treat as the winning one.
+        return await conn.QueryFirstOrDefaultAsync<Folder>(
+            $"SELECT {SelectCols} FROM tbl_folder f WHERE f.path = @path AND f.status = 'D' " +
+            "ORDER BY f.lamport_ts DESC, upper(f.source_node_id) DESC LIMIT 1",
+            new { path });
+    }
+
     public async Task<List<Folder>> GetChildrenAsync(string? parentPath)
     {
         using var conn = OpenConnection();

@@ -41,6 +41,13 @@ public interface IFolderRepository
     /// </para>
     /// </summary>
     Task SetDeleteVersionAsync(Guid id, RowVersion version);
+
+    /// <summary>
+    /// The most recently deleted folder row at exactly <paramref name="path"/> (highest delete
+    /// version), or null when none was ever deleted there. Unscoped: it is read by sync replay to
+    /// decide whether an incoming article still belongs in a folder that has since been deleted.
+    /// </summary>
+    Task<Folder?> GetLatestDeletedByPathAsync(string path);
     /// <summary>Soft-deletes all sub-folders whose path starts with the given prefix.</summary>
     Task<int> SoftDeleteByPathPrefixAsync(string pathPrefix, DateTime deletedAt, Guid? cascadeOpId = null);
 

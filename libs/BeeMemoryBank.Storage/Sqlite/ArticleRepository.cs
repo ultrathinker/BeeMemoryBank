@@ -782,6 +782,23 @@ public class ArticleRepository(
             new { folderId });
     }
 
+    async Task<List<Article>> IArticleRepository.ListByFolderIdUnscopedAsync(Guid folderId)
+    {
+        using var conn = OpenConnection();
+        return (await conn.QueryAsync<Article>(
+            $"SELECT {SelectCols} {FromClause} WHERE a.folder_id = @folderId",
+            new { folderId })).ToList();
+    }
+
+    async Task IArticleRepository.DetachToRootUnscopedAsync(IReadOnlyCollection<Guid> articleIds)
+    {
+        if (articleIds.Count == 0) return;
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_article SET folder_id = NULL, tree_path = '/' WHERE id IN @articleIds",
+            new { articleIds });
+    }
+
     public async Task<List<(Guid Id, string TreePath)>> GetArticlesWithNullFolderIdAsync()
     {
         using var conn = OpenConnection();

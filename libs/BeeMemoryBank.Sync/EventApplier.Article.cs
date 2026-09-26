@@ -95,9 +95,9 @@ public partial class EventApplier
         // Folder auto-vivification stays outside the transaction below — same call as
         // ArticleService.CreateAsync makes, for the same reason (see its comment): an ancestor
         // folder vivified by an apply that later rolls back is an inert, harmless empty folder.
-        await folderRepo.EnsureExistsAsync(p.TreePath, evt.NodeId);
-        var folder = await folderRepo.GetByPathAsync(p.TreePath);
+        var folder = await PlaceArticleAsync(p.TreePath, evt);
         article.FolderId = folder?.Id;
+        article.TreePath = folder?.Path ?? "/";
 
         var body = await PayloadToBodyAsync(articleId, p);
         var tags = (p.ConceptTags ?? []).ToList();
@@ -142,6 +142,30 @@ public partial class EventApplier
         }
         using var _ = await ArticleWriteLock.AcquireAsync(evt.ArticleId.Value);
         await ApplyArticleUpdateCoreAsync(evt);
+    }
+
+    /// <summary>
+    /// The folder an incoming article lands in, created if needed - or null for the root when the
+    /// article's folder was deleted by a delete that outranks this event. Mirror image of the
+    /// version check in ApplyFolderDeleteAsync, and it has to be: there a delete arriving after
+    /// the edit moves the article to '/' only if the delete is the newer of the two, so here an
+    /// edit arriving after the delete may revive the folder only if the edit is the newer one.
+    /// Only the article's own folder is compared, as there; ancestors come back with it through
+    /// EnsureExistsAsync, as a live subfolder keeps its parent there.
+    /// </summary>
+    private async Task<Folder?> PlaceArticleAsync(string treePath, SyncEvent evt)
+    {
+        if (treePath != "/" && await folderRepo.GetByPathAsync(treePath) == null)
+        {
+            var deleted = await folderRepo.GetLatestDeletedByPathAsync(treePath);
+            if (deleted != null &&
+                !ConflictResolver.IncomingWins(
+                    RowVersion.Of(deleted.LamportTs, deleted.SourceNodeId),
+                    new RowVersion(evt.LamportTs, evt.NodeId)))
+                return null;
+        }
+        await folderRepo.EnsureExistsAsync(treePath, evt.NodeId);
+        return await folderRepo.GetByPathAsync(treePath);
     }
 
     private async Task ApplyArticleUpdateCoreAsync(SyncEvent evt)
@@ -222,9 +246,9 @@ public partial class EventApplier
 
             // Folder auto-vivification stays outside the transaction — see the identical comment in
             // ApplyArticleCreateCoreAsync.
-            await folderRepo.EnsureExistsAsync(p.TreePath, evt.NodeId);
-            var folder = await folderRepo.GetByPathAsync(p.TreePath);
+            var folder = await PlaceArticleAsync(p.TreePath, evt);
             existing.FolderId = folder?.Id;
+            existing.TreePath = folder?.Path ?? "/";
 
             var body = await PayloadToBodyAsync(articleId, p);
             var tags = (p.ConceptTags ?? []).ToList();
