@@ -208,8 +208,21 @@ if (OperatingSystem.IsWindows())
     var autoUnlockLogger = autoUnlockScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     try
     {
+        // A desktop app update hands the open vault over to the restarted process (one-shot,
+        // minutes-long, removed here whether used or not). Tried first: it is the more specific
+        // of the two and must not be left on disk just because auto-unlock also succeeded.
+        var handoff = app.Services.GetService<BeeMemoryBank.Infrastructure.OsAutoUnlock.UpdateUnlockHandoff>();
+        if (handoff != null)
+        {
+            var handoffRepo = autoUnlockScope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.INodeIdentityRepository>();
+            if (await handoff.TryConsumeAsync(handoffRepo))
+                autoUnlockLogger.LogInformation("Session unlocked from the desktop update handoff.");
+        }
+
         var autoUnlockSvc = app.Services.GetService<BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService>();
-        if (autoUnlockSvc != null)
+        // Already open from the handoff: TryAutoUnlockAsync would report success without doing
+        // anything, and the log would claim an auto-unlock that never happened.
+        if (autoUnlockSvc != null && !app.Services.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>().IsUnlocked)
         {
             var nodeRepo = autoUnlockScope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.INodeIdentityRepository>();
             var unlocked = await autoUnlockSvc.TryAutoUnlockAsync(nodeRepo);

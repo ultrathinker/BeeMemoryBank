@@ -1,0 +1,59 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="BeeMemoryBank.Desktop.Views.UpdateWindow"
+        Title="Updates"
+        Width="440"
+        MinWidth="360"
+        MinHeight="180"
+        MaxHeight="720"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
+        CanResize="False"
+        Background="#111119"
+        Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">
+
+    <!-- Standard dialog layout: buttons docked at the bottom, content scrolls. -->
+    <DockPanel>
+        <StackPanel Name="Buttons"
+                    DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="24,12,24,20">
+            <Button Name="SecondaryButton"
+                    Click="OnSecondaryClick"
+                    Padding="20,10"
+                    Background="#2D2D3D"
+                    Foreground="#FFFFFF"
+                    CornerRadius="6" />
+            <Button Name="PrimaryButton"
+                    Click="OnPrimaryClick"
+                    IsDefault="True"
+                    Padding="20,10"
+                    Background="#F59E0B"
+                    Foreground="#111119"
+                    FontWeight="SemiBold"
+                    CornerRadius="6" />
+        </StackPanel>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24,24,24,8" Spacing="12">
+                <TextBlock Name="TitleText"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Foreground="#FFFFFF"
+                           TextWrapping="Wrap" />
+                <TextBlock Name="BodyText"
+                           TextWrapping="Wrap"
+                           FontSize="13"
+                           Foreground="#D1D5DB" />
+                <ProgressBar Name="Bar"
+                             Minimum="0"
+                             Maximum="100"
+                             Height="6"
+                             Foreground="#F59E0B"
+                             Background="#2D2D3D" />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

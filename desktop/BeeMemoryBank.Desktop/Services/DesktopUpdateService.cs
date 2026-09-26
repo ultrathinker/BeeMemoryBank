@@ -52,18 +52,24 @@ public sealed class DesktopUpdateService
     public string? ReadyVersion => _downloaded?.TargetFullRelease.Version.ToString();
 
     /// <summary>
-    /// Checks the source and downloads a newer release in the background. Returns the downloaded
-    /// version, or null when already up to date. Never applies anything by itself.
+    /// Checks the source and downloads a newer release. Returns the downloaded version, or null
+    /// when already up to date. Never applies anything by itself. <paramref name="found"/> gets the
+    /// new version before the download starts, <paramref name="progress"/> the download percent;
+    /// both may be called on a background thread.
     /// </summary>
-    public async Task<string?> CheckAndDownloadAsync(CancellationToken ct = default)
+    public async Task<string?> CheckAndDownloadAsync(
+        Action<string>? found = null, Action<int>? progress = null, CancellationToken ct = default)
     {
         if (!IsAvailable || _manager is null) return null;
         if (_downloaded is not null) return ReadyVersion;
 
-        var info = await _manager.CheckForUpdatesAsync().ConfigureAwait(false);
+        // Velopack's check takes no token; WaitAsync lets a cancel return right away and leaves
+        // the abandoned request to finish on its own.
+        var info = await _manager.CheckForUpdatesAsync().WaitAsync(ct).ConfigureAwait(false);
         if (info is null || info.IsDowngrade) return null;
 
-        await _manager.DownloadUpdatesAsync(info, null, ct).ConfigureAwait(false);
+        found?.Invoke(info.TargetFullRelease.Version.ToString());
+        await _manager.DownloadUpdatesAsync(info, progress, ct).ConfigureAwait(false);
         _downloaded = info;
         return ReadyVersion;
     }

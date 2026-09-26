@@ -24,6 +24,7 @@ public partial class App : Application
     // already-open window instead of stacking duplicates.
     private Avalonia.Controls.Window? _manageStoragesWindow;
     private Avalonia.Controls.Window? _settingsWindow;
+    private Views.UpdateWindow? _updateWindow;
 
     public override void Initialize()
     {
@@ -116,6 +117,12 @@ public partial class App : Application
                 });
             };
 
+            var checkUpdatesItem = new NativeMenuItem("Check for updates...");
+            checkUpdatesItem.Click += (s, e) =>
+            {
+                Dispatcher.UIThread.Post(() => CheckForUpdates(mainWindow, desktop));
+            };
+
             var exitItem = new NativeMenuItem("Exit");
             exitItem.Click += (s, e) =>
             {
@@ -146,6 +153,7 @@ public partial class App : Application
             menu.Items.Add(profilesItem);
             menu.Items.Add(settingsItem);
             menu.Items.Add(new NativeMenuItemSeparator());
+            menu.Items.Add(checkUpdatesItem);
             menu.Items.Add(statusItem);
             menu.Items.Add(new NativeMenuItemSeparator());
             menu.Items.Add(exitItem);
@@ -170,11 +178,49 @@ public partial class App : Application
         }
     }
 
+    /// <summary>Opens the update window (or brings it back) and runs a check in it.</summary>
+    private void CheckForUpdates(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        _ = GetUpdateWindow(mainWindow, desktop).CheckAsync();
+    }
+
     private void RestartToUpdate(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)
     {
-        // Stop the node first (RealClose -> graceful stdin-EOF shutdown) so the database is
-        // closed before Velopack swaps the files, then restart into the new version.
-        _updates?.ApplyAndRestart(mainWindow.RealClose, () => desktop.Shutdown());
+        GetUpdateWindow(mainWindow, desktop);
+        _ = RestartToUpdateAsync(mainWindow, desktop);
+    }
+
+    private Views.UpdateWindow GetUpdateWindow(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        if (_updateWindow?.IsVisible != true)
+        {
+            _updateWindow = new Views.UpdateWindow(_updates!, () => RestartToUpdateAsync(mainWindow, desktop));
+            var window = _updateWindow;
+            window.Closed += (_, _) => { if (_updateWindow == window) _updateWindow = null; };
+            // Not owned by the main window, which usually sits hidden in the tray.
+            window.Show();
+        }
+        _updateWindow.Activate();
+        return _updateWindow;
+    }
+
+    private bool _restarting;
+
+    private async Task RestartToUpdateAsync(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        if (_restarting || _updates?.ReadyVersion is null) return;
+        _restarting = true;
+        _updateWindow?.ShowApplying(_updates.ReadyVersion);
+        // Let the window paint "Updating..." before the node stop blocks the UI thread.
+        await Task.Delay(300);
+
+        // Hand the open vault to the restarted app (no second login), then stop the node
+        // (RealClose -> graceful stdin-EOF shutdown) so the database is closed before Velopack
+        // swaps the files, then restart into the new version.
+        await _updates.ApplyAndRestartAsync(
+            () => Services.NodeSessionHandoff.RequestAsync(mainWindow.FrontUrl),
+            mainWindow.RealClose,
+            () => desktop.Shutdown());
     }
 
     private void ShowSettingsWindow(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)
@@ -187,6 +233,7 @@ public partial class App : Application
 
         _settingsWindow = new Views.SettingsWindow(
             mainWindow, _autostartService!, _preventSleepService, _updates!,
+            () => CheckForUpdates(mainWindow, desktop),
             () => RestartToUpdate(mainWindow, desktop));
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         // Not owned by the main window: that one usually sits hidden in the tray, and an

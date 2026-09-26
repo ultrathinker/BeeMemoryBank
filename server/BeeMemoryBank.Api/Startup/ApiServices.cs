@@ -153,6 +153,11 @@ if (OperatingSystem.IsWindows())
             sp.GetRequiredService<BeeMemoryBank.Core.Interfaces.IKeySlotRepository>(),
             sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
             dataPath));
+    // Keeps the vault open across the restart of a desktop app update (see the class).
+    builder.Services.AddSingleton(sp =>
+        new BeeMemoryBank.Infrastructure.OsAutoUnlock.UpdateUnlockHandoff(
+            sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
+            dataPath));
 }
 builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();

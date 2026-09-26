@@ -57,6 +57,10 @@ public class SessionUnlockCallSiteGuardTests
             "OS auto-unlock: unwraps the master DEK from the DPAPI-protected os_auto_unlock slot and " +
             "verifies it against the sentinel before installing it. Unlocking IS the feature.",
 
+        ["libs/BeeMemoryBank.Infrastructure/OsAutoUnlock/UpdateUnlockHandoff.cs"] =
+            "Desktop update restart: re-installs the master DEK the same user's running node handed over " +
+            "minutes earlier (DPAPI, one-shot, expiring, sentinel-verified). Unlocking IS the feature.",
+
         ["server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs"] =
             "POST /api/session/unlock and /login — the human unlock. This is the endpoint the flag exists for.",
 

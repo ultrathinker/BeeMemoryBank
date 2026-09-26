@@ -20,6 +20,7 @@ public partial class SettingsWindow : Window
     private readonly Services.AutostartService _autostart;
     private readonly Services.PreventSleepService? _preventSleep;
     private readonly Services.DesktopUpdateController _updates;
+    private readonly Action _checkForUpdates;
     private readonly Action _restartToUpdate;
     private bool _loading;
 
@@ -30,6 +31,7 @@ public partial class SettingsWindow : Window
         _profiles = null!;
         _autostart = null!;
         _updates = null!;
+        _checkForUpdates = () => { };
         _restartToUpdate = () => { };
         InitializeComponent();
     }
@@ -39,6 +41,7 @@ public partial class SettingsWindow : Window
         Services.AutostartService autostart,
         Services.PreventSleepService? preventSleep,
         Services.DesktopUpdateController updates,
+        Action checkForUpdates,
         Action restartToUpdate)
     {
         _owner = owner;
@@ -46,6 +49,7 @@ public partial class SettingsWindow : Window
         _autostart = autostart;
         _preventSleep = preventSleep;
         _updates = updates;
+        _checkForUpdates = checkForUpdates;
         _restartToUpdate = restartToUpdate;
         InitializeComponent();
 
@@ -226,9 +230,10 @@ public partial class SettingsWindow : Window
         _updates.AutoCheck = AutoUpdateCheck.IsChecked == true;
     }
 
-    private async void OnCheckNowClick(object? sender, RoutedEventArgs e)
+    private void OnCheckNowClick(object? sender, RoutedEventArgs e)
     {
-        await _updates.CheckAsync(interactive: true);
+        // The update window shows the check, its progress and the result.
+        _checkForUpdates();
     }
 
     private void OnRestartClick(object? sender, RoutedEventArgs e)
