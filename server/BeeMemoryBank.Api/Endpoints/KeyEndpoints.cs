@@ -27,6 +27,7 @@ public static class KeyEndpoints
         group.MapPost("/change-password", async (
             ChangePasswordRequest req,
             KeyManagementService svc,
+            UserService userService,
             SessionService session,
             IEventLogger eventLogger,
             INodeIdentityRepository nodeRepo,
@@ -36,7 +37,22 @@ public static class KeyEndpoints
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
-            await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword);
+            // A signed-in user (the web's Admin -> Security page) changes THEIR password: login hash,
+            // key slot and security stamp together, the same as Profile -> Change password. The
+            // slot-only rotation below used to run for them too and left the login hash on the old
+            // password: the new one was refused at sign-in, and the old one signed in but could no
+            // longer unlock the vault, so after the next lock or restart the web could not open the
+            // node at all (BMB-31, scenario 18). Callers with no user (older mobile builds) keep it.
+            var callerId = CallerIdentity.Extract(ctx).UserId;
+            if (callerId is { } userId)
+            {
+                try { await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword); }
+                catch (UnauthorizedAccessException) { throw new InvalidOperationException("Incorrect old password."); }
+            }
+            else
+            {
+                await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword);
+            }
 
             // This node is now in step with itself again, whatever a peer told us earlier.
             await nodeRepo.ClearMasterPasswordNoticeAsync();
