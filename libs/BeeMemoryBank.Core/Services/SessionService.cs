@@ -8,7 +8,10 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Core.Services;
 
-public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory? scopeFactory = null)
+public class SessionService(
+    IKeySlotRepository keySlotRepo,
+    IServiceScopeFactory? scopeFactory = null,
+    IRetiredMasterDekStore? retiredDekStore = null)
 {
     private byte[]? _masterDek;
     private byte[]? _pendingClearDek;
@@ -25,6 +28,11 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
     // wiped on Lock() so a stolen process snapshot after explicit lock yields no keys.
     private readonly LinkedList<byte[]> _retiredDeks = new();
     private const int MaxRetiredDeks = 3;
+
+    // Retired DEKs persisted by earlier rotations (IRetiredMasterDekStore), loaded at every unlock.
+    // Not capped and not evicted like the cache above: they are what keeps a body that arrived under
+    // an old key readable after this process restarts. Tried after the in-memory ones.
+    private readonly List<byte[]> _persistedRetiredDeks = new();
 
     // Serialize concurrent UnlockAsync calls. Without this, two parallel attempts (browser
     // auto-retry, mobile + web simultaneously) both reach the lazy-rewrap branch and both
@@ -132,6 +140,7 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         {
             if (_masterDek != null) Array.Clear(_masterDek);
             _masterDek = dek;
+            LoadPersistedRetiredDeksLocked();
         }
 
         if (scopeFactory != null)
@@ -317,8 +326,32 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         {
             if (_masterDek != null) Array.Clear(_masterDek);
             _masterDek = masterDek;
+            LoadPersistedRetiredDeksLocked();
         }
         TriggerPostUnlockCatchUp();
+    }
+
+    /// <summary>
+    /// Opens every retired master DEK stored by earlier rotations with the current key. A row that
+    /// does not open (sealed under a key this node never had) is skipped: it can only mean the row
+    /// is foreign or damaged, and the unlock must not fail over a key that exists only as a fallback.
+    /// Called under <c>_lock</c> right after <c>_masterDek</c> is set.
+    /// </summary>
+    private void LoadPersistedRetiredDeksLocked()
+    {
+        foreach (var old in _persistedRetiredDeks) Array.Clear(old);
+        _persistedRetiredDeks.Clear();
+        if (retiredDekStore == null || _masterDek == null) return;
+
+        IReadOnlyList<(string Name, byte[]? Wrapped, byte[]? Iv)> rows;
+        try { rows = retiredDekStore.ListWrapped(); }
+        catch { return; } // a store failure must not fail the unlock; reads just have fewer keys to try
+
+        foreach (var (name, wrapped, iv) in rows)
+        {
+            if (NodeDataKeyEnvelope.TryUnwrap(name, wrapped, iv, _masterDek) is { } dek)
+                _persistedRetiredDeks.Add(dek);
+        }
     }
 
     /// <summary>
@@ -439,13 +472,17 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
         lock (_lock)
         {
             if (_masterDek == null) return Array.Empty<byte[]>();
-            var result = new byte[1 + _retiredDeks.Count][];
+            var result = new byte[1 + _retiredDeks.Count + _persistedRetiredDeks.Count][];
             result[0] = (byte[])_masterDek.Clone();
             int i = 1;
             // Iterate from most-recent retired (Last) to oldest (First) — the most recent
             // retirement is the most likely match for an in-flight event.
             for (var node = _retiredDeks.Last; node != null; node = node.Previous)
                 result[i++] = (byte[])node.Value.Clone();
+            // Then the persisted ones, newest first. Right after a rotation a key can be in both
+            // lists; that costs one extra failed tag check, nothing else.
+            for (var j = _persistedRetiredDeks.Count - 1; j >= 0; j--)
+                result[i++] = (byte[])_persistedRetiredDeks[j].Clone();
             return result;
         }
     }
@@ -493,6 +530,9 @@ public class SessionService(IKeySlotRepository keySlotRepo, IServiceScopeFactory
             foreach (var retired in _retiredDeks)
                 Array.Clear(retired);
             _retiredDeks.Clear();
+            foreach (var persisted in _persistedRetiredDeks)
+                Array.Clear(persisted);
+            _persistedRetiredDeks.Clear();
             if (_pendingClearDek != null)
             {
                 Array.Clear(_pendingClearDek);

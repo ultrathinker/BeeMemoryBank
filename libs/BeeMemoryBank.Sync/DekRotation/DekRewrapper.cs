@@ -114,6 +114,17 @@ public static class DekRewrapper
 
             ReWrapNodeDataKeys(conn, tx, oldDek, newDek, tally, logger);
 
+            // Keep the key being retired, sealed under the new one (after the pass above, so it is
+            // not re-wrapped twice): a body that arrives under it later, from a peer that was
+            // offline or had not applied this rotation yet, must still open here after a restart,
+            // when the in-memory retired cache is gone. Later rotations carry it forward with the
+            // other node data keys. INSERT OR IGNORE: the name is this rotation's, a retry is a no-op.
+            var retiredName = IRetiredMasterDekStore.KeyNamePrefix + commitEventId;
+            var (retiredWrapped, retiredIv) = NodeDataKeyEnvelope.Wrap(retiredName, oldDek, newDek);
+            conn.Execute(
+                $"INSERT OR IGNORE INTO {NodeDataKeyEnvelope.TableName} (key_name, wrapped_key, iv, created_at) VALUES (@name, @wrapped, @iv, @now)",
+                new { name = retiredName, wrapped = retiredWrapped, iv = retiredIv, now = DateTime.UtcNow.ToString("O") }, tx);
+
             Report(progress, DekRotationFlowStep.ReWrappingPerItem, 74,
                 isInitiator ? "Re-encrypting remote-account tokens..." : "Auto-accept: re-encrypting remote-account tokens...");
 

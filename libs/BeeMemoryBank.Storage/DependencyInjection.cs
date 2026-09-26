@@ -56,6 +56,7 @@ public static class DependencyInjection
         services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
         services.AddScoped<IBlobRepository, BlobRepository>();
         services.AddSingleton<IKeySlotRepository, KeySlotRepository>();
+        services.AddSingleton<IRetiredMasterDekStore, RetiredMasterDekStore>();
         // Singleton (not Scoped) — these repos are pulled into the singleton SnapshotService
         // factory in Api/Program.cs. Resolving a scoped service from a singleton throws under
         // ASPNETCORE_ENVIRONMENT=Development (scope validation enabled), which is exactly the
