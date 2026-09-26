@@ -67,26 +67,7 @@ public class LoginModel(ApiClient api) : PageModel
             return Page();
         }
 
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.Name, result.Username!),
-            new(ClaimTypes.Role, result.Role!),
-            new("DisplayName", result.DisplayName ?? result.Username!),
-            new("UserId", result.UserId ?? ""),
-            // Node-local security stamp. OnValidatePrincipal revalidates this against the API
-            // periodically; a mismatch (password/role change, deletion) rejects the cookie, and
-            // so does a cookie without the claim (→ re-login).
-            new("SecurityStamp", result.SecurityStamp ?? ""),
-            // Random per-sign-in id, forwarded to the API as X-Web-Session. It scopes the
-            // protected-article unlock window to this browser's login, so unlocking an article here
-            // does not also open it on another device or browser signed in as the same user.
-            new(InternalKeyHandler.WebSessionClaim, Guid.NewGuid().ToString("N"))
-        };
-        var identity = new ClaimsIdentity(claims, "BeeWebCookie");
-        var principal = new ClaimsPrincipal(identity);
-
-        await HttpContext.SignInAsync("BeeWebCookie", principal,
-            new AuthenticationProperties { IsPersistent = true });
+        await WebSignIn.SignInAsync(HttpContext, result);
 
         // If a legacy "master password" slot was migrated into a synthetic admin user during
         // this very login, stash a one-shot banner so the user understands why they're now

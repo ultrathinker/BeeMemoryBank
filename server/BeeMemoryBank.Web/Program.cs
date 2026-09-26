@@ -377,6 +377,9 @@ app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
+// A valid cookie on a locked vault (after an update or reboot) goes to /Login before the page
+// renders, instead of showing the tree and logging out on the first click.
+app.UseMiddleware<BeeMemoryBank.Web.Middleware.LockedVaultRedirectMiddleware>();
 
 // ─── API-Proxy routes (for browser JavaScript) ───────────────────────────
 // Reverse-proxy route handlers live in server/BeeMemoryBank.Web/Endpoints/*.cs and are wired up
