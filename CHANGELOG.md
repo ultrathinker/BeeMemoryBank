@@ -190,6 +190,27 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### Desktop 1.0.8: an update window, no second sign-in, a shorter first run (2026-09-26)
+
+- **"Check for updates" shows what it is doing.** The tray item (and Settings → Check now) used to
+  close the menu and do the check invisibly; the result only appeared as a new tray item later. It
+  now opens a window: checking, then downloading with a percent, then "You're up to date" or
+  "Version X is ready" with **Update now**. Closing the window cancels the check or download.
+  "Restart to update" in the tray opens the same window, which says the app is about to restart.
+- **An update no longer asks for the password again.** Right before the node stops for an update
+  the app hands the open vault to the next start: the master DEK is written DPAPI-protected (current
+  Windows user) with a 10-minute expiry to `update-unlock.dat`, and the restarted API deletes the
+  file first and uses it only if the delete worked, the expiry holds and the key matches the
+  sentinel. See [SECURITY.md](SECURITY.md).
+- **A locked vault goes straight to the login page.** After a restart the web cookie was still
+  valid while the vault was locked, so the tree rendered, its folders even loaded, and the first
+  click on an article bounced to /Login. Page navigations now check the lock first.
+- **First run:** the username comes pre-filled as `admin` and the computer's name as the name
+  others see; finishing setup signs you in and opens the app instead of a "done" page and the same
+  login again; "network" and "node" are gone from the texts; no step indicator; and the join form
+  no longer scans the local network by itself (the "Find devices on my network" button still
+  does, on request).
+
 #### Desktop 1.0.7: sign-in in the app window, profiles, settings, a simpler first run (2026-09-26)
 
 From a hands-on test of the Windows app as an ordinary user would meet it.

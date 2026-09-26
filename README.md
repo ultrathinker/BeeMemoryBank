@@ -202,14 +202,14 @@ Agent runs: python bmb-upload.py --url https://your-server.example.com --bearer 
 
 ---
 
-## :card_index_dividers: Multiple Storages
+## :card_index_dividers: Multiple Profiles
 
-BeeMemoryBank supports running multiple isolated data stores (storages or vaults) within the same Desktop application. 
+The Desktop app can keep several completely separate memory banks side by side, called profiles.
 
-* **What is a Storage?** Each storage is a completely independent database with its own credentials, keys, articles, and media files. Think of it like having a "Personal Bank" and a "Work Bank" that never touch or share any vault data. (The desktop shell's own settings and the list of storages themselves — `desktop-settings.json` and `profiles.json` — live at the shared stable data root rather than inside any one vault; see [docs/deployment.md](docs/deployment.md).)
-* **Creating a Storage:** To create a new storage, right-click the system tray icon, navigate to **Storage**, and click **Create Storage...**. You will be prompted to give it a name.
-* **Switching:** You can switch between storages directly from the system tray menu. The Desktop application will safely shut down the backend for the current storage, clean up the session context in the web view, and spin up the new storage in a matter of seconds.
-* **Managing and "Forgetting":** Through the **Manage Storages...** menu, you can rename profiles or "forget" them. Forgetting a storage simply removes it from the list of profiles in the application—your encrypted files and databases are **never deleted from the disk** and will remain exactly where they were.
+* **What is a profile?** Each profile is an independent vault with its own password, keys, articles and media, in its own data folder. Think of a "Personal" and a "Work" profile that never share anything. (The desktop app's own settings and the list of profiles — `desktop-settings.json` and `profiles.json` — live at the shared data root rather than inside any one vault; see [docs/deployment.md](docs/deployment.md).)
+* **Creating or adding one:** right-click the tray icon → **Profiles** → **New profile...**, or **Add existing profile...** to use a folder that already holds a vault.
+* **Switching:** pick a profile in the same submenu. The app stops the current profile's backend, clears the window's session and starts the other one in a few seconds.
+* **Managing:** **Manage profiles...** renames a profile, moves its data to another folder, or "forgets" it. Forgetting only removes the profile from the list — its files are **never deleted from the disk**.
 
 ---
 
@@ -253,7 +253,8 @@ Run anyway**. See the [code signing policy](#code-signing-policy) and
 The app lives in the tray. Right-click it for **Profiles** (separate memory banks, each with its
 own data folder, password and sync network: create, add an existing folder, move, rename) and
 **Settings** (start with Windows, profile to open at startup, keep the computer awake, updates).
-It checks for updates on its own and offers "Restart to update" when a new release is out. Data
+It checks for updates on its own and offers "Restart to update" when a new release is out;
+**Check for updates...** in the tray checks right away and shows the progress. Data
 is kept in `%LOCALAPPDATA%\BeeMemoryBankData` and survives updates and uninstall.
 
 To build the installer yourself (requires the [.NET 10 SDK](https://dotnet.microsoft.com/download)
@@ -624,7 +625,7 @@ line shown above (Caddy and Apache `mod_proxy` send it by default).
 | Linux/systemd | `git pull` → `dotnet publish ...` → `sudo systemctl restart beememorybank-api beememorybank-web` |
 | macOS/launchd | `git pull` → `dotnet publish ...` → `launchctl kickstart -k gui/$(id -u)/com.beememorybank.api` (and `.web`) |
 | Windows/NSSM | `git pull` → `dotnet publish ...` → `nssm restart BeeMemoryBankApi BeeMemoryBankWeb` |
-| Windows Desktop | Automatic: the tray offers "Restart to update" when a release is out (or Tray icon → Settings → Check now) |
+| Windows Desktop | Automatic: the tray offers "Restart to update" when a release is out (or Tray icon → Check for updates...) |
 | Windows Server (MSI) | `git pull` → `.\scripts\pack-windows-msi.ps1` → `msiexec /i ...` (the stable `UpgradeCode` lets it upgrade in place; data in `ProgramData` is preserved) |
 
 Tip: take a snapshot via Admin → Snapshots → Create before updating, in case a DB migration goes sideways.
