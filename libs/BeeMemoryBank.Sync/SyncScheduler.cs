@@ -19,6 +19,15 @@ public class SyncScheduler(
     SnapshotRequiredState? snapshotRequiredState = null) : BackgroundService
 {
     public TimeSpan Interval { get; set; } = interval ?? TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Shortest time between the starts of two cycles. Every save signals the trigger and every
+    /// cycle opens with a fresh challenge/authenticate handshake, which the peer rate-limits per IP
+    /// (30 a minute, shared with anything else behind the same NAT, such as a phone). Saving about
+    /// once a second used to start a cycle per save and draw 429s for minutes on end (seen on the
+    /// test stand, BMB-31 scenario 12); with a gap, a burst of saves rides one cycle.
+    /// </summary>
+    public TimeSpan MinCycleGap { get; set; } = TimeSpan.FromSeconds(3);
     public event EventHandler<SyncCycleResult>? SyncCycleCompleted;
 
     private readonly SemaphoreSlim _syncLock = new(1, 1);
@@ -31,11 +40,13 @@ public class SyncScheduler(
         // First sync after a short delay on startup
         await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
 
+        var cycleStart = DateTime.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 await _syncLock.WaitAsync(stoppingToken);
+                cycleStart = DateTime.UtcNow;
                 try
                 {
                     var result = await SyncAllAsync(stoppingToken);
@@ -62,7 +73,18 @@ public class SyncScheduler(
             }
 
             await syncTrigger.WaitAsync(Interval, stoppingToken);
+            var gap = RemainingGap(cycleStart, DateTime.UtcNow, MinCycleGap);
+            if (gap > TimeSpan.Zero)
+                await Task.Delay(gap, stoppingToken);
         }
+    }
+
+    /// <summary>How long to hold off before the next cycle so it starts no sooner than
+    /// <paramref name="minGap"/> after the previous one started.</summary>
+    public static TimeSpan RemainingGap(DateTime lastStartUtc, DateTime nowUtc, TimeSpan minGap)
+    {
+        var left = lastStartUtc + minGap - nowUtc;
+        return left > TimeSpan.Zero ? left : TimeSpan.Zero;
     }
 
     private async Task<SyncCycleResult> SyncAllAsync(CancellationToken ct)
