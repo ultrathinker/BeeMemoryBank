@@ -9,6 +9,7 @@ appId: com.beememorybank.mobile
     timeout: 3000
 - tapOn:
     text: "Status"
+- runFlow: _close_drawer.yaml
 # Scroll to top first in case page was left scrolled
 - swipe:
     direction: DOWN
@@ -25,11 +26,11 @@ appId: com.beememorybank.mobile
     timeout: 10000
 - scrollUntilVisible:
     element:
-      text: "Sync Now"
+      id: "com.beememorybank.mobile:id/SyncNowButton"
     direction: DOWN
-    timeout: 10000
+    timeout: 30000
 - tapOn:
-    text: "Sync Now"
+    id: "com.beememorybank.mobile:id/SyncNowButton"
 - scrollUntilVisible:
     element:
       text: "Node Info"

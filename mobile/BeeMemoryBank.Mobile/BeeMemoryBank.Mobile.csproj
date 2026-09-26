@@ -7,12 +7,20 @@
     <UseMaui>true</UseMaui>
     <ApplicationId>com.beememorybank.mobile</ApplicationId>
     <ApplicationTitle>BeeMemoryBank</ApplicationTitle>
-    <ApplicationVersion>1</ApplicationVersion>
     <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
     <RootNamespace>BeeMemoryBank.Mobile</RootNamespace>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <!-- Both versions come from the repo-root VERSION file (Directory.Build.props sets $(Version)),
+         like every other app in the repo. Android's versionCode must be an increasing integer:
+         major*10000 + minor*100 + patch, so 1.0.7 -> 10007. A pre-release label is ignored here. -->
+    <_BmbCoreVersion>$([System.Text.RegularExpressions.Regex]::Match('$(Version)', '^\d+\.\d+\.\d+').Value)</_BmbCoreVersion>
+    <_BmbCoreVersion Condition="'$(_BmbCoreVersion)' == ''">1.0.0</_BmbCoreVersion>
+    <ApplicationDisplayVersion>$(_BmbCoreVersion)</ApplicationDisplayVersion>
+    <_BmbMajor>$(_BmbCoreVersion.Split('.')[0])</_BmbMajor>
+    <_BmbMinor>$(_BmbCoreVersion.Split('.')[1])</_BmbMinor>
+    <_BmbPatch>$(_BmbCoreVersion.Split('.')[2])</_BmbPatch>
+    <ApplicationVersion>$([MSBuild]::Add($([MSBuild]::Add($([MSBuild]::Multiply($(_BmbMajor), 10000)), $([MSBuild]::Multiply($(_BmbMinor), 100)))), $(_BmbPatch)))</ApplicationVersion>
   </PropertyGroup>
 
   <ItemGroup>

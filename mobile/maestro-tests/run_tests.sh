@@ -5,6 +5,19 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# The flows log in with ${BMB_TEST_PASSWORD} and expect the fixture data from
+# stand/seed-fixtures.sh (see stand/README.md).
+if [ -z "${BMB_TEST_PASSWORD:-}" ]; then
+    echo "Set BMB_TEST_PASSWORD to the test node's password first." >&2
+    exit 2
+fi
+
+# The Maestro installer puts the CLI in ~/.maestro/bin; the zip unpacks to ~/.maestro/maestro/bin.
+MAESTRO="$HOME/.maestro/bin/maestro"
+[ -x "$MAESTRO" ] || MAESTRO="$HOME/.maestro/maestro/bin/maestro"
+export MAESTRO_CLI_NO_ANALYTICS=1
+export MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED=true
+
 echo "=== Cleaning up stale Maestro sessions ==="
 pkill -f maestro.cli 2>/dev/null || true
 adb forward --remove-all 2>/dev/null || true
@@ -21,11 +34,11 @@ sleep 1
 echo "=== Running Maestro tests ==="
 RESULT=0
 if [ $# -eq 0 ]; then
-    ~/.maestro/bin/maestro test "$SCRIPT_DIR/" || RESULT=$?
+    "$MAESTRO" test "$SCRIPT_DIR/" -e BMB_TEST_PASSWORD="$BMB_TEST_PASSWORD" || RESULT=$?
 else
     for test in "$@"; do
         echo "--- Running: $test ---"
-        ~/.maestro/bin/maestro test "$SCRIPT_DIR/$test" || RESULT=$?
+        "$MAESTRO" test "$SCRIPT_DIR/$test" -e BMB_TEST_PASSWORD="$BMB_TEST_PASSWORD" || RESULT=$?
     done
 fi
 

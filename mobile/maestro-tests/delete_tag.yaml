@@ -23,13 +23,8 @@ appId: com.beememorybank.mobile
     id: "com.beememorybank.mobile:id/TitleEntry"
 - inputText: "Temp Tag Delete Test"
 - pressKey: back
-- scrollUntilVisible:
-    element:
-      id: "com.beememorybank.mobile:id/TagsEntry"
-    direction: DOWN
-    timeout: 5000
 - tapOn:
-    id: "com.beememorybank.mobile:id/TagsEntry"
+    id: "com.beememorybank.mobile:id/ConceptTagsEntry"
 - inputText: "maestro-temp-tag"
 - pressKey: back
 - tapOn:

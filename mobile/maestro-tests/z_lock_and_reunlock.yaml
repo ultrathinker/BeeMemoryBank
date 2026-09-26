@@ -9,6 +9,7 @@ appId: com.beememorybank.mobile
     timeout: 3000
 - tapOn:
     text: "Status"
+- runFlow: _close_drawer.yaml
 - extendedWaitUntil:
     visible:
       text: "Node Info"

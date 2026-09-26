@@ -39,6 +39,12 @@ appId: com.beememorybank.mobile
 - tapOn:
     id: "com.beememorybank.mobile:id/CommentEntry"
 - inputText: "Test comment from Maestro"
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: "com.beememorybank.mobile:id/AddCommentButton"
+    direction: DOWN
+    timeout: 15000
 - tapOn:
     id: "com.beememorybank.mobile:id/AddCommentButton"
 - extendedWaitUntil:

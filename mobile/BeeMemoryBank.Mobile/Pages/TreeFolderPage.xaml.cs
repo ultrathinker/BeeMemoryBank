@@ -40,7 +40,16 @@ public partial class TreeFolderPage : ContentPage
     {
         base.OnAppearing();
         NavBusyOverlay.IsVisible = false; // clear tap-loading when returning
+
+        // The first appearance is loaded by the FolderPath query setter. Coming back (from an
+        // article just created, edited or deleted here) must reload too, or the list is stale
+        // until the folder is opened again, like the Articles and Tree tabs already do.
+        if (_appearedBefore)
+            _ = LoadItemsAsync(_currentPath);
+        _appearedBefore = true;
     }
+
+    private bool _appearedBefore;
 
     public string FolderName
     {

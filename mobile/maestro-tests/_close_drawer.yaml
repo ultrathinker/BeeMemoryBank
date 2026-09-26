@@ -1,0 +1,14 @@
+appId: com.beememorybank.mobile
+---
+# Close the navigation drawer if it stayed open: tapping the page you are already on does not
+# close it. With the drawer open there is no hamburger and no "Navigate up".
+- runFlow:
+    when:
+      notVisible: "Open navigation drawer"
+    commands:
+      - runFlow:
+          when:
+            notVisible: "Navigate up"
+          commands:
+            - tapOn:
+                point: "90%,50%"

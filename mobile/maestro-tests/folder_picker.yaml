@@ -19,6 +19,11 @@ appId: com.beememorybank.mobile
     visible:
       id: "com.beememorybank.mobile:id/TitleEntry"
     timeout: 30000
+- scrollUntilVisible:
+    element:
+      text: "Choose Folder"
+    direction: DOWN
+    timeout: 15000
 - tapOn:
     text: "Choose Folder"
 - extendedWaitUntil:
@@ -40,7 +45,7 @@ appId: com.beememorybank.mobile
     text: "Select"
 - extendedWaitUntil:
     visible:
-      id: "com.beememorybank.mobile:id/TitleEntry"
+      text: "/Technology"
     timeout: 30000
 - takeScreenshot: folder_picker
 - back

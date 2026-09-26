@@ -38,5 +38,5 @@ appId: com.beememorybank.mobile
       id: "com.beememorybank.mobile:id/FolderList"
     timeout: 30000
 - assertVisible:
-    text: "Books"
+    text: "/Books"
 - takeScreenshot: back_to_books

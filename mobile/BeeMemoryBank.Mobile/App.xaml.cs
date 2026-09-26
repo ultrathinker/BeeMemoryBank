@@ -69,6 +69,8 @@ public partial class App : Application
         });
 
         MainPage = new AppShell();
+        _session.Locked -= OnSessionLocked;
+        _session.Locked += OnSessionLocked;
 
         if (!await _initSvc.IsInitializedAsync())
         {
@@ -103,14 +105,36 @@ public partial class App : Application
         // After OnSleep locked the session, route the user to the unlock
         // page. Skip if the app is in setup or already on /unlock to avoid
         // loops during first-run.
-        if (!_session.IsUnlocked && Shell.Current != null)
+        if (!_session.IsUnlocked) RouteToUnlock();
+    }
+
+    // Leave the content pages the moment the vault locks, not only on the next OnResume: when
+    // Android recreates the activity (memory pressure, "Don't keep activities") the new window
+    // shows the Shell's last page without an OnResume ever firing, and the user saw the
+    // article list of a locked vault ("Session is locked" on open). With the Shell already on
+    // //unlock, every way back into the app lands on the unlock page.
+    private void OnSessionLocked()
+    {
+        MainThread.BeginInvokeOnMainThread(RouteToUnlock);
+    }
+
+    private static void RouteToUnlock()
+    {
+        try
         {
-            var route = Shell.Current.CurrentState?.Location?.OriginalString ?? "";
+            var shell = Shell.Current;
+            if (shell == null) return;
+
+            var route = shell.CurrentState?.Location?.OriginalString ?? "";
             if (!route.Contains("unlock", StringComparison.OrdinalIgnoreCase) &&
                 !route.Contains("setup", StringComparison.OrdinalIgnoreCase))
             {
-                Shell.Current.GoToAsync("//unlock").FireAndForget();
+                shell.GoToAsync("//unlock").FireAndForget();
             }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Routing to unlock failed: {ex}");
         }
     }
 

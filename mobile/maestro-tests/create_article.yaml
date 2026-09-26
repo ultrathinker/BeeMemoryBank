@@ -23,6 +23,7 @@ appId: com.beememorybank.mobile
 - tapOn:
     id: "com.beememorybank.mobile:id/TitleEntry"
 - inputText: ${output.title}
+- hideKeyboard
 - tapOn:
     id: "com.beememorybank.mobile:id/ContentEditor"
 - inputText: "Created by Maestro test"

@@ -29,6 +29,9 @@ public partial class SetupPage : ContentPage
     }
 
     // Pre-fill sensible defaults so the user can just type the password and continue.
+    // The server URL stays empty (the placeholder shows the expected shape): a half-typed
+    // domain meant nothing to anyone but the author, and an empty field is the standalone
+    // choice.
     private void PrefillDefaults()
     {
         if (string.IsNullOrWhiteSpace(NameEntry.Text))
@@ -36,10 +39,6 @@ public partial class SetupPage : ContentPage
             var deviceName = Microsoft.Maui.Devices.DeviceInfo.Current.Name;
             NameEntry.Text = string.IsNullOrWhiteSpace(deviceName) ? "My Node" : deviceName;
         }
-        // Partial URL on purpose — the secret production domain is NOT hard-coded in source
-        // (keeps it out of the public repo / pre-push secret hook); the user completes it.
-        if (string.IsNullOrWhiteSpace(ServerUrlEntry.Text))
-            ServerUrlEntry.Text = "https://beememorybank.";
     }
 
     private async void OnSetupClicked(object? sender, EventArgs e)
