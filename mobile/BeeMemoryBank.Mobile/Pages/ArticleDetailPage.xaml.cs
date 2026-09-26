@@ -284,10 +284,18 @@ public partial class ArticleDetailPage : ContentPage
         ContentMarkdown.MarkdownText = SanitizeMarkdown(markdown);
     }
 
+    // Through CommentService, not the repository: comments are encrypted with the article's key,
+    // so the raw row's Text is empty for every comment written by another node (and for our own
+    // since they are encrypted too). Text is overwritten with the plaintext for display only.
     private async Task LoadCommentsAsync(Guid articleId, IServiceProvider sp)
     {
-        var commentRepo = sp.GetRequiredService<ICommentRepository>();
-        var comments = await commentRepo.GetByArticleIdAsync(articleId);
+        var commentSvc = sp.GetRequiredService<CommentService>();
+        var comments = await sp.GetRequiredService<ICommentRepository>().GetByArticleIdAsync(articleId);
+        foreach (var c in comments)
+        {
+            try { c.Text = await commentSvc.DecryptTextAsync(c); }
+            catch (Exception) { c.Text = "[cannot decrypt this comment]"; }
+        }
         CommentsList.ItemsSource = comments.OrderBy(c => c.CreatedAt).ToList();
     }
 
@@ -299,11 +307,9 @@ public partial class ArticleDetailPage : ContentPage
         try
         {
             using var scope = _services.CreateScope();
-            var commentRepo = scope.ServiceProvider.GetRequiredService<ICommentRepository>();
-            var eventLogger = scope.ServiceProvider.GetRequiredService<IEventLogger>();
-
-            var comment = await commentRepo.CreateAsync(_parsedId, text);
-            await eventLogger.LogCommentCreateAsync(comment);
+            // CommentService encrypts with the article's key and logs the sync event. The repository's
+            // plain CreateAsync stored the text unencrypted and shipped it to every peer in clear.
+            await scope.ServiceProvider.GetRequiredService<CommentService>().CreateAsync(_parsedId, text);
 
             CommentEntry.Text = "";
             await LoadCommentsAsync(_parsedId, scope.ServiceProvider);
@@ -325,11 +331,7 @@ public partial class ArticleDetailPage : ContentPage
         try
         {
             using var scope = _services.CreateScope();
-            var commentRepo = scope.ServiceProvider.GetRequiredService<ICommentRepository>();
-            var eventLogger = scope.ServiceProvider.GetRequiredService<IEventLogger>();
-
-            await commentRepo.DeleteAsync(comment.Id);
-            await eventLogger.LogCommentDeleteAsync(comment.CommentId);
+            await scope.ServiceProvider.GetRequiredService<CommentService>().DeleteAsync(comment.Id);
 
             await LoadCommentsAsync(_parsedId, scope.ServiceProvider);
         }
