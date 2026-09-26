@@ -190,6 +190,37 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### 1.0.10: sync fixes from a three-node test (2026-09-27)
+
+A web node, the Windows app and the Android app were run against each other on a test stand
+(a hub in Docker, the app in a Windows VM, a phone) through creates, edits, moves, deletes,
+tags, comments, media, protected articles, offline conflicts, long offline periods, load,
+lock/restart and password changes. Six real faults turned up; each is fixed with a test that
+fails without the fix, and the scenario was re-run on all three nodes.
+
+- **Folder renamed or deleted on another node:** a folder that one node had created as a mere
+  parent (for a synced subfolder or article) has a different id on every node, and a rename or
+  delete of it arriving over sync looked the folder up by id only. The rename moved the
+  subfolders and article paths but left the folder behind; the delete did nothing. Both now fall
+  back to the path.
+- **Android comments were stored and sent unencrypted,** and every other node then refused them,
+  so they showed up nowhere but on the phone while their text sat in every node's event log.
+  Comments written elsewhere showed up on the phone as empty lines. The phone now encrypts,
+  decrypts and deletes comments like every other client; a source check keeps comment creation
+  in one place.
+- **A folder deleted on one node while an article in it was edited on another** split the nodes
+  for good: one revived the folder, the other moved the article to the root. The article now
+  stays in its folder (which stays or comes back) when the edit is newer than the delete, and
+  goes to the root when the delete is newer, whatever order the two arrive in.
+- **Saving about once a second** started a sync cycle per save, each with a fresh handshake, and
+  the hub answered 429 for minutes. Cycles now start at most every 3 seconds.
+- **Signing in right after a password change** bounced back to the sign-in page for up to five
+  minutes (a cached security stamp); the sign-in now refreshes it.
+- **Admin → Security → Change master password** changed only the key slot, not the sign-in: the
+  new password was refused at sign-in and the old one signed in without unlocking, so after the
+  next lock or restart the node could not be opened from the web. It now changes both, as
+  Profile → Change password does.
+
 #### 1.0.9: every page works in a narrow or short window (2026-09-26)
 
 The web UI (the same pages the Windows app shows) had almost no rules for small windows. At
