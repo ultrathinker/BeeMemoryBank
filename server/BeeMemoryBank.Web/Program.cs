@@ -184,8 +184,26 @@ builder.Services.AddAuthentication("BeeWebCookie")
 
                 if (!string.Equals(stampClaim, currentStamp, StringComparison.Ordinal))
                     context.RejectPrincipal();
-            }
+            },
+
+            // Redirect to /Login with a RELATIVE Location. The default builds an absolute URL from
+            // Request.Host, and behind the desktop node's front (YARP, which forwards with the Web
+            // process's own host:port and only X-Forwarded-For/Proto are honoured here) that is
+            // Web's internal loopback port. The app window then treats the login page as a foreign
+            // site: it opened in the external browser and the window stayed black on every start
+            // that needed a login. A relative Location resolves against whatever the client used.
+            OnRedirectToLogin = context => RedirectRelative(context),
+            OnRedirectToAccessDenied = context => RedirectRelative(context),
         };
+
+        static Task RedirectRelative(Microsoft.AspNetCore.Authentication.RedirectContext<CookieAuthenticationOptions> context)
+        {
+            var target = Uri.TryCreate(context.RedirectUri, UriKind.Absolute, out var absolute)
+                ? absolute.PathAndQuery
+                : context.RedirectUri;
+            context.Response.Redirect(target);
+            return Task.CompletedTask;
+        }
     });
 
 // Admin-configurable web login cookie lifetime (default 48h, sliding ON — see

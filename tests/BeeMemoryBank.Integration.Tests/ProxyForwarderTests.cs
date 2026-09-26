@@ -144,6 +144,26 @@ public class ProxyForwarderTests
 
     public ProxyForwarderTests(ProxyForwarderFixture fx) => _fx = fx;
 
+    // ── Login redirect ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task AnonymousPageRequest_RedirectsToLoginWithARelativeLocation()
+    {
+        // Behind the desktop node's front the Web host sees its own internal host:port. An
+        // absolute Location built from it sent the app window to that port, which the window
+        // opened in the external browser (and stayed black). A relative one cannot point anywhere
+        // but the address the client already uses.
+        using var anonymous = _fx.Web.CreateClient(
+            new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await anonymous.GetAsync("/Tree");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location.Should().NotBeNull();
+        response.Headers.Location!.IsAbsoluteUri.Should().BeFalse($"Location was '{response.Headers.Location}'");
+        response.Headers.Location.OriginalString.Should().StartWith("/Login?ReturnUrl=");
+    }
+
     // ── Representative migrated routes ────────────────────────────────────────────
 
     [Fact]
