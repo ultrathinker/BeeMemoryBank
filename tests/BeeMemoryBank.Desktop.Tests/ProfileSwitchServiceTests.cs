@@ -439,6 +439,180 @@ public class ProfileSwitchServiceTests : IDisposable
         return $"http://127.0.0.1:{port}";
     }
 
+    // ── Move profile (RelocateAsync) ─────────────────────────────────────────────
+
+    /// <summary>Puts a minimal vault into <paramref name="dir"/>: a SQLite-headed db, a media
+    /// file, and the runtime files a live node leaves behind (which must not travel).</summary>
+    private static void SeedVault(string dir)
+    {
+        Directory.CreateDirectory(Path.Combine(dir, "media"));
+        var db = Encoding.ASCII.GetBytes("SQLite format 3\0").Concat(new byte[4096]).ToArray();
+        File.WriteAllBytes(Path.Combine(dir, "beememorybank.db"), db);
+        File.WriteAllText(Path.Combine(dir, "media", "picture.png"), "png-bytes");
+        File.WriteAllText(Path.Combine(dir, "node.lock"), "");
+        File.WriteAllText(Path.Combine(dir, "api.ready"), "");
+        File.WriteAllText(Path.Combine(dir, ".runtime.json"), "{}");
+    }
+
+    [Fact]
+    public async Task Relocate_ActiveProfile_StopsCopiesRepointsAndStartsFromNewFolder()
+    {
+        var (svc, a, _, dir) = CreateTwoProfiles();
+        SeedVault(a.DataPath);
+        var target = Path.Combine(dir, "moved-a");
+        var lifecycle = new FakeNodeLifecycle().WithResult(target, success: true, "http://127.0.0.1:5105");
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var result = await switchSvc.RelocateAsync(a.Id, target, activeProfileId: a.Id, progress: null, CancellationToken.None);
+
+        result.Success.Should().BeTrue(result.ErrorMessage);
+        result.FrontUrl.Should().Be("http://127.0.0.1:5105");
+        result.OldDataPath.Should().Be(a.DataPath);
+        lifecycle.StopCalls.Should().Be(1, "the active node must be stopped before its files are copied");
+        lifecycle.StartOrder.Should().Equal(target);
+        svc.GetById(a.Id).DataPath.Should().Be(Path.GetFullPath(target));
+
+        File.Exists(Path.Combine(target, "beememorybank.db")).Should().BeTrue();
+        File.Exists(Path.Combine(target, "media", "picture.png")).Should().BeTrue();
+        File.Exists(Path.Combine(target, "node.lock")).Should().BeFalse("runtime files must not travel");
+        File.Exists(Path.Combine(target, "api.ready")).Should().BeFalse();
+        File.Exists(Path.Combine(target, ".runtime.json")).Should().BeFalse();
+        File.Exists(Path.Combine(a.DataPath, "beememorybank.db")).Should().BeTrue("the old folder is never touched");
+    }
+
+    [Fact]
+    public async Task Relocate_ActiveProfile_NewFolderDoesNotStart_RestoresOldPathAndRestartsFromIt()
+    {
+        var (svc, a, _, dir) = CreateTwoProfiles();
+        SeedVault(a.DataPath);
+        var target = Path.Combine(dir, "moved-a");
+        var lifecycle = new FakeNodeLifecycle()
+            .WithResult(target, success: false, "boom: cannot open copy")
+            .WithResult(a.DataPath, success: true, "http://127.0.0.1:5106");
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var result = await switchSvc.RelocateAsync(a.Id, target, activeProfileId: a.Id, progress: null, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Rejected.Should().BeFalse();
+        result.ErrorMessage.Should().Contain("boom: cannot open copy");
+        result.FrontUrl.Should().Be("http://127.0.0.1:5106", "the profile must be running again from its old folder");
+        lifecycle.StartOrder.Should().Equal(target, a.DataPath);
+        svc.GetById(a.Id).DataPath.Should().Be(a.DataPath);
+    }
+
+    [Fact]
+    public async Task Relocate_NonEmptyTarget_IsRefusedBeforeTheNodeIsStopped()
+    {
+        var (svc, a, _, dir) = CreateTwoProfiles();
+        SeedVault(a.DataPath);
+        var target = Path.Combine(dir, "busy");
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "unrelated.txt"), "x");
+        var lifecycle = new FakeNodeLifecycle();
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var result = await switchSvc.RelocateAsync(a.Id, target, activeProfileId: a.Id, progress: null, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Rejected.Should().BeTrue();
+        lifecycle.StopCalls.Should().Be(0);
+        lifecycle.StartCalls.Should().Be(0);
+        svc.GetById(a.Id).DataPath.Should().Be(a.DataPath);
+    }
+
+    [Fact]
+    public async Task Relocate_TargetInsideCurrentFolder_IsRefused()
+    {
+        var (svc, a, _, _) = CreateTwoProfiles();
+        SeedVault(a.DataPath);
+        var lifecycle = new FakeNodeLifecycle();
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var result = await switchSvc.RelocateAsync(a.Id, Path.Combine(a.DataPath, "sub"), activeProfileId: a.Id,
+            progress: null, CancellationToken.None);
+
+        result.Rejected.Should().BeTrue();
+        lifecycle.StopCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Relocate_InactiveProfile_CopiesWithoutTouchingTheRunningNode()
+    {
+        var (svc, a, b, dir) = CreateTwoProfiles();
+        SeedVault(b.DataPath);
+        var target = Path.Combine(dir, "moved-b");
+        var lifecycle = new FakeNodeLifecycle();
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var result = await switchSvc.RelocateAsync(b.Id, target, activeProfileId: a.Id, progress: null, CancellationToken.None);
+
+        result.Success.Should().BeTrue(result.ErrorMessage);
+        result.FrontUrl.Should().BeNull();
+        lifecycle.StopCalls.Should().Be(0);
+        lifecycle.StartCalls.Should().Be(0);
+        svc.GetById(b.Id).DataPath.Should().Be(Path.GetFullPath(target));
+        File.Exists(Path.Combine(target, "beememorybank.db")).Should().BeTrue();
+    }
+
+    // ── Open an existing profile folder (OpenFolderAsActiveAsync) ────────────────
+
+    [Fact]
+    public async Task OpenFolder_PointsTheActiveProfileAtTheVaultAndRestartsFromIt()
+    {
+        var (svc, a, _, dir) = CreateTwoProfiles();
+        var existing = Path.Combine(dir, "existing-vault");
+        SeedVault(existing);
+        var lifecycle = new FakeNodeLifecycle().WithResult(existing, success: true, "http://127.0.0.1:5201");
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var result = await switchSvc.OpenFolderAsActiveAsync(a.Id, existing, progress: null, CancellationToken.None);
+
+        result.Success.Should().BeTrue(result.ErrorMessage);
+        result.FrontUrl.Should().Be("http://127.0.0.1:5201");
+        lifecycle.StopCalls.Should().Be(1);
+        lifecycle.StartOrder.Should().Equal(existing);
+        svc.GetById(a.Id).DataPath.Should().Be(Path.GetFullPath(existing));
+    }
+
+    [Fact]
+    public async Task OpenFolder_WithoutAVault_IsRefusedAndNothingIsStopped()
+    {
+        var (svc, a, _, dir) = CreateTwoProfiles();
+        var notAVault = Path.Combine(dir, "photos");
+        Directory.CreateDirectory(notAVault);
+        File.WriteAllText(Path.Combine(notAVault, "cat.jpg"), "x");
+        var lifecycle = new FakeNodeLifecycle();
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var result = await switchSvc.OpenFolderAsActiveAsync(a.Id, notAVault, progress: null, CancellationToken.None);
+
+        result.Rejected.Should().BeTrue();
+        result.ErrorMessage.Should().Contain("beememorybank.db");
+        lifecycle.StopCalls.Should().Be(0);
+        svc.GetById(a.Id).DataPath.Should().Be(a.DataPath);
+    }
+
+    [Fact]
+    public async Task OpenFolder_ThatDoesNotStart_RestoresTheOldPathAndRestarts()
+    {
+        var (svc, a, _, dir) = CreateTwoProfiles();
+        var existing = Path.Combine(dir, "broken-vault");
+        SeedVault(existing);
+        var lifecycle = new FakeNodeLifecycle()
+            .WithResult(existing, success: false, "boom: wrong schema")
+            .WithResult(a.DataPath, success: true, "http://127.0.0.1:5202");
+        var switchSvc = new ProfileSwitchService(svc, lifecycle);
+
+        var result = await switchSvc.OpenFolderAsActiveAsync(a.Id, existing, progress: null, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorMessage.Should().Contain("boom: wrong schema");
+        result.FrontUrl.Should().Be("http://127.0.0.1:5202");
+        lifecycle.StartOrder.Should().Equal(existing, a.DataPath);
+        svc.GetById(a.Id).DataPath.Should().Be(a.DataPath);
+    }
+
     // ── Fakes ────────────────────────────────────────────────────────────────────
 
     /// <summary>

@@ -53,7 +53,7 @@ public sealed class ProfileServiceTests : IDisposable
         var profiles = service.GetAll();
         profiles.Should().HaveCount(1);
         profiles[0].Id.Should().Be("default");
-        profiles[0].Name.Should().Be("Личный");
+        profiles[0].Name.Should().Be("Personal");
         profiles[0].DataPath.Should().Be(_defaultVaultDir);
         service.LastUsedProfileId.Should().Be("default");
         service.AutostartMode.Should().Be(AutostartMode.LastUsed);
@@ -251,6 +251,39 @@ public sealed class ProfileServiceTests : IDisposable
         actSamePath.Should().Throw<ArgumentException>().WithMessage("*already used by profile*");
 
         service.GetAll().Should().HaveCount(2, "the default profile plus 'First' only - the collision must not be added");
+    }
+
+    [Fact]
+    public void SetDataPath_RepointsTheProfile_AndPersists()
+    {
+        var service = new ProfileService(_profilesFilePath, _defaultVaultDir, _vaultsParentDir);
+        var profile = service.AddProfile("Work");
+        var newPath = Path.Combine(_tempDirectory, "moved", "work");
+
+        service.SetDataPath(profile.Id, newPath);
+
+        service.GetById(profile.Id).DataPath.Should().Be(Path.GetFullPath(newPath));
+        new ProfileService(_profilesFilePath, _defaultVaultDir, _vaultsParentDir)
+            .GetById(profile.Id).DataPath.Should().Be(Path.GetFullPath(newPath), "the change must survive a reload");
+    }
+
+    [Fact]
+    public void SetDataPath_RefusesAnotherProfilesFolder_RelativePaths_AndUnknownIds()
+    {
+        var service = new ProfileService(_profilesFilePath, _defaultVaultDir, _vaultsParentDir);
+        var work = service.AddProfile("Work");
+        var home = service.AddProfile("Home");
+
+        ((Action)(() => service.SetDataPath(work.Id, home.DataPath)))
+            .Should().Throw<ArgumentException>().WithMessage("*already used by profile*");
+        ((Action)(() => service.SetDataPath(work.Id, "relative\\dir")))
+            .Should().Throw<ArgumentException>();
+        ((Action)(() => service.SetDataPath("nope", Path.Combine(_tempDirectory, "x"))))
+            .Should().Throw<KeyNotFoundException>();
+
+        // Re-setting a profile to its own current folder is not a collision.
+        service.SetDataPath(work.Id, work.DataPath);
+        service.GetById(work.Id).DataPath.Should().Be(work.DataPath);
     }
 
     [Fact]

@@ -1,0 +1,95 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="BeeMemoryBank.Desktop.Views.AddExistingProfileDialog"
+        Title="Add existing profile"
+        Width="560"
+        MinWidth="420"
+        MinHeight="240"
+        MaxHeight="720"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="#111119"
+        Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">
+
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="10"
+                    Margin="24,12,24,20">
+            <Button Name="CancelButton"
+                    Content="Cancel"
+                    Click="OnCancelClick"
+                    IsCancel="True"
+                    Padding="20,10"
+                    Background="#2D2D3D"
+                    Foreground="#FFFFFF"
+                    CornerRadius="6" />
+            <Button Name="AddButton"
+                    Content="Add"
+                    Click="OnAddClick"
+                    IsDefault="True"
+                    Padding="20,10"
+                    Background="#F59E0B"
+                    Foreground="#111119"
+                    FontWeight="SemiBold"
+                    CornerRadius="6" />
+        </StackPanel>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24,24,24,0" Spacing="12">
+                <TextBlock Text="Add existing profile"
+                           FontSize="20"
+                           FontWeight="SemiBold"
+                           Foreground="#FFFFFF"
+                           Margin="0,0,0,4" />
+
+                <TextBlock Text="Pick a folder that already holds a Bee Memory Bank profile, for example one you forgot earlier or copied from another computer. The data stays where it is; unlock it with that profile's own password."
+                           FontSize="12"
+                           Foreground="#A0A0B0"
+                           TextWrapping="Wrap" />
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Profile folder"
+                               FontSize="13"
+                               Foreground="#A0A0B0" />
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0"
+                                 Name="FolderBox"
+                                 PlaceholderText="Folder that contains beememorybank.db"
+                                 FontSize="13"
+                                 Background="#1E1E2A"
+                                 Foreground="#FFFFFF" />
+                        <Button Grid.Column="1"
+                                Content="Browse..."
+                                Click="OnBrowseClick"
+                                Margin="8,0,0,0"
+                                Padding="12,6"
+                                Background="#2D2D3D"
+                                Foreground="#FFFFFF"
+                                CornerRadius="6" />
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Name"
+                               FontSize="13"
+                               Foreground="#A0A0B0" />
+                    <TextBox Name="NameBox"
+                             PlaceholderText="How this profile is called in the list"
+                             FontSize="14"
+                             Background="#1E1E2A"
+                             Foreground="#FFFFFF" />
+                </StackPanel>
+
+                <TextBlock Name="ErrorText"
+                           Text=""
+                           FontSize="12"
+                           Foreground="#EF4444"
+                           TextWrapping="Wrap"
+                           IsVisible="False" />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

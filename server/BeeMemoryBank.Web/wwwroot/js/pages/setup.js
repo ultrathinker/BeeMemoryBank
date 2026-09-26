@@ -28,11 +28,18 @@
         });
     }
 
-    var linkRestoreLegacy = document.getElementById('link-restore-legacy');
+    var btnExisting = document.getElementById('btn-mode-existing');
     var linkLegacyBack = document.getElementById('link-legacy-back');
-    if (linkRestoreLegacy) {
-        linkRestoreLegacy.addEventListener('click', function (e) {
+    if (btnExisting) {
+        btnExisting.addEventListener('click', function (e) {
             e.preventDefault();
+            // Inside the Windows app (WebView2) the shell intercepts this address, shows the
+            // system folder picker and opens the chosen folder as this profile. A plain browser
+            // cannot pick a folder on the node, so it gets the path-and-copy form instead.
+            if (window.chrome && window.chrome.webview) {
+                window.location.href = 'https://bmb-desktop.invalid/open-existing-profile';
+                return;
+            }
             var panelMode = document.getElementById('panel-mode');
             var panelLegacy = document.getElementById('panel-legacy');
             if (panelMode) panelMode.classList.remove('active');

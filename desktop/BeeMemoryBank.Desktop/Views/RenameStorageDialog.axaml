@@ -1,64 +1,60 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="BeeMemoryBank.Desktop.Views.RenameStorageDialog"
-        Title="Переименование хранилища"
+        Title="Rename profile"
         Width="440"
-        Height="220"
-        CanResize="False"
+        MinWidth="360"
+        MinHeight="180"
+        MaxHeight="720"
+        SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
         Background="#111119"
         Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">
 
-    <Grid Margin="24">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
-
-        <TextBlock Grid.Row="0"
-                   Text="Новое название"
-                   FontSize="18"
-                   FontWeight="SemiBold"
-                   Foreground="#FFFFFF"
-                   Margin="0,0,0,12" />
-
-        <TextBox Grid.Row="1"
-                 Name="NameBox"
-                 FontSize="14"
-                 Background="#1E1E2A"
-                 Foreground="#FFFFFF" />
-
-        <TextBlock Grid.Row="2"
-                   Name="ErrorText"
-                   Text=""
-                   FontSize="12"
-                   Foreground="#EF4444"
-                   TextWrapping="Wrap"
-                   IsVisible="False"
-                   Margin="0,8,0,0" />
-
-        <StackPanel Grid.Row="3"
+    <!-- Same layout as CreateStorageDialog: buttons docked at the bottom, content scrolls. -->
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Bottom"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Spacing="10"
-                    Margin="0,12,0,0">
-            <Button Content="Отмена"
+                    Margin="24,12,24,20">
+            <Button Content="Cancel"
                     Click="OnCancelClick"
+                    IsCancel="True"
                     Padding="20,10"
                     Background="#2D2D3D"
                     Foreground="#FFFFFF"
                     CornerRadius="6" />
-            <Button Name="SaveButton"
-                    Content="Сохранить"
+            <Button Content="Save"
+                    Name="SaveButton"
                     Click="OnSaveClick"
+                    IsDefault="True"
                     Padding="20,10"
                     Background="#F59E0B"
                     Foreground="#111119"
                     FontWeight="SemiBold"
                     CornerRadius="6" />
         </StackPanel>
-    </Grid>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24,24,24,0" Spacing="12">
+                <TextBlock Text="New name"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Foreground="#FFFFFF"
+                           TextWrapping="Wrap" />
+                <TextBox Name="NameBox"
+                         FontSize="14"
+                         Background="#1E1E2A"
+                         Foreground="#FFFFFF" />
+                <TextBlock Name="ErrorText"
+                           Text=""
+                           FontSize="12"
+                           Foreground="#EF4444"
+                           TextWrapping="Wrap"
+                           IsVisible="False" />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
 </Window>

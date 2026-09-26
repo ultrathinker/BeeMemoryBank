@@ -58,7 +58,7 @@ public static class StorageDisplayLogic
 
 /// <summary>
 /// Result of validating user input from the "create storage" dialog. Carries a
-/// human-readable error (Russian, matches the rest of the shell) when invalid, or a trimmed
+/// human-readable error (English, matches the rest of the shell) when invalid, or a trimmed
 /// name + an explicitly-normalized data path ready to hand to
 /// <see cref="ProfileService.AddProfile"/> when valid.
 /// </summary>
@@ -100,11 +100,11 @@ public static class StorageInputValidator
         var name = rawName?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(name))
         {
-            return StorageNameValidation.Fail("Укажите название хранилища.");
+            return StorageNameValidation.Fail("Enter a name for the profile.");
         }
         if (name.Length > 100)
         {
-            return StorageNameValidation.Fail("Название слишком длинное (максимум 100 символов).");
+            return StorageNameValidation.Fail("The name is too long (100 characters at most).");
         }
 
         string? explicitPath = null;
@@ -113,18 +113,34 @@ public static class StorageInputValidator
         {
             if (!System.IO.Path.IsPathRooted(rawPath))
             {
-                return StorageNameValidation.Fail("Каталог данных должен быть абсолютным путём.");
+                return StorageNameValidation.Fail("The data folder must be a full path, for example D:\\BeeData.");
             }
             if (BeeMemoryBank.AppPaths.BmbPaths.IsInsideVelopackCurrentDir(rawPath))
             {
                 return StorageNameValidation.Fail(
-                    "Этот каталог находится внутри папки приложения, которая полностью заменяется " +
-                    "при каждом обновлении. Выберите каталог за пределами папки установки.");
+                    "This folder is inside the application folder, which is replaced on every " +
+                    "update. Choose a folder outside the installation.");
             }
             explicitPath = rawPath;
         }
 
         return StorageNameValidation.Ok(name, explicitPath);
+    }
+
+    /// <summary>
+    /// Validates the "add existing profile" dialog: a name (same rules as create) and a
+    /// required absolute folder path. Whether the folder really holds a vault is checked by
+    /// the dialog itself, since that needs the filesystem.
+    /// </summary>
+    public static StorageNameValidation ValidateAddExisting(string? rawName, string? rawFolder)
+    {
+        var folder = rawFolder?.Trim() ?? string.Empty;
+        if (folder.Length == 0)
+        {
+            return StorageNameValidation.Fail("Choose the folder that holds the profile.");
+        }
+
+        return ValidateCreate(rawName, folder);
     }
 
     /// <summary>
@@ -135,11 +151,11 @@ public static class StorageInputValidator
         var name = rawName?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(name))
         {
-            return StorageNameValidation.Fail("Укажите новое название.");
+            return StorageNameValidation.Fail("Enter a new name.");
         }
         if (name.Length > 100)
         {
-            return StorageNameValidation.Fail("Название слишком длинное (максимум 100 символов).");
+            return StorageNameValidation.Fail("The name is too long (100 characters at most).");
         }
         return StorageNameValidation.Ok(name, explicitDataPath: null);
     }

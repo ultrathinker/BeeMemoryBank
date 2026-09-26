@@ -7,6 +7,7 @@ using Avalonia.Collections;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Profiles;
 
 namespace BeeMemoryBank.Desktop.Views;
@@ -27,10 +28,9 @@ public sealed class ProfileRow
 }
 
 /// <summary>
-/// Native window for managing the registered profiles: rename, forget (without touching disk
-/// files), open the data folder in Explorer, and pick the autostart profile (§4.6 —
-/// two-mode toggle, NOT a per-profile checkbox grid: only ONE of "LastUsed" or a single
-/// "FixedProfile" is active at a time).
+/// Native "Profiles" window: create or add profiles, and per profile rename, move the data
+/// folder, open it in Explorer or forget it (without touching disk files). Which profile opens
+/// at startup lives in the Settings window.
 ///
 /// Lists/refreshes come from a single <see cref="ProfileService"/> instance shared with the
 /// rest of the shell (passed in via the constructor). Mutations go straight through that
@@ -41,7 +41,6 @@ public partial class ManageStoragesWindow : Window
 {
     private readonly ProfileService _profiles;
     private readonly MainWindow _owner;
-    private bool _suppressAutostartEvents;
 
     public ManageStoragesWindow()
     {
@@ -57,36 +56,26 @@ public partial class ManageStoragesWindow : Window
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         InitializeComponent();
 
-        AutostartLastUsedRadio.IsCheckedChanged += OnAutostartRadioChanged;
-        AutostartFixedRadio.IsCheckedChanged += OnAutostartRadioChanged;
-        AutostartProfileCombo.SelectionChanged += OnAutostartProfileChanged;
-
-        // Keep the active-profile badge live if the user switches storages from the TRAY
-        // while this window stays open, rather than only refreshing on this window's own
-        // actions. The safety check in ForgetAsync reads _owner.ActiveProfileId directly (not
-        // a cached copy), so it is correct even without this - this is purely so the
-        // displayed list does not visibly lag behind reality.
+        // Keep the list live if the user switches profiles from the TRAY while this window
+        // stays open, rather than only refreshing on this window's own actions. The safety
+        // check in ForgetAsync reads _owner.ActiveProfileId directly (not a cached copy), so
+        // it is correct even without this - this is purely so the displayed list does not
+        // visibly lag behind reality.
         _owner.ActiveProfileChanged += OnOwnerActiveProfileChanged;
         Closed += (_, _) => _owner.ActiveProfileChanged -= OnOwnerActiveProfileChanged;
 
-        RefreshAll();
+        RefreshProfileList();
     }
 
     private void OnOwnerActiveProfileChanged(object? sender, EventArgs e)
     {
-        Dispatcher.UIThread.Post(RefreshAll);
+        Dispatcher.UIThread.Post(RefreshProfileList);
     }
 
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
-        RefreshAll();
-    }
-
-    private void RefreshAll()
-    {
         RefreshProfileList();
-        RefreshAutostart();
     }
 
     private void RefreshProfileList()
@@ -104,125 +93,27 @@ public partial class ManageStoragesWindow : Window
                 DisplayName = p.Name,
                 DataPath = p.DataPath,
                 IsActive = isActive,
-                ActiveBadge = isActive ? "● активное" : string.Empty,
+                ActiveBadge = isActive ? "● open now" : string.Empty,
             });
         }
 
         ProfilesList.ItemsSource = new AvaloniaList<ProfileRow>(rows);
     }
 
-    private void RefreshAutostart()
-    {
-        _suppressAutostartEvents = true;
-        try
-        {
-            // Combo always lists all profiles so the user can pick any as the fixed target.
-            var all = _profiles.GetAll();
-            AutostartProfileCombo.ItemsSource = all
-                .Select(p => new ComboBoxItem { Content = p.Name, Tag = p.Id })
-                .ToList();
+    // ── Header actions ───────────────────────────────────────────────────────────
 
-            if (_profiles.AutostartMode == AutostartMode.FixedProfile
-                && !string.IsNullOrEmpty(_profiles.AutostartProfileId))
-            {
-                AutostartFixedRadio.IsChecked = true;
-                AutostartLastUsedRadio.IsChecked = false;
-                SelectComboById(_profiles.AutostartProfileId);
-                AutostartHint.Text = "При автозапуске всегда открывается выбранное хранилище.";
-            }
-            else
-            {
-                AutostartLastUsedRadio.IsChecked = true;
-                AutostartFixedRadio.IsChecked = false;
-                AutostartProfileCombo.SelectedIndex = -1;
-                AutostartHint.Text = "При автозапуске открывается последнее активно использованное хранилище.";
-            }
-        }
-        finally
-        {
-            _suppressAutostartEvents = false;
-        }
+    private async void OnNewProfileClick(object? sender, RoutedEventArgs e)
+    {
+        try { await ProfileCommands.NewProfileAsync(this, _owner); }
+        catch (Exception ex) { await ShowMessageAsync("Could not create the profile", ex.Message); }
+        RefreshProfileList();
     }
 
-    private void SelectComboById(string? id)
+    private async void OnAddExistingClick(object? sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrEmpty(id))
-        {
-            AutostartProfileCombo.SelectedIndex = -1;
-            return;
-        }
-        var items = AutostartProfileCombo.ItemsSource as System.Collections.IList;
-        if (items == null) return;
-        int idx = -1;
-        int i = 0;
-        foreach (var it in items)
-        {
-            if (it is ComboBoxItem cbi && cbi.Tag is string tagId
-                && string.Equals(tagId, id, StringComparison.Ordinal))
-            {
-                idx = i;
-                break;
-            }
-            i++;
-        }
-        AutostartProfileCombo.SelectedIndex = idx;
-    }
-
-    private string? GetSelectedAutostartProfileId()
-    {
-        return AutostartProfileCombo.SelectedItem is ComboBoxItem cbi ? cbi.Tag as string : null;
-    }
-
-    private void OnAutostartRadioChanged(object? sender, EventArgs e)
-    {
-        if (_suppressAutostartEvents) return;
-
-        if (AutostartFixedRadio.IsChecked == true)
-        {
-            var id = GetSelectedAutostartProfileId();
-            if (string.IsNullOrEmpty(id))
-            {
-                // No profile selected yet — let the combo selection drive this once picked.
-                AutostartHint.Text = "Выберите хранилище из списка.";
-                return;
-            }
-            ApplyAutostart(AutostartMode.FixedProfile, id);
-        }
-        else if (AutostartLastUsedRadio.IsChecked == true)
-        {
-            ApplyAutostart(AutostartMode.LastUsed, null);
-        }
-    }
-
-    private void OnAutostartProfileChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressAutostartEvents) return;
-        if (AutostartFixedRadio.IsChecked != true)
-        {
-            // Switch to "fixed" mode as soon as the user picks a profile, since picking is an
-            // explicit act that signals intent.
-            AutostartFixedRadio.IsChecked = true;
-        }
-
-        var id = GetSelectedAutostartProfileId();
-        if (!string.IsNullOrEmpty(id))
-        {
-            ApplyAutostart(AutostartMode.FixedProfile, id);
-        }
-    }
-
-    private void ApplyAutostart(AutostartMode mode, string? fixedId)
-    {
-        try
-        {
-            _profiles.SetAutostart(mode, fixedId);
-            _owner.NotifyProfilesChanged();
-            RefreshAutostart();
-        }
-        catch (Exception ex)
-        {
-            AutostartHint.Text = $"Ошибка: {ex.Message}";
-        }
+        try { await ProfileCommands.AddExistingAsync(this, _owner); }
+        catch (Exception ex) { await ShowMessageAsync("Could not add the profile", ex.Message); }
+        RefreshProfileList();
     }
 
     // ── Per-row actions ──────────────────────────────────────────────────────────
@@ -239,7 +130,7 @@ public partial class ManageStoragesWindow : Window
     {
         ProfileEntry profile;
         try { profile = _profiles.GetById(id); }
-        catch (KeyNotFoundException) { RefreshAll(); return; }
+        catch (KeyNotFoundException) { RefreshProfileList(); return; }
 
         // ShowDialog(owner) sets Owner internally (protected); no direct assignment here.
         var dialog = new RenameStorageDialog(profile.Name);
@@ -251,12 +142,112 @@ public partial class ManageStoragesWindow : Window
         {
             _profiles.RenameProfile(id, newName);
             _owner.NotifyProfilesChanged();
-            RefreshAll();
+            RefreshProfileList();
         }
         catch (Exception ex)
         {
-            await ShowMessageAsync("Не удалось переименовать", ex.Message);
+            await ShowMessageAsync("Could not rename the profile", ex.Message);
         }
+    }
+
+    private async void OnMoveClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.Tag is string id)
+        {
+            await MoveAsync(id);
+        }
+    }
+
+    private async Task MoveAsync(string id)
+    {
+        ProfileEntry profile;
+        try { profile = _profiles.GetById(id); }
+        catch (KeyNotFoundException) { RefreshProfileList(); return; }
+
+        var picked = await FolderPicker.PickAsync(this, $"Where should profile “{profile.Name}” live?");
+        if (picked == null) return;
+
+        // An empty (or new) folder is used as is. A folder with other things in it, like a
+        // whole drive, gets a subfolder named after the profile instead of mixing the vault
+        // into unrelated files. The confirmation below shows the exact final path.
+        var target = VaultFiles.Inspect(picked) is VaultFolderState.Missing or VaultFolderState.Empty
+            ? picked
+            : Path.Combine(picked, SafeFolderName(profile.Name));
+
+        var error = VaultCopier.ValidateTarget(profile.DataPath, target);
+        if (error != null)
+        {
+            await ShowMessageAsync("Cannot move the profile here", $"{error}\n\n{target}");
+            return;
+        }
+
+        var isActive = string.Equals(id, _owner.ActiveProfileId, StringComparison.Ordinal);
+        var confirm = new ConfirmDialog(
+            $"Move profile “{profile.Name}”?",
+            $"From:\n{profile.DataPath}\n\nTo:\n{target}\n\n" +
+            (isActive ? "The profile closes for a moment while its data is copied, then opens again from the new folder.\n\n" : string.Empty) +
+            "The old folder is kept until you decide what to do with it.",
+            "Move", "Cancel");
+        if (!await confirm.ShowDialog<bool>(this)) return;
+
+        var originalTitle = Title;
+        IsEnabled = false;
+        Title = "Profiles — moving...";
+        Services.RelocateResult result;
+        try
+        {
+            result = await _owner.MoveProfileAsync(id, target);
+        }
+        finally
+        {
+            IsEnabled = true;
+            Title = originalTitle;
+            RefreshProfileList();
+        }
+
+        if (!result.Success)
+        {
+            await ShowMessageAsync("Could not move the profile", result.ErrorMessage ?? "Unknown error.");
+            return;
+        }
+
+        await OfferToDeleteOldCopyAsync(result.Profile!, result.OldDataPath!);
+    }
+
+    private async Task OfferToDeleteOldCopyAsync(ProfileEntry moved, string oldPath)
+    {
+        var ask = new ConfirmDialog(
+            "Profile moved",
+            $"“{moved.Name}” now lives in:\n{moved.DataPath}\n\n" +
+            $"The old copy is still in:\n{oldPath}\n\n" +
+            "Delete the old copy? Keep it if you want a backup; you can delete it yourself later.",
+            "Delete old copy", "Keep it");
+        if (!await ask.ShowDialog<bool>(this)) return;
+
+        // Never delete a folder some profile still points at, or one that is not a vault.
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (_profiles.GetAll().Any(p => string.Equals(p.DataPath, oldPath, comparison))
+            || VaultFiles.Inspect(oldPath) != VaultFolderState.Vault)
+        {
+            await ShowMessageAsync("The old copy was kept", $"It is not safe to delete this folder automatically:\n{oldPath}");
+            return;
+        }
+
+        try
+        {
+            await Task.Run(() => Directory.Delete(oldPath, recursive: true));
+        }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync("Could not delete the old copy", $"{ex.Message}\n\n{oldPath}");
+        }
+    }
+
+    private static string SafeFolderName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.');
+        return cleaned.Length == 0 ? "BeeMemoryBank" : $"BeeMemoryBank - {cleaned}";
     }
 
     private async void OnForgetClick(object? sender, RoutedEventArgs e)
@@ -271,7 +262,7 @@ public partial class ManageStoragesWindow : Window
     {
         ProfileEntry profile;
         try { profile = _profiles.GetById(id); }
-        catch (KeyNotFoundException) { RefreshAll(); return; }
+        catch (KeyNotFoundException) { RefreshProfileList(); return; }
 
         // Forgetting the ACTIVE profile removes the registry pointer while the node for it
         // is still running: the next switch would pass a currentProfileId ProfileService can
@@ -282,14 +273,13 @@ public partial class ManageStoragesWindow : Window
         if (!string.IsNullOrEmpty(_owner.ActiveProfileId)
             && string.Equals(id, _owner.ActiveProfileId, StringComparison.Ordinal))
         {
-            await ShowMessageAsync("Невозможно забыть хранилище",
-                $"Хранилище «{profile.Name}» сейчас активно. Переключитесь на другое хранилище, затем повторите.");
+            await ShowMessageAsync("Cannot forget this profile",
+                $"Profile “{profile.Name}” is open right now. Switch to another profile first, then try again.");
             return;
         }
 
-        // The confirmation text is the brief's literal: it explicitly tells the user the
-        // data stays on disk and shows the path, because ProfileService.ForgetProfile only
-        // removes the registry pointer.
+        // The confirmation explicitly tells the user the data stays on disk and shows the
+        // path, because ProfileService.ForgetProfile only removes the registry pointer.
         var confirm = new ConfirmForgetDialog(profile.Name, profile.DataPath);
         var ok = await confirm.ShowDialog<bool>(this);
         if (!ok) return;
@@ -298,16 +288,16 @@ public partial class ManageStoragesWindow : Window
         {
             _profiles.ForgetProfile(id);
             _owner.NotifyProfilesChanged();
-            RefreshAll();
+            RefreshProfileList();
         }
         catch (InvalidOperationException ioex)
         {
-            // Last-profile case — the brief: "не дай кнопке просто молча не сработать".
-            await ShowMessageAsync("Невозможно забыть хранилище", ioex.Message);
+            // Last-profile case — the button must never silently do nothing.
+            await ShowMessageAsync("Cannot forget this profile", ioex.Message);
         }
         catch (Exception ex)
         {
-            await ShowMessageAsync("Не удалось забыть хранилище", ex.Message);
+            await ShowMessageAsync("Could not forget the profile", ex.Message);
         }
     }
 
@@ -317,7 +307,7 @@ public partial class ManageStoragesWindow : Window
 
         ProfileEntry profile;
         try { profile = _profiles.GetById(id); }
-        catch (KeyNotFoundException) { RefreshAll(); return; }
+        catch (KeyNotFoundException) { RefreshProfileList(); return; }
 
         OpenFolder(profile.DataPath);
     }

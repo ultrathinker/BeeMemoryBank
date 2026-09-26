@@ -10,8 +10,8 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
 {
     public string? ErrorMessage { get; set; }
 
-    /// <summary>"legacy" = restore-from-previous-installation panel (opt-in, reached only via the
-    /// "Restore from a previous installation" link — never shown automatically), "" = mode-select
+    /// <summary>"legacy" = open-an-existing-profile panel, browser variant (opt-in, reached only via
+    /// the "Open an existing profile" card outside the Windows app — never shown automatically), "" = mode-select
     /// (step 1), "form" = show form (step 2), "done" = completion (step 3)</summary>
     public string Step { get; set; } = "";
 

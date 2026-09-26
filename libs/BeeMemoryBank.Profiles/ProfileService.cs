@@ -162,21 +162,7 @@ public sealed class ProfileService
 
         if (dataPath != null)
         {
-            if (string.IsNullOrWhiteSpace(dataPath))
-            {
-                throw new ArgumentException("Data path cannot be empty or whitespace.", nameof(dataPath));
-            }
-            if (!Path.IsPathRooted(dataPath))
-            {
-                throw new ArgumentException("Data path must be an absolute path.", nameof(dataPath));
-            }
-            if (BmbPaths.IsInsideVelopackCurrentDir(dataPath))
-            {
-                throw new ArgumentException(
-                    "Data path is inside a Velopack-managed 'current' folder, which gets wiped on every " +
-                    "update/repair. Choose a location outside the application's install directory.",
-                    nameof(dataPath));
-            }
+            ValidateExplicitDataPath(dataPath, nameof(dataPath));
         }
 
         lock (_lock)
@@ -207,14 +193,7 @@ public sealed class ProfileService
             // engine would present them as independent accounts while they are actually the
             // same storage. Only reachable via an explicit dataPath (the auto-generated path
             // is always a fresh per-id subdirectory), but still worth refusing outright.
-            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            var collision = _registry.Profiles.FirstOrDefault(p => string.Equals(p.DataPath, finalDataPath, comparison));
-            if (collision != null)
-            {
-                throw new ArgumentException(
-                    $"Data path '{finalDataPath}' is already used by profile '{collision.Name}' ({collision.Id}).",
-                    nameof(dataPath));
-            }
+            ThrowIfDataPathTaken(finalDataPath, exceptId: null, nameof(dataPath));
 
             var entry = new ProfileEntry
             {
@@ -258,6 +237,69 @@ public sealed class ProfileService
 
             profile.Name = newName.Trim();
             SaveInternal(_registry, skipBak: false);
+        }
+    }
+
+    /// <summary>
+    /// Points an existing profile at a different data directory. Only the registry changes:
+    /// copying the vault there (and stopping the node that uses it) is the caller's job.
+    /// </summary>
+    /// <param name="id">The profile identifier.</param>
+    /// <param name="newDataPath">Absolute path of the new data directory.</param>
+    public void SetDataPath(string id, string newDataPath)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            throw new ArgumentException("Profile ID cannot be null or empty.", nameof(id));
+        }
+        ValidateExplicitDataPath(newDataPath, nameof(newDataPath));
+        var finalDataPath = Path.GetFullPath(newDataPath);
+
+        lock (_lock)
+        {
+            var profile = _registry.Profiles.FirstOrDefault(p => p.Id == id);
+            if (profile == null)
+            {
+                throw new KeyNotFoundException($"Profile with ID '{id}' was not found.");
+            }
+
+            ThrowIfDataPathTaken(finalDataPath, exceptId: id, nameof(newDataPath));
+
+            profile.DataPath = finalDataPath;
+            SaveInternal(_registry, skipBak: false);
+        }
+    }
+
+    private static void ValidateExplicitDataPath(string dataPath, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(dataPath))
+        {
+            throw new ArgumentException("Data path cannot be empty or whitespace.", paramName);
+        }
+        if (!Path.IsPathRooted(dataPath))
+        {
+            throw new ArgumentException("Data path must be an absolute path.", paramName);
+        }
+        if (BmbPaths.IsInsideVelopackCurrentDir(dataPath))
+        {
+            throw new ArgumentException(
+                "Data path is inside a Velopack-managed 'current' folder, which gets wiped on every " +
+                "update/repair. Choose a location outside the application's install directory.",
+                paramName);
+        }
+    }
+
+    // Caller holds _lock.
+    private void ThrowIfDataPathTaken(string finalDataPath, string? exceptId, string paramName)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var collision = _registry.Profiles.FirstOrDefault(p =>
+            p.Id != exceptId && string.Equals(p.DataPath, finalDataPath, comparison));
+        if (collision != null)
+        {
+            throw new ArgumentException(
+                $"Data path '{finalDataPath}' is already used by profile '{collision.Name}' ({collision.Id}).",
+                paramName);
         }
     }
 
@@ -431,7 +473,7 @@ public sealed class ProfileService
                 new ProfileEntry
                 {
                     Id = BmbPaths.DefaultVaultId,
-                    Name = "Личный",
+                    Name = "Personal",
                     DataPath = defaultVault,
                     CreatedAt = DateTime.UtcNow,
                     LastUsedAt = DateTime.UtcNow

@@ -2,20 +2,22 @@ using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Profiles;
 
 namespace BeeMemoryBank.Desktop.Views;
 
 /// <summary>
-/// Native dialog for creating a new storage profile. Collects a name (required) and an
-/// optional advanced data-path; on "Create" it calls <see cref="ProfileService.AddProfile"/>
+/// Native dialog for creating a new profile. Collects a name (required) and an optional
+/// advanced data folder; on "Create" it calls <see cref="ProfileService.AddProfile"/>
 /// and returns the resulting <see cref="ProfileEntry"/> via <see cref="CreatedProfile"/>.
 ///
 /// Validation is split: <see cref="Services.StorageInputValidator.ValidateCreate"/> catches
 /// empty/oversized names and non-absolute paths for instant inline feedback (no exception
-/// trip), while deeper invariants (duplicate dataPath, registry write errors) are surfaced
-/// by catching whatever <see cref="ProfileService.AddProfile"/> throws and showing it in the
-/// same inline red TextBlock — no separate MessageBox.
+/// trip), the folder itself must be empty or new (a folder that already holds a profile
+/// belongs to "Add existing profile"), and deeper invariants (duplicate dataPath, registry
+/// write errors) are surfaced by catching whatever <see cref="ProfileService.AddProfile"/>
+/// throws and showing it in the same inline red TextBlock — no separate MessageBox.
 /// </summary>
 public partial class CreateStorageDialog : Window
 {
@@ -47,6 +49,12 @@ public partial class CreateStorageDialog : Window
         Close(dialogResult: false);
     }
 
+    private async void OnBrowseClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await FolderPicker.PickAsync(this, "Choose an empty folder for the new profile");
+        if (path != null) DataPathBox.Text = path;
+    }
+
     private async void OnCreateClick(object? sender, RoutedEventArgs e)
     {
         await CreateAsync();
@@ -64,6 +72,19 @@ public partial class CreateStorageDialog : Window
         {
             ShowError(validation.Error!);
             return;
+        }
+
+        if (validation.ExplicitDataPath != null)
+        {
+            switch (VaultFiles.Inspect(validation.ExplicitDataPath))
+            {
+                case VaultFolderState.Vault:
+                    ShowError("This folder already contains a Bee Memory Bank profile. To use it, choose Profiles → Add existing profile.");
+                    return;
+                case VaultFolderState.Other:
+                    ShowError("This folder is not empty. Choose an empty folder for the new profile.");
+                    return;
+            }
         }
 
         CreateButton.IsEnabled = false;
@@ -90,7 +111,7 @@ public partial class CreateStorageDialog : Window
         }
         catch (Exception ex)
         {
-            ShowError($"Не удалось создать хранилище: {ex.Message}");
+            ShowError($"Could not create the profile: {ex.Message}");
         }
         finally
         {

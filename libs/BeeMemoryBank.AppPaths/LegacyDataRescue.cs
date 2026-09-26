@@ -120,17 +120,6 @@ public static class LegacyDataRescue
     private static readonly byte[] SqliteMagic =
         Encoding.ASCII.GetBytes("SQLite format 3\0");
 
-    // Files that are transient/runtime-only and must NOT be copied across.
-    private static readonly HashSet<string> TransientFileNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "node.lock",
-        ".runtime.json",
-        "node.status.json",
-    };
-
-    // Suffix pattern for *.ready transient files (checked separately, not by exact name).
-    private const string ReadySuffix = ".ready";
-
     // No minimum-size threshold: the SQLite header magic alone decides whether a file is a
     // "real" database (which implies at least 16 bytes). File size is at most a weak signal,
     // so it never blocks a rescue on its own.
@@ -409,20 +398,7 @@ public static class LegacyDataRescue
     }
 
     /// <summary>Returns true if the file name represents a transient runtime file.</summary>
-    private static bool IsTransient(string fileName)
-    {
-        if (TransientFileNames.Contains(fileName))
-        {
-            return true;
-        }
-
-        if (fileName.EndsWith(ReadySuffix, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return false;
-    }
+    private static bool IsTransient(string fileName) => VaultFiles.IsTransient(fileName);
 
     /// <summary>
     /// Three-way probe of a SQLite file path.

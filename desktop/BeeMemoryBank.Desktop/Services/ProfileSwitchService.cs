@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Profiles;
 
 namespace BeeMemoryBank.Desktop.Services;
@@ -41,6 +42,35 @@ public sealed record SwitchResult
     /// port than before). <see cref="Success"/> is still false.</summary>
     public static SwitchResult Reverted(ProfileEntry revertedProfile, string revertedFrontUrl, string message)
         => new() { Success = false, Profile = revertedProfile, FrontUrl = revertedFrontUrl, ErrorMessage = message };
+}
+
+/// <summary>
+/// Outcome of <see cref="ProfileSwitchService.RelocateAsync"/>. <see cref="FrontUrl"/> is set
+/// whenever the active profile's node is running again afterwards (from the new folder on
+/// success, from the old one after a failure), so the caller can re-point the WebView.
+/// </summary>
+public sealed record RelocateResult
+{
+    public bool Success { get; init; }
+    public ProfileEntry? Profile { get; init; }
+    public string? OldDataPath { get; init; }
+    public string? FrontUrl { get; init; }
+    public string? ErrorMessage { get; init; }
+
+    /// <summary>True when the move was refused before anything was stopped or copied.</summary>
+    public bool Rejected { get; init; }
+
+    public static RelocateResult Ok(ProfileEntry profile, string oldDataPath, string? frontUrl)
+        => new() { Success = true, Profile = profile, OldDataPath = oldDataPath, FrontUrl = frontUrl };
+
+    public static RelocateResult Error(string message)
+        => new() { Success = false, ErrorMessage = message };
+
+    public static RelocateResult Refused(string message)
+        => new() { Success = false, Rejected = true, ErrorMessage = message };
+
+    public static RelocateResult Failed(ProfileEntry profile, string message, string frontUrl)
+        => new() { Success = false, Profile = profile, ErrorMessage = message, FrontUrl = frontUrl };
 }
 
 /// <summary>
@@ -282,7 +312,7 @@ public sealed class ProfileSwitchService : IDisposable
         {
             try
             {
-                var recoveredName = $"Восстановлено {DateTime.Now:yyyy-MM-dd HH:mm}";
+                var recoveredName = $"Recovered {DateTime.Now:yyyy-MM-dd HH:mm}";
                 _profiles.AddProfile(recoveredName, startResult.RecoveredVaultDir);
             }
             catch (Exception ex)
@@ -352,6 +382,224 @@ public sealed class ProfileSwitchService : IDisposable
         return SwitchResult.Error(
             $"Failed to switch to profile '{targetProfile.Name}': {failureMsg}. " +
             $"Attempt to revert to previous profile '{currentProfile.Name}' also failed: {revertFailure}.");
+    }
+
+    /// <summary>
+    /// Moves a profile's data to <paramref name="newDataPath"/>: copies the vault (verified),
+    /// repoints the profile and, when it is the active one, restarts its node from the new
+    /// place. The old folder is left untouched; the caller decides what to do with it.
+    /// </summary>
+    /// <remarks>
+    /// Shares the single-flight gate with <see cref="SwitchToAsync"/>: a move and a switch both
+    /// stop and start the hosted node and must never interleave. On any failure the profile
+    /// keeps (or gets back) its old path, and an active profile is started again from there.
+    /// </remarks>
+    public async Task<RelocateResult> RelocateAsync(
+        string profileId,
+        string newDataPath,
+        string? activeProfileId,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        if (!await _switchGate.WaitAsync(0, CancellationToken.None).ConfigureAwait(false))
+        {
+            return RelocateResult.Refused("Another profile operation is already in progress. Please wait for it to finish.");
+        }
+
+        try
+        {
+            return await RelocateCoreAsync(profileId, newDataPath, activeProfileId, progress, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _switchGate.Release();
+        }
+    }
+
+    private async Task<RelocateResult> RelocateCoreAsync(
+        string profileId,
+        string newDataPath,
+        string? activeProfileId,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        ProfileEntry profile;
+        try
+        {
+            profile = _profiles.GetById(profileId);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or ArgumentException)
+        {
+            return RelocateResult.Refused(ex.Message);
+        }
+
+        var oldPath = profile.DataPath;
+        var targetError = VaultCopier.ValidateTarget(oldPath, newDataPath);
+        if (targetError != null)
+        {
+            return RelocateResult.Refused(targetError);
+        }
+
+        var isActive = string.Equals(profileId, activeProfileId, StringComparison.Ordinal);
+        if (!isActive && VaultFiles.IsLockedByNode(oldPath))
+        {
+            return RelocateResult.Refused(
+                $"Profile '{profile.Name}' is in use by another running Bee Memory Bank node. Stop it and try again.");
+        }
+
+        if (isActive)
+        {
+            progress?.Report($"Stopping profile '{profile.Name}'...");
+            try
+            {
+                await _nodeLifecycle.StopAsync(StopGracefulTimeout, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ProfileSwitchService: error stopping node before move: {ex.Message}");
+            }
+
+            if (VaultFiles.IsLockedByNode(oldPath))
+            {
+                return await RestartAfterFailedMoveAsync(profile, oldPath,
+                    "The profile's node did not stop, so its data cannot be copied safely.", progress, ct).ConfigureAwait(false);
+            }
+        }
+
+        var destinationExisted = Directory.Exists(newDataPath);
+        try
+        {
+            await Task.Run(() => VaultCopier.CopyVerified(oldPath, newDataPath, progress, ct), ct).ConfigureAwait(false);
+            _profiles.SetDataPath(profileId, newDataPath);
+        }
+        catch (Exception ex)
+        {
+            if (!destinationExisted)
+            {
+                // Only a folder this move created is ours to clean up; a pre-existing (empty)
+                // folder the user picked is left in place.
+                try { Directory.Delete(newDataPath, recursive: true); }
+                catch (Exception cleanupEx) { Debug.WriteLine($"ProfileSwitchService: partial copy cleanup failed: {cleanupEx.Message}"); }
+            }
+
+            var message = $"Could not copy the data: {ex.Message}";
+            return isActive
+                ? await RestartAfterFailedMoveAsync(profile, oldPath, message, progress, ct).ConfigureAwait(false)
+                : RelocateResult.Error(message);
+        }
+
+        var moved = _profiles.GetById(profileId);
+        if (!isActive)
+        {
+            progress?.Report($"Moved profile '{moved.Name}'.");
+            return RelocateResult.Ok(moved, oldPath, frontUrl: null);
+        }
+
+        progress?.Report($"Starting profile '{moved.Name}' from the new folder...");
+        var start = await _nodeLifecycle.StartOrAttachAsync(moved.DataPath, progress, ct).ConfigureAwait(false);
+        if (start.Success && !string.IsNullOrEmpty(start.FrontUrl))
+        {
+            return RelocateResult.Ok(moved, oldPath, start.FrontUrl);
+        }
+
+        // The copy is fine on disk but the node would not start from it: go back to the
+        // original folder, which was never touched.
+        try { _profiles.SetDataPath(profileId, oldPath); }
+        catch (Exception ex) { Debug.WriteLine($"ProfileSwitchService: could not restore old data path: {ex.Message}"); }
+
+        return await RestartAfterFailedMoveAsync(profile, oldPath,
+            $"The profile did not start from the new folder ({start.ErrorMessage ?? "unknown error"}). " +
+            $"It stays in {oldPath}; the copy in {newDataPath} was not removed.", progress, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Points the ACTIVE profile at a folder that already holds a vault and restarts its node
+    /// from there (the "Open an existing profile" path of the first-run wizard). Nothing is
+    /// copied; the previous folder is left as it is. On failure the old path is restored and
+    /// the node started again from it.
+    /// </summary>
+    public async Task<RelocateResult> OpenFolderAsActiveAsync(
+        string activeProfileId,
+        string folder,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
+        if (!await _switchGate.WaitAsync(0, CancellationToken.None).ConfigureAwait(false))
+        {
+            return RelocateResult.Refused("Another profile operation is already in progress. Please wait for it to finish.");
+        }
+
+        try
+        {
+            ProfileEntry profile;
+            try
+            {
+                profile = _profiles.GetById(activeProfileId);
+            }
+            catch (Exception ex) when (ex is KeyNotFoundException or ArgumentException)
+            {
+                return RelocateResult.Refused(ex.Message);
+            }
+
+            if (VaultFiles.Inspect(folder) != VaultFolderState.Vault)
+            {
+                return RelocateResult.Refused(
+                    $"No Bee Memory Bank profile was found in this folder (it has no {VaultFiles.DatabaseFileName}).");
+            }
+            if (VaultFiles.IsLockedByNode(folder))
+            {
+                return RelocateResult.Refused("This profile is in use by another running Bee Memory Bank node.");
+            }
+
+            var oldPath = profile.DataPath;
+            try
+            {
+                // Validates the path and refuses a folder another profile already uses.
+                _profiles.SetDataPath(activeProfileId, folder);
+            }
+            catch (ArgumentException ex)
+            {
+                return RelocateResult.Refused(ex.Message);
+            }
+
+            progress?.Report($"Stopping profile '{profile.Name}'...");
+            try
+            {
+                await _nodeLifecycle.StopAsync(StopGracefulTimeout, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ProfileSwitchService: error stopping node before opening a folder: {ex.Message}");
+            }
+
+            var opened = _profiles.GetById(activeProfileId);
+            progress?.Report("Opening the profile folder...");
+            var start = await _nodeLifecycle.StartOrAttachAsync(opened.DataPath, progress, ct).ConfigureAwait(false);
+            if (start.Success && !string.IsNullOrEmpty(start.FrontUrl))
+            {
+                return RelocateResult.Ok(opened, oldPath, start.FrontUrl);
+            }
+
+            try { _profiles.SetDataPath(activeProfileId, oldPath); }
+            catch (Exception ex) { Debug.WriteLine($"ProfileSwitchService: could not restore old data path: {ex.Message}"); }
+
+            return await RestartAfterFailedMoveAsync(profile, oldPath,
+                $"The profile in {folder} did not start ({start.ErrorMessage ?? "unknown error"}).", progress, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _switchGate.Release();
+        }
+    }
+
+    private async Task<RelocateResult> RestartAfterFailedMoveAsync(
+        ProfileEntry profile, string oldPath, string message, IProgress<string>? progress, CancellationToken ct)
+    {
+        progress?.Report($"Starting profile '{profile.Name}' again...");
+        var restart = await _nodeLifecycle.StartOrAttachAsync(oldPath, progress, ct).ConfigureAwait(false);
+        return restart.Success && !string.IsNullOrEmpty(restart.FrontUrl)
+            ? RelocateResult.Failed(profile, message, restart.FrontUrl!)
+            : RelocateResult.Error($"{message} Starting the profile again also failed: {restart.ErrorMessage ?? "unknown error"}.");
     }
 
     /// <summary>

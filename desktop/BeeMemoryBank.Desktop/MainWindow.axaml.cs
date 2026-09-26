@@ -132,7 +132,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    var recoveredName = $"Восстановлено {DateTime.Now:yyyy-MM-dd HH:mm}";
+                    var recoveredName = $"Recovered {DateTime.Now:yyyy-MM-dd HH:mm}";
                     _profiles.AddProfile(recoveredName, result.RecoveredVaultDir);
                 }
                 catch (Exception ex)
@@ -213,7 +213,7 @@ public partial class MainWindow : Window
         WebPanel.IsVisible = false;
         ErrorPanel.IsVisible = false;
         SplashPanel.IsVisible = true;
-        StatusText.Text = "Переключение хранилища...";
+        StatusText.Text = "Switching profile...";
 
         var progress = new Progress<string>(UpdateStatus);
         var cookieClearer = new Services.NativeWebViewCookieClearer(BmbWebView);
@@ -230,7 +230,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ShowError($"Сбой переключения: {ex.Message}");
+            ShowError($"Profile switch failed: {ex.Message}");
             ActiveProfileChanged?.Invoke(this, EventArgs.Empty);
             return;
         }
@@ -257,8 +257,126 @@ public partial class MainWindow : Window
         }
         else
         {
-            ShowError(result.ErrorMessage ?? "Неизвестная ошибка.");
+            ShowError(result.ErrorMessage ?? "Unknown error.");
             ActiveProfileChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Moves a profile's data folder (see <see cref="Services.ProfileSwitchService.RelocateAsync"/>).
+    /// For the active profile the splash panel covers the WebView while its node is stopped,
+    /// copied and started again; for any other profile nothing visible changes here.
+    /// </summary>
+    public async Task<Services.RelocateResult> MoveProfileAsync(string profileId, string newDataPath)
+    {
+        var isActive = string.Equals(_activeProfileId, profileId, StringComparison.Ordinal);
+        if (isActive)
+        {
+            WebPanel.IsVisible = false;
+            ErrorPanel.IsVisible = false;
+            SplashPanel.IsVisible = true;
+            StatusText.Text = "Moving profile...";
+        }
+
+        Services.RelocateResult result;
+        try
+        {
+            result = await _profileSwitch.RelocateAsync(
+                profileId, newDataPath, _activeProfileId, new Progress<string>(UpdateStatus), _switchLifetimeCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return Services.RelocateResult.Refused("The move was cancelled.");
+        }
+        catch (Exception ex)
+        {
+            result = Services.RelocateResult.Error(ex.Message);
+        }
+
+        if (isActive)
+        {
+            if (result.Profile != null && !string.IsNullOrEmpty(result.FrontUrl))
+            {
+                ApplySuccessfulNodeStart(result.Profile, result.FrontUrl!);
+            }
+            else if (result.Rejected)
+            {
+                // Rejected before anything was stopped: the node is still up, just show it again.
+                SplashPanel.IsVisible = false;
+                WebPanel.IsVisible = true;
+            }
+            else
+            {
+                ShowError(result.ErrorMessage ?? "Unknown error.");
+            }
+        }
+
+        NotifyProfilesChanged();
+        return result;
+    }
+
+    /// <summary>
+    /// "Open an existing profile" from the first-run wizard: pick a folder that holds a vault
+    /// and make the active (still empty) profile use it. A folder that another profile already
+    /// uses is simply switched to.
+    /// </summary>
+    private async Task OpenExistingProfileFolderAsync()
+    {
+        var activeId = _activeProfileId;
+        if (string.IsNullOrEmpty(activeId)) return;
+
+        var folder = await Views.FolderPicker.PickAsync(this, "Choose the folder of your Bee Memory Bank profile");
+        if (folder == null) return;
+
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var fullFolder = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(folder));
+        foreach (var p in _profiles.GetAll())
+        {
+            if (string.Equals(System.IO.Path.TrimEndingDirectorySeparator(p.DataPath), fullFolder, comparison))
+            {
+                if (p.Id != activeId) await SwitchProfileAsync(p.Id);
+                return;
+            }
+        }
+
+        WebPanel.IsVisible = false;
+        ErrorPanel.IsVisible = false;
+        SplashPanel.IsVisible = true;
+        StatusText.Text = "Opening the profile...";
+
+        Services.RelocateResult result;
+        try
+        {
+            result = await _profileSwitch.OpenFolderAsActiveAsync(
+                activeId, fullFolder, new Progress<string>(UpdateStatus), _switchLifetimeCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            result = Services.RelocateResult.Error(ex.Message);
+        }
+
+        if (result.Profile != null && !string.IsNullOrEmpty(result.FrontUrl))
+        {
+            ApplySuccessfulNodeStart(result.Profile, result.FrontUrl!);
+        }
+        else if (result.Rejected)
+        {
+            SplashPanel.IsVisible = false;
+            WebPanel.IsVisible = true;
+        }
+        else
+        {
+            ShowError(result.ErrorMessage ?? "Unknown error.");
+        }
+        NotifyProfilesChanged();
+
+        if (!result.Success)
+        {
+            await new Views.MessageDialog("Could not open the profile", result.ErrorMessage ?? "Unknown error.").ShowDialog(this);
         }
     }
 
@@ -415,8 +533,23 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>
+    /// Address the first-run wizard navigates to (setup.js) when the user picks "Open an
+    /// existing profile" inside the app. The .invalid TLD can never resolve, so if the shell did
+    /// not handle it nothing would be reached.
+    /// </summary>
+    private const string OpenExistingProfileCommand = "https://bmb-desktop.invalid/open-existing-profile";
+
     private void OnWebViewNavigationStarted(object? sender, WebViewNavigationStartingEventArgs e)
     {
+        if (e.Request != null
+            && string.Equals(e.Request.AbsoluteUri, OpenExistingProfileCommand, StringComparison.OrdinalIgnoreCase))
+        {
+            e.Cancel = true;
+            Dispatcher.UIThread.Post(async () => await OpenExistingProfileFolderAsync());
+            return;
+        }
+
         if (e.Request != null && !IsLocalOrigin(e.Request))
         {
             e.Cancel = true;

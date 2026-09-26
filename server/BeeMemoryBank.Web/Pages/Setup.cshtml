@@ -103,19 +103,19 @@
             </div>
         }
 
-        <!-- ═══ Restore from a previous installation (opt-in only — reached solely via the
-             "Restore from a previous installation" link on step 1; never shown automatically) ═══ -->
+        <!-- ═══ Open an existing profile, browser variant (reached solely via the "Open an existing
+             profile" card on step 1 outside the Windows app; never shown automatically) ═══ -->
         <div class="wizard-panel @(step == "legacy" ? "active" : "")" id="panel-legacy">
             <a href="#" class="back-link" id="link-legacy-back">
                 <sl-icon name="arrow-left"></sl-icon> Back
             </a>
             <form method="post" asp-page-handler="Migrate" class="tab-panel-form" style="margin-top:12px;">
                 @Html.AntiForgeryToken()
-                <sl-input name="sourcePath" label="Legacy Data Folder" required autofocus
-                          placeholder="e.g. C:\bee\data" help-text="Enter the folder path containing beememorybank.db"></sl-input>
+                <sl-input name="sourcePath" label="Profile folder" required autofocus
+                          placeholder="e.g. C:\bee\data" help-text="The folder on this computer that contains beememorybank.db. Its data is copied into this node."></sl-input>
                 <div class="form-actions" style="margin-top:4px;">
                     <sl-button type="submit" variant="primary" style="width:100%;">
-                        <sl-icon slot="prefix" name="search"></sl-icon> Validate & Copy Database
+                        <sl-icon slot="prefix" name="folder2-open"></sl-icon> Open profile
                     </sl-button>
                 </div>
             </form>
@@ -138,11 +138,15 @@
                         <small>Connect this node to a network that's already running elsewhere.</small>
                     </div>
                 </button>
-            </div>
-            <div style="text-align:center; margin-top:20px;">
-                <a href="#" class="back-link" id="link-restore-legacy" style="display:inline-flex; margin-bottom:0;">
-                    Restore from a previous installation
-                </a>
+                <!-- In the Windows app this card asks the app shell for a native folder picker and
+                     opens that folder as the profile; in a browser it shows the copy form above. -->
+                <button class="mode-card" id="btn-mode-existing" type="button">
+                    <sl-icon name="folder2-open"></sl-icon>
+                    <div class="mode-card-text">
+                        <strong>Open an existing profile</strong>
+                        <small>Use a folder that already holds your Bee Memory Bank data.</small>
+                    </div>
+                </button>
             </div>
         </div>
 
@@ -226,21 +230,12 @@
                 }
             </p>
 
-            <sl-alert variant="neutral" open style="margin-bottom:0;">
-                <sl-icon slot="icon" name="search"></sl-icon>
-                <strong>About AI-powered search</strong><br />
-                Semantic search improves once a language model is available on this node.
-                You can configure this later via <strong>Profile &rarr; AI Agents</strong>.
-            </sl-alert>
-
+            <!-- One way forward only: extras such as AI agents are connected later from the
+                 running app (Profile → AI Agents), not during setup. -->
             <div class="done-actions">
-                <sl-button variant="primary" size="large" href="/Profile?createAgent=1" style="width:100%;">
-                    <sl-icon slot="prefix" name="robot"></sl-icon>
-                    Connect an AI agent now
-                </sl-button>
-                <sl-button variant="default" href="/Login" style="width:100%;">
+                <sl-button variant="primary" size="large" href="/Login" style="width:100%;">
                     <sl-icon slot="prefix" name="box-arrow-in-right"></sl-icon>
-                    Continue to my node
+                    Continue
                 </sl-button>
             </div>
         </div>

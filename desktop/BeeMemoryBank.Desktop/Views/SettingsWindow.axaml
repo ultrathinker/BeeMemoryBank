@@ -1,0 +1,136 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="BeeMemoryBank.Desktop.Views.SettingsWindow"
+        Title="Settings"
+        Width="600"
+        MinWidth="460"
+        MinHeight="300"
+        MaxHeight="800"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        Background="#111119"
+        Icon="avares://BeeMemoryBank.Desktop/Assets/icon.png">
+
+    <Window.Styles>
+        <Style Selector="Border.section">
+            <Setter Property="Background" Value="#1A1A26" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="16,14" />
+        </Style>
+        <Style Selector="TextBlock.sectionTitle">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+        </Style>
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#8B8B9B" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="CheckBox, RadioButton">
+            <Setter Property="Foreground" Value="#D1D5DB" />
+            <Setter Property="FontSize" Value="13" />
+        </Style>
+    </Window.Styles>
+
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="24,12,24,20">
+            <Button Content="Close"
+                    Click="OnCloseClick"
+                    IsCancel="True"
+                    IsDefault="True"
+                    Padding="20,10"
+                    Background="#2D2D3D"
+                    Foreground="#FFFFFF"
+                    CornerRadius="6" />
+        </StackPanel>
+
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="24,24,24,0" Spacing="12">
+                <TextBlock Text="Settings"
+                           FontSize="20"
+                           FontWeight="SemiBold"
+                           Foreground="#FFFFFF"
+                           Margin="0,0,0,4" />
+
+                <!-- Startup -->
+                <Border Classes="section">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="sectionTitle" Text="Startup" />
+                        <CheckBox Name="AutostartCheck"
+                                  Content="Start Bee Memory Bank when I sign in to Windows" />
+                        <TextBlock Classes="hint"
+                                   Text="The app starts minimized to the tray, so sync keeps running in the background." />
+
+                        <TextBlock Text="Profile to open at startup"
+                                   FontSize="13"
+                                   Foreground="#D1D5DB"
+                                   Margin="0,8,0,0" />
+                        <RadioButton Name="AutostartLastUsedRadio"
+                                     GroupName="AutostartProfile"
+                                     Content="The one I used last" />
+                        <RadioButton Name="AutostartFixedRadio"
+                                     GroupName="AutostartProfile"
+                                     Content="Always this profile:" />
+                        <ComboBox Name="AutostartProfileCombo"
+                                  Margin="28,0,0,0"
+                                  MinWidth="300"
+                                  Background="#1E1E2A"
+                                  Foreground="#FFFFFF" />
+                        <TextBlock Name="AutostartHint"
+                                   Classes="hint"
+                                   Text="" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Power -->
+                <Border Classes="section">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="sectionTitle" Text="Power" />
+                        <CheckBox Name="PreventSleepCheck"
+                                  Content="Keep this computer awake while Bee Memory Bank is running" />
+                        <TextBlock Classes="hint"
+                                   Text="Useful when other devices sync through this computer. The screen can still turn off." />
+                    </StackPanel>
+                </Border>
+
+                <!-- Updates -->
+                <Border Classes="section">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="sectionTitle" Text="Updates" />
+                        <TextBlock Name="VersionText"
+                                   FontSize="13"
+                                   Foreground="#D1D5DB" />
+                        <CheckBox Name="AutoUpdateCheck"
+                                  Content="Check for updates automatically" />
+                        <TextBlock Classes="hint"
+                                   Text="Updates are downloaded in the background and installed only when you restart the app." />
+                        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,4,0,0">
+                            <Button Name="CheckNowButton"
+                                    Content="Check now"
+                                    Click="OnCheckNowClick"
+                                    Padding="14,7"
+                                    Background="#2D2D3D"
+                                    Foreground="#FFFFFF"
+                                    CornerRadius="6" />
+                            <Button Name="RestartButton"
+                                    Content="Restart to update"
+                                    Click="OnRestartClick"
+                                    IsVisible="False"
+                                    Padding="14,7"
+                                    Background="#F59E0B"
+                                    Foreground="#111119"
+                                    FontWeight="SemiBold"
+                                    CornerRadius="6" />
+                        </StackPanel>
+                        <TextBlock Name="UpdateStatusText"
+                                   Classes="hint" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

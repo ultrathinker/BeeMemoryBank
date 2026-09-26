@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Class="BeeMemoryBank.Desktop.Views.ConfirmForgetDialog"
-        Title="Forget profile"
+        x:Class="BeeMemoryBank.Desktop.Views.ConfirmDialog"
+        Title="Bee Memory Bank"
         Width="500"
         MinWidth="360"
         MinHeight="180"
@@ -20,13 +20,15 @@
                     Spacing="10"
                     Margin="24,12,24,20">
             <Button Content="Cancel"
+                    Name="CancelButton"
                     Click="OnCancelClick"
                     IsCancel="True"
                     Padding="20,10"
                     Background="#2D2D3D"
                     Foreground="#FFFFFF"
                     CornerRadius="6" />
-            <Button Content="Forget"
+            <Button Content="OK"
+                    Name="ConfirmButton"
                     Click="OnConfirmClick"
                     Padding="20,10"
                     Background="#F59E0B"
@@ -37,7 +39,7 @@
 
         <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
             <StackPanel Margin="24,24,24,0" Spacing="12">
-                <TextBlock Text="Forget this profile?"
+                <TextBlock Name="TitleText"
                            FontSize="18"
                            FontWeight="SemiBold"
                            Foreground="#F59E0B"

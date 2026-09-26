@@ -20,8 +20,9 @@ public partial class ConfirmForgetDialog : Window
     {
         InitializeComponent();
         BodyText.Text =
-            $"Хранилище «{profileName}» будет убрано из списка.\n\n" +
-            $"Данные ОСТАЮТСЯ на диске по пути:\n{dataPath}";
+            $"Profile “{profileName}” will be removed from the list.\n\n" +
+            $"Its data STAYS on disk in:\n{dataPath}\n\n" +
+            "You can bring it back later with Profiles → Add existing profile.";
     }
 
     private void OnCancelClick(object? sender, RoutedEventArgs e)

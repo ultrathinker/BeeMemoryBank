@@ -1,8 +1,6 @@
 using System;
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Text.Json;
 
 namespace BeeMemoryBank.Desktop.Services;
 
@@ -19,12 +17,13 @@ public class PreventSleepService
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern uint SetThreadExecutionState(uint esFlags);
 
-    private readonly string _settingsFilePath;
+    private const string SettingKey = "preventSleep";
+    private readonly DesktopSettingsStore _settings;
     private bool _isEnabled;
 
-    public PreventSleepService()
+    public PreventSleepService(DesktopSettingsStore? settings = null)
     {
-        _settingsFilePath = BeeMemoryBank.AppPaths.BmbPaths.DesktopSettingsFile;
+        _settings = settings ?? new DesktopSettingsStore();
         LoadSettings();
     }
 
@@ -110,35 +109,14 @@ public class PreventSleepService
 
     private void LoadSettings()
     {
-        try
-        {
-            if (File.Exists(_settingsFilePath))
-            {
-                var json = File.ReadAllText(_settingsFilePath);
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("preventSleep", out var prop))
-                {
-                    _isEnabled = prop.GetBoolean();
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[PreventSleepService] Error loading settings: {ex.Message}");
-            _isEnabled = false;
-        }
+        _isEnabled = _settings.GetBool(SettingKey, defaultValue: false);
     }
 
     private void SaveSettings()
     {
         try
         {
-            var options = new JsonWriterOptions { Indented = true };
-            using var stream = new FileStream(_settingsFilePath, FileMode.Create, FileAccess.Write);
-            using var writer = new Utf8JsonWriter(stream, options);
-            writer.WriteStartObject();
-            writer.WriteBoolean("preventSleep", _isEnabled);
-            writer.WriteEndObject();
+            _settings.SetBool(SettingKey, _isEnabled);
         }
         catch (Exception ex)
         {

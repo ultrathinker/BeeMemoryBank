@@ -76,7 +76,7 @@ public sealed class StorageDisplayLogicTests : IDisposable
         StorageDisplayLogic.FormatShellTitle(_profiles, activeProfileId: b.Id)
             .Should().Be("BeeMemoryBank — B");
         StorageDisplayLogic.FormatShellTitle(_profiles, activeProfileId: a.Id)
-            .Should().Be("BeeMemoryBank — Личный");
+            .Should().Be("BeeMemoryBank — Personal");
     }
 
     [Fact]

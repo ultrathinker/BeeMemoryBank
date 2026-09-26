@@ -16,11 +16,14 @@ namespace BeeMemoryBank.Desktop;
 public partial class App : Application
 {
     private TrayIcon? _trayIcon;
-    private DispatcherTimer? _updateTimer;
+    private readonly Services.DesktopSettingsStore _settingsStore = new();
+    private Services.AutostartService? _autostartService;
     private Services.PreventSleepService? _preventSleepService;
-    // Single-instance reference for the manage-storages window so re-clicking "Manage…"
-    // focuses the already-open window instead of stacking duplicates.
+    private Services.DesktopUpdateController? _updates;
+    // Single-instance references so re-clicking "Manage…" / "Settings…" focuses the
+    // already-open window instead of stacking duplicates.
     private Avalonia.Controls.Window? _manageStoragesWindow;
+    private Avalonia.Controls.Window? _settingsWindow;
 
     public override void Initialize()
     {
@@ -72,84 +75,44 @@ public partial class App : Application
                 Dispatcher.UIThread.Post(() => mainWindow.ShowAndFocusWindow());
             };
 
-            // ── §4.5 Storage submenu ─────────────────────────────────────────────
+            // ── §4.5 Profiles submenu ────────────────────────────────────────────
             // The submenu lists every registered profile as a radio entry (checkmark on the
-            // active one), plus "Create..." and "Manage..." commands. It is rebuilt on every
-            // ActiveProfileChanged event because NativeMenu/NativeMenuItem don't expose a
-            // clean way to reach into individual child items across platforms to flip just
-            // their IsChecked — a full rebuild is simpler, idempotent and small (single-digit
-            // items).
-            var storageItem = new NativeMenuItem("Хранилище");
-            var storageMenu = new NativeMenu();
-            storageItem.Menu = storageMenu;
-            RebuildStorageMenu(storageMenu, mainWindow);
+            // active one), plus "New...", "Add existing..." and "Manage..." commands. It is
+            // rebuilt on every ActiveProfileChanged event because NativeMenu/NativeMenuItem
+            // don't expose a clean way to reach into individual child items across platforms
+            // to flip just their IsChecked — a full rebuild is simpler, idempotent and small
+            // (single-digit items).
+            var profilesItem = new NativeMenuItem("Profiles");
+            var profilesMenu = new NativeMenu();
+            profilesItem.Menu = profilesMenu;
+            RebuildStorageMenu(profilesMenu, mainWindow);
 
             mainWindow.ActiveProfileChanged += (s, e) =>
             {
                 Dispatcher.UIThread.Post(() =>
                 {
                     UpdateTrayTooltip();
-                    RebuildStorageMenu(storageMenu, mainWindow);
+                    RebuildStorageMenu(profilesMenu, mainWindow);
                 });
             };
 
-            var autostartService = new Services.AutostartService();
-            var autostartItem = new NativeMenuItem("Autostart")
-            {
-                ToggleType = MenuItemToggleType.CheckBox,
-                IsChecked = autostartService.IsEnabled
-            };
-
-            NativeMenuItem? preventSleepItem = null;
+            // Settings live in their own window (autostart, sleep prevention, updates); the
+            // services are created here once so the window and the app share one state.
+            _autostartService = new Services.AutostartService();
             if (OperatingSystem.IsWindows())
             {
-                _preventSleepService = new Services.PreventSleepService();
+                _preventSleepService = new Services.PreventSleepService(_settingsStore);
                 _preventSleepService.ApplyState();
-
-                preventSleepItem = new NativeMenuItem("Prevent sleep")
-                {
-                    ToggleType = MenuItemToggleType.CheckBox,
-                    IsChecked = _preventSleepService.IsEnabled
-                };
-                preventSleepItem.Click += (s, e) =>
-                {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        try
-                        {
-                            if (OperatingSystem.IsWindows() && _preventSleepService != null)
-                            {
-                                _preventSleepService.IsEnabled = !_preventSleepService.IsEnabled;
-                                preventSleepItem.IsChecked = _preventSleepService.IsEnabled;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Error toggling prevent sleep: {ex.Message}");
-                        }
-                    });
-                };
             }
-            autostartItem.Click += (s, e) =>
+            _updates = new Services.DesktopUpdateController(new Services.DesktopUpdateService(), _settingsStore);
+
+            var settingsItem = new NativeMenuItem("Settings...");
+            settingsItem.Click += (s, e) =>
             {
                 Dispatcher.UIThread.Post(() =>
                 {
-                    try
-                    {
-                        if (autostartService.IsEnabled)
-                        {
-                            autostartService.Disable();
-                        }
-                        else
-                        {
-                            autostartService.Enable();
-                        }
-                        autostartItem.IsChecked = autostartService.IsEnabled;
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error toggling autostart: {ex.Message}");
-                    }
+                    try { ShowSettingsWindow(mainWindow, desktop); }
+                    catch (Exception ex) { Console.WriteLine($"Error opening settings window: {ex.Message}"); }
                 });
             };
 
@@ -163,83 +126,26 @@ public partial class App : Application
                 });
             };
 
-            // Desktop self-update from published GitHub releases (see DesktopUpdateService).
-            var updates = new Services.DesktopUpdateService();
-            var checkItem = new NativeMenuItem("Check for updates") { IsEnabled = updates.IsAvailable };
-            var statusItem = new NativeMenuItem(updates.IsAvailable
-                ? $"Version {updates.CurrentVersion}"
-                : "Updates: not an installed build") { IsEnabled = false };
-
-            async Task RunUpdateCheckAsync(bool interactive)
+            // Update status line: "Version X" while idle (disabled), "Restart to update to Y"
+            // (clickable) once a newer release has been downloaded in the background.
+            var statusItem = new NativeMenuItem(_updates.StatusText) { IsEnabled = false };
+            _updates.Changed += (s, e) =>
             {
-                if (!updates.IsAvailable) return;
-                checkItem.IsEnabled = false;
-                if (interactive) statusItem.Header = "Updates: checking...";
-                try
-                {
-                    var ready = await updates.CheckAndDownloadAsync();
-                    if (ready is not null)
-                    {
-                        statusItem.Header = $"Restart to update to {ready}";
-                        statusItem.IsEnabled = true;
-                    }
-                    else if (interactive)
-                    {
-                        statusItem.Header = $"Up to date ({updates.CurrentVersion})";
-                    }
-                }
-                catch (Exception ex)
-                {
-                    if (interactive) statusItem.Header = "Updates: check failed";
-                    Console.WriteLine($"Update check failed: {ex.Message}");
-                }
-                finally
-                {
-                    checkItem.IsEnabled = true;
-                }
-            }
-
-            checkItem.Click += (s, e) => Dispatcher.UIThread.Post(async () => await RunUpdateCheckAsync(interactive: true));
-
+                if (!_updates.IsAvailable) return;
+                statusItem.Header = _updates.ReadyVersion != null
+                    ? $"Restart to update to {_updates.ReadyVersion}"
+                    : $"Version {_updates.CurrentVersion}";
+                statusItem.IsEnabled = _updates.ReadyVersion != null;
+            };
             statusItem.Click += (s, e) =>
             {
-                if (updates.ReadyVersion is null) return;
-                Dispatcher.UIThread.Post(() =>
-                {
-                    // Stop the node first (RealClose -> graceful stdin-EOF shutdown) so the
-                    // database is closed before Velopack swaps the files, then restart into it.
-                    mainWindow.RealClose();
-                    try
-                    {
-                        updates.ApplyAndRestart();
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Applying update failed: {ex.Message}");
-                        desktop.Shutdown();
-                    }
-                });
+                Dispatcher.UIThread.Post(() => RestartToUpdate(mainWindow, desktop));
             };
-
-            // Quiet background check: shortly after start, then daily. Only downloads; the user
-            // chooses when to restart.
-            _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
-            _updateTimer.Tick += async (s, e) =>
-            {
-                _updateTimer.Interval = TimeSpan.FromHours(24);
-                await RunUpdateCheckAsync(interactive: false);
-            };
-            if (updates.IsAvailable) _updateTimer.Start();
 
             menu.Items.Add(openItem);
-            menu.Items.Add(storageItem);
-            menu.Items.Add(autostartItem);
-            if (preventSleepItem != null)
-            {
-                menu.Items.Add(preventSleepItem);
-            }
+            menu.Items.Add(profilesItem);
+            menu.Items.Add(settingsItem);
             menu.Items.Add(new NativeMenuItemSeparator());
-            menu.Items.Add(checkItem);
             menu.Items.Add(statusItem);
             menu.Items.Add(new NativeMenuItemSeparator());
             menu.Items.Add(exitItem);
@@ -264,8 +170,33 @@ public partial class App : Application
         }
     }
 
+    private void RestartToUpdate(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        // Stop the node first (RealClose -> graceful stdin-EOF shutdown) so the database is
+        // closed before Velopack swaps the files, then restart into the new version.
+        _updates?.ApplyAndRestart(mainWindow.RealClose, () => desktop.Shutdown());
+    }
+
+    private void ShowSettingsWindow(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        if (_settingsWindow?.IsVisible == true)
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        _settingsWindow = new Views.SettingsWindow(
+            mainWindow, _autostartService!, _preventSleepService, _updates!,
+            () => RestartToUpdate(mainWindow, desktop));
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        // Not owned by the main window: that one usually sits hidden in the tray, and an
+        // owned window would be hidden together with it.
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
+    }
+
     /// <summary>
-    /// Rebuilds the nested "Хранилище" submenu from the current profile registry. Called on
+    /// Rebuilds the nested "Profiles" submenu from the current profile registry. Called on
     /// app start and on every <see cref="MainWindow.ActiveProfileChanged"/> so the radio
     /// checkmark follows the live active profile.
     ///
@@ -317,48 +248,40 @@ public partial class App : Application
 
         storageMenu.Items.Add(new NativeMenuItemSeparator());
 
-        var createItem = new NativeMenuItem("Создать хранилище…");
+        var createItem = new NativeMenuItem("New profile...");
         createItem.Click += (s, e) =>
         {
             Dispatcher.UIThread.Post(async () =>
             {
-                try { await ShowCreateStorageDialogAsync(mainWindow); }
-                catch (Exception ex) { Console.WriteLine($"Error in create-storage dialog: {ex.Message}"); }
+                mainWindow.ShowAndFocusWindow();
+                try { await Views.ProfileCommands.NewProfileAsync(mainWindow, mainWindow); }
+                catch (Exception ex) { Console.WriteLine($"Error in new-profile dialog: {ex.Message}"); }
             });
         };
         storageMenu.Items.Add(createItem);
 
-        var manageItem = new NativeMenuItem("Управление хранилищами…");
+        var addExistingItem = new NativeMenuItem("Add existing profile...");
+        addExistingItem.Click += (s, e) =>
+        {
+            Dispatcher.UIThread.Post(async () =>
+            {
+                mainWindow.ShowAndFocusWindow();
+                try { await Views.ProfileCommands.AddExistingAsync(mainWindow, mainWindow); }
+                catch (Exception ex) { Console.WriteLine($"Error in add-existing-profile dialog: {ex.Message}"); }
+            });
+        };
+        storageMenu.Items.Add(addExistingItem);
+
+        var manageItem = new NativeMenuItem("Manage profiles...");
         manageItem.Click += (s, e) =>
         {
             Dispatcher.UIThread.Post(() =>
             {
                 try { ShowManageStoragesWindow(mainWindow); }
-                catch (Exception ex) { Console.WriteLine($"Error opening manage-storages window: {ex.Message}"); }
+                catch (Exception ex) { Console.WriteLine($"Error opening manage-profiles window: {ex.Message}"); }
             });
         };
         storageMenu.Items.Add(manageItem);
-    }
-
-    private async System.Threading.Tasks.Task ShowCreateStorageDialogAsync(MainWindow mainWindow)
-    {
-        mainWindow.ShowAndFocusWindow();
-
-        // ShowDialog(owner) sets Owner internally; no direct assignment here.
-        var dialog = new Views.CreateStorageDialog(mainWindow.Profiles);
-        var ok = await dialog.ShowDialog<bool?>(mainWindow);
-        if (ok != true || dialog.CreatedProfile == null) return;
-
-        // Newly-created profile → switch to it like a normal target. The empty data dir will
-        // surface the existing /Setup wizard, nothing else to do here.
-        try
-        {
-            await mainWindow.SwitchProfileAsync(dialog.CreatedProfile.Id);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error switching to newly created profile: {ex.Message}");
-        }
     }
 
     private void ShowManageStoragesWindow(MainWindow mainWindow)
