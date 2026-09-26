@@ -190,6 +190,30 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### 1.0.9: every page works in a narrow or short window (2026-09-26)
+
+The web UI (the same pages the Windows app shows) had almost no rules for small windows. At
+about 800 px the logo broke onto three lines, header links ran off the edge, and toolbar
+buttons were cut off or out of reach — body hides overflow, so they could not even be scrolled
+to. Checked page by page at 360–1366 px wide with a new audit script
+(`tools/layout-audit/shot.py`: screenshots plus automatic detection of page-wide sideways
+scroll, controls past the edge and clipped boxes) and three independent reviews of the shots.
+
+- **Header:** the logo never wraps; below 1280 px the links become icons with tooltips, below
+  720 px they move into one menu button (with Logout), below 480 px the logo shows the bee only.
+- **Folder tree:** below 720 px it is a drawer over the page, closed by default, opened from a
+  header button, closing itself after a pick or a tap beside it, with the page dimmed behind it;
+  between 720 and 1024 px it is capped at 260 px. The wide-window collapsed/expanded preference
+  is not touched by the narrow-window drawer.
+- **Content column** can shrink (`min-width: 0`), so one wide table or long title no longer
+  widens the whole page; tables inside cards scroll sideways instead of cutting off their action
+  columns (Admin nodes/agents/models/snapshots, Users, Roles, Profile, Folder, Tags).
+- Rows of buttons and title bars wrap: the home page actions, the article toolbar, Graph, Tags,
+  Users, Roles; the Internet Access address grid folds into one column.
+- The AI page hides the tree button (it has no tree) and keeps its heading clear of the chat
+  history tab.
+- The Windows app window can now be made as small as 420×480 (it was 800×600).
+
 #### Desktop 1.0.8: an update window, no second sign-in, a shorter first run (2026-09-26)
 
 - **"Check for updates" shows what it is doing.** The tray item (and Settings → Check now) used to
