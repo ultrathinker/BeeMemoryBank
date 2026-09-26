@@ -18,6 +18,18 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
     /// <summary>"standalone" or "join" — tracks which path the user took, shown in step 3</summary>
     public string Mode { get; set; } = "standalone";
 
+    /// <summary>Pre-filled login name: nearly everyone keeps it.</summary>
+    public const string SuggestedUsername = "admin";
+
+    /// <summary>
+    /// Pre-filled name of this node: the computer's own name, which is what the user would type
+    /// anyway. Empty in a container, where the machine name is a random id nobody recognises.
+    /// </summary>
+    public static string SuggestedNodeName =>
+        string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : Environment.MachineName;
+
     public void OnGet(string? step, string? mode)
     {
         Mode = mode ?? "standalone";
@@ -109,7 +121,7 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
             return Page();
         }
 
-        return RedirectToPage("/Setup", new { step = "done", mode = "standalone" });
+        return await SignInOrFinishAsync(adminUsername, password, "standalone");
     }
 
     public async Task<IActionResult> OnPostJoinAsync(
@@ -139,7 +151,30 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
             return Page();
         }
 
-        return RedirectToPage("/Setup", new { step = "done", mode = "join" });
+        return await SignInOrFinishAsync(joinAdminUsername, joinPassword, "join");
+    }
+
+    /// <summary>
+    /// The user has just typed the password: sign them in and open the app, instead of a "done"
+    /// screen followed by the same login again. If that sign-in fails for any reason the node is
+    /// still set up, so fall back to the done screen and its Continue-to-login button.
+    /// </summary>
+    private async Task<IActionResult> SignInOrFinishAsync(string username, string password, string mode)
+    {
+        try
+        {
+            var login = await api.LoginAsync(username, password);
+            if (login.Success)
+            {
+                await WebSignIn.SignInAsync(HttpContext, login);
+                return LocalRedirect("/Tree");
+            }
+        }
+        catch
+        {
+            // Fall through to the done screen.
+        }
+        return RedirectToPage("/Setup", new { step = "done", mode });
     }
 
     /// <summary>

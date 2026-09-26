@@ -1,4 +1,4 @@
-// Setup wizard logic (mode selection, forms, network scan, and submission loader)
+// Setup wizard logic (mode selection, forms, on-request network scan, and submission loader)
 (function () {
     function goToForm(mode) {
         var panelMode = document.getElementById('panel-mode');
@@ -10,22 +10,6 @@
         var formJoin = document.getElementById('form-join');
         if (formStandalone) formStandalone.style.display = (mode === 'standalone') ? 'block' : 'none';
         if (formJoin) formJoin.style.display = (mode === 'join') ? 'block' : 'none';
-
-        updateStepDots(2);
-        if (mode === 'join') scanNetwork();
-    }
-
-    function updateStepDots(activeStep) {
-        var dots = document.querySelectorAll('.step-dot');
-        var lines = document.querySelectorAll('.step-line');
-        dots.forEach(function (dot, i) {
-            dot.classList.remove('active', 'done');
-            if (i + 1 < activeStep) dot.classList.add('done');
-            else if (i + 1 === activeStep) dot.classList.add('active');
-        });
-        lines.forEach(function (line, i) {
-            line.classList.toggle('done', i + 1 < activeStep);
-        });
     }
 
     var btnExisting = document.getElementById('btn-mode-existing');
@@ -61,11 +45,9 @@
     if (btnStandalone) btnStandalone.addEventListener('click', function () { goToForm('standalone'); });
     if (btnJoin) btnJoin.addEventListener('click', function () { goToForm('join'); });
 
+    // The network scan runs only when asked for, never by itself.
     var btnScan = document.getElementById('btn-scan-network');
     if (btnScan) btnScan.addEventListener('click', scanNetwork);
-
-    var joinFormOnLoad = document.getElementById('form-join');
-    if (joinFormOnLoad && joinFormOnLoad.style.display !== 'none') scanNetwork();
 
     function escapeHtml(s) {
         return String(s == null ? '' : s)
@@ -79,7 +61,7 @@
         box.innerHTML =
             '<small class="text-muted">' +
             '<sl-spinner style="font-size:0.85em;vertical-align:-2px;"></sl-spinner> ' +
-            'Searching your network\u2026</small>';
+            'Looking for devices\u2026</small>';
         fetch('/Setup?handler=DiscoveredNodes', { headers: { 'Accept': 'application/json' } })
             .then(function (r) { return r.ok ? r.json() : []; })
             .then(function (nodes) { renderDiscovered(nodes || []); })
@@ -92,14 +74,14 @@
         box.innerHTML = '';
         if (!nodes.length) {
             box.innerHTML =
-                '<small class="text-muted">No BeeMemoryBank nodes found on your network. ' +
-                'Enter the remote node URL manually below.</small>';
+                '<small class="text-muted">Nothing found on your network. ' +
+                'Type the address of the other device above.</small>';
             return;
         }
         var head = document.createElement('small');
         head.className = 'text-muted';
-        head.textContent = nodes.length + ' node' + (nodes.length > 1 ? 's' : '') +
-            ' found on your network \u2014 click to use:';
+        head.textContent = nodes.length + ' device' + (nodes.length > 1 ? 's' : '') +
+            ' found \u2014 click one to use it:';
         box.appendChild(head);
         nodes.forEach(function (n) {
             var btn = document.createElement('button');
@@ -127,11 +109,11 @@
         form.addEventListener('submit', function () {
             var kind = form.getAttribute('data-setup-form');
             if (kind === 'join') {
-                if (title) title.textContent = 'Joining network\u2026';
-                if (msg) msg.textContent = 'Exchanging keys, downloading signed snapshot, importing data. This may take up to a minute.';
+                if (title) title.textContent = 'Connecting\u2026';
+                if (msg) msg.textContent = 'Copying your notes from the other device. This may take up to a minute.';
             } else {
-                if (title) title.textContent = 'Creating network\u2026';
-                if (msg) msg.textContent = 'Generating keys and initializing local database.';
+                if (title) title.textContent = 'Setting up\u2026';
+                if (msg) msg.textContent = 'This takes a few seconds.';
             }
             form.querySelectorAll('[data-submit-btn]').forEach(function (b) { b.loading = true; b.disabled = true; });
             if (dlg && typeof dlg.show === 'function') dlg.show();

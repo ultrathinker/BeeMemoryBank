@@ -28,14 +28,6 @@
         .setup-card .logo-icon { width: 1.6rem; height: 1.6rem; vertical-align: middle; margin-right: 6px; }
         .setup-subtitle { text-align: center; color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 24px; }
 
-        /* Step indicator */
-        .step-indicator { display: flex; align-items: center; justify-content: center; gap: 0; margin-bottom: 28px; }
-        .step-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); background: var(--bg-app); transition: all 0.2s; flex-shrink: 0; }
-        .step-dot.active { border-color: var(--sl-color-primary-600); color: var(--sl-color-primary-600); background: var(--sl-color-primary-950); }
-        .step-dot.done { border-color: var(--sl-color-success-500); background: var(--sl-color-success-950); color: var(--sl-color-success-400); }
-        .step-line { flex: 1; height: 2px; background: var(--border); max-width: 48px; }
-        .step-line.done { background: var(--sl-color-success-500); }
-
         /* Mode selection cards */
         .mode-cards { display: flex; flex-direction: column; gap: 12px; }
         .mode-card { display: flex; align-items: center; gap: 16px; padding: 18px; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--bg-app); transition: border-color 0.15s, background 0.15s; text-align: left; width: 100%; }
@@ -66,9 +58,9 @@
     <div class="setup-card">
         <h2>
             <img src="/images/favicon.svg" alt="" class="logo-icon" />
-            BeeMemoryBank Setup
+            Welcome to Bee Memory Bank
         </h2>
-        <p class="setup-subtitle">Set up your personal memory node in three steps.</p>
+        <p class="setup-subtitle">Choose how to start.</p>
 
         <partial name="_HttpsRequiredAlert" />
 
@@ -85,24 +77,6 @@
             int currentStepNum = step == "done" ? 3 : (step == "form" ? 2 : 1);
         }
 
-        <!-- Step indicator -->
-        @if (step != "legacy")
-        {
-            <div class="step-indicator">
-                <div class="step-dot @(currentStepNum > 1 ? "done" : currentStepNum == 1 ? "active" : "")">
-                    @if (currentStepNum > 1) { <sl-icon name="check-lg"></sl-icon> } else { <text>1</text> }
-                </div>
-                <div class="step-line @(currentStepNum > 1 ? "done" : "")"></div>
-                <div class="step-dot @(currentStepNum > 2 ? "done" : currentStepNum == 2 ? "active" : "")">
-                    @if (currentStepNum > 2) { <sl-icon name="check-lg"></sl-icon> } else { <text>2</text> }
-                </div>
-                <div class="step-line @(currentStepNum > 2 ? "done" : "")"></div>
-                <div class="step-dot @(currentStepNum == 3 ? "done" : "")">
-                    @if (currentStepNum == 3) { <sl-icon name="check-lg"></sl-icon> } else { <text>3</text> }
-                </div>
-            </div>
-        }
-
         <!-- ═══ Open an existing profile, browser variant (reached solely via the "Open an existing
              profile" card on step 1 outside the Windows app; never shown automatically) ═══ -->
         <div class="wizard-panel @(step == "legacy" ? "active" : "")" id="panel-legacy">
@@ -112,7 +86,7 @@
             <form method="post" asp-page-handler="Migrate" class="tab-panel-form" style="margin-top:12px;">
                 @Html.AntiForgeryToken()
                 <sl-input name="sourcePath" label="Profile folder" required autofocus
-                          placeholder="e.g. C:\bee\data" help-text="The folder on this computer that contains beememorybank.db. Its data is copied into this node."></sl-input>
+                          placeholder="e.g. C:\bee\data" help-text="The folder on this computer that contains beememorybank.db. Its data is copied into this app."></sl-input>
                 <div class="form-actions" style="margin-top:4px;">
                     <sl-button type="submit" variant="primary" style="width:100%;">
                         <sl-icon slot="prefix" name="folder2-open"></sl-icon> Open profile
@@ -127,15 +101,15 @@
                 <button class="mode-card" id="btn-mode-standalone" type="button">
                     <sl-icon name="plus-circle"></sl-icon>
                     <div class="mode-card-text">
-                        <strong>Create a new network</strong>
-                        <small>Start fresh — set up the first node and become the admin.</small>
+                        <strong>Start fresh</strong>
+                        <small>Create a new, empty memory bank on this computer.</small>
                     </div>
                 </button>
                 <button class="mode-card" id="btn-mode-join" type="button">
                     <sl-icon name="link"></sl-icon>
                     <div class="mode-card-text">
-                        <strong>Join an existing network</strong>
-                        <small>Connect this node to a network that's already running elsewhere.</small>
+                        <strong>Connect to another device</strong>
+                        <small>Use the notes you already keep on another computer or server.</small>
                     </div>
                 </button>
                 <!-- In the Windows app this card asks the app shell for a native folder picker and
@@ -161,18 +135,18 @@
             <div id="form-standalone" style="display:@(mode == "standalone" || currentStepNum == 2 && mode != "join" ? "block" : "none");">
                 <form method="post" asp-page-handler="Standalone" class="tab-panel-form" data-setup-form="standalone">
                     @Html.AntiForgeryToken()
-                    <sl-input name="adminUsername" label="Admin Username" required autofocus
-                              placeholder="e.g. admin" autocomplete="username"></sl-input>
-                    <small class="text-muted" style="margin-top:-12px;">Used to log in. Can be different from the node name. Rename later via Profile.</small>
-                    <sl-input name="displayName" label="Node Name" required
-                              placeholder="e.g. My Laptop"></sl-input>
-                    <sl-input name="password" label="Password" type="password" required
-                              password-toggle minlength="6"></sl-input>
-                    <sl-input name="confirmPassword" label="Confirm Password" type="password" required
-                              password-toggle minlength="6"></sl-input>
+                    <sl-input name="adminUsername" label="Username" required
+                              value="@SetupModel.SuggestedUsername" autocomplete="username"></sl-input>
+                    <sl-input name="password" label="Password" type="password" required autofocus
+                              password-toggle minlength="6" autocomplete="new-password"></sl-input>
+                    <sl-input name="confirmPassword" label="Repeat password" type="password" required
+                              password-toggle minlength="6" autocomplete="new-password"></sl-input>
+                    <sl-input name="displayName" label="Name of this computer" required
+                              value="@SetupModel.SuggestedNodeName" placeholder="e.g. My Laptop"
+                              help-text="How this computer appears on your other devices."></sl-input>
                     <div class="form-actions">
                         <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
-                            <sl-icon slot="prefix" name="plus-circle"></sl-icon> Create Network
+                            <sl-icon slot="prefix" name="plus-circle"></sl-icon> Create
                         </sl-button>
                     </div>
                 </form>
@@ -182,31 +156,30 @@
             <div id="form-join" style="display:@(mode == "join" ? "block" : "none");">
                 <form method="post" asp-page-handler="Join" class="tab-panel-form" data-setup-form="join">
                     @Html.AntiForgeryToken()
-                    <sl-input name="joinAdminUsername" label="Admin Username" required
-                              placeholder="e.g. admin" autocomplete="username"></sl-input>
-                    <small class="text-muted" style="margin-top:-12px;">Used to log in on this node. Can be different from the node name.</small>
-                    <sl-input name="joinDisplayName" label="Node Name" required
-                              placeholder="e.g. My Phone"></sl-input>
+                    <sl-input name="remoteUrl" id="join-remote-url" label="Address of the other device" required autofocus
+                              placeholder="https://bee.example.com" type="url"></sl-input>
 
-                    <!-- ADDITIVE: discovered-nodes list. Populated by a mDNS scan (OnGetDiscoveredNodes).
-                         Clicking a chip only pre-fills the manual Remote Node URL field below — the
-                         manual-entry path is unchanged and still does the actual submit. -->
+                    <!-- Optional, on request only: an mDNS scan (OnGetDiscoveredNodes) whose results
+                         pre-fill the address field above. Never runs by itself. -->
                     <div id="join-discovered" style="margin-bottom:4px;">
                         <sl-button variant="default" size="small" id="btn-scan-network" type="button" outline
                                    style="width:100%;">
                             <sl-icon slot="prefix" name="broadcast-pin"></sl-icon>
-                            Scan my network for nodes
+                            Find devices on my network
                         </sl-button>
                         <div id="discovered-nodes" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
 
-                    <sl-input name="remoteUrl" id="join-remote-url" label="Remote Node URL" required
-                              placeholder="https://bee.example.com" type="url"></sl-input>
+                    <sl-input name="joinAdminUsername" label="Username" required
+                              value="@SetupModel.SuggestedUsername" autocomplete="username"></sl-input>
                     <sl-input name="joinPassword" label="Password" type="password" required
-                              password-toggle minlength="6"></sl-input>
+                              password-toggle minlength="6" autocomplete="current-password"></sl-input>
+                    <sl-input name="joinDisplayName" label="Name of this computer" required
+                              value="@SetupModel.SuggestedNodeName" placeholder="e.g. My Laptop"
+                              help-text="How this computer appears on your other devices."></sl-input>
                     <div class="form-actions">
                         <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
-                            <sl-icon slot="prefix" name="link"></sl-icon> Join Network
+                            <sl-icon slot="prefix" name="link"></sl-icon> Connect
                         </sl-button>
                     </div>
                 </form>
@@ -222,11 +195,11 @@
             <p class="text-muted" style="text-align:center;font-size:0.9rem;margin-bottom:20px;">
                 @if (mode == "join")
                 {
-                    <text>Your node has joined the network. Log in whenever you're ready.</text>
+                    <text>This computer is connected. Sign in to open your notes.</text>
                 }
                 else
                 {
-                    <text>Your node is ready. Log in whenever you're ready.</text>
+                    <text>Everything is ready. Sign in to open your notes.</text>
                 }
             </p>
 
