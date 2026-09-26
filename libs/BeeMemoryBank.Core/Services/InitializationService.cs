@@ -88,7 +88,9 @@ public class InitializationService(
         finally
         {
             Array.Clear(masterDek);
-            Array.Clear(kek);
+            // kek is still null when a step before the key derivation failed; clearing it
+            // unconditionally threw ArgumentNullException here and hid that real error.
+            if (kek != null) Array.Clear(kek);
         }
     }
 
