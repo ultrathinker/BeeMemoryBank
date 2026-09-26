@@ -245,14 +245,16 @@ API and Web processes for you — no manual `BMB_INTERNAL_KEY` juggling between 
 **Desktop mode** (recommended for a personal machine/laptop): download
 `BeeMemoryBank-win-Setup.exe` from the [latest release](https://github.com/ultrathinker/BeeMemoryBank/releases/latest)
 and run it. It is a per-user install: no admin rights, nothing else to install (the .NET runtime
-ships inside the app folder), and it starts with Windows (turn that off with **Autostart** in the
-tray menu). Releases up to v1.0.6 are not code-signed, so SmartScreen may warn about an
-unrecognized app: choose **More info → Run anyway**. See the [code signing policy](#code-signing-policy)
-and [what the app sends over the network](PRIVACY.md).
+ships inside the app folder), and it starts with Windows (turn that off in **Settings**). Releases
+are not code-signed yet, so SmartScreen may warn about an unrecognized app: choose **More info →
+Run anyway**. See the [code signing policy](#code-signing-policy) and
+[what the app sends over the network](PRIVACY.md).
 
-The app lives in the tray. Right-click it for Autostart, Prevent-sleep and **Check for updates**;
-it also checks on its own and offers "Restart to update" when a new release is out. Data is kept
-in `%LOCALAPPDATA%\BeeMemoryBankData` and survives updates and uninstall.
+The app lives in the tray. Right-click it for **Profiles** (separate memory banks, each with its
+own data folder, password and sync network: create, add an existing folder, move, rename) and
+**Settings** (start with Windows, profile to open at startup, keep the computer awake, updates).
+It checks for updates on its own and offers "Restart to update" when a new release is out. Data
+is kept in `%LOCALAPPDATA%\BeeMemoryBankData` and survives updates and uninstall.
 
 To build the installer yourself (requires the [.NET 10 SDK](https://dotnet.microsoft.com/download)
 and `dotnet tool install -g vpk`):
@@ -622,7 +624,7 @@ line shown above (Caddy and Apache `mod_proxy` send it by default).
 | Linux/systemd | `git pull` → `dotnet publish ...` → `sudo systemctl restart beememorybank-api beememorybank-web` |
 | macOS/launchd | `git pull` → `dotnet publish ...` → `launchctl kickstart -k gui/$(id -u)/com.beememorybank.api` (and `.web`) |
 | Windows/NSSM | `git pull` → `dotnet publish ...` → `nssm restart BeeMemoryBankApi BeeMemoryBankWeb` |
-| Windows Desktop | Automatic: the tray offers "Restart to update" when a release is out (or Tray icon → Check for updates) |
+| Windows Desktop | Automatic: the tray offers "Restart to update" when a release is out (or Tray icon → Settings → Check now) |
 | Windows Server (MSI) | `git pull` → `.\scripts\pack-windows-msi.ps1` → `msiexec /i ...` (the stable `UpgradeCode` lets it upgrade in place; data in `ProgramData` is preserved) |
 
 Tip: take a snapshot via Admin → Snapshots → Create before updating, in case a DB migration goes sideways.

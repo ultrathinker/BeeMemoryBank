@@ -190,6 +190,41 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### Desktop 1.0.7: sign-in in the app window, profiles, settings, a simpler first run (2026-09-26)
+
+From a hands-on test of the Windows app as an ordinary user would meet it.
+
+- **After a restart the app window stayed black and the sign-in page opened in the external
+  browser.** The node's front proxies to the Web process with that process's own host:port, and
+  cookie authentication built an absolute `/Login` redirect from it. The window treated the
+  internal port as a foreign site and handed it to the default browser; every start that needed a
+  sign-in did this. The login and access-denied redirects are now relative.
+- **Profiles instead of "storages", in English like the rest of the app.** The tray menu was half
+  English, half Russian; it now reads Open / Profiles / Settings… / version / Exit. The Profiles
+  submenu and window can create a profile, **add an existing profile folder** (checked to really
+  hold a vault) and **move a profile's data folder**: the node is stopped, the vault is copied and
+  verified, the profile is repointed and started again, and on any failure it keeps (or gets back)
+  its old folder. The old copy is kept unless the user chooses to delete it.
+- **One Settings window, opened from the tray:** start with Windows, which profile opens at
+  startup, keep the computer awake, check for updates automatically / now, restart to update.
+  Settings owned by different parts of the app no longer overwrite each other's keys in
+  `desktop-settings.json`.
+- **Dialogs grow with their content and scroll.** They had a fixed size, so opening "Advanced"
+  pushed the buttons out of the window. Buttons now sit at the bottom and always stay visible.
+- **First-run setup has one way forward per step.** The "Connect an AI agent now" button and the
+  AI search note are gone from the last step (agents are added later from the running app). Step
+  one offers three paths: create a network, join one by URL, or **open an existing profile** — in
+  the app a folder picker, in a browser the existing copy-from-path form.
+- **Desktop updates download a delta.** CI seeds the release folder with the latest published
+  release before packing, so an update fetches a few MB instead of the full ~190 MB package.
+- Android: the app version comes from `VERSION` (it was always 1.0), the server address on the
+  setup screen starts empty instead of a half-typed domain, the app leaves the content pages
+  the moment the vault locks rather than only on the next resume, and a folder page shows an
+  article created in it right away instead of after the folder is opened again. The Maestro flows
+  run against a local test stand again (`mobile/maestro-tests/stand`).
+- A failure early in node initialization is no longer hidden behind an `ArgumentNullException`
+  from the key cleanup in `finally`.
+
 #### No firewall prompt on a fresh desktop install; `/api/dek-rotation/accept` answers 409 when busy (2026-09-25)
 
 - **Windows Firewall no longer asks about BeeMemoryBank.Api after installation.** The prompt came
@@ -204,8 +239,8 @@ revoke rows that predate the row-versioning migration above and never got their 
   appears hit exactly this. The web UI and CLI already show a 409 as an error. This was also the
   cause of the intermittent CI failures of `DekRotationHookMandatoryTests`, together with the
   unlock's background sweep of pending auto-accepts running late on a slow runner.
-- Releases built by CI carry no delta package, so a desktop update downloads the full package
-  (~190 MB); the few-MB deltas mentioned below apply to locally built feeds.
+- Releases built by CI up to 1.0.6 carry no delta package, so updating to them downloads the full
+  package (~190 MB); 1.0.7 fixed that.
 
 #### Windows desktop install: self-updating, half the size, starts with Windows (2026-09-25, 1.0.5-1.0.6)
 
