@@ -43,6 +43,15 @@ public partial class App : Application
             using var conn = _dbFactory.CreateConnection();
             await conn.ExecuteAsync("PRAGMA journal_mode=WAL;");
             await conn.ExecuteAsync("PRAGMA synchronous=NORMAL;");
+
+            // The phone has no admin screen to approve a DEK rotation, so without this it never
+            // applies one: every article written after a rotation stays unreadable on it
+            // (AuthTagMismatch), and what it writes stays on the old key (BMB-31, scenario 20).
+            // A superadmin peer already holds the master key, so following its rotations adds no
+            // trust the phone had not given it. Runs at every start so a superadmin peer learned
+            // since is covered too; a rotation left pending is applied at the next unlock.
+            await conn.ExecuteAsync(
+                "UPDATE tbl_whitelist SET auto_accept_dek_rotation = 1 WHERE is_superadmin = 1 AND auto_accept_dek_rotation = 0");
         }
         catch (Exception ex)
         {
