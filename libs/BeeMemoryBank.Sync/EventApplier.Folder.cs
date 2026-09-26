@@ -52,11 +52,23 @@ public partial class EventApplier
         });
     }
 
+    /// <summary>
+    /// Finds the local folder an incoming rename or delete refers to: by the sender's id first,
+    /// then by path. Folder ids are not shared across nodes for every folder — an ancestor that
+    /// EnsureExistsAsync vivified (the parent of a synced folder_create, the folders above a new
+    /// article) gets a fresh local id and no event of its own, so two nodes hold the same folder
+    /// under different ids. Looking up by id alone made a rename or delete of such a folder a
+    /// silent no-op on the peer, and the tree diverged for good.
+    /// </summary>
+    private async Task<Folder?> ResolveFolderAsync(Guid folderId, string path)
+        => await folderRepo.GetByIdAsync(folderId, includeDeleted: true)
+           ?? await folderRepo.GetByPathAsync(path);
+
     private async Task ApplyFolderRenameAsync(SyncEvent evt)
     {
         var p = Deserialize<FolderRenamePayload>(evt.Payload);
 
-        var folder = await folderRepo.GetByIdAsync(p.FolderId, includeDeleted: true);
+        var folder = await ResolveFolderAsync(p.FolderId, p.OldPath);
         if (folder == null)
         {
             // Folder not known locally — ensure the old path exists so rename can proceed
@@ -71,7 +83,10 @@ public partial class EventApplier
                 new RowVersion(evt.LamportTs, evt.NodeId)))
             return; // local wins, skip
 
-        await folderRepo.RenamePathAsync(p.OldPath, p.NewPath, p.FolderId, evt.LamportTs, evt.NodeId, p.UpdatedAt);
+        // folder.Id, not p.FolderId: when the folder was found by path above, the local row has a
+        // different id, and RenamePathAsync updates the folder row itself by id — with the sender's
+        // id it would move the subfolders and the articles' paths but leave the folder row behind.
+        await folderRepo.RenamePathAsync(p.OldPath, p.NewPath, folder.Id, evt.LamportTs, evt.NodeId, p.UpdatedAt);
 
         // The folder-ACL cache stores resolved PATHS, not folder ids. FolderService does this for
         // local renames; a rename arriving over sync has to as well, or a rule on the old path
@@ -86,7 +101,7 @@ public partial class EventApplier
     {
         var p = Deserialize<FolderDeletePayload>(evt.Payload);
 
-        var folder = await folderRepo.GetByIdAsync(p.FolderId, includeDeleted: true);
+        var folder = await ResolveFolderAsync(p.FolderId, p.Path);
         if (folder == null) return;
 
         if (folder.Status == "D")
@@ -121,12 +136,12 @@ public partial class EventApplier
         // above returns early on every retry (only bumping lamport if higher) and never reaches
         // ClearFolderIdUnscopedAsync again, so the orphaned folder_id never self-heals. Detaching first means a crash before the soft-delete just leaves the folder
         // status still 'A', so the retry re-runs this whole method and completes it.
-        await articleRepo.ClearFolderIdUnscopedAsync(p.FolderId);
-        await folderRepo.SoftDeleteAsync(p.FolderId, p.DeletedAt);
+        await articleRepo.ClearFolderIdUnscopedAsync(folder.Id);
+        await folderRepo.SoftDeleteAsync(folder.Id, p.DeletedAt);
         // Same reason as the article path: the already-deleted branch at the top of this method
         // compares against this row's version, so it has to be the delete's, not the last rename's.
-        await folderRepo.SetDeleteVersionAsync(p.FolderId, new RowVersion(evt.LamportTs, evt.NodeId));
-        await folderAccess.InvalidateCacheForFolderAsync(p.FolderId);
+        await folderRepo.SetDeleteVersionAsync(folder.Id, new RowVersion(evt.LamportTs, evt.NodeId));
+        await folderAccess.InvalidateCacheForFolderAsync(folder.Id);
     }
 
     private async Task ApplyMediaCreateAsync(SyncEvent evt)
