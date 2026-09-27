@@ -190,6 +190,28 @@ revoke rows that predate the row-versioning migration above and never got their 
 
 ### Fixed
 
+#### 1.0.11: key rotation, protected comments (2026-09-27)
+
+Second pass on the three-node test stand, this time through master-key rotations and a revoked
+phone. Each fix has a test that fails without it and was re-run on the stand.
+
+- **Articles written before a key rotation could become unreadable after a restart.** A node
+  keeps the previous master keys so that bodies still arriving under an old key open, but it kept
+  them in memory only: after a restart, a late body from a slow device failed to open for good.
+  Retired keys are now stored in the profile, each wrapped under the key that replaced it, so the
+  chain survives restarts and later rotations.
+- **Android did not follow key rotations started on another device** and stopped syncing after
+  one: the automatic accept was off for the other superadmin devices. It is now on for them, like
+  on the other clients.
+- **Comments on a protected article are sealed under its passphrase,** like the body. Before,
+  anyone who could open the vault read them, and the comments API listed any article's comments
+  to any caller, including a user denied the folder; it now applies the folder rules too. Without
+  the unlock a comment shows as locked and a new one cannot be added; protecting, unprotecting or
+  changing the passphrase re-seals the existing comments and keeps their dates. Comments written
+  before this version are sealed the next time the article is unlocked.
+- **Plaintext comments from older Android builds** are encrypted the next time the node is
+  unlocked, and their plaintext events are removed from the event log.
+
 #### 1.0.10: sync fixes from a three-node test (2026-09-27)
 
 A web node, the Windows app and the Android app were run against each other on a test stand
