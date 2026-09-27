@@ -378,6 +378,11 @@ public static class ArticleEndpoints
             {
                 var content = await svc.UnlockContentAsync(id, req.Passphrase);
                 PassphraseAttemptSucceeded(ctx, id);
+                // Comments written on this protected article before comments were sealed under the
+                // passphrase are still readable with the vault key alone; the passphrase just proven
+                // lets them be sealed now (a no-op once there are none left). Not for read-only callers.
+                if (meta.Protected)
+                    await ResealLegacyCommentsAsync(ctx, id, req.Passphrase, isSuperadmin, userId, agentId, meta.TreePath, folderAccess);
                 // Remember the verified passphrase server-side (see ProtectedUnlockCache.Ttl) so the
                 // View and Edit pages can both open without re-prompting. Never returned to the browser.
                 // No caller key (browser request without a Web session) → nothing is cached, and the
@@ -477,6 +482,24 @@ public static class ArticleEndpoints
 
     private static void PassphraseAttemptSucceeded(HttpContext ctx, Guid id) =>
         PassphraseAttempts.Reset(PassphraseAttemptKey(ctx, id));
+
+    private static async Task ResealLegacyCommentsAsync(HttpContext ctx, Guid id, string passphrase,
+        bool isSuperadmin, int? userId, int? agentId, string treePath, FolderAccessService folderAccess)
+    {
+        if (!isSuperadmin)
+        {
+            var (_, _, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
+            if (FolderAccessService.IsReadOnlyForCaller(readOnlyPaths, treePath)) return;
+        }
+        try
+        {
+            await ctx.RequestServices.GetRequiredService<CommentService>().ReprotectAsync(id, null, passphrase);
+        }
+        catch (Exception)
+        {
+            // Best effort: the unlock itself succeeded; the next unlock tries again.
+        }
+    }
 
     internal static string? CallerKey(HttpContext ctx)
     {

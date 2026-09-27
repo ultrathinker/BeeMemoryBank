@@ -397,10 +397,12 @@ public partial class ArticleDetailPage : ContentPage
         LockCard.IsVisible = false;
         ContentCard.IsVisible = true;
 
-        // The comments were loaded locked; open them with the passphrase just verified.
+        // The comments were loaded locked; open them with the passphrase just verified. Comments
+        // written before they were sealed under the passphrase get sealed now (no-op when none).
         try
         {
             using var commentScope = _services.CreateScope();
+            await commentScope.ServiceProvider.GetRequiredService<CommentService>().ReprotectAsync(_parsedId, null, pass);
             await LoadCommentsAsync(_parsedId, commentScope.ServiceProvider);
         }
         catch { /* the article itself is open; comments stay as loaded */ }

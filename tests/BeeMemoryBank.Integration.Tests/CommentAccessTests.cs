@@ -91,6 +91,27 @@ public sealed class CommentAccessTests : IAsyncLifetime
         (await denied.Content.ReadAsStringAsync()).Should().NotContain("for admins");
     }
 
+    [Fact]
+    public async Task A_comment_from_before_the_change_is_sealed_at_the_next_unlock()
+    {
+        var id = await CreateArticleAsync("/Legacy");
+        (await _browser.PostAsJsonAsync("/api/comments", new { articleId = id, text = "old comment" })).EnsureSuccessStatusCode();
+        // Protected the way an older version did it: the body only, comments untouched.
+        using (var scope = _factory.Services.CreateScope())
+            await scope.ServiceProvider.GetRequiredService<ArticleService>().ProtectAsync(id, Phrase, null);
+
+        using var reader = Browser("browser-c");
+        (await reader.GetFromJsonAsync<List<CommentBody>>($"/api/comments?articleId={id}"))!.Single().Locked
+            .Should().BeFalse("the premise: an old comment is still under the vault key only");
+
+        using var unlocker = Browser("browser-d");
+        (await unlocker.PostAsJsonAsync($"/api/articles/{id}/unlock", new { passphrase = Phrase })).EnsureSuccessStatusCode();
+
+        var after = await reader.GetFromJsonAsync<List<CommentBody>>($"/api/comments?articleId={id}");
+        after!.Single().Locked.Should().BeTrue("the unlock sealed it under the passphrase");
+        (await unlocker.GetFromJsonAsync<List<CommentBody>>($"/api/comments?articleId={id}"))!.Single().Text.Should().Be("old comment");
+    }
+
     private async Task<int> CreateAllowListedUserAsync(string allowedPath)
     {
         using var scope = _factory.Services.CreateScope();
