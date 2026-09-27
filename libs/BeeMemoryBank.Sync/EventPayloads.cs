@@ -27,6 +27,13 @@ public static class EventTypes
     public const string DekRotationProposed = "dek_rotation_proposed";
     public const string DekRotationCommit = "dek_rotation_commit";
     public const string MasterPasswordChanged = "master_password_changed";
+
+    // Blind nodes (BMB-43): recovery material, see RecoveryPayloads.cs and migration 027.
+    public const string RecoveryBoxSet = "recovery_box_set";
+    public const string RecoveryBoxRetire = "recovery_box_retire";
+    public const string RetiredLinkSet = "retired_link_set";
+    public const string StateAnchor = "state_anchor";
+    public const string SealedSecretSet = "sealed_secret_set";
 }
 
 /// <summary>
@@ -58,6 +65,10 @@ public static class EventAuthorization
         EventTypes.HardDelete,
         EventTypes.RestoreNetwork,
         EventTypes.MasterPasswordChanged,
+        // Retiring another node's recovery box removes a way back into the vault; an integrity
+        // anchor is what a restore trusts. Both are cluster-state decisions.
+        EventTypes.RecoveryBoxRetire,
+        EventTypes.StateAnchor,
     };
 
     /// <summary>
@@ -81,6 +92,13 @@ public static class EventAuthorization
         EventTypes.ConceptTagMerge,
         EventTypes.ConceptTagDelete,
         EventTypes.SnapshotCheckpoint,
+        // Any full node may publish these: a box is always the author's own (checked by the
+        // applier), and a forged link or sealed secret is harmless because a restore keeps only
+        // what opens and verifies. Restricting links to superadmins would lose a link together
+        // with the node that rotated (see RecoveryPayloads.cs).
+        EventTypes.RecoveryBoxSet,
+        EventTypes.RetiredLinkSet,
+        EventTypes.SealedSecretSet,
     };
 
     /// <summary>

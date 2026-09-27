@@ -30,7 +30,10 @@ public static class SnapshotTables
         "tbl_folder", "tbl_article", "tbl_article_body", "tbl_concept_tag",
         "tbl_article_concept_tag", "tbl_concept_tag_edge", "tbl_media",
         "tbl_tombstone", "tbl_conflict_version", "tbl_projection_matrix",
-        "tbl_comment", "tbl_article_version"
+        "tbl_comment", "tbl_article_version",
+        // Blind-node recovery material (migration 027): sealed, safe for peers, and needed by any
+        // node seeded or joined after the events that filled it were compacted away.
+        "tbl_recovery_box", "tbl_dek_retired_link", "tbl_state_anchor", "tbl_sealed_secret"
     ];
 
     /// <summary>

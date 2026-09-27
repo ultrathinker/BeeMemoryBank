@@ -70,7 +70,7 @@ public class EventAuthorizationGuardTests
     [Fact]
     public void SuperadminOnly_IsExactlyTheClusterStateSet()
     {
-        // Pinned on purpose. These six apply immediately and change who is trusted or what exists
+        // Pinned on purpose. These apply immediately and change who is trusted or what exists
         // network-wide (plus master_password_changed, which drives an admin-UI phishing surface).
         // Changing this set changes who can revoke peers, hard-delete, or trigger a restore across
         // the whole mesh from a single node — a security decision, never an incidental edit.
@@ -82,6 +82,10 @@ public class EventAuthorizationGuardTests
             EventTypes.HardDelete,
             EventTypes.RestoreNetwork,
             EventTypes.MasterPasswordChanged,
+            // Blind nodes (BMB-43): retiring someone else's recovery box removes a way back into
+            // the vault, and an integrity anchor is what a restore trusts.
+            EventTypes.RecoveryBoxRetire,
+            EventTypes.StateAnchor,
         });
     }
 
