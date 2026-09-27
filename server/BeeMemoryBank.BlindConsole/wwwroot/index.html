@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeeMemoryBank blind node</title>
+<style>
+  :root { --bg:#101418; --card:#1a2027; --line:#2a323c; --fg:#e8ecef; --dim:#9aa7b2; --acc:#f5c451; --ok:#7fd18a; --bad:#ef8a7f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:12px 12px 80px; }
+  h1 { font-size:1.15rem; margin:.4rem 0 1rem; }
+  h2 { font-size:1rem; margin:0; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:12px; }
+  .row { display:flex; justify-content:space-between; gap:8px; padding:.3rem 0; border-bottom:1px dashed var(--line); flex-wrap:wrap; }
+  .row:last-child { border-bottom:none; }
+  .k { color:var(--dim); }
+  .v { text-align:right; word-break:break-all; }
+  button { background:var(--acc); color:#1a1a10; border:none; border-radius:10px; padding:.65rem 1rem; font-size:1rem; min-height:44px; cursor:pointer; }
+  button.secondary { background:var(--card); color:var(--fg); border:1px solid var(--line); }
+  button.danger { background:var(--bad); color:#2a110d; }
+  button[disabled] { opacity:.5; cursor:default; }
+  input, select { background:#0c0f13; color:var(--fg); border:1px solid var(--line); border-radius:10px; padding:.6rem; font-size:1rem; min-height:44px; width:100%; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .modes button.active { outline:2px solid var(--acc); }
+  .bar { height:10px; border-radius:6px; background:#0c0f13; border:1px solid var(--line); overflow:hidden; margin:.4rem 0; }
+  .bar > div { height:100%; background:var(--acc); width:0; transition:width .5s; }
+  .note { color:var(--dim); font-size:.85rem; }
+  .err { color:var(--bad); }
+  .ok { color:var(--ok); }
+  .hidden { display:none; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  td, th { text-align:left; padding:.25rem .4rem; border-bottom:1px solid var(--line); }
+  #login { margin-top:20vh; }
+  details { margin-top:.5rem; }
+  summary { cursor:pointer; color:var(--dim); padding:.3rem 0; }
+</style>
+</head>
+<body>
+<main>
+
+<div id="login" class="hidden">
+  <h1>BeeMemoryBank blind node</h1>
+  <section>
+    <p class="note">Local management page. Enter the console password.</p>
+    <p><input id="lpw" type="password" placeholder="Console password" autocomplete="current-password"></p>
+    <p class="err hidden" id="lerr"></p>
+    <button id="lbtn" style="width:100%">Sign in</button>
+  </section>
+</div>
+
+<div id="app" class="hidden">
+  <h1>Blind node <span class="note" id="hdr-name"></span></h1>
+
+  <section>
+    <h2>Status</h2>
+    <div id="state"></div>
+  </section>
+
+  <section>
+    <h2>Pairing</h2>
+    <div id="pairing"><p class="note">The pairing code is shown here for the device that pairs with this node.</p></div>
+    <div id="peers"></div>
+    <button class="secondary" id="pair-renew">Renew code</button>
+  </section>
+
+  <section>
+    <h2>Jobs</h2>
+    <div id="job"></div>
+    <div class="grid3 modes" style="margin-top:.6rem">
+      <button data-mode="economy" id="m-eco">Economy</button>
+      <button data-mode="fast" id="m-fast">Fast</button>
+      <button data-mode="pause" id="m-pause">Pause</button>
+    </div>
+    <p class="note">Economy is the quiet default (low priority, one thread). Fast uses up to 90 % of the cores. Pause freezes the running job.</p>
+  </section>
+
+  <section>
+    <h2>Backups</h2>
+    <div id="backups"></div>
+    <div class="grid2" style="margin-top:.6rem">
+      <button id="b-now">Back up now</button>
+      <button id="b-verify" class="secondary">Check (5 %)</button>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <button id="b-full" class="secondary">Full check</button>
+      <button id="b-sched" class="secondary">Schedule…</button>
+    </div>
+    <details id="sched-box" class="hidden">
+      <summary>Backup settings</summary>
+      <div class="grid2">
+        <label>Time (UTC)<input id="s-time" type="time"></label>
+        <label>Schedule<br><select id="s-on"><option value="off">off</option><option value="on">on</option></select></label>
+      </div>
+      <div class="grid2">
+        <label>Repository<br><select id="s-type"><option value="folder">folder</option><option value="s3">S3</option></select></label>
+        <label>Folder / S3 prefix<input id="s-path"></label>
+      </div>
+      <div class="grid2" id="s3-extra">
+        <label>S3 endpoint<input id="s-endpoint"></label>
+        <label>Bucket<input id="s-bucket"></label>
+        <label>Prefix<input id="s-prefix"></label>
+        <label>Access key<input id="s-ak"></label>
+        <label>Secret key<input id="s-sk" type="password"></label>
+      </div>
+      <label>restic password<input id="s-rpw" type="password" placeholder="delivered by the pairing Windows device"></label>
+      <p class="note">Snapshots to keep (default: 7 · 4 · 12 · 3):</p>
+      <div class="grid2">
+        <label>Daily<input id="s-kd" type="number" min="0"></label>
+        <label>Weekly<input id="s-kw" type="number" min="0"></label>
+        <label>Monthly<input id="s-km" type="number" min="0"></label>
+        <label>Yearly<input id="s-ky" type="number" min="0"></label>
+      </div>
+      <button id="s-save" style="width:100%">Save settings</button>
+    </details>
+    <details>
+      <summary>Save a copy to…</summary>
+      <p class="note">A one-off copy of the repository into another folder — a USB disk or a NAS share. The folder must be mounted into the container (for example <code>/backups/usb</code>). The copy is encrypted with the same restic password, and the recovery set is written next to it.</p>
+      <p><input id="c-dest" placeholder="/backups/usb/bmb-copy"></p>
+      <button id="c-btn" class="secondary" style="width:100%">Save copy</button>
+      <p class="note hidden" id="c-out"></p>
+    </details>
+    <details>
+      <summary>Snapshots</summary>
+      <div id="b-list" class="note">Loading…</div>
+    </details>
+    <p class="note">A hard delete in the network does not remove articles from backups that were already made.</p>
+  </section>
+
+  <section>
+    <h2>Recovery</h2>
+    <p class="note">A one-time code, valid for 15 minutes. The new device enters this node's address, the code and the master password.</p>
+    <p><label>Console password (again)<input id="r-pw" type="password" autocomplete="current-password"></label></p>
+    <button id="r-code">Issue a recovery code</button>
+    <pre id="r-out" class="hidden" style="white-space:pre-wrap"></pre>
+    <details>
+      <summary>Issued codes</summary>
+      <div id="r-log" class="note">Loading…</div>
+    </details>
+  </section>
+
+  <section>
+    <h2>Sign-in log</h2>
+    <div id="logins" class="note">Loading…</div>
+  </section>
+
+  <section>
+    <h2>Danger zone</h2>
+    <p class="note">Disconnect and wipe destroys this node's data (its copy of the network included) but does NOT touch the restic repository or the other devices. The node returns to its initial state.</p>
+    <p><label>Console password<input id="w-pw" type="password"></label></p>
+    <p><label>Node name, to confirm<input id="w-name"></label></p>
+    <button class="danger" id="w-btn">Disconnect and wipe</button>
+    <p class="err hidden" id="w-err"></p>
+  </section>
+
+  <button class="secondary" id="logout" style="width:100%">Sign out</button>
+</div>
+
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtBytes = (n) => { if (n == null) return "—"; const u=["B","KB","MB","GB","TB"]; let i=0; while (n>=1000&&i<u.length-1){n/=1000;i++;} return n.toFixed(n>=100?0:1)+" "+u[i]; };
+const fmtDate = (iso) => { if (!iso) return "—"; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+
+let timer = null;
+
+async function api(method, path, body) {
+  const headers = { "X-Bmb-Console": "1" };
+  if (body != null) headers["Content-Type"] = "application/json";
+  const r = await fetch("/proxy/" + path, { method, headers, body: body != null ? JSON.stringify(body) : undefined });
+  const text = await r.text();
+  let json = null; try { json = JSON.parse(text); } catch {}
+  return { status: r.status, json, text };
+}
+
+async function refresh() {
+  const s = await api("GET", "api/blind/status");
+  if (s.status === 401) { location.reload(); return; }
+  if (!s.json) return;
+  render(s.json);
+}
+
+function render(st) {
+  $("hdr-name").textContent = st.node_name ? "· " + st.node_name : "";
+
+  let h = "";
+  h += row("Version / protocol", esc(st.version) + " / " + esc(st.protocol));
+  h += row("Role", st.role === "blind" ? "blind node" : esc(st.role));
+  h += row("Data", esc(st.data_path));
+  h += row("Backups", esc(st.backups_path || "not configured"));
+  if (st.stored) h += row("Stored", esc(st.stored.articles) + " articles · " + esc(st.stored.blobs) + " blobs · " + fmtBytes(st.stored.bytes));
+  h += row("Free", fmtBytes(st.free_bytes));
+  if (st.anchor) h += row("Anchor", (st.anchor.confirmed ? "confirmed" : "not confirmed") + " as of " + fmtDate(st.anchor.created_at));
+  else h += row("Anchor", "—");
+  if (st.boxes) h += row("Recovery boxes", esc(st.boxes.count) + " (strong: " + esc(st.boxes.strong) + ", device: " + esc(st.boxes.device) + ")");
+  if (st.pairing) h += row("Pairing code", st.pairing.code_active ? "active" : "none");
+  $("state").innerHTML = h;
+
+  const peers = (st.peers || []).map(p =>
+    "<div class='row'><span>" + esc(p.name) + "</span><span class='v k'>behind by " +
+    (p.lag != null ? esc(p.lag) + " events" : "?") + " · " + fmtDate(p.last_contact) + "</span></div>").join("");
+  $("peers").innerHTML = peers || "<p class='note'>No peers paired yet.</p>";
+
+  const jobs = (st.jobs || []).filter(j => j.state === "running" || j.state === "queued");
+  if (jobs.length) {
+    const j = jobs[0];
+    const pct = Math.round((j.progress || 0) * 100);
+    $("job").innerHTML =
+      "<div class='row'><span>" + jobName(j.kind) + "</span><span class='v'>" + pct + " %" +
+      (j.speed_bytes_per_sec ? " · " + fmtBytes(j.speed_bytes_per_sec) + "/s" : "") +
+      (j.eta ? " · done by " + fmtDate(j.eta) : "") + "</span></div>" +
+      "<div class='bar'><div style='width:" + pct + "%'></div></div>" +
+      (j.detail ? "<p class='note'>" + esc(j.detail) + "</p>" : "");
+  } else {
+    const last = (st.jobs || [])[0];
+    $("job").innerHTML = last
+      ? "<p class='note'>Last job: " + jobName(last.kind) + " — " + jobState(last.state) + " " + fmtDate(last.finished_at) + "</p>"
+      : "<p class='note'>No jobs yet.</p>";
+  }
+  const mode = st.cpu_mode || "economy";
+  for (const [id, m] of [["m-eco","economy"],["m-fast","fast"],["m-pause","pause"]])
+    $(id).classList.toggle("active", mode === m);
+
+}
+
+function jobName(k) { return k === "backup" ? "Backup" : k === "verify" ? "Check" : k === "copy" ? "Copy to folder" : k === "wipe" ? "Wipe" : k; }
+function jobState(s) { return {done:"done", failed:"failed", cancelled:"cancelled", running:"running", queued:"queued"}[s] || s; }
+function row(k, v) { return "<div class='row'><span class='k'>" + k + "</span><span class='v'>" + v + "</span></div>"; }
+
+async function loadBackups() {
+  const s = await api("GET", "api/blind/backup/settings");
+  if (!s.json) return;
+  const c = s.json.settings || {};
+  $("s-time").value = c.scheduleTime || "03:00";
+  $("s-on").value = c.scheduleEnabled ? "on" : "off";
+  $("s-type").value = c.repoType === "S3" || c.repoType === 1 ? "s3" : "folder";
+  $("s-path").value = c.repoFolder || (c.s3Prefix || "");
+  $("s3-extra").style.display = $("s-type").value === "s3" ? "" : "none";
+  if (c.s3Endpoint) $("s-endpoint").value = c.s3Endpoint;
+  if (c.s3Bucket) $("s-bucket").value = c.s3Bucket;
+  if (c.s3Prefix) $("s-prefix").value = c.s3Prefix;
+  $("s-ak").value = c.s3AccessKey && !c.s3AccessKey.includes("•") ? c.s3AccessKey : "";
+  $("s-sk").value = ""; $("s-rpw").value = "";
+  $("s-kd").value = c.keepDaily ?? 7; $("s-kw").value = c.keepWeekly ?? 4;
+  $("s-km").value = c.keepMonthly ?? 12; $("s-ky").value = c.keepYearly ?? 3;
+}
+
+async function loadList() {
+  const s = await api("GET", "api/blind/backup/list");
+  const box = $("b-list");
+  if (s.status !== 200) { box.textContent = s.json?.error || "no data"; return; }
+  const snaps = Array.isArray(s.json) ? s.json : [];
+  box.innerHTML = snaps.length ? "<table><tr><th>When</th><th>Added</th></tr>" +
+    snaps.map(x => "<tr><td>" + fmtDate(x.time) + "</td><td>" + fmtBytes(x.summary?.total_bytes_added ?? null) + "</td></tr>").join("") +
+    "</table>" : "No snapshots yet.";
+}
+
+async function loadLogins() {
+  const s = await api("GET", "api/blind/console/logins");
+  const box = $("logins");
+  if (s.status !== 200) { box.textContent = "—"; return; }
+  const map = { ok: "signed in", "bad-password": "wrong password", locked: "locked out", "password-set": "password changed" };
+  const rows = (s.json || []).map(l => "<tr><td>" + fmtDate(l.at) + "</td><td>" + (map[l.outcome] || esc(l.outcome)) + "</td><td>" + esc(l.remote || "") + "</td></tr>").join("");
+  box.innerHTML = rows ? "<table><tr><th>When</th><th>Event</th><th>From</th></tr>" + rows + "</table>" : "Empty.";
+}
+
+async function loadPairCode() {
+  const s = await api("GET", "api/blind/pair-code");
+  const box = $("pairing");
+  if (s.status === 404) { box.innerHTML = "<p class='note'>No pairing code available (pairing has not run yet).</p>"; return; }
+  if (s.status !== 200) { box.innerHTML = "<p class='note'>Pairing code: no data.</p>"; return; }
+  const j = s.json || {};
+  box.innerHTML = j.code
+    ? "<div class='row'><span class='k'>Code</span><span class='v' style='font-family:monospace'>" + esc(j.code) + "</span></div><p class='note'>valid until " + fmtDate(j.expires_at) + "</p>"
+    : "<p class='note'>No active code.</p>";
+}
+
+// ── events ──────────────────────────────────────────────────────────────
+$("lbtn").onclick = doLogin;
+$("lpw").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
+async function doLogin() {
+  $("lerr").classList.add("hidden");
+  const r = await fetch("/login", { method: "POST", headers: {"Content-Type":"application/json", "X-Bmb-Console":"1"}, body: JSON.stringify({ password: $("lpw").value }) });
+  if (r.ok) { enter(); return; }
+  let locked = false; try { locked = (await r.json()).locked === true; } catch {}
+  $("lerr").textContent = locked ? "Too many failed attempts — sign-in is locked for 15 minutes."
+    : r.status === 401 ? "Wrong password." : "Sign-in failed (HTTP " + r.status + ").";
+  $("lerr").classList.remove("hidden");
+}
+
+$("logout").onclick = async () => { await fetch("/logout", { method: "POST", headers: {"X-Bmb-Console":"1"} }); location.reload(); };
+for (const [id, m] of [["m-eco","economy"],["m-fast","fast"],["m-pause","pause"]])
+  $(id).onclick = () => api("POST", "api/blind/backup/mode", { mode: m }).then(refresh);
+
+$("b-now").onclick = async () => { const r = await api("POST", "api/blind/backup/now"); if (r.status === 409) alert("A job is already running."); refresh(); };
+$("b-verify").onclick = async () => { const r = await api("POST", "api/blind/backup/verify", { full: false }); if (r.status === 409) alert("A job is already running."); refresh(); };
+$("b-full").onclick = async () => { if (!confirm("A full check reads the whole repository and can take hours. Continue?")) return; const r = await api("POST", "api/blind/backup/verify", { full: true }); if (r.status === 409) alert("A job is already running."); refresh(); };
+$("c-btn").onclick = async () => {
+  const r = await api("POST", "api/blind/backup/copy", { destination: $("c-dest").value });
+  const out = $("c-out");
+  out.classList.remove("hidden", "err");
+  if (r.status === 202) out.textContent = "Copy started — follow it under Jobs.";
+  else { out.textContent = r.status === 409 ? "A job is already running." : "Not started: " + ((r.json && r.json.error) || ("HTTP " + r.status)); out.classList.add("err"); }
+  refresh();
+};
+$("b-sched").onclick = () => { $("sched-box").open = !$("sched-box").open; };
+$("s-type").onchange = () => { $("s3-extra").style.display = $("s-type").value === "s3" ? "" : "none"; };
+$("s-save").onclick = async () => {
+  const body = { scheduleTime: $("s-time").value || "03:00", scheduleEnabled: $("s-on").value === "on",
+    keepDaily: +$("s-kd").value, keepWeekly: +$("s-kw").value, keepMonthly: +$("s-km").value, keepYearly: +$("s-ky").value };
+  if ($("s-type").value === "folder") { body.repoType = "folder"; body.repoFolder = $("s-path").value; }
+  else {
+    body.repoType = "s3"; body.s3Endpoint = $("s-endpoint").value; body.s3Bucket = $("s-bucket").value;
+    body.s3Prefix = $("s-prefix").value || $("s-path").value;
+    if ($("s-ak").value) body.s3AccessKey = $("s-ak").value;
+    if ($("s-sk").value) body.s3SecretKey = $("s-sk").value;
+  }
+  if ($("s-rpw").value) body.resticPassword = $("s-rpw").value;
+  const r = await api("PUT", "api/blind/backup/settings", body);
+  if (r.status === 200) { alert("Settings saved."); loadBackups(); }
+  else alert("Not saved: " + ((r.json && r.json.error) || r.status));
+};
+$("pair-renew").onclick = async () => { await api("POST", "api/blind/pair-code/renew", {}); loadPairCode(); };
+$("r-code").onclick = async () => {
+  const r = await api("POST", "api/blind/restore-code", { password: $("r-pw").value });
+  $("r-pw").value = "";
+  const out = $("r-out");
+  out.classList.remove("hidden", "ok", "err");
+  if (r.status === 200 && r.json && r.json.code) {
+    out.textContent = "Code: " + r.json.code + "\nValid until " + fmtDate(r.json.expiresAt ?? r.json.expires_at);
+    out.classList.add("ok");
+    loadRestoreLog();
+  } else {
+    out.textContent = r.status === 401 ? "Wrong console password."
+      : r.status === 423 ? "Locked for 15 minutes after failed attempts."
+      : r.status === 404 ? "Recovery codes arrive together with network recovery."
+      : "Could not issue a code: " + ((r.json && r.json.error) || ("HTTP " + r.status));
+    out.classList.add("err");
+  }
+};
+
+async function loadRestoreLog() {
+  const s = await api("GET", "api/blind/restore-codes");
+  const box = $("r-log");
+  if (s.status !== 200 || !Array.isArray(s.json)) { box.textContent = "—"; return; }
+  box.innerHTML = s.json.length ? "<table><tr><th>Issued</th><th>By</th><th>Used</th></tr>" +
+    s.json.map(x => "<tr><td>" + fmtDate(x.issuedAt) + "</td><td>" + esc(x.issuedBy || "") + "</td><td>" +
+      (x.usedAt ? fmtDate(x.usedAt) : x.revoked ? "revoked" : "no") + "</td></tr>").join("") + "</table>"
+    : "No codes issued yet.";
+}
+
+$("w-btn").onclick = async () => {
+  if (!confirm("WIPE all data of this blind node? The backup repository and the other devices are NOT affected.")) return;
+  if (!confirm("Are you sure? This cannot be undone.")) return;
+  const r = await api("POST", "api/blind/wipe", { consolePassword: $("w-pw").value, confirmNodeName: $("w-name").value });
+  if (r.status === 200) { alert("The node was wiped. It needs to be paired again."); location.reload(); }
+  else { $("w-err").textContent = (r.json && r.json.error) || ("HTTP " + r.status); $("w-err").classList.remove("hidden"); }
+};
+
+function enter() {
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  refresh(); loadBackups(); loadList(); loadLogins(); loadPairCode(); loadRestoreLog();
+  if (timer) clearInterval(timer);
+  timer = setInterval(refresh, 5000);
+}
+
+(async () => {
+  const probe = await fetch("/proxy/api/blind/status");
+  if (probe.status === 401) { $("login").classList.remove("hidden"); $("lpw").focus(); }
+  else enter();
+})();
+</script>
+</body>
+</html>

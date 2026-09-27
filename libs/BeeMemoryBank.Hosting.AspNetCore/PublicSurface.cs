@@ -78,6 +78,7 @@ public static class PublicSurface
         // Joining a network. Authorised by the master password inside the handler; a joining node
         // has nothing else to present.
         new("POST", "/api/join"),
+        new("GET", "/api/blind/status"), // BMB-54: a superadmin peer's sync token; the handler checks it
 
         // A peer pulling the snapshot for a network-wide restore we are hosting. Authenticated by
         // the same sync bearer token — see the handler, which checks it explicitly.

@@ -501,6 +501,12 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         "GET /api/folders/accessible",
         "GET /api/folders/by-path/snapshot",
         "GET /api/articles/{id:guid}/version",
+
+        // Blind-node status (BMB-54): read by the local console AND by a superadmin PEER with its
+        // sync bearer token — a peer has no internal key, so the role filter cannot see it. The
+        // handler checks both paths itself (internal key -> superadmin role, else a superadmin
+        // peer token; a regular user gets 403) — see BlindStatusEndpoints.AuthorizeAsync.
+        "GET /api/blind/status",
     ];
 
     /// <summary>

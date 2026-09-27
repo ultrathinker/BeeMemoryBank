@@ -201,6 +201,10 @@ snapshotCmd.AddCommand(snapshotRestoreStandaloneCmd);
 
 root.AddCommand(snapshotCmd);
 
+// ─── bmb blind ──────────────────────────────────────────────────────────────
+
+BlindCommand.AddTo(root, dataOption);
+
 // ─── bmb dek-rotate ─────────────────────────────────────────────────────────
 
 var dekRotateCmd = new Command("dek-rotate", "DEK rotation management (Phase B6)");

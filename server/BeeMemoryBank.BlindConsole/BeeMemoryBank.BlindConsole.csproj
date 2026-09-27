@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The page is embedded in the DLL, not served from the content root: the console must
+         render identically from a container, a test host and `dotnet run`, and a content-root
+         miss would turn into a blank page on exactly the deployments nobody is watching.
+         The console is deliberately dependency-free besides that: no CDN assets — a blind node
+         on a LAN without internet must render fully. -->
+    <EmbeddedResource Include="wwwroot\index.html" />
+  </ItemGroup>
+
+</Project>

@@ -3,6 +3,7 @@ using BeeMemoryBank.Api.Endpoints;
 using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
@@ -173,6 +174,8 @@ builder.Services.AddHostedService<BeeMemoryBank.Api.Services.ChatHistoryBackfill
 builder.Services.AddScoped<BeeMemoryBank.Core.Services.IDekRotationHook, ChatDekRotationHook>();
 builder.Services.AddScoped<ZipExportService>();
 builder.Services.AddScoped<CompactionService>();
+// Blind node (BMB-54): /api/blind/status base fields, backups, jobs/CPU modes, console login, wipe.
+builder.Services.AddBlindNodeServices(dataPath);
 // Node reset lives in Core so the API endpoint and `bmb init reset` share one definition of
 // "wipe"; the Api contributes chat.db cleanup through the hook interface.
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<BeeMemoryBank.Core.Services.NodeResetService>(sp, dataPath));

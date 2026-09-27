@@ -1,0 +1,21 @@
+# BuildKit reads <Dockerfile>.dockerignore in place of the root .dockerignore for this image.
+# The root file only excludes top-level bin/obj; a working tree that has been built (a dev box,
+# the test box) carries hundreds of MB of nested bin/obj that must not be shipped to the builder.
+**/bin/
+**/obj/
+**/TestResults/
+.git/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+**/node_modules/
+mobile/
+desktop/
+tests/
+docs/
+installers/
+data/
+*.log
+*.onnx
