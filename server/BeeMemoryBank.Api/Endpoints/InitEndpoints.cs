@@ -44,6 +44,15 @@ public static class InitEndpoints
             await _initLock.WaitAsync();
             try
             {
+                // IsClaimedAsync as well as IsInitializedAsync (review release-a2, U2c): this path
+                // WRITES a new identity and a new master DEK, and a database that already carries
+                // either is somebody's vault whatever its shape looks like. Without this, a vault
+                // whose shape nobody recognizes gets a second identity row and a second DEK written
+                // next to the data still sealed under the first one.
+                if (await initSvc.IsClaimedAsync())
+                    return Results.Conflict(new ErrorResponse(
+                        "This database already holds a node (an identity row or a key slot); it cannot be initialized over. "
+                        + "Unlock it with its password, or start from an empty data directory."));
                 if (await initSvc.IsInitializedAsync())
                     return Results.Conflict(new ErrorResponse("Node is already initialized."));
 
@@ -95,6 +104,15 @@ public static class InitEndpoints
             await _initLock.WaitAsync();
             try
             {
+                // IsClaimedAsync as well as IsInitializedAsync (review release-a2, U2c): this path
+                // WRITES a new identity and a new master DEK, and a database that already carries
+                // either is somebody's vault whatever its shape looks like. Without this, a vault
+                // whose shape nobody recognizes gets a second identity row and a second DEK written
+                // next to the data still sealed under the first one.
+                if (await initSvc.IsClaimedAsync())
+                    return Results.Conflict(new ErrorResponse(
+                        "This database already holds a node (an identity row or a key slot); it cannot be initialized over. "
+                        + "Unlock it with its password, or start from an empty data directory."));
                 if (await initSvc.IsInitializedAsync())
                     return Results.Conflict(new ErrorResponse("Node is already initialized."));
 

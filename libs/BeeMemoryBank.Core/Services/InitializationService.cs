@@ -70,10 +70,33 @@ public class InitializationService(
         return (await userRepo.ListActiveAsync()).Any(u => u.KeySlotId is { } id && slotIds.Contains(id));
     }
 
+    /// <summary>
+    /// Whether this database already belongs to a node, however uninitialized its shape looks: any
+    /// identity row, or any key slot.
+    ///
+    /// <para>Deliberately coarser than <see cref="IsInitializedAsync"/> — it is the check a SETUP
+    /// path makes before writing a new identity and a new master DEK. On a vault whose shape nobody
+    /// recognizes (a pre-unification one, a half-written one), answering "not initialized" is
+    /// survivable; initializing over it is not: the operator's data is still there, still wrapped
+    /// under the old key, and the new DEK is the only one the node knows. R2's live mixed-version
+    /// test caught exactly that: on a legacy vault, /api/init/standalone succeeded, wrote a SECOND
+    /// tbl_node_identity row and a setupadmin with a fresh DEK. IsInitializedAsync now recognizes
+    /// the legacy shape, and this is the second line of defence behind it (review release-a2, U2c).</para>
+    /// </summary>
+    public async Task<bool> IsClaimedAsync()
+        => await nodeRepo.GetAsync() is not null || (await keySlotRepo.GetAllAsync()).Count > 0;
+
     public async Task InitializeAsync(string adminUsername, string nodeDisplayName, string password, bool canGenerateEmbeddings = true)
     {
         if (await IsInitializedAsync())
             throw new InvalidOperationException("Node is already initialized.");
+
+        // The coarse guard too: whatever IsInitializedAsync answered about this database's SHAPE,
+        // a database that already carries an identity or a key slot is somebody's vault.
+        if (await IsClaimedAsync())
+            throw new InvalidOperationException(
+                "This database already holds a node (an identity row or a key slot); refusing to initialize over it. " +
+                "Unlock it with its own password, or start from an empty data directory.");
 
         if (string.IsNullOrWhiteSpace(adminUsername))
             throw new ArgumentException("Admin username is required.", nameof(adminUsername));

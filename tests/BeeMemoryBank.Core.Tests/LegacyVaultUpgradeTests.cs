@@ -157,6 +157,51 @@ public class LegacyVaultUpgradeTests : IAsyncDisposable
     }
 
     /// <summary>
+    /// Defence in depth behind the recognition above: whatever <c>IsInitializedAsync</c> answers
+    /// about a database's SHAPE, a setup path must not write a new identity and a new master DEK
+    /// into a database that already carries either. R2's live mixed-version test (U2c) found
+    /// /api/init/standalone succeeding on a legacy vault, leaving a SECOND identity row and a
+    /// setupadmin whose DEK is the only one the node knows — the operator's data still there, still
+    /// sealed under the old key, and now unreachable.
+    /// </summary>
+    [Fact]
+    public async Task InitializingOverADatabaseThatAlreadyHoldsANode_IsRefused()
+    {
+        var (_, init, _) = await BuildLegacyVaultAsync(keepUsers: true);
+
+        (await init.IsInitializedAsync()).Should().BeTrue("the vault is intact and recognizable");
+        (await init.IsClaimedAsync()).Should().BeTrue("it carries an identity row and a key slot");
+
+        var act = () => init.InitializeAsync("setupadmin", "Fresh setup", "another-password-1");
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*already*");
+    }
+
+    /// <summary>
+    /// The same guard where the shape is NOT recognizable: an identity row with nothing behind it is
+    /// "not initialized" (the restore path must be allowed to finish it) — and must still not be
+    /// initialized over, or the half-written row and the new one would both claim to be this node.
+    /// </summary>
+    [Fact]
+    public async Task InitializingOverAnIdentityRowWithNothingBehindIt_IsAlsoRefused()
+    {
+        var (_, init, _) = await BuildLegacyVaultAsync(keepUsers: true);
+        using (var conn = _factory!.CreateConnection())
+        {
+            await conn.ExecuteAsync("DELETE FROM tbl_key_slot");
+            await conn.ExecuteAsync("DELETE FROM tbl_user");
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
+        }
+
+        (await init.IsInitializedAsync()).Should().BeFalse("nothing can open it — restore may finish it");
+        (await init.IsClaimedAsync()).Should().BeTrue("but the identity row is still somebody's");
+
+        var act = () => init.InitializeAsync("setupadmin", "Fresh setup", "another-password-1");
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*already holds a node*");
+    }
+
+    /// <summary>
     /// And the shape DK1-2's rule exists for stays a brick of the other kind: an identity row with
     /// nothing behind it — no slot, no sentinel, no user — is not an initialized node, so the restore
     /// that would finish it is allowed to run.
