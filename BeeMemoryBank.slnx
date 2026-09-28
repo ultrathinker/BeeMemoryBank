@@ -15,6 +15,7 @@
     <Project Path="libs/BeeMemoryBank.Profiles/BeeMemoryBank.Profiles.csproj" />
     <Project Path="libs/BeeMemoryBank.Search/BeeMemoryBank.Search.csproj" />
     <Project Path="libs/BeeMemoryBank.Storage/BeeMemoryBank.Storage.csproj" />
+    <Project Path="libs/BeeMemoryBank.Rekey/BeeMemoryBank.Rekey.csproj" />
     <Project Path="libs/BeeMemoryBank.Sync/BeeMemoryBank.Sync.csproj" />
   </Folder>
   <Folder Name="/server/">

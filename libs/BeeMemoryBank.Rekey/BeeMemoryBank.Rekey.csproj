@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Offline content re-keying (BMB-57, rekey-offline.md): run by `bmb rekey` with the node stopped, on a copy of
+       the vault. Plain SQL on its own connections; no reference to the Api project. -->
+  <ItemGroup>
+    <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BeeMemoryBank.Rekey.Tests" />
+  </ItemGroup>
+
+</Project>
