@@ -20,6 +20,29 @@ namespace BeeMemoryBank.Node;
 
 public static class Program
 {
+    /// <summary>The node's shared hold on vault.lease, for the life of the process (a field: a local could be finalized).</summary>
+    private static BeeMemoryBank.AppPaths.VaultLease? s_vaultLease;
+
+    /// <summary>
+    /// The vault gate for both start modes (review release-b R1-3): refused while a re-key runs, an interrupted swap
+    /// finished or rolled back, and vault.lease held shared. Returns the data directory to use, or null after printing
+    /// why the start is refused.
+    /// </summary>
+    private static string? EnterVault(string dataDirectory)
+    {
+        try
+        {
+            var (resolution, lease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(Path.GetFullPath(dataDirectory));
+            s_vaultLease = lease;
+            return resolution.DataDir;
+        }
+        catch (BeeMemoryBank.AppPaths.VaultInUseException ex)
+        {
+            Console.Error.WriteLine($"[Error] {ex.Message}");
+            return null;
+        }
+    }
+
     public static async Task<int> Main(string[] args)
     {
         BeeMemoryBank.Hosting.Utf8Console.EnableForRedirectedOutput();
@@ -133,15 +156,9 @@ public static class Program
                     ? envDataPath
                     : BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
             }
-            resolvedDataDirectory = Path.GetFullPath(dataDirectory!);
-            // An offline re-key's swap is finished (or rolled back) before anything creates or opens D.
-            var rekeySwap = BeeMemoryBank.AppPaths.RekeySwapResolver.Resolve(resolvedDataDirectory);
-            resolvedDataDirectory = rekeySwap.DataDir;
-            if (BeeMemoryBank.AppPaths.RekeyLock.StartRefusal(rekeySwap) is { } rekeyRunning)
-            {
-                Console.Error.WriteLine($"[Error] {rekeyRunning}");
-                return 5;
-            }
+            // The vault gate, before anything creates or opens D (the legacy rescue below included).
+            if (EnterVault(dataDirectory!) is not { } entered) return 5;
+            resolvedDataDirectory = entered;
 
             try
             {
@@ -230,7 +247,10 @@ public static class Program
                 return 1;
             }
 
-            resolvedDataDirectory = config.DataDirectory;
+            // The same gate as the auto mode: without it a configured node could start, or take node.lock, in the
+            // middle of a re-key, and would never finish an interrupted swap.
+            if (EnterVault(config.DataDirectory) is not { } enteredConfigured) return 5;
+            resolvedDataDirectory = enteredConfigured;
             childConfigs = config.Children.Select(c => new ChildProcessConfig(
                 c.ApplicationName,
                 c.ExecutablePath,
