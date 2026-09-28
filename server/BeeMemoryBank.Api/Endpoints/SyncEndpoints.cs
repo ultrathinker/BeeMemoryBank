@@ -386,8 +386,12 @@ public static class SyncEndpoints
             // A node whose own log was just replaced by a reseed is empty and has issued nothing
             // yet, so a peer's still-older position is refused until its first event lands — that
             // direction only ever withholds a cut-off, never cuts ahead of a peer.
+            // Checked against what the peer itself reported before, not against the delivery
+            // watermark: that one moves when a page is merely served, so an honest report that has
+            // not caught up with the last page served would be refused here (and the refusal would
+            // leave the delivery watermark in place as the only number anyone could trim by).
             long head = await eventLogRepo.GetMaxSequenceAsync();
-            long recorded = (await pushPositionRepo.GetAsync(nodeId))?.LastPushedSeq ?? 0;
+            long recorded = (await pushPositionRepo.GetAsync(nodeId))?.ReportedSeq ?? 0;
             if (sequence > head || sequence < recorded)
             {
                 return Results.Json(new
@@ -400,6 +404,10 @@ public static class SyncEndpoints
                 }, statusCode: 400);
             }
 
+            // The peer's own word about its position — the number the log may be trimmed by — and,
+            // separately, the delivery watermark, which says a peer has been *sent* this far (the
+            // status page and the push cursor read it). Only the first may delete events (security #3).
+            await pushPositionRepo.RecordReportedPositionAsync(nodeId, sequence);
             await pushPositionRepo.UpdatePositionAsync(nodeId, sequence);
             // Also here, not only at authenticate: a token lives an hour, and a peer that upgraded
             // in the meantime should not stay "old" in the PC's pre-flight until it re-authenticates.
