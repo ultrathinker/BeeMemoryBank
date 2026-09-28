@@ -45,6 +45,55 @@ public sealed class FileNodeKeyTests : IDisposable
         File.ReadAllBytes(key.Path).Should().Equal(before);
     }
 
+    /// <summary>
+    /// The write is atomic: the seed goes to a temp file beside the final name, is flushed, read
+    /// back and checked, and is only then renamed onto it. Written straight to the final path, a
+    /// crash or a full volume in that window left a file that <c>Exists</c> reports and
+    /// <c>ReadSeed</c> refuses — and the node never started again, because its v=2 identity row
+    /// points at a key file with nothing in it.
+    /// </summary>
+    [Fact]
+    public void AFileThatHoldsNoSeed_IsRegenerated_AndNoTempIsLeftBehind()
+    {
+        var key = NewKey();
+        File.WriteAllBytes(key.Path, []); // what a torn write left
+
+        var pub = key.LoadOrCreate(out var created);
+
+        created.Should().BeTrue();
+        key.ReadSeed().Should().HaveCount(32);
+        key.Matches(pub).Should().BeTrue();
+        File.Exists(key.Path + ".tmp").Should().BeFalse(
+            "the temp file is renamed onto the final name — a leftover would be the half-written key moved aside");
+    }
+
+    [Fact]
+    public void LoadOrCreate_KeepsAValidSeed_WhateverElseIsWrong()
+    {
+        var key = NewKey();
+        var first = key.LoadOrCreate(out var created);
+        created.Should().BeTrue();
+        var onDisk = File.ReadAllBytes(key.Path);
+
+        var again = key.LoadOrCreate(out var createdAgain);
+
+        createdAgain.Should().BeFalse();
+        again.Should().Equal(first, "a node that already has a key must never be handed another one");
+        File.ReadAllBytes(key.Path).Should().Equal(onDisk);
+    }
+
+    [Fact]
+    public void Create_LeavesTheSeedOnlyUnderTheFinalName()
+    {
+        var key = NewKey();
+        var pub = key.Create();
+
+        // Only the final name: the temp file of the atomic write is renamed, never left beside it.
+        Directory.GetFiles(_dir).Should().Equal(key.Path);
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty();
+        key.Matches(pub).Should().BeTrue();
+    }
+
     [Fact]
     public void ReadSeed_RefusesAKeyOthersCanRead()
     {
