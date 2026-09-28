@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using Dapper;
 
@@ -12,15 +13,18 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// <item>the node's identity seed is sealed under D_c (a v=1 row is opened with the old key first; a legacy
 ///   plaintext v=0 row is sealed for the first time). Its public key and node id do not change;</item>
 /// <item>the owner's slot is written again: D_c under the owner's password, with a fresh salt;</item>
-/// <item>every other slot is removed (other users, recovery codes, the OS auto-unlock, update hand-offs), and the
-///   users that pointed at one lose their link to it;</item>
-/// <item>every agent's wrapped master key is cleared, so no old agent key can unlock;</item>
+/// <item>every other slot is removed (other users, recovery codes, the OS auto-unlock, update hand-offs);</item>
+/// <item>every other user keeps its row (folder rules, authorship) but cannot sign in until the owner resets its
+///   password: the hash is one of a secret nobody holds, and the slot link, sign-in stamp and remote API tokens go,
+///   as with an admin reset;</item>
+/// <item>every agent is revoked and its wrapped master key cleared, so no old agent key works at all;</item>
 /// <item>the chain material of past rotations and the <c>retired-master-dek:*</c> rows are removed;</item>
 /// <item>recovery boxes, their bookkeeping and the rotation links are removed. The owner's device box for D_c is
 ///   written at the first login after the re-key.</item>
 /// </list>
 /// The chat key (<c>tbl_node_data_key</c> row <c>chat</c>) is ChatRekeyStep's. Notes name what was cleared, for the
-/// report page: <c>cleared-slot:&lt;slot&gt; &lt;user or kind&gt;</c> and <c>cleared-agent:&lt;id&gt; &lt;name&gt;</c>.
+/// report page: <c>cleared-slot:&lt;slot&gt; &lt;user or kind&gt;</c>, <c>cleared-agent:&lt;id&gt; &lt;name&gt;</c> and
+/// <c>reset-user:&lt;id&gt; &lt;username&gt;</c>. A vault whose owner slot belongs to no user (a legacy slot) is refused.
 /// </summary>
 public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
 {
@@ -44,7 +48,19 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         var counts = new Dictionary<string, long>();
         var notes = new List<string>();
 
-        // The Argon2id work comes first, outside the transaction.
+        // The owner is the user of the owner's slot. A legacy password slot belongs to no user; the start-up migration
+        // gives it one, so such a vault is re-keyed after one start, not guessed at here.
+        var ownerUser = await db.ExecuteScalarAsync<long?>(
+            "SELECT id FROM tbl_user WHERE key_slot_id = @ownerSlot LIMIT 1", new { ownerSlot })
+            ?? throw new InvalidOperationException(
+                $"The owner's key slot {ownerSlot} belongs to no user (a legacy slot): start the node once, then re-key.");
+
+        // The Argon2id work comes first, outside the transaction: every other user gets a password hash of a secret
+        // nobody holds. Their old password fails at sign-in exactly as a wrong one does, same work and same answer,
+        // and the owner's usual reset (Admin -> Users) sets a new one.
+        var others = (await db.QueryAsync<(long Id, string Username)>(
+            "SELECT id, username FROM tbl_user WHERE id <> @ownerUser ORDER BY id", new { ownerUser })).ToList();
+        var lockedHashes = others.Select(_ => UserService.HashPassword(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)))).ToList();
         var salt = KeyDerivation.GenerateSalt();
         var kek = KeyDerivation.DeriveKek(password, salt,
             CryptoConstants.DefaultArgonMemory, CryptoConstants.DefaultArgonIterations, CryptoConstants.DefaultArgonParallelism);
@@ -92,18 +108,29 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
                      @"SELECT s.slot_id, s.slot_type, (SELECT u.username FROM tbl_user u WHERE u.key_slot_id = s.slot_id LIMIT 1)
                        FROM tbl_key_slot s WHERE s.slot_id <> @ownerSlot ORDER BY s.slot_id", new { ownerSlot }, tx))
             notes.Add($"cleared-slot:{s.SlotId} {s.User ?? s.Type}");
-        // A user whose slot is gone must have a new password set before it can open the vault again; its old sign-in
-        // cookies go with the slot.
-        counts["tbl_user.key_slot_id"] = await db.ExecuteAsync(
-            @"UPDATE tbl_user SET key_slot_id = NULL, security_stamp = lower(hex(randomblob(16)))
-              WHERE key_slot_id IS NOT NULL AND key_slot_id <> @ownerSlot", new { ownerSlot }, tx);
         counts["tbl_key_slot"] = await db.ExecuteAsync("DELETE FROM tbl_key_slot WHERE slot_id <> @ownerSlot", new { ownerSlot }, tx);
 
+        // Every other user: no sign-in until the owner resets them. The rows stay (folder rules, authorship), and what
+        // an admin reset also takes goes too: the slot link, the sign-in stamp (old cookies) and remote API tokens.
+        for (var i = 0; i < others.Count; i++)
+        {
+            await db.ExecuteAsync(
+                @"UPDATE tbl_user SET password_hash = @hash, key_slot_id = NULL, security_stamp = lower(hex(randomblob(16)))
+                  WHERE id = @id", new { hash = lockedHashes[i], id = others[i].Id }, tx);
+            notes.Add($"reset-user:{others[i].Id} {others[i].Username}");
+        }
+        counts["tbl_user"] = others.Count;
+        counts["tbl_remote_api_token"] = await db.ExecuteAsync(
+            "DELETE FROM tbl_remote_api_token WHERE user_id <> @ownerUser", new { ownerUser }, tx);
+
+        // Every agent is revoked, the owner's included: a re-key is what an owner does after a key leaks, and an agent
+        // key is a credential. The wrapped master keys go with them. Deleted agents ('D') stay as they are.
         foreach (var a in await db.QueryAsync<(long Id, string Name)>(
-                     "SELECT id, name FROM tbl_agent WHERE encrypted_dek IS NOT NULL OR dek_iv IS NOT NULL ORDER BY id", transaction: tx))
+                     "SELECT id, name FROM tbl_agent WHERE status = 'A' ORDER BY id", transaction: tx))
             notes.Add($"cleared-agent:{a.Id} {a.Name}");
         counts["tbl_agent"] = await db.ExecuteAsync(
-            "UPDATE tbl_agent SET encrypted_dek = NULL, dek_iv = NULL WHERE encrypted_dek IS NOT NULL OR dek_iv IS NOT NULL",
+            @"UPDATE tbl_agent SET status = CASE WHEN status = 'A' THEN 'R' ELSE status END, encrypted_dek = NULL, dek_iv = NULL
+              WHERE status = 'A' OR encrypted_dek IS NOT NULL OR dek_iv IS NOT NULL",
             transaction: tx);
 
         counts["tbl_node_data_key"] = await db.ExecuteAsync(
@@ -187,6 +214,12 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         if (await db.ExecuteScalarAsync<long>(
                 "SELECT COUNT(*) FROM tbl_agent WHERE encrypted_dek IS NOT NULL OR dek_iv IS NOT NULL") is var a and > 0)
             problems.Add(new("tbl_agent", "*", $"{a} agent(s) still carry a wrapped master key"));
+        if (await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_agent WHERE status = 'A'") is var active and > 0)
+            problems.Add(new("tbl_agent", "*", $"{active} agent(s) still active"));
+        if (await db.ExecuteScalarAsync<long>(
+                @"SELECT COUNT(*) FROM tbl_remote_api_token
+                  WHERE user_id NOT IN (SELECT id FROM tbl_user WHERE key_slot_id = @o)", new { o = _ownerSlot }) is var t and > 0)
+            problems.Add(new("tbl_remote_api_token", "*", $"{t} remote token(s) of other users left"));
         if (await db.ExecuteScalarAsync<long>(
                 "SELECT COUNT(*) FROM tbl_node_data_key WHERE key_name LIKE @p", new { p = IRetiredMasterDekStore.KeyNamePrefix + "%" }) is var r and > 0)
             problems.Add(new("tbl_node_data_key", "retired-master-dek:*", $"{r} retired key row(s) left"));
