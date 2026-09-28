@@ -353,6 +353,21 @@ public class ProxyForwarderTests
             .Should().Contain(["admin", "bob"]);
     }
 
+    [Fact]
+    public async Task TheRekeyReport_IsSuperadminOnly_AtTheWebGate_AndItsPageRenders()
+    {
+        var bob = await _fx.Bob.GetAsync("/api-proxy/rekey/report");
+        bob.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await bob.Content.ReadAsStringAsync()).Should().Contain("superadmin only");
+
+        var admin = await _fx.Admin.GetAsync("/api-proxy/rekey/report");
+        admin.StatusCode.Should().Be(HttpStatusCode.NotFound, "the gate passes and this vault was never re-keyed");
+
+        var page = await _fx.Admin.GetAsync("/RekeyReport");
+        page.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await page.Content.ReadAsStringAsync()).Should().Contain("Re-pair every blind node now").And.Contain("rekey-report.js");
+    }
+
     // ── Deny-by-default ──────────────────────────────────────────────────────────
 
     [Fact]

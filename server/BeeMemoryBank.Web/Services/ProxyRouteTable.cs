@@ -140,6 +140,7 @@ public static class ProxyRouteTable
         ["snapshots"] = new("/api/snapshots",
             [new("GET", null), new("POST", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
         ["compact"] = new("/api/admin/compact", [new("GET", UserRoles.Superadmin)]),
+        ["rekey/report"] = new("/api/rekey/report", [new("GET", UserRoles.Superadmin)]),
         ["admin/search/embeddings-enabled"] = new("/api/admin/search/embeddings-enabled",
             [new("GET", UserRoles.Superadmin), new("PUT", UserRoles.Superadmin)]),
         ["admin/search/embeddings/backfill"] = new("/api/admin/search/embeddings/backfill",

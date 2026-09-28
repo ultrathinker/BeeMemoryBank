@@ -1,0 +1,68 @@
+@page
+@model RekeyReportModel
+@{
+    ViewData["Title"] = "Re-key report";
+}
+
+<div class="main-content">
+    <h2 style="margin:0 0 24px 0;"><sl-icon name="key" style="margin-right:8px;vertical-align:middle;"></sl-icon>Re-key report</h2>
+
+    <div id="rekey-loading" style="text-align:center; padding:40px;">
+        <sl-spinner style="font-size: 3rem;"></sl-spinner>
+    </div>
+
+    <sl-alert id="rekey-none" variant="neutral" style="display:none; margin-bottom:16px;">
+        <sl-icon slot="icon" name="info-circle"></sl-icon>
+        This vault has not been re-keyed.
+    </sl-alert>
+
+    <sl-alert id="rekey-error" variant="danger" style="display:none; margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        <span id="rekey-error-text"></span>
+    </sl-alert>
+
+    <div id="rekey-body" style="display:none;">
+        <sl-alert id="rekey-result" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="info-circle"></sl-icon>
+            <strong id="rekey-result-title"></strong>
+            <div id="rekey-result-detail"></div>
+        </sl-alert>
+
+        <sl-card id="rekey-next" style="width:100%; margin-bottom:24px;">
+            <div slot="header"><strong>What you need to do now</strong></div>
+            <p>The vault now has a new key. Everything this node holds was sealed again under it, and the old key opens
+                none of it. What lives outside this node was not changed:</p>
+            <ul>
+                <li><strong>Re-pair every blind node now.</strong> Until you do, a blind node keeps serving its old copy
+                    of the vault to anyone who holds the old credentials.</li>
+                <li><strong>Devices re-join as new profiles</strong>, and other users reset their passwords. Only your
+                    password opens this vault now.</li>
+                <li><strong>Recreate agents and recovery codes.</strong> The old agent keys, recovery codes and the OS
+                    auto-unlock no longer work.</li>
+                <li><strong>Old backups, snapshots and devices still open with the old key.</strong> The re-key cannot
+                    reach them; delete the ones you no longer trust.</li>
+                <li><strong>The old vault folder can be deleted</strong> once you have checked this vault. It still opens
+                    with the old key. Deleting it on an SSD does not guarantee the bytes are erased.</li>
+            </ul>
+            <p id="rekey-old-vault" style="display:none;">Old vault folder: <code id="rekey-old-vault-path"></code>
+                <span id="rekey-old-vault-gone" style="display:none;">(already deleted)</span></p>
+        </sl-card>
+
+        <sl-card id="rekey-warnings-card" style="width:100%; margin-bottom:24px; display:none;">
+            <div slot="header"><strong>Found before the re-key</strong></div>
+            <ul id="rekey-blocking"></ul>
+            <ul id="rekey-warnings"></ul>
+        </sl-card>
+
+        <sl-card style="width:100%; margin-bottom:24px;">
+            <div slot="header"><strong>What was done</strong></div>
+            <table class="bmb-table" style="width:100%; border-collapse:collapse;">
+                <thead><tr><th>Step</th><th>What</th><th style="text-align:right;">Rows</th></tr></thead>
+                <tbody id="rekey-steps"></tbody>
+            </table>
+            <div id="rekey-lists"></div>
+        </sl-card>
+    </div>
+</div>
+
+<script src="/js/pages/rekey-report.js"></script>

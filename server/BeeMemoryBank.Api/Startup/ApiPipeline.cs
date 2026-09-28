@@ -150,6 +150,7 @@ app.MapDownloadEndpoints();
     app.MapBlindNodeEndpoints(); // BMB-54: blind status, backups, console, wipe
     app.MapInternetAccessEndpoints();
     app.MapAutoUnlockEndpoints();
+    app.MapRekeyReportEndpoints();
     app.MapChatEndpoints();
     app.MapMcp("/mcp");
     }
