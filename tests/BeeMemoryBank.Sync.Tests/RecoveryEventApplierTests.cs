@@ -1,6 +1,8 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Recovery;
 using Dapper;
 
 namespace BeeMemoryBank.Sync.Tests;
@@ -179,6 +181,226 @@ public class RecoveryEventApplierTests : IAsyncLifetime
         await Apply(_phone.BoxSet(boxes[0], "device", "d64t3", FpA, lamport: 100));
         (await Box(boxes[^1]))!.Status.Should().Be("A");
         (await ActiveBoxes()).Should().NotContain(boxes[0]);
+    }
+
+    // --- an inactive box keeps no key material (F7) -----------------------------------------
+    // A box stops being active when a newer one supersedes it or a retire covers it. From then on the
+    // old password must not open anything this node holds: not the row, and not the logged event that
+    // carried the same bytes and would be served to every peer that pulls.
+
+    [Fact]
+    public async Task Supersede_DestroysTheOlderBoxMaterial_InTheRowAndTheEventLog()
+    {
+        var older = Guid.NewGuid();
+        var newer = Guid.NewGuid();
+
+        await Apply(_phone.BoxSet(older, "device", "d64t3", FpA, lamport: 10));
+        await Apply(_phone.BoxSet(newer, "device", "d64t3", FpB, lamport: 20));
+
+        (await MaterialLengths(older)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().NotContain(older);
+        (await MaterialLengths(newer)).Should().Be((32, 49, 12), "the active box is untouched");
+        (await LoggedBoxIds()).Should().Contain(newer);
+    }
+
+    [Fact]
+    public async Task LateOlderBox_IsStoredWithoutMaterial_AndNotKeptInTheLog()
+    {
+        var older = Guid.NewGuid();
+        var newer = Guid.NewGuid();
+
+        await Apply(_phone.BoxSet(newer, "device", "d64t3", FpB, lamport: 20));
+        await Apply(_phone.BoxSet(older, "device", "d64t3", FpA, lamport: 10));
+
+        (await Box(older))!.Status.Should().Be("R");
+        (await MaterialLengths(older)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().BeEquivalentTo([newer]);
+    }
+
+    [Fact]
+    public async Task Retire_DestroysTheTargetMaterial_InTheRowAndTheEventLog()
+    {
+        var strong = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+        await Apply(_phone.BoxSet(device, "device", "d64t3", FpA, lamport: 11));
+
+        await Apply(_pc.Retire([device], strong, lamport: 12));
+
+        (await Box(device))!.Status.Should().Be("R");
+        (await MaterialLengths(device)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().BeEquivalentTo([strong]);
+    }
+
+    [Fact]
+    public async Task DeferredRetire_DestroysTheMaterialWhenItApplies()
+    {
+        var strong = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        await Apply(_phone.BoxSet(device, "device", "d64t3", FpA, lamport: 11));
+        await Apply(_pc.Retire([device], strong, lamport: 12));
+        (await MaterialLengths(device)).Should().Be((32, 49, 12), "the retire waits for its covering box");
+
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+
+        (await MaterialLengths(device)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().BeEquivalentTo([strong]);
+    }
+
+    [Fact]
+    public async Task RedeliveredEventOfAnInactiveBox_DoesNotBringItsMaterialBack()
+    {
+        var strong = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        var deviceEvent = _phone.BoxSet(device, "device", "d64t3", FpA, lamport: 11);
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+        await Apply(deviceEvent);
+        await Apply(_pc.Retire([device], strong, lamport: 12));
+
+        // A peer that still holds the event sends it again: same id, same bytes.
+        await Apply(deviceEvent);
+
+        (await MaterialLengths(device)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().NotContain(device);
+    }
+
+    [Fact]
+    public async Task DestroyingMaterial_LeavesTheFileScrubOwed()
+    {
+        await Apply(_phone.BoxSet(Guid.NewGuid(), "device", "d64t3", FpA, lamport: 10));
+        (await ScrubOwed()).Should().BeFalse("nothing was destroyed yet");
+
+        await Apply(_phone.BoxSet(Guid.NewGuid(), "device", "d64t3", FpB, lamport: 20));
+
+        (await ScrubOwed()).Should().BeTrue("freed pages and WAL frames may still hold the bytes until the scrub");
+    }
+
+    [Fact]
+    public async Task Purge_CleansMaterialLeftByAnOlderBuild()
+    {
+        // What a node that ran an older build holds: a retired row with its bytes, and its event logged.
+        var strong = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        var deviceEvent = _phone.BoxSet(device, "device", "d64t3", FpA, lamport: 11);
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+        await Apply(deviceEvent);
+        using (var conn = _node.Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync("UPDATE tbl_recovery_box SET status = 'R' WHERE box_id = @B COLLATE NOCASE",
+                new { B = device.ToString() });
+        }
+        (await MaterialLengths(device)).Should().Be((32, 49, 12));
+
+        (await RecoveryBoxMaterialPurge.RunAsync(_node.Factory)).Should().BeGreaterThan(0);
+
+        (await MaterialLengths(device)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().BeEquivalentTo([strong]);
+        (await RecoveryBoxMaterialPurge.RunAsync(_node.Factory)).Should().Be(0, "a second run finds nothing");
+    }
+
+    /// <summary>
+    /// What a reader sees is a committed state: a peer pulling /api/sync/events, a backup's VACUUM INTO. At no committed
+    /// state may the log hold a recovery_box_set event whose box is not active here: not while a newer box supersedes
+    /// it, not in the gap before a separate purge, and not after its row is trimmed past the retention limit
+    /// (release-a2 review: security #1, spec #2).
+    /// </summary>
+    [Fact]
+    public async Task NoCommittedState_EverHoldsALoggedEventOfABoxThatIsNotActive()
+    {
+        using var cts = new CancellationTokenSource();
+        long violations = 0, snapshots = 0;
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reader = Task.Run(async () =>
+        {
+            using var conn = _node.Factory.CreateConnection();
+            while (!cts.IsCancellationRequested)
+            {
+                if (await conn.ExecuteScalarAsync<long>(InactiveLoggedSql) > 0) Interlocked.Increment(ref violations);
+                Interlocked.Increment(ref snapshots);
+                reading.TrySetResult();
+            }
+        });
+        await reading.Task; // the reader is running before the first box arrives
+
+        for (var i = 0; i < 60; i++)
+            await Apply(_phone.BoxSet(Guid.NewGuid(), "device", "d64t3", i % 2 == 0 ? FpA : FpB, lamport: 100 + i));
+        var during = Interlocked.Read(ref snapshots);
+        cts.Cancel();
+        await reader;
+        during.Should().BeGreaterThan(1, "the reader looked while the boxes were being applied");
+
+        using var conn = _node.Factory.CreateConnection();
+        (await conn.ExecuteScalarAsync<long>(InactiveLoggedSql)).Should().Be(0, "at the end, rows trimmed past the limit leave no event");
+        Interlocked.Read(ref violations).Should().Be(0, "no committed state may serve an inactive box's material");
+        (await LoggedBoxIds()).Should().ContainSingle("only the active box's event is logged");
+    }
+
+    /// <summary>A logged recovery_box_set event whose box has no active row here.</summary>
+    private const string InactiveLoggedSql =
+        @"SELECT COUNT(*) FROM tbl_event e WHERE e.event_type = 'recovery_box_set' AND NOT EXISTS (
+            SELECT 1 FROM tbl_recovery_box b WHERE b.status = 'A'
+              AND b.box_id = json_extract(e.payload, '$.box_id') COLLATE NOCASE)";
+
+    /// <summary>
+    /// A node upgraded from a build before F7, with more than ten password changes on one device: that build logged
+    /// every box event with its material and trimmed the rows past the ten-row limit, so the oldest events have no row
+    /// left. After the startup purge, and after a peer redelivers a trimmed box, no old password opens anything in the
+    /// database; the newest password still opens the active box.
+    /// </summary>
+    [Fact]
+    public async Task AfterAnUpgradeWithMoreThanTenRotations_NoOldPasswordOpensAnything()
+    {
+        var dek = RandomNumberGenerator.GetBytes(32);
+        var fp = DekFingerprint.Of(dek);
+        const int boxes = 13;
+        var events = new List<SyncEvent>();
+        for (var i = 0; i < boxes; i++)
+            events.Add(_phone.BoxSet(Guid.NewGuid(), fp, 100 + i, RecoveryBoxCrypto.Wrap(dek, $"device-pw-{i}", RecoveryBoxKdf.Device64)));
+
+        // The older build's state: every event logged; the newest box active and the ten before it retired, with
+        // their material; the two oldest rows trimmed away.
+        using (var conn = _node.Factory.CreateConnection())
+            for (var i = 0; i < boxes; i++)
+            {
+                await _node.EventLogRepo.AppendAsync(events[i]);
+                if (i < boxes - 1 - EventApplier.MaxInactiveBoxesPerAuthorAndKind) continue;
+                var p = JsonSerializer.Deserialize<RecoveryBoxSetPayload>(events[i].Payload)!;
+                await conn.ExecuteAsync(
+                    @"INSERT INTO tbl_recovery_box (box_id, kind, author_node_id, dek_fingerprint, epoch_hint, kdf_preset, salt, wrapped, iv,
+                        created_at, status, lamport_ts, source_node_id)
+                      VALUES (@BoxId, 'device', @Author, @Fp, 1, @Preset, @Salt, @Wrapped, @Iv, @Now, @Status, @Lamport, @Author)",
+                    new
+                    {
+                        p.BoxId, Author = _phone.Id.ToString(), Fp = fp, Preset = p.KdfPreset, Salt = Convert.FromBase64String(p.Salt),
+                        Wrapped = Convert.FromBase64String(p.Wrapped), Iv = Convert.FromBase64String(p.Iv), Now = DateTime.UtcNow.ToString("O"),
+                        Status = i == boxes - 1 ? "A" : "R", Lamport = events[i].LamportTs
+                    });
+            }
+
+        await RecoveryBoxMaterialPurge.RunAsync(_node.Factory); // the startup repair
+        await Apply(events[0]);                                // a peer redelivers a trimmed box
+
+        var opened = await PasswordsThatOpenAnythingAsync(Enumerable.Range(0, boxes).Select(i => $"device-pw-{i}"));
+        opened.Should().Equal([$"device-pw-{boxes - 1}"], "only the newest password opens a box, the active one");
+        (await LoggedBoxIds()).Should().Equal([Guid.Parse(JsonSerializer.Deserialize<RecoveryBoxSetPayload>(events[^1].Payload)!.BoxId)]);
+        (await ActiveBoxes()).Should().ContainSingle();
+    }
+
+    /// <summary>The attacker with a copy of the database: every box row and logged box event, tried with each password.</summary>
+    private async Task<List<string>> PasswordsThatOpenAnythingAsync(IEnumerable<string> passwords)
+    {
+        var material = new List<(string Preset, byte[] Salt, byte[] Wrapped, byte[] Iv)>();
+        using (var conn = _node.Factory.CreateConnection())
+        {
+            material.AddRange(await conn.QueryAsync<(string, byte[], byte[], byte[])>("SELECT kdf_preset, salt, wrapped, iv FROM tbl_recovery_box"));
+            foreach (var payload in await conn.QueryAsync<string>("SELECT payload FROM tbl_event WHERE event_type = 'recovery_box_set'"))
+            {
+                var p = JsonSerializer.Deserialize<RecoveryBoxSetPayload>(payload)!;
+                material.Add((p.KdfPreset, Convert.FromBase64String(p.Salt), Convert.FromBase64String(p.Wrapped), Convert.FromBase64String(p.Iv)));
+            }
+        }
+        var usable = material.Where(m => RecoveryBoxKdf.IsWellFormed("device", m.Salt, m.Wrapped, m.Iv)).ToList();
+        return passwords.Where(pw => usable.Any(m => RecoveryBoxCrypto.TryUnwrap(pw, m.Preset, m.Salt, m.Wrapped, m.Iv) != null)).ToList();
     }
 
     // --- recovery_box_retire ----------------------------------------------------------------
@@ -441,6 +663,30 @@ public class RecoveryEventApplierTests : IAsyncLifetime
             .Select(Guid.Parse).ToList();
     }
 
+    private async Task<(long Salt, long Wrapped, long Iv)> MaterialLengths(Guid id)
+    {
+        using var conn = _node.Factory.CreateConnection();
+        return await conn.QuerySingleAsync<(long, long, long)>(
+            "SELECT length(salt), length(wrapped), length(iv) FROM tbl_recovery_box WHERE box_id = @Id COLLATE NOCASE",
+            new { Id = id.ToString() });
+    }
+
+    /// <summary>The boxes whose recovery_box_set event is in this node's log (what it would serve to a peer).</summary>
+    private async Task<List<Guid>> LoggedBoxIds()
+    {
+        using var conn = _node.Factory.CreateConnection();
+        return (await conn.QueryAsync<string>("SELECT payload FROM tbl_event WHERE event_type = @T",
+                new { T = EventTypes.RecoveryBoxSet }))
+            .Select(p => Guid.Parse(JsonSerializer.Deserialize<RecoveryBoxSetPayload>(p)!.BoxId)).ToList();
+    }
+
+    private async Task<bool> ScrubOwed()
+    {
+        using var conn = _node.Factory.CreateConnection();
+        return await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_blind_state WHERE key = @K",
+            new { K = StoredEventRepair.CleanupPendingKey }) > 0;
+    }
+
     private async Task<long> PendingRetires()
     {
         using var conn = _node.Factory.CreateConnection();
@@ -470,6 +716,12 @@ public class RecoveryEventApplierTests : IAsyncLifetime
                 box.ToString(), kind, (author ?? Id).ToString(), fp, 1, preset,
                 B64(saltBytes, 1), Convert.ToBase64String(wrapped), B64(12, 3)));
         }
+
+        /// <summary>A device box with real material: the DEK wrapped under <paramref name="seal"/>'s password.</summary>
+        public SyncEvent BoxSet(Guid box, string fp, long lamport, RecoveryBoxSeal seal) =>
+            Sign(EventTypes.RecoveryBoxSet, lamport, new RecoveryBoxSetPayload(
+                box.ToString(), "device", Id.ToString(), fp, 1, seal.KdfPreset,
+                Convert.ToBase64String(seal.Salt), Convert.ToBase64String(seal.Wrapped), Convert.ToBase64String(seal.Iv)));
 
         public SyncEvent Retire(IReadOnlyList<Guid> boxes, Guid covering, long lamport) =>
             Sign(EventTypes.RecoveryBoxRetire, lamport, new RecoveryBoxRetirePayload(

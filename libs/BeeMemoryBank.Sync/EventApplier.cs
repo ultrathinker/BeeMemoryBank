@@ -301,7 +301,10 @@ public partial class EventApplier(
         // Record event AFTER successful apply. INSERT OR IGNORE handles the
         // TOCTOU race: if another process already inserted this event (concurrent apply),
         // the duplicate insert is harmlessly ignored since data changes are idempotent.
-        await eventLogRepo.AppendIfNotExistsAsync(evt);
+        // A recovery_box_set is the exception: its apply logs it in the same transaction as the rows, and only
+        // while its box is active here, so an inactive box's material is never in the log (F7).
+        if (evt.EventType != EventTypes.RecoveryBoxSet)
+            await eventLogRepo.AppendIfNotExistsAsync(evt);
         return EventApplyResult.Applied;
     }
 }
