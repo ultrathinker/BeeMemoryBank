@@ -288,6 +288,49 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// Floor (Release A and B): after a reseed completes, no file of the blind node's data directory holds the database
+    /// it replaced. That database is the whole vault under its old key (after a content re-key) and holds recovery
+    /// material a purge removed; it used to stay as beememorybank.db.pre-seed and go into every copy of the volume.
+    /// A random probe written only into the old database must be found in no file afterwards.
+    /// </summary>
+    [Fact]
+    public async Task AfterAReseed_NoFileOfTheBlindDataDir_HoldsTheOldDatabase()
+    {
+        await AddBlindNodeAsync();
+        var probe = RandomNumberGenerator.GetBytes(48);
+        using (var conn = _blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+        {
+            await conn.ExecuteAsync("INSERT INTO tbl_migration_marker (key, value, set_at) VALUES ('preseed-probe', @probe, 'now')", new { probe });
+            await conn.ExecuteAsync("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        FilesHolding(_blind.DataPath, probe).Should().NotBeEmpty("the probe is in the old database before the reseed");
+        var (http, request) = await ReseedRequestAsync(includesUpTo: 0);
+
+        var response = await http.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        http.Dispose();
+        FilesHolding(_blind.DataPath, probe).Should().BeEmpty("no file keeps a page of the old database");
+        File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse();
+        Directory.Exists(BlindSeedCutover.DirOf(_blind.DataPath)).Should().BeFalse();
+    }
+
+    private static List<string> FilesHolding(string dir, byte[] needle) =>
+        Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+            .Where(f =>
+            {
+                try
+                {
+                    using var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var ms = new MemoryStream();
+                    fs.CopyTo(ms);
+                    return ms.GetBuffer().AsSpan(0, (int)ms.Length).IndexOf(needle) >= 0;
+                }
+                catch (IOException) { return false; }
+            })
+            .ToList();
+
+    /// <summary>
     /// Review l-root5 #2: the other half of the switch's contract. A connection that NEVER closes
     /// must not be waited for indefinitely, and must not be worked around either: the seed fails
     /// closed with 400, the file is not switched, and the gate opens again so the node keeps

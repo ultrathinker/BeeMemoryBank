@@ -192,21 +192,52 @@ public sealed class BlindSeedCutover
     public void MarkDone(Guid seedId) => WriteMarker(seedId, Done);
 
     /// <summary>
-    /// After "done": the old database becomes beememorybank.db.pre-seed, the old media go. Resumable: the
-    /// main file first (replacing an earlier pre-seed copy whole, sidecars included), then each old
-    /// sidecar still in the cutover directory; the directory goes only once they are all out of it.
+    /// After "done" (the new seed is committed and the node runs on it): the old database and old media are
+    /// no longer a way back, only a copy of the vault as it was, under whatever key it was under then. After
+    /// a content re-key that is the whole vault under the replaced key, and in any case it holds the
+    /// recovery material a purge removed; it used to stay as <c>beememorybank.db.pre-seed</c> and go into
+    /// every copy of the data volume. It is now wiped: each database file (main and sidecars) is
+    /// overwritten with zeros in place, then deleted; the old media files are deleted. Nothing ever read the
+    /// pre-seed copy. A <c>.pre-seed</c> left by an older build goes the same way. Resumable: every file is
+    /// wiped where it is, and the directory goes last.
     /// </summary>
     public void FinishDone()
     {
-        var preSeed = _livePath + ".pre-seed";
-        if (File.Exists(OldDbPath))
-        {
-            foreach (var suffix in Sidecars) if (File.Exists(preSeed + suffix)) File.Delete(preSeed + suffix);
-            File.Move(OldDbPath, preSeed, overwrite: true);
-        }
-        foreach (var suffix in Sidecars)
-            if (File.Exists(OldDbPath + suffix)) File.Move(OldDbPath + suffix, preSeed + suffix, overwrite: true);
+        foreach (var file in new[] { OldDbPath }.Concat(Sidecars.Select(x => OldDbPath + x)))
+            WipeFile(file);
+        WipePreSeedLeftovers(_livePath);
         Directory.Delete(_dir, recursive: true);
+    }
+
+    /// <summary>The rollback copy older builds kept after a completed seed: <c>beememorybank.db.pre-seed</c> and its sidecars.</summary>
+    private static IEnumerable<string> PreSeedFiles(string livePath) =>
+        new[] { livePath + ".pre-seed" }.Concat(Sidecars.Select(x => livePath + ".pre-seed" + x));
+
+    private static void WipePreSeedLeftovers(string livePath)
+    {
+        foreach (var file in PreSeedFiles(livePath)) WipeFile(file);
+    }
+
+    /// <summary>
+    /// Zeros over the whole file, flushed, then the file deleted: no page of it stays readable through the
+    /// file system (flash storage may still hold the blocks; that is not promised). A missing file is fine.
+    /// </summary>
+    internal static void WipeFile(string path)
+    {
+        if (!File.Exists(path)) return;
+        using (var file = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.None))
+        {
+            var zeros = new byte[64 * 1024];
+            var remaining = file.Length;
+            while (remaining > 0)
+            {
+                var n = (int)Math.Min(zeros.Length, remaining);
+                file.Write(zeros, 0, n);
+                remaining -= n;
+            }
+            file.Flush(flushToDisk: true);
+        }
+        File.Delete(path);
     }
 
     /// <summary>
@@ -248,7 +279,16 @@ public sealed class BlindSeedCutover
     public static void Recover(string dataPath, ILogger logger)
     {
         var cutover = new BlindSeedCutover(dataPath);
-        if (!Directory.Exists(cutover._dir)) return;
+        if (!Directory.Exists(cutover._dir))
+        {
+            // No cutover in progress: a rollback copy left by an older build is nobody's way back.
+            if (PreSeedFiles(cutover._livePath).Any(File.Exists))
+            {
+                WipePreSeedLeftovers(cutover._livePath);
+                logger.LogInformation("Blind seed: wiped the pre-seed copy an older build kept after a completed seed");
+            }
+            return;
+        }
         SqliteConnection.ClearAllPools();
 
         var (phase, seedId) = cutover.PhaseOf();
