@@ -93,7 +93,10 @@ public class RekeyPreflightTests : RekeyVaultTestBase
     {
         Mutate($"DELETE FROM tbl_article_version WHERE article_id = '{Upper(_data.Purged)}' COLLATE NOCASE",
                $"DELETE FROM tbl_article_body WHERE article_id = '{Upper(_data.Purged)}' COLLATE NOCASE");
-        (await RunAsync()).Blocking.Should().BeEmpty("the article's key is still in its events");
+        var report = await RunAsync();
+        report.Blocking.Should().BeEmpty("the article's key is still in its events");
+        report.Warnings.Should().Contain(w => w.Contains(_data.Purged.ToString(), StringComparison.OrdinalIgnoreCase) && w.Contains("event log"),
+            "the product no longer shows these comments, so the report must name them");
 
         Mutate($"DELETE FROM tbl_event WHERE article_id = '{Upper(_data.Purged)}' COLLATE NOCASE");
         (await RunAsync()).Blocking.Should().Contain(p => p.Table == "tbl_comment");

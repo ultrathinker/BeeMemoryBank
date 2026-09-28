@@ -141,10 +141,18 @@ public sealed class RekeyPreflight : IRekeyPreflight
 
                 var articleComments = comments.GetValueOrDefault(article) ?? [];
                 if (articleComments.Count == 0) continue;
+                var onlyInEvents = false;
                 if (opened.Count == 0)
+                {
                     foreach (var w in fallback.GetValueOrDefault(article) ?? [])
                         if (OpenEntityKey(EnvelopeFraming.Article, article, w.Wrapped, w.Iv, keys) is { } key)
                             opened.Add(key);
+                    onlyInEvents = opened.Count > 0;
+                }
+                // The product no longer shows these (CommentService reads the body's key only), and the event log
+                // that holds their key is cleared: named here so the report names them, whatever the re-seal does.
+                if (onlyInEvents)
+                    warnings.Add($"article {article}: its body is purged; the key of its {articleComments.Count} comment(s) is only in the event log");
 
                 // Every comment, not only the first: each is opened the way CommentService reads it.
                 foreach (var c in articleComments)
