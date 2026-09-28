@@ -19,6 +19,17 @@ public static class RekeyPlan
     /// <summary>The pre-flight (R2).</summary>
     public static Func<IRekeyPreflight>? Preflight { get; set; }
 
-    /// <summary>The steps, in order. Filled as the step classes land.</summary>
-    public static IReadOnlyList<Func<IRekeyStep>> Steps { get; } = [];
+    /// <summary>
+    /// The steps, in order. Filled as the step classes land; until every step in
+    /// <see cref="RekeyRunner.RequiredSteps"/> is here, the verb refuses before it creates anything.
+    /// KeyMaterial runs first: the event-log reset signs its checkpoint with the identity it seals under D_c.
+    /// </summary>
+    public static IReadOnlyList<Func<IRekeyStep>> Steps { get; } =
+    [
+        () => new Steps.KeyMaterialStep(),
+        () => new Steps.RowResealStep(),
+        () => new Steps.DerivedDataClearStep(),
+        () => new Steps.PeerRevokeStep(),
+        () => new Steps.EventLogResetStep(),
+    ];
 }
