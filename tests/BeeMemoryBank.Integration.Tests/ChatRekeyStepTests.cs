@@ -144,6 +144,35 @@ public class ChatRekeyStepTests : RekeyVaultTestBase
     }
 
     [Fact]
+    public async Task Verify_FindsPlaintextLeftInPlaceOfItsCiphertext()
+    {
+        using var keys = NewKeys();
+        var step = new ChatRekeyStep();
+        await step.RunAsync(Context(keys));
+        var id = Upper(_data.ChatMessage);
+        MutateIn(WorkChat, $"UPDATE chat_message SET content_ciphertext = NULL, content_iv = NULL, content_key_v = NULL, content_text = 'CHAT-SENTINEL-back' WHERE id = '{id}'");
+
+        var problems = await step.VerifyAsync(Context(keys));
+
+        problems.Should().ContainSingle(p => p.Table == "chat_message.content_ciphertext" && p.RowKey == id && p.Problem.Contains("plaintext"));
+    }
+
+    [Fact]
+    public async Task Verify_FindsAChatKeyRowThatIsNotTheNewKey()
+    {
+        using var keys = NewKeys();
+        var step = new ChatRekeyStep();
+        await step.RunAsync(Context(keys));
+        var (wrapped, iv) = ChatDataKeyEnvelope.Wrap(RandomNumberGenerator.GetBytes(32), keys.CampaignDek);
+        using (var main = Open(WorkMain, readOnly: false))
+            main.Execute("UPDATE tbl_node_data_key SET wrapped_key = @wrapped, iv = @iv WHERE key_name = 'chat'", new { wrapped, iv });
+
+        var problems = await step.VerifyAsync(Context(keys));
+
+        problems.Should().Contain(p => p.Table == "tbl_node_data_key" && p.RowKey == "chat");
+    }
+
+    [Fact]
     public async Task Verify_FindsARowThatStillOpensUnderTheOldChatKey()
     {
         using var keys = NewKeys();
