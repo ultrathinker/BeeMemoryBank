@@ -57,7 +57,7 @@ public static class RekeyTables
             "tbl_migration", "tbl_migration_marker", "sqlite_sequence",
             "tbl_folder", "tbl_article", "tbl_concept_tag", "tbl_article_concept_tag", "tbl_concept_tag_edge",
             "tbl_tombstone",
-            "tbl_user", "tbl_role", "tbl_role_folder_acl_entry", "tbl_folder_acl_entry", "tbl_agent_access",
+            "tbl_user", "tbl_role", "tbl_role_folder_acl_entry", "tbl_folder_acl_entry",
             "tbl_favorite", "tbl_remote_api_token", "tbl_remote_subscription",
             "tbl_audit_log", "tbl_hard_delete_audit", "tbl_compaction_log",
             "tbl_whitelist", "tbl_blind_state", "tbl_blind_restore_code",
