@@ -5,6 +5,8 @@ using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Api.Services.BlindConsole;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -171,8 +173,12 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
             new { consolePassword = "console-pw-123", confirmNodeName = "blindwipenode" });
         wipe.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // The node's own data is gone…
-        (await _factory.Services.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull();
+        // The node's own data is gone — including the identity it had, which is replaced by a fresh
+        // one so the node is not left unable to pair (see Wipe_LeavesANodeThatCanBePairedAgain_...).
+        var recreated = await _factory.Services.GetRequiredService<INodeIdentityRepository>().GetAsync();
+        recreated.Should().NotBeNull("a wiped node comes back with a usable identity, not as a brick");
+        recreated!.NodeId.Should().NotBe(Guid.Empty);
+        recreated.Ed25519PrivateKeyV.Should().Be(NodeIdentityCrypto.ExternalKeyVersion);
         (await whitelist.GetByNodeIdAsync(peerId)).Should().BeNull("the mesh's copy of the whitelist dies with the node");
         File.Exists(Path.Combine(_factory.DataPath, "media", "pic.enc")).Should().BeFalse();
         File.Exists(Path.Combine(_factory.DataPath, "blind", "settings.json")).Should().BeFalse(
@@ -188,6 +194,42 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
         File.Exists(Path.Combine(_factory.DataPath, "blind", "console.json")).Should().BeTrue(
             "the console password is local, never mesh data — keeping it lets the operator re-pair without the CLI");
         File.Exists(keepFile).Should().BeTrue("the wipe must never reach into the backup repository");
+    }
+
+    /// <summary>
+    /// The wipe clears tbl_node_identity with every other table, and the node used to stay without
+    /// one until the next process start: pair-code answered "Node is not initialized" and the only
+    /// way out was restarting the container. The operator's whole reason for wiping from the console
+    /// is to pair the node again from that console, so the identity is recreated in the wipe from the
+    /// key that survives it (v=2, never in the database).
+    /// </summary>
+    [Fact]
+    public async Task Wipe_LeavesANodeThatCanBePairedAgain_WithoutARestart()
+    {
+        var before = await _factory.Services.GetRequiredService<INodeIdentityRepository>().GetAsync();
+        before.Should().NotBeNull();
+
+        using var client = _factory.CreateClient();
+        await SetConsolePasswordAsync(client);
+        (await client.PostAsJsonAsync("/api/blind/wipe",
+            new { consolePassword = "console-pw-123", confirmNodeName = "BlindWipeNode" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Same running host, no restart: a code a PC would accept.
+        var response = await client.GetAsync("/api/blind/pair-code");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var code = BlindPairCode.Parse(json.GetProperty("code").GetString()!);
+        code.Address.Should().Be(BlindNodeFactory.PublicAddress);
+        BlindNodeId.IsBlind(code.NodeId).Should().BeTrue();
+        code.NodeId.Should().NotBe(before!.NodeId,
+            "the mesh has just been told to forget this node; a re-pairing PC whitelists a new id");
+        code.PublicKeyB64.Should().Be(Convert.ToBase64String(before.Ed25519PublicKey),
+            "the key never was in the database — it is the same box, with a new id");
+
+        // And the node is not merely answering: it can still sign as that identity.
+        (await _factory.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!
+            .Ed25519PrivateKeyV.Should().Be(NodeIdentityCrypto.ExternalKeyVersion);
     }
 }
 
