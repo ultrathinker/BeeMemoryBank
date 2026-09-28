@@ -41,7 +41,11 @@ public sealed record RekeySwapJournal(
                ?? throw new InvalidDataException($"The re-key journal {path} is empty.");
     }
 
-    /// <summary>Temp file, flushed to disk, atomically renamed over the journal.</summary>
+    /// <summary>
+    /// Temp file, flushed to disk, atomically renamed over the journal, and the rename made durable (the parent
+    /// directory flushed, write-through on Windows): a flushed file whose directory entry is lost is no journal at all
+    /// (review release-b R1-5).
+    /// </summary>
     public static void Write(string dataDir, RekeySwapJournal journal)
     {
         var path = PathFor(dataDir);
@@ -51,13 +55,27 @@ public sealed record RekeySwapJournal(
             JsonSerializer.Serialize(fs, journal);
             fs.Flush(flushToDisk: true);
         }
-        File.Move(tmp, path, overwrite: true);
+        DurableFs.MoveFile(tmp, path);
     }
 
     public static void Delete(string dataDir)
     {
         File.Delete(PathFor(dataDir));
         File.Delete(PathFor(dataDir) + ".tmp");
+        DurableFs.FlushDirectory(Path.GetDirectoryName(PathFor(dataDir))!);
+    }
+
+    /// <summary>The report the verb writes into the new vault once it is verified, before the swap.</summary>
+    public const string VerifiedMarker = "rekey-report.json";
+
+    /// <summary>The old vaults a swap parked next to D, newest first.</summary>
+    public static IReadOnlyList<string> ParkedOldDirs(string dataDir)
+    {
+        var d = Normalize(dataDir);
+        var parent = Path.GetDirectoryName(d)!;
+        if (!Directory.Exists(parent)) return [];
+        return Directory.EnumerateDirectories(parent, Path.GetFileName(d) + ".pre-rekey-*")
+            .OrderByDescending(p => p, StringComparer.Ordinal).ToList();
     }
 }
 
@@ -85,7 +103,7 @@ public static class RekeySwapResolver
     {
         var d = RekeySwapJournal.Normalize(dataDir);
         var journal = RekeySwapJournal.Read(d);
-        if (journal == null) return new(d, false);
+        if (journal == null) return ResolveWithoutJournal(d);
 
         var dExists = Directory.Exists(d);
         var oldExists = Directory.Exists(journal.Old);
@@ -146,12 +164,39 @@ public static class RekeySwapResolver
         File.Delete(RekeySwapJournal.LockPathFor(d));
     }
 
+    /// <summary>
+    /// No journal. That is the normal case, and nothing is done while D exists. With D missing, the swap may have been
+    /// under way when a power cut lost the journal's directory entry (review release-b R1-5), so the siblings decide.
+    /// A verified new vault (the verb writes its report into it before the swap) goes to D. Failing that, the newest
+    /// parked old vault goes back. With neither, this is a first run and D is created as usual.
+    /// </summary>
+    private static RekeySwapResolution ResolveWithoutJournal(string d)
+    {
+        if (Directory.Exists(d)) return new(d, false);
+        var newDir = RekeySwapJournal.NewDirFor(d);
+        var parked = RekeySwapJournal.ParkedOldDirs(d);
+        if (Directory.Exists(newDir) && File.Exists(Path.Combine(newDir, RekeySwapJournal.VerifiedMarker)))
+        {
+            RenameWithRetry(newDir, d);
+            // Recorded as swapped, so the first start clears it (and the re-key lock) like any other swap.
+            RekeySwapJournal.Write(d, new RekeySwapJournal(newDir, parked.FirstOrDefault() ?? RekeySwapJournal.OldDirFor(d, DateTimeOffset.UtcNow),
+                RekeySwapJournal.Swapped));
+            return new(d, true);
+        }
+        if (parked.Count > 0)
+        {
+            RenameWithRetry(parked[0], d);
+            return new(d, false);
+        }
+        return new(d, false);
+    }
+
     private static bool IsEmpty(string dir) => !Directory.EnumerateFileSystemEntries(dir).Any();
 
     /// <summary>
-    /// Directory.Move, retried briefly: on Windows a handle still closing inside the directory (an antivirus scan, a
-    /// pooled SQLite connection being released) fails the rename for a moment. A persistent failure throws, and the
-    /// next start takes the decision again from what is on disk.
+    /// A durable directory rename (<see cref="DurableFs.MoveDirectory"/>), retried briefly: on Windows a handle still
+    /// closing inside the directory (an antivirus scan, a pooled SQLite connection being released) fails the rename for
+    /// a moment. A persistent failure throws, and the next start takes the decision again from what is on disk.
     /// </summary>
     public static void RenameWithRetry(string from, string to, int attempts = 10)
     {
@@ -159,7 +204,7 @@ public static class RekeySwapResolver
         {
             try
             {
-                Directory.Move(from, to);
+                DurableFs.MoveDirectory(from, to);
                 return;
             }
             catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && i < attempts)
