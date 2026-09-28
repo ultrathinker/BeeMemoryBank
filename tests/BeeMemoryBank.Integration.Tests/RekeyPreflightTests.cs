@@ -272,7 +272,8 @@ public class RekeyPreflightTests : RekeyVaultTestBase
         var copy = Path.Combine(_osTemp, "tmp5A3F.tmp");
         File.Copy(Path.Combine(_vault, "beememorybank.db"), copy);
 
-        var run = RunAsync();
+        // On a pool thread: the open of a FIFO blocks synchronously, before the pre-flight's first await.
+        var run = Task.Run(() => RunAsync());
         (await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(30)))).Should().BeSameAs(run, "a FIFO must not stall the pre-flight");
 
         var report = await run;
