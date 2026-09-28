@@ -155,7 +155,7 @@ public class RekeyPreflightTests : IAsyncLifetime
     [Fact]
     public async Task ChatRows_ThatDoNotOpen_Block()
     {
-        Mutate(Chat, $"UPDATE chat_message SET content_ciphertext = randomblob(length(content_ciphertext)) WHERE id = '{Upper(_data.ChatMessage)}'",
+        MutateIn(Chat, $"UPDATE chat_message SET content_ciphertext = randomblob(length(content_ciphertext)) WHERE id = '{Upper(_data.ChatMessage)}'",
                      $"UPDATE chat_message SET content_key_v = -1 WHERE id = '{Upper(_data.LegacyDekMessage)}'");
 
         var report = await RunAsync();
@@ -427,9 +427,9 @@ public class RekeyPreflightTests : IAsyncLifetime
         };
     }
 
-    private void Mutate(params string[] sql) => Mutate(Main, sql);
+    private void Mutate(params string[] sql) => MutateIn(Main, sql);
 
-    private void Mutate(string db, params string[] sql)
+    private void MutateIn(string db, params string[] sql)
     {
         using var conn = Open(db, readOnly: false);
         foreach (var statement in sql) conn.Execute(statement);
