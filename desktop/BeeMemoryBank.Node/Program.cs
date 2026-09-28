@@ -365,6 +365,9 @@ public static class Program
         {
             Console.WriteLine($"[Node] Launching children with lock on data dir: '{resolvedDataDirectory}'...");
             await orchestrator.StartAsync(stopToken);
+            // Every child is up: the first start on a swapped-in vault succeeded, so its journal and re-key lock go
+            // (the Api child does the same; whichever comes second finds nothing to do). Review release-b R1-4.
+            BeeMemoryBank.AppPaths.RekeySwapResolver.CompleteFirstStart(resolvedDataDirectory);
 
             if (isAutoMode && apiConfig != null && webConfig != null)
             {

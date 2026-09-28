@@ -135,4 +135,21 @@ public sealed class NodeVaultGateTests : IDisposable
         File.ReadAllText(Path.Combine(_d, "marker")).Should().Be("new vault", "the swap was finished, not an empty D created");
         File.ReadAllText(Path.Combine(oldDir, "marker")).Should().Be("old vault");
     }
+
+    /// <summary>
+    /// R1-4: once the node's children are up, the first start on the swapped-in vault succeeded, and the node clears
+    /// the journal and the re-key lock itself. The child here is the stub, not the real Api, so only the node can.
+    /// </summary>
+    [Fact]
+    public async Task OnceItsChildrenAreUp_TheNodeClearsTheSwapJournalAndTheReKeyLock()
+    {
+        StageInterruptedSwap();
+
+        await using var node = Start(WriteConfig());
+
+        (await WaitForAsync(() => File.Exists(ReadyFile))).Should().BeTrue(node.Output);
+        (await WaitForAsync(() => !File.Exists(RekeySwapJournal.PathFor(_d)), 20)).Should().BeTrue(
+            "the journal goes after the first successful start\n" + node.Output);
+        File.Exists(RekeySwapJournal.LockPathFor(_d)).Should().BeFalse("and so does the re-key lock");
+    }
 }
