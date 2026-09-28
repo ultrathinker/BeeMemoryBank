@@ -227,10 +227,15 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
             var cutover = new BlindSeedCutover(_data);
             if (!TryCreateDirectoryLink(BlindSeedCutover.DirOf(_data), outside)) return; // no link, no test
 
-            var prepare = () => cutover.Prepare();
-            prepare.Should().Throw<BlindSeedRejectedException>("the cutover directory must be a plain directory of ours");
+            // The call is made once, and what it did is read after the sentinel check — whether the
+            // platform's recursive delete follows the link is a fact worth having in the log either way.
+            Exception? thrown = null;
+            try { cutover.Prepare(); }
+            catch (Exception ex) { thrown = ex; }
+
             File.Exists(Path.Combine(outside, "sentinel.txt")).Should().BeTrue(
                 "a recursive delete of a linked directory takes the tree it points at with it");
+            thrown.Should().BeOfType<BlindSeedRejectedException>("the cutover directory must be a plain directory of ours");
         }
         finally
         {

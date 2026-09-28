@@ -37,12 +37,14 @@ public sealed class BlindSeedCutover
 
     private static readonly string[] Sidecars = ["-wal", "-shm"];
 
+    private readonly string _data;
     private readonly string _dir;
     private readonly string _livePath;
     private readonly string _liveMedia;
 
     public BlindSeedCutover(string dataPath)
     {
+        _data = dataPath;
         _dir = DirOf(dataPath);
         _livePath = LivePathOf(dataPath);
         _liveMedia = Path.Combine(dataPath, "media");
@@ -66,6 +68,14 @@ public sealed class BlindSeedCutover
     {
         if (Directory.Exists(_dir))
         {
+            // The directory itself, and the names the phases below act on, must be the cutover's own
+            // plain entries (security #9) — see the guards above; PhaseOf reads the marker, which
+            // refuses a linked one, so this is the write and delete side of the same rule.
+            RefuseLink(_dir);
+            RefuseLink(MarkerPath);
+            RefuseLink(StagedMediaDir);
+            RefuseLink(OldDbPath);
+            RefuseLink(OldMediaDir);
             switch (PhaseOf().Phase)
             {
                 case Switching:
@@ -78,7 +88,7 @@ public sealed class BlindSeedCutover
                     FinishDone();
                     break;
                 default:
-                    Directory.Delete(_dir, recursive: true);
+                    DeleteOwnDirectory(_dir, _data);
                     break;
             }
         }
@@ -91,6 +101,10 @@ public sealed class BlindSeedCutover
     /// </summary>
     public void StageMedia(string packageMediaDir)
     {
+        // A live media directory that is a link would have this copy read whatever it points at into
+        // the seed's staged media — someone else's files, sent on to the seeder (security #9).
+        RefuseLink(_liveMedia);
+        RefuseLink(StagedMediaDir);
         if (Directory.Exists(_liveMedia))
             foreach (var other in Directory.GetFiles(_liveMedia).Where(f => !f.EndsWith(".enc", StringComparison.Ordinal)))
                 File.Copy(other, Path.Combine(StagedMediaDir, Path.GetFileName(other)), overwrite: true);
@@ -111,8 +125,14 @@ public sealed class BlindSeedCutover
     /// </summary>
     public void WriteMarker(Guid seedId, string phase)
     {
-        var temp = MarkerPath + ".tmp";
-        using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write))
+        RefuseLink(MarkerPath);
+        // A random name opened with CreateNew (Codex round 2, security #9): the old fixed ".tmp" was
+        // opened by name with FileMode.Create, which follows a link someone left at that name and
+        // truncates whatever it points at — outside the data root. CreateNew cannot follow anything:
+        // it fails if the name exists at all, a link included, and a name nobody can predict cannot
+        // have been prepared in advance.
+        var temp = Path.Combine(_dir, $"marker-{Guid.NewGuid():N}.tmp");
+        using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write))
         {
             JsonSerializer.Serialize(file, new Marker(seedId, phase, phase == Switching ? Directory.Exists(_liveMedia) : null));
             file.Flush(flushToDisk: true);
@@ -136,13 +156,18 @@ public sealed class BlindSeedCutover
     /// </summary>
     public void SwitchFiles()
     {
+        RefuseLink(_livePath);
+        RefuseLink(OldDbPath);
+        RefuseLink(OldMediaDir);
+        RefuseLink(StagedMediaDir);
+        foreach (var suffix in Sidecars) RefuseLink(_livePath + suffix);
         if (File.Exists(StagedDbPath))
         {
             if (!File.Exists(OldDbPath)) File.Move(_livePath, OldDbPath);
             foreach (var suffix in Sidecars)
             {
                 if (!File.Exists(_livePath + suffix)) continue;
-                if (File.Exists(OldDbPath + suffix)) File.Delete(_livePath + suffix);
+                if (File.Exists(OldDbPath + suffix)) DeleteOwnFile(_livePath + suffix, _data);
                 else File.Move(_livePath + suffix, OldDbPath + suffix);
             }
             File.Move(StagedDbPath, _livePath, overwrite: true);
@@ -160,14 +185,18 @@ public sealed class BlindSeedCutover
     public void RollBack()
     {
         var newDbInstalled = !File.Exists(StagedDbPath);
+        RefuseLink(_livePath);
+        RefuseLink(OldDbPath);
+        RefuseLink(OldMediaDir);
+        RefuseLink(_liveMedia);
         if (File.Exists(OldDbPath))
         {
             // What is live is not the old database: the new one, or an empty one a stray open created at
             // the vacant path. Its sidecars go with it — except before the new database was moved in,
             // when a sidecar still beside the live path is the old database's own, never moved.
-            if (File.Exists(_livePath)) File.Delete(_livePath);
+            DeleteOwnFile(_livePath, _data);
             if (newDbInstalled)
-                foreach (var suffix in Sidecars) if (File.Exists(_livePath + suffix)) File.Delete(_livePath + suffix);
+                foreach (var suffix in Sidecars) DeleteOwnFile(_livePath + suffix, _data);
             File.Move(OldDbPath, _livePath);
         }
         foreach (var suffix in Sidecars)
@@ -175,7 +204,7 @@ public sealed class BlindSeedCutover
 
         if (Directory.Exists(OldMediaDir))
         {
-            if (Directory.Exists(_liveMedia)) Directory.Delete(_liveMedia, recursive: true);
+            DeleteOwnDirectory(_liveMedia, _data);
             Directory.Move(OldMediaDir, _liveMedia);
         }
         else if (ReadMarker()?.LiveMediaExisted == false && Directory.Exists(_liveMedia))
@@ -183,9 +212,9 @@ public sealed class BlindSeedCutover
             // (Only ever reached from a marker that says "switching": with one that cannot be read at
             // all there is no rollback to get here through — see RecoverUnresolved.)
             // There was no media directory before the switch: the live one is the seed's.
-            Directory.Delete(_liveMedia, recursive: true);
+            DeleteOwnDirectory(_liveMedia, _data);
         }
-        Directory.Delete(_dir, recursive: true);
+        DeleteOwnDirectory(_dir, _data);
     }
 
     /// <summary>The cutover is durable from here on: a start finishes it, it is never rolled back.</summary>
@@ -199,14 +228,16 @@ public sealed class BlindSeedCutover
     public void FinishDone()
     {
         var preSeed = _livePath + ".pre-seed";
+        RefuseLink(preSeed);
+        foreach (var suffix in Sidecars) RefuseLink(preSeed + suffix);
         if (File.Exists(OldDbPath))
         {
-            foreach (var suffix in Sidecars) if (File.Exists(preSeed + suffix)) File.Delete(preSeed + suffix);
+            foreach (var suffix in Sidecars) DeleteOwnFile(preSeed + suffix, _data);
             File.Move(OldDbPath, preSeed, overwrite: true);
         }
         foreach (var suffix in Sidecars)
             if (File.Exists(OldDbPath + suffix)) File.Move(OldDbPath + suffix, preSeed + suffix, overwrite: true);
-        Directory.Delete(_dir, recursive: true);
+        DeleteOwnDirectory(_dir, _data);
     }
 
     /// <summary>
@@ -226,6 +257,14 @@ public sealed class BlindSeedCutover
     private Marker? ReadMarker()
     {
         if (!File.Exists(MarkerPath)) return null;
+        if (IsLink(MarkerPath))
+        {
+            // A marker that is a link is not our marker: reading through it would take whatever it
+            // points at as the cutover's phase, including a file outside the data root (security #9).
+            // Reported as unreadable — with the files beside it, that is Unresolved, and nothing is
+            // deleted on the strength of it.
+            return null;
+        }
         try
         {
             return JsonSerializer.Deserialize<Marker>(File.ReadAllText(MarkerPath));
@@ -252,23 +291,34 @@ public sealed class BlindSeedCutover
         SqliteConnection.ClearAllPools();
 
         var (phase, seedId) = cutover.PhaseOf();
-        switch (phase)
+        try
         {
-            case Done:
-                cutover.FinishDone();
-                logger.LogWarning("Blind seed {SeedId}: finished a cutover interrupted after it was complete", seedId);
-                break;
-            case Switching:
-                cutover.RollBack();
-                logger.LogWarning("Blind seed {SeedId}: rolled back a cutover interrupted mid-switch; the seed can be sent again", seedId);
-                break;
-            case Unresolved:
-                cutover.RecoverUnresolved(logger);
-                break;
-            default:
-                Directory.Delete(cutover._dir, recursive: true);
-                logger.LogInformation("Blind seed: dropped a cutover that never started switching");
-                break;
+            switch (phase)
+            {
+                case Done:
+                    cutover.FinishDone();
+                    logger.LogWarning("Blind seed {SeedId}: finished a cutover interrupted after it was complete", seedId);
+                    break;
+                case Switching:
+                    cutover.RollBack();
+                    logger.LogWarning("Blind seed {SeedId}: rolled back a cutover interrupted mid-switch; the seed can be sent again", seedId);
+                    break;
+                case Unresolved:
+                    cutover.RecoverUnresolved(logger);
+                    break;
+                default:
+                    cutover.DeleteOwnDirectory(cutover._dir, cutover._data);
+                    logger.LogInformation("Blind seed: dropped a cutover that never started switching");
+                    break;
+            }
+        }
+        catch (BlindSeedRejectedException ex)
+        {
+            // A path in the cutover directory is not a plain file or directory of ours — a link, or
+            // something outside the data root. Refusing is the only safe answer, and refusing here
+            // means leaving every file exactly where it is (security #9); the node starts on
+            // whatever database is live, and the next seed is refused until an operator looks.
+            logger.LogError(ex, "Blind seed: the cutover directory in {Data} could not be recovered safely; nothing was changed", dataPath);
         }
     }
 
@@ -283,6 +333,10 @@ public sealed class BlindSeedCutover
     private void RecoverUnresolved(ILogger logger)
     {
         var restoredDb = false;
+        RefuseLink(_livePath);
+        RefuseLink(OldDbPath);
+        RefuseLink(OldMediaDir);
+        RefuseLink(_liveMedia);
         if (!File.Exists(_livePath) && File.Exists(OldDbPath))
         {
             // Nothing live to lose, and a node without its database does not start: the old one,
@@ -311,6 +365,72 @@ public sealed class BlindSeedCutover
     {
         using var file = File.OpenRead(path);
         return SHA256.HashData(file);
+    }
+
+    // ── every path this type touches is its own, and a plain one ────────────────────────────────
+    //
+    // The cutover writes, moves onto and deletes fixed names under the data root (Codex round 2,
+    // security #9). A symbolic link, junction or any other reparse point planted at one of those
+    // names is not the cutover's file: a write through it lands wherever it points (outside the data
+    // root, on a path the attacker chose), and a recursive delete of a directory that is a link can
+    // take the linked tree with it. So every destructive or writing step first checks that the path
+    // is a plain entry of the expected kind, directly under the data root, and refuses otherwise.
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    /// <summary>A path that exists and is a link (symbolic link, junction, other reparse point).</summary>
+    private static bool IsLink(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
+        catch (IOException) { return false; }
+    }
+
+    /// <summary>Refuses a path that is a link — for the ones that do not exist, there is nothing to refuse.</summary>
+    private static void RefuseLink(string path)
+    {
+        if (IsLink(path))
+            throw new BlindSeedRejectedException(
+                $"Refusing to touch {path}: it is a link (or another reparse point), not this cutover's own file. Nothing was changed; resolve it by hand.");
+    }
+
+    private static bool IsDirectlyUnder(string path, string parent) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(Path.GetFullPath(path))!),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(parent)),
+            PathComparison);
+
+    /// <summary>
+    /// Deletes a regular file of the cutover's own: never a link, never a directory, and only one
+    /// sitting directly under <paramref name="parent"/>. A missing path is a no-op.
+    /// </summary>
+    private void DeleteOwnFile(string path, string parent)
+    {
+        if (!File.Exists(path)) return;
+        RefuseLink(path);
+        if (!IsDirectlyUnder(path, parent))
+            throw new BlindSeedRejectedException(
+                $"Refusing to delete {path}: it is not directly under {parent}. Nothing was changed; resolve it by hand.");
+        File.Delete(path);
+    }
+
+    /// <summary>
+    /// Deletes a directory of the cutover's own, recursively — only when it is a plain directory
+    /// sitting directly under <paramref name="parent"/>. A missing path is a no-op.
+    /// </summary>
+    private void DeleteOwnDirectory(string path, string parent)
+    {
+        if (!Directory.Exists(path)) return;
+        RefuseLink(path);
+        if (!IsDirectlyUnder(path, parent))
+            throw new BlindSeedRejectedException(
+                $"Refusing to delete {path}: it is not directly under {parent}. Nothing was changed; resolve it by hand.");
+        Directory.Delete(path, recursive: true);
     }
 
     private sealed record Marker(Guid SeedId, string Phase, bool? LiveMediaExisted = null);
