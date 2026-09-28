@@ -190,6 +190,8 @@ public class RepositoryWriteGuardrailTests
         // for the protocol itself, not application content.
         new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "ISyncPushPositionRepository", "UpdatePositionAsync",
             "Records how far a peer has pulled from this node — sync protocol bookkeeping, not content."),
+        new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "ISyncPushPositionRepository", "RecordReportedPositionAsync",
+            "Records how far a peer SAYS it has applied our log (POST /api/sync/report-position) — the same protocol bookkeeping the entry above covers, in the column the blind node's log trimmer cuts at rather than the delivery watermark."),
         new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "IBlobRepository", "StoreAsync",
             "Stores content-addressed blob bytes pushed by a peer during sync — this endpoint is the receiving side of the sync protocol itself."),
         new("server/BeeMemoryBank.Api/Endpoints/SnapshotEndpoints.cs", "IEventLogRepository", "AppendAsync",
