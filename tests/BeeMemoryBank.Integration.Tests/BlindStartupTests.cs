@@ -158,18 +158,23 @@ public class BlindStartupTests
         (await whitelist.GetByNodeIdAsync(oldPeer)).Should().NotBeNull();
     }
 
-    /// <summary>Review L-stage1 #4: one that died after it was complete is finished: new database live, old one kept.</summary>
+    /// <summary>
+    /// Review L-stage1 #4: one that died after it was complete is finished: new database live. The old one is wiped,
+    /// not kept as a .pre-seed copy: committed, it is no way back, only the vault under its old key.
+    /// </summary>
     [Fact]
     public async Task ACutoverInterruptedAfterItWasDone_IsFinishedAtStart()
     {
         using var blind = new BlindNodeFactory();
         var newPeer = Guid.NewGuid();
-        await StageInterruptedCutoverAsync(blind.DataPath, BlindSeedCutover.Done, oldPeer: Guid.NewGuid(), newPeer);
+        var oldPeer = Guid.NewGuid();
+        await StageInterruptedCutoverAsync(blind.DataPath, BlindSeedCutover.Done, oldPeer, newPeer);
 
         var whitelist = blind.Services.GetRequiredService<IWhitelistRepository>();
 
         (await whitelist.GetByNodeIdAsync(newPeer)).Should().NotBeNull("the new database stays live");
-        File.Exists(Path.Combine(blind.DataPath, "beememorybank.db.pre-seed")).Should().BeTrue();
+        (await whitelist.GetByNodeIdAsync(oldPeer)).Should().BeNull();
+        File.Exists(Path.Combine(blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse("the replaced database is wiped");
         Directory.Exists(BlindSeedCutover.DirOf(blind.DataPath)).Should().BeFalse();
     }
 

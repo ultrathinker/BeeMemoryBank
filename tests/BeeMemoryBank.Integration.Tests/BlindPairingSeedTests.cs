@@ -75,7 +75,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
         var pcRow = await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(pcId);
         pcRow.Should().NotBeNull();
         pcRow!.IsSuperadmin.Should().BeTrue("the PC used the pair code");
-        File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeTrue("the previous database is kept");
+        File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse("the previous database is wiped once the seed is committed");
 
         // The PC trusts the blind node's key and pushes from the package's checkpoint on.
         var blindRow = await _pc.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(blindId);
@@ -289,6 +289,49 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// Floor (Release A and B): after a reseed completes, no file of the blind node's data directory holds the database
+    /// it replaced. That database is the whole vault under its old key (after a content re-key) and holds recovery
+    /// material a purge removed; it used to stay as beememorybank.db.pre-seed and go into every copy of the volume.
+    /// A random probe written only into the old database must be found in no file afterwards.
+    /// </summary>
+    [Fact]
+    public async Task AfterAReseed_NoFileOfTheBlindDataDir_HoldsTheOldDatabase()
+    {
+        await AddBlindNodeAsync();
+        var probe = RandomNumberGenerator.GetBytes(48);
+        using (var conn = _blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+        {
+            await conn.ExecuteAsync("INSERT INTO tbl_migration_marker (key, value, set_at) VALUES ('preseed-probe', @probe, 'now')", new { probe });
+            await conn.ExecuteAsync("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        FilesHolding(_blind.DataPath, probe).Should().NotBeEmpty("the probe is in the old database before the reseed");
+        var (http, request) = await ReseedRequestAsync(includesUpTo: 0);
+
+        var response = await http.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        http.Dispose();
+        FilesHolding(_blind.DataPath, probe).Should().BeEmpty("no file keeps a page of the old database");
+        File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse();
+        Directory.Exists(BlindSeedCutover.DirOf(_blind.DataPath)).Should().BeFalse();
+    }
+
+    private static List<string> FilesHolding(string dir, byte[] needle) =>
+        Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+            .Where(f =>
+            {
+                try
+                {
+                    using var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var ms = new MemoryStream();
+                    fs.CopyTo(ms);
+                    return ms.GetBuffer().AsSpan(0, (int)ms.Length).IndexOf(needle) >= 0;
+                }
+                catch (IOException) { return false; }
+            })
+            .ToList();
+
+    /// <summary>
     /// Review l-root5 #2: the other half of the switch's contract. A connection that NEVER closes
     /// must not be waited for indefinitely, and must not be worked around either: the seed fails
     /// closed with 400, the file is not switched, and the gate opens again so the node keeps
@@ -309,8 +352,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
             NodeId = phone, DisplayName = "Phone", Ed25519PublicKey = Ed25519Signer.GenerateKeyPair().publicKey,
             Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
         });
-        var preSeed = Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed");
-        var seededAt = File.GetLastWriteTimeUtc(preSeed);
+        var probe = await WriteProbeAsync();
         var (http, request) = await ReseedRequestAsync(includesUpTo: 0);
 
         var response = await http.SendAsync(request).WaitAsync(TimeSpan.FromSeconds(90));
@@ -319,7 +361,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
         (await response.Content.ReadAsStringAsync()).Should().Contain("stayed in use");
         (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(phone))
             .Should().BeNull("the file was never switched, so the peer the package carried is not in the live database");
-        File.GetLastWriteTimeUtc(preSeed).Should().Be(seededAt, "the previous database was not touched");
+        (await HasProbeAsync(probe)).Should().BeTrue("the previous database was not touched");
 
         // The gate is released with the failed seed, not left set: the node goes on serving.
         // Scoped, because this connection is itself a holder: the retry below would wait for it and
@@ -918,7 +960,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
 
         (await _blind.Services.GetRequiredService<BlindState>().GetReseedNeededAsync())
             .Should().BeNull("the reseed replaced the database, flag included");
-        File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeTrue();
+        File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse("the replaced database is wiped");
     }
 
     /// <summary>Without a reason, a sync with a blind peer never starts a reseed (plan 5.2: only on the detector or the flag).</summary>
@@ -927,13 +969,28 @@ public class BlindPairingSeedTests : IAsyncLifetime
     {
         await AddBlindNodeAsync();
         var blindId = (await IdentityAsync(_blind)).NodeId;
-        var seededAt = File.GetLastWriteTimeUtc(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed"));
+        var probe = await WriteProbeAsync();
         using var http = _pc.Services.GetRequiredService<IHttpClientFactory>().CreateClient("SyncScheduler");
         var row = (await _pc.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(blindId))!;
 
         await _pc.Services.GetRequiredService<IBlindPeerReseeder>().AfterSyncAsync(row, http, null, CancellationToken.None);
 
-        File.GetLastWriteTimeUtc(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().Be(seededAt);
+        (await HasProbeAsync(probe)).Should().BeTrue("no reseed replaced the database");
+    }
+
+    /// <summary>A row only the blind node's current database has: gone once a reseed replaces the database.</summary>
+    private async Task<string> WriteProbeAsync()
+    {
+        var probe = "probe-" + Guid.NewGuid().ToString("N");
+        using var conn = _blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        await conn.ExecuteAsync("INSERT INTO tbl_migration_marker (key, value, set_at) VALUES (@probe, 'x', 'now')", new { probe });
+        return probe;
+    }
+
+    private async Task<bool> HasProbeAsync(string probe)
+    {
+        using var conn = _blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        return await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_migration_marker WHERE key = @probe", new { probe }) == 1;
     }
 
     private async Task AddBlindNodeAsync()

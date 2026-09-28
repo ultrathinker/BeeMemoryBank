@@ -78,27 +78,70 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
         Directory.Exists(BlindSeedCutover.DirOf(_data)).Should().BeFalse();
     }
 
+    /// <summary>
+    /// Once the seed is committed ("done"), the old database is no way back, only a copy of the vault under its old
+    /// key: it is wiped (zeros, then deleted), sidecars included, and no <c>.pre-seed</c> copy is kept.
+    /// </summary>
     [Fact]
-    public async Task AFinishThatFailsAfterTheMainFileMoved_KeepsTheSidecars_AndResumes()
+    public async Task AFinishedCutover_WipesTheOldDatabase_AndKeepsNoPreSeedCopy()
     {
         var cutover = StartSwitch();
         await RetriedAsync(cutover.SwitchFiles);
         cutover.MarkDone(Guid.NewGuid());
-        var preSeed = Live + ".pre-seed";
-        Directory.CreateDirectory(preSeed + "-wal");
 
-        // Finish is repeated by the next start (the marker says "done"), not by the retry wrapper.
-        for (var attempt = 0; attempt < 2; attempt++)
-            try { cutover.FinishDone(); }
-            // Linux reports a rename onto a directory as an IOException, Windows as access denied.
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-
-        OldDatabaseFiles().Should().Equal(["old main", "old shm", "old wal"], "no file of the old database is deleted");
-        Directory.Delete(preSeed + "-wal");
         cutover.FinishDone();
-        new[] { preSeed, preSeed + "-wal", preSeed + "-shm" }.Select(File.ReadAllText)
-            .Should().Equal("old main", "old wal", "old shm");
+
+        File.ReadAllText(Live).Should().Be("new main");
         Directory.Exists(BlindSeedCutover.DirOf(_data)).Should().BeFalse();
+        Directory.EnumerateFiles(_data, "*", SearchOption.AllDirectories).Select(File.ReadAllText)
+            .Should().NotContain(t => t.StartsWith("old"), "no file of the old database is left anywhere");
+        File.Exists(Live + ".pre-seed").Should().BeFalse();
+    }
+
+    /// <summary>A finish interrupted half way (the next start repeats it: the marker says "done") still ends with nothing old left.</summary>
+    [Fact]
+    public async Task AFinishInterruptedHalfway_IsCompletedByTheNextStart()
+    {
+        var cutover = StartSwitch();
+        await RetriedAsync(cutover.SwitchFiles);
+        cutover.MarkDone(Guid.NewGuid());
+        BlindSeedCutover.WipeFile(InCutover("old.db")); // the main file went; the process died before the sidecars
+
+        BlindSeedCutover.Recover(_data, NullLogger.Instance);
+
+        Directory.Exists(BlindSeedCutover.DirOf(_data)).Should().BeFalse();
+        Directory.EnumerateFiles(_data, "*", SearchOption.AllDirectories).Select(File.ReadAllText)
+            .Should().NotContain(t => t.StartsWith("old"));
+    }
+
+    /// <summary>A .pre-seed copy an older build left after a completed seed is wiped at start.</summary>
+    [Fact]
+    public void APreSeedCopyLeftByAnOlderBuild_IsWipedAtStart()
+    {
+        Directory.CreateDirectory(_data);
+        File.WriteAllText(Live, "live main");
+        foreach (var suffix in new[] { "", "-wal", "-shm" }) File.WriteAllText(Live + ".pre-seed" + suffix, "old copy" + suffix);
+
+        BlindSeedCutover.Recover(_data, NullLogger.Instance);
+
+        Directory.EnumerateFiles(_data).Select(Path.GetFileName).Should().Equal("beememorybank.db");
+        File.ReadAllText(Live).Should().Be("live main");
+    }
+
+    /// <summary>DK2's rule holds: while a cutover is unresolved, nothing is deleted, an older pre-seed copy included.</summary>
+    [Fact]
+    public void AnUnresolvedCutover_DeletesNothing_NotEvenAnOlderPreSeedCopy()
+    {
+        StartSwitch();
+        File.Move(Live, InCutover("old.db"));
+        File.WriteAllText(Live, "new main");
+        File.WriteAllText(InCutover("marker.json"), "{ torn");
+        File.WriteAllText(Live + ".pre-seed", "old copy");
+
+        BlindSeedCutover.Recover(_data, NullLogger.Instance);
+
+        File.Exists(InCutover("old.db")).Should().BeTrue("unresolved: the old database stays");
+        File.ReadAllText(Live + ".pre-seed").Should().Be("old copy", "nothing is deleted while the cutover is unresolved");
     }
 
     /// <summary>
