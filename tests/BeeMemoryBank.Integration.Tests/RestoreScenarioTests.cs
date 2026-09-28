@@ -333,6 +333,38 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         RecoverySet.Parse(set!).Boxes.Should().NotBeEmpty("the backup writes the real recovery set, not the stub's nothing");
     }
 
+    /// <summary>
+    /// The restore bootstrap writes the identity row first and the key slot, the admin and the
+    /// sentinel after it. "Initialized" used to mean no more than "that first row exists", so a
+    /// crash in between (a power cut, a killed container — the restore is not a transaction) left a
+    /// node that called itself initialized, refused the next restore with "restore needs a fresh
+    /// node" and had no slot to unlock with. Nothing cleared it but wiping the volume by hand.
+    /// </summary>
+    [Fact]
+    public async Task ARestoreThatDiedAfterTheNodeRow_IsNotInitialized_AndTheNextAttemptSucceeds()
+    {
+        using var target = new RecoveryTestFactory();
+        var nodeRepo = target.Services.GetRequiredService<INodeIdentityRepository>();
+        // Exactly what the crash leaves behind: the row, and nothing else.
+        await nodeRepo.CreateAsync(new NodeIdentity
+        {
+            NodeId = Guid.NewGuid(), DisplayName = "Half restored",
+            Ed25519PublicKey = Ed25519Signer.GenerateKeyPair().publicKey,
+            Ed25519PrivateKey = [], Ed25519PrivateKeyIV = null, Ed25519PrivateKeyV = 1,
+            CreatedAt = DateTime.UtcNow
+        });
+        using (var scope = target.Services.CreateScope())
+            (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
+                .Should().BeFalse(
+                    "there is no key slot, no admin and no sentinel — this node cannot be unlocked, "
+                    + "and calling it initialized is what made the brick permanent");
+
+        var result = await target.Services.GetRequiredService<BlindRestoreClient>().RestoreFromBackupAsync(source.BackupFolder, Who);
+
+        result.NodeId.Should().NotBe(Guid.Empty);
+        await AssertEverythingOpensAsync(target);
+    }
+
     [Fact]
     public async Task FromBackupFolder_WithNoBlindNodeAtAll_EverythingOpens()
     {

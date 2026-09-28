@@ -13,8 +13,42 @@ public class InitializationService(
     IUserRepository userRepo,
     IDbConnectionFactory dbFactory)
 {
+    /// <summary>
+    /// Whether this database holds a node somebody can actually use — which is not the same as
+    /// "there is a row in tbl_node_identity".
+    ///
+    /// <para>An external-key identity (v=2, a blind node) is the whole of that node's
+    /// initialization: it has no vault, so there is no owner, slot or sentinel to look for.</para>
+    ///
+    /// <para>Every other node needs a vault that can be opened: an active user with a key slot, and
+    /// the sentinel that says which master key that slot is bound to. The identity row alone used to
+    /// be the entire test, and the restore bootstrap writes that row first — a crash anywhere in the
+    /// rest of it (the slot, the admin, the sentinel) left a node that called itself initialized,
+    /// refused the next restore with "restore needs a fresh node", and had no slot to unlock with.
+    /// Nothing but wiping the volume cleared that (review release-a #6). Writing the whole bootstrap
+    /// in one transaction is the other way to close it; this closes it for every partial write, from
+    /// any version, not only the ones a transaction would cover.</para>
+    ///
+    /// <para>Both halves have been written by every initialization path since the first release —
+    /// init, join, the phone's setup, restore — so no healthy node changes its answer here. The one
+    /// way a real node looks uninitialized is a database somebody emptied by hand, which is exactly
+    /// a node that should get the setup wizard rather than fail to unlock forever.</para>
+    /// </summary>
     public async Task<bool> IsInitializedAsync()
-        => await nodeRepo.GetAsync() != null;
+    {
+        var identity = await nodeRepo.GetAsync();
+        if (identity is null) return false;
+        if (identity.Ed25519PrivateKeyV == NodeIdentityCrypto.ExternalKeyVersion) return true;
+
+        // The sentinel first: it is one value on the row already read, and a node without it cannot
+        // be unlocked by any slot (SessionService verifies every slot against it).
+        if (await nodeRepo.GetSentinelAsync() is null) return false;
+
+        // Then an owner: an active user that has a key slot. The slot rows and the users are read
+        // through the repositories, not by joining tables here.
+        var slotIds = (await keySlotRepo.GetAllAsync()).Select(s => s.SlotId).ToHashSet();
+        return (await userRepo.ListActiveAsync()).Any(u => u.KeySlotId is { } id && slotIds.Contains(id));
+    }
 
     public async Task InitializeAsync(string adminUsername, string nodeDisplayName, string password, bool canGenerateEmbeddings = true)
     {
