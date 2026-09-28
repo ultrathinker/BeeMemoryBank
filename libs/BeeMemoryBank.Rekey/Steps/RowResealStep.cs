@@ -282,6 +282,13 @@ public sealed class RowResealStep : IRekeyStep
                 if (!Guid.TryParse(m.Id, out var mediaId)) { Problems.Add(new(Media, m.Id, "not a GUID")); continue; }
                 var oldCt = await BlobAsync(Db, tx, m.Hash);
                 var fromFile = false;
+                if (oldCt == null && MediaFile(ctx.SourceDir, m.Id) is { } linked && File.Exists(linked)
+                    && (NoFollow.IsLink(linked) || NoFollow.IsLink(Path.GetDirectoryName(linked)!)))
+                {
+                    // Never read through a link (review release-b R1-7): it could name any file outside the vault.
+                    Problems.Add(new(Media, m.Id, "its .enc file is a link (or inside a linked media directory); not followed"));
+                    continue;
+                }
                 if (oldCt == null && MediaFile(ctx.SourceDir, m.Id) is { } path && File.Exists(path))
                 {
                     oldCt = await File.ReadAllBytesAsync(path, ctx.Ct);

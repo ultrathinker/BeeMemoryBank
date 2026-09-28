@@ -35,35 +35,56 @@ public static class RekeySwap
         FaultBetweenRenames = "between-renames", FaultAfterRename2 = "after-rename-2";
 
     /// <summary>Copies every <see cref="CarriedOver"/> entry of <paramref name="dataDir"/> that exists into <paramref name="newDir"/>.</summary>
-    public static IReadOnlyList<string> CarryOver(string dataDir, string newDir, Action<string>? fault = null)
+    public static IReadOnlyList<string> CarryOver(string dataDir, string newDir, Action<string>? fault = null) =>
+        CarryOver(dataDir, newDir, skippedLinks: null, fault);
+
+    /// <summary>
+    /// The carry-over, never following a link (review release-b R1-7): a junction or symbolic link anywhere under a
+    /// carried-over entry, the entry itself included, is not copied and its path relative to D goes into
+    /// <paramref name="skippedLinks"/>. Only regular files and directories that really are inside D are copied.
+    /// </summary>
+    public static IReadOnlyList<string> CarryOver(string dataDir, string newDir, List<string>? skippedLinks, Action<string>? fault = null)
     {
         var copied = new List<string>();
         foreach (var name in CarriedOver)
         {
             var from = Path.Combine(dataDir, name);
             var to = Path.Combine(newDir, name);
-            if (Directory.Exists(from)) CopyDirectory(from, to, fault);
-            else if (File.Exists(from))
+            if (!Directory.Exists(from) && !File.Exists(from)) continue;
+            if (NoFollow.IsLink(from))
+            {
+                skippedLinks?.Add(name);
+                continue;
+            }
+            if (Directory.Exists(from)) CopyDirectory(dataDir, from, to, skippedLinks, fault);
+            else
             {
                 fault?.Invoke(FaultCarryOver);
                 File.Copy(from, to, overwrite: true);
             }
-            else continue;
             copied.Add(name);
         }
         return copied;
     }
 
-    private static void CopyDirectory(string from, string to, Action<string>? fault)
+    private static void CopyDirectory(string dataDir, string from, string to, List<string>? skippedLinks, Action<string>? fault)
     {
         Directory.CreateDirectory(to);
-        foreach (var file in Directory.EnumerateFiles(from))
+        foreach (var entry in Directory.EnumerateFileSystemEntries(from))
         {
-            fault?.Invoke(FaultCarryOver);
-            File.Copy(file, Path.Combine(to, Path.GetFileName(file)), overwrite: true);
+            if (NoFollow.IsLink(entry))
+            {
+                skippedLinks?.Add(Path.GetRelativePath(dataDir, entry).Replace('\\', '/'));
+                continue;
+            }
+            var target = Path.Combine(to, Path.GetFileName(entry));
+            if (Directory.Exists(entry)) CopyDirectory(dataDir, entry, target, skippedLinks, fault);
+            else
+            {
+                fault?.Invoke(FaultCarryOver);
+                File.Copy(entry, target, overwrite: true);
+            }
         }
-        foreach (var dir in Directory.EnumerateDirectories(from))
-            CopyDirectory(dir, Path.Combine(to, Path.GetFileName(dir)), fault);
     }
 
     /// <summary>

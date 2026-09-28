@@ -106,7 +106,7 @@ public static class RekeyRunner
         var succeeded = false;
         var newDir = RekeySwapJournal.NewDirFor(d);
         report.PastLock = true;
-        if (Directory.Exists(StoppedReportDirFor(d))) Directory.Delete(StoppedReportDirFor(d), recursive: true); // an older run's
+        NoFollow.DeleteTree(StoppedReportDirFor(d)); // an older run's
         try
         {
             using var nodeLock = RekeyLock.TryAcquireNodeLock(d);
@@ -259,7 +259,7 @@ public static class RekeyRunner
 
     private static void DiscardNewDir(string newDir)
     {
-        if (Directory.Exists(newDir)) Directory.Delete(newDir, recursive: true);
+        NoFollow.DeleteTree(newDir); // a link planted as D.rekey-new goes as a link; its target is never touched
     }
 
     /// <summary>

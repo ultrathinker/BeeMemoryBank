@@ -343,6 +343,38 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
         return await conn.ExecuteScalarAsync<string>("SELECT id FROM tbl_article WHERE id = @a COLLATE NOCASE", new { a = id.ToString() });
     }
 
+    /// <summary>
+    /// Review release-b R1-7: a legacy media/{id}.enc that is a link (here, to a file outside the vault) is never read.
+    /// The attempt fails with the row named, instead of importing whatever the link points at.
+    /// </summary>
+    [Fact]
+    public async Task ALegacyMediaFileThatIsALink_IsNotFollowed_AndTheAttemptFails()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "bmb-outside-" + Guid.NewGuid().ToString("N") + ".enc");
+        File.Copy(EncPath, outside);
+        File.Delete(EncPath);
+        try { File.CreateSymbolicLink(EncPath, outside); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            File.Move(outside, EncPath);
+            return; // no right to create links on this machine
+        }
+        try
+        {
+            var ctx = await CopyAsync();
+            using var keys = ctx.Keys;
+
+            var run = () => new RowResealStep().RunAsync(ctx);
+
+            (await run.Should().ThrowAsync<RekeyRowsUnopenableException>()).Which.Problems
+                .Should().Contain(pr => pr.Table == RowResealStep.Media && pr.Problem.Contains("link"));
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
     [Fact]
     public async Task MediaWithNeitherBlobNorFile_FailsTheAttempt()
     {

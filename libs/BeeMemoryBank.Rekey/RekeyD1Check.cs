@@ -154,7 +154,7 @@ public static class RekeyD1Check
     {
         var problems = new List<RekeyProblem>();
         if (old.CiphertextPrefixes.Count == 0) return problems;
-        foreach (var file in Directory.EnumerateFiles(newDir, "*", SearchOption.AllDirectories))
+        foreach (var file in Directory.EnumerateFiles(newDir, "*", NoFollow.Walk))
         {
             var bytes = File.ReadAllBytes(file);
             for (var i = 0; i + Prefix <= bytes.Length; i++)
