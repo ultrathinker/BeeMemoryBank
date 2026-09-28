@@ -21,7 +21,8 @@ public enum RekeyOutcome
     Failed,
     /// <summary>Exit 4: the swap finishes at the next start of the node.</summary>
     SwapPending,
-    /// <summary>The verb was never started (no CLI); the node was not stopped.</summary>
+    /// <summary>The verb was never started (no CLI, or a node this app did not start runs on the vault); the node was
+    /// not stopped.</summary>
     NotRun,
 }
 
@@ -83,6 +84,16 @@ public sealed class DesktopRekeyService
         var cli = _cliPath();
         if (cli is null)
             return new DesktopRekeyResult { Outcome = RekeyOutcome.NotRun, Message = "The command-line tool (bmb) was not found next to the app." };
+
+        // A node this app only attached to (a service, the command line) keeps running through StopAsync, and the
+        // verb would then refuse on its node.lock: say so now, with nothing stopped (review release-b R2-3).
+        if (nodeIsRunning && _node.IsAttachedToExternalNode)
+            return new DesktopRekeyResult
+            {
+                Outcome = RekeyOutcome.NotRun,
+                Message = "This vault's node was not started by this app (it runs as a service or from the command line), " +
+                          "so the app cannot stop it. Stop that node first, then re-key.",
+            };
 
         if (nodeIsRunning)
         {
