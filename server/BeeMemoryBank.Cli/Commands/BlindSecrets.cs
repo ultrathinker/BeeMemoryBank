@@ -10,6 +10,9 @@ namespace BeeMemoryBank.Cli.Commands;
 public static class BlindSecrets
 {
     public const string ConsolePassword = "console_password";
+    /// <summary>The password a node already has, when <c>blind init</c> is changing it (or
+    /// re-running on an initialized node). Optional: without it an existing password is kept.</summary>
+    public const string CurrentConsolePassword = "current_console_password";
     public const string ResticPassword = "restic_password";
     public const string S3SecretKey = "s3_secret_key";
 

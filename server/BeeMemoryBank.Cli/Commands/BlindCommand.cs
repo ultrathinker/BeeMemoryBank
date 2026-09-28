@@ -37,6 +37,8 @@ public static class BlindCommand
             var prompts = new Dictionary<string, string>
             {
                 [BlindSecrets.ConsolePassword] = "Console page password (min 8 characters)",
+                [BlindSecrets.CurrentConsolePassword] =
+                    "Current console password (only to change an existing one; Enter to keep it)",
                 [BlindSecrets.ResticPassword] = "restic repository password (Enter to set it later)",
             };
             if (s3 is not null) prompts[BlindSecrets.S3SecretKey] = "S3 secret key";
@@ -122,10 +124,21 @@ public static class BlindCommand
         }
         var resticPw = secrets.GetValueOrDefault(BlindSecrets.ResticPassword);
         var sk = secrets.GetValueOrDefault(BlindSecrets.S3SecretKey);
+        var currentPw = secrets.GetValueOrDefault(BlindSecrets.CurrentConsolePassword);
 
+        // `init` is also how a configured node gets a different backup target, and that node
+        // already has a console password: the endpoint then needs the current one (a password
+        // change is not something an unattended CLI run may do without it). Without it, init keeps
+        // the password it finds and goes on to the settings — the run's actual purpose — instead
+        // of stopping at a step the operator did not come here to perform.
         var (status, body) = await api.SendAsync("POST", "api/blind/console/password",
-            $$"""{"newPassword":{{Json(consolePassword)}}}""");
+            currentPw is null
+                ? $$"""{"newPassword":{{Json(consolePassword)}}}"""
+                : $$"""{"newPassword":{{Json(consolePassword)}},"currentPassword":{{Json(currentPw)}}}""");
         if (status == 204) await output.WriteLineAsync("Console password set.");
+        else if (currentPw is null && body.Contains("already set", StringComparison.OrdinalIgnoreCase))
+            await output.WriteLineAsync(
+                $"Console password kept (this node has one already; pass {BlindSecrets.CurrentConsolePassword} to change it).");
         else return await FailAsync(output, status, body);
 
         if (repoFolder is not null || s3 is not null || resticPw is not null)

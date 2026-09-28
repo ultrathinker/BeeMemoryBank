@@ -22,7 +22,7 @@ public sealed class CoreBlindStatusContributor(
     ISyncPositionRepository syncPositionRepo,
     ISyncPushPositionRepository pushPositionRepo,
     IEventLogRepository eventLogRepo,
-    IArticleRepository articleRepo,
+    IDbConnectionFactory connFactory,
     IBlobRepository blobRepo,
     INodeRole? role = null,
     string? dataPath = null) : IBlindStatusContributor
@@ -90,13 +90,27 @@ public sealed class CoreBlindStatusContributor(
 
         b.Set("stored", new Dictionary<string, object?>
         {
-            ["articles"] = await articleRepo.CountAsync(),
+            // Counted straight from the table, not through IArticleRepository.CountAsync: that one
+            // applies the caller's folder ACL, and a blind node's status is asked for by the
+            // console and the CLI — internal-key callers with no user scope at all, which resolve
+            // to an empty one. The node then reported "0 articles" while holding the whole mesh's
+            // vault. The question here is what this NODE stores, not what this caller may read —
+            // the same reason the blob count and the database size below never went through a scope.
+            ["articles"] = await CountArticlesAsync(),
             ["blobs"] = blobCount,
             // Everything the node stores for the mesh: the vault database, the blob table's
             // ciphertext and the encrypted media files. The console shows this as "Stored".
             ["bytes"] = dbBytes + blobBytes + mediaBytes,
         });
         b.Set("free_bytes", new DriveInfo(Path.GetFullPath(_dataPath)).AvailableFreeSpace);
+    }
+
+    /// <summary>Live articles in this node's database, whatever the asking caller may read.</summary>
+    private async Task<long> CountArticlesAsync()
+    {
+        using var conn = connFactory.CreateConnection();
+        return await Dapper.SqlMapper.ExecuteScalarAsync<long>(
+            conn, "SELECT COUNT(*) FROM tbl_article WHERE status = 'A'");
     }
 
     private string DbPath => Path.Combine(_dataPath, "beememorybank.db");
