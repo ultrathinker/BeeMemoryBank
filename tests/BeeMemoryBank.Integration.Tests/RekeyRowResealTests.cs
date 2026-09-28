@@ -337,10 +337,75 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
                 .Should().Be(1, "the old vault keeps it");
     }
 
+    /// <summary>
+    /// Review release-b R1-9: a plaintext comment of a purged body is dropped and listed too (marked "plaintext"), and
+    /// its text is nowhere in the copy afterwards.
+    /// </summary>
+    [Fact]
+    public async Task APlaintextCommentOfAPurgedBody_IsDroppedAndListed_AndItsTextIsGoneFromTheCopy()
+    {
+        const string text = "plaintext orphan note 7c1e";
+        using (var conn = Db.CreateConnection())
+        {
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_comment (article_id, text, created_at, comment_id, encrypted, lamport_ts)
+                  VALUES ((SELECT id FROM tbl_article WHERE id = @a COLLATE NOCASE), @text, @t, @c, 0, 1)",
+                new { a = _deleted.ToString(), text, t = DateTime.UtcNow.ToString("O"), c = Guid.NewGuid().ToString() });
+            await conn.ExecuteAsync("DELETE FROM tbl_article_body WHERE article_id = @a COLLATE NOCASE", new { a = _deleted.ToString() });
+        }
+        var ctx = await CopyAsync();
+        using var keys = ctx.Keys;
+
+        var result = await new RowResealStep().RunAsync(ctx);
+
+        (await ctx.Main.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_comment WHERE article_id = @a COLLATE NOCASE", new { a = _deleted.ToString() }))
+            .Should().Be(0, "neither the sealed nor the plaintext comment of the purged body stays");
+        result.Notes.Where(n => n.StartsWith(RowResealStep.DroppedCommentNote)).Should().HaveCount(2)
+            .And.ContainSingle(n => n.EndsWith(" plaintext"));
+        result.Notes.Should().NotContain(n => n.Contains(text), "no content goes into the report");
+        (await new RowResealStep().VerifyAsync(ctx)).Should().BeEmpty();
+        await ctx.Main.ExecuteAsync("VACUUM");
+        ctx.Main.Close();
+        var file = await File.ReadAllBytesAsync(Path.Combine(ctx.WorkDir, "beememorybank.db"));
+        file.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(text)).Should().Be(-1, "the plaintext is gone from the copy");
+    }
+
     private async Task<string> ArticleIdAsync(Guid id)
     {
         using var conn = Db.CreateConnection();
         return await conn.ExecuteScalarAsync<string>("SELECT id FROM tbl_article WHERE id = @a COLLATE NOCASE", new { a = id.ToString() });
+    }
+
+    /// <summary>
+    /// Review release-b R1-7: a legacy media/{id}.enc that is a link (here, to a file outside the vault) is never read.
+    /// The attempt fails with the row named, instead of importing whatever the link points at.
+    /// </summary>
+    [Fact]
+    public async Task ALegacyMediaFileThatIsALink_IsNotFollowed_AndTheAttemptFails()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "bmb-outside-" + Guid.NewGuid().ToString("N") + ".enc");
+        File.Copy(EncPath, outside);
+        File.Delete(EncPath);
+        try { File.CreateSymbolicLink(EncPath, outside); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            File.Move(outside, EncPath);
+            return; // no right to create links on this machine
+        }
+        try
+        {
+            var ctx = await CopyAsync();
+            using var keys = ctx.Keys;
+
+            var run = () => new RowResealStep().RunAsync(ctx);
+
+            (await run.Should().ThrowAsync<RekeyRowsUnopenableException>()).Which.Problems
+                .Should().Contain(pr => pr.Table == RowResealStep.Media && pr.Problem.Contains("link"));
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
     }
 
     [Fact]

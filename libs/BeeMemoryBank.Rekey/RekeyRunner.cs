@@ -62,6 +62,9 @@ public static class RekeyRunner
 
     public const string MainDb = "beememorybank.db", ChatDb = "chat.db", ReportFile = RekeyReport.FileName;
 
+    /// <summary>The report entry of the carry-over, after the plan's steps.</summary>
+    public const string CarryOverName = "CarryOver";
+
     public const string FaultAfterCopy = "after-copy", FaultAfterSteps = "after-steps", FaultAfterVerify = "after-verify",
         FaultAfterScrub = "after-scrub";
 
@@ -106,12 +109,19 @@ public static class RekeyRunner
         var succeeded = false;
         var newDir = RekeySwapJournal.NewDirFor(d);
         report.PastLock = true;
-        if (Directory.Exists(StoppedReportDirFor(d))) Directory.Delete(StoppedReportDirFor(d), recursive: true); // an older run's
+        NoFollow.DeleteTree(StoppedReportDirFor(d)); // an older run's
         try
         {
             using var nodeLock = RekeyLock.TryAcquireNodeLock(d);
             if (nodeLock == null)
                 return Fail(RekeyExit.FailedBeforeSwap, "The node is running (node.lock is held): stop it first.");
+            // Every process that opens the vault holds vault.lease shared: a standalone or Docker Api, a node's child
+            // Api, a CLI command. Exclusive, it both refuses the run while one of them is up and keeps them from
+            // starting until the run is over (review release-b R1-1).
+            using var vaultLease = VaultStartup.TryAcquireExclusive(d);
+            if (vaultLease == null)
+                return Fail(RekeyExit.FailedBeforeSwap,
+                    "The vault is in use (an Api, a node or a bmb command holds its vault.lease): stop it first.");
 
             var missing = RequiredSteps.Where(n => options.Steps.All(s => s.Name != n)).ToList();
             if (missing.Count > 0 || options.Preflight == null)
@@ -190,6 +200,14 @@ public static class RekeyRunner
             SqliteConnection.ClearAllPools();
             options.Fault?.Invoke(FaultAfterScrub);
 
+            // The carry-over comes before the last D1 scan (review release-b R1-8): whatever it brings from D into the new
+            // vault is scanned with the rest. It never follows a link (R1-7); what it skipped is named in the report.
+            var skippedLinks = new List<string>();
+            var carried = RekeySwap.CarryOver(d, newDir, skippedLinks, options.Fault);
+            report.Steps.Add(new RekeyStepResult(CarryOverName,
+                new Dictionary<string, long> { ["entries"] = carried.Count, ["links_skipped"] = skippedLinks.Count },
+                [.. carried.Select(c => "carried:" + c), .. skippedLinks.Select(l => "skipped-link:" + l)]));
+
             // The D1 byte check, on the scrubbed files: no old ciphertext survives anywhere in them.
             var leaks = RekeyD1Check.CheckBytes(newDir, oldMaterial);
             if (leaks.Count > 0) return FailVerify(report, leaks);
@@ -199,12 +217,13 @@ public static class RekeyRunner
             // could not be renamed on Windows (and would carry a stray file). The re-key lock, held, still keeps a
             // node from starting.
             nodeLock.Dispose();
+            // The vault lease stays held through the swap: it is next to D, so it does not stand in the renames' way.
             report.OldVault = RekeySwapJournal.OldDirFor(d, now);
             RekeyReport.Write(newDir, report.ToReport(RekeyReport.Done, null));
             progress.Report("swap", 0, 1);
             try
             {
-                RekeySwap.Swap(d, now, options.Fault);
+                RekeySwap.Swap(d, now, options.Fault, carryOver: false);
             }
             catch when (RekeySwapJournal.Read(d) != null)
             {
@@ -251,7 +270,7 @@ public static class RekeyRunner
 
     private static void DiscardNewDir(string newDir)
     {
-        if (Directory.Exists(newDir)) Directory.Delete(newDir, recursive: true);
+        NoFollow.DeleteTree(newDir); // a link planted as D.rekey-new goes as a link; its target is never touched
     }
 
     /// <summary>

@@ -20,12 +20,14 @@ namespace BeeMemoryBank.Rekey;
 public static class RekeySwap
 {
     /// <summary>
-    /// §5 "carried over": TLS and network config, the Web↔Api key and the plaintext audit logs. The databases are not
+    /// §5 "carried over": TLS and network config and the plaintext audit logs. The databases are not
     /// in the list: the new vault's are the re-keyed copies. Everything else stays behind in the old directory.
     /// </summary>
     public static readonly IReadOnlyList<string> CarriedOver =
     [
-        "certs", "tls", "internet-access", "ddns-state.json", ".internal-key", "wipe-audit.log", "reset-audit.log",
+        // Not .internal-key: it is the Web-to-Api trust credential, and an old copy of it must not open the new
+        // vault; KeyMaterialStep writes a fresh one into the new vault (L-2).
+        "certs", "tls", "internet-access", "ddns-state.json", "wipe-audit.log", "reset-audit.log",
     ];
 
     /// <summary>The fault points of the swap, for the brick tests.</summary>
@@ -33,35 +35,56 @@ public static class RekeySwap
         FaultBetweenRenames = "between-renames", FaultAfterRename2 = "after-rename-2";
 
     /// <summary>Copies every <see cref="CarriedOver"/> entry of <paramref name="dataDir"/> that exists into <paramref name="newDir"/>.</summary>
-    public static IReadOnlyList<string> CarryOver(string dataDir, string newDir, Action<string>? fault = null)
+    public static IReadOnlyList<string> CarryOver(string dataDir, string newDir, Action<string>? fault = null) =>
+        CarryOver(dataDir, newDir, skippedLinks: null, fault);
+
+    /// <summary>
+    /// The carry-over, never following a link (review release-b R1-7): a junction or symbolic link anywhere under a
+    /// carried-over entry, the entry itself included, is not copied and its path relative to D goes into
+    /// <paramref name="skippedLinks"/>. Only regular files and directories that really are inside D are copied.
+    /// </summary>
+    public static IReadOnlyList<string> CarryOver(string dataDir, string newDir, List<string>? skippedLinks, Action<string>? fault = null)
     {
         var copied = new List<string>();
         foreach (var name in CarriedOver)
         {
             var from = Path.Combine(dataDir, name);
             var to = Path.Combine(newDir, name);
-            if (Directory.Exists(from)) CopyDirectory(from, to, fault);
-            else if (File.Exists(from))
+            if (!Directory.Exists(from) && !File.Exists(from)) continue;
+            if (NoFollow.IsLink(from))
+            {
+                skippedLinks?.Add(name);
+                continue;
+            }
+            if (Directory.Exists(from)) CopyDirectory(dataDir, from, to, skippedLinks, fault);
+            else
             {
                 fault?.Invoke(FaultCarryOver);
                 File.Copy(from, to, overwrite: true);
             }
-            else continue;
             copied.Add(name);
         }
         return copied;
     }
 
-    private static void CopyDirectory(string from, string to, Action<string>? fault)
+    private static void CopyDirectory(string dataDir, string from, string to, List<string>? skippedLinks, Action<string>? fault)
     {
         Directory.CreateDirectory(to);
-        foreach (var file in Directory.EnumerateFiles(from))
+        foreach (var entry in Directory.EnumerateFileSystemEntries(from))
         {
-            fault?.Invoke(FaultCarryOver);
-            File.Copy(file, Path.Combine(to, Path.GetFileName(file)), overwrite: true);
+            if (NoFollow.IsLink(entry))
+            {
+                skippedLinks?.Add(Path.GetRelativePath(dataDir, entry).Replace('\\', '/'));
+                continue;
+            }
+            var target = Path.Combine(to, Path.GetFileName(entry));
+            if (Directory.Exists(entry)) CopyDirectory(dataDir, entry, target, skippedLinks, fault);
+            else
+            {
+                fault?.Invoke(FaultCarryOver);
+                File.Copy(entry, target, overwrite: true);
+            }
         }
-        foreach (var dir in Directory.EnumerateDirectories(from))
-            CopyDirectory(dir, Path.Combine(to, Path.GetFileName(dir)), fault);
     }
 
     /// <summary>
@@ -69,7 +92,9 @@ public static class RekeySwap
     /// <see cref="RekeySwapJournal.NewDirFor"/>(<paramref name="dataDir"/>).
     /// <paramref name="fault"/> is the tests' fault injection, called at each named point.
     /// </summary>
-    public static string Swap(string dataDir, DateTimeOffset now, Action<string>? fault = null)
+    /// <param name="carryOver">False when the caller has already carried the files over (the verb does, before its
+    /// last D1 scan, so that scan covers them: review release-b R1-8).</param>
+    public static string Swap(string dataDir, DateTimeOffset now, Action<string>? fault = null, bool carryOver = true)
     {
         var d = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dataDir));
         var newDir = RekeySwapJournal.NewDirFor(d);
@@ -80,7 +105,7 @@ public static class RekeySwap
         if (RekeySwapJournal.Read(d) != null)
             throw new InvalidOperationException($"A swap is already in progress ({RekeySwapJournal.PathFor(d)}); start the node to finish it.");
 
-        CarryOver(d, newDir, fault);
+        if (carryOver) CarryOver(d, newDir, fault);
 
         var journal = new RekeySwapJournal(newDir, oldDir, RekeySwapJournal.Prepared);
         RekeySwapJournal.Write(d, journal);

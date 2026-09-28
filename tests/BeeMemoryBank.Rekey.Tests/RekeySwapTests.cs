@@ -87,7 +87,7 @@ public sealed class RekeySwapTests : IDisposable
         tree.Keys.Should().BeEquivalentTo(
         [
             "beememorybank.db", "chat.db", "certs/ca.pem", "certs/acme/account.json", "tls/server.pfx",
-            "internet-access/state.json", "ddns-state.json", ".internal-key", "wipe-audit.log", "reset-audit.log",
+            "internet-access/state.json", "ddns-state.json", "wipe-audit.log", "reset-audit.log",
         ], "only the §5 list is carried over: no media, snapshots, secrets or unknown files");
         Tree(OldDir).Should().BeEquivalentTo(_oldTree);
         Directory.Exists(RekeySwapJournal.NewDirFor(_d)).Should().BeFalse();

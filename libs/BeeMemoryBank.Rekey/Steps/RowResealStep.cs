@@ -36,8 +36,9 @@ public sealed class RowResealStep : IRekeyStep
 {
     public string Name => "RowReseal";
 
-    /// <summary>The note of a sealed comment dropped because its article's body was purged:
-    /// <c>dropped-comment:&lt;comment id&gt; article:&lt;article id&gt; created:&lt;created_at&gt;</c>. No content.</summary>
+    /// <summary>The note of a comment dropped because its article's body was purged:
+    /// <c>dropped-comment:&lt;comment id&gt; article:&lt;article id&gt; created:&lt;created_at&gt;</c>, with <c> plaintext</c>
+    /// appended for one that was never sealed. No content.</summary>
     public const string DroppedCommentNote = "dropped-comment:";
 
     public const string Body = "tbl_article_body", Comment = "tbl_comment", Version = "tbl_article_version",
@@ -159,19 +160,15 @@ public sealed class RowResealStep : IRekeyStep
             // survives only in the event log, which the re-key clears. Re-sealing it under a key stored nowhere would
             // destroy it anyway, and keeping it under the old key would leave it to the old keys (D1). It is dropped
             // from the copy and listed, without content, in the report; the old vault keeps it until the owner deletes
-            // it. A plaintext one is readable and holds no old-key material: it stays as it is.
+            // it. A plaintext one goes the same way (review release-b R1-9): there is no key left to seal it under, and
+            // kept, its text would sit in the clear in a vault that promises none.
             var withBody = bodies.Select(b => b.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var orphans in comments.Where(g => !withBody.Contains(g.Key)))
                 foreach (var c in orphans)
                 {
                     var key = CommentKey(c.RowId, c.CommentId);
-                    if (c.Encrypted == 0)
-                    {
-                        Notes.Add($"kept-plaintext-comment:{key} article:{c.ArticleId}");
-                        continue;
-                    }
                     await Db.ExecuteAsync("DELETE FROM tbl_comment WHERE id = @RowId", new { c.RowId }, tx);
-                    Notes.Add($"{DroppedCommentNote}{key} article:{c.ArticleId} created:{c.CreatedAt}");
+                    Notes.Add($"{DroppedCommentNote}{key} article:{c.ArticleId} created:{c.CreatedAt}" + (c.Encrypted == 0 ? " plaintext" : ""));
                     Count("comments_dropped_body_purged");
                 }
 
@@ -282,6 +279,13 @@ public sealed class RowResealStep : IRekeyStep
                 if (!Guid.TryParse(m.Id, out var mediaId)) { Problems.Add(new(Media, m.Id, "not a GUID")); continue; }
                 var oldCt = await BlobAsync(Db, tx, m.Hash);
                 var fromFile = false;
+                if (oldCt == null && MediaFile(ctx.SourceDir, m.Id) is { } linked && File.Exists(linked)
+                    && (NoFollow.IsLink(linked) || NoFollow.IsLink(Path.GetDirectoryName(linked)!)))
+                {
+                    // Never read through a link (review release-b R1-7): it could name any file outside the vault.
+                    Problems.Add(new(Media, m.Id, "its .enc file is a link (or inside a linked media directory); not followed"));
+                    continue;
+                }
                 if (oldCt == null && MediaFile(ctx.SourceDir, m.Id) is { } path && File.Exists(path))
                 {
                     oldCt = await File.ReadAllBytesAsync(path, ctx.Ct);
@@ -406,8 +410,10 @@ public sealed class RowResealStep : IRekeyStep
             }
         }
         foreach (var g in comments.Where(g => !bodyIds.Contains(g.Key)))
-            foreach (var c in g.Where(c => c.Encrypted != 0))
-                problems.Add(new(Comment, CommentKey(c.RowId, c.CommentId), "a sealed comment of a purged article is left under its old key"));
+            foreach (var c in g)
+                problems.Add(new(Comment, CommentKey(c.RowId, c.CommentId), c.Encrypted != 0
+                    ? "a sealed comment of a purged article is left under its old key"
+                    : "a plaintext comment of a purged article is left in the clear"));
 
         foreach (var (table, sql) in new[]
                  {

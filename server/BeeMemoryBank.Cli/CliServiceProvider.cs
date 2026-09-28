@@ -30,6 +30,10 @@ public static class CliServiceProvider
     /// </summary>
     public static async Task<ServiceProvider> CreateAsync(string dataPath)
     {
+        // The vault gate (review release-b R1-2): refused while a re-key runs, an interrupted swap finished first, and
+        // vault.lease held shared as long as the provider lives, so the re-key refuses while this command runs.
+        var (resolution, vaultLease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(dataPath);
+        dataPath = resolution.DataDir;
         Directory.CreateDirectory(dataPath);
         UseSiblingApiModelIfNotBundled();
 
@@ -49,7 +53,10 @@ public static class CliServiceProvider
             // cannot drift on what "wipe" means. No INodeResetHook here — chat.db is an Api-side
             // concern and does not exist for CLI-only deployments.
             .AddScoped(sp => ActivatorUtilities.CreateInstance<Core.Services.NodeResetService>(sp, dataPath))
+            // By a factory, so disposing the provider releases the lease; resolved at once so it is held from here.
+            .AddSingleton<BeeMemoryBank.AppPaths.VaultLease>(_ => vaultLease)
             .BuildServiceProvider();
+        services.GetRequiredService<BeeMemoryBank.AppPaths.VaultLease>();
 
         using (var scope = services.CreateScope())
         {

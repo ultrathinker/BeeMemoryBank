@@ -46,10 +46,13 @@ var dataPath = builder.Configuration["BeeMemoryBank:DataPath"]
     ?? Environment.GetEnvironmentVariable("BMB_DATA_PATH")
     ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
 // An offline re-key's swap is finished (or rolled back) before anything creates or opens D.
-var rekeySwap = BeeMemoryBank.AppPaths.RekeySwapResolver.Resolve(dataPath);
+// The vault gate (review release-b R1-1): refused while a re-key runs, an interrupted swap finished or rolled back, and
+// vault.lease held shared for the life of the process, so the re-key refuses while this Api runs (standalone, Docker,
+// or a node's child alike).
+var (rekeySwap, vaultLease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(dataPath);
 dataPath = rekeySwap.DataDir;
-if (BeeMemoryBank.AppPaths.RekeyLock.StartRefusal(rekeySwap) is { } rekeyRunning)
-    throw new InvalidOperationException(rekeyRunning);
+// Created by a factory so the host disposes it (an instance registration is never disposed), resolved once below.
+builder.Services.AddSingleton<BeeMemoryBank.AppPaths.VaultLease>(_ => vaultLease);
 
 Directory.CreateDirectory(dataPath);
 
@@ -74,6 +77,7 @@ if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"))
 builder.AddBeeApiServices(dataPath);
 
 var app = builder.Build();
+app.Services.GetRequiredService<BeeMemoryBank.AppPaths.VaultLease>(); // the lease now lives, and ends, with the host
 
 app.UseLoopbackForwardedHeaders();
 await app.RunBeeApiStartupTasksAsync(dataPath);
