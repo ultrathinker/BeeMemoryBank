@@ -33,6 +33,16 @@ public class InitializationService(
     /// init, join, the phone's setup, restore — so no healthy node changes its answer here. The one
     /// way a real node looks uninitialized is a database somebody emptied by hand, which is exactly
     /// a node that should get the setup wizard rather than fail to unlock forever.</para>
+    ///
+    /// <para><b>A vault from before the password unification is the exception that must not be
+    /// missed.</b> Nodes older than the per-user slot era carry a single shared
+    /// <c>slot_type='password'</c> row and no user pointing at a slot — the users are linked, and
+    /// that row is promoted, by <see cref="LegacyPasswordSlotMigrationService"/> on the FIRST
+    /// SUCCESSFUL UNLOCK. So on an upgraded vault that has not been unlocked yet, the modern half
+    /// of this test is false while the vault is perfectly intact and one password away from being
+    /// usable again. Answering "not initialized" there sends the operator (and the Web and phone
+    /// clients) to the setup wizard instead of the unlock prompt, and the migration that would fix
+    /// the shape never runs — the upgrade brick (review release-a2, agy#2 / sec#5).</para>
     /// </summary>
     public async Task<bool> IsInitializedAsync()
     {
@@ -40,13 +50,23 @@ public class InitializationService(
         if (identity is null) return false;
         if (identity.Ed25519PrivateKeyV == NodeIdentityCrypto.ExternalKeyVersion) return true;
 
-        // The sentinel first: it is one value on the row already read, and a node without it cannot
-        // be unlocked by any slot (SessionService verifies every slot against it).
+        var slots = await keySlotRepo.GetAllAsync();
+
+        // The legacy shape, checked first because it is proof on its own: a shared password slot is
+        // a vault with a password, and nothing in this build creates one (AddPasswordSlotAsync
+        // allows "user" and "recovery" only, and every initialization path writes a user slot). The
+        // sentinel is deliberately not required here: it would re-brick exactly the vaults this
+        // branch exists for, and a torn restore — the case the sentinel guards — writes a user slot,
+        // never this one.
+        if (slots.Any(s => s.SlotType == LegacyPasswordSlotMigrationService.LegacySlotType)) return true;
+
+        // The sentinel: it is one value on the row already read, and a node without it cannot be
+        // unlocked by any slot (SessionService verifies every slot against it).
         if (await nodeRepo.GetSentinelAsync() is null) return false;
 
         // Then an owner: an active user that has a key slot. The slot rows and the users are read
         // through the repositories, not by joining tables here.
-        var slotIds = (await keySlotRepo.GetAllAsync()).Select(s => s.SlotId).ToHashSet();
+        var slotIds = slots.Select(s => s.SlotId).ToHashSet();
         return (await userRepo.ListActiveAsync()).Any(u => u.KeySlotId is { } id && slotIds.Contains(id));
     }
 
