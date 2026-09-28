@@ -86,8 +86,21 @@ public class RekeyPreflightTests : RekeyVaultTestBase
         report.Blocking.Should().ContainSingle(p => p.Table == "tbl_comment" && p.RowKey.Equals(_data.LastComment.ToString(), StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>A purged body whose versions remain: its sealed comments are dropped from the copy (option C), so they
+    /// are a warning, not a block.</summary>
+    [Fact]
+    public async Task ACommentOfAPurgedBody_WithVersionsLeft_IsAWarning()
+    {
+        Mutate($"DELETE FROM tbl_article_body WHERE article_id = '{Upper(_data.Purged)}' COLLATE NOCASE");
+
+        var report = await RunAsync();
+
+        report.Blocking.Should().BeEmpty();
+        report.Warnings.Should().ContainSingle(w => w.Contains(_data.Purged.ToString(), StringComparison.OrdinalIgnoreCase) && w.Contains("dropped"));
+    }
+
     /// <summary>A purged article keeps its comments; its key survives only in the event log, which the pre-flight
-    /// reads as a key source. Without it the comment cannot be re-sealed, and that blocks.</summary>
+    /// reads as a key source. Without it the comment cannot be proven openable, and that blocks.</summary>
     [Fact]
     public async Task ACommentOfAPurgedArticle_OpensThroughItsEvent_AndBlocksWithoutIt()
     {
@@ -95,7 +108,7 @@ public class RekeyPreflightTests : RekeyVaultTestBase
                $"DELETE FROM tbl_article_body WHERE article_id = '{Upper(_data.Purged)}' COLLATE NOCASE");
         var report = await RunAsync();
         report.Blocking.Should().BeEmpty("the article's key is still in its events");
-        report.Warnings.Should().Contain(w => w.Contains(_data.Purged.ToString(), StringComparison.OrdinalIgnoreCase) && w.Contains("event log"),
+        report.Warnings.Should().Contain(w => w.Contains(_data.Purged.ToString(), StringComparison.OrdinalIgnoreCase) && w.Contains("dropped"),
             "the product no longer shows these comments, so the report must name them");
 
         Mutate($"DELETE FROM tbl_event WHERE article_id = '{Upper(_data.Purged)}' COLLATE NOCASE");
