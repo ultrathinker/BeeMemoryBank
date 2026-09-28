@@ -365,6 +365,7 @@ public static class SyncEndpoints
             HttpContext ctx,
             SyncTokenStore store,
             ISyncPushPositionRepository pushPositionRepo,
+            IEventLogRepository eventLogRepo,
             IWhitelistRepository whitelist,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             long sequence,
@@ -372,6 +373,33 @@ public static class SyncEndpoints
         {
             if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
+
+            // The number is a claim about how far this peer has read OUR log, and it is what lets the
+            // log be cut: a blind node trims up to the position every active peer has reached, and
+            // ordinary compaction reads the same rows. So it is checked rather than recorded on trust
+            // (Codex #5). Above the head it is a claim the peer cannot have read — with a single peer
+            // the minimum IS that number, and the log is then cut past what the peer really holds.
+            // Below what is already recorded for it, the peer contradicts itself, and taking the
+            // lower value would move the cut-off back over events the peer has already passed.
+            // Equal is the ordinary caught-up report, sent every cycle.
+            //
+            // A node whose own log was just replaced by a reseed is empty and has issued nothing
+            // yet, so a peer's still-older position is refused until its first event lands — that
+            // direction only ever withholds a cut-off, never cuts ahead of a peer.
+            long head = await eventLogRepo.GetMaxSequenceAsync();
+            long recorded = (await pushPositionRepo.GetAsync(nodeId))?.LastPushedSeq ?? 0;
+            if (sequence > head || sequence < recorded)
+            {
+                return Results.Json(new
+                {
+                    error = "POSITION_OUT_OF_RANGE",
+                    current_head_seq = head,
+                    recorded_position = recorded,
+                    message = "A position above the log head is not one this peer can have read, and one "
+                        + "below its recorded position would move the log's cut-off backwards."
+                }, statusCode: 400);
+            }
+
             await pushPositionRepo.UpdatePositionAsync(nodeId, sequence);
             // Also here, not only at authenticate: a token lives an hour, and a peer that upgraded
             // in the meantime should not stay "old" in the PC's pre-flight until it re-authenticates.
