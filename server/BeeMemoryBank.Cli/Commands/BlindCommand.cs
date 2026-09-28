@@ -136,7 +136,7 @@ public static class BlindCommand
                 ? $$"""{"newPassword":{{Json(consolePassword)}}}"""
                 : $$"""{"newPassword":{{Json(consolePassword)}},"currentPassword":{{Json(currentPw)}}}""");
         if (status == 204) await output.WriteLineAsync("Console password set.");
-        else if (currentPw is null && body.Contains("already set", StringComparison.OrdinalIgnoreCase))
+        else if (currentPw is null && PasswordAlreadySet(body))
             await output.WriteLineAsync(
                 $"Console password kept (this node has one already; pass {BlindSecrets.CurrentConsolePassword} to change it).");
         else return await FailAsync(output, status, body);
@@ -294,6 +294,30 @@ public static class BlindCommand
             InternalKey = options?.InternalKey ?? BlindApi.ResolveInternalKey(dataPath),
             Handler = options?.Handler,
         });
+
+    /// <summary>
+    /// Whether the refusal is "this node already has a console password" — decided by the error CODE
+    /// the Api sends (ErrorCodes.ConsolePasswordAlreadySet, BeeMemoryBank.Api.Models), because that
+    /// is the field callers may branch on. The literal is spelled out here the way this file already
+    /// spells out its routes: the CLI talks to the node over HTTP and does not reference the Api
+    /// assembly. The message check stays as the fallback for a node built before the code existed.
+    /// </summary>
+    private const string ConsolePasswordAlreadySetCode = "console_password_already_set";
+
+    private static bool PasswordAlreadySet(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String)
+                return code.GetString() == ConsolePasswordAlreadySetCode;
+        }
+        catch (JsonException)
+        {
+            // Not JSON at all: fall through to the message.
+        }
+        return body.Contains("already set", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static async Task<int> FailAsync(TextWriter output, int status, string body)
     {

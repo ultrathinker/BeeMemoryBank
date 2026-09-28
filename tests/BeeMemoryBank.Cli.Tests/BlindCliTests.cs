@@ -111,7 +111,10 @@ public class BlindCliTests : IDisposable
     {
         var handler = new ScriptedHandler
         {
-            PasswordAnswer = (400, """{"error":"a console password is already set without a current password offered"}"""),
+            // The real node's payload, code included: the CLI branches on the code, and this test
+            // used to feed it the message it happened to look for, which the endpoint never sent
+            // (review release-a2 agy#1).
+            PasswordAnswer = (400, """{"error":"a console password is already set without a current password offered","code":"console_password_already_set"}"""),
         };
         var sw = new StringWriter();
         var secrets = new Dictionary<string, string>
