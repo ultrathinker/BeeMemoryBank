@@ -112,6 +112,13 @@ public static class RekeyRunner
             using var nodeLock = RekeyLock.TryAcquireNodeLock(d);
             if (nodeLock == null)
                 return Fail(RekeyExit.FailedBeforeSwap, "The node is running (node.lock is held): stop it first.");
+            // Every process that opens the vault holds vault.lease shared: a standalone or Docker Api, a node's child
+            // Api, a CLI command. Exclusive, it both refuses the run while one of them is up and keeps them from
+            // starting until the run is over (review release-b R1-1).
+            using var vaultLease = VaultStartup.TryAcquireExclusive(d);
+            if (vaultLease == null)
+                return Fail(RekeyExit.FailedBeforeSwap,
+                    "The vault is in use (an Api, a node or a bmb command holds vault.lease): stop it first.");
 
             var missing = RequiredSteps.Where(n => options.Steps.All(s => s.Name != n)).ToList();
             if (missing.Count > 0 || options.Preflight == null)
@@ -199,6 +206,7 @@ public static class RekeyRunner
             // could not be renamed on Windows (and would carry a stray file). The re-key lock, held, still keeps a
             // node from starting.
             nodeLock.Dispose();
+            vaultLease.Dispose(); // lives inside D too; the held re-key lock keeps every start out from here on
             report.OldVault = RekeySwapJournal.OldDirFor(d, now);
             RekeyReport.Write(newDir, report.ToReport(RekeyReport.Done, null));
             progress.Report("swap", 0, 1);
