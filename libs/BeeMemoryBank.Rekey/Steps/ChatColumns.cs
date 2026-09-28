@@ -10,9 +10,15 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// <param name="Plain">The legacy plaintext column rows from before chat encryption still use (null: none).</param>
 /// <param name="Bytes">Binary content (an attachment) rather than UTF-8 text.</param>
 /// <param name="Aad">The AAD, from the row's id.</param>
-internal sealed record ChatColumn(string Table, string Cipher, string Iv, string Version, string? Plain, bool Bytes, Func<string, byte[]> Aad)
+/// <param name="PlainCleared">What the plaintext column holds once its value is sealed: NULL, or '' for a NOT NULL
+/// column (a title, a key prefix), as the product clears them.</param>
+internal sealed record ChatColumn(string Table, string Cipher, string Iv, string Version, string? Plain, bool Bytes, Func<string, byte[]> Aad,
+    string PlainCleared = "NULL")
 {
     public string Name => $"{Table}.{Cipher}";
+
+    /// <summary>A plaintext column of its own, beside the ciphertext (not an attachment's shared blob column).</summary>
+    public bool HasSeparatePlain => Plain != null && Plain != Cipher;
 }
 
 internal static class ChatColumns
@@ -29,9 +35,11 @@ internal static class ChatColumns
         // A legacy attachment's plaintext lives in the same column as its ciphertext: blob with a NULL iv.
         new("chat_attachment", "blob", "iv", "key_v", "blob", true, _ => "bmb-chat-attachment-blob-v1"u8.ToArray()),
         new("chat_api_key", "ciphertext", "iv", "key_v", null, false, _ => "bmb-openrouter-key-v1"u8.ToArray()),
-        new("chat_api_key", "key_prefix_ciphertext", "key_prefix_iv", "key_prefix_key_v", null, false,
-            id => Encoding.UTF8.GetBytes($"bmb-chat-api-key-prefix-v1:{Guid.Parse(id):D}")),
-        new("chat_conversation", "title_ciphertext", "title_iv", "title_key_v", null, false,
-            id => Encoding.UTF8.GetBytes($"bmb-chat-conversation-title-v1:{Guid.Parse(id):D}")),
+        // Titles and key prefixes written before they were sealed are still in their plaintext column until the
+        // hosted backfill reaches them; a node stopped before that holds them in the clear (batch review L-3).
+        new("chat_api_key", "key_prefix_ciphertext", "key_prefix_iv", "key_prefix_key_v", "key_prefix", false,
+            id => Encoding.UTF8.GetBytes($"bmb-chat-api-key-prefix-v1:{Guid.Parse(id):D}"), PlainCleared: "''"),
+        new("chat_conversation", "title_ciphertext", "title_iv", "title_key_v", "title", false,
+            id => Encoding.UTF8.GetBytes($"bmb-chat-conversation-title-v1:{Guid.Parse(id):D}"), PlainCleared: "''"),
     ];
 }

@@ -15,14 +15,16 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// <item>the owner's slot is written again: D_c under the owner's password, with a fresh salt;</item>
 /// <item>every other slot is removed (other users, recovery codes, the OS auto-unlock, update hand-offs);</item>
 /// <item>every other user keeps its row (folder rules, authorship) but cannot sign in until the owner resets its
-///   password: the hash is one of a secret nobody holds, and the slot link, sign-in stamp and remote API tokens go,
-///   as with an admin reset;</item>
+///   password: the hash is one of a secret nobody holds, and the slot link and sign-in stamp go, as with an admin
+///   reset;</item>
+/// <item>every remote API token is revoked, the owner's included;</item>
 /// <item>every agent is revoked and its wrapped master key cleared, so no old agent key works at all;</item>
 /// <item>the chain material of past rotations and the <c>retired-master-dek:*</c> rows are removed;</item>
 /// <item>recovery boxes, their bookkeeping and the rotation links are removed. The owner's device box for D_c is
 ///   written at the first login after the re-key.</item>
 /// </list>
-/// The chat key (<c>tbl_node_data_key</c> row <c>chat</c>) is ChatRekeyStep's. Notes name what was cleared, for the
+/// After the transaction, a fresh <c>.internal-key</c> is written into the new vault. The chat key
+/// (<c>tbl_node_data_key</c> row <c>chat</c>) is ChatRekeyStep's. Notes name what was cleared, for the
 /// report page: <c>cleared-slot:&lt;slot&gt; &lt;user or kind&gt;</c>, <c>cleared-agent:&lt;id&gt; &lt;name&gt;</c> and
 /// <c>reset-user:&lt;id&gt; &lt;username&gt;</c>. A vault whose owner slot belongs to no user (a legacy slot) is refused.
 /// </summary>
@@ -120,8 +122,15 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
             notes.Add($"reset-user:{others[i].Id} {others[i].Username}");
         }
         counts["tbl_user"] = others.Count;
-        counts["tbl_remote_api_token"] = await db.ExecuteAsync(
-            "DELETE FROM tbl_remote_api_token WHERE user_id <> @ownerUser", new { ownerUser }, tx);
+
+        // Every remote API token, the owner's included (batch review L-1): a bmbrt_ token is a bearer credential another
+        // node holds, and only the owner's password may open the new vault. Each node that read the vault with one is
+        // given a new token by the owner; the report lists them.
+        foreach (var t in await db.QueryAsync<(string Id, string? User, string? Label)>(
+                     @"SELECT t.id, (SELECT u.username FROM tbl_user u WHERE u.id = t.user_id), t.label
+                       FROM tbl_remote_api_token t ORDER BY t.created_at, t.id", transaction: tx))
+            notes.Add($"revoked-token:{t.Id} {t.User ?? "?"} {t.Label ?? "unlabelled"}");
+        counts["tbl_remote_api_token"] = await db.ExecuteAsync("DELETE FROM tbl_remote_api_token", transaction: tx);
 
         // Every agent is revoked, the owner's included: a re-key is what an owner does after a key leaks, and an agent
         // key is a credential. The wrapped master keys go with them. Deleted agents ('D') stay as they are.
@@ -143,6 +152,13 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
             counts[table] = await db.ExecuteAsync($"DELETE FROM {table}", transaction: tx);
 
         tx.Commit();
+
+        // A fresh Web-to-Api key in the new vault (batch review L-2). A Docker or dev node reads D/.internal-key and
+        // trusts forwarded identity headers behind it; the old vault's key must not open the new one. The swap does not
+        // carry the old file over.
+        WriteInternalKey(Path.Combine(ctx.WorkDir, InternalKeyFile));
+        counts[InternalKeyFile] = 1;
+
         ctx.Progress.Report(Name, 1, 1);
         return new RekeyStepResult(Name, counts, notes);
     }
@@ -216,10 +232,16 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
             problems.Add(new("tbl_agent", "*", $"{a} agent(s) still carry a wrapped master key"));
         if (await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_agent WHERE status = 'A'") is var active and > 0)
             problems.Add(new("tbl_agent", "*", $"{active} agent(s) still active"));
-        if (await db.ExecuteScalarAsync<long>(
-                @"SELECT COUNT(*) FROM tbl_remote_api_token
-                  WHERE user_id NOT IN (SELECT id FROM tbl_user WHERE key_slot_id = @o)", new { o = _ownerSlot }) is var t and > 0)
-            problems.Add(new("tbl_remote_api_token", "*", $"{t} remote token(s) of other users left"));
+        if (await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_remote_api_token") is var t and > 0)
+            problems.Add(new("tbl_remote_api_token", "*", $"{t} remote API token(s) left"));
+
+        var newKeyFile = Path.Combine(ctx.WorkDir, InternalKeyFile);
+        var newKey = File.Exists(newKeyFile) ? File.ReadAllText(newKeyFile).Trim() : null;
+        var oldKeyFile = Path.Combine(ctx.SourceDir, InternalKeyFile);
+        if (newKey is not { Length: 64 })
+            problems.Add(new(InternalKeyFile, ctx.WorkDir, "the new vault has no fresh internal key"));
+        else if (File.Exists(oldKeyFile) && File.ReadAllText(oldKeyFile).Trim() == newKey)
+            problems.Add(new(InternalKeyFile, ctx.WorkDir, "the new vault's internal key is the old vault's"));
         if (await db.ExecuteScalarAsync<long>(
                 "SELECT COUNT(*) FROM tbl_node_data_key WHERE key_name LIKE @p", new { p = IRetiredMasterDekStore.KeyNamePrefix + "%" }) is var r and > 0)
             problems.Add(new("tbl_node_data_key", "retired-master-dek:*", $"{r} retired key row(s) left"));
@@ -230,6 +252,21 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
             if (await db.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {table}") is var n and > 0)
                 problems.Add(new(table, "*", $"{n} row(s) left"));
         return problems;
+    }
+
+    /// <summary>The Web-to-Api key file of a data directory.</summary>
+    public const string InternalKeyFile = ".internal-key";
+
+    /// <summary>A new random key, as the Api generates one (64 hex digits), readable by the owner only on Unix.</summary>
+    private static void WriteInternalKey(string path)
+    {
+        var key = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
+        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        using (var fs = new FileStream(path, options))
+        using (var w = new StreamWriter(fs))
+            w.Write(key);
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     /// <summary>The seed in the clear: a v=1 row under whichever old key seals it, a legacy v=0 row as it is.</summary>

@@ -15,8 +15,9 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// <para>A row the old keys do not open stops the step; the pre-flight lists such rows before anything is
 /// created, so reaching one here means the vault changed under the lock.</para>
 ///
-/// <para>Titles and key prefixes are plaintext columns on a schema without their sealed twins; they are carried
-/// as they are (see <see cref="RekeyTables.Chat"/>). The old ciphertext left in free pages is the scrub's (step 5).</para>
+/// <para>Conversation titles and provider-key prefixes are sealed columns too; one still in its legacy plaintext
+/// column (written before sealing, not yet reached by the hosted backfill) is sealed here and the column cleared to
+/// '' as the product clears it. The old ciphertext left in free pages is the scrub's (step 5).</para>
 /// </summary>
 public sealed class ChatRekeyStep : IRekeyStep
 {
@@ -179,7 +180,7 @@ public sealed class ChatRekeyStep : IRekeyStep
                     : ArticleEncryptor.Encrypt(System.Text.Encoding.UTF8.GetString(plaintext), ctx.Keys.ChatKey, aad);
                 using var cmd = ctx.Chat!.CreateCommand();
                 cmd.Transaction = tx;
-                var clearPlain = column.Plain != null && column.Plain != column.Cipher ? $", {column.Plain} = NULL" : "";
+                var clearPlain = column.HasSeparatePlain ? $", {column.Plain} = {column.PlainCleared}" : "";
                 cmd.CommandText = $"UPDATE {column.Table} SET {column.Cipher} = $c, {column.Iv} = $iv, {column.Version} = $v{clearPlain} WHERE id = $id";
                 cmd.Parameters.AddWithValue("$c", cipher);
                 cmd.Parameters.AddWithValue("$iv", iv);
@@ -263,7 +264,7 @@ public sealed class ChatRekeyStep : IRekeyStep
 
     private static List<ChatRow> Rows(SqliteConnection chat, ChatColumn column)
     {
-        var plain = column.Plain != null && column.Plain != column.Cipher ? column.Plain : "NULL";
+        var plain = column.HasSeparatePlain && HasColumn(chat, column.Table, column.Plain!) ? column.Plain : "NULL";
         using var cmd = chat.CreateCommand();
         cmd.CommandText = $"SELECT id, {column.Cipher}, {column.Iv}, {column.Version}, {plain} FROM {column.Table}";
         using var r = cmd.ExecuteReader();
@@ -292,6 +293,14 @@ public sealed class ChatRekeyStep : IRekeyStep
         cmd.Parameters.AddWithValue("$iv", column.Iv);
         cmd.Parameters.AddWithValue("$v", column.Version);
         return Convert.ToInt64(cmd.ExecuteScalar()) == 3;
+    }
+
+    private static bool HasColumn(SqliteConnection chat, string table, string name)
+    {
+        using var cmd = chat.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $n";
+        cmd.Parameters.AddWithValue("$n", name);
+        return Convert.ToInt64(cmd.ExecuteScalar()) == 1;
     }
 
     private static bool Opens(ChatColumn column, byte[] cipher, byte[] iv, byte[] key, byte[] aad)

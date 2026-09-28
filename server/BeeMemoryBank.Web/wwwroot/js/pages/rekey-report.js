@@ -51,7 +51,8 @@
             for (const note of step.notes || []) $('rekey-lists').appendChild(li(`${step.name}: ${note}`));
         }
         for (const [label, list] of [['Revoked node', report.revokedPeers], ['Cleared slot', report.clearedSlots],
-            ['Revoked agent', report.clearedAgents], ['User to reset (by you)', report.resetUsers]])
+            ['Revoked agent', report.clearedAgents], ['User to reset (by you)', report.resetUsers],
+            ['Revoked remote token', report.revokedTokens]])
             for (const x of list || []) $('rekey-lists').appendChild(li(`${label}: ${x}`));
 
         $('rekey-body').style.display = '';

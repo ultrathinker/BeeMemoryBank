@@ -52,7 +52,11 @@ public sealed class RekeyPreflight : IRekeyPreflight
         CheckMedia(sourceDir, liveMain, keys, blocking, warnings, ct);
         CheckSealedSecrets(liveMain, keys, blocking, warnings);
         CheckRemoteTokens(liveMain, keys, blocking);
-        if (liveChat != null) CheckChat(liveMain, liveChat, keys, blocking, ct);
+        if (liveChat != null)
+        {
+            CheckChat(liveMain, liveChat, keys, blocking, ct);
+            NameChatPlaintext(liveChat, warnings);
+        }
         ListLeftovers(sourceDir, warnings);
 
         var needed = BytesNeeded(sourceDir);
@@ -150,7 +154,7 @@ public sealed class RekeyPreflight : IRekeyPreflight
                 // them. A warning, so the report names them; a comment no key opens still blocks below (only the
                 // pre-flight can prove it was openable).
                 if (!(wrappers.GetValueOrDefault(article) ?? []).Any(w => w.Table == "tbl_article_body"))
-                    warnings.Add($"article {article}: its body is purged; its {articleComments.Count} sealed comment(s) are dropped from the re-keyed vault (the old vault keeps them)");
+                    warnings.Add($"article {article}: its body is purged; its {articleComments.Count} sealed comment(s) are dropped from the re-keyed vault; they remain only in the old vault folder, and deleting that folder deletes them");
 
                 // Every comment, not only the first: each is opened the way CommentService reads it.
                 foreach (var c in articleComments)
@@ -350,6 +354,24 @@ public sealed class RekeyPreflight : IRekeyPreflight
         finally
         {
             if (chatKey != null) Array.Clear(chatKey);
+        }
+    }
+
+    /// <summary>
+    /// Legacy plaintext in chat.db, by column: a message, conversation title or provider-key prefix from before it was
+    /// sealed that the hosted backfill has not reached. Not a refusal (the chat step seals it under the new chat key and
+    /// clears the column), but the owner is told it was there.
+    /// </summary>
+    private static void NameChatPlaintext(SqliteConnection chat, List<string> warnings)
+    {
+        foreach (var column in ChatColumns.All.Where(c => c.HasSeparatePlain))
+        {
+            if (!HasColumn(chat, column.Table, column.Cipher) || !HasColumn(chat, column.Table, column.Plain!)) continue;
+            var n = Query(chat,
+                $"SELECT COUNT(*) FROM {column.Table} WHERE {column.Plain} IS NOT NULL AND {column.Plain} != ''",
+                r => r.GetInt64(0)).Single();
+            if (n > 0)
+                warnings.Add($"{column.Name}: {n} row(s) of legacy plaintext in {column.Table}.{column.Plain}; the re-key seals them under the new chat key and clears the column");
         }
     }
 

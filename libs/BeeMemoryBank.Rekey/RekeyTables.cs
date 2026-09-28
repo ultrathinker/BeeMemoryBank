@@ -67,15 +67,15 @@ public static class RekeyTables
             "fts_tag", "fts_tag_config", "fts_tag_data", "fts_tag_docsize", "fts_tag_idx",
         ]));
 
-    /// <summary>chat.db. Owned by R2. Conversation titles and key prefixes are plaintext columns on this schema (the
-    /// product writes them so); the conversation and key tables are listed by what their sealed columns get.</summary>
+    /// <summary>chat.db. Owned by R2. Conversation titles and key prefixes are sealed under the chat key; one still in
+    /// its legacy plaintext column is sealed by ChatRekeyStep and the column cleared.</summary>
     public static IReadOnlyDictionary<string, TableFate> Chat { get; } =
         new Dictionary<string, TableFate>(StringComparer.OrdinalIgnoreCase)
         {
             ["chat_message"] = TableFate.Resealed,
             ["chat_attachment"] = TableFate.Resealed,
             ["chat_api_key"] = TableFate.Resealed,
-            ["chat_conversation"] = TableFate.Plaintext,
+            ["chat_conversation"] = TableFate.Resealed,
             ["chat_model"] = TableFate.Plaintext,
             ["chat_settings"] = TableFate.Plaintext,
             ["chat_user_settings"] = TableFate.Plaintext,
