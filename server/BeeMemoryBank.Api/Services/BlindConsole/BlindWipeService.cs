@@ -5,6 +5,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using Microsoft.Extensions.Logging;
 
@@ -32,7 +33,10 @@ public sealed class BlindWipeFailedException(string message, Exception? inner = 
     : InvalidOperationException(message, inner);
 
 public sealed class BlindWipeService(
-    IDbConnectionFactory connFactory,
+    // The concrete factory: the quiesce/drain barrier this wipe takes (BeginQuiesce/WaitDrainedAsync)
+    // is on it, not on IDbConnectionFactory — a connection that stays open across the deletes is
+    // exactly what makes the wipe race a reader.
+    DbConnectionFactory connFactory,
     INodeIdentityRepository nodeRepo,
     SessionService session,
     MaintenanceModeService maintenance,
@@ -40,6 +44,7 @@ public sealed class BlindWipeService(
     BlindJobManager jobs,
     BlindBackupSettingsStore settings,
     FileNodeKey identityKey,
+    SyncScheduler syncScheduler,
     string dataPath,
     ILogger<BlindWipeService> logger)
 {
@@ -72,19 +77,52 @@ public sealed class BlindWipeService(
             throw new BlindWipeRefusedException(
                 $"a backup job did not stop within {DrainTimeout.TotalSeconds:0} s — nothing was wiped; try again");
         tokens.Clear();
-        maintenance.Enter("Wiping the blind node…");
-        session.Lock();
-        try
+
+        // One barrier for every OTHER writer, taken in one documented order (review release-a2
+        // agy#4, sec#6, spec#3). Maintenance and the session lock below stop HTTP callers only:
+        //
+        //   1. the event-write gate — holds new event writes off (EventApplier, the log trimmer)
+        //      and waits for the ones already running; this flow is the owner, so its own writes
+        //      pass;
+        //   2. the sync loop — paused, its cycle in flight waited out: a pull writes sync positions
+        //      outside the gate, and one landing after the wipe would resurrect mesh state on a node
+        //      the operator just disconnected;
+        //   3. the heavy-operation lock — the other flows that bulk-rewrite tbl_event take it
+        //      (compaction, snapshot restore, DEK rotation) and must not be inside this database;
+        //   4. the database connections themselves — new ones wait, open ones are waited for, and a
+        //      connection still open after the wait fails the wipe before anything is deleted
+        //      instead of racing the deletes (the same gate the reseed cutover uses).
+        using (await EventWriteGate.Instance.QuiesceAsync(ct))
         {
-            WipeVaultDatabase();
-            DeleteBlindFiles();
-            FolderAccessService.InvalidateAll();
-            await RecreateIdentityAsync(identity.DisplayName);
-        }
-        finally
-        {
-            maintenance.Exit();
-            jobs.EndWipe();
+            EventWriteGate.EnterOwnerFlow();
+            maintenance.Enter("Wiping the blind node…");
+            session.Lock();
+            await HeavyOperationLock.Instance.WaitAsync(ct);
+            try
+            {
+                using var syncPaused = await syncScheduler.PauseAsync(ct);
+                using var drained = connFactory.BeginQuiesce();
+                try
+                {
+                    await connFactory.WaitDrainedAsync(DrainTimeout, ct);
+                }
+                catch (TimeoutException)
+                {
+                    throw new BlindWipeRefusedException(
+                        $"a database connection stayed in use for {DrainTimeout.TotalSeconds:0} s — nothing was wiped; try again");
+                }
+
+                WipeVaultDatabase();
+                DeleteBlindFiles();
+                FolderAccessService.InvalidateAll();
+                await RecreateIdentityAsync(identity.DisplayName);
+            }
+            finally
+            {
+                jobs.EndWipe();
+                HeavyOperationLock.Instance.Release();
+                maintenance.Exit();
+            }
         }
     }
 

@@ -6,7 +6,10 @@ using BeeMemoryBank.Api.Services.BlindConsole;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -197,6 +200,69 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// The wipe takes one barrier for every other writer before it deletes anything, and it waits
+    /// rather than racing (review release-a2 agy#4, sec#6, spec#3): an event write in flight holds it
+    /// at the gate, a database connection still open holds it at the drain, and while it waits it has
+    /// already paused the sync loop — a pull that lands after the wipe would resurrect mesh state on
+    /// a node the operator just disconnected. Held in both places, it must not complete; released, it
+    /// must finish and leave nothing behind but the recreated identity.
+    /// </summary>
+    [Fact]
+    public async Task Wipe_WaitsForAWriteAndAConnectionInFlight_InsteadOfRacingThem()
+    {
+        // Something of the mesh to lose, so "empty afterwards" means something.
+        var peerId = Guid.NewGuid();
+        await _factory.Services.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
+        {
+            NodeId = peerId, DisplayName = "peer", Ed25519PublicKey = new byte[32], Status = "A",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow, LamportTs = 1, SourceNodeId = peerId,
+        });
+
+        using (var client = _factory.CreateClient())
+            await SetConsolePasswordAsync(client);
+
+        var scheduler = _factory.Services.GetRequiredService<SyncScheduler>();
+        scheduler.IsPaused.Should().BeFalse("nothing has asked the loop to stand down yet");
+
+        // 1. An event write in flight — exactly what an applier or the log trimmer holds.
+        var writer = await EventWriteGate.Instance.EnterAsync();
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        var held = connFactory.CreateConnection(); // 2. and a connection nobody will release yet
+        held.Open();
+
+        using var wipeClient = _factory.CreateClient();
+        var wipe = wipeClient.PostAsJsonAsync("/api/blind/wipe",
+            new { consolePassword = "console-pw-123", confirmNodeName = "BlindWipeNode" });
+        try
+        {
+            await Task.Delay(400);
+            wipe.IsCompleted.Should().BeFalse("the wipe waits at the event-write gate while a write is in flight");
+
+            writer.Dispose();
+            await Task.Delay(400);
+            wipe.IsCompleted.Should().BeFalse("and then waits for the connection still open on the database");
+            scheduler.IsPaused.Should().BeTrue("the barrier is held: the sync loop is paused for the duration");
+        }
+        finally
+        {
+            writer.Dispose();      // idempotent: an exception above must not leave the process-wide gate held
+            held.Dispose();
+        }
+
+        (await wipe).StatusCode.Should().Be(HttpStatusCode.OK, await (await wipe).Content.ReadAsStringAsync());
+        scheduler.IsPaused.Should().BeFalse("the barrier is released again");
+
+        using (var conn = connFactory.CreateConnection())
+        {
+            foreach (var table in new[] { "tbl_article", "tbl_event", "tbl_whitelist", "tbl_sync_position" })
+                (await conn.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM [{table}]"))
+                    .Should().Be(0, $"{table} is cleared by the wipe");
+            (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_node_identity")).Should().Be(1,
+                "and the one row the node needs to be pairable again is recreated");
+        }
+    }
+
+    /// <summary>
     /// The wipe clears tbl_node_identity with every other table, and the node used to stay without
     /// one until the next process start: pair-code answered "Node is not initialized" and the only
     /// way out was restarting the container. The operator's whole reason for wiping from the console
@@ -290,6 +356,40 @@ public class BlindConsoleAuthTests : IAsyncLifetime
         var logins = await (await client.GetAsync("/api/blind/console/logins")).Content.ReadFromJsonAsync<JsonElement>();
         logins.EnumerateArray().First().GetProperty("remote").GetString().Should().Be("192.168.1.50",
             "the Api's own peer is always the console process; the journal must name the browser");
+    }
+
+    /// <summary>
+    /// The two refusals are different, and the difference is what <c>bmb blind init</c> branches on:
+    /// "already set, keep it and go on to the backup target" versus "that current password is wrong".
+    /// The endpoint told them apart by re-reading HasPassword() after the failed attempt, which is
+    /// true in BOTH cases — so a node with a password answered "wrong password" for a request that
+    /// carried none, the CLI's branch never fired, and re-running init on a configured node could
+    /// not reach the settings it was re-run for (review release-a2 agy#1, sec#8).
+    /// </summary>
+    [Fact]
+    public async Task Password_AlreadySetWithoutACurrentOne_IsItsOwnRefusal()
+    {
+        using var client = _factory.CreateClient();
+        await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "first-pw-123" });
+
+        var noCurrent = await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "second-pw-456" });
+        noCurrent.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var refusal = await noCurrent.Content.ReadFromJsonAsync<JsonElement>();
+        refusal.GetProperty("code").GetString().Should().Be(BeeMemoryBank.Api.Models.ErrorCodes.ConsolePasswordAlreadySet,
+            "callers branch on the code, not on the prose");
+        refusal.GetProperty("error").GetString().Should().Contain("already set");
+        // Nothing changed: the old password still opens the console.
+        (await (await client.PostAsJsonAsync("/api/blind/console/login", new { password = "first-pw-123" }))
+            .Content.ReadFromJsonAsync<JsonElement>()).GetProperty("ok").GetBoolean().Should().BeTrue();
+
+        // A current password that is offered and wrong is the other refusal, with no code to branch on.
+        var wrong = await client.PostAsJsonAsync("/api/blind/console/password",
+            new { currentPassword = "not-it", newPassword = "second-pw-456" });
+        wrong.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var wrongBody = await wrong.Content.ReadFromJsonAsync<JsonElement>();
+        wrongBody.GetProperty("error").GetString().Should().Contain("wrong");
+        wrongBody.TryGetProperty("code", out var code).Should().BeTrue("the field is always there");
+        code.ValueKind.Should().Be(JsonValueKind.Null, "and null unless the caller may branch on it");
     }
 
     [Fact]

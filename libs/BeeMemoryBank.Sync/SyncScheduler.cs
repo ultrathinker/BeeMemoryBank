@@ -39,6 +39,56 @@ public class SyncScheduler(
     private readonly UnreachablePeers _unreachable = new();
     private bool _disposed;
 
+    // The pause barrier: a flow that is about to delete or replace this node's tables holds the
+    // loop off until it is done. See PauseAsync.
+    private readonly SemaphoreSlim _pauseGate = new(1, 1);
+    private volatile bool _paused;
+
+    /// <summary>True while a wipe or a reseed owns the mesh state and the loop is held off.</summary>
+    public bool IsPaused => _paused;
+
+    /// <summary>
+    /// Holds the sync loop off and waits out the cycle already running, if any: the caller owns this
+    /// node's mesh state until the returned handle is disposed.
+    ///
+    /// <para>The reseed cutover and "disconnect and wipe" delete or replace the very tables a pull
+    /// applies into. Maintenance mode and the event-write gate do not stop this loop: a cycle that
+    /// fetches a page and writes its sync position (SyncClient's own commit, outside the gate) either
+    /// fails the wipe's own verification or lands after the wipe committed and resurrects mesh state
+    /// on a node the operator just disconnected (review release-a2 agy#4, sec#6, spec#3). Taking
+    /// <see cref="_syncLock"/> is the drain — a cycle that is already applying finishes, and this
+    /// method returns only when it has.</para>
+    /// </summary>
+    public async Task<IDisposable> PauseAsync(CancellationToken ct = default)
+    {
+        await _pauseGate.WaitAsync(ct);
+        _paused = true;
+        try
+        {
+            await _syncLock.WaitAsync(ct);
+            _syncLock.Release();
+        }
+        catch
+        {
+            _paused = false;
+            _pauseGate.Release();
+            throw;
+        }
+        return new Paused(this);
+    }
+
+    private sealed class Paused(SyncScheduler scheduler) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            scheduler._paused = false;
+            scheduler._pauseGate.Release();
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("SyncScheduler started, interval {Interval}", Interval);
@@ -54,6 +104,14 @@ public class SyncScheduler(
         var cycleStart = DateTime.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
+            // A wipe or a reseed owns the tables right now: skip the whole cycle, the repair scrub
+            // below included — it writes event rows like any applier.
+            if (_paused)
+            {
+                await syncTrigger.WaitAsync(Interval, stoppingToken);
+                continue;
+            }
+
             // Every cycle, invisible or not: a repair scrub still owed is finished as soon as nothing
             // holds its checkpoint back (see StoredEventRepair.RetryPendingScrubAsync).
             try { await StoredEventRepair.RetryPendingScrubAsync(scopeFactory, logger); }
