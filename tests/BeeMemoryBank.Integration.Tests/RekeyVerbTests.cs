@@ -207,9 +207,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
     {
         var chat = Path.Combine(_d, RekeyRunner.ChatDb);
         if (!File.Exists(chat)) return null;
-        using var c = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = chat, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
-        c.Open();
-        c.Execute("PRAGMA locking_mode = EXCLUSIVE"); // as the verb opens it: no -wal/-shm files appear in D
+        using var c = RekeyRunner.OpenLive(chat); // as the verb opens it
         return c.Query<string>("SELECT name FROM sqlite_master WHERE type = 'table'").ToDictionary(n => n, _ => TableFate.Cleared, StringComparer.OrdinalIgnoreCase);
     }
 

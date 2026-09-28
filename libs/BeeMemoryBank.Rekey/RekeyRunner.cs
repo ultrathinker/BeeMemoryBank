@@ -237,15 +237,20 @@ public static class RekeyRunner
         if (Directory.Exists(newDir)) Directory.Delete(newDir, recursive: true);
     }
 
-    /// <summary>The live file, read-only, with an exclusive lock held for the connection's life.</summary>
-    private static SqliteConnection OpenLive(string path)
+    /// <summary>
+    /// The live file with an exclusive lock held for the connection's life, and <c>query_only</c>: no statement can
+    /// write. Not <see cref="SqliteOpenMode.ReadOnly"/>: SQLite cannot open a WAL database read-only when its -wal and
+    /// -shm files are gone (a cleanly stopped node), and fails with a disk I/O error.
+    /// </summary>
+    public static SqliteConnection OpenLive(string path)
     {
         var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+            DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false
         }.ToString());
         conn.Open();
         conn.Execute("PRAGMA locking_mode = EXCLUSIVE");
+        conn.Execute("PRAGMA query_only = ON");
         conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master"); // takes the lock now
         return conn;
     }
