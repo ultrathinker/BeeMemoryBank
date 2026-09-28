@@ -426,8 +426,9 @@ public sealed class BlindSeedService(
         var livePath = Path.Combine(dataPath, "beememorybank.db");
         using (await EventWriteGate.Instance.QuiesceAsync(ct))
         {
-            // This flow replays into the new database while everyone else waits.
-            EventWriteGate.EnterOwnerFlow();
+            // This flow replays into the new database while everyone else waits; the mark lasts as
+            // long as the gate is held, and no longer.
+            using var ownerFlow = EventWriteGate.EnterOwnerFlow();
             maintenance.Enter("Blind node is taking in a seed");
             await HeavyOperationLock.Instance.WaitAsync();
             try

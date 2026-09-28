@@ -36,11 +36,24 @@ public sealed class EventWriteGate
     }
 
     /// <summary>
-    /// Marks the calling flow as inside the gate: set by a write that entered (so nested writes pass)
-    /// and by the flow that quiesced (so its own replay passes). Synchronous on purpose — the flag
-    /// then holds for the caller and everything it awaits.
+    /// Marks the calling flow as inside the gate for the lifetime of the returned scope: set by a
+    /// write that entered (so nested writes pass) and by the flow that quiesced (so its own replay
+    /// passes). Synchronous on purpose — the flag then holds for the caller and everything it awaits.
+    ///
+    /// <para>Dispose gives the mark back — the scope restores what the flow had before, and a flow
+    /// that merely <i>called</i> a write is an ordinary one again. Left behind, the mark is a
+    /// privilege nobody asked for: every later write on that flow skips
+    /// <see cref="EnterAsync"/> entirely, and can land in a database file a cutover is replacing
+    /// right then. Work started with <c>Task.Run</c> inside an owner flow inherits the mark through
+    /// the execution context, so a detached write has to suppress the flow (see
+    /// <c>EventApplier</c>'s auto-accept dispatches) or be awaited through the gate itself.</para>
     /// </summary>
-    public static void EnterOwnerFlow() => Inside.Value = true;
+    public static IDisposable EnterOwnerFlow()
+    {
+        bool previous = Inside.Value;
+        Inside.Value = true;
+        return new OwnerFlow(previous);
+    }
 
     /// <summary>Holds new writes off and returns once none is running; dispose to let them go on.</summary>
     public async Task<IDisposable> QuiesceAsync(CancellationToken ct = default)
@@ -99,6 +112,15 @@ public sealed class EventWriteGate
             if (Interlocked.Exchange(ref _done, 1) != 0) return;
             gate.IsQuiescing = false;
             gate._cutover.Release();
+        }
+    }
+
+    private sealed class OwnerFlow(bool previous) : IDisposable
+    {
+        private int _done;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _done, 1) == 0) Inside.Value = previous;
         }
     }
 
