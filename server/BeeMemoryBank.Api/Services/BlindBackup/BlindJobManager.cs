@@ -366,6 +366,56 @@ public sealed class BlindJobManager
         }
     }
 
+    /// <summary>
+    /// Closes the manager for a file-level operation that needs the media tree to itself — a seed
+    /// cutover renames whole media directories aside and later deletes the old one — and waits for
+    /// the job in flight, its restic children and any snapshot read, up to
+    /// <paramref name="drainTimeout"/>. Returns null when it could not (a job would not finish in
+    /// time, or a wipe holds the gate); the caller must then not touch the files.
+    ///
+    /// <para>Unlike <see cref="BeginWipeAsync"/> the running job is <b>not</b> cancelled: a backup
+    /// that is merely in the way is allowed to finish, because the cutover may still be refused and
+    /// killing a good backup for it would be the wrong trade. The same gate is used, so a wipe and a
+    /// cutover can never both believe they came first. Dispose the result to reopen the manager.</para>
+    /// </summary>
+    public async Task<IDisposable?> TryBeginExclusiveAsync(TimeSpan drainTimeout)
+    {
+        Task idle;
+        lock (_sync)
+        {
+            if (_wiping) return null;
+            _wiping = true;
+            _wipeEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            idle = _current?.Completion ?? Task.CompletedTask;
+        }
+
+        var deadline = DateTime.UtcNow + drainTimeout;
+        if (await Task.WhenAny(idle, Task.Delay(drainTimeout)) == idle)
+        {
+            while (DateTime.UtcNow < deadline)
+            {
+                lock (_sync)
+                    if (_current is null && _children.Count == 0 && _readers == 0) return new Exclusive(this);
+                await Task.Delay(50);
+            }
+        }
+
+        _logger.LogError("Blind cutover refused: a job or restic process did not finish within {Timeout}", drainTimeout);
+        EndWipe();
+        return null;
+    }
+
+    /// <summary>The exclusive gate <see cref="TryBeginExclusiveAsync"/> handed out; dispose to reopen.</summary>
+    private sealed class Exclusive(BlindJobManager owner) : IDisposable
+    {
+        private int _done;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _done, 1) == 0) owner.EndWipe();
+        }
+    }
+
     /// <summary>Reopens the manager after the wipe (or after a refused one).</summary>
     public void EndWipe()
     {

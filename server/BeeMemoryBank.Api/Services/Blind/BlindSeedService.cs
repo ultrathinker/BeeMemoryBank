@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Api.Startup;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -56,6 +57,7 @@ public sealed class BlindSeedService(
     string dataPath,
     SnapshotService snapshots,
     MaintenanceModeService maintenance,
+    BlindJobManager jobs,
     IServiceScopeFactory scopeFactory,
     IConfiguration config,
     ILogger<BlindSeedService> logger)
@@ -433,6 +435,15 @@ public sealed class BlindSeedService(
             await HeavyOperationLock.Instance.WaitAsync();
             try
             {
+                // The media tree this cutover is about to rename aside, move into and later delete is
+                // also what a restic backup reads (Codex round 2, security #7): block new jobs and wait
+                // for the one running, so no reader holds files in it while the directories move — on
+                // Windows the rename fails under an open handle, on Linux the reader captures a
+                // half-moved tree. Taken with the wipe's own gate, so a wipe and a cutover serialize.
+                using var exclusive = await jobs.TryBeginExclusiveAsync(_cutoverDrainWait)
+                    ?? throw new BlindSeedRejectedException(
+                        $"A blind backup job (or a wipe) was still running after {_cutoverDrainWait.TotalSeconds:0} s; nothing was changed. Send the seed again when it finishes.");
+
                 // Every connection to the live database takes part in the switch (review l-root4 #1):
                 // new ones wait, open ones are waited for, and the switch goes ahead only once none is
                 // left, so no reader or writer keeps the moved file open. This flow's own connections
