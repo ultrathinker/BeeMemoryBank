@@ -7,6 +7,7 @@ using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.Logging;
 #if ANDROID
 using BeeMemoryBank.Mobile.Platforms.Android;
@@ -78,7 +79,10 @@ public static class MauiProgram
         // p5: friendly maintenance-mode messages for HTTP 503 from the BMB API. Only routes
         // through the named/DI HttpClient — raw `new HttpClient()` sites still see raw 503.
         builder.Services.AddTransient<Services.MaintenanceDetectingHandler>();
+        // Pinned TLS keys (plan 4.4): every sync caller on the phone takes this default client, so it
+        // carries the pinned handler — blind peers on their key only, HTTPS only, no redirects.
         builder.Services.AddHttpClient(string.Empty)
+            .UsePinnedSyncHandler()
             .AddHttpMessageHandler<Services.MaintenanceDetectingHandler>();
 
         builder.Services.AddTransient<SnapshotJoinClient>(sp =>

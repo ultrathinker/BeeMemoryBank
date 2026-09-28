@@ -34,6 +34,12 @@ public static class ApiServices
 {
     public static void AddBeeApiServices(this WebApplicationBuilder builder, string dataPath)
     {
+// BMB_ROLE=blind (plan 3.4): a node that stores and relays the mesh's ciphertext but never holds
+// the master DEK. Read from configuration (environment included) so a test host can set it per
+// instance. Everything below that needs the DEK, a model or a human is left out in that role.
+var role = new EnvironmentNodeRole(builder.Configuration["BMB_ROLE"]);
+builder.Services.AddSingleton<INodeRole>(role);
+
 builder.Services.AddStorage(dataPath);
 builder.Services.AddCore();
 builder.Services.AddMemoryCache();
@@ -41,7 +47,10 @@ builder.Services.AddMemoryCache();
 // internally, which registers HybridSearchService / EmbeddingProjectionService that depend on
 // IEmbeddingGenerator being present). AddImageTranscoder must run before any scope resolves
 // MediaService.
-builder.Services.AddOnnxEmbeddings(dataPath);
+if (role.IsBlind)
+    builder.Services.AddSingleton<IEmbeddingGenerator, BeeMemoryBank.Sync.Blind.BlindEmbeddingGenerator>();
+else
+    builder.Services.AddOnnxEmbeddings(dataPath);
 builder.Services.AddImageTranscoder();
 builder.Services.AddSync();
 builder.Services.AddSingleton<SyncTokenStore>();
@@ -66,13 +75,15 @@ TimeSpan? embeddingInterval = int.TryParse(Environment.GetEnvironmentVariable("B
     ? TimeSpan.FromSeconds(eis) : null;
 int? embeddingBatchSize = int.TryParse(Environment.GetEnvironmentVariable("BMB_EMBEDDING_BATCH_SIZE"), out var ebs) && ebs >= 1
     ? ebs : null;
-builder.Services.AddEmbeddingProcessor(interval: embeddingInterval, batchSize: embeddingBatchSize);
+if (!role.IsBlind)
+    builder.Services.AddEmbeddingProcessor(interval: embeddingInterval, batchSize: embeddingBatchSize);
 
 TimeSpan? indexInterval = int.TryParse(Environment.GetEnvironmentVariable("BMB_INDEX_INTERVAL_SECONDS"), out var iis) && iis >= 1
     ? TimeSpan.FromSeconds(iis) : null;
 int? indexBatchSize = int.TryParse(Environment.GetEnvironmentVariable("BMB_INDEX_BATCH_SIZE"), out var ibs) && ibs >= 1
     ? ibs : null;
-builder.Services.AddIndexProcessor(interval: indexInterval, batchSize: indexBatchSize);
+if (!role.IsBlind)
+    builder.Services.AddIndexProcessor(interval: indexInterval, batchSize: indexBatchSize);
 
 // ── mDNS announce: advertise this node on the LAN (_beememorybank._tcp.local) ──
 // Runs in the API because that is where the authoritative InvisibleModeService (registered by
@@ -84,7 +95,8 @@ builder.Services.AddIndexProcessor(interval: indexInterval, batchSize: indexBatc
 // from the network (the default desktop install listens on loopback only): announcing a port no
 // peer can connect to is useless, and the multicast socket is what makes Windows Firewall ask the
 // user to allow BeeMemoryBank.Api on public and private networks right after installation.
-if (!string.Equals(builder.Configuration["BMB_MDNS_ENABLED"], "false", StringComparison.OrdinalIgnoreCase))
+// A blind node is paired by code and dialled at the address in it; it never advertises itself.
+if (!role.IsBlind && !string.Equals(builder.Configuration["BMB_MDNS_ENABLED"], "false", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddMdnsAnnouncer(o =>
     {
@@ -125,29 +137,37 @@ builder.Services.AddSingleton(sp =>
         // GetRequiredService, not GetService: a SnapshotService without a session has no way to
         // encrypt, and CreateAsync then writes the vault out in the clear. That must not be
         // reachable by silently resolving null at the composition root.
-        sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>()));
+        sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
+        // Only in the blind role: the key a blind node signs its packages with.
+        sp.GetService<IExternalNodeKey>()));
 // Singleton: RestoreInitiatorService holds in-memory progress state for /restore/progress polling.
 // Task.Run flows in EventApplier and SnapshotEndpoints fire-and-forget, so the service must outlive
 // the request scope. Scoped dependencies (repositories) are resolved via IServiceScopeFactory per
 // operation to avoid capturing a single scope at construction time.
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<RestoreInitiatorService>(sp, dataPath));
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<DekRotationService>(sp, dataPath));
-builder.Services.AddSingleton<IDekRotationApplier>(sp => sp.GetRequiredService<DekRotationService>());
+if (!role.IsBlind)
+    builder.Services.AddSingleton<IDekRotationApplier>(sp => sp.GetRequiredService<DekRotationService>());
 // Singleton: UpdateService holds in-memory state-machine state for /node/update/status polling.
 // All collaborators (Snapshot/Maintenance/DekRotation/SnapshotRestore/Session services) are
 // singletons resolved from the container; dataPath is the explicit ActivatorUtilities arg.
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<UpdateService>(sp, dataPath));
 // LazySlotRewrapService is registered by AddSync() in Sync DI now (so CLI/mobile get it too).
-builder.Services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.GetRequiredService<RestoreInitiatorService>());
-// Core-side retry contract: SessionService.UnlockCoreAsync resolves IRestoreRetrier to sweep
-// stuck restore events on every unlock (mirrors the DEK-rotation retry pattern).
-builder.Services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<RestoreInitiatorService>());
+if (!role.IsBlind)
+{
+    builder.Services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.GetRequiredService<RestoreInitiatorService>());
+    // Core-side retry contract: SessionService.UnlockCoreAsync resolves IRestoreRetrier to sweep
+    // stuck restore events on every unlock (mirrors the DEK-rotation retry pattern).
+    builder.Services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<RestoreInitiatorService>());
+}
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<McpResponseManager>(sp, dataPath));
 builder.Services.AddSingleton<DownloadTokenService>();
 builder.Services.AddSingleton<BeeMemoryBank.Api.Services.ProtectedUnlockCache>();
 // OsAutoUnlockService is Windows-only; registered as a conditional singleton so other code can
 // resolve it as OsAutoUnlockService? (nullable) and safely get null on non-Windows platforms.
-if (OperatingSystem.IsWindows())
+// Both put the master DEK back into the session without anyone typing a password — which is why
+// a blind node (plan 3.4) must not have them at all.
+if (OperatingSystem.IsWindows() && !role.IsBlind)
 {
     builder.Services.AddSingleton(sp =>
         new BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService(
@@ -162,13 +182,16 @@ if (OperatingSystem.IsWindows())
 }
 builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();
-builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler>();
-// Moves legacy chat rows onto the node chat key: plaintext from before chat.db was encrypted at
-// rest, and ciphertext sealed directly under the master DEK from before the chat key
-// existed. Needs an unlocked vault — it polls and no-ops when locked rather than hooking unlock,
-// matching PendingEmbeddingProcessor. On a node with nothing legacy left (and on every fresh node)
-// a tick is one empty partial-index lookup per table.
-builder.Services.AddHostedService<BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor>();
+if (!role.IsBlind)
+{
+    builder.Services.AddHostedService<BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler>();
+    // Moves legacy chat rows onto the node chat key: plaintext from before chat.db was encrypted at
+    // rest, and ciphertext sealed directly under the master DEK from before the chat key
+    // existed. Needs an unlocked vault — it polls and no-ops when locked rather than hooking unlock,
+    // matching PendingEmbeddingProcessor. On a node with nothing legacy left (and on every fresh node)
+    // a tick is one empty partial-index lookup per table.
+    builder.Services.AddHostedService<BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor>();
+}
 // Same migration, run to completion right before every DEK rotation (initiator and peer), so no
 // chat row is left sealed under a DEK the node is about to retire. See IDekRotationHook.
 builder.Services.AddScoped<BeeMemoryBank.Core.Services.IDekRotationHook, ChatDekRotationHook>();
@@ -227,26 +250,25 @@ builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServe
     o.Limits.MaxRequestBodySize = 500L * 1024 * 1024;
 });
 builder.Services.AddOpenApi();
-builder.Services.AddMcpServer()
-    .WithHttpTransport()
-    .WithTools<BeeSearchTools>()
-    .WithTools<BeeReadTools>()
-    .WithTools<BeeWriteTools>()
-    .WithTools<BeeSessionTools>()
-    .WithTools<BeeUploadTools>()
-    .WithTools<BeeAuditTools>()
-    .WithTools<BeeConceptTools>();
 
-builder.Services.AddSingleton(new BeeMemoryBank.Api.Helpers.McpToolRegistry(new[]
+// The blind package (CONTRACTS §2): a full node builds it to seed, reseed and hand out replicas; a
+// blind node builds it for an Android blind node.
+builder.Services.AddScoped<BlindPackageBuilder>();
+builder.Services.TryAddSingleton(TimeProvider.System);
+if (role.IsBlind)
 {
-    typeof(BeeSearchTools),
-    typeof(BeeReadTools),
-    typeof(BeeWriteTools),
-    typeof(BeeSessionTools),
-    typeof(BeeUploadTools),
-    typeof(BeeAuditTools),
-    typeof(BeeConceptTools)
-}));
+    AddBlindRoleServices(builder.Services, dataPath);
+    UseBlindHttps(builder, dataPath);
+}
+else
+{
+    // The PC's side of blind nodes (plan 4.2, 5.2): pairing, pre-flight, reseed — and reseeding a
+    // blind peer from the sync scheduler when it needs it.
+    builder.Services.AddScoped<BlindPreflight>();
+    builder.Services.AddSingleton<BlindNodeManager>();
+    builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.IBlindPeerReseeder>(sp => sp.GetRequiredService<BlindNodeManager>());
+    AddMcp(builder.Services);
+}
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -257,5 +279,75 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
 });
 
+    }
+
+    /// <summary>
+    /// What a blind node has instead of the DEK-bound services (plan 3.4, 3.5): its identity key in
+    /// a file, a rotation applier with nothing to re-wrap, and a restore initiator that only asks
+    /// for a reseed.
+    /// </summary>
+    private static void AddBlindRoleServices(IServiceCollection services, string dataPath)
+    {
+        services.AddSingleton(new FileNodeKey(Path.Combine(dataPath, FileNodeKey.FileName)));
+        services.AddSingleton<IExternalNodeKey>(sp => sp.GetRequiredService<FileNodeKey>());
+        services.AddSingleton<BeeMemoryBank.Sync.Blind.BlindState>();
+        services.AddSingleton<BeeMemoryBank.Sync.Blind.BlindRestoreInitiator>();
+        services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.GetRequiredService<BeeMemoryBank.Sync.Blind.BlindRestoreInitiator>());
+        services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<BeeMemoryBank.Sync.Blind.BlindRestoreInitiator>());
+        services.AddScoped<IDekRotationApplier, BeeMemoryBank.Sync.Blind.BlindDekRotationApplier>();
+
+        // Pairing and seed (plan 4.1-4.4): the self-signed certificate in the data volume, the pair
+        // code, and the receiver of the package that makes this node's database.
+        services.AddSingleton(new BlindTlsIdentity(BlindTlsCertificate.LoadOrCreate(dataPath)));
+        services.AddSingleton<BlindPairing>();
+        services.AddSingleton<BeeMemoryBank.Api.Services.BlindStatus.IBlindStatusContributor, PairingBlindStatusContributor>();
+        services.AddSingleton(sp => ActivatorUtilities.CreateInstance<BlindSeedService>(sp, dataPath));
+
+        // Log trimming without an event (plan 5.4) — a blind node has no compaction of its own.
+        services.AddSingleton<BlindLogTrimmer>();
+        services.AddHostedService(sp => sp.GetRequiredService<BlindLogTrimmer>());
+    }
+
+    /// <summary>
+    /// A blind node is dialled by every full device (plan 4.4), over HTTPS with its self-signed
+    /// certificate. BMB_BLIND_HTTPS_PORT opens that listener on all interfaces;
+    /// BMB_BLIND_LOCAL_PORT keeps a loopback HTTP port for the console next to it (internal key).
+    /// Without the variable the process listens wherever ASPNETCORE_URLS says, as every node does.
+    /// </summary>
+    private static void UseBlindHttps(WebApplicationBuilder builder, string dataPath)
+    {
+        if (!int.TryParse(builder.Configuration["BMB_BLIND_HTTPS_PORT"], out var httpsPort) || httpsPort <= 0)
+            return;
+        var localPort = int.TryParse(builder.Configuration["BMB_BLIND_LOCAL_PORT"], out var p) && p > 0 ? p : 5612;
+        builder.WebHost.ConfigureKestrel(kestrel =>
+        {
+            var certificate = kestrel.ApplicationServices.GetRequiredService<BlindTlsIdentity>().Certificate;
+            kestrel.ListenAnyIP(httpsPort, listen => listen.UseHttps(certificate));
+            kestrel.ListenLocalhost(localPort);
+        });
+    }
+
+    private static void AddMcp(IServiceCollection services)
+    {
+services.AddMcpServer()
+    .WithHttpTransport()
+    .WithTools<BeeSearchTools>()
+    .WithTools<BeeReadTools>()
+    .WithTools<BeeWriteTools>()
+    .WithTools<BeeSessionTools>()
+    .WithTools<BeeUploadTools>()
+    .WithTools<BeeAuditTools>()
+    .WithTools<BeeConceptTools>();
+
+services.AddSingleton(new BeeMemoryBank.Api.Helpers.McpToolRegistry(new[]
+{
+    typeof(BeeSearchTools),
+    typeof(BeeReadTools),
+    typeof(BeeWriteTools),
+    typeof(BeeSessionTools),
+    typeof(BeeUploadTools),
+    typeof(BeeAuditTools),
+    typeof(BeeConceptTools)
+}));
     }
 }

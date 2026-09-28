@@ -162,6 +162,13 @@ public partial class DekRotationService
                 };
                 foreach (var peer in activePeers)
                 {
+                    // A blind node never receives the DEK (plan 3.3) — that is what makes it blind.
+                    // Decided by the mark in its id alone, never by a whitelist column: a row can
+                    // reach this node through an event from a build that knows no such column, or
+                    // be rewritten by an update event, while the id is fixed by the node's key.
+                    if (BlindNodeId.IsBlind(peer.NodeId))
+                        continue;
+
                     // One malformed active whitelist key must not deny rotation to the whole mesh.
                     // Validate the birational map up front; a peer whose Ed25519 key will not convert
                     // is EXCLUDED (it gets no openable envelope and must re-join to catch up) rather

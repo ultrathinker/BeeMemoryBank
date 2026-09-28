@@ -483,6 +483,10 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         "GET /api/sync/events",
         "GET /api/sync/snapshot/for-join",
         "GET /api/snapshots/restore/{eventId}/file",
+        // How this node sees the calling peer (plan 4.2), and the blind package for an Android
+        // blind node (plan 10): both under the sync bearer token of the peer asking.
+        "GET /api/sync/my-standing",
+        "GET /api/blind/replica",
 
         // Anonymous on purpose so the locked splash screen can poll it; the handler strips
         // everything but a coarse status for callers without the internal key.

@@ -88,7 +88,8 @@ public class SnapshotJoinClient
             {
                 NodeId = localNodeId,
                 ChallengeB64 = challenge.Challenge,
-                SignatureB64 = Convert.ToBase64String(challengeSig)
+                SignatureB64 = Convert.ToBase64String(challengeSig),
+                ProtocolVersion = SyncProtocolVersion.Current
             }, JsonOpts, ct);
         authResp.EnsureSuccessStatusCode();
         var authToken = (await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts, ct))?.Token

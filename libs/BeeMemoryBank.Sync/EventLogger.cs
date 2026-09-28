@@ -113,7 +113,8 @@ public class EventLogger(
             PublicKeyB64: Convert.ToBase64String(entry.Ed25519PublicKey),
             ApiAddress: entry.ApiAddress,
             CanGenerateEmbeddings: entry.CanGenerateEmbeddings,
-            IsSuperadmin: entry.IsSuperadmin);
+            IsSuperadmin: entry.IsSuperadmin,
+            TlsSpki: entry.TlsSpki);
 
         await AppendEventAsync(identity, EventTypes.WhitelistAdd, null, lamportTs,
             JsonSerializer.Serialize(payload));
@@ -135,13 +136,13 @@ public class EventLogger(
         return new RowVersion(lamportTs, identity.NodeId);
     }
 
-    public async Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null)
+    public async Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
 
         var lamportTs = clock.Tick();
-        var payload = new WhitelistUpdatePayload(NodeId: nodeId, ApiAddress: apiAddress, DisplayName: displayName, IsSuperadmin: isSuperadmin);
+        var payload = new WhitelistUpdatePayload(NodeId: nodeId, ApiAddress: apiAddress, DisplayName: displayName, IsSuperadmin: isSuperadmin, TlsSpki: tlsSpki);
 
         await AppendEventAsync(identity, EventTypes.WhitelistUpdate, null, lamportTs,
             JsonSerializer.Serialize(payload));
@@ -405,6 +406,14 @@ public class EventLogger(
             throw new InvalidOperationException(
                 $"Event of type {eventType} was given entity id '{entityId}', but its signed fields " +
                 $"derive '{evt.EntityId ?? "(none)"}'. Put the identifier in the payload instead.");
+
+        // The source half of the authorship ban (plan 3.2; EventApplier enforces the receiving
+        // half): a blind node authors nothing. Refusing here keeps a stray local write on a blind
+        // node from entering its log, where every peer that pulls it would reject it again. This
+        // is also why event signing has no v=2 (external key) branch — only blind nodes have one.
+        if (BlindNodeId.IsBlind(identity.NodeId))
+            throw new InvalidOperationException(
+                $"Refusing to log a {eventType} event: this is a blind node, and blind nodes never author events.");
 
         var sigPayload = EventSignature.BuildPayload(evt);
         if (identity.Ed25519PrivateKeyV == 0)

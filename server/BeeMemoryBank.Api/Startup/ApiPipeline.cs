@@ -51,15 +51,24 @@ app.UseMiddleware<BeeMemoryBank.Api.Middleware.RateLimitMiddleware>();
 // Maintenance mode — blocks all requests except snapshot restore and session unlock
 app.UseMiddleware<BeeMemoryBank.Api.Middleware.MaintenanceMiddleware>();
 
-// Agent bearer auth (non-blocking, auto-unlock)
-app.UseMiddleware<BeeMemoryBank.Api.Middleware.AgentAuthMiddleware>();
+// A blind node has neither (plan 3.4): agent auth would auto-unlock the session with an agent's
+// wrapped DEK — the one thing a blind node must never hold — and with no users or agents there is
+// no caller scope to resolve; every request keeps the deny-all default.
+var isBlind = app.Services.GetRequiredService<INodeRole>().IsBlind;
+if (!isBlind)
+{
+    // Agent bearer auth (non-blocking, auto-unlock)
+    app.UseMiddleware<BeeMemoryBank.Api.Middleware.AgentAuthMiddleware>();
 
-// Ambient caller scope — resolves folder ACL once per request, repos filter reads automatically
-app.UseMiddleware<BeeMemoryBank.Api.Middleware.CallerScopeMiddleware>();
+    // Ambient caller scope — resolves folder ACL once per request, repos filter reads automatically
+    app.UseMiddleware<BeeMemoryBank.Api.Middleware.CallerScopeMiddleware>();
+}
 
 // Validate MCP tool/call parameter names. The SDK silently drops unknown args,
 // which sends weak models into guess-the-flag loops. We short-circuit with a
 // schema-bearing error before the SDK sees the request.
+// A blind node has no MCP at all (plan 3.4): neither the server nor these guards are registered.
+if (!isBlind)
 app.UseWhen(
     ctx => ctx.Request.Path.StartsWithSegments("/mcp"),
     branch =>
@@ -82,22 +91,20 @@ if (app.Environment.IsDevelopment())
 
     public static void MapBeeApiEndpoints(this WebApplication app)
     {
-app.MapGet("/health", () => Results.Ok(new { status = "ok", timestamp = DateTime.UtcNow }))
-   .WithTags("Health");
+MapHealthAndVersion(app);
 
-app.MapGet("/api/version", () =>
+// A blind node (plan 3.4) serves only what the mesh needs from a store that cannot read: sync and
+// its own /api/blind/* surface. Leaving the rest unmapped — rather than guarding each endpoint —
+// is what keeps notes, search, MCP, AI, export, compaction, /api/session/unlock and /api/join off
+// in that role, including any endpoint added later.
+if (app.Services.GetRequiredService<INodeRole>().IsBlind)
 {
-    var asm = System.Reflection.Assembly.GetExecutingAssembly();
-    var location = asm.Location;
-    var deployedAt = File.Exists(location)
-        ? File.GetLastWriteTimeUtc(location)
-        : DateTime.UtcNow;
-    // `version` is the compiled-in build version (source of truth for update checks).
-    // `deployedAt`/`build` are kept for backward compatibility (older mobile/Maestro readers);
-    // `build` is the actual deploy date derived from the running binary's timestamp, not a frozen
-    // constant — old readers only need A date, not THE original date.
-    return Results.Ok(new { version = BeeMemoryBank.Api.Helpers.AppVersion.Current, deployedAt, build = deployedAt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) });
-}).WithTags("Health").AllowAnonymous();
+    app.MapSyncEndpoints();
+    app.MapBlindSeedEndpoints();
+    app.MapBlindNodeEndpoints(); // BMB-54: blind status, backups, console, wipe
+    app.MapBlindReplicaEndpoint();
+    return;
+}
 
 app.MapSessionEndpoints();
 app.MapArticleEndpoints();
@@ -117,6 +124,8 @@ app.MapUserEndpoints();
 app.MapJoinEndpoints();
 app.MapInitEndpoints();
 app.MapSyncEndpoints();
+app.MapBlindReplicaEndpoint();
+app.MapBlindNodeManagementEndpoints();
 app.MapSnapshotEndpoints();
     app.MapDekRotationEndpoints();
     app.MapUpdateEndpoints();
@@ -138,6 +147,25 @@ app.MapDownloadEndpoints();
     app.MapAutoUnlockEndpoints();
     app.MapChatEndpoints();
     app.MapMcp("/mcp");
+    }
 
+    private static void MapHealthAndVersion(WebApplication app)
+    {
+app.MapGet("/health", () => Results.Ok(new { status = "ok", timestamp = DateTime.UtcNow }))
+   .WithTags("Health");
+
+app.MapGet("/api/version", () =>
+{
+    var asm = System.Reflection.Assembly.GetExecutingAssembly();
+    var location = asm.Location;
+    var deployedAt = File.Exists(location)
+        ? File.GetLastWriteTimeUtc(location)
+        : DateTime.UtcNow;
+    // `version` is the compiled-in build version (source of truth for update checks).
+    // `deployedAt`/`build` are kept for backward compatibility (older mobile/Maestro readers);
+    // `build` is the actual deploy date derived from the running binary's timestamp, not a frozen
+    // constant — old readers only need A date, not THE original date.
+    return Results.Ok(new { version = BeeMemoryBank.Api.Helpers.AppVersion.Current, deployedAt, build = deployedAt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) });
+}).WithTags("Health").AllowAnonymous();
     }
 }

@@ -49,6 +49,10 @@ public class SnapshotTablesCoverageTests
         "tbl_whitelist", "tbl_restore_replay_shield", "tbl_restore_event_state",
         "tbl_compaction_log", "tbl_dek_rotation_state",
 
+        // A blind node's own flags (reseed needed, the pairing secret): about this one node, and
+        // the pairing secret must never leave it.
+        "tbl_blind_state",
+
         // Audit trails: this node's record of what happened here.
         "tbl_audit_log", "tbl_hard_delete_audit",
 

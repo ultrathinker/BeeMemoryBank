@@ -27,8 +27,10 @@ public class SnapshotFileSwapRetryTests
 
         swapCalls.Should().Be(4, "three blocked attempts, then the freed window");
         // The pool must be cleared immediately before EVERY attempt — clearing once and waiting
-        // (the old code) hands the file back to whoever reopens a connection during the wait.
-        clearCalls.Should().Be(4);
+        // (the old code) hands the file back to whoever reopens a connection during the wait — and
+        // once more after the swap that succeeded, for a connection opened in its window
+        // (SnapshotFileSwapPoolTests).
+        clearCalls.Should().Be(5);
     }
 
     [Fact]

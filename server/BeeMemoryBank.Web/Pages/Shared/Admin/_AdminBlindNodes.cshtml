@@ -1,0 +1,64 @@
+@model BeeMemoryBank.Web.Pages.BlindNodesModel
+
+<h3 style="margin-bottom:12px;"><sl-icon name="plus-circle"></sl-icon> Add a blind node</h3>
+<div class="card" style="margin-bottom:24px;max-width:720px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Paste the pair code from the blind node's console. This PC checks the node's key, checks that
+        every other device already sees this PC as superadmin and runs a current version, then sends
+        the node its first copy.
+    </p>
+    <form method="post" asp-page-handler="Add">
+        <textarea name="code" rows="3" placeholder="BMBBLIND1...." required style="width:100%;font-family:monospace;"></textarea>
+        <sl-button type="submit" variant="primary" size="small" style="margin-top:8px;">
+            <sl-icon slot="prefix" name="link-45deg"></sl-icon> Add
+        </sl-button>
+    </form>
+</div>
+
+<h3 style="margin-bottom:12px;"><sl-icon name="hdd-network"></sl-icon> Connected blind nodes</h3>
+@if (Model.Nodes == null)
+{
+    <sl-alert variant="warning" open>Could not load blind nodes. Check the API connection.</sl-alert>
+}
+else if (Model.Nodes.Count == 0)
+{
+    <p class="text-muted">No blind nodes yet.</p>
+}
+else
+{
+    @foreach (var node in Model.Nodes)
+    {
+        <div class="card" style="margin-bottom:12px;max-width:720px;">
+            <div class="article-meta">
+                <span><strong>@node.DisplayName</strong></span>
+                <span class="article-id-badge">@node.NodeId</span>
+                <span>@(node.Address ?? "no address")</span>
+                <span>Protocol: @(node.Protocol?.ToString() ?? "unknown")</span>
+                <span>Last contact: @(node.LastContact?.ToLocalTime().ToString("g") ?? "never")</span>
+            </div>
+            @if (node.Alarms.Contains("old_protocol"))
+            {
+                <sl-alert variant="danger" open style="margin-top:8px;">
+                    This blind node runs an older sync protocol. Update it: until then it receives nothing.
+                </sl-alert>
+            }
+            @if (node.Alarms.Contains("silent"))
+            {
+                <sl-alert variant="warning" open style="margin-top:8px;">
+                    No contact for several days. While it is silent, other devices keep their history for it.
+                    If it is gone for good, disconnect it.
+                </sl-alert>
+            }
+            <div style="display:flex;gap:8px;margin-top:10px;">
+                <form method="post" asp-page-handler="Reseed">
+                    <input type="hidden" name="nodeId" value="@node.NodeId" />
+                    <sl-button type="submit" size="small"><sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Reseed</sl-button>
+                </form>
+                <form method="post" asp-page-handler="Disconnect">
+                    <input type="hidden" name="nodeId" value="@node.NodeId" />
+                    <sl-button type="submit" size="small" variant="danger"><sl-icon slot="prefix" name="x-circle"></sl-icon> Disconnect</sl-button>
+                </form>
+            </div>
+        </div>
+    }
+}

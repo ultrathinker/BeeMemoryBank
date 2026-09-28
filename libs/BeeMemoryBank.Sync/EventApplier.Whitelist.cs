@@ -75,6 +75,7 @@ public partial class EventApplier
                 existing.ApiAddress = p.ApiAddress;
                 existing.CanGenerateEmbeddings = p.CanGenerateEmbeddings;
                 existing.IsSuperadmin = p.IsSuperadmin;
+                existing.TlsSpki = p.TlsSpki;
                 existing.Status = "A";
                 existing.UpdatedAt = DateTime.UtcNow;
                 existing.LamportTs = incoming.LamportTs;
@@ -93,6 +94,7 @@ public partial class EventApplier
             ApiAddress = p.ApiAddress,
             CanGenerateEmbeddings = p.CanGenerateEmbeddings,
             IsSuperadmin = p.IsSuperadmin,
+            TlsSpki = p.TlsSpki,
             Status = "A",
             CreatedAt = now,
             UpdatedAt = now,
@@ -153,6 +155,7 @@ public partial class EventApplier
 
         if (p.ApiAddress != null) existing.ApiAddress = p.ApiAddress;
         if (p.DisplayName != null) existing.DisplayName = p.DisplayName;
+        if (p.TlsSpki != null) existing.TlsSpki = p.TlsSpki;
 
         if (p.IsSuperadmin is { } isSuperadmin)
         {

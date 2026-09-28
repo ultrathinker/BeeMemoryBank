@@ -226,7 +226,8 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
         {
             NodeId = identity.NodeId,
             ChallengeB64 = challengeData.Challenge,
-            SignatureB64 = Convert.ToBase64String(signature)
+            SignatureB64 = Convert.ToBase64String(signature),
+            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
         });
         authResp.EnsureSuccessStatusCode();
         var authData = await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts)
@@ -255,8 +256,14 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
     private sealed record ChallengeDto(string Challenge, Guid ServerNodeId);
     private sealed record AuthTokenDto(string Token);
 
-    [Fact]
-    public async Task Join_RemoteNodeNewerProtocol_RefusesToJoin()
+    /// <summary>
+    /// Newer: this build cannot apply its events. Older than 3 (review L-stage0 #2): it accepts a
+    /// blind node's events, so nothing from it is taken in.
+    /// </summary>
+    [Theory]
+    [InlineData(999, "higher than local version")]
+    [InlineData(2, "update it first")]
+    public async Task Join_RemoteNodeOnAnIncompatibleProtocol_RefusesToJoin(int remoteProtocol, string reason)
     {
         var mockHandler = new MockHttpMessageHandler(async request =>
         {
@@ -269,7 +276,7 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
                         nodeId = Guid.NewGuid(),
                         displayName = "RemoteNode",
                         ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
-                        protocolVersion = 999
+                        protocolVersion = remoteProtocol
                     },
                     keySlot = new
                     {
@@ -319,7 +326,7 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
         var error = await resp.Content.ReadFromJsonAsync<ErrorResponse>(JsonOpts);
         error.Should().NotBeNull();
         error!.Error.Should().Contain("protocol version");
-        error.Error.Should().Contain("higher than local version");
+        error.Error.Should().Contain(reason);
     }
 
     private class MockHttpMessageHandler : HttpMessageHandler

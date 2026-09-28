@@ -554,6 +554,9 @@ public class RestoreInitiatorService : IRestoreInitiator
         {
             if (peer.NodeId == identity.NodeId) continue;
             if (peer.NodeId == originator.NodeId) continue;
+            // A blind node never serves a network restore (plan 3.4): it is flagged for a reseed
+            // instead, and holds no restore snapshot to hand out.
+            if (BlindNodeId.IsBlind(peer.NodeId)) continue;
             if (string.IsNullOrWhiteSpace(peer.ApiAddress)) continue;
             if (!IsAcceptableSeederUrl(peer.ApiAddress))
             {
@@ -621,7 +624,8 @@ public class RestoreInitiatorService : IRestoreInitiator
                     {
                         NodeId = identity.NodeId,
                         ChallengeB64 = challengeData.Challenge,
-                        SignatureB64 = Convert.ToBase64String(signature)
+                        SignatureB64 = Convert.ToBase64String(signature),
+                        ProtocolVersion = SyncProtocolVersion.Current
                     })
                 };
                 if (!string.IsNullOrEmpty(originalHost))

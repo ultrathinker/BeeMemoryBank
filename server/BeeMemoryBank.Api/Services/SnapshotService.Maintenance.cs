@@ -72,7 +72,7 @@ public partial class SnapshotService
         throw new InvalidOperationException("Snapshot does not contain manifest.json");
     }
 
-    private static void FilterSecretsFrom(string tempDbPath)
+    private static void FilterSecretsFrom(string tempDbPath, IReadOnlyCollection<string>? alsoKeep = null)
     {
         // Pooling=False is load-bearing, not tidiness. Microsoft.Data.Sqlite pools by default, so
         // Dispose only returns the connection to the pool and the native handle stays open on the
@@ -85,7 +85,9 @@ public partial class SnapshotService
         using var conn = new SqliteConnection(cs);
         conn.Open();
         using var pragmaCmd = conn.CreateCommand();
-        pragmaCmd.CommandText = "PRAGMA foreign_keys = OFF;";
+        // secure_delete: what is deleted below is zeroed as it goes, not just unlinked — the final
+        // VACUUM rewrites the file anyway, this keeps the in-between journal free of it too.
+        pragmaCmd.CommandText = "PRAGMA foreign_keys = OFF; PRAGMA secure_delete = ON;";
         pragmaCmd.ExecuteNonQuery();
 
         // Allow-list, not deny-list. Enumerate what is actually IN this database and decide about
@@ -104,7 +106,8 @@ public partial class SnapshotService
         }
 
         var keep = new HashSet<string>(
-            SnapshotTables.Replicated.Concat(SnapshotTables.SchemaMeta), StringComparer.OrdinalIgnoreCase);
+            SnapshotTables.Replicated.Concat(SnapshotTables.SchemaMeta).Concat(alsoKeep ?? []),
+            StringComparer.OrdinalIgnoreCase);
         var drop = new HashSet<string>(SnapshotTables.StrippedByDropping, StringComparer.OrdinalIgnoreCase);
 
         // Two tables are neither fully kept nor fully cleared — they are filtered row by row just
@@ -151,9 +154,25 @@ public partial class SnapshotService
         roleCmd.CommandText = "DELETE FROM tbl_role WHERE is_system = 0";
         try { roleCmd.ExecuteNonQuery(); } catch (SqliteException) { /* pre-009 archive */ }
 
-        using var vacuumCmd = conn.CreateCommand();
-        vacuumCmd.CommandText = "VACUUM";
-        vacuumCmd.ExecuteNonQuery();
+        Compact(conn);
+    }
+
+    /// <summary>
+    /// Rewrites the copy from its live rows only, as a single self-contained file: rollback journal
+    /// (deleted when done) rather than WAL, so no -wal file holds pages the archive would not show.
+    /// </summary>
+    private static void Compact(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA journal_mode = DELETE; VACUUM;";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void CompactInPlace(string dbPath)
+    {
+        using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+        conn.Open();
+        Compact(conn);
     }
 
     /// <summary>

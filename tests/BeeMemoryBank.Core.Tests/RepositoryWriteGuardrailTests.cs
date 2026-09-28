@@ -110,6 +110,10 @@ public class RepositoryWriteGuardrailTests
         new("mobile/BeeMemoryBank.Mobile/Services/NodeSetupService.cs", "ISyncPositionRepository", "UpsertAsync", BootstrapReason),
         new("mobile/BeeMemoryBank.Mobile/Services/NodeSetupService.cs", "INodeIdentityRepository", "MarkInitialSyncCompletedAsync", BootstrapReason),
 
+        // A blind node (BMB_ROLE=blind) has no setup wizard: its identity row is created on first
+        // start, before anything could be logged — and a blind node never logs events at all.
+        new("server/BeeMemoryBank.Api/Startup/BlindRoleStartup.cs", "INodeIdentityRepository", "CreateAsync", BootstrapReason),
+
         // /api/join is reached AFTER the joining node already exists, by the node it is joining —
         // that side is past bootstrap, so it earns its allow-list entries individually below rather
         // than sharing BootstrapReason.
@@ -127,6 +131,11 @@ public class RepositoryWriteGuardrailTests
         new("server/BeeMemoryBank.Api/Endpoints/KeyEndpoints.cs", "INodeIdentityRepository", "SetMasterPasswordChangedLocallyAtAsync", NodeLocalSettingReason),
         new("server/BeeMemoryBank.Api/Endpoints/SearchMetricsEndpoints.cs", "INodeIdentityRepository", "SetCanGenerateEmbeddingsAsync", NodeLocalSettingReason),
         new("server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs", "INodeIdentityRepository", "SetSessionSettingsAsync", NodeLocalSettingReason),
+
+        // ── Protocol a peer last declared (plan 3.1, migration 028): this node's own observation of
+        // who it talked to, written after the peer authenticated. Never replicated, no event.
+        new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "IWhitelistRepository", "RecordProtocolVersionAsync",
+            "Records the protocol an authenticated peer declared; a local observation, never replicated."),
 
         // ── Agents: node-local identity, "created, authenticated, and revoked per-node. They are
         // never synchronized to other nodes." (file header of AgentEndpoints.cs). No AgentService

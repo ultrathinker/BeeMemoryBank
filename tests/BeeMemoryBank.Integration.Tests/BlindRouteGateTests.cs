@@ -12,9 +12,17 @@ namespace BeeMemoryBank.Integration.Tests;
 /// guardrail runs on a full node, where they are not mapped): every /api/blind route declares
 /// .RequireSuperadmin() at its registration site — except the status, which checks the role
 /// itself — and a caller on the 'user' role behind the internal key gets 403 from each.
+///
+/// <para>The peer-facing routes of pairing and seeding (BMB-52) are the other exception: a peer
+/// presents the pair code's one-time secret or its sync token, never the internal key, so a role
+/// gate cannot apply. Each is in the public-surface allow-list (pinned by the shared guardrail) and
+/// authorizes in its handler; here a 'user' caller must simply get nowhere with them.</para>
 /// </summary>
 public class BlindRouteGateTests : IAsyncLifetime
 {
+    private static readonly HashSet<string> PeerAuthenticated =
+        ["/api/blind/seed", "/api/blind/seed/{seedId:guid}", "/api/blind/replica"];
+
     private readonly BlindNodeFactory _factory = new();
 
     public Task InitializeAsync() => _factory.InitializeNodeAsync(password: "blindGatePw");
@@ -42,6 +50,17 @@ public class BlindRouteGateTests : IAsyncLifetime
         {
             var path = e.RoutePattern.RawText!;
             var method = e.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.First();
+            if (PeerAuthenticated.Contains(path))
+            {
+                var probe = await user.SendAsync(new HttpRequestMessage(new HttpMethod(method),
+                    path.Replace("{seedId:guid}", Guid.NewGuid().ToString()))
+                {
+                    Content = method is "POST" or "PUT" ? JsonContent.Create(new { }) : null,
+                });
+                if (probe.IsSuccessStatusCode)
+                    failures.Add($"{method} {path} answered {(int)probe.StatusCode} to a 'user' caller without a peer credential");
+                continue;
+            }
             if (path != "/api/blind/status" && e.Metadata.GetMetadata<RequiresSuperadmin>() is null)
                 failures.Add($"{method} {path} has no .RequireSuperadmin()");
 

@@ -46,4 +46,11 @@ public interface IWhitelistRepository
     /// </para>
     /// </summary>
     Task SetVersionAsync(Guid nodeId, RowVersion version);
+
+    /// <summary>
+    /// Records the sync protocol an authenticated peer just declared (see
+    /// <see cref="WhitelistEntry.LastProtocolVersion"/>). Touches nothing else on the row, the
+    /// version columns included: this is an observation, not a replicated change.
+    /// </summary>
+    Task RecordProtocolVersionAsync(Guid nodeId, int protocolVersion, DateTime seenAt);
 }

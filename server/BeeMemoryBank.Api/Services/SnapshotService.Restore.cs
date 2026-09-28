@@ -341,6 +341,12 @@ public partial class SnapshotService
             try
             {
                 swap();
+                // And again after it: a connection opened in the window between the clear above and
+                // the swap (a request allowed through maintenance, a background reader) went back to
+                // the pool still open on the file that was just moved away or deleted. Reused, it reads
+                // the old database and fails every write with SQLITE_READONLY_DBMOVED — the "read-only
+                // database" a reseed hit under load (review L-merge round 3 #3).
+                clearPools();
                 return;
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException && attempt < maxAttempts)

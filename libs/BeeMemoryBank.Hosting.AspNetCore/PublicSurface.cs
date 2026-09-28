@@ -74,6 +74,17 @@ public static class PublicSurface
         new("POST", "/api/sync/blobs/get"),
         // A peer asking us to probe a third node's reachability on its behalf.
         new("POST", "/api/sync/probe-relay"),
+        // How we see the calling peer (superadmin flag, protocols seen) — the PC's pre-flight
+        // before adding a blind node (plan 4.2). Sync bearer token, checked in the handler.
+        new("GET", "/api/sync/my-standing"),
+
+        // ── Blind nodes (plan 4.2-4.3, 10) ──────────────────────────────────
+        // The seed of a blind node, in parts: authorized by the one-time secret of its pair code
+        // or by the sync token of a superadmin peer (reseed), both checked in the handler.
+        new("POST", "/api/blind/seed"),
+        new("GET", "/api/blind/seed/{seedId}"),
+        // The blind package for an Android blind node, under the sync token of a blind peer.
+        new("GET", "/api/blind/replica"),
 
         // Joining a network. Authorised by the master password inside the handler; a joining node
         // has nothing else to present.

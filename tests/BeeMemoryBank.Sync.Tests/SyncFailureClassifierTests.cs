@@ -6,9 +6,9 @@ namespace BeeMemoryBank.Sync.Tests;
 /// Night-7: SyncFailureClassifier is the single place an apply-failure exception is sorted into
 /// Permanent vs Deferred (see its own remarks for why this must not be re-derived at each call
 /// site). These tests pin down every exception type EventApplier/SyncClient actually throw for
-/// this decision — including the two DIFFERENT UnauthorizedAccessException uses in EventApplier
-/// ("not in whitelist" vs "known peer, not superadmin"), which is exactly the pair a naive
-/// "classify by BCL exception type" rule would get wrong.
+/// this decision — including the DIFFERENT UnauthorizedAccessException uses in EventApplier
+/// ("not in whitelist" and "not superadmin yet" vs "revoked" and "blind author"), which is exactly
+/// the split a naive "classify by BCL exception type" rule would get wrong.
 /// </summary>
 public class SyncFailureClassifierTests
 {
@@ -32,13 +32,22 @@ public class SyncFailureClassifierTests
         SyncFailureClassifier.Classify(new InvalidDataException("Invalid Ed25519 signature"))
             .Should().Be(SyncFailureKind.Permanent);
 
+    /// <summary>
+    /// Plan 4.2: the PC's promotion (from the hub) and the PC's own superadmin-only event (adding a
+    /// blind node) reach a phone by different paths, in either order. A permanent answer here
+    /// quarantined the add after a few tries and the phone never learned about the blind node.
+    /// </summary>
     [Fact]
-    public void PlainUnauthorizedAccessException_KnownPeerNotSuperadmin_IsPermanent() =>
-        // The OTHER UnauthorizedAccessException EventApplier throws (requiresSuperadmin gate) —
-        // a fully-resolved peer that is not authorized, as opposed to OriginatorNotWhitelistedException's
-        // "we don't know this peer at all yet". Must NOT be swept into Deferred just because it
-        // shares a BCL base type with the one that should be.
-        SyncFailureClassifier.Classify(new UnauthorizedAccessException("requires superadmin privilege"))
+    public void OriginatorNotSuperadminException_IsDeferred() =>
+        SyncFailureClassifier.Classify(new OriginatorNotSuperadminException(Guid.NewGuid(), EventTypes.WhitelistAdd))
+            .Should().Be(SyncFailureKind.Deferred);
+
+    [Fact]
+    public void PlainUnauthorizedAccessException_IsPermanent() =>
+        // What EventApplier throws for a revoked originator or a blind author — answers about a
+        // fully-resolved peer. Must NOT be swept into Deferred just because it shares a BCL base
+        // type with the two subclasses that should be.
+        SyncFailureClassifier.Classify(new UnauthorizedAccessException("blind nodes never author events"))
             .Should().Be(SyncFailureKind.Permanent);
 
     [Fact]

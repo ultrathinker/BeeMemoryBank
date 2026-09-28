@@ -180,7 +180,8 @@ public class SnapshotJoinClientTests : IAsyncLifetime
         {
             NodeId = nodeId,
             ChallengeB64 = challengeB64,
-            SignatureB64 = Convert.ToBase64String(sig)
+            SignatureB64 = Convert.ToBase64String(sig),
+            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
         }, JsonOpts);
         authResp.EnsureSuccessStatusCode();
         var authData = await authResp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);

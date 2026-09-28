@@ -47,10 +47,34 @@ public partial class EventApplier(
 
     public async Task<EventApplyResult> ApplyAsync(SyncEvent evt)
     {
+        // A blind reseed swaps the database file under this process: it holds applies off and waits
+        // for the ones running, so none lands in the file being replaced (EventWriteGate).
+        using var _ = await EventWriteGate.Instance.EnterAsync();
+        EventWriteGate.EnterOwnerFlow();
+        return await ApplyCoreAsync(evt);
+    }
+
+    private async Task<EventApplyResult> ApplyCoreAsync(SyncEvent evt)
+    {
         // Protocol version check. Version 1 events (ciphertext inline) are still applied: the log
         // holds them, and a peer that has not upgraded still emits them.
         if (!SyncProtocolVersion.CanApply(evt.ProtocolVersion))
             throw new NotSupportedException($"Unknown protocol version: {evt.ProtocolVersion}");
+
+        // The blind-node rules (EventInvariants): a blind node never authors anything (plan 3.2) —
+        // it holds no DEK, so nothing it could sign is content, and its key sits in a plain file on
+        // a box that is easier to steal than a PC — and no rotation seals the DEK for one. Refused
+        // for EVERY type, including ones this build does not know, which would otherwise be stored
+        // and relayed by the default branch below; before the whitelist lookup, since an unknown
+        // blind id must not be parked as "whitelist_add still in flight" (deferred, retried for
+        // hours) when the answer can never change; and before the idempotency shortcut, so an event
+        // a pre-fix build already stored is not waved through as "already applied".
+        if (EventInvariants.Violation(evt) is { } violation)
+        {
+            logger.LogWarning("Event {EventId} ({Type}) from {NodeId} rejected: {Reason}",
+                evt.EventId, evt.EventType, evt.NodeId, violation);
+            throw new UnauthorizedAccessException(violation);
+        }
 
         // Fast-path idempotency: if event already processed, skip.
         // Must run before the signer check so that self-echoes (a node pulling back
@@ -169,8 +193,7 @@ public partial class EventApplier(
             logger.LogWarning(
                 "Event {EventId} ({Type}) rejected: originator {NodeId} ({Display}) is not superadmin in local whitelist",
                 evt.EventId, evt.EventType, evt.NodeId, node.DisplayName);
-            throw new UnauthorizedAccessException(
-                $"Event type {evt.EventType} requires superadmin privilege; node {evt.NodeId} is not authorized.");
+            throw new OriginatorNotSuperadminException(evt.NodeId, evt.EventType);
         }
 
         // Strip ViaAgentName from remote events too (ActorName/Type already overridden above).

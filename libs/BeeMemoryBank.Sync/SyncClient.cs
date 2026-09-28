@@ -96,6 +96,17 @@ public class SyncClient(
                 "entry in our own whitelist, or a peer impersonation attempt.");
         }
 
+        // Below protocol 3 a peer would accept a blind node's events and seal the DEK for it
+        // (SyncProtocolVersion.MinPeer). It must not learn of one from us, and anything we pulled
+        // from it could have come from one — so nothing moves either way until it upgrades. It
+        // refuses our token request anyway; checking first keeps the log clear about why.
+        if (!SyncProtocolVersion.IsCompatiblePeer(remoteIdentity.ProtocolVersion))
+        {
+            logger.LogWarning("Remote node {NodeId} is on protocol {Remote} < {Min}; not syncing with it until it upgrades.",
+                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion, SyncProtocolVersion.MinPeer);
+            return 0;
+        }
+
         var token = await AuthenticateAsync(http, remoteApiBase, identity, expectedPeerNodeId, ct);
 
         int appliedCount = 0;
@@ -217,21 +228,23 @@ public class SyncClient(
         const int PushFetchSize = 500;
         const long PushBatchByteTarget = 8 * 1024 * 1024;
 
-        // A peer still on protocol 1 cannot apply our events (it expects the ciphertext inline and
-        // has no /api/sync/blobs/* to receive it separately), so pushing would only produce a
-        // skip on every event and a permanent stall. Leave the cursor where it is; the events go
-        // out once the peer upgrades. Its own events still reach us through the pull above.
-        if (remoteIdentity.ProtocolVersion < SyncProtocolVersion.Current)
-        {
-            logger.LogWarning("Remote node {NodeId} is on protocol {Remote} < {Local}; skipping push until it upgrades.",
-                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion, SyncProtocolVersion.Current);
-            return appliedCount;
-        }
-
         var pushPosition = await pushPositionRepo.GetAsync(remoteIdentity.NodeId);
         long pushAfter = pushPosition?.LastPushedSeq ?? 0;
         int totalApplied = 0, totalSkipped = 0;
         long localMaxSeq = await eventLogRepo.GetMaxSequenceAsync();
+
+        // Gap detector (plan 5.1): relaying "everything after pushAfter" would start at the oldest
+        // event still here, above the compaction point, and the peer would never see what lay in
+        // between. A peer that also pulls from us gets a 410 for that; a peer we only ever push to
+        // — a blind node — would not notice at all.
+        //
+        // Only for a peer we have pushed to before. With no record at all we do not know what it
+        // holds — it may have been seeded or joined from another node's snapshot — and pushing
+        // what we have is what it always got.
+        if (pushPosition != null
+            && await eventLogRepo.GetLastCompactionCpAsync() is { } lastCompactionCp && pushAfter < lastCompactionCp)
+            throw new PushGapException(remoteApiBase, remoteIdentity.NodeId, pushAfter, lastCompactionCp, localMaxSeq);
+
         logger.LogInformation("Push to {Remote}: localMaxSeq={MaxSeq}, pushAfter={After}", remoteIdentity.NodeId, localMaxSeq, pushAfter);
         while (true)
         {
@@ -404,7 +417,7 @@ public class SyncClient(
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, 
-                $"{baseUrl}/api/sync/report-position?sequence={sequence}");
+                $"{baseUrl}/api/sync/report-position?sequence={sequence}&protocolVersion={SyncProtocolVersion.Current}");
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             var resp = await http.SendAsync(req, ct);
             resp.EnsureSuccessStatusCode();

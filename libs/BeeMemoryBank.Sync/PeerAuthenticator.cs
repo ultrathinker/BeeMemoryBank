@@ -54,7 +54,7 @@ public static class PeerAuthenticator
     ///   → sign the challenge (tagged with the audience-bound "BMB-CHALLENGE-V2\0" + server NodeId
     ///     prefix) via <paramref name="authSigner"/>
     ///   → POST <paramref name="baseUrl"/>/api/sync/authenticate with
-    ///     { NodeId, ChallengeB64, SignatureB64 }
+    ///     { NodeId, ChallengeB64, SignatureB64, ProtocolVersion }
     ///   → Bearer token.
     ///
     /// A 401 is a plain failure with no retry. There is deliberately no unbound-payload fallback
@@ -149,7 +149,8 @@ public static class PeerAuthenticator
         {
             NodeId = identity.NodeId,
             ChallengeB64 = challengeData.Challenge,
-            SignatureB64 = Convert.ToBase64String(signature)
+            SignatureB64 = Convert.ToBase64String(signature),
+            ProtocolVersion = SyncProtocolVersion.Current
         }, ct);
 
         authResp.EnsureSuccessStatusCode();

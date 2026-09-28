@@ -24,11 +24,14 @@ public partial class SnapshotService
     /// every snapshot is signed by its creator so it can later participate in network-wide restore
     /// without manual re-signing. The signature is provenance proof, never a secret.</param>
     /// <param name="cpSequenceNum">Lamport checkpoint sequence number — set by compaction/sync paths.</param>
+    /// <param name="additions">Package-specific changes on top of a peer snapshot — the blind
+    /// package (plan 4.2) is the one caller. See <see cref="SnapshotAdditions"/>.</param>
     public async Task<SnapshotInfo> CreateAsync(
         bool filterSecrets = true,
         bool sign = true,
         long? cpSequenceNum = null,
-        bool encryptDb = true)
+        bool encryptDb = true,
+        SnapshotAdditions? additions = null)
     {
         Directory.CreateDirectory(SnapshotsDir);
 
@@ -66,8 +69,15 @@ public partial class SnapshotService
                 cmd.ExecuteNonQuery();
             }
 
+            // Every change to the copy comes BEFORE its final compaction. A row updated or deleted
+            // afterwards would only be gone from queries: SQLite leaves the old bytes in free and
+            // overflow pages, and the file goes into the archive as it is (review L-stage1 #1 — a
+            // nulled embedding projection was still readable in the raw package).
+            additions?.AdjustDb(tempDb);
             if (filterSecrets)
-                FilterSecretsFrom(tempDb);
+                FilterSecretsFrom(tempDb, additions?.KeepTables);
+            else if (additions != null)
+                CompactInPlace(tempDb);
 
             bool dbEncrypted = false;
             if (encryptDb)
@@ -111,6 +121,12 @@ public partial class SnapshotService
 
             var dbHash = await ComputeHashAsync(tempDb);
             allFiles[DbFileName] = dbHash;
+
+            // Listed in the signed manifest like every other file, so they are covered by the
+            // same signature and VerifyManifestAsync checks them on the way in.
+            var extraFiles = additions?.ExtraFiles ?? new Dictionary<string, byte[]>();
+            foreach (var (name, bytes) in extraFiles)
+                allFiles[name] = Convert.ToHexStringLower(SHA256.HashData(bytes));
 
             var mediaDir = Path.Combine(_dataPath, "media");
             var mediaFiles = new List<string>();
@@ -261,6 +277,14 @@ public partial class SnapshotService
                 {
                     DataStream = new MemoryStream(manifestBytes)
                 });
+
+                foreach (var (name, bytes) in extraFiles)
+                {
+                    await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, name)
+                    {
+                        DataStream = new MemoryStream(bytes)
+                    });
+                }
 
                 if (manifestSignature != null)
                 {

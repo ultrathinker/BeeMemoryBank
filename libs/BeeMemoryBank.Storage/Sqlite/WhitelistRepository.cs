@@ -27,7 +27,10 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 auto_accept_dek_rotation   AS AutoAcceptDekRotation,
                 is_superadmin              AS IsSuperadmin,
                 lamport_ts                 AS LamportTs,
-                source_node_id             AS SourceNodeId
+                source_node_id             AS SourceNodeId,
+                last_protocol_version      AS LastProtocolVersion,
+                last_protocol_seen_at      AS LastProtocolSeenAt,
+                tls_spki                   AS TlsSpki
               FROM tbl_whitelist WHERE node_id = @nodeId"
             : @"SELECT
                 node_id                    AS NodeId,
@@ -43,7 +46,10 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 auto_accept_dek_rotation   AS AutoAcceptDekRotation,
                 is_superadmin              AS IsSuperadmin,
                 lamport_ts                 AS LamportTs,
-                source_node_id             AS SourceNodeId
+                source_node_id             AS SourceNodeId,
+                last_protocol_version      AS LastProtocolVersion,
+                last_protocol_seen_at      AS LastProtocolSeenAt,
+                tls_spki                   AS TlsSpki
               FROM tbl_whitelist WHERE node_id = @nodeId COLLATE NOCASE AND status = 'A'";
         return await conn.QuerySingleOrDefaultAsync<WhitelistEntry>(sql, new { nodeId });
     }
@@ -66,7 +72,10 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 auto_accept_dek_rotation   AS AutoAcceptDekRotation,
                 is_superadmin              AS IsSuperadmin,
                 lamport_ts                 AS LamportTs,
-                source_node_id             AS SourceNodeId
+                source_node_id             AS SourceNodeId,
+                last_protocol_version      AS LastProtocolVersion,
+                last_protocol_seen_at      AS LastProtocolSeenAt,
+                tls_spki                   AS TlsSpki
               FROM tbl_whitelist WHERE status = 'A' ORDER BY (substr(display_name,1,1)='_') DESC, display_name")).ToList();
     }
 
@@ -75,8 +84,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_whitelist
-              (node_id, display_name, ed25519_public_key, api_address, can_generate_embeddings, status, created_at, updated_at, is_superadmin, lamport_ts, source_node_id)
-              VALUES (@NodeId, @DisplayName, @Ed25519PublicKey, @ApiAddress, @CanGenerateEmbeddings, @Status, @CreatedAt, @UpdatedAt, @IsSuperadmin, @LamportTs, @SourceNodeId)",
+              (node_id, display_name, ed25519_public_key, api_address, can_generate_embeddings, status, created_at, updated_at, is_superadmin, lamport_ts, source_node_id, tls_spki)
+              VALUES (@NodeId, @DisplayName, @Ed25519PublicKey, @ApiAddress, @CanGenerateEmbeddings, @Status, @CreatedAt, @UpdatedAt, @IsSuperadmin, @LamportTs, @SourceNodeId, @TlsSpki)",
             new
             {
                 entry.NodeId,
@@ -89,7 +98,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 entry.UpdatedAt,
                 IsSuperadmin = entry.IsSuperadmin ? 1 : 0,
                 entry.LamportTs,
-                entry.SourceNodeId
+                entry.SourceNodeId,
+                entry.TlsSpki
             });
     }
 
@@ -106,7 +116,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                   is_superadmin = @IsSuperadmin,
                   updated_at = @UpdatedAt,
                   lamport_ts = @LamportTs,
-                  source_node_id = @SourceNodeId
+                  source_node_id = @SourceNodeId,
+                  tls_spki = @TlsSpki
               WHERE node_id = @NodeId",
             new
             {
@@ -119,7 +130,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 IsSuperadmin = entry.IsSuperadmin ? 1 : 0,
                 entry.UpdatedAt,
                 entry.LamportTs,
-                entry.SourceNodeId
+                entry.SourceNodeId,
+                entry.TlsSpki
             });
     }
 
@@ -143,6 +155,15 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
             @"UPDATE tbl_whitelist SET lamport_ts = @lamportTs, source_node_id = @sourceNodeId
               WHERE node_id = @nodeId COLLATE NOCASE",
             new { nodeId, lamportTs = version.LamportTs, sourceNodeId = version.SourceNodeId });
+    }
+
+    public async Task RecordProtocolVersionAsync(Guid nodeId, int protocolVersion, DateTime seenAt)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_whitelist SET last_protocol_version = @protocolVersion, last_protocol_seen_at = @seenAt
+              WHERE node_id = @nodeId COLLATE NOCASE",
+            new { nodeId, protocolVersion, seenAt });
     }
 
     public async Task<bool> GetAutoAcceptRestoreAsync(string nodeId)

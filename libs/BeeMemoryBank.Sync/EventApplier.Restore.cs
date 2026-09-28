@@ -32,6 +32,15 @@ public partial class EventApplier
             null, false, null, null,
             nowIso, nowIso));
 
+        // An initiator that needs no approval (a blind node's, which only flags itself for a
+        // reseed) runs inline: before this event is recorded, so a failure redelivers the event
+        // instead of leaving it applied and the flag unwritten.
+        if (!restoreInitiator.RequiresApproval)
+        {
+            await restoreInitiator.AcceptRestoreAsync(evt.EventId.ToString(), payload, evt);
+            return;
+        }
+
         var autoAccept = await whitelistRepo.GetAutoAcceptRestoreAsync(evt.NodeId.ToString());
 
         if (autoAccept)
@@ -100,7 +109,15 @@ public partial class EventApplier
         }
 
         var existing = await dekRotationStateRepo.GetAsync(evt.EventId.ToString());
-        if (existing != null) return;
+        if (existing != null)
+        {
+            // A commit that needs no approval and is still open was cut off between recording its
+            // state and closing it (the failure left the event unrecorded, so it came again): close
+            // it now rather than leave it in Committing for good.
+            if (existing.State == DekRotationState.Committing && !dekRotationApplier.RequiresApproval)
+                await dekRotationApplier.AutoAcceptCommitAsync(evt);
+            return;
+        }
 
         // Validate that the matching PROPOSED event exists locally before accepting the COMMIT.
         // Without this, a malicious peer with a still-trusted Ed25519 key could craft a
@@ -136,6 +153,15 @@ public partial class EventApplier
             LastProcessedIdComment: null,
             CreatedAt: nowIso,
             UpdatedAt: nowIso));
+
+        // No approval to wait for (a blind node): close it inline. A failure then propagates, the
+        // event is not recorded and is delivered again, instead of a background task that a crash
+        // can lose after the event is already in the log.
+        if (!dekRotationApplier.RequiresApproval)
+        {
+            await dekRotationApplier.AutoAcceptCommitAsync(evt);
+            return;
+        }
 
         var autoAccept = await whitelistRepo.GetAutoAcceptDekRotationAsync(evt.NodeId.ToString());
 

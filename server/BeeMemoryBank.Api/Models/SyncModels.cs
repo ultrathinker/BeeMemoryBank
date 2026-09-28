@@ -4,7 +4,12 @@ namespace BeeMemoryBank.Api.Models;
 public record SyncChallengeResponse(string Challenge, Guid ServerNodeId);
 
 /// <summary>Node authentication request.</summary>
-public record SyncAuthRequest(Guid NodeId, string ChallengeB64, string SignatureB64);
+/// <param name="ProtocolVersion">
+/// The caller's SyncProtocolVersion.Current. Absent (null) from builds before protocol 3. Recorded
+/// on the caller's whitelist row (WhitelistEntry.LastProtocolVersion); below
+/// SyncProtocolVersion.MinPeer, or absent, the caller gets no token (426).
+/// </param>
+public record SyncAuthRequest(Guid NodeId, string ChallengeB64, string SignatureB64, int? ProtocolVersion = null);
 
 /// <summary>Response after successful authentication.</summary>
 public record SyncAuthResponse(string Token);

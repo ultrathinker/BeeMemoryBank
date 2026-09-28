@@ -32,6 +32,8 @@ public partial class SnapshotService
     private readonly IRestoreReplayShieldRepository? _replayShieldRepo;
     private readonly IWhitelistRepository? _whitelistRepo;
     private readonly BeeMemoryBank.Core.Services.SessionService? _sessionService;
+    // A blind node's identity key (row v=2, plan 3.5): it signs the packages it serves with it.
+    private readonly IExternalNodeKey? _externalKey;
 
     public string SnapshotsDir => Path.Combine(_dataPath, "snapshots");
 
@@ -40,7 +42,8 @@ public partial class SnapshotService
         ILogger<SnapshotService>? logger = null,
         IRestoreReplayShieldRepository? replayShieldRepo = null,
         IWhitelistRepository? whitelistRepo = null,
-        BeeMemoryBank.Core.Services.SessionService? sessionService = null)
+        BeeMemoryBank.Core.Services.SessionService? sessionService = null,
+        IExternalNodeKey? externalKey = null)
     {
         _dataPath = dataPath;
         _connFactory = connFactory;
@@ -50,6 +53,7 @@ public partial class SnapshotService
         _replayShieldRepo = replayShieldRepo;
         _whitelistRepo = whitelistRepo;
         _sessionService = sessionService;
+        _externalKey = externalKey;
     }
 
     public List<SnapshotInfo> List()

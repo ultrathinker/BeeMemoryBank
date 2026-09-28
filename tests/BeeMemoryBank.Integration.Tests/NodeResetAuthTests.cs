@@ -122,7 +122,7 @@ public class NodeResetAuthTests : IAsyncLifetime
     public async Task Reset_ClearsIssuedSyncTokens()
     {
         var store = _factory.Services.GetRequiredService<BeeMemoryBank.Api.Services.SyncTokenStore>();
-        var token = store.IssueToken(Guid.NewGuid());
+        var token = store.IssueToken(Guid.NewGuid(), BeeMemoryBank.Sync.SyncProtocolVersion.Current);
         store.TryValidateToken(token, out _).Should().BeTrue();
 
         (await _client.PostAsJsonAsync("/api/init/reset", new { masterPassword = Password }))

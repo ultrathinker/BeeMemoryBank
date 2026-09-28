@@ -79,8 +79,12 @@ public static class SyncEndpoints
         }).WithTags("Sync");
 
         // ─── Sentinel (no auth — encrypted, useless without DEK) ───────────────
-        app.MapGet("/api/sync/sentinel", async (INodeIdentityRepository nodeRepo) =>
+        app.MapGet("/api/sync/sentinel", async (INodeIdentityRepository nodeRepo, INodeRole role) =>
         {
+            // A blind node has no DEK and so no sentinel of its own (plan 3.4). Said explicitly
+            // rather than left to an empty column: a sentinel that arrived in its database some
+            // other way must not make it look like a node on a particular key.
+            if (role.IsBlind) return Results.NotFound();
             var sentinel = await nodeRepo.GetSentinelAsync();
             if (sentinel == null) return Results.NotFound();
             return Results.Ok(new { sentinelB64 = Convert.ToBase64String(sentinel) });
@@ -181,7 +185,25 @@ public static class SyncEndpoints
                 return Results.Unauthorized();
             }
 
-            var token = store.IssueToken(req.NodeId);
+            // Only after the signature verified: an unauthenticated caller must not be able to write
+            // a version onto someone else's row and so steer the PC's pre-flight for blind nodes.
+            if (req.ProtocolVersion is { } declared)
+                await whitelist.RecordProtocolVersionAsync(req.NodeId, declared, DateTime.UtcNow);
+
+            // Protocol 3 is a boundary, not a hint (SyncProtocolVersion.MinPeer): an older peer
+            // would accept a blind node's events and seal the DEK for it, so it gets no token and
+            // with it none of the data endpoints. Recorded above first, so the PC's pre-flight
+            // sees why this peer stopped syncing.
+            if (!SyncProtocolVersion.IsCompatiblePeer(req.ProtocolVersion))
+            {
+                logger.LogWarning("Auth 426 for {NodeId} ({Display}): protocol {Version} is below {Min}; upgrade that node",
+                    req.NodeId, entry.DisplayName, req.ProtocolVersion?.ToString() ?? "(none)", SyncProtocolVersion.MinPeer);
+                return Results.Problem(
+                    $"Sync protocol {SyncProtocolVersion.MinPeer} or newer is required; update this node.",
+                    statusCode: StatusCodes.Status426UpgradeRequired);
+            }
+
+            var token = store.IssueToken(req.NodeId, req.ProtocolVersion!.Value);
             return Results.Ok(new SyncAuthResponse(token));
         }).WithTags("Sync");
 
@@ -257,8 +279,14 @@ public static class SyncEndpoints
             INodeIdentityRepository nodeRepo,
             ILamportClock clock,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
+            INodeRole role,
             ILogger<Program> logger) =>
         {
+            // A full node joins through a node that holds the DEK (plan 2): the join snapshot is
+            // the joiner's starting point for its own vault, and a blind node serves blind
+            // packages only (/api/blind/replica).
+            if (role.IsBlind) return Results.NotFound();
+
             if (await AuthenticatePeerAsync(ctx, store) is not { } requesterNodeId)
                 return Results.Unauthorized();
 
@@ -337,13 +365,48 @@ public static class SyncEndpoints
             HttpContext ctx,
             SyncTokenStore store,
             ISyncPushPositionRepository pushPositionRepo,
+            IWhitelistRepository whitelist,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
-            long sequence) =>
+            long sequence,
+            int? protocolVersion) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
             await pushPositionRepo.UpdatePositionAsync(nodeId, sequence);
+            // Also here, not only at authenticate: a token lives an hour, and a peer that upgraded
+            // in the meantime should not stay "old" in the PC's pre-flight until it re-authenticates.
+            if (protocolVersion is { } declared)
+                await whitelist.RecordProtocolVersionAsync(nodeId, declared, DateTime.UtcNow);
             return Results.Ok();
+        }).WithTags("Sync");
+
+        // ─── My standing (plan 4.2) ──────────────────────────────────────────────
+        // How THIS node sees the caller — its superadmin flag lives in our whitelist, not in the
+        // caller's — plus the protocol we last saw from each peer, for the PC's pre-flight before
+        // it adds a blind node. A blind responder also says whether it wants a reseed (plan 5.3).
+        app.MapGet("/api/sync/my-standing", async (
+            HttpContext ctx,
+            SyncTokenStore store,
+            IWhitelistRepository whitelist,
+            INodeIdentityRepository nodeRepo,
+            INodeRole role,
+            IDbConnectionFactory db,
+            IServiceProvider services) =>
+        {
+            if (await AuthenticatePeerAsync(ctx, store) is not { } callerId) return Results.Unauthorized();
+            var self = await nodeRepo.GetAsync();
+            if (self == null) return Results.Problem("Node is not initialized.", statusCode: 503);
+
+            var rows = await whitelist.GetAllActiveAsync();
+            // Revoked between the token check and this read: an authorization answer, not a crash.
+            if (rows.FirstOrDefault(r => r.NodeId == callerId) is not { } caller) return Results.Unauthorized();
+            var reseedNeeded = role.IsBlind
+                && await services.GetRequiredService<BeeMemoryBank.Sync.Blind.BlindState>().GetReseedNeededAsync() != null;
+            return Results.Ok(new BeeMemoryBank.Sync.Blind.MyStanding(
+                self.NodeId, SyncProtocolVersion.Current, caller.IsSuperadmin, reseedNeeded,
+                rows.Select(r => new BeeMemoryBank.Sync.Blind.PeerProtocolSeen(
+                    r.NodeId, r.DisplayName, r.LastProtocolVersion, r.LastProtocolSeenAt, r.CreatedAt)).ToList(),
+                await new BeeMemoryBank.Sync.Blind.BlindState(db).GetDekExposureAsync()));
         }).WithTags("Sync");
 
         // ─── Apply events (push from remote) ─────────────────────────────────────

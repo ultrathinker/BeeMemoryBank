@@ -275,7 +275,10 @@ public record WhitelistAddPayload(
     // every sync — the receiving node creates the entry as non-superadmin
     // and then rejects the new peer's hard_delete / restore_network /
     // whitelist_add events forever (cluster split-brain).
-    [property: JsonPropertyName("is_superadmin")]    bool IsSuperadmin = false
+    [property: JsonPropertyName("is_superadmin")]    bool IsSuperadmin = false,
+    // The pinned TLS key of a peer with a self-signed certificate (a blind node, plan 4.4). Absent
+    // from older senders, which never add such a peer.
+    [property: JsonPropertyName("tls_spki")]         string? TlsSpki = null
 );
 
 /// <summary>Payload for revoking a node from the whitelist.</summary>
@@ -292,7 +295,10 @@ public record WhitelistUpdatePayload(
     // documented there. Here null means "this event says nothing about the flag", so a sender that
     // predates demotion — and omits the field entirely — leaves it untouched instead of silently
     // demoting every peer it renames. Only an explicit true/false changes anything.
-    [property: JsonPropertyName("is_superadmin")] bool? IsSuperadmin = null
+    [property: JsonPropertyName("is_superadmin")] bool? IsSuperadmin = null,
+    // Null = unchanged, same rule as above: a blind node's new certificate after its volume was
+    // recreated, or a pin set on a row that was added without one.
+    [property: JsonPropertyName("tls_spki")]      string? TlsSpki = null
 );
 
 /// <summary>Payload for comment creation (supports both plaintext and encrypted).</summary>

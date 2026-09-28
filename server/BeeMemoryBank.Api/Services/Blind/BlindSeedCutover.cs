@@ -1,0 +1,243 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
+
+namespace BeeMemoryBank.Api.Services;
+
+/// <summary>
+/// The file side of a blind seed's cutover (review L-stage1 #4): the new database and every media file
+/// are staged and checked first, a durable marker says how far the switch got, and the old database is
+/// kept until the whole cutover is done — so a process that dies anywhere in between is either rolled
+/// back to the old database or finished at the next start (<see cref="Recover"/>), never left on a new
+/// database without its media or its replayed events.
+///
+/// <para>Layout, in the data volume (not in blind-tmp, which every start empties):
+/// <c>blind-cutover/marker.json</c> (seed id, phase), <c>new.db</c>, <c>media/</c> (the complete new
+/// media directory), and, once the switch has begun, <c>old.db</c> (+ -wal/-shm) and <c>old-media/</c>.
+/// The media directory is switched whole, by renames on the same volume, so there is never a
+/// half-moved set of files: the old one is intact beside the new one until the cutover is done.</para>
+/// </summary>
+public sealed class BlindSeedCutover
+{
+    public const string Staged = "staged";
+    public const string Switching = "switching";
+    public const string Done = "done";
+
+    private static readonly string[] Sidecars = ["-wal", "-shm"];
+
+    private readonly string _dir;
+    private readonly string _livePath;
+    private readonly string _liveMedia;
+
+    public BlindSeedCutover(string dataPath)
+    {
+        _dir = DirOf(dataPath);
+        _livePath = LivePathOf(dataPath);
+        _liveMedia = Path.Combine(dataPath, "media");
+    }
+
+    public static string DirOf(string dataPath) => Path.Combine(dataPath, "blind-cutover");
+    private static string LivePathOf(string dataPath) => Path.Combine(dataPath, "beememorybank.db");
+
+    public string StagedDbPath => Path.Combine(_dir, "new.db");
+    private string StagedMediaDir => Path.Combine(_dir, "media");
+    private string OldDbPath => Path.Combine(_dir, "old.db");
+    private string OldMediaDir => Path.Combine(_dir, "old-media");
+    private string MarkerPath => Path.Combine(_dir, "marker.json");
+
+    /// <summary>
+    /// Starts from nothing — except that an unresolved switch is never thrown away: its old.db and
+    /// old-media are the only way back, so a new seed is refused until a start has rolled it back.
+    /// A cutover that got to "done" is finished first; a staged one that never switched is dropped.
+    /// </summary>
+    public void Prepare()
+    {
+        if (Directory.Exists(_dir))
+        {
+            switch (ReadMarker()?.Phase)
+            {
+                case Switching:
+                    throw new BlindSeedRejectedException(
+                        "An earlier seed's switch was interrupted and is not resolved; this node rolls it back at its next start. Restart it, then send the seed again.");
+                case Done:
+                    FinishDone();
+                    break;
+                default:
+                    Directory.Delete(_dir, recursive: true);
+                    break;
+            }
+        }
+        Directory.CreateDirectory(StagedMediaDir);
+    }
+
+    /// <summary>
+    /// The complete new media directory: the package's media, each copy checked against its source,
+    /// plus whatever the live directory holds besides media files.
+    /// </summary>
+    public void StageMedia(string packageMediaDir)
+    {
+        if (Directory.Exists(_liveMedia))
+            foreach (var other in Directory.GetFiles(_liveMedia).Where(f => !f.EndsWith(".enc", StringComparison.Ordinal)))
+                File.Copy(other, Path.Combine(StagedMediaDir, Path.GetFileName(other)), overwrite: true);
+        if (!Directory.Exists(packageMediaDir)) return;
+        foreach (var source in Directory.GetFiles(packageMediaDir, "*.enc"))
+        {
+            var staged = Path.Combine(StagedMediaDir, Path.GetFileName(source));
+            File.Copy(source, staged, overwrite: true);
+            if (!HashOf(staged).AsSpan().SequenceEqual(HashOf(source)))
+                throw new IOException($"Staged media {Path.GetFileName(source)} does not match the package.");
+        }
+    }
+
+    /// <summary>
+    /// Durably records the phase. A "switching" marker also records whether a live media directory
+    /// existed before the switch: without one, the directory a rollback finds live is the seed's, and
+    /// it must go rather than stay beside the old database.
+    /// </summary>
+    public void WriteMarker(Guid seedId, string phase)
+    {
+        var temp = MarkerPath + ".tmp";
+        using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write))
+        {
+            JsonSerializer.Serialize(file, new Marker(seedId, phase, phase == Switching ? Directory.Exists(_liveMedia) : null));
+            file.Flush(flushToDisk: true);
+        }
+        File.Move(temp, MarkerPath, overwrite: true);
+    }
+
+    /// <summary>
+    /// The switch itself: live database and live media directory aside (kept), staged ones in. Pools
+    /// must be cleared around it. Each step is a rename; <see cref="RollBack"/> undoes any prefix of them.
+    ///
+    /// <para>Every move checks where it stands first — the main file and each sidecar on its own —
+    /// because the caller's retry wrapper repeats the whole action after an IOException, which can come
+    /// between any two of them. Repeated blindly, the first step would move the NEW database over old.db
+    /// (the only copy of the old one), and a -wal left behind by a failed move holds committed frames
+    /// of the old database: until the new database is in, a sidecar beside the vacant live path is
+    /// moved after its main file, never deleted. The only one that is deleted is a sidecar whose
+    /// counterpart already moved: it came from a request allowed through maintenance (authenticate)
+    /// that opened the vacant path and so created an empty database there, which the new database
+    /// replaces.</para>
+    /// </summary>
+    public void SwitchFiles()
+    {
+        if (File.Exists(StagedDbPath))
+        {
+            if (!File.Exists(OldDbPath)) File.Move(_livePath, OldDbPath);
+            foreach (var suffix in Sidecars)
+            {
+                if (!File.Exists(_livePath + suffix)) continue;
+                if (File.Exists(OldDbPath + suffix)) File.Delete(_livePath + suffix);
+                else File.Move(_livePath + suffix, OldDbPath + suffix);
+            }
+            File.Move(StagedDbPath, _livePath, overwrite: true);
+        }
+        if (Directory.Exists(_liveMedia) && !Directory.Exists(OldMediaDir)) Directory.Move(_liveMedia, OldMediaDir);
+        if (Directory.Exists(StagedMediaDir)) Directory.Move(StagedMediaDir, _liveMedia);
+    }
+
+    /// <summary>
+    /// Back to the database and media directory the cutover started from, whichever of the switch's
+    /// steps had happened; the new ones are discarded. Resumable like <see cref="SwitchFiles"/>: the old
+    /// main file comes back first, then each old sidecar still in the cutover directory, and the
+    /// directory goes only once nothing of the old database is left in it.
+    /// </summary>
+    public void RollBack()
+    {
+        var newDbInstalled = !File.Exists(StagedDbPath);
+        if (File.Exists(OldDbPath))
+        {
+            // What is live is not the old database: the new one, or an empty one a stray open created at
+            // the vacant path. Its sidecars go with it — except before the new database was moved in,
+            // when a sidecar still beside the live path is the old database's own, never moved.
+            if (File.Exists(_livePath)) File.Delete(_livePath);
+            if (newDbInstalled)
+                foreach (var suffix in Sidecars) if (File.Exists(_livePath + suffix)) File.Delete(_livePath + suffix);
+            File.Move(OldDbPath, _livePath);
+        }
+        foreach (var suffix in Sidecars)
+            if (File.Exists(OldDbPath + suffix)) File.Move(OldDbPath + suffix, _livePath + suffix, overwrite: true);
+
+        if (Directory.Exists(OldMediaDir))
+        {
+            if (Directory.Exists(_liveMedia)) Directory.Delete(_liveMedia, recursive: true);
+            Directory.Move(OldMediaDir, _liveMedia);
+        }
+        else if (ReadMarker()?.LiveMediaExisted == false && Directory.Exists(_liveMedia))
+        {
+            // There was no media directory before the switch: the live one is the seed's.
+            Directory.Delete(_liveMedia, recursive: true);
+        }
+        Directory.Delete(_dir, recursive: true);
+    }
+
+    /// <summary>The cutover is durable from here on: a start finishes it, it is never rolled back.</summary>
+    public void MarkDone(Guid seedId) => WriteMarker(seedId, Done);
+
+    /// <summary>
+    /// After "done": the old database becomes beememorybank.db.pre-seed, the old media go. Resumable: the
+    /// main file first (replacing an earlier pre-seed copy whole, sidecars included), then each old
+    /// sidecar still in the cutover directory; the directory goes only once they are all out of it.
+    /// </summary>
+    public void FinishDone()
+    {
+        var preSeed = _livePath + ".pre-seed";
+        if (File.Exists(OldDbPath))
+        {
+            foreach (var suffix in Sidecars) if (File.Exists(preSeed + suffix)) File.Delete(preSeed + suffix);
+            File.Move(OldDbPath, preSeed, overwrite: true);
+        }
+        foreach (var suffix in Sidecars)
+            if (File.Exists(OldDbPath + suffix)) File.Move(OldDbPath + suffix, preSeed + suffix, overwrite: true);
+        Directory.Delete(_dir, recursive: true);
+    }
+
+    private Marker? ReadMarker()
+    {
+        try
+        {
+            return File.Exists(MarkerPath) ? JsonSerializer.Deserialize<Marker>(File.ReadAllText(MarkerPath)) : null;
+        }
+        catch (JsonException)
+        {
+            // A marker is replaced atomically; an unreadable one was never the current one.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// At start, before the database is opened: finishes a cutover that got to "done", rolls back one
+    /// that was switching, and drops one that never started switching.
+    /// </summary>
+    public static void Recover(string dataPath, ILogger logger)
+    {
+        var cutover = new BlindSeedCutover(dataPath);
+        if (!Directory.Exists(cutover._dir)) return;
+        SqliteConnection.ClearAllPools();
+
+        var marker = cutover.ReadMarker();
+        switch (marker?.Phase)
+        {
+            case Done:
+                cutover.FinishDone();
+                logger.LogWarning("Blind seed {SeedId}: finished a cutover interrupted after it was complete", marker.SeedId);
+                break;
+            case Switching:
+                cutover.RollBack();
+                logger.LogWarning("Blind seed {SeedId}: rolled back a cutover interrupted mid-switch; the seed can be sent again", marker.SeedId);
+                break;
+            default:
+                Directory.Delete(cutover._dir, recursive: true);
+                logger.LogInformation("Blind seed: dropped a cutover that never started switching");
+                break;
+        }
+    }
+
+    private static byte[] HashOf(string path)
+    {
+        using var file = File.OpenRead(path);
+        return SHA256.HashData(file);
+    }
+
+    private sealed record Marker(Guid SeedId, string Phase, bool? LiveMediaExisted = null);
+}

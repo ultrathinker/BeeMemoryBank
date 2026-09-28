@@ -125,10 +125,15 @@ public class PublicSurfaceTests : IAsyncLifetime
         offenders.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// Routes of both roles: PublicSurface is one list for every node, and a blind node publishes
+    /// its seed endpoints, which a full node does not map (plan 3.4).
+    /// </summary>
     private List<string> MappedRoutePatterns()
     {
-        var sources = _factory.Services.GetRequiredService<EndpointDataSource>();
-        return sources.Endpoints
+        using var blind = new BlindNodeFactory();
+        return new[] { _factory.Services, blind.Services }
+            .SelectMany(s => s.GetRequiredService<EndpointDataSource>().Endpoints)
             .OfType<RouteEndpoint>()
             .Select(e => "/" + e.RoutePattern.RawText!.TrimStart('/'))
             .Distinct()

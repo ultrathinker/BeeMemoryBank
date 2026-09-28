@@ -46,7 +46,7 @@ public interface IEventLogger
     Task<RowVersion> LogWhitelistRevokeAsync(Guid nodeId);
 
     /// <inheritdoc cref="LogWhitelistAddAsync"/>
-    Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null);
+    Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null);
     Task LogCommentCreateAsync(Comment comment);
     Task LogCommentDeleteAsync(Guid commentId);
     Task LogFolderCreateAsync(Folder folder);

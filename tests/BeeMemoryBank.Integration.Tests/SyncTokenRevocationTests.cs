@@ -41,7 +41,7 @@ public class SyncTokenRevocationTests : IAsyncLifetime
         });
 
         var store = _factory.Services.GetRequiredService<SyncTokenStore>();
-        var token = store.IssueToken(peerId);
+        var token = store.IssueToken(peerId, BeeMemoryBank.Sync.SyncProtocolVersion.Current);
 
         using var peer = _factory.Server.CreateClient();
         peer.DefaultRequestHeaders.Authorization = new("Bearer", token);
@@ -62,7 +62,7 @@ public class SyncTokenRevocationTests : IAsyncLifetime
     public async Task UnknownPeer_TokenIsRejected()
     {
         var store = _factory.Services.GetRequiredService<SyncTokenStore>();
-        var token = store.IssueToken(Guid.NewGuid());
+        var token = store.IssueToken(Guid.NewGuid(), BeeMemoryBank.Sync.SyncProtocolVersion.Current);
 
         using var peer = _factory.Server.CreateClient();
         peer.DefaultRequestHeaders.Authorization = new("Bearer", token);

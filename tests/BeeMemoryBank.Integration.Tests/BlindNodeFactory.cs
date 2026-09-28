@@ -1,19 +1,38 @@
-using BeeMemoryBank.Core.Interfaces;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.TestHost;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// A test node in the blind role. The role comes through DI, not BMB_ROLE: the environment is
-/// global to the test process and would turn every other test class's node blind too.
+/// An Api host in the blind role (BMB_ROLE=blind, plan 3.4). Set through configuration rather than
+/// the process environment so a blind and a full node can run side by side in one test process —
+/// and rather than by replacing the INodeRole registration, because the role is read while the
+/// services are registered (what a blind node leaves out is decided there).
 /// </summary>
 public class BlindNodeFactory : BmbWebApplicationFactory
 {
+    /// <summary>What the pair code tells a PC. Tests route the PC's outbound calls into this host.</summary>
+    public const string PublicAddress = "https://blind.test:5610";
+
+    private string? _nodeName;
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         base.ConfigureWebHost(builder);
-        builder.ConfigureTestServices(s => s.AddSingleton<INodeRole>(new EnvironmentNodeRole("blind")));
+        builder.UseSetting("BMB_ROLE", "blind");
+        builder.UseSetting("BMB_PUBLIC_ADDRESS", PublicAddress);
+        if (_nodeName is not null) builder.UseSetting("BMB_NODE_NAME", _nodeName);
+    }
+
+    /// <summary>
+    /// A blind node initializes itself at its first start, from its key (plan 3.4): there is no vault,
+    /// user or password to create, and the ordinary initialization refuses it as already done. Starting
+    /// the host is the whole setup. The name is given the way an operator gives it (BMB_NODE_NAME), so
+    /// it has to come before the host starts; the password has nothing to protect on a blind node.
+    /// </summary>
+    public new Task InitializeNodeAsync(string displayName = "TestNode", string password = "testPassword")
+    {
+        _nodeName = displayName;
+        _ = Services;
+        return Task.CompletedTask;
     }
 }

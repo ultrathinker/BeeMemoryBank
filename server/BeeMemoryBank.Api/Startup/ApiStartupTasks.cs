@@ -63,12 +63,23 @@ if (Environment.GetEnvironmentVariable("BMB_STDIN_LIFELINE") == "1")
     BeeMemoryBank.Hosting.StdinLifeline.Start(() => app.Lifetime.StopApplication());
 }
 
+// A blind seed's cutover interrupted by a crash is finished or rolled back before anything opens the database.
+if (app.Services.GetRequiredService<INodeRole>().IsBlind)
+    BlindSeedCutover.Recover(dataPath, app.Services.GetRequiredService<ILogger<Program>>());
+
 // Run migrations on startup
 using (var scope = app.Services.CreateScope())
 {
     var migrator = scope.ServiceProvider.GetRequiredService<MigrationRunner>();
     await migrator.RunMigrationsAsync();
 }
+await BeeMemoryBank.Sync.StoredEventRepair.RunAsync(app.Services.GetRequiredService<IServiceScopeFactory>(), app.Services.GetRequiredService<ILogger<Program>>());
+
+// Blind role (plan 3.4, 3.5): identity with the key in a file, leftover temp files. Right after
+// migrations — which a blind node runs like any other, no DEK involved.
+var isBlind = app.Services.GetRequiredService<INodeRole>().IsBlind;
+if (isBlind)
+    await BlindRoleStartup.RunAsync(app.Services, dataPath, app.Services.GetRequiredService<ILogger<Program>>());
 
 // Bootstrap tbl_folder from existing article tree_path values (one-time, idempotent)
 using (var scope = app.Services.CreateScope())
@@ -80,6 +91,8 @@ using (var scope = app.Services.CreateScope())
 // Initialize the AI chat DB schema (separate chat.db; idempotent CREATE TABLE IF NOT EXISTS).
 // Placed AFTER the beedb migration/bootstrapper blocks and deliberately does NOT use
 // MigrationRunner or Storage/Migrations. See docs/ai-chat-implementation-plan.md §1 ("Chat DB").
+// A blind node has no AI chat.
+if (!isBlind)
 using (var scope = app.Services.CreateScope())
 {
     var chatInitializer = scope.ServiceProvider.GetRequiredService<ChatDbInitializer>();
@@ -202,7 +215,7 @@ using (var scope = app.Services.CreateScope())
 // TryAutoUnlockAsync are direct method calls. If auto-unlock fails for any reason (file absent,
 // DPAPI decryption error, sentinel mismatch) we log a warning and continue — the admin can still
 // unlock manually via /Login.
-if (OperatingSystem.IsWindows())
+if (OperatingSystem.IsWindows() && !isBlind)
 {
     using var autoUnlockScope = app.Services.CreateScope();
     var autoUnlockLogger = autoUnlockScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
@@ -272,7 +285,8 @@ if (OperatingSystem.IsWindows())
     });
 }
 
-// Backfill concept tag embeddings in background
+// Backfill concept tag embeddings in background. Not on a blind node: it has no model.
+if (!isBlind)
 {
     using var scope = app.Services.CreateScope();
     var conceptTagService = scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Services.ConceptTagService>();

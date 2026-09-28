@@ -154,7 +154,8 @@ public class InitJoinEndpointTests : IAsyncLifetime
         {
             NodeId = identity.NodeId,
             ChallengeB64 = challengeData.Challenge,
-            SignatureB64 = Convert.ToBase64String(signature)
+            SignatureB64 = Convert.ToBase64String(signature),
+            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
         });
         authResp.EnsureSuccessStatusCode();
         var authData = await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts)

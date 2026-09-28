@@ -236,7 +236,8 @@ public class ProbeTests : IAsyncLifetime
         {
             NodeId = identity.NodeId,
             ChallengeB64 = challengeB64,
-            SignatureB64 = Convert.ToBase64String(signature)
+            SignatureB64 = Convert.ToBase64String(signature),
+            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
         });
         authResp.EnsureSuccessStatusCode();
         var authData = await authResp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);

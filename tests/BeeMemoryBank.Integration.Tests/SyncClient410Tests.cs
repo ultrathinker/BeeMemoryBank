@@ -46,7 +46,8 @@ public class SyncClient410Tests
             {
                 nodeId = testNodeId,
                 displayName = "TestRemote",
-                ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32])
+                ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+                protocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
             }), Encoding.UTF8, "application/json")
         });
 
@@ -117,7 +118,8 @@ public class SyncClient410Tests
             {
                 nodeId = testNodeId,
                 displayName = "TestRemote",
-                ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32])
+                ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+                protocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
             }), Encoding.UTF8, "application/json")
         });
 

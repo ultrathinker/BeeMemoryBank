@@ -4,10 +4,19 @@ namespace BeeMemoryBank.Crypto;
 /// Crypto helpers for tbl_node_identity.ed25519_private_key:
 ///   v=0 = legacy plaintext seed (existing rows before migration 005)
 ///   v=1 = AES-GCM-wrapped seed under master DEK, AAD = "bmb-node-pk" || nodeId bytes
+///   v=2 = the seed is not in the database at all (<see cref="ExternalKeyVersion"/>)
 /// Use SignWithIdentity to sign — it decrypts on the fly and clears the plaintext seed.
 /// </summary>
 public static class NodeIdentityCrypto
 {
+    /// <summary>
+    /// A node that never holds the master DEK — a blind node (plan 3.5) — cannot keep its signing
+    /// key under it, yet has to authenticate to peers unattended. Its row keeps only the public
+    /// key; the seed lives outside the database (a 0600 file in the data volume on Linux, the
+    /// Android Keystore on a phone) and the caller supplies it. The private-key columns are empty.
+    /// </summary>
+    public const int ExternalKeyVersion = 2;
+
     private static readonly byte[] PrivateKeyAadPrefix = "bmb-node-pk"u8.ToArray();
 
     /// <summary>
@@ -31,6 +40,15 @@ public static class NodeIdentityCrypto
             storedPrivateKey.CopyTo(copy, 0);
             return copy;
         }
+
+        // Explicit, rather than letting AES-GCM fail on an empty blob: every path that reaches here
+        // with a v=2 row is one that should have gone to the external key instead, and the message
+        // has to say so.
+        if (privateKeyVersion == ExternalKeyVersion)
+            throw new InvalidOperationException(
+                "This node's identity key is kept outside the database (v=2); the database holds no copy to decrypt.");
+        if (privateKeyVersion != 1)
+            throw new InvalidOperationException($"Unknown node identity key version {privateKeyVersion}.");
 
         if (privateKeyIV is null)
             throw new InvalidOperationException("v1 node identity row missing ed25519_private_key_iv.");
@@ -87,8 +105,39 @@ public static class NodeIdentityCrypto
         int privateKeyVersion,
         Guid nodeId,
         Func<byte[]> getMasterDek,
+        byte[] payload) =>
+        SignWithIdentityOrGetDek(storedPrivateKey, privateKeyIV, privateKeyVersion, nodeId, getMasterDek,
+            getExternalSeed: null, payload);
+
+    /// <summary>
+    /// Dispatches on the row version: v=0 plaintext, v=1 under the master DEK (fetched lazily),
+    /// v=2 the seed from <paramref name="getExternalSeed"/> — never the DEK, which a v=2 node does
+    /// not have. The seed is cleared after signing whichever way it was obtained.
+    /// </summary>
+    public static byte[] SignWithIdentityOrGetDek(
+        byte[] storedPrivateKey,
+        byte[]? privateKeyIV,
+        int privateKeyVersion,
+        Guid nodeId,
+        Func<byte[]> getMasterDek,
+        Func<byte[]>? getExternalSeed,
         byte[] payload)
     {
+        if (privateKeyVersion == ExternalKeyVersion)
+        {
+            if (getExternalSeed is null)
+                throw new InvalidOperationException(
+                    "This node's identity key is kept outside the database (v=2), and no external key source is configured.");
+            var seed = getExternalSeed();
+            try
+            {
+                return Ed25519Signer.Sign(seed, payload);
+            }
+            finally
+            {
+                Array.Clear(seed);
+            }
+        }
         if (privateKeyVersion == 0)
         {
             return SignWithIdentity(storedPrivateKey, privateKeyIV, 0, nodeId, Array.Empty<byte>(), payload);
@@ -103,6 +152,10 @@ public static class NodeIdentityCrypto
             Array.Clear(dek);
         }
     }
+
+    /// <summary>The Ed25519 public key of a 32-byte seed.</summary>
+    public static byte[] PublicKeyOf(byte[] seed) =>
+        new Org.BouncyCastle.Crypto.Parameters.Ed25519PrivateKeyParameters(seed).GeneratePublicKey().GetEncoded();
 
     private static byte[] BuildPrivateKeyAad(Guid nodeId)
     {

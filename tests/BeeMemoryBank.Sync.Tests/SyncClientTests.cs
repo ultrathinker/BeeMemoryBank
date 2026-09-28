@@ -156,12 +156,13 @@ public class SyncClientTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A peer still on protocol 1 cannot apply protocol-2 events (no inline ciphertext, no blob
-    /// endpoints to receive it separately), so the push phase is skipped — pushing would only
-    /// stall on skipped events. Pull still runs: its protocol-1 events remain applicable here.
+    /// Review L-stage0 #2: a peer below protocol 3 would accept a blind node's events, so nothing
+    /// moves either way — not even a pull, whose events could have come from a blind node.
     /// </summary>
-    [Fact]
-    public async Task SyncWith_PeerLowerVersion_PullsButSkipsPush()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task SyncWith_PeerBelowProtocol3_NeitherPullsNorPushes(int remoteVersion)
     {
         // Arrange
         _peerNewerProtocolState.HasNewerProtocol = false;
@@ -172,7 +173,7 @@ public class SyncClientTests : IAsyncLifetime
                 nodeId = _remoteNodeId,
                 displayName = "RemoteLower",
                 ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
-                protocolVersion = 0
+                protocolVersion = remoteVersion
             }), Encoding.UTF8, "application/json")
         });
 
@@ -181,11 +182,9 @@ public class SyncClientTests : IAsyncLifetime
 
         // Assert
         result.Should().Be(0);
-        _peerNewerProtocolState.HasNewerProtocol.Should().BeFalse();
-        _mockHandler.CallLog.Should().Contain(s => s.StartsWith("GET") && s.Contains("/api/sync/events"));
-        _mockHandler.CallLog.Should().Contain(s => s.StartsWith("POST") && s.Contains("/api/sync/report-position"));
-        _mockHandler.CallLog.Should().NotContain(s => s.StartsWith("POST") && s.Contains("/api/sync/events")); // push skipped
-        _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/blobs"));
+        _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/challenge") || s.Contains("/api/sync/authenticate")
+            || s.Contains("/api/sync/events") || s.Contains("/api/sync/blobs") || s.Contains("/api/sync/report-position"),
+            "no token is requested and no event goes either way");
     }
 
     [Fact]
@@ -410,6 +409,66 @@ public class SyncClientTests : IAsyncLifetime
         // Never posted a signature of any kind.
         _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/authenticate"));
     }
+
+    /// <summary>
+    /// Plan 3.1: a peer on protocol 2 does not know the blind-node mark — it would accept a blind
+    /// node's events and seal the DEK for one. It must not receive a single event from us.
+    /// </summary>
+    [Fact]
+    public async Task SyncWith_PeerOnProtocol2_GetsNoPush_ItPredatesBlindNodes()
+    {
+        MapIdentity(protocolVersion: 2);
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        _mockHandler.CallLog.Should().NotContain(s => s.StartsWith("POST") && s.EndsWith("/api/sync/events"));
+        _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/blobs"));
+    }
+
+    /// <summary>
+    /// The peer can only keep "last seen protocol" for us (the PC's pre-flight before adding a
+    /// blind node reads it) if we declare it, in both places the peer records it.
+    /// </summary>
+    [Fact]
+    public async Task SyncWith_DeclaresOwnProtocol_InAuthenticateAndReportPosition()
+    {
+        MapIdentity(protocolVersion: SyncProtocolVersion.Current);
+        int? declaredAtAuth = null;
+        string? reportQuery = null;
+        _mockHandler.MapRoute("/api/sync/authenticate", req =>
+        {
+            var body = JsonDocument.Parse(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            declaredAtAuth = body.RootElement.TryGetProperty("protocolVersion", out var declared)
+                ? declared.GetInt32()
+                : null;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { token = "test-token" }), Encoding.UTF8, "application/json")
+            };
+        });
+        _mockHandler.MapRoute("/api/sync/report-position", req =>
+        {
+            reportQuery = req.RequestUri!.Query;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+        });
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        declaredAtAuth.Should().Be(SyncProtocolVersion.Current);
+        reportQuery.Should().Contain($"protocolVersion={SyncProtocolVersion.Current}");
+    }
+
+    private void MapIdentity(int protocolVersion) =>
+        _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                nodeId = _remoteNodeId,
+                displayName = "Remote",
+                ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+                protocolVersion
+            }), Encoding.UTF8, "application/json")
+        });
 
     private class ConcreteFixture : SyncTestFixture { }
 

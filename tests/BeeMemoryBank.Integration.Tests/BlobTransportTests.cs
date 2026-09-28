@@ -236,7 +236,8 @@ public class BlobTransportTests : IAsyncLifetime
 
         var authResp = await server.PostAsJsonAsync("/api/sync/authenticate", new
         {
-            NodeId = identity.NodeId, ChallengeB64 = challengeB64, SignatureB64 = Convert.ToBase64String(signature)
+            NodeId = identity.NodeId, ChallengeB64 = challengeB64, SignatureB64 = Convert.ToBase64String(signature),
+            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
         });
         authResp.EnsureSuccessStatusCode();
         return (await authResp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts)).GetProperty("token").GetString()!;

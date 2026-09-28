@@ -1,4 +1,6 @@
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -18,6 +20,9 @@ public class SyncScheduler(
     Action? periodicCleanup = null,
     SnapshotRequiredState? snapshotRequiredState = null) : BackgroundService
 {
+    /// <summary>The named HttpClient the scheduler syncs with; pinned by AddSync (UsePinnedSyncHandler).</summary>
+    public const string HttpClientName = "SyncScheduler";
+
     public TimeSpan Interval { get; set; } = interval ?? TimeSpan.FromSeconds(60);
 
     /// <summary>
@@ -31,11 +36,17 @@ public class SyncScheduler(
     public event EventHandler<SyncCycleResult>? SyncCycleCompleted;
 
     private readonly SemaphoreSlim _syncLock = new(1, 1);
+    private readonly UnreachablePeers _unreachable = new();
     private bool _disposed;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("SyncScheduler started, interval {Interval}", Interval);
+
+        // Before anything is served or pushed from the log: hosts without the API startup (mobile)
+        // run the repair here. See StoredEventRepair; a second run elsewhere finds nothing.
+        try { await StoredEventRepair.RunAsync(scopeFactory, logger); }
+        catch (Exception ex) { logger.LogError(ex, "Stored event repair failed; retried at the next start"); }
 
         // First sync after a short delay on startup
         await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
@@ -43,6 +54,11 @@ public class SyncScheduler(
         var cycleStart = DateTime.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Every cycle, invisible or not: a repair scrub still owed is finished as soon as nothing
+            // holds its checkpoint back (see StoredEventRepair.RetryPendingScrubAsync).
+            try { await StoredEventRepair.RetryPendingScrubAsync(scopeFactory, logger); }
+            catch (Exception ex) { logger.LogWarning(ex, "Retrying the stored event repair's scrub failed; retried next cycle"); }
+
             try
             {
                 await _syncLock.WaitAsync(stoppingToken);
@@ -115,31 +131,87 @@ public class SyncScheduler(
         var remoteNodes = nodes.Where(n => !string.IsNullOrEmpty(n.ApiAddress)).ToList();
         if (remoteNodes.Count == 0) return new SyncCycleResult(0);
 
-        using var http = httpClientFactory.CreateClient("SyncScheduler");
+        using var http = httpClientFactory.CreateClient(HttpClientName);
+        var reseeder = scope.ServiceProvider.GetService<IBlindPeerReseeder>();
 
         foreach (var node in remoteNodes)
         {
             if (ct.IsCancellationRequested) break;
+            if (_unreachable.ShouldSkip(node.NodeId, DateTime.UtcNow))
+                continue;
+
+            Exception? failure = null;
             try
             {
                 totalApplied += await syncClient.SyncWithAsync(http, node.ApiAddress!, node.NodeId, ct);
                 snapshotRequiredState?.Clear();
+                if (_unreachable.NoteSuccess(node.NodeId) is var failedBefore and > 0)
+                    logger.LogInformation("{NodeId} ({Address}) is reachable again after {Failures} failed attempts",
+                        node.NodeId, node.ApiAddress, failedBefore);
+            }
+            catch (PushGapException ex)
+            {
+                // The PEER is behind our compaction, not us: nothing to flag locally. A blind peer
+                // is reseeded below; a full one has to rejoin.
+                failure = ex;
+                logger.LogWarning("{NodeId} ({Address}) missed events our compaction removed (pushed up to {Pushed}, cp={Cp})",
+                    node.NodeId, node.ApiAddress, ex.PushedUpTo, ex.LastCompactionCp);
             }
             catch (SnapshotRequiredException ex)
             {
+                failure = ex;
                 logger.LogCritical(
                     "Node is out-of-sync with {Url}: compacted past us (cp={Cp}, head={Head}). Manual wipe & rejoin required.",
                     ex.RemoteUrl, ex.LastCompactionCp, ex.CurrentHeadSeq);
                 snapshotRequiredState?.Set(ex);
             }
+            catch (Exception ex) when (IsUnreachable(ex, ct))
+            {
+                failure = ex;
+                NoteUnreachable(node, ex);
+                continue;
+            }
             catch (Exception ex)
             {
+                failure = ex;
                 logger.LogWarning(ex, "Error synchronizing with {NodeId} ({Address})",
                     node.NodeId, node.ApiAddress);
+            }
+
+            if (reseeder != null && BlindNodeId.IsBlind(node.NodeId))
+            {
+                try { await reseeder.AfterSyncAsync(node, http, failure, ct); }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    logger.LogError(ex, "Reseeding blind node {NodeId} ({Address}) failed", node.NodeId, node.ApiAddress);
+                }
             }
         }
 
         return new SyncCycleResult(totalApplied);
+    }
+
+    /// <summary>Could not talk to the peer at all — as opposed to talking and being refused.</summary>
+    internal static bool IsUnreachable(Exception ex, CancellationToken ct) => ex switch
+    {
+        HttpRequestException { StatusCode: null } => true,
+        TaskCanceledException when !ct.IsCancellationRequested => true, // the HttpClient timeout
+        _ => false
+    };
+
+    /// <summary>
+    /// Only the first failure of a streak is a warning, the rest go to debug — so an absent phone
+    /// does not fill the log with the same line every minute.
+    /// </summary>
+    private void NoteUnreachable(WhitelistEntry node, Exception ex)
+    {
+        var (failures, pause) = _unreachable.NoteFailure(node.NodeId, DateTime.UtcNow, Interval);
+        if (failures == 1)
+            logger.LogWarning("{NodeId} ({Address}) is unreachable ({Error}); retrying with a growing pause, up to {Max}",
+                node.NodeId, node.ApiAddress, ex.Message, UnreachablePeers.MaxPause);
+        else
+            logger.LogDebug("{NodeId} ({Address}) still unreachable ({Failures} attempts); next try in {Pause}",
+                node.NodeId, node.ApiAddress, failures, pause);
     }
 
     public override void Dispose()

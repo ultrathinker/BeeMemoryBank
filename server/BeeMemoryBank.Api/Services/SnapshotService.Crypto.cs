@@ -69,6 +69,13 @@ public partial class SnapshotService
     /// </summary>
     private byte[] SignWithIdentityAuto(NodeIdentity nodeIdentity, byte[] payload)
     {
+        // A blind node signs with the key it keeps outside the database; it has no DEK to wait for.
+        if (nodeIdentity.Ed25519PrivateKeyV == NodeIdentityCrypto.ExternalKeyVersion)
+            return NodeIdentityCrypto.SignWithIdentityOrGetDek(
+                nodeIdentity.Ed25519PrivateKey, nodeIdentity.Ed25519PrivateKeyIV, nodeIdentity.Ed25519PrivateKeyV,
+                nodeIdentity.NodeId, () => throw new InvalidOperationException("A v=2 identity is never signed under the DEK."),
+                _externalKey is null ? null : _externalKey.ReadSeed, payload);
+
         if (nodeIdentity.Ed25519PrivateKeyV == 0)
         {
             // Legacy plaintext: no session needed; pass an empty masterDek (helper does not use

@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Embeddings;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -48,6 +49,14 @@ public static class DependencyInjection
         // this with a Keystore-backed signer so background backup-sync works while locked.
         services.TryAddScoped<INodeAuthSigner, SessionNodeAuthSigner>();
 
+        // Which peers present a pinned, self-signed TLS key (plan 4.4). Every client that dials a
+        // sync peer builds its handler from this, so the pins apply on every node alike.
+        services.AddSingleton<Blind.SpkiPinRegistry>();
+        // Pinned TLS keys (plan 4.4) for the scheduler's client on every host that syncs — server,
+        // CLI and the phone's foreground service alike: a peer whose whitelist row carries tls_spki
+        // (a blind node with its self-signed certificate) is accepted on that key and nothing else.
+        services.AddHttpClient(SyncScheduler.HttpClientName).UsePinnedSyncHandler();
+
         // ILazySlotRewrapService is needed by SessionService.UnlockAsync to handle
         // post-DEK-rotation slot rewrap (when a node didn't auto-accept eagerly).
         // Registering here means CLI/mobile/server all share the same impl — without
@@ -94,7 +103,6 @@ public static class DependencyInjection
     /// </summary>
     public static IServiceCollection AddSyncScheduler(this IServiceCollection services, TimeSpan? interval = null, Func<IServiceProvider, Action?>? periodicCleanupFactory = null)
     {
-        services.AddHttpClient("SyncScheduler");
         services.AddHostedService(sp =>
             new SyncScheduler(
                 sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),

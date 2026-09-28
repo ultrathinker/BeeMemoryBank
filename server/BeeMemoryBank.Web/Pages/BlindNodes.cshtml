@@ -1,0 +1,28 @@
+@page
+@model BeeMemoryBank.Web.Pages.BlindNodesModel
+@{
+    ViewData["Title"] = "Blind nodes";
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <h2 style="font-size:1.4rem;font-weight:700;margin:0 0 16px 0;">
+        <sl-icon name="shield-lock" style="margin-right:6px;"></sl-icon>Blind nodes
+    </h2>
+    <p class="text-muted" style="margin-bottom:18px;">
+        A blind node keeps an encrypted copy of this network and makes backups, but never holds the
+        master key: it cannot read your notes. Titles, paths, tags and file names are visible to it.
+    </p>
+
+    @if (Model.SuccessMessage != null)
+    {
+        <sl-alert variant="success" open style="margin-bottom:12px;">@Model.SuccessMessage</sl-alert>
+    }
+    @if (Model.ErrorMessage != null)
+    {
+        <sl-alert variant="danger" open style="margin-bottom:12px;">@Model.ErrorMessage</sl-alert>
+    }
+
+    <partial name="~/Pages/Shared/Admin/_AdminBlindNodes.cshtml" model="Model" />
+</div>
+</div>

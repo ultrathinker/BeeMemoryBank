@@ -49,4 +49,22 @@ public class WhitelistEntry
     /// event, only an existing superadmin peer can promote it.</para>
     /// </summary>
     public bool IsSuperadmin { get; set; }
+
+    /// <summary>
+    /// The sync protocol this peer last declared to THIS node, and when (migration 028). A local
+    /// observation, never replicated. Null = not heard from since this build — a peer on an older
+    /// build declares nothing. The PC reads it before adding a blind node (plan 3.1).
+    /// </summary>
+    public int? LastProtocolVersion { get; set; }
+
+    /// <inheritdoc cref="LastProtocolVersion"/>
+    public DateTime? LastProtocolSeenAt { get; set; }
+
+    /// <summary>
+    /// base64url(SHA-256(SubjectPublicKeyInfo)) of the TLS key this peer serves HTTPS with, when that
+    /// certificate is self-signed — a blind node (plan 4.4, migration 029). Replicated with the row.
+    /// Every sync connection to <see cref="ApiAddress"/> must present exactly this key. Null = no
+    /// pin, ordinary certificate validation.
+    /// </summary>
+    public string? TlsSpki { get; set; }
 }

@@ -100,13 +100,13 @@ public class BlindStatusEndpointsTests : IAsyncLifetime
 
         using var plain = _factory.Server.CreateClient();
         plain.DefaultRequestHeaders.Authorization =
-            new("Bearer", store.IssueToken(plainPeer));
+            new("Bearer", store.IssueToken(plainPeer, BeeMemoryBank.Sync.SyncProtocolVersion.Current));
         (await plain.GetAsync("/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.Unauthorized,
             "a peer token alone must not reveal the mesh layout — the peer has to be a superadmin");
 
         using var admin = _factory.Server.CreateClient();
         admin.DefaultRequestHeaders.Authorization =
-            new("Bearer", store.IssueToken(adminPeer));
+            new("Bearer", store.IssueToken(adminPeer, BeeMemoryBank.Sync.SyncProtocolVersion.Current));
         (await admin.GetAsync("/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.OK);
 
         // The superadmin path shows every OTHER active peer, with its lag once it has pulled.
@@ -156,20 +156,17 @@ public class BlindStatusEndpointsTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A second node with the fake anchor provider and the blind role. The role comes through DI
-    /// instead of the process environment: BMB_ROLE is global to the test process, and
-    /// CoreBlindStatusContributor prefers a registered INodeRole.
+    /// A second node with the fake anchor provider and the blind role. The role comes from the host's
+    /// configuration (BlindNodeFactory), not the process environment: BMB_ROLE is global to the test
+    /// process. It cannot come from a replaced INodeRole alone — the role is read while the services
+    /// are registered, and a blind node registers what it needs (its key) there.
     /// </summary>
-    private sealed class AnchorAndBlindRoleFactory : BmbWebApplicationFactory
+    private sealed class AnchorAndBlindRoleFactory : BlindNodeFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             base.ConfigureWebHost(builder);
-            builder.ConfigureTestServices(s =>
-            {
-                s.AddSingleton<IBlindStatusContributor>(new FakeAnchorContributor());
-                s.AddSingleton<INodeRole>(new EnvironmentNodeRole("blind"));
-            });
+            builder.ConfigureTestServices(s => s.AddSingleton<IBlindStatusContributor>(new FakeAnchorContributor()));
         }
     }
 

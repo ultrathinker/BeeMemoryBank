@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using BeeMemoryBank.Sync;
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -10,7 +11,7 @@ namespace BeeMemoryBank.Api.Services;
 public class SyncTokenStore
 {
     private sealed record ChallengeEntry(Guid ServerNodeId, DateTime ExpiresAt);
-    private sealed record TokenEntry(Guid NodeId, DateTime ExpiresAt);
+    private sealed record TokenEntry(Guid NodeId, int ProtocolVersion, DateTime ExpiresAt);
 
     private readonly ConcurrentDictionary<string, ChallengeEntry> _challenges = new();
     private readonly ConcurrentDictionary<string, TokenEntry> _tokens = new();
@@ -35,13 +36,15 @@ public class SyncTokenStore
         return true;
     }
 
-    /// <summary>Issues a Bearer token for an authenticated node. TTL 1 hour.</summary>
-    public string IssueToken(Guid nodeId)
+    /// <summary>
+    /// Issues a Bearer token for an authenticated node, bound to the protocol it declared. TTL 1 hour.
+    /// </summary>
+    public string IssueToken(Guid nodeId, int protocolVersion)
     {
         var bytes = new byte[32];
         RandomNumberGenerator.Fill(bytes);
         var token = Convert.ToBase64String(bytes);
-        _tokens[token] = new TokenEntry(nodeId, DateTime.UtcNow.AddHours(1));
+        _tokens[token] = new TokenEntry(nodeId, protocolVersion, DateTime.UtcNow.AddHours(1));
         return token;
     }
 
@@ -66,7 +69,9 @@ public class SyncTokenStore
     {
         nodeId = default;
         if (!_tokens.TryGetValue(token, out var entry)) return false;
-        if (entry.ExpiresAt <= DateTime.UtcNow)
+        // Checked here as well as at issue, because every data endpoint goes through this: a token
+        // of a peer below the minimum protocol opens none of them, however it came to exist.
+        if (entry.ExpiresAt <= DateTime.UtcNow || !SyncProtocolVersion.IsCompatiblePeer(entry.ProtocolVersion))
         {
             _tokens.TryRemove(token, out _);
             return false;

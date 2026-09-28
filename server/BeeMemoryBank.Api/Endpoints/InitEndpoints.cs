@@ -170,6 +170,14 @@ public static class InitEndpoints
                         new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is higher than local version ({BeeMemoryBank.Sync.SyncProtocolVersion.Current})"),
                         statusCode: 400);
                 }
+                // An older peer accepts events a blind node authored (SyncProtocolVersion.MinPeer),
+                // so its snapshot and log are no ground to build this node on.
+                if (!BeeMemoryBank.Sync.SyncProtocolVersion.IsCompatiblePeer(joinResponse.RemoteNode.ProtocolVersion))
+                {
+                    return Results.Json(
+                        new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is below {BeeMemoryBank.Sync.SyncProtocolVersion.MinPeer}; update it first"),
+                        statusCode: 400);
+                }
 
                 var slot = joinResponse.KeySlot;
                 var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
@@ -359,7 +367,8 @@ public static class InitEndpoints
                         {
                             NodeId = nodeId,
                             ChallengeB64 = challenge.Challenge,
-                            SignatureB64 = Convert.ToBase64String(challengeSig)
+                            SignatureB64 = Convert.ToBase64String(challengeSig),
+                            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
                         }, JsonOptions);
                     authResp.EnsureSuccessStatusCode();
                     var authToken = (await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOptions))?.Token
