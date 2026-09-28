@@ -216,9 +216,24 @@ public sealed class RestoreSourceFixture : IAsyncLifetime
         return id;
     }
 
+    /// <summary>
+    /// Each strong box as it was before the rotation that superseded it. A superseded box keeps no key material
+    /// in the database (F7), so a tamperer who wants the old boxes back needs a copy made before: this is it.
+    /// </summary>
+    public List<OldBox> OldStrongBoxes { get; } = [];
+
+    public sealed record OldBox(string BoxId, string Kind, string AuthorNodeId, string DekFingerprint, long EpochHint, string KdfPreset,
+        byte[] Salt, byte[] Wrapped, byte[] Iv, string CreatedAt, long LamportTs, string? SourceNodeId);
+
     private async Task RotateAsync(HttpClient client, SessionService session)
     {
         var before = DekFingerprint.Of(session.GetMasterDek());
+        using (var keep = Source.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            OldStrongBoxes.AddRange(await keep.QueryAsync<OldBox>(
+                @"SELECT box_id AS BoxId, kind AS Kind, author_node_id AS AuthorNodeId, dek_fingerprint AS DekFingerprint,
+                         epoch_hint AS EpochHint, kdf_preset AS KdfPreset, salt AS Salt, wrapped AS Wrapped, iv AS Iv,
+                         created_at AS CreatedAt, lamport_ts AS LamportTs, source_node_id AS SourceNodeId
+                  FROM tbl_recovery_box WHERE kind = 'strong' AND status = 'A'"));
         var propose = await client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
         propose.EnsureSuccessStatusCode();
         var commitEventId = (await propose.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("commitEventId").GetGuid().ToString();
@@ -391,8 +406,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         // The old strong boxes put back as active and every chain link removed: the password opens three
         // unlinked keys. The genuine anchor under the newest one must not confirm, since nothing proves
         // which key is newest.
-        var folder = await BackupCopyAsync(
-            "UPDATE tbl_recovery_box SET status = 'A' WHERE kind = 'strong'; DELETE FROM tbl_dek_retired_link;");
+        var folder = await OldStrongBoxesBackAsync("DELETE FROM tbl_dek_retired_link;");
         await RewriteRecoverySetAsync(folder);
         using var target = new RecoveryTestFactory();
 
@@ -407,7 +421,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     [Fact]
     public async Task OldBoxesKept_WithTheLinks_TheHeadIsTheNewestKey_AndConfirms()
     {
-        var folder = await BackupCopyAsync("UPDATE tbl_recovery_box SET status = 'A' WHERE kind = 'strong';");
+        var folder = await OldStrongBoxesBackAsync();
         await RewriteRecoverySetAsync(folder);
         using var target = new RecoveryTestFactory();
 
@@ -435,7 +449,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     /// </summary>
     private async Task<string> NewestBoxHiddenBehindJunkAsync()
     {
-        var folder = await BackupCopyAsync("UPDATE tbl_recovery_box SET status = 'A' WHERE kind = 'strong';");
+        var folder = await OldStrongBoxesBackAsync();
         await RewriteRecoverySetAsync(folder, set =>
         {
             set.Boxes.RemoveAll(b => b.Kind == "strong" && b.DekFingerprint == source.CurrentFingerprint);
@@ -594,7 +608,9 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     }
 
     /// <summary>A private copy of the backup folder with <paramref name="tamper"/> applied to its database.</summary>
-    private async Task<string> BackupCopyAsync(string tamper)
+    private Task<string> BackupCopyAsync(string tamper) => BackupCopyAsync(conn => conn.ExecuteAsync(tamper));
+
+    private async Task<string> BackupCopyAsync(Func<Microsoft.Data.Sqlite.SqliteConnection, Task> tamper)
     {
         var folder = Path.Combine(source.Work, "backup-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
@@ -602,9 +618,25 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             File.Copy(file, Path.Combine(folder, Path.GetFileName(file)));
         using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(folder, BlindPackageFile.DbFileName)};Pooling=False");
         conn.Open();
-        await conn.ExecuteAsync(tamper);
+        await tamper(conn);
         return folder;
     }
+
+    /// <summary>
+    /// A copy with the old strong boxes put back as active, their material taken from before the rotations (the
+    /// database itself no longer holds it), then <paramref name="more"/>.
+    /// </summary>
+    private Task<string> OldStrongBoxesBackAsync(string more = "") => BackupCopyAsync(async conn =>
+    {
+        foreach (var b in source.OldStrongBoxes)
+            await conn.ExecuteAsync(
+                @"INSERT OR REPLACE INTO tbl_recovery_box
+                    (box_id, kind, author_node_id, dek_fingerprint, epoch_hint, kdf_preset, salt, wrapped, iv,
+                     created_at, status, retired_by_box_id, lamport_ts, source_node_id)
+                  VALUES (@BoxId, @Kind, @AuthorNodeId, @DekFingerprint, @EpochHint, @KdfPreset, @Salt, @Wrapped, @Iv,
+                     @CreatedAt, 'A', NULL, @LamportTs, @SourceNodeId)", b);
+        if (more.Length > 0) await conn.ExecuteAsync(more);
+    });
 
     [Fact]
     public async Task RestoredClock_IsAboveEverythingImported()
