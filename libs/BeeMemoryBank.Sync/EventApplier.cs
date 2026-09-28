@@ -300,6 +300,11 @@ public partial class EventApplier(
         // TOCTOU race: if another process already inserted this event (concurrent apply),
         // the duplicate insert is harmlessly ignored since data changes are idempotent.
         await eventLogRepo.AppendIfNotExistsAsync(evt);
+
+        // A box that is not active here keeps no key material, in its row or in the log (F7). After the
+        // append: a redelivered event of a box already retired here has just been logged again.
+        if (evt.EventType is EventTypes.RecoveryBoxSet or EventTypes.RecoveryBoxRetire)
+            await PurgeInactiveBoxMaterialAsync();
         return EventApplyResult.Applied;
     }
 }

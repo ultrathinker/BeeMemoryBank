@@ -34,6 +34,12 @@ public static class StoredEventRepair
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IDbConnectionFactory>();
 
+        // Key material of inactive recovery boxes that an older build kept (F7). It marks the scrub below
+        // as owed when it removes anything.
+        var purged = await Recovery.RecoveryBoxMaterialPurge.RunAsync(db);
+        if (purged > 0)
+            logger.LogWarning("Removed the key material of {Count} inactive recovery box row(s) and event(s)", purged);
+
         List<(string EventId, string NodeId, string EventType, string Payload)> candidates;
         using (var conn = db.CreateConnection())
             candidates = (await conn.QueryAsync<(string, string, string, string)>(

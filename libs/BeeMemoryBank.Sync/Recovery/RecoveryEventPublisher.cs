@@ -63,6 +63,9 @@ public class RecoveryEventPublisher(
         // order could ship an event whose effect this node itself never recorded.
         await applier.ApplyOwnRecoveryEventAsync(evt);
         await eventLogRepo.AppendAsync(evt);
+        // Our own new box superseded our old one, or our retire covered others: their material goes (F7).
+        if (eventType is EventTypes.RecoveryBoxSet or EventTypes.RecoveryBoxRetire)
+            await applier.PurgeInactiveBoxMaterialAsync();
         syncTrigger.Signal();
         return evt;
     }

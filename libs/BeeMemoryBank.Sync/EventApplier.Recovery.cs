@@ -31,8 +31,9 @@ public partial class EventApplier
     private const int MaxRetireTargets = 64;
     private const int MaxAnchorVectorEntries = 4096;
     private const int MaxSealedSecretBytes = 4096;
-    // Superseded and retired boxes are kept (a late event must find its row and stay superseded), but
-    // a peer publishing box after box must not grow every node's table without bound.
+    // Superseded and retired boxes are kept (a late event must find its row and stay superseded), though
+    // without their key material (PurgeInactiveBoxMaterialAsync), and a peer publishing box after box must
+    // not grow every node's table without bound.
     internal const int MaxInactiveBoxesPerAuthorAndKind = 10;
 
     /// <summary>
@@ -50,6 +51,13 @@ public partial class EventApplier
         EventTypes.SealedSecretSet => ApplySealedSecretSetAsync(evt),
         _ => throw new ArgumentException($"{evt.EventType} is not a recovery event.", nameof(evt)),
     };
+
+    /// <summary>
+    /// Clears the key material of every box that is not active here, and removes their logged events
+    /// (<see cref="Recovery.RecoveryBoxMaterialPurge"/>). Called once the event that changed a box's state
+    /// is in the log.
+    /// </summary>
+    public virtual Task PurgeInactiveBoxMaterialAsync() => Recovery.RecoveryBoxMaterialPurge.RunAsync(connFactory);
 
     private async Task ApplyRecoveryBoxSetAsync(SyncEvent evt)
     {
