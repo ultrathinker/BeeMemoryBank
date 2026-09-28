@@ -289,6 +289,65 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
     }
 
     /// <summary>
+    /// Both rules of the merge at once (DK2-3's link guards, R1's wipe of the old database): the finish writes
+    /// zeros over the old database, so a link planted at <c>old.db</c> would carry those zeros to whatever it names.
+    /// The finish refuses before writing anything, and what the link points at is untouched.
+    /// </summary>
+    [Fact]
+    public async Task AFinishWithALinkAtTheOldDatabase_IsRefused_AndNothingIsWipedThroughIt()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "bmb-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, "victim.txt"), "not the cutover's to wipe");
+            var cutover = StartSwitch();
+            await RetriedAsync(cutover.SwitchFiles);
+            cutover.MarkDone(Guid.NewGuid());
+            File.Delete(InCutover("old.db"));
+            if (!TryCreateDirectoryLink(InCutover("old.db"), outside)) return; // no link, no test
+
+            var finish = () => cutover.FinishDone();
+
+            finish.Should().Throw<BlindSeedRejectedException>("the old database's path is a link, not the cutover's file");
+            File.ReadAllText(Path.Combine(outside, "victim.txt")).Should().Be("not the cutover's to wipe");
+            File.ReadAllText(InCutover("old.db-wal")).Should().Be("old wal", "a refusal changes nothing: the sidecars are not wiped either");
+        }
+        finally
+        {
+            TryRemoveDirectoryLink(InCutover("old.db"));
+            TryDeleteTree(outside);
+        }
+    }
+
+    /// <summary>The same at start for an older build's <c>.pre-seed</c> copy: a link there is refused, not wiped through.</summary>
+    [Fact]
+    public void APreSeedPathThatIsALink_IsRefusedAtStart_AndWhatItPointsAtSurvives()
+    {
+        Directory.CreateDirectory(_data);
+        File.WriteAllText(Live, "live main");
+        var outside = Path.Combine(Path.GetTempPath(), "bmb-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, "victim.txt"), "not ours");
+            File.WriteAllText(Live + ".pre-seed-wal", "old copy wal");
+            if (!TryCreateDirectoryLink(Live + ".pre-seed", outside)) return; // no link, no test
+
+            var recover = () => BlindSeedCutover.Recover(_data, NullLogger.Instance);
+
+            recover.Should().Throw<BlindSeedRejectedException>();
+            File.ReadAllText(Path.Combine(outside, "victim.txt")).Should().Be("not ours");
+            File.ReadAllText(Live).Should().Be("live main");
+        }
+        finally
+        {
+            TryRemoveDirectoryLink(Live + ".pre-seed");
+            TryDeleteTree(outside);
+        }
+    }
+
+    /// <summary>
     /// A directory link, created the way each platform allows without elevation: a junction on
     /// Windows (no privilege needed), a symbolic link elsewhere. False when the platform refused —
     /// the test that asked then has nothing to exercise and says so by returning.
