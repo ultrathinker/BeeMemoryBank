@@ -21,6 +21,13 @@ public interface INodeLifecycleService
 {
     Task<NodeLifecycleResult> StartOrAttachAsync(string dataDir, IProgress<string>? progress, CancellationToken ct);
     Task StopAsync(TimeSpan gracefulTimeout, CancellationToken ct);
+
+    /// <summary>
+    /// True while the current node is one this app ATTACHED to (a node already running: a service, the command line,
+    /// another app) rather than started. <see cref="StopAsync"/> leaves such a node running, so a caller that needs
+    /// the node really stopped (the offline re-key) must not rely on it.
+    /// </summary>
+    bool IsAttachedToExternalNode => false;
 }
 
 /// <summary>
@@ -65,6 +72,11 @@ public sealed class NodeLifecycleService : INodeLifecycleService
     // no handle to it at all (see StartOrAttachAsync) and StopAsync must leave it untouched.
     private bool _ownsProcess;
     private StreamWriter? _hostedStdin;
+
+    // Set when StartOrAttachAsync attached to a node it did not start; cleared by a hosted start and by StopAsync.
+    private volatile bool _attachedExternal;
+
+    public bool IsAttachedToExternalNode => _attachedExternal;
 
     // Serializes StartOrAttachAsync/StopAsync against each other and against themselves: two
     // overlapping calls on the SAME instance (e.g. a caller invoking SwitchToAsync twice in
@@ -201,6 +213,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                         if (probeOk)
                         {
                             attached = true;
+                            _attachedExternal = true;
                             frontUrl = descriptor.FrontUrl;
                             progress?.Report("Attached to running node!");
                         }
@@ -210,6 +223,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
 
             if (!attached)
             {
+                _attachedExternal = false;
                 progress?.Report("Locating BeeMemoryBank.Node executable...");
                 var nodeExePath = TestOnly_NodeExePathOverride ?? ResolveNodeExePath();
 
@@ -481,6 +495,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
         _nodeProcess = null;
         _hostedStdin = null;
         _ownsProcess = false;
+        _attachedExternal = false;
 
         if (proc == null || !owned)
         {
@@ -570,6 +585,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
         _nodeProcess = proc;
         _hostedStdin = stdin;
         _ownsProcess = true;
+        _attachedExternal = false;
     }
 
     internal void TestOnly_SetAttached(Process proc)
@@ -577,6 +593,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
         _nodeProcess = proc;
         _hostedStdin = null;
         _ownsProcess = false;
+        _attachedExternal = true;
     }
 
     private static string ResolveNodeExePath()

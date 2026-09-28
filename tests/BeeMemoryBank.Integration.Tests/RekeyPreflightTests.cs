@@ -136,7 +136,7 @@ public class RekeyPreflightTests : RekeyVaultTestBase
             blob = conn.ExecuteScalar<byte[]>($"SELECT b.data FROM tbl_media m JOIN tbl_blob b ON b.hash = m.ciphertext_sha256 WHERE m.id = '{media}'")!;
         Mutate($"UPDATE tbl_media SET ciphertext_sha256 = NULL WHERE id = '{media}'");
         Directory.CreateDirectory(Path.Combine(_vault, "media"));
-        var file = Path.Combine(_vault, "media", $"{media}.enc");
+        var file = Path.Combine(_vault, "media", $"{_data.Media}.enc"); // the product's name (MediaService), as the re-seal reads it
         File.WriteAllBytes(file, blob);
         (await RunAsync()).Blocking.Should().BeEmpty();
 
@@ -145,15 +145,111 @@ public class RekeyPreflightTests : RekeyVaultTestBase
         (await RunAsync()).Blocking.Should().ContainSingle(p => p.Table == "tbl_media");
     }
 
+    /// <summary>R2-1: the re-seal fails on a row whose ciphertext is gone, so the pre-flight refuses it — before the
+    /// copy, where a refusal leaves nothing behind.</summary>
     [Fact]
-    public async Task CiphertextThatIsAlreadyGone_IsAWarning_NotABlock()
+    public async Task CiphertextThatIsGone_Blocks_BeforeTheCopy()
     {
         Mutate($"DELETE FROM tbl_blob WHERE hash = (SELECT ciphertext_hash FROM tbl_article_version WHERE id = '{_data.Version}')");
 
         var report = await RunAsync();
 
-        report.Blocking.Should().BeEmpty();
-        report.Warnings.Should().Contain(w => w.Contains(_data.Version, StringComparison.OrdinalIgnoreCase) && w.Contains("gone"));
+        report.Blocking.Should().ContainSingle(p => p.Table == "tbl_article_version" && p.RowKey.Equals(_data.Version, StringComparison.OrdinalIgnoreCase)
+            && p.Problem.Contains("missing"));
+    }
+
+    [Fact]
+    public async Task ABodyWhoseBlobIsGone_Blocks()
+    {
+        Mutate($"DELETE FROM tbl_blob WHERE hash = (SELECT ciphertext_hash FROM tbl_article_body WHERE article_id = '{Upper(_data.Purged)}' COLLATE NOCASE)");
+
+        (await RunAsync()).Blocking.Should().Contain(p => p.Table == "tbl_article_body" && p.RowKey.Equals(_data.Purged.ToString(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AMediumWithNeitherBlobNorFile_Blocks()
+    {
+        Mutate($"UPDATE tbl_media SET ciphertext_sha256 = NULL WHERE id = '{Upper(_data.Media)}'");
+        foreach (var f in Directory.EnumerateFiles(Path.Combine(_vault, "media"), $"{_data.Media}.enc", new EnumerationOptions { MatchCasing = MatchCasing.CaseInsensitive }))
+            File.Delete(f); // the frozen copy's own file, if the product wrote one
+
+        (await RunAsync()).Blocking.Should().ContainSingle(p => p.Table == "tbl_media" && p.RowKey.Equals(_data.Media.ToString(), StringComparison.OrdinalIgnoreCase)
+            && p.Problem.Contains("neither"));
+    }
+
+    /// <summary>R1-7 on the pre-flight's side: a media directory that is a junction is never read through, and the
+    /// medium it would have served blocks early (the re-seal refuses it too). Windows: a junction needs no privilege.</summary>
+    [Fact]
+    public async Task AMediumWhoseEncFileIsBehindAJunction_Blocks_AndIsNotRead()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        byte[] blob;
+        using (var conn = Open(Main, readOnly: true))
+            blob = conn.ExecuteScalar<byte[]>($"SELECT b.data FROM tbl_media m JOIN tbl_blob b ON b.hash = m.ciphertext_sha256 WHERE m.id = '{Upper(_data.Media)}'")!;
+        Mutate($"UPDATE tbl_media SET ciphertext_sha256 = NULL WHERE id = '{Upper(_data.Media)}'");
+        var media = Path.Combine(_vault, "media");
+        var elsewhere = _vault + "-elsewhere";
+        Directory.CreateDirectory(elsewhere);
+        File.WriteAllBytes(Path.Combine(elsewhere, $"{_data.Media}.enc"), blob);
+        foreach (var f in Directory.EnumerateFiles(media)) File.Move(f, Path.Combine(elsewhere, Path.GetFileName(f)), overwrite: true);
+        Directory.Delete(media);
+        try
+        {
+            var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{media}\" \"{elsewhere}\"")
+                { UseShellExecute = false, CreateNoWindow = true })!;
+            mk.WaitForExit();
+            mk.ExitCode.Should().Be(0, "the junction is the test's premise");
+
+            var report = await RunAsync();
+
+            report.Blocking.Should().Contain(p => p.Table == "tbl_media" && p.RowKey.Equals(_data.Media.ToString(), StringComparison.OrdinalIgnoreCase)
+                && p.Problem.Contains("link"));
+        }
+        finally
+        {
+            if (Directory.Exists(media)) Directory.Delete(media); // the junction only, never its target's content
+            Directory.Delete(elsewhere, recursive: true);
+        }
+    }
+
+    /// <summary>R2-2: comment_id is TEXT. A NULL or non-GUID one is a legacy comment sealed without an AAD; the product
+    /// and the re-seal open it, so the pre-flight must too — and never throw on it.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("legacy-comment-7")]
+    public async Task ALegacyCommentWithoutAGuidId_Passes_AndOneThatDoesNotOpen_BlocksWithoutThrowing(string? commentId)
+    {
+        var key = ArticleKey(_data.Purged);
+        var (ct, iv) = ArticleEncryptor.Encrypt("a legacy comment", key);
+        long row;
+        using (var conn = Open(Main, readOnly: false))
+            row = conn.ExecuteScalar<long>(
+                "INSERT INTO tbl_comment (article_id, text, created_at, comment_id, encrypted, ciphertext, iv) VALUES (@a, '', 'now', @c, 1, @ct, @iv); SELECT last_insert_rowid();",
+                new { a = Upper(_data.Purged), c = commentId, ct, iv });
+
+        (await RunAsync()).Blocking.Should().BeEmpty();
+
+        Mutate($"UPDATE tbl_comment SET ciphertext = randomblob(length(ciphertext)) WHERE id = {row}");
+        var report = await RunAsync();
+        report.Blocking.Should().ContainSingle(p => p.Table == "tbl_comment" && p.RowKey == RowResealStep.CommentKey(row, commentId));
+    }
+
+    [Fact]
+    public async Task ACommentWhoseArticleIdIsNotAGuid_Blocks_WithoutThrowing()
+    {
+        Mutate($"UPDATE tbl_comment SET article_id = 'not-a-guid' WHERE comment_id = '{_data.LastComment}' COLLATE NOCASE");
+
+        var report = await RunAsync();
+
+        report.Blocking.Should().ContainSingle(p => p.Table == "tbl_comment" && p.Problem.Contains("not a GUID"));
+    }
+
+    private byte[] ArticleKey(Guid article)
+    {
+        using var conn = Open(Main, readOnly: true);
+        var row = conn.QuerySingle<(byte[] W, byte[] Iv)>(
+            "SELECT encrypted_dek, dek_iv FROM tbl_article_body WHERE article_id = @a COLLATE NOCASE", new { a = article.ToString() });
+        return EnvelopeFraming.Article.UnwrapDek(article, row.W, row.Iv, Session.GetMasterDek());
     }
 
     [Fact]

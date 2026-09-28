@@ -193,6 +193,51 @@ public class NodeLifecycleServiceTests
     }
 
     [Fact]
+    public async Task StartOrAttachAsync_ToARunningNode_ReportsItAsAttached_UntilStopped()
+    {
+        // A node already running on the vault: its .runtime.json names a live process (this one) and a front that
+        // answers /node/status. The service attaches, and says so (the re-key refuses on it, review release-b R2-3).
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        using var stop = new CancellationTokenSource();
+        var front = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                using var client = await listener.AcceptTcpClientAsync(stop.Token);
+                using var stream = client.GetStream();
+                var buffer = new byte[4096];
+                _ = await stream.ReadAsync(buffer, stop.Token);
+                var ok = System.Text.Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                await stream.WriteAsync(ok, stop.Token);
+            }
+        });
+        var dataDir = Path.Combine(Path.GetTempPath(), "bmb-nls-attach-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dataDir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dataDir, ".runtime.json"),
+                $"{{\"pid\":{Environment.ProcessId},\"frontUrl\":\"http://127.0.0.1:{port}\"}}");
+            var svc = new NodeLifecycleService();
+
+            var result = await svc.StartOrAttachAsync(dataDir, progress: null, CancellationToken.None);
+
+            result.Success.Should().BeTrue();
+            svc.IsAttachedToExternalNode.Should().BeTrue();
+            await svc.StopAsync(TimeSpan.FromSeconds(1), CancellationToken.None);
+            svc.IsAttachedToExternalNode.Should().BeFalse("StopAsync forgets the node it attached to");
+        }
+        finally
+        {
+            stop.Cancel();
+            listener.Stop();
+            try { await front; } catch (Exception) { }
+            Directory.Delete(dataDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task StopAsync_NoProcessTracked_IsNoOp()
     {
         // A freshly-constructed service that never hosted or attached anything must stop

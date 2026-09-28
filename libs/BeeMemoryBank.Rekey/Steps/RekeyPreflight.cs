@@ -20,11 +20,14 @@ namespace BeeMemoryBank.Rekey.Steps;
 ///
 /// <para>Also blocking: a DEK rotation proposed or committing; a restore pending (the restore state, a pending
 /// upload, a standalone restore's staging file); less free space on the vault's volume than 2.5 × (database +
-/// chat.db + media) (§7).</para>
+/// chat.db + media) (§7); a row whose ciphertext is gone (a body, version, conflict or medium whose blob is missing, a
+/// medium with neither blob nor <c>.enc</c> file) and a medium whose <c>.enc</c> file is a link: RowResealStep fails
+/// on each (review release-b R2-1, R1-7), and the pre-flight is where a refusal leaves nothing behind; an id that is
+/// not a GUID where the re-seal needs one.</para>
 ///
 /// <para>Listed, never acted on (warnings): a copy of the vault in the OS temp folder, a blind node's folders in a
-/// full node's data directory, ciphertext that is already gone (a body whose blob is missing: nothing to re-key, and
-/// nothing the re-key could lose). The pre-flight deletes nothing.</para>
+/// full node's data directory, the comments of a purged body (dropped by the re-seal). The pre-flight deletes
+/// nothing.</para>
 /// </summary>
 public sealed class RekeyPreflight : IRekeyPreflight
 {
@@ -106,33 +109,39 @@ public sealed class RekeyPreflight : IRekeyPreflight
             list.Add(w);
         }
 
-        // Every wrapper the re-seal will rewrite, unscoped. The key of one article is the same in all of them.
-        foreach (var (id, wrapped, iv) in Query(main, "SELECT article_id, encrypted_dek, dek_iv FROM tbl_article_body",
-                     r => (Id(r, 0), Bytes(r, 1), Bytes(r, 2))))
-            Add(id, new Wrapper("tbl_article_body", id.ToString(), wrapped, iv));
-        foreach (var (id, article, wrapped, iv) in Query(main, "SELECT id, article_id, encrypted_dek, dek_iv FROM tbl_article_version",
-                     r => (r.GetString(0), Id(r, 1), Bytes(r, 2), Bytes(r, 3))))
-            Add(article, new Wrapper("tbl_article_version", id, wrapped, iv));
-        foreach (var (id, article, wrapped, iv) in Query(main, "SELECT id, article_id, encrypted_dek, dek_iv FROM tbl_conflict_version",
-                     r => (r.GetString(0), Id(r, 1), Bytes(r, 2), Bytes(r, 3))))
-            Add(article, new Wrapper("tbl_conflict_version", id, wrapped, iv));
+        // Every wrapper the re-seal will rewrite, unscoped. The key of one article is the same in all of them. An
+        // article id that is not a GUID blocks (the framing's AAD is the GUID): listed, never thrown.
+        foreach (var (id, raw, wrapped, iv) in Query(main, "SELECT article_id, article_id, encrypted_dek, dek_iv FROM tbl_article_body",
+                     r => (TryId(r, 0), r.GetString(1), Bytes(r, 2), Bytes(r, 3))))
+            if (id is { } a) Add(a, new Wrapper("tbl_article_body", a.ToString(), wrapped, iv));
+            else blocking.Add(new RekeyProblem("tbl_article_body", raw, "the article id is not a GUID"));
+        foreach (var table in new[] { "tbl_article_version", "tbl_conflict_version" })
+            foreach (var (id, article, raw, wrapped, iv) in Query(main, $"SELECT id, article_id, article_id, encrypted_dek, dek_iv FROM {table}",
+                         r => (r.GetString(0), TryId(r, 1), r.GetString(2), Bytes(r, 3), Bytes(r, 4))))
+                if (article is { } a) Add(a, new Wrapper(table, id, wrapped, iv));
+                else blocking.Add(new RekeyProblem(table, id, $"its article id '{raw}' is not a GUID"));
         // The event log is cleared on the copy (EventLogResetStep), so an event's wrapper is never re-sealed and never
         // blocks. It is still a source of an article's key: the comments of an article whose body was purged have no
         // other one.
         var fallback = new Dictionary<Guid, List<Wrapper>>();
         foreach (var (seq, article, payload) in Query(main,
                      "SELECT sequence_num, article_id, payload FROM tbl_event WHERE article_id IS NOT NULL AND event_type IN ('article_create','article_update')",
-                     r => (r.GetInt64(0), Id(r, 1), r.GetString(2))))
-            if (EventWrapper(payload) is { } w)
+                     r => (r.GetInt64(0), TryId(r, 1) ?? Guid.Empty, r.GetString(2))))
+            if (article != Guid.Empty && EventWrapper(payload) is { } w)
             {
                 if (!fallback.TryGetValue(article, out var list)) fallback[article] = list = [];
                 list.Add(new Wrapper("tbl_event", seq.ToString(), w.Wrapped, w.Iv));
             }
 
-        var comments = Query(main, "SELECT id, comment_id, article_id, ciphertext, iv FROM tbl_comment WHERE encrypted = 1",
-                r => (Row: r.GetInt64(0), Id: r.IsDBNull(1) ? (Guid?)null : Guid.Parse(r.GetString(1)), Article: Id(r, 2),
-                    Cipher: r.IsDBNull(3) ? null : Bytes(r, 3), Iv: r.IsDBNull(4) ? null : Bytes(r, 4)))
-            .GroupBy(c => c.Article).ToDictionary(g => g.Key, g => g.ToList());
+        // comment_id as stored (TEXT): a NULL or non-GUID one is a legacy comment sealed without an AAD, which the
+        // product and the re-seal both open (RowResealStep.TryOpenComment); its row key is the re-seal's.
+        var allComments = Query(main, "SELECT id, comment_id, article_id, ciphertext, iv FROM tbl_comment WHERE encrypted = 1",
+            r => (Row: r.GetInt64(0), Id: r.IsDBNull(1) ? null : r.GetString(1), Article: TryId(r, 2), ArticleRaw: r.GetString(2),
+                Cipher: r.IsDBNull(3) ? null : Bytes(r, 3), Iv: r.IsDBNull(4) ? null : Bytes(r, 4)));
+        foreach (var c in allComments.Where(c => c.Article is null))
+            blocking.Add(new RekeyProblem("tbl_comment", RowResealStep.CommentKey(c.Row, c.Id), $"its article id '{c.ArticleRaw}' is not a GUID"));
+        var comments = allComments.Where(c => c.Article is not null)
+            .GroupBy(c => c.Article!.Value).ToDictionary(g => g.Key, g => g.ToList());
 
         foreach (var article in wrappers.Keys.Concat(comments.Keys).Distinct())
         {
@@ -159,11 +168,11 @@ public sealed class RekeyPreflight : IRekeyPreflight
                 // Every comment, not only the first: each is opened the way CommentService reads it.
                 foreach (var c in articleComments)
                 {
-                    var rowKey = c.Id?.ToString() ?? $"row {c.Row}";
+                    var rowKey = RowResealStep.CommentKey(c.Row, c.Id);
                     if (opened.Count == 0)
                         blocking.Add(new RekeyProblem("tbl_comment", rowKey, $"no key of article {article} opens, so the comment cannot be re-sealed"));
-                    else if (c.Cipher is not { Length: > 0 } || c.Iv is not { Length: > 0 } || c.Id is null
-                             || !opened.Any(k => CommentOpens(article, c.Id.Value, c.Cipher, c.Iv, k)))
+                    else if (c.Cipher is not { Length: > 0 } || c.Iv is not { Length: > 0 }
+                             || !opened.Any(k => RowResealStep.TryOpenComment(article, c.Id, c.Cipher, c.Iv, k) is not null))
                         blocking.Add(new RekeyProblem("tbl_comment", rowKey, $"the comment does not open under any key of article {article}"));
                 }
             }
@@ -174,8 +183,8 @@ public sealed class RekeyPreflight : IRekeyPreflight
         }
     }
 
-    /// <summary>A body, version or conflict: its wrapper opens, and its ciphertext opens under the key it gives. A row
-    /// whose ciphertext is gone protects nothing, so it is a warning whatever its wrapper does.</summary>
+    /// <summary>A body, version or conflict: its wrapper opens, and its ciphertext is there and opens under the key it
+    /// gives. A row whose ciphertext is gone blocks: the re-seal fails on it (review release-b R2-1).</summary>
     private static void CheckArticleRow(SqliteConnection main, Guid article, Wrapper w, RekeyKeys keys, List<byte[]> opened,
         List<RekeyProblem> blocking, List<string> warnings)
     {
@@ -189,7 +198,7 @@ public sealed class RekeyPreflight : IRekeyPreflight
         if (entity is not null) opened.Add(entity);
         if (cipher is null)
         {
-            warnings.Add($"{w.Table} {w.Key}: its ciphertext is gone (nothing to re-key)");
+            blocking.Add(new RekeyProblem(w.Table, w.Key, "its ciphertext is missing (the blob it names is gone), so the re-seal would fail on it"));
             return;
         }
         if (entity is null)
@@ -230,10 +239,15 @@ public sealed class RekeyPreflight : IRekeyPreflight
         var sql = hasHash
             ? "SELECT m.id, m.encrypted_dek, m.dek_iv, m.iv, b.data FROM tbl_media m LEFT JOIN tbl_blob b ON b.hash = m.ciphertext_sha256"
             : "SELECT m.id, m.encrypted_dek, m.dek_iv, m.iv, NULL FROM tbl_media m";
-        foreach (var (id, wrapped, dekIv, iv, blob) in Query(main, sql,
-                     r => (Id(r, 0), Bytes(r, 1), Bytes(r, 2), Bytes(r, 3), r.IsDBNull(4) ? null : Bytes(r, 4))))
+        foreach (var (maybeId, raw, wrapped, dekIv, iv, blob) in Query(main, sql,
+                     r => (TryId(r, 0), r.GetString(0), Bytes(r, 1), Bytes(r, 2), Bytes(r, 3), r.IsDBNull(4) ? null : Bytes(r, 4))))
         {
             ct.ThrowIfCancellationRequested();
+            if (maybeId is not { } id)
+            {
+                blocking.Add(new RekeyProblem("tbl_media", raw, "the media id is not a GUID"));
+                continue;
+            }
             var entity = OpenEntityKey(EnvelopeFraming.Media, id, wrapped, dekIv, keys);
             if (entity is null)
             {
@@ -242,10 +256,20 @@ public sealed class RekeyPreflight : IRekeyPreflight
             }
             try
             {
-                var cipher = blob ?? MediaFile(sourceDir, id);
+                byte[]? cipher = blob;
+                if (cipher is null && RowResealStep.MediaFile(sourceDir, raw) is { } file && File.Exists(file))
+                {
+                    // The re-seal never reads through a link (review release-b R1-7); refused here, before the copy.
+                    if (NoFollow.IsLink(file) || NoFollow.IsLink(Path.GetDirectoryName(file)!))
+                    {
+                        blocking.Add(new RekeyProblem("tbl_media", id.ToString(), "its .enc file is a link (or inside a linked media directory); the re-key does not follow links"));
+                        continue;
+                    }
+                    cipher = File.ReadAllBytes(file);
+                }
                 if (cipher is null)
                 {
-                    warnings.Add($"tbl_media {id}: its ciphertext is gone (no blob, no media file; nothing to re-key)");
+                    blocking.Add(new RekeyProblem("tbl_media", id.ToString(), "neither its blob nor its .enc file exists, so the re-seal would fail on it"));
                     continue;
                 }
                 try
@@ -262,17 +286,6 @@ public sealed class RekeyPreflight : IRekeyPreflight
                 Array.Clear(entity);
             }
         }
-    }
-
-    private static byte[]? MediaFile(string sourceDir, Guid id)
-    {
-        var dir = Path.Combine(sourceDir, "media");
-        foreach (var name in new[] { $"{id}.enc", $"{id.ToString().ToUpperInvariant()}.enc" })
-        {
-            var path = Path.Combine(dir, name);
-            if (File.Exists(path)) return File.ReadAllBytes(path);
-        }
-        return null;
     }
 
     // ─── Sealed secrets, remote tokens ──────────────────────────────────────
@@ -469,13 +482,6 @@ public sealed class RekeyPreflight : IRekeyPreflight
         return null;
     }
 
-    // The product's reader (CommentService.DecryptCommentText): the comment AAD, then the legacy one without an AAD.
-    private static bool CommentOpens(Guid article, Guid comment, byte[] cipher, byte[] iv, byte[] key)
-    {
-        var aad = "bmb-comment"u8.ToArray().Concat(article.ToByteArray()).Concat(comment.ToByteArray()).ToArray();
-        return Opens(() => ArticleEncryptor.Decrypt(cipher, iv, key, aad)) || Opens(() => ArticleEncryptor.Decrypt(cipher, iv, key, aad: null));
-    }
-
     private static (byte[] Wrapped, byte[] Iv)? EventWrapper(string payload)
     {
         try
@@ -524,6 +530,6 @@ public sealed class RekeyPreflight : IRekeyPreflight
         return Convert.ToInt64(cmd.ExecuteScalar()) > 0;
     }
 
-    private static Guid Id(SqliteDataReader r, int i) => Guid.Parse(r.GetString(i));
+    private static Guid? TryId(SqliteDataReader r, int i) => Guid.TryParse(r.GetString(i), out var g) ? g : null;
     private static byte[] Bytes(SqliteDataReader r, int i) => (byte[])r.GetValue(i);
 }

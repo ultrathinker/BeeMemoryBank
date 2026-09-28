@@ -162,6 +162,21 @@ public class DesktopRekeyServiceTests : IDisposable
         status.Should().Contain("plain text from the verb").And.Contain("{\"step\":").And.Contain("Re-keying: verify");
     }
 
+    /// <summary>R2-3: StopAsync leaves an attached node running, so the re-key refuses before touching anything.</summary>
+    [Fact]
+    public async Task AnAttachedExternalNode_IsRefused_BeforeAnythingIsStoppedOrRun()
+    {
+        var node = new FakeNode { Attached = true };
+        var runner = new FakeRunner(0) { Node = node };
+
+        var result = await Service(node, runner).RunAsync(DataDir, Password, nodeIsRunning: true, null, null, CancellationToken.None);
+
+        result.Outcome.Should().Be(RekeyOutcome.NotRun);
+        result.Message.Should().Contain("not started by this app").And.Contain("Stop that node first");
+        node.Calls.Should().BeEmpty("nothing is stopped, run or started");
+        result.ReportUrl.Should().BeNull();
+    }
+
     [Fact]
     public async Task ANodeThatIsNotRunning_IsNotStopped()
     {
@@ -185,6 +200,8 @@ public class DesktopRekeyServiceTests : IDisposable
     private sealed class FakeNode : INodeLifecycleService
     {
         public List<string> Calls { get; } = [];
+        public bool Attached { get; init; }
+        public bool IsAttachedToExternalNode => Attached;
         public NodeLifecycleResult StartResult { get; init; } = new() { Success = true, FrontUrl = "http://127.0.0.1:5301/" };
 
         public Task<NodeLifecycleResult> StartOrAttachAsync(string dataDir, IProgress<string>? progress, CancellationToken ct)
