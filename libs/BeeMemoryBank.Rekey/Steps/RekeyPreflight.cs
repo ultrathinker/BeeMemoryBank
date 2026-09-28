@@ -393,10 +393,16 @@ public sealed class RekeyPreflight : IRekeyPreflight
     /// <summary>A SQLite file, whatever its extension (a raw snapshot copy is a <c>.tmp</c>), with the vault's tables.</summary>
     private static bool IsVaultCopy(string path)
     {
+        // Only a regular file can be a copy, and it is opened only once that is known. Opening a FIFO blocks until
+        // a writer comes, forever: on Linux every running .NET process keeps clr-debug-pipe-* FIFOs in /tmp, the
+        // verb's own included. A SQLite database is at least one 512-byte page, and stat() gives a FIFO, a socket or
+        // a device a length of 0.
+        if (new FileInfo(path).Length < 512) return false;
         var header = new byte[SqliteMagic.Length];
         using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             if (fs.Read(header, 0, header.Length) != header.Length || !header.AsSpan().SequenceEqual(SqliteMagic)) return false;
-        var builder = new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false };
+        // A file another process holds locked is not waited on for long: it is a warning, not a reason to stall.
+        var builder = new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 1 };
         try
         {
             using var conn = new SqliteConnection(builder.ToString());

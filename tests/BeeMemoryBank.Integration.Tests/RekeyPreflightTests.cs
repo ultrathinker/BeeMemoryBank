@@ -259,6 +259,30 @@ public class RekeyPreflightTests : RekeyVaultTestBase
         Directory.Exists(blind).Should().BeTrue();
     }
 
+    /// <summary>
+    /// A FIFO in the OS temp folder is passed over, not opened: opening one blocks until a writer comes, and on Linux
+    /// every running .NET process keeps clr-debug-pipe-* FIFOs in /tmp. The pre-flight hung on E480 before this.
+    /// </summary>
+    [Fact]
+    public async Task AFifoInTheOsTempFolder_DoesNotStallThePreflight()
+    {
+        if (OperatingSystem.IsWindows()) return; // no FIFOs in a Windows temp folder
+        var fifo = Path.Combine(_osTemp, "clr-debug-pipe-1-1-in");
+        mkfifo(fifo, Convert.ToUInt32("600", 8)).Should().Be(0, "the test needs a FIFO");
+        var copy = Path.Combine(_osTemp, "tmp5A3F.tmp");
+        File.Copy(Path.Combine(_vault, "beememorybank.db"), copy);
+
+        var run = RunAsync();
+        (await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(30)))).Should().BeSameAs(run, "a FIFO must not stall the pre-flight");
+
+        var report = await run;
+        report.Warnings.Should().Contain(w => w.StartsWith(copy), "the scan goes on past the FIFO");
+        report.Warnings.Should().NotContain(w => w.StartsWith(fifo));
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int mkfifo(string path, uint mode);
+
     /// <summary>The keys belong to the verb; the pre-flight neither clears nor keeps any of them.</summary>
     [Fact]
     public async Task TheCandidateKeys_AreLeftAsTheyWere()
