@@ -32,7 +32,7 @@ public sealed class PeerRevokeStep : IRekeyStep
                   SET status = 'R', deleted_at = @now, updated_at = @now, lamport_ts = @lamport, source_node_id = @self
                   WHERE node_id = @node",
                 new { now, lamport, self = ctx.NodeId.ToString(), node = p.NodeId }, tx);
-            notes.Add($"revoked:{p.NodeId} {p.Name}");
+            notes.Add($"revoked:{(Guid.TryParse(p.NodeId, out var g) ? g.ToString() : p.NodeId)} {p.Name}");
         }
 
         tx.Commit();
