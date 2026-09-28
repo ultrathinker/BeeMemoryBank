@@ -723,25 +723,37 @@ public sealed class BlindSeedService(
         using var scope = scopeFactory.CreateScope();
         var applier = scope.ServiceProvider.GetRequiredService<EventApplier>();
         var quarantine = scope.ServiceProvider.GetRequiredService<ISyncQuarantineRepository>();
-        foreach (var evt in tail)
+        var scopeHolder = scope.ServiceProvider.GetRequiredService<CallerScopeHolder>();
+
+        // The replay is a sync apply and runs under the system scope, exactly as the batch handler's
+        // is (SyncEndpoints: RunAsSystemAsync around its apply loop). Without it the apply runs under
+        // the *seeding peer's* caller scope, which allows no folder path at all -- so an event whose
+        // article sits in a folder this blind node does not have yet (a phone push during the reseed
+        // window, anything in a new folder) is refused by FolderRepository.ThrowIfWriteDenied,
+        // classified permanent and quarantined: what the blind node held beyond the package, and in
+        // no package, is then lost on it for good.
+        return await scopeHolder.RunAsSystemAsync(async () =>
         {
-            try
+            foreach (var evt in tail)
             {
-                await applier.ApplyAsync(evt);
+                try
+                {
+                    await applier.ApplyAsync(evt);
+                }
+                catch (Exception ex) when (SyncFailureClassifier.Classify(ex) == SyncFailureKind.Permanent)
+                {
+                    await quarantine.RecordFailureAsync(evt.EventId, evt.EventType, evt.NodeId,
+                        "Blind reseed replay: " + ex.Message, SyncFailureKind.Permanent);
+                    logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) can never apply; quarantined", evt.EventId, evt.EventType);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) did not apply; rolling back", evt.EventId, evt.EventType);
+                    return $"{evt.EventId} ({evt.EventType}: {ex.Message})";
+                }
             }
-            catch (Exception ex) when (SyncFailureClassifier.Classify(ex) == SyncFailureKind.Permanent)
-            {
-                await quarantine.RecordFailureAsync(evt.EventId, evt.EventType, evt.NodeId,
-                    "Blind reseed replay: " + ex.Message, SyncFailureKind.Permanent);
-                logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) can never apply; quarantined", evt.EventId, evt.EventType);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) did not apply; rolling back", evt.EventId, evt.EventType);
-                return $"{evt.EventId} ({evt.EventType}: {ex.Message})";
-            }
-        }
-        return null;
+            return (string?)null;
+        });
     }
 
     private void TryDeleteTree(string dir)
