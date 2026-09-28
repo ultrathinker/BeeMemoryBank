@@ -70,6 +70,39 @@ public class SyncReportPositionTests : IAsyncLifetime
             "the refused report must not move the recorded position");
     }
 
+    /// <summary>
+    /// Codex round 2, security #3. Serving a page is not the peer having read it: <c>/api/sync/events</c>
+    /// records how far it has been *sent* the moment it answers, and the report is the peer's own word
+    /// about what it applied. The two are kept apart — only the reported one may delete events — and
+    /// this is the case that tells them apart: an honest peer that has applied less than it was served
+    /// says so, and saying so must not be refused.
+    /// </summary>
+    [Fact]
+    public async Task ReportPosition_BelowWhatThePeerWasServed_IsAccepted_AndIsWhatTheLogIsCutBy()
+    {
+        var (peerId, http) = await PeerAsync();
+        for (var i = 0; i < 3; i++)
+            await Events.AppendIfNotExistsAsync(new SyncEvent
+            {
+                EventId = Guid.NewGuid(), NodeId = peerId, LamportTs = i + 1,
+                EventType = EventTypes.FolderCreate, Payload = "{}", Signature = new byte[64],
+                ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current, CreatedAt = DateTime.UtcNow
+            });
+
+        // The peer pulls a page and is served all three — the delivery watermark moves to 3.
+        using var _ = await http.GetAsync("/api/sync/events?afterSequence=0");
+        (await Positions.GetAsync(peerId))!.LastPushedSeq.Should().Be(3);
+
+        // It applied only two of them, and says so.
+        (await ReportAsync(http, 2)).StatusCode.Should().Be(HttpStatusCode.OK,
+            "a peer that has applied less than it was served may say so — refusing it would leave the " +
+            "delivery watermark as the only number the log could be cut by");
+
+        var row = (await Positions.GetAsync(peerId))!;
+        row.ReportedSeq.Should().Be(2, "the acknowledged position is what a blind node's trimmer cuts at");
+        row.LastPushedSeq.Should().Be(3, "and the delivery watermark still says what it was sent");
+    }
+
     private IEventLogRepository Events => _factory.Services.GetRequiredService<IEventLogRepository>();
 
     private ISyncPushPositionRepository Positions => _factory.Services.GetRequiredService<ISyncPushPositionRepository>();
