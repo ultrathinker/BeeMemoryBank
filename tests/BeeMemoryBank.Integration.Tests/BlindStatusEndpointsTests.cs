@@ -58,15 +58,23 @@ public class BlindStatusEndpointsTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// "Stored" describes what this NODE holds, not what the asking caller may read. It used to be
-    /// counted through IArticleRepository.CountAsync, which applies the caller's folder ACL — and
-    /// the console and the CLI ask with the internal key and no user scope, so a node carrying the
-    /// mesh's whole vault answered "0 articles".
+    /// "Stored" describes what this NODE holds, not what the asking caller may read — which on a
+    /// blind node is the difference between a number and nothing at all.
+    ///
+    /// <para>A blind node registers no <c>CallerScopeMiddleware</c> (ApiPipeline: no users, no
+    /// agents, nothing to resolve a scope from), so every request resolves the deny-everything
+    /// default. The count went through <c>IArticleRepository.CountAsync</c>, which pushes the
+    /// caller's folder ACL into its WHERE clause: on the release stand the node reported "0
+    /// articles" while holding 49. The blob count and the database size never went through a scope,
+    /// and neither does this one now.</para>
     /// </summary>
     [Fact]
     public async Task StoredArticles_AreCountedWhateverTheCallerMayRead()
     {
-        var connFactory = _factory.Services.GetRequiredService<IDbConnectionFactory>();
+        using var blind = new BlindNodeFactory();
+        await blind.InitializeNodeAsync(displayName: "BlindCountNode");
+
+        var connFactory = blind.Services.GetRequiredService<IDbConnectionFactory>();
         using (var conn = connFactory.CreateConnection())
         {
             for (var i = 0; i < 3; i++)
@@ -81,9 +89,10 @@ public class BlindStatusEndpointsTests : IAsyncLifetime
                 new { id = Guid.NewGuid().ToString(), now = DateTime.UtcNow.ToString("O") });
         }
 
-        using var client = _factory.CreateClient();
+        using var client = blind.CreateClient();
         var json = await (await client.GetAsync("/api/blind/status")).Content.ReadFromJsonAsync<JsonElement>();
-        json.GetProperty("stored").GetProperty("articles").GetInt32().Should().Be(3);
+        json.GetProperty("stored").GetProperty("articles").GetInt32().Should().Be(3,
+            "the node holds three live articles, whatever the asking caller is allowed to read");
     }
 
     [Fact]
