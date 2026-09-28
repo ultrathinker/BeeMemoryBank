@@ -46,7 +46,10 @@ var dataPath = builder.Configuration["BeeMemoryBank:DataPath"]
     ?? Environment.GetEnvironmentVariable("BMB_DATA_PATH")
     ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
 // An offline re-key's swap is finished (or rolled back) before anything creates or opens D.
-dataPath = BeeMemoryBank.AppPaths.RekeySwapResolver.Resolve(dataPath).DataDir;
+var rekeySwap = BeeMemoryBank.AppPaths.RekeySwapResolver.Resolve(dataPath);
+dataPath = rekeySwap.DataDir;
+if (BeeMemoryBank.AppPaths.RekeyLock.StartRefusal(rekeySwap) is { } rekeyRunning)
+    throw new InvalidOperationException(rekeyRunning);
 
 Directory.CreateDirectory(dataPath);
 

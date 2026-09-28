@@ -258,4 +258,17 @@ root.AddCommand(restoreCmd);
 
 // ────────────────────────────────────────────────────────────────────────────
 
+// ─── bmb rekey ──────────────────────────────────────────────────────────────
+
+var rekeyPasswordStdinOpt = new Option<bool>("--password-stdin", "Read the owner's password from the first line of stdin");
+var rekeyProgressJsonOpt = new Option<bool>("--progress-json", "One JSON line per progress event on stdout");
+var rekeyCmd = new Command("rekey", "Re-key the whole vault under a fresh key, offline (the node must be stopped)");
+rekeyCmd.AddOption(rekeyPasswordStdinOpt);
+rekeyCmd.AddOption(rekeyProgressJsonOpt);
+rekeyCmd.SetHandler(async (data, passwordStdin, progressJson) =>
+{
+    Environment.Exit(await RekeyCommand.HandleAsync(data, passwordStdin, progressJson));
+}, dataOption, rekeyPasswordStdinOpt, rekeyProgressJsonOpt);
+root.AddCommand(rekeyCmd);
+
 return await root.InvokeAsync(args);

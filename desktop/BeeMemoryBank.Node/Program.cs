@@ -135,7 +135,13 @@ public static class Program
             }
             resolvedDataDirectory = Path.GetFullPath(dataDirectory!);
             // An offline re-key's swap is finished (or rolled back) before anything creates or opens D.
-            resolvedDataDirectory = BeeMemoryBank.AppPaths.RekeySwapResolver.Resolve(resolvedDataDirectory).DataDir;
+            var rekeySwap = BeeMemoryBank.AppPaths.RekeySwapResolver.Resolve(resolvedDataDirectory);
+            resolvedDataDirectory = rekeySwap.DataDir;
+            if (BeeMemoryBank.AppPaths.RekeyLock.StartRefusal(rekeySwap) is { } rekeyRunning)
+            {
+                Console.Error.WriteLine($"[Error] {rekeyRunning}");
+                return 5;
+            }
 
             try
             {

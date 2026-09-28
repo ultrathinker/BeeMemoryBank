@@ -17,6 +17,7 @@
          the Api does, just without the image transcoder (the CLI has no upload path). -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Embeddings\BeeMemoryBank.Embeddings.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Rekey\BeeMemoryBank.Rekey.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
   </ItemGroup>
 
