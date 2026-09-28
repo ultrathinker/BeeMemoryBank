@@ -30,7 +30,11 @@ public sealed class BlindPreflight(
     /// </summary>
     public static readonly TimeSpan UnknownProtocolGrace = TimeSpan.FromDays(7);
 
-    public async Task RunAsync(HttpClient http, CancellationToken ct)
+    /// <summary>
+    /// Throws <see cref="BlindPreflightFailedException"/> with every problem found; otherwise returns what
+    /// the operator should know but that does not stop the add.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> RunAsync(HttpClient http, CancellationToken ct)
     {
         var self = await nodeRepo.GetAsync() ?? throw new InvalidOperationException("Node is not initialized.");
         var peers = (await whitelist.GetAllActiveAsync()).Where(p => !BlindNodeId.IsBlind(p.NodeId)).ToList();
@@ -43,6 +47,7 @@ public sealed class BlindPreflight(
             if (version is { } v && seen.TryGetValue(id, out var best) && (best is null || v > best)) seen[id] = v;
         }
 
+        var answered = 0;
         foreach (var peer in peers.Where(p => !string.IsNullOrEmpty(p.ApiAddress)))
         {
             // Plan 4.2 asks the peers that are reachable. One that is not cannot receive the
@@ -50,6 +55,7 @@ public sealed class BlindPreflight(
             // lets the add wait for a promotion instead of dropping it.
             var answer = await AskAsync(http, self, peer, ct);
             if (!answer.Reached) continue;
+            answered++;
             if (answer.Standing is not { } standing)
             {
                 problems.Add($"\"{peer.DisplayName}\" refused this PC (or answered something unreadable): check that this PC " +
@@ -82,7 +88,16 @@ public sealed class BlindPreflight(
 
         if (problems.Count > 0)
             throw new BlindPreflightFailedException(problems);
+
+        // Nobody answered, so nothing in the network confirmed this PC's standing — a PC alone in its
+        // network, or one whose peers are all offline. That does not stop the add (review r1-merge #3):
+        // the blind node takes this PC as its authority because it holds the pair code the operator
+        // issued there, not because a peer confirmed it. The operator is told so.
+        return answered == 0 ? [NoConfirmationWarning] : [];
     }
+
+    public const string NoConfirmationWarning =
+        "No other full node is reachable to confirm your standing — the blind node will trust you because you hold its pair code.";
 
     /// <summary>
     /// Whether the network verifiably sees this node as superadmin: at least one full peer answered,

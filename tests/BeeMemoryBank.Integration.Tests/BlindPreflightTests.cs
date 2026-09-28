@@ -10,7 +10,9 @@ namespace BeeMemoryBank.Integration.Tests;
 /// <summary>
 /// Plan 4.2 / 3.1: before adding a blind node the PC asks every reachable full peer how it sees the
 /// PC (GET /api/sync/my-standing) and refuses — naming the node — while any peer does not see it as
-/// superadmin or any full node is still on a protocol that knows nothing of blind nodes.
+/// superadmin or any full node is still on a protocol that knows nothing of blind nodes. When nobody
+/// answers, it warns and goes on: the pair code, not a peer, makes the PC the blind node's authority
+/// (review r1-merge #3).
 /// </summary>
 [Collection(HeavyOperationCollection.Name)]
 public class BlindPreflightTests : IAsyncLifetime
@@ -56,6 +58,32 @@ public class BlindPreflightTests : IAsyncLifetime
         await TrustPcOnHubAsync(superadmin: true);
 
         await RunAsync().Should().NotThrowAsync();
+        (await WarningsAsync(_toHub)).Should().BeEmpty("the hub answered and confirmed the PC");
+    }
+
+    /// <summary>
+    /// Review r1-merge #3: no full peer answers (here the hub is switched off). Nothing confirmed the PC's
+    /// standing, which is said, but it is no reason to refuse: the blind node will trust the PC because
+    /// it holds the pair code. It is still no confirmation for anything else that asks.
+    /// </summary>
+    [Fact]
+    public async Task NobodyAnswers_Warns_AndDoesNotRefuse()
+    {
+        using var offline = new HttpClient(new Unreachable());
+
+        var run = () => WarningsAsync(offline);
+        (await run.Should().NotThrowAsync("the pair code, not a peer, is what the blind node trusts"))
+            .Which.Should().Equal([BlindPreflight.NoConfirmationWarning]);
+        using var scope = _pc.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<BlindPreflight>().IsSuperadminInNetworkAsync(offline, CancellationToken.None))
+            .Should().BeFalse("nobody confirmed it");
+    }
+
+    /// <summary>Every request fails in transport, as for a peer that is switched off.</summary>
+    private sealed class Unreachable : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new HttpRequestException("unreachable");
     }
 
     [Fact]
@@ -162,6 +190,12 @@ public class BlindPreflightTests : IAsyncLifetime
     {
         using var scope = _pc.Services.CreateScope();
         return await scope.ServiceProvider.GetRequiredService<BlindPreflight>().IsSuperadminInNetworkAsync(_toHub, CancellationToken.None);
+    }
+
+    private async Task<IReadOnlyList<string>> WarningsAsync(HttpClient http)
+    {
+        using var scope = _pc.Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<BlindPreflight>().RunAsync(http, CancellationToken.None);
     }
 
     private Func<Task> RunAsync() => async () =>

@@ -15,9 +15,11 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-merge #2 and #3: how the producer describes itself in a blind package. It is a reseed
-/// authority only where the network verifiably says so, and it can be dialled and pinned where it
-/// said it can be reached.
+/// Review L-merge #2 and #3: how the producer describes itself in a blind package — a replica says
+/// superadmin only where the network verifiably does, and the producer can be dialled and pinned where
+/// it said it can be reached. And what makes a first seed's producer the blind node's authority: the
+/// pair code the operator issued, not what its manifest claims (review r1-merge #3); after that, only
+/// signed standing changes it.
 /// </summary>
 public class BlindReplicaProducerTests : IAsyncLifetime
 {
@@ -90,43 +92,29 @@ public class BlindReplicaProducerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-merge round 2 #1: the PC seeds under the pair code with its own manifest row claiming
-    /// superadmin (BlindNodeManager says so after its pre-flight) — but nothing the network signed says
-    /// so. The blind node imports it as an ordinary peer, and its later reseed is refused.
+    /// Review r1-merge #3: the authority comes from the code, not from the manifest. Through the real
+    /// seed endpoint and the real seeder proof, the PC sends a package whose manifest does not claim
+    /// superadmin for it, and no signed standing either — the blind node still takes it as superadmin,
+    /// bound to the paired key, and takes its reseed.
     /// </summary>
     [Fact]
-    public async Task AProducersOwnSuperadminClaim_GrantsNothing_AndItsReseedIsRefused()
-    {
-        await AddBlindNodeAsync();
-        var pc = (await _pc.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
-
-        (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(pc.NodeId))!
-            .IsSuperadmin.Should().BeFalse("a producer's claim about itself is not the network's word");
-        var resp = await ReseedAsync(pc);
-        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "only a peer the blind node already holds as superadmin may reseed");
-    }
-
-    /// <summary>A promotion the PC signed for itself is in its log, but no applier accepts it.</summary>
-    [Fact]
-    public async Task ASelfSignedPromotion_IsNoStanding()
+    public async Task TheCodeMakesTheProducerTheAuthority_WhateverItsManifestClaims()
     {
         var pc = (await _pc.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
-        var self = new SyncEvent
-        {
-            EventId = Guid.NewGuid(), NodeId = pc.NodeId, LamportTs = 10, EventType = EventTypes.WhitelistUpdate,
-            Payload = JsonSerializer.Serialize(new WhitelistUpdatePayload(pc.NodeId, null, null, IsSuperadmin: true)),
-            ProtocolVersion = SyncProtocolVersion.Current, CreatedAt = DateTime.UtcNow
-        };
+        BlindPackage package;
         using (var scope = _pc.Services.CreateScope())
-        {
-            self.Signature = scope.ServiceProvider.GetRequiredService<INodeAuthSigner>().SignChallenge(pc, EventSignature.BuildPayload(self));
-            await scope.ServiceProvider.GetRequiredService<IEventLogRepository>().AppendAsync(self);
-        }
+            package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+                .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: false);
+        package.Manifest.Whitelist.Single(p => p.NodeId == pc.NodeId).IsSuperadmin.Should().BeFalse("the manifest claims nothing");
+        package.Manifest.Standing.Should().BeNullOrEmpty();
 
-        await AddBlindNodeAsync();
+        var seed = await SeedUnderThePairCodeAsync(pc, package);
 
-        (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(pc.NodeId))!
-            .IsSuperadmin.Should().BeFalse();
+        seed.StatusCode.Should().Be(HttpStatusCode.OK, await seed.Content.ReadAsStringAsync());
+        var row = (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(pc.NodeId))!;
+        row.IsSuperadmin.Should().BeTrue("the PC used the pair code");
+        row.Ed25519PublicKey.Should().Equal(pc.Ed25519PublicKey);
+        (await ReseedAsync(pc)).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     /// <summary>
@@ -150,12 +138,14 @@ public class BlindReplicaProducerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-merge round 3 #2: the producer was admitted as superadmin and later revoked, both signed
-    /// by the root and both in its log. Its first seed carries the revoke with the promotion, so the
-    /// blind node does not hold it as an active superadmin, and it cannot reseed.
+    /// Review r1-merge #3: the producer was admitted as superadmin and later revoked, both signed by the
+    /// root and both in its log and its first seed. The operator gave it the pair code anyway, and that
+    /// grant is newer than anything the stream says: it is the blind node's authority. The grant keeps
+    /// the version the stream left, so an older revoke arriving later changes nothing, and a newer one,
+    /// signed by the root, takes the authority away.
     /// </summary>
     [Fact]
-    public async Task ARevokedProducer_GetsNothingFromItsOldPromotion()
+    public async Task ARevokedProducerGivenTheCode_IsTheAuthority_UntilANewerSignedRevoke()
     {
         var pc = (await _pc.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
         var (rootId, rootKey) = await TrustRootOnPcAsync();
@@ -165,8 +155,121 @@ public class BlindReplicaProducerTests : IAsyncLifetime
 
         await AddBlindNodeAsync();
 
-        var row = await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(pc.NodeId);
-        (row is null || !row.IsSuperadmin).Should().BeTrue("the revoke travelled with the promotion it ends");
+        var whitelist = _blind.Services.GetRequiredService<IWhitelistRepository>();
+        (await whitelist.GetByNodeIdAsync(pc.NodeId, includeDeleted: true)).Should()
+            .Match<WhitelistEntry>(r => r.Status == "A" && r.IsSuperadmin, "the operator's grant");
+        await ApplyOnBlindAsync(Signed(rootId, rootKey, 15, EventTypes.WhitelistRevoke, new WhitelistRevokePayload(pc.NodeId)));
+        (await whitelist.GetByNodeIdAsync(pc.NodeId, includeDeleted: true)).Should()
+            .Match<WhitelistEntry>(r => r.Status == "A" && r.IsSuperadmin, "a revoke older than the row's version loses");
+
+        await ApplyOnBlindAsync(Signed(rootId, rootKey, 30, EventTypes.WhitelistRevoke, new WhitelistRevokePayload(pc.NodeId)));
+
+        (await whitelist.GetByNodeIdAsync(pc.NodeId)).Should().BeNull("a newer signed revoke ends the authority");
+        var reseed = () => ReseedAsync(pc);
+        (await reseed.Should().ThrowAsync<HttpRequestException>("a revoked peer is refused already at the handshake"))
+            .Which.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    /// <summary>
+    /// Review l-root2 #2: the grant is a versioned decision. The package carries no standing for the PC,
+    /// and a demotion signed by the root that the package did not carry (no reachable peer had passed it
+    /// on) and that is not newer than what the package reflected arrives afterwards: it loses against the
+    /// grant. A newer one wins, as everywhere.
+    /// </summary>
+    [Fact]
+    public async Task ADemotionThePackageDidNotCarry_AndNoNewerThanIt_DoesNotUndoTheGrant()
+    {
+        var pc = (await _pc.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+        var blindId = (await _blind.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!.NodeId;
+        var (rootId, rootKey) = await TrustRootOnPcAsync();
+        // Some history the package reflects: the root admitted a phone, at Lamport 50.
+        await ApplyOnPcAsync(Signed(rootId, rootKey, 50, EventTypes.WhitelistAdd, new WhitelistAddPayload(Guid.NewGuid(), "Phone",
+            Convert.ToBase64String(Ed25519Signer.GenerateKeyPair().publicKey), null, false, IsSuperadmin: false)));
+        await AddBlindNodeAsync();
+        var whitelist = _blind.Services.GetRequiredService<IWhitelistRepository>();
+        var granted = (await whitelist.GetByNodeIdAsync(pc.NodeId))!;
+
+        // Signed at 50: no newer than the history the package reflected, and not in it.
+        await ApplyOnBlindAsync(Signed(rootId, rootKey, 50, EventTypes.WhitelistUpdate,
+            new WhitelistUpdatePayload(pc.NodeId, null, null, IsSuperadmin: false)));
+        (await whitelist.GetByNodeIdAsync(pc.NodeId))!.IsSuperadmin.Should().BeTrue("a demotion no newer than the grant loses");
+
+        await ApplyOnBlindAsync(Signed(rootId, rootKey, granted.LamportTs + 1, EventTypes.WhitelistUpdate,
+            new WhitelistUpdatePayload(pc.NodeId, null, null, IsSuperadmin: false)));
+        (await whitelist.GetByNodeIdAsync(pc.NodeId))!.IsSuperadmin.Should().BeFalse("a newer signed demotion wins");
+        granted.SourceNodeId.Should().Be(blindId, "the grant is this node's own decision");
+    }
+
+    /// <summary>
+    /// Review l-root3: the grant's time comes from the raw maximum, not through the Lamport clock, whose
+    /// update caps a jump at 10,000,000 ahead of it. A peer row in the package stands at 100,000,000; a
+    /// root-signed demotion at 20,000,000 that the package did not carry is not newer than the grant.
+    /// </summary>
+    [Fact]
+    public async Task AGrantAfterAHighLamportTime_IsNotCappedByTheClock()
+    {
+        var pc = (await _pc.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+        var (rootId, rootKey) = await TrustRootOnPcAsync();
+        await PeerOnPcAtAsync(100_000_000);
+        await AddBlindNodeAsync();
+
+        await ApplyOnBlindAsync(Signed(rootId, rootKey, 20_000_000, EventTypes.WhitelistUpdate,
+            new WhitelistUpdatePayload(pc.NodeId, null, null, IsSuperadmin: false)));
+
+        (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(pc.NodeId))!
+            .IsSuperadmin.Should().BeTrue("the grant comes after 100,000,000, and 20,000,000 is not newer");
+    }
+
+    /// <summary>
+    /// Review l-root3: a package holding a Lamport time at long.MaxValue leaves no time after it for the
+    /// grant. It is refused before the switch: the blind node keeps its database and grants nothing.
+    /// </summary>
+    [Fact]
+    public async Task APackageAtTheLamportLimit_IsRefused_AndNothingIsSwitched()
+    {
+        var pc = (await _pc.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+        await PeerOnPcAtAsync(long.MaxValue);
+        BlindPackage package;
+        using (var scope = _pc.Services.CreateScope())
+            package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+                .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: true);
+
+        var seed = await SeedUnderThePairCodeAsync(pc, package);
+
+        seed.StatusCode.Should().Be(HttpStatusCode.BadRequest, await seed.Content.ReadAsStringAsync());
+        (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(pc.NodeId, includeDeleted: true))
+            .Should().BeNull("nothing was switched, so nothing was granted");
+        File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse("the live database was never replaced");
+    }
+
+    /// <summary>A peer row on the PC at Lamport <paramref name="lamport"/>, which the package's whitelist carries.</summary>
+    private async Task PeerOnPcAtAsync(long lamport) =>
+        await _pc.Services.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
+        {
+            NodeId = Guid.NewGuid(), DisplayName = "Phone", Ed25519PublicKey = Ed25519Signer.GenerateKeyPair().publicKey,
+            Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow, LamportTs = lamport, SourceNodeId = Guid.NewGuid()
+        });
+
+    private async Task ApplyOnBlindAsync(SyncEvent evt)
+    {
+        using var scope = _blind.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<EventApplier>().ApplyAsync(evt)).Should().Be(EventApplyResult.Applied);
+    }
+
+    /// <summary>The PC's first seed, as BlindNodeManager sends it: the pair code's proof names the PC and its key.</summary>
+    private async Task<HttpResponseMessage> SeedUnderThePairCodeAsync(NodeIdentity pc, BlindPackage package)
+    {
+        using var console = _blind.CreateClient();
+        var code = BlindPairCode.Parse((await console.GetFromJsonAsync<JsonElement>("/api/blind/pair-code")).GetProperty("code").GetString()!);
+        var bytes = await File.ReadAllBytesAsync(package.FilePath);
+        using var http = _blind.Server.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Post,
+            $"/api/blind/seed?seedId={package.Manifest.SeedId}&offset=0&total={bytes.Length}&sha256={package.Sha256}")
+        { Content = new ByteArrayContent(bytes) };
+        req.Headers.Add(BlindSeederProof.NodeIdHeader, pc.NodeId.ToString());
+        req.Headers.Add(BlindSeederProof.KeyHeader, Convert.ToBase64String(pc.Ed25519PublicKey));
+        req.Headers.Add(BlindSeederProof.MacHeader, BlindSeederProof.Compute(code.Secret, package.Manifest.SeedId, pc.NodeId, pc.Ed25519PublicKey));
+        return await http.SendAsync(req);
     }
 
     private async Task<(Guid Id, byte[] Key)> TrustRootOnPcAsync()

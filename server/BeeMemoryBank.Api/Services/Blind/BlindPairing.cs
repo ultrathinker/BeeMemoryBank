@@ -19,6 +19,13 @@ public sealed class BlindPairing(
     TimeProvider time)
 {
     /// <summary>
+    /// What issuing a code grants, shown with the code by the console and the CLI: the device whose
+    /// first seed uses it becomes this node's superadmin (review r1-merge #3).
+    /// </summary>
+    public const string AuthorityNotice =
+        "The device that uses this code will manage this blind node (reseed, anchors, recovery).";
+
+    /// <summary>
     /// The current code, or a new one when there is none or it expired. <paramref name="renew"/>
     /// always issues a new secret, which also invalidates the previous one.
     /// </summary>
@@ -55,15 +62,28 @@ public sealed class BlindPairing(
         await state.GetPairingSecretAsync() is { } c && c.ExpiresAt > time.GetUtcNow().UtcDateTime;
 
     /// <summary>
-    /// True if the current, unexpired secret vouches for this seeder and key for this seed
-    /// (<see cref="BlindSeederProof"/>).
+    /// The id of the code (<see cref="CodeIdOf"/>) if the current, unexpired secret vouches for this
+    /// seeder and key for this seed (<see cref="BlindSeederProof"/>); otherwise null.
     /// </summary>
-    public async Task<bool> VerifySeederAsync(Guid seedId, Guid seederNodeId, string seederKeyB64, string macB64)
+    public async Task<string?> VerifySeederAsync(Guid seedId, Guid seederNodeId, string seederKeyB64, string macB64)
     {
-        if (await state.GetPairingSecretAsync() is not { } current) return false;
-        if (current.ExpiresAt <= time.GetUtcNow().UtcDateTime) return false;
-        return BlindSeederProof.Verify(current.Secret, seedId, seederNodeId, seederKeyB64, macB64);
+        if (await state.GetPairingSecretAsync() is not { } current) return null;
+        if (current.ExpiresAt <= time.GetUtcNow().UtcDateTime) return null;
+        return BlindSeederProof.Verify(current.Secret, seedId, seederNodeId, seederKeyB64, macB64) ? CodeIdOf(current.Secret) : null;
     }
+
+    /// <summary>
+    /// Whether the code a proof was checked against is still the current, unexpired, unspent one. The
+    /// seed service asks again under its upload gate (review l-root2 #1): a proof checked before
+    /// another upload with the same code spent it must not be accepted after that upload is done.
+    /// </summary>
+    public async Task<bool> IsCurrentCodeAsync(string codeId) =>
+        await state.GetPairingSecretAsync() is { } current
+        && current.ExpiresAt > time.GetUtcNow().UtcDateTime
+        && CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(CodeIdOf(current.Secret)), Encoding.ASCII.GetBytes(codeId));
+
+    /// <summary>Names a code without revealing its secret: the hash of the secret.</summary>
+    public static string CodeIdOf(string secret) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
 
     /// <summary>A first seed took: the code is spent.</summary>
     public Task ConsumeAsync() => state.ClearPairingSecretAsync();

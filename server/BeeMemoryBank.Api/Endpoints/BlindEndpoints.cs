@@ -54,6 +54,10 @@ public static class BlindEndpoints
             {
                 return Results.Json(new { error = "OFFSET_MISMATCH", seed_id = seedId, received = ex.Received }, statusCode: 409);
             }
+            catch (BlindSeedAuthorityGoneException)
+            {
+                return Results.Unauthorized();
+            }
             catch (BlindSeedRejectedException ex)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 400);
@@ -168,8 +172,8 @@ public static class BlindEndpoints
         if (headers.TryGetValue(BlindSeederProof.MacHeader, out var mac))
             return Guid.TryParse(headers[BlindSeederProof.NodeIdHeader].ToString(), out var seeder)
                    && headers[BlindSeederProof.KeyHeader].ToString() is { Length: > 0 } key
-                   && await pairing.VerifySeederAsync(seedId, seeder, key, mac.ToString())
-                ? new BlindSeedAuthority.PairingSecret(seeder, key)
+                   && await pairing.VerifySeederAsync(seedId, seeder, key, mac.ToString()) is { } codeId
+                ? new BlindSeedAuthority.PairingSecret(seeder, key, codeId)
                 : null;
 
         if (await SyncEndpoints.AuthenticatePeerAsync(ctx, store) is not { } peer) return null;
@@ -179,7 +183,11 @@ public static class BlindEndpoints
     }
 
     private static object PairCodeDto(Sync.Blind.BlindPairCode code) =>
-        new { code = code.ToString(), node_id = code.NodeId, address = code.Address, expires_at = code.ExpiresAt };
+        new
+        {
+            code = code.ToString(), node_id = code.NodeId, address = code.Address, expires_at = code.ExpiresAt,
+            notice = BlindPairing.AuthorityNotice
+        };
 }
 
 public sealed record AddBlindNodeRequest(string Code);

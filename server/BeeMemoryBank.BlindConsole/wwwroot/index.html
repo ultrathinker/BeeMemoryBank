@@ -275,6 +275,7 @@ async function loadPairCode() {
   const j = s.json || {};
   box.innerHTML = j.code
     ? "<div class='row'><span class='k'>Code</span><span class='v' style='font-family:monospace'>" + esc(j.code) + "</span></div><p class='note'>valid until " + fmtDate(j.expires_at) + "</p>"
+      + (j.notice ? "<p><strong>" + esc(j.notice) + "</strong></p>" : "")
     : "<p class='note'>No active code.</p>";
 }
 

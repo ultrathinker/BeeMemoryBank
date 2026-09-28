@@ -55,7 +55,7 @@ public static class BlindCommand
         status.SetHandler(async (data) => Environment.Exit(await HandleStatusAsync(data)), dataOption);
         blind.AddCommand(status);
 
-        var pair = new Command("pair-code", "Show the pairing code (BMB-52 endpoint)");
+        var pair = new Command("pair-code", "Show the pairing code. The device that uses it will manage this blind node (reseed, anchors, recovery)");
         pair.SetHandler(async (data) => Environment.Exit(await HandleSimplePostAsync(data, "api/blind/pair-code", viaGet: true)), dataOption);
         blind.AddCommand(pair);
 

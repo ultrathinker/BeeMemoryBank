@@ -55,10 +55,70 @@ public class DbConnectionFactory : IDbConnectionFactory, IDisposable
     /// another here, and it is not a secret (a local file path or a temp path).</summary>
     public string DatabaseId => _connectionString;
 
+    // Connection lifetimes, for a switch of the database file (BeginQuiesce): how many connections
+    // this factory handed out are open now, whether new opens have to wait, and the flow that switches.
+    private readonly object _lifetimes = new();
+    private int _open;
+    private bool _quiesced;
+    private TaskCompletionSource? _drained;
+    private static readonly AsyncLocal<DbConnectionFactory?> Quiescer = new();
+
     public IDbConnection CreateConnection()
     {
+        var counted = EnterOpen();
         var connection = new SqliteConnection(_connectionString);
-        connection.Open();
+        if (counted)
+        {
+            var released = 0;
+            void Release()
+            {
+                if (Interlocked.Exchange(ref released, 1) == 0) ExitOpen();
+            }
+            connection.StateChange += (_, e) => { if (e.CurrentState == ConnectionState.Closed) Release(); };
+            connection.Disposed += (_, _) => Release();
+            try
+            {
+                connection.Open();
+            }
+            catch
+            {
+                Release();
+                throw;
+            }
+        }
+        else connection.Open();
+
+        try
+        {
+            Initialize(connection);
+            return connection;
+        }
+        catch
+        {
+            // The lease is released for failures AFTER the open too, not just for the open itself
+            // (review l-root5 #1). A PRAGMA that fails on a transient lock - journal_mode=WAL needs
+            // a moment of exclusivity - used to leave the connection open and _open permanently
+            // incremented: the caller saw an error, but every later seed then waited the whole
+            // drain timeout for a connection that no longer existed and failed with 400.
+            //
+            // Dispose covers both cases: it closes the handle and releases the lease through the
+            // Disposed handler, and Release is idempotent, so the StateChange that closing also
+            // raises cannot release twice. For a quiesced flow (counted == false) there is no lease
+            // to release, and the connection still has to go.
+            //
+            // Closing is not enough on its own (orchestrator, 28.09): Microsoft.Data.Sqlite pools
+            // by connection string, so the failed connection goes into the pool and its native
+            // handle - and on Windows the file lock - stays open for a database the caller never
+            // received. The pool is cleared straight after, which is what this factory already does
+            // before it touches a moved file and in Dispose, for the same reason.
+            connection.Dispose();
+            SqliteConnection.ClearPool(new SqliteConnection(_connectionString));
+            throw;
+        }
+    }
+
+    private static void Initialize(SqliteConnection connection)
+    {
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
         cmd.ExecuteNonQuery();
@@ -76,7 +136,90 @@ public class DbConnectionFactory : IDbConnectionFactory, IDisposable
         // kilobytes, so the encoding overhead is irrelevant here.
         connection.CreateFunction("sha256", (byte[]? data) =>
             data == null ? null : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)).ToLowerInvariant());
-        return connection;
+    }
+
+    /// <summary>
+    /// Starts a switch of this database's file (a blind node's seed, plan 5.2): from now on a new
+    /// connection waits until the returned handle is disposed, except in the flow that called this,
+    /// which goes on opening connections for its own work. Follow it with <see cref="WaitDrainedAsync"/>
+    /// before the file is touched: a connection opened before the switch keeps the old file open, and
+    /// on Linux it would go on reading — and writing — the file the switch moved away (review l-root4 #1).
+    /// </summary>
+    public IDisposable BeginQuiesce()
+    {
+        lock (_lifetimes)
+        {
+            if (_quiesced) throw new InvalidOperationException("This database is already being switched.");
+            _quiesced = true;
+        }
+        // Set here, in a synchronous method, so it stays set in the caller's flow.
+        Quiescer.Value = this;
+        return new QuiesceHandle(this);
+    }
+
+    /// <summary>
+    /// Waits until every connection opened outside the switching flow is closed, then closes the idle
+    /// pooled handles too. Throws <see cref="TimeoutException"/> if one is still open after
+    /// <paramref name="timeout"/>: the caller must then not switch the file.
+    /// </summary>
+    public async Task WaitDrainedAsync(TimeSpan timeout, CancellationToken ct = default)
+    {
+        Task drained;
+        lock (_lifetimes)
+        {
+            if (!_quiesced) throw new InvalidOperationException("BeginQuiesce first.");
+            drained = _open == 0
+                ? Task.CompletedTask
+                : (_drained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+        }
+        await drained.WaitAsync(timeout, ct);
+        SqliteConnection.ClearPool(new SqliteConnection(_connectionString));
+    }
+
+    /// <summary>Open connections this factory is tracking (outside a switching flow).</summary>
+    public int OpenConnections
+    {
+        get { lock (_lifetimes) return _open; }
+    }
+
+    private bool EnterOpen()
+    {
+        if (Quiescer.Value == this) return false;
+        lock (_lifetimes)
+        {
+            while (_quiesced) Monitor.Wait(_lifetimes);
+            _open++;
+            return true;
+        }
+    }
+
+    private void ExitOpen()
+    {
+        lock (_lifetimes)
+        {
+            if (--_open == 0 && _drained is { } drained)
+            {
+                _drained = null;
+                drained.TrySetResult();
+            }
+        }
+    }
+
+    private sealed class QuiesceHandle(DbConnectionFactory factory) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            lock (factory._lifetimes)
+            {
+                factory._quiesced = false;
+                factory._drained = null;
+                Monitor.PulseAll(factory._lifetimes);
+            }
+            if (Quiescer.Value == factory) Quiescer.Value = null;
+        }
     }
 
     private bool _disposed;

@@ -18,6 +18,10 @@
     {
         <sl-alert variant="success" open style="margin-bottom:12px;">@Model.SuccessMessage</sl-alert>
     }
+    @if (Model.WarningMessage != null)
+    {
+        <sl-alert variant="warning" open style="margin-bottom:12px;">@Model.WarningMessage</sl-alert>
+    }
     @if (Model.ErrorMessage != null)
     {
         <sl-alert variant="danger" open style="margin-bottom:12px;">@Model.ErrorMessage</sl-alert>

@@ -17,11 +17,13 @@ public class BlindNodesModel(ApiClient api) : PageModel
     public List<BlindNodeDto>? Nodes { get; set; }
     public string? SuccessMessage { get; set; }
     public string? ErrorMessage { get; set; }
+    public string? WarningMessage { get; set; }
 
-    public async Task OnGetAsync(string? msg, string? err)
+    public async Task OnGetAsync(string? msg, string? err, string? warn)
     {
         SuccessMessage = msg;
         ErrorMessage = err;
+        WarningMessage = warn;
         Nodes = await api.ListBlindNodesAsync();
     }
 
@@ -29,10 +31,11 @@ public class BlindNodesModel(ApiClient api) : PageModel
     {
         if (string.IsNullOrWhiteSpace(code))
             return RedirectToPage(new { err = "Paste the pair code shown by the blind node." });
-        var (ok, error) = await api.AddBlindNodeAsync(code.Trim());
-        return ok
-            ? RedirectToPage(new { msg = "Blind node added and seeded." })
-            : RedirectToPage(new { err = error });
+        var (ok, error, warnings) = await api.AddBlindNodeAsync(code.Trim());
+        if (!ok) return RedirectToPage(new { err = error });
+        return warnings.Count > 0
+            ? RedirectToPage(new { msg = "Blind node added and seeded.", warn = string.Join(" ", warnings) })
+            : RedirectToPage(new { msg = "Blind node added and seeded." });
     }
 
     public async Task<IActionResult> OnPostReseedAsync(Guid nodeId)

@@ -1,3 +1,5 @@
+using System.Globalization;
+using BeeMemoryBank.Api.Services;
 using Microsoft.AspNetCore.Hosting;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -14,6 +16,18 @@ public class BlindNodeFactory : BmbWebApplicationFactory
     public const string PublicAddress = "https://blind.test:5610";
 
     private string? _nodeName;
+    private readonly int? _drainWaitSeconds;
+
+    /// <summary>Creates the host.</summary>
+    /// <param name="drainWaitSeconds">
+    /// Overrides how long a seed's switch waits for the live database's connections to close
+    /// (<see cref="BlindSeedService.DefaultCutoverDrainWait"/> is a minute). A test that provokes the
+    /// timeout should cost seconds, not a minute of wall clock; the default stays production's.
+    /// </param>
+    public BlindNodeFactory(int? drainWaitSeconds = null)
+    {
+        _drainWaitSeconds = drainWaitSeconds;
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -21,6 +35,8 @@ public class BlindNodeFactory : BmbWebApplicationFactory
         builder.UseSetting("BMB_ROLE", "blind");
         builder.UseSetting("BMB_PUBLIC_ADDRESS", PublicAddress);
         if (_nodeName is not null) builder.UseSetting("BMB_NODE_NAME", _nodeName);
+        if (_drainWaitSeconds is { } seconds)
+            builder.UseSetting(BlindSeedService.CutoverDrainWaitSecondsKey, seconds.ToString(CultureInfo.InvariantCulture));
     }
 
     /// <summary>

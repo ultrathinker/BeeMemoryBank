@@ -15,8 +15,12 @@ namespace BeeMemoryBank.Api.Services;
 /// <summary>Who is seeding: the holder of the pair code's secret, or a superadmin peer reseeding.</summary>
 public abstract record BlindSeedAuthority
 {
-    /// <summary>The seeder the pairing secret vouched for (<see cref="BlindSeederProof"/>): id and key (base64).</summary>
-    public sealed record PairingSecret(Guid SeederNodeId, string SeederKeyB64) : BlindSeedAuthority;
+    /// <summary>
+    /// The seeder the pairing secret vouched for (<see cref="BlindSeederProof"/>): id and key (base64),
+    /// and which code vouched (<see cref="BlindPairing.CodeIdOf"/>), so it can be asked again whether
+    /// that code is still unspent.
+    /// </summary>
+    public sealed record PairingSecret(Guid SeederNodeId, string SeederKeyB64, string CodeId) : BlindSeedAuthority;
 
     public sealed record SuperadminPeer(Guid NodeId) : BlindSeedAuthority;
 }
@@ -37,6 +41,10 @@ public sealed class BlindSeedOffsetException(long received)
 }
 
 public sealed class BlindSeedRejectedException(string message) : InvalidOperationException(message);
+
+/// <summary>The pair code this upload came under is spent, renewed or expired by the time it is admitted.</summary>
+public sealed class BlindSeedAuthorityGoneException()
+    : InvalidOperationException("The pair code this seed was sent under is no longer valid.");
 
 /// <summary>
 /// Receives a blind package and makes it this blind node's database (plan 4.2, 4.3, 5.2):
@@ -100,6 +108,16 @@ public sealed class BlindSeedService(
         await _gate.WaitAsync(ct);
         try
         {
+            // The pair code is checked again here, under the gate every part and the switch run
+            // under: the endpoint checked the proof before waiting for the gate, and an upload with the
+            // same proof that got the gate first may have seeded and spent the code meanwhile. Only the
+            // first one switches the database and grants authority (review l-root2 #1).
+            if (authority is BlindSeedAuthority.PairingSecret pairing)
+            {
+                using var scope = scopeFactory.CreateScope();
+                if (!await scope.ServiceProvider.GetRequiredService<BlindPairing>().IsCurrentCodeAsync(pairing.CodeId))
+                    throw new BlindSeedAuthorityGoneException();
+            }
             var upload = Admit(seedId, total, sha256.ToLowerInvariant(), authority);
             if (offset != upload.Received)
                 throw new BlindSeedOffsetException(upload.Received);
@@ -227,16 +245,21 @@ public sealed class BlindSeedService(
         cutover.Prepare();
         // The producer's standing on this node is never its own claim in the manifest (review L-merge
         // round 2 #1): a reseed comes from a peer this node ALREADY holds as superadmin, which it stays;
-        // a first seed's producer gets no row here at all — its row comes from the signed whitelist
-        // events about it (manifest.Standing), run through the ordinary applier after the switch, and
-        // only if they do not create one is it added as an ordinary peer (round 3 #1).
+        // a first seed's producer gets no row here at all — the pair code makes it superadmin after the
+        // switch, on top of the signed whitelist events about it (manifest.Standing; review r1-merge #3).
         var producerStanding = upload.Authority is BlindSeedAuthority.SuperadminPeer;
         await BuildDatabaseAsync(cutover.StagedDbPath, package, manifest, self, await liveEvents.GetMaxSequenceAsync(), producerStanding);
+        // A first seed's grant is versioned after everything the package brought; a package whose
+        // times leave no room after them is refused here, before the switch (review l-root3).
+        long? grantAt = null;
+        if (upload.Authority is BlindSeedAuthority.PairingSecret)
+            using (var staged = new DbConnectionFactory(cutover.StagedDbPath))
+                grantAt = GrantTime(await MaxLamportHeldAsync(staged), manifest);
         cutover.StageMedia(Path.Combine(package.Directory, "media"));
         cutover.WriteMarker(manifest.SeedId, BlindSeedCutover.Staged);
 
         await CutOverAsync(cutover, manifest, liveEvents,
-            upload.Authority is BlindSeedAuthority.PairingSecret seeder ? seeder.SeederKeyB64 : null, ct);
+            upload.Authority is BlindSeedAuthority.PairingSecret seeder ? (seeder.SeederKeyB64, grantAt!.Value) : null, ct);
 
         // The new database starts with an empty tbl_blind_state, so the code is spent already;
         // said explicitly, so it stays spent whatever the swap carries over in the future.
@@ -267,6 +290,12 @@ public sealed class BlindSeedService(
             case BlindSeedAuthority.PairingSecret seeder:
                 if (manifest.ProducerNodeId != seeder.SeederNodeId)
                     throw new BlindSeedRejectedException("The package was not built by the node that paired.");
+                // The seeder becomes this node's superadmin: only a full node can be one. A blind node
+                // holds no key and authors nothing, and this node cannot seed itself (review l-root4 #2).
+                if (BlindNodeId.IsBlind(seeder.SeederNodeId))
+                    throw new BlindSeedRejectedException("A blind node cannot seed a blind node: pair it from a full node.");
+                if ((await services.GetRequiredService<INodeIdentityRepository>().GetAsync())?.NodeId == seeder.SeederNodeId)
+                    throw new BlindSeedRejectedException("This node cannot seed itself.");
                 producerKey = Convert.FromBase64String(seeder.SeederKeyB64);
                 break;
             default:
@@ -391,7 +420,8 @@ public sealed class BlindSeedService(
     /// sender can send again. The durable marker lets a start after a crash finish or roll back.
     /// </summary>
     private async Task CutOverAsync(
-        BlindSeedCutover cutover, BlindManifest manifest, IEventLogRepository liveEvents, string? pairedKeyB64, CancellationToken ct)
+        BlindSeedCutover cutover, BlindManifest manifest, IEventLogRepository liveEvents,
+        (string KeyB64, long GrantAt)? paired, CancellationToken ct)
     {
         var livePath = Path.Combine(dataPath, "beememorybank.db");
         using (await EventWriteGate.Instance.QuiesceAsync(ct))
@@ -402,6 +432,24 @@ public sealed class BlindSeedService(
             await HeavyOperationLock.Instance.WaitAsync();
             try
             {
+                // Every connection to the live database takes part in the switch (review l-root4 #1):
+                // new ones wait, open ones are waited for, and the switch goes ahead only once none is
+                // left, so no reader or writer keeps the moved file open. This flow's own connections
+                // are the exception — they are the switch. A connection still open after the wait makes
+                // the seed fail here, before anything moved; the sender sends it again.
+                using var liveScope = scopeFactory.CreateScope();
+                var live = liveScope.ServiceProvider.GetRequiredService<DbConnectionFactory>();
+                using var quiesced = live.BeginQuiesce();
+                try
+                {
+                    await live.WaitDrainedAsync(CutoverDrainWait, ct);
+                }
+                catch (TimeoutException)
+                {
+                    throw new BlindSeedRejectedException(
+                        $"The database stayed in use for {CutoverDrainWait.TotalSeconds:0} s; nothing was changed. Send the seed again.");
+                }
+
                 // Plan 5.2: the reseeding node pulled everything up to IncludesUpTo before cutting the
                 // package; what this node received after that is in no package and is replayed below.
                 var finalHead = await liveEvents.GetMaxSequenceAsync();
@@ -424,10 +472,10 @@ public sealed class BlindSeedService(
                 // "switching" and the next start rolls back (and no new seed discards it meanwhile).
                 try
                 {
-                    await SnapshotService.SwapDbFileWithRetryAsync(cutover.SwitchFiles, SqliteConnection.ClearAllPools, logger);
+                    await SnapshotService.SwapDbFileWithRetryAsync(cutover.SwitchFiles, ClearLivePool, logger);
                     FolderAccessService.InvalidateAll();
-                    if (pairedKeyB64 is not null)
-                        await ApplyFirstSeedStandingAsync(manifest, pairedKeyB64);
+                    if (paired is { } p)
+                        await ApplyFirstSeedStandingAsync(manifest, p.KeyB64, p.GrantAt);
                     if (await ReplayAsync(tail) is { } failure)
                         throw new BlindSeedRejectedException(
                             $"Could not replay this node's own event {failure} on top of the package; nothing was changed. Send the seed again.");
@@ -437,7 +485,7 @@ public sealed class BlindSeedService(
                 {
                     try
                     {
-                        await SnapshotService.SwapDbFileWithRetryAsync(cutover.RollBack, SqliteConnection.ClearAllPools, logger);
+                        await SnapshotService.SwapDbFileWithRetryAsync(cutover.RollBack, ClearLivePool, logger);
                         FolderAccessService.InvalidateAll();
                     }
                     catch (Exception rollbackFailure)
@@ -515,17 +563,32 @@ public sealed class BlindSeedService(
     /// stops the replay and is returned — the caller rolls back rather than drop it.
     /// </summary>
     /// <summary>
-    /// A first seed's producer, as the network signed it (review L-merge round 3 #1, #2): the whitelist
-    /// events about it — its admission, later updates and revokes, in order — go through the ordinary
-    /// applier BEFORE any row for it exists, so its signed admission creates the row with the standing
-    /// it granted, and a later signed revoke takes it away. Each counts only if its author is superadmin
-    /// here and its signature holds; an admission for another key than the one the pair code vouched for
-    /// is not applied. What the stream cannot prove it does not grant: updates or revokes without their
-    /// admission (compacted away, or a node that joined from a snapshot) find no row and apply to
-    /// nothing. Only then is a producer without a row added as an ordinary peer, reachable at the address
-    /// and pin its manifest names.
+    /// A first seed's producer is this node's authority because the operator made it so (review r1-merge
+    /// #3): the pair code was issued at this node's console for the device that uses it to manage this
+    /// node (<see cref="BlindPairing.AuthorityNotice"/>), and the seeder proof showed that this producer,
+    /// with the key it signs with, used it. So it becomes superadmin here, bound to that key, whatever its
+    /// manifest says about itself or about its network.
+    ///
+    /// <para>The whitelist events about it that the manifest carries — its admission, later updates and
+    /// revokes, in order (review L-merge round 3 #1, #2) — still go through the ordinary applier first.
+    /// Each counts only if its author is superadmin here and its signature holds; an admission for another
+    /// key than the paired one is not applied. They leave the row at the version the network last signed
+    /// for it, and the grant keeps that version, never one from the manifest: from here on only a signed
+    /// standing event newer than it — a demotion, a revoke — changes the producer's authority, through the
+    /// same applier.</para>
+    ///
+    /// <para>The grant is a decision this node takes at the switch, and the row carries it as its version
+    /// (review l-root2 #2): <paramref name="grantAt"/>, the Lamport time right after everything this node
+    /// holds once the package is in — every versioned row the package brought (a package's log starts
+    /// empty, its rows do not) and the standing stream (<see cref="GrantTime"/>) — stamped with this
+    /// node's id. It is taken from the raw maximum, not through the Lamport clock, whose update caps a
+    /// jump (review l-root3); the clock is not moved: this node authors no events. A signed event about the producer that the
+    /// package did not carry and that is not newer than what the package reflected (a demotion no reachable
+    /// peer had passed on) loses against it; a newer one wins, as everywhere. Lamport time cannot tell
+    /// "issued before the code" from "issued after" by a node that has seen none of the producer's recent
+    /// events, so an event with a higher clock still counts as newer.</para>
     /// </summary>
-    private async Task ApplyFirstSeedStandingAsync(BlindManifest manifest, string pairedKeyB64)
+    private async Task ApplyFirstSeedStandingAsync(BlindManifest manifest, string pairedKeyB64, long grantAt)
     {
         using var scope = scopeFactory.CreateScope();
         var applier = scope.ServiceProvider.GetRequiredService<EventApplier>();
@@ -550,30 +613,108 @@ public sealed class BlindSeedService(
 
         var whitelist = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
         var claimed = manifest.Whitelist.Single(p => p.NodeId == manifest.ProducerNodeId);
+        // CheckProducerAsync refused a blind seeder already; the grant keeps the invariant on its own.
+        if (BlindNodeId.IsBlind(manifest.ProducerNodeId))
+            throw new InvalidOperationException("A blind node is never a superadmin; nothing is switched.");
+        var pairedKey = Convert.FromBase64String(pairedKeyB64);
+        var now = DateTime.UtcNow;
+        var self = await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
+        // Every row the standing stream left is in the staged database the grant time was taken from,
+        // so the grant is newer than any of them.
+        var grant = new RowVersion(grantAt, self.NodeId);
         if (await whitelist.GetByNodeIdAsync(manifest.ProducerNodeId, includeDeleted: true) is { } row)
         {
-            if (row.Status == "A" && (claimed.ApiAddress ?? row.ApiAddress) is var address
-                && (address != row.ApiAddress || (claimed.TlsSpki ?? row.TlsSpki) != row.TlsSpki))
-            {
-                // Where to reach it is not standing: the manifest's address and pin stand, the version does not move.
-                row.ApiAddress = address;
-                row.TlsSpki = claimed.TlsSpki ?? row.TlsSpki;
-                await whitelist.UpdateAsync(row);
-            }
-            return;
+            // Where to reach it is not standing: the manifest's address and pin stand.
+            if (!ConflictResolver.IncomingWins(row.Version, grant))
+                throw new InvalidOperationException(
+                    $"The producer's row ({row.LamportTs}) is not older than the grant ({grantAt}); nothing is switched.");
+            row.LamportTs = grant.LamportTs;
+            row.SourceNodeId = grant.SourceNodeId;
+            row.Status = "A";
+            row.IsSuperadmin = true;
+            row.Ed25519PublicKey = pairedKey;
+            row.ApiAddress = claimed.ApiAddress ?? row.ApiAddress;
+            row.TlsSpki = claimed.TlsSpki ?? row.TlsSpki;
+            row.UpdatedAt = now;
+            await whitelist.UpdateAsync(row);
         }
-        await whitelist.CreateAsync(new WhitelistEntry
+        else
         {
-            NodeId = claimed.NodeId,
-            DisplayName = claimed.DisplayName,
-            Ed25519PublicKey = Convert.FromBase64String(pairedKeyB64),
-            ApiAddress = claimed.ApiAddress,
-            IsSuperadmin = false,
-            TlsSpki = claimed.TlsSpki,
-            Status = "A",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        });
+            await whitelist.CreateAsync(new WhitelistEntry
+            {
+                NodeId = claimed.NodeId,
+                DisplayName = claimed.DisplayName,
+                Ed25519PublicKey = pairedKey,
+                ApiAddress = claimed.ApiAddress,
+                IsSuperadmin = true,
+                TlsSpki = claimed.TlsSpki,
+                Status = "A",
+                CreatedAt = now,
+                UpdatedAt = now,
+                LamportTs = grant.LamportTs,
+                SourceNodeId = grant.SourceNodeId
+            });
+        }
+        logger.LogInformation("Blind seed: {Producer} used this node's pair code; it manages this node from now on (superadmin)",
+            manifest.ProducerNodeId);
+    }
+
+    /// <summary>
+    /// The grant's Lamport time: one after the highest time the package holds (its rows) or carries (its
+    /// standing stream), in checked arithmetic. A package at the limit of what a Lamport time can hold
+    /// leaves no time after it and is refused.
+    /// </summary>
+    private static long GrantTime(long maxHeld, BlindManifest manifest)
+    {
+        var max = Math.Max(maxHeld, (manifest.Standing ?? []).Select(e => e.LamportTs).DefaultIfEmpty(0).Max());
+        if (max >= long.MaxValue)
+            throw new BlindSeedRejectedException(
+                "The package carries a Lamport time at the limit of what can be represented; this node cannot take it.");
+        return checked(max + 1);
+    }
+
+    /// <summary>
+    /// How long a switch waits for the connections to the live database to close, unless
+    /// <c>BeeMemoryBank:BlindSeed:CutoverDrainWaitSeconds</c> says otherwise. Configurable because
+    /// the timeout path is the one that must fail closed, and proving that in a test should cost
+    /// seconds rather than a minute of wall clock and a real stuck reader.
+    /// </summary>
+    public static readonly TimeSpan DefaultCutoverDrainWait = TimeSpan.FromSeconds(60);
+
+    /// <summary>Configuration key for <see cref="DefaultCutoverDrainWait"/>.</summary>
+    public const string CutoverDrainWaitSecondsKey = "BeeMemoryBank:BlindSeed:CutoverDrainWaitSeconds";
+
+    private readonly TimeSpan _cutoverDrainWait =
+        TimeSpan.FromSeconds(Math.Max(1, config.GetValue(CutoverDrainWaitSecondsKey, (int)DefaultCutoverDrainWait.TotalSeconds)));
+
+    /// <summary>The drain wait this instance actually uses.</summary>
+    public TimeSpan CutoverDrainWait => _cutoverDrainWait;
+
+    /// <summary>
+    /// Closes the pooled connections to the live database, so its files can be switched. Only that
+    /// pool: <see cref="SqliteConnection.ClearAllPools"/> would also close every other database's idle
+    /// connections in the process, and one being handed out at that moment fails with
+    /// ObjectDisposedException (seen in the integration tests, where many nodes share a process).
+    /// </summary>
+    private void ClearLivePool()
+    {
+        using var scope = scopeFactory.CreateScope();
+        using var live = new SqliteConnection(scope.ServiceProvider.GetRequiredService<DbConnectionFactory>().DatabaseId);
+        SqliteConnection.ClearPool(live);
+    }
+
+    /// <summary>The highest Lamport time of any row this node holds, in every table that versions its rows.</summary>
+    private static async Task<long> MaxLamportHeldAsync(IDbConnectionFactory db)
+    {
+        using var conn = db.CreateConnection();
+        var tables = await conn.QueryAsync<string>(
+            @"SELECT m.name FROM sqlite_master m
+              WHERE m.type = 'table' AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) WHERE name = 'lamport_ts')");
+        long max = 0;
+        foreach (var table in tables)
+            max = Math.Max(max, await conn.ExecuteScalarAsync<long?>($"SELECT MAX(lamport_ts) FROM \"{table.Replace("\"", "\"\"")}\"") ?? 0);
+        return max;
     }
 
     private async Task<string?> ReplayAsync(List<SyncEvent> tail)

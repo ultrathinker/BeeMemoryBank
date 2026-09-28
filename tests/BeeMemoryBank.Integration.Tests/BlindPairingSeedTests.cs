@@ -28,7 +28,11 @@ namespace BeeMemoryBank.Integration.Tests;
 public class BlindPairingSeedTests : IAsyncLifetime
 {
     private const string Password = "blindPairingPw1!";
-    private readonly BlindNodeFactory _blind = new();
+    // A short drain wait: the timeout path has to be provable, and proving it against the
+    // production minute would mean a minute of wall clock per run. The test that holds a
+    // connection across the drain holds it for longer than this; the one that releases it does so
+    // after 2 s, well inside it.
+    private readonly BlindNodeFactory _blind = new(drainWaitSeconds: 10);
     private readonly BmbWebApplicationFactory _pc = new();
     private HttpClient _pcClient = null!;
 
@@ -36,8 +40,9 @@ public class BlindPairingSeedTests : IAsyncLifetime
     {
         _ = _blind.Services; // start it: identity, certificate
         _pc.RouteOutboundHttpThrough(_blind.Server.CreateHandler());
+        // The PC's first seed uses the pair code, which makes it the blind node's superadmin and reseed
+        // authority (review r1-merge #3; BlindRootBootstrapTests).
         await _pc.InitializeNodeAsync("PC", Password);
-        await PromoteThePcAsync();
         _pcClient = _pc.CreateClient();
         (await _pcClient.PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password }))
             .EnsureSuccessStatusCode();
@@ -68,7 +73,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
         var pcId = (await IdentityAsync(_pc)).NodeId;
         var pcRow = await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(pcId);
         pcRow.Should().NotBeNull();
-        pcRow!.IsSuperadmin.Should().BeTrue("the root's signed promotion of the PC came with the package");
+        pcRow!.IsSuperadmin.Should().BeTrue("the PC used the pair code");
         File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeTrue("the previous database is kept");
 
         // The PC trusts the blind node's key and pushes from the package's checkpoint on.
@@ -203,6 +208,171 @@ public class BlindPairingSeedTests : IAsyncLifetime
         otherSeeder.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    /// <summary>
+    /// Review l-root2 #1: two uploads under the same proof at once. Both pass the endpoint's proof check
+    /// before either has the upload gate; the first one through seeds and spends the code, and the second
+    /// is refused under the gate — it neither switches the database again nor grants authority again.
+    /// </summary>
+    [Fact]
+    public async Task TwoUploadsUnderTheSameProof_AtOnce_OnlyOneSeeds()
+    {
+        var code = await PairCodeAsync();
+        BlindPackage package;
+        using (var scope = _pc.Services.CreateScope())
+            package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+                .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: true);
+
+        var answers = await Task.WhenAll(UploadWholeAsync(package, code.Secret), UploadWholeAsync(package, code.Secret));
+
+        answers.Select(a => a.StatusCode).Should().BeEquivalentTo([HttpStatusCode.OK, HttpStatusCode.Unauthorized]);
+    }
+
+    /// <summary>
+    /// Review l-root2 #1, the same race made deterministic: a proof checked while the code was current
+    /// is presented to the seed service only after another seed spent the code.
+    /// </summary>
+    [Fact]
+    public async Task AProofCheckedBeforeTheCodeWasSpent_IsRefusedAfterIt()
+    {
+        var code = await PairCodeAsync();
+        var pc = await IdentityAsync(_pc);
+        BlindPackage package;
+        using (var scope = _pc.Services.CreateScope())
+            package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+                .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: true);
+        var keyB64 = Convert.ToBase64String(pc.Ed25519PublicKey);
+        var codeId = await _blind.Services.GetRequiredService<BlindPairing>().VerifySeederAsync(package.Manifest.SeedId, pc.NodeId,
+            keyB64, BlindSeederProof.Compute(code.Secret, package.Manifest.SeedId, pc.NodeId, pc.Ed25519PublicKey));
+        codeId.Should().NotBeNull("precondition: the proof held when it was checked");
+        (await UploadWholeAsync(package, code.Secret)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var bytes = await File.ReadAllBytesAsync(package.FilePath);
+        var late = () => _blind.Services.GetRequiredService<BlindSeedService>().ReceiveAsync(package.Manifest.SeedId, 0, bytes.Length,
+            package.Sha256, new BlindSeedAuthority.PairingSecret(pc.NodeId, keyB64, codeId!), new MemoryStream(bytes), CancellationToken.None);
+
+        await late.Should().ThrowAsync<BlindSeedAuthorityGoneException>();
+    }
+
+    /// <summary>
+    /// Review l-root4 #1: a connection to the live database opened before a reseed and still open when
+    /// the package arrives. The switch waits for it instead of moving the file from under it (on Linux
+    /// the connection would go on reading and writing the moved file); once it closes, the switch goes
+    /// ahead, and a connection opened then reads the new database.
+    /// </summary>
+    [Fact]
+    public async Task AConnectionOpenAcrossTheSwitch_IsWaitedFor_AndTheNextOneReadsTheNewDatabase()
+    {
+        await AddBlindNodeAsync();
+        var live = _blind.Services.GetRequiredService<DbConnectionFactory>();
+        var held = live.CreateConnection();
+        await held.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_whitelist");
+        // Only the new database has this peer: the PC adds it right before it cuts the package.
+        var phone = Guid.NewGuid();
+        await _pc.Services.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
+        {
+            NodeId = phone, DisplayName = "Phone", Ed25519PublicKey = Ed25519Signer.GenerateKeyPair().publicKey,
+            Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        var (http, request) = await ReseedRequestAsync(includesUpTo: 0);
+
+        var reseed = http.SendAsync(request);
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        reseed.IsCompleted.Should().BeFalse("the switch waits for the connection that still has the live database open");
+        held.Dispose();
+        var response = await reseed.WaitAsync(TimeSpan.FromSeconds(60));
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(phone))
+            .Should().NotBeNull("a connection opened after the switch reads the new database");
+        http.Dispose();
+    }
+
+    /// <summary>
+    /// Review l-root5 #2: the other half of the switch's contract. A connection that NEVER closes
+    /// must not be waited for indefinitely, and must not be worked around either: the seed fails
+    /// closed with 400, the file is not switched, and the gate opens again so the node keeps
+    /// serving. Shortening the wait is what makes this provable without a minute of wall clock.
+    /// </summary>
+    [Fact]
+    public async Task AConnectionHeldPastTheDrainTimeout_FailsClosed_AndTheGateReopens()
+    {
+        await AddBlindNodeAsync();
+        var live = _blind.Services.GetRequiredService<DbConnectionFactory>();
+        using var held = live.CreateConnection();
+        await held.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_whitelist");
+
+        // Only the new database would have this peer: the PC adds it right before it cuts the package.
+        var phone = Guid.NewGuid();
+        await _pc.Services.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
+        {
+            NodeId = phone, DisplayName = "Phone", Ed25519PublicKey = Ed25519Signer.GenerateKeyPair().publicKey,
+            Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        var preSeed = Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed");
+        var seededAt = File.GetLastWriteTimeUtc(preSeed);
+        var (http, request) = await ReseedRequestAsync(includesUpTo: 0);
+
+        var response = await http.SendAsync(request).WaitAsync(TimeSpan.FromSeconds(90));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, await response.Content.ReadAsStringAsync());
+        (await response.Content.ReadAsStringAsync()).Should().Contain("stayed in use");
+        (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(phone))
+            .Should().BeNull("the file was never switched, so the peer the package carried is not in the live database");
+        File.GetLastWriteTimeUtc(preSeed).Should().Be(seededAt, "the previous database was not touched");
+
+        // The gate is released with the failed seed, not left set: the node goes on serving.
+        // Scoped, because this connection is itself a holder: the retry below would wait for it and
+        // time out too, which is the drain working rather than a bug in it.
+        held.Dispose();
+        using (var after = live.CreateConnection())
+        {
+            (await after.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_whitelist")).Should().BeGreaterThan(0);
+        }
+
+        // And a later seed of the same kind is not permanently refused.
+        var (retryHttp, retry) = await ReseedRequestAsync(includesUpTo: 0);
+        var retried = await retryHttp.SendAsync(retry).WaitAsync(TimeSpan.FromSeconds(90));
+        retried.StatusCode.Should().Be(HttpStatusCode.OK, await retried.Content.ReadAsStringAsync());
+        (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(phone))
+            .Should().NotBeNull("the retry switched the file once nothing held it");
+        retryHttp.Dispose();
+        http.Dispose();
+    }
+
+    /// <summary>
+    /// Review l-root4 #2: the seeder of a first seed becomes the blind node's superadmin, so it must be
+    /// a full node. Another blind node with a valid pairing proof for its own key and its own package is
+    /// refused before anything is staged: nothing switched, no row for it.
+    /// </summary>
+    [Fact]
+    public async Task ABlindNodeAsTheSeeder_IsRefusedBeforeStaging_AndGetsNoRow()
+    {
+        var code = await PairCodeAsync();
+        using var other = new BlindNodeFactory();
+        var otherIdentity = await IdentityAsync(other);
+        BlindPackage package;
+        using (var scope = other.Services.CreateScope())
+            package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+                .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: false);
+        var bytes = await File.ReadAllBytesAsync(package.FilePath);
+        using var http = _blind.Server.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Post,
+            $"/api/blind/seed?seedId={package.Manifest.SeedId}&offset=0&total={bytes.Length}&sha256={package.Sha256}")
+        { Content = new ByteArrayContent(bytes) };
+        req.Headers.Add(BlindSeederProof.NodeIdHeader, otherIdentity.NodeId.ToString());
+        req.Headers.Add(BlindSeederProof.KeyHeader, Convert.ToBase64String(otherIdentity.Ed25519PublicKey));
+        req.Headers.Add(BlindSeederProof.MacHeader, BlindSeederProof.Compute(code.Secret, package.Manifest.SeedId,
+            otherIdentity.NodeId, otherIdentity.Ed25519PublicKey));
+
+        var resp = await http.SendAsync(req);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("cannot seed a blind node", "it is refused before staging");
+        (await _blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(otherIdentity.NodeId, includeDeleted: true))
+            .Should().BeNull();
+        File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse("nothing was switched");
+    }
+
     /// <summary>Review L-stage1 #3: a first seed spends the code — its proof does not open a second one.</summary>
     [Fact]
     public async Task TheCode_IsSpentByTheFirstSeed()
@@ -248,9 +418,9 @@ public class BlindPairingSeedTests : IAsyncLifetime
         var keyB64 = Convert.ToBase64String(key);
 
         renewed.Secret.Should().NotBe(old.Secret);
-        (await pairing.VerifySeederAsync(seedId, nodeId, keyB64, BlindSeederProof.Compute(old.Secret, seedId, nodeId, key)))
+        (await pairing.VerifySeederAsync(seedId, nodeId, keyB64, BlindSeederProof.Compute(old.Secret, seedId, nodeId, key)) is not null)
             .Should().BeFalse();
-        (await pairing.VerifySeederAsync(seedId, nodeId, keyB64, BlindSeederProof.Compute(renewed.Secret, seedId, nodeId, key)))
+        (await pairing.VerifySeederAsync(seedId, nodeId, keyB64, BlindSeederProof.Compute(renewed.Secret, seedId, nodeId, key)) is not null)
             .Should().BeTrue();
     }
 
@@ -314,7 +484,8 @@ public class BlindPairingSeedTests : IAsyncLifetime
         var seeds = _blind.Services.GetRequiredService<BlindSeedService>();
         var bytes = RandomNumberGenerator.GetBytes(1000);
         var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
-        var who = new BlindSeedAuthority.PairingSecret(Guid.NewGuid(), Convert.ToBase64String(new byte[32]));
+        var who = new BlindSeedAuthority.PairingSecret(Guid.NewGuid(), Convert.ToBase64String(new byte[32]),
+            BlindPairing.CodeIdOf((await PairCodeAsync()).Secret));
         var seedId = Guid.NewGuid();
         await seeds.ReceiveAsync(seedId, 0, bytes.Length, sha, who, new MemoryStream(bytes, 0, 400), CancellationToken.None);
 
@@ -718,33 +889,6 @@ public class BlindPairingSeedTests : IAsyncLifetime
         { Content = new ByteArrayContent(bytes) };
         await AddSeederAsync(req, secret, package.Manifest.SeedId, claimedNodeId, claimedKey, macOverKey);
         return await http.SendAsync(req);
-    }
-
-    /// <summary>
-    /// The network made the PC superadmin: a root node the PC trusts admitted it as superadmin with a
-    /// signed whitelist_add, which the PC holds in its log. That signed event — not the PC's own row in the manifest — is
-    /// what makes it a reseed authority on the blind node (review L-merge round 2 #1).
-    /// </summary>
-    private async Task PromoteThePcAsync()
-    {
-        var (pub, key) = Ed25519Signer.GenerateKeyPair();
-        var root = Guid.NewGuid();
-        await _pc.Services.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
-        {
-            NodeId = root, DisplayName = "Root", Ed25519PublicKey = pub, Status = "A", IsSuperadmin = true,
-            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
-        });
-        var pc = await IdentityAsync(_pc);
-        var promote = new SyncEvent
-        {
-            EventId = Guid.NewGuid(), NodeId = root, LamportTs = 10, EventType = EventTypes.WhitelistAdd,
-            Payload = JsonSerializer.Serialize(new WhitelistAddPayload(pc.NodeId, "PC",
-                Convert.ToBase64String(pc.Ed25519PublicKey), null, false, IsSuperadmin: true)),
-            ProtocolVersion = SyncProtocolVersion.Current, CreatedAt = DateTime.UtcNow
-        };
-        promote.Signature = Ed25519Signer.Sign(key, EventSignature.BuildPayload(promote));
-        using var scope = _pc.Services.CreateScope();
-        await scope.ServiceProvider.GetRequiredService<EventApplier>().ApplyAsync(promote);
     }
 
     /// <summary>A hub both nodes know as superadmin — the author of the events used as markers.</summary>

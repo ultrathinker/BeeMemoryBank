@@ -17,7 +17,8 @@ public sealed record BlindNodeStatus(
     Guid NodeId, string DisplayName, string? Address, int? Protocol, DateTime? LastContact,
     IReadOnlyList<string> Alarms);
 
-public sealed record BlindNodeAdded(Guid NodeId, string DisplayName, long PackageCp);
+/// <param name="Warnings">What the pre-flight wants the operator to know, which did not stop the add.</param>
+public sealed record BlindNodeAdded(Guid NodeId, string DisplayName, long PackageCp, IReadOnlyList<string> Warnings);
 
 /// <summary>
 /// The PC's side of blind nodes (plan 4.2, 5.2): add one from its pair code, reseed it, list it.
@@ -72,7 +73,7 @@ public sealed class BlindNodeManager(
 
         using var scope = scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
-        await sp.GetRequiredService<BlindPreflight>().RunAsync(http, ct);
+        var warnings = await sp.GetRequiredService<BlindPreflight>().RunAsync(http, ct);
 
         var whitelist = sp.GetRequiredService<IWhitelistRepository>();
         var displayName = $"Blind {code.NodeId.ToString()[..8]}";
@@ -143,7 +144,7 @@ public sealed class BlindNodeManager(
         await StartPushingFromAsync(sp, code.NodeId, package.Manifest.CpSequence);
         logger.LogInformation("Blind node {NodeId} at {Address} added and seeded (cp {Cp})",
             code.NodeId, code.Address, package.Manifest.CpSequence);
-        return new BlindNodeAdded(code.NodeId, displayName, package.Manifest.CpSequence);
+        return new BlindNodeAdded(code.NodeId, displayName, package.Manifest.CpSequence, warnings);
     }
 
     /// <summary>
