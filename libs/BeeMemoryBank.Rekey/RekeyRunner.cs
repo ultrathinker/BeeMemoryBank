@@ -62,6 +62,9 @@ public static class RekeyRunner
 
     public const string MainDb = "beememorybank.db", ChatDb = "chat.db", ReportFile = RekeyReport.FileName;
 
+    /// <summary>The report entry of the carry-over, after the plan's steps.</summary>
+    public const string CarryOverName = "CarryOver";
+
     public const string FaultAfterCopy = "after-copy", FaultAfterSteps = "after-steps", FaultAfterVerify = "after-verify",
         FaultAfterScrub = "after-scrub";
 
@@ -197,6 +200,14 @@ public static class RekeyRunner
             SqliteConnection.ClearAllPools();
             options.Fault?.Invoke(FaultAfterScrub);
 
+            // The carry-over comes before the last D1 scan (review release-b R1-8): whatever it brings from D into the new
+            // vault is scanned with the rest. It never follows a link (R1-7); what it skipped is named in the report.
+            var skippedLinks = new List<string>();
+            var carried = RekeySwap.CarryOver(d, newDir, skippedLinks, options.Fault);
+            report.Steps.Add(new RekeyStepResult(CarryOverName,
+                new Dictionary<string, long> { ["entries"] = carried.Count, ["links_skipped"] = skippedLinks.Count },
+                [.. carried.Select(c => "carried:" + c), .. skippedLinks.Select(l => "skipped-link:" + l)]));
+
             // The D1 byte check, on the scrubbed files: no old ciphertext survives anywhere in them.
             var leaks = RekeyD1Check.CheckBytes(newDir, oldMaterial);
             if (leaks.Count > 0) return FailVerify(report, leaks);
@@ -212,7 +223,7 @@ public static class RekeyRunner
             progress.Report("swap", 0, 1);
             try
             {
-                RekeySwap.Swap(d, now, options.Fault);
+                RekeySwap.Swap(d, now, options.Fault, carryOver: false);
             }
             catch when (RekeySwapJournal.Read(d) != null)
             {

@@ -92,7 +92,9 @@ public static class RekeySwap
     /// <see cref="RekeySwapJournal.NewDirFor"/>(<paramref name="dataDir"/>).
     /// <paramref name="fault"/> is the tests' fault injection, called at each named point.
     /// </summary>
-    public static string Swap(string dataDir, DateTimeOffset now, Action<string>? fault = null)
+    /// <param name="carryOver">False when the caller has already carried the files over (the verb does, before its
+    /// last D1 scan, so that scan covers them: review release-b R1-8).</param>
+    public static string Swap(string dataDir, DateTimeOffset now, Action<string>? fault = null, bool carryOver = true)
     {
         var d = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dataDir));
         var newDir = RekeySwapJournal.NewDirFor(d);
@@ -103,7 +105,7 @@ public static class RekeySwap
         if (RekeySwapJournal.Read(d) != null)
             throw new InvalidOperationException($"A swap is already in progress ({RekeySwapJournal.PathFor(d)}); start the node to finish it.");
 
-        CarryOver(d, newDir, fault);
+        if (carryOver) CarryOver(d, newDir, fault);
 
         var journal = new RekeySwapJournal(newDir, oldDir, RekeySwapJournal.Prepared);
         RekeySwapJournal.Write(d, journal);

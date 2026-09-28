@@ -237,7 +237,8 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         Tree(journal.Old).Should().BeEquivalentTo(_tree, "the old vault is never written");
         var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(_d, RekeyRunner.ReportFile))).RootElement;
         report.GetProperty("result").GetString().Should().Be("done");
-        report.GetProperty("steps").EnumerateArray().Select(s => s.GetProperty("name").GetString()).Should().Equal(RekeyRunner.RequiredSteps);
+        report.GetProperty("steps").EnumerateArray().Select(s => s.GetProperty("name").GetString())
+            .Should().Equal([.. RekeyRunner.RequiredSteps, RekeyRunner.CarryOverName]);
         report.GetProperty("oldVault").GetString().Should().Be(journal.Old);
         RekeyLock.StartRefusal(RekeySwapResolver.Resolve(_d)).Should().BeNull("the verb has ended; the first start may run");
 
@@ -358,6 +359,26 @@ public sealed class RekeyVerbTests : IAsyncLifetime
 
         AssertOldVaultInUse(outcome, RekeyExit.FailedBeforeSwap);
         outcome.Message.Should().Contain("(D1)");
+    }
+
+    /// <summary>
+    /// Review release-b R1-8: an old ciphertext hidden in a file the carry-over brings from D (here, under certs/). The
+    /// last D1 scan runs after the carry-over, so it sees it and the run fails before the swap.
+    /// </summary>
+    [Fact]
+    public async Task AnOldCiphertextInACarriedOverFile_IsCaughtByTheLastScan()
+    {
+        byte[] oldBlob;
+        using (var src = RekeyRunner.OpenLive(Path.Combine(_d, RekeyRunner.MainDb)))
+            oldBlob = src.ExecuteScalar<byte[]>("SELECT data FROM tbl_blob LIMIT 1");
+        SqliteConnection.ClearAllPools();
+        await File.WriteAllBytesAsync(Path.Combine(_d, "certs", "export.bin"), oldBlob);
+        _tree = Tree(_d);
+
+        var outcome = await RunAsync();
+
+        AssertOldVaultInUse(outcome, RekeyExit.FailedBeforeSwap);
+        outcome.Message.Should().Contain("old ciphertext bytes").And.Contain("export.bin");
     }
 
     /// <summary>An old ciphertext copied into a plaintext column: only the byte search can see it, and it does.</summary>
