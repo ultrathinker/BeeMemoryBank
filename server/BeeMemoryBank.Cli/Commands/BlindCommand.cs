@@ -37,6 +37,8 @@ public static class BlindCommand
             var prompts = new Dictionary<string, string>
             {
                 [BlindSecrets.ConsolePassword] = "Console page password (min 8 characters)",
+                [BlindSecrets.CurrentConsolePassword] =
+                    "Current console password (only to change an existing one; Enter to keep it)",
                 [BlindSecrets.ResticPassword] = "restic repository password (Enter to set it later)",
             };
             if (s3 is not null) prompts[BlindSecrets.S3SecretKey] = "S3 secret key";
@@ -122,10 +124,21 @@ public static class BlindCommand
         }
         var resticPw = secrets.GetValueOrDefault(BlindSecrets.ResticPassword);
         var sk = secrets.GetValueOrDefault(BlindSecrets.S3SecretKey);
+        var currentPw = secrets.GetValueOrDefault(BlindSecrets.CurrentConsolePassword);
 
+        // `init` is also how a configured node gets a different backup target, and that node
+        // already has a console password: the endpoint then needs the current one (a password
+        // change is not something an unattended CLI run may do without it). Without it, init keeps
+        // the password it finds and goes on to the settings — the run's actual purpose — instead
+        // of stopping at a step the operator did not come here to perform.
         var (status, body) = await api.SendAsync("POST", "api/blind/console/password",
-            $$"""{"newPassword":{{Json(consolePassword)}}}""");
+            currentPw is null
+                ? $$"""{"newPassword":{{Json(consolePassword)}}}"""
+                : $$"""{"newPassword":{{Json(consolePassword)}},"currentPassword":{{Json(currentPw)}}}""");
         if (status == 204) await output.WriteLineAsync("Console password set.");
+        else if (currentPw is null && PasswordAlreadySet(body))
+            await output.WriteLineAsync(
+                $"Console password kept (this node has one already; pass {BlindSecrets.CurrentConsolePassword} to change it).");
         else return await FailAsync(output, status, body);
 
         if (repoFolder is not null || s3 is not null || resticPw is not null)
@@ -281,6 +294,30 @@ public static class BlindCommand
             InternalKey = options?.InternalKey ?? BlindApi.ResolveInternalKey(dataPath),
             Handler = options?.Handler,
         });
+
+    /// <summary>
+    /// Whether the refusal is "this node already has a console password" — decided by the error CODE
+    /// the Api sends (ErrorCodes.ConsolePasswordAlreadySet, BeeMemoryBank.Api.Models), because that
+    /// is the field callers may branch on. The literal is spelled out here the way this file already
+    /// spells out its routes: the CLI talks to the node over HTTP and does not reference the Api
+    /// assembly. The message check stays as the fallback for a node built before the code existed.
+    /// </summary>
+    private const string ConsolePasswordAlreadySetCode = "console_password_already_set";
+
+    private static bool PasswordAlreadySet(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String)
+                return code.GetString() == ConsolePasswordAlreadySetCode;
+        }
+        catch (JsonException)
+        {
+            // Not JSON at all: fall through to the message.
+        }
+        return body.Contains("already set", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static async Task<int> FailAsync(TextWriter output, int status, string body)
     {

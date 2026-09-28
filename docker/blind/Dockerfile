@@ -60,16 +60,26 @@ RUN chmod +x entrypoint.sh \
     && chmod 0755 /usr/local/bin/bmb
 
 # Defaults for every process in the container, `docker exec … bmb blind …` included: the data
-# volume, and the Api on its blind port (the CLI's own default is a full node's 5300).
+# volume, the two ports the Api listens on (TLS on the published sync port, plain HTTP on a
+# loopback port for local tools — see ApiServices.UseBlindHttps), and where the CLI and the console
+# find it (the local one; the CLI's own default is a full node's 5300).
 ENV BMB_DATA_PATH=/app/data \
-    BMB_API_URL=http://127.0.0.1:5610
+    BMB_BLIND_HTTPS_PORT=5610 \
+    BMB_BLIND_LOCAL_PORT=5612 \
+    BMB_API_URL=http://127.0.0.1:5612
 
 # 5610 — sync surface, published on the LAN. 5611 — the console, published on the HOST's
 # loopback only (see compose.yaml; binding the container side to 127.0.0.1 would break the
 # host-loopback publish, the same DNAT-shape as the main image's API port).
 EXPOSE 5610 5611
 
+# Both listeners, because either one alone is a half-working node: the TLS port is what the mesh
+# and the pairing dial (curl -k: the certificate is self-signed and pinned by the peers, not by a
+# CA), the loopback port is what the console and `bmb` use. 5610 answers HTTPS only — a plain
+# request to it now fails, which is exactly what used to make this healthcheck the last thing
+# still "working" on a node that could not be paired.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -f http://localhost:5610/health || exit 1
+    CMD curl -fsk https://localhost:5610/health -o /dev/null \
+     && curl -fs http://localhost:5612/health -o /dev/null || exit 1
 
 ENTRYPOINT ["./entrypoint.sh"]

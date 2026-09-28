@@ -88,9 +88,11 @@ public partial class App : Application
         }
         else if (!await _initSvc.IsInitializedAsync())
         {
-            // First start chooses the mode; an older install that never saw the choice is a full device.
-            var route = Services.Blind.DeviceModeStore.Get() == null ? "//mode" : "//setup";
-            Shell.Current.GoToAsync(route).FireAndForget();
+            // Straight to setup. The first-start mode choice (plan §10) is not offered in this
+            // release — the blind copy's phone side is unfinished (DeviceModeStore.BlindModeOffered)
+            // — so nobody is sent to //mode, and an install that somehow still carries the stamp has
+            // already been brought back to Full by the IsBlind check above.
+            Shell.Current.GoToAsync("//setup").FireAndForget();
         }
         else
         {

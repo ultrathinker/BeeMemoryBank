@@ -101,7 +101,11 @@ public sealed class BlindBackupSettingsStore(string dataPath)
         KeepMonthly = s.KeepMonthly,
         KeepYearly = s.KeepYearly,
         ScheduleTime = s.ScheduleTime,
-        ScheduleEnabled = s.ScheduleEnabled,
+        // The display answers "will this node back itself up?", not "has the operator decided?":
+        // an undecided schedule that runs is shown as on, because that is what the node does. The
+        // console sends the toggle back only when the operator actually flipped it, so showing the
+        // effective value does not turn it into a decision (see the console's save).
+        ScheduleEnabled = s.ScheduleRuns(dataPath),
         CheckSubsetPercent = s.CheckSubsetPercent,
         ResticGoMemLimit = s.ResticGoMemLimit,
         ResticBinary = s.ResticBinary,

@@ -26,6 +26,15 @@ public partial class ModeChoicePage : ContentPage
     private async void OnBlindClicked(object? sender, EventArgs e)
     {
         if (_busy) return;
+        // Nothing navigates here while the choice is hidden (DeviceModeStore.BlindModeOffered), and
+        // the page must not be a way in anyway: a deep link, or a future edit that routes back to
+        // //mode early, would otherwise create a blind copy this build cannot finish setting up.
+        if (!DeviceModeStore.BlindModeOffered)
+        {
+            ErrorLabel.Text = "This build does not offer the blind copy. Update the app to use it.";
+            ErrorLabel.IsVisible = true;
+            return;
+        }
         _busy = true;
         ErrorLabel.IsVisible = false;
         try

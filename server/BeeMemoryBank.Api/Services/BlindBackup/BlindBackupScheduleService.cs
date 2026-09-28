@@ -31,7 +31,14 @@ public sealed class BlindBackupScheduleService(
             try
             {
                 var s = settingsStore.Load();
-                var slot = s.ScheduleEnabled && s.Validate(settingsStore.DataPath).Ok
+                // ScheduleRuns, not the raw flag: an undecided schedule is on once the node has a
+                // repository and its password, so a node configured through init or the console
+                // backs itself up without a second step. Saying so out loud the first time it
+                // happens, because "backups are running" is worth knowing about even when the
+                // operator never flipped the toggle.
+                var runs = s.ScheduleRuns(settingsStore.DataPath);
+                LogUndecidedOnce(s, runs);
+                var slot = runs
                     ? DueSlot(s.ScheduleTime, DateTime.UtcNow, jobs.LastStartedAt("backup"), JitterOfTheDay)
                     : null;
 
@@ -85,6 +92,23 @@ public sealed class BlindBackupScheduleService(
         if (lastBackupStartedAt >= slot) return null;
         if (now - slot > CatchUpWindow) return null;
         return slot;
+    }
+
+    private bool _saidUndecided;
+
+    /// <summary>
+    /// This node schedules backups nobody switched on. Said once per process, at Information — the
+    /// console shows the schedule as on (that is what the node does), and this line is what tells
+    /// an operator reading the log where that came from.
+    /// </summary>
+    private void LogUndecidedOnce(BlindBackupSettings s, bool runs)
+    {
+        if (_saidUndecided || !runs || s.ScheduleEnabled is not null) return;
+        _saidUndecided = true;
+        logger.LogInformation(
+            "Blind schedule: a daily backup at {Time} UTC is on by default once the repository is "
+            + "configured; turn the schedule off in the console (or in settings.json) to stop it",
+            s.ScheduleTime);
     }
 
     // The jitter is per-day and remembered inside the day: a fresh random value on every tick

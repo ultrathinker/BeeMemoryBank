@@ -38,13 +38,20 @@ public static class BlindBackupEndpoints
                 return Results.Conflict(new ErrorResponse("the node is being wiped"));
             var s = store.Load();
             Apply(dto, s);
-            // The RESULT is checked, not the request: with the schedule already on, a partial
-            // update (a typo in the memory limit, an emptied password) would otherwise be saved,
-            // and the scheduler would then skip every backup in silence. A draft (schedule off)
-            // may be incomplete, but nothing in it may be wrong.
-            var (ok, problem) = s.ScheduleEnabled ? s.Validate(store.DataPath) : s.ValidateValues(store.DataPath);
+            // The RESULT is checked, not the request: with the schedule on, a partial update (a
+            // typo in the memory limit, an emptied password) would otherwise be saved, and the
+            // scheduler would then skip every backup in silence. A draft may be incomplete, but
+            // nothing in it may be wrong.
+            //
+            // "On" here is ScheduleGuarded, not the raw flag: since release A a node with a
+            // repository backs itself up without the operator ever touching the toggle, so a
+            // configured node is guarded even while the stored value is still undecided — and an
+            // explicit "on" over a configuration that cannot run it is refused rather than stored
+            // as a promise the node will not keep.
+            var guarded = s.ScheduleGuarded(store.DataPath);
+            var (ok, problem) = guarded ? s.Validate(store.DataPath) : s.ValidateValues(store.DataPath);
             if (!ok)
-                return Results.BadRequest(new ErrorResponse(s.ScheduleEnabled
+                return Results.BadRequest(new ErrorResponse(guarded
                     ? $"the schedule is on and would stop working: {problem}"
                     : problem!));
             try

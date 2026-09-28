@@ -72,6 +72,57 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
 
     // ── settings ─────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Release A: a node with a repository backs itself up without the operator finding a second
+    /// switch. The console toggle used to be the only way on, so a node configured through init or
+    /// the settings form — the whole configuration, in place — sat there until somebody flipped it.
+    /// </summary>
+    [Fact]
+    public async Task Settings_AConfiguredNode_IsScheduledWithoutTouchingTheToggle()
+    {
+        using var client = Client();
+        await ConfigureRepoAsync(client);
+
+        var s = await (await client.GetAsync("/api/blind/backup/settings")).Content.ReadFromJsonAsync<JsonElement>();
+        s.GetProperty("settings").GetProperty("scheduleEnabled").GetBoolean().Should().BeTrue(
+            "a node with a repository backs up without a further step");
+
+        var store = _factory.Services.GetRequiredService<BlindBackupSettingsStore>();
+        var stored = store.Load();
+        stored.ScheduleEnabled.Should().BeNull("nobody decided — it is the node's default that runs");
+        stored.ScheduleRuns(_factory.DataPath).Should().BeTrue();
+
+        // And the scheduler that reads this really has a backup owed at the next slot: the decision
+        // above is only worth anything if a job follows from it.
+        var noon = new DateTime(2026, 9, 27, 12, 0, 0, DateTimeKind.Utc);
+        BlindBackupScheduleService.DueSlot(stored.ScheduleTime, noon, lastBackupStartedAt: null,
+                _ => TimeSpan.Zero)
+            .Should().NotBeNull("a configured node is owed a backup at its scheduled time");
+    }
+
+    /// <summary>The other side: an operator who says off is not overruled by the default, and a
+    /// later save that does not mention the schedule does not quietly put it back on.</summary>
+    [Fact]
+    public async Task Settings_AnExplicitOff_StaysOff()
+    {
+        using var client = Client();
+        await ConfigureRepoAsync(client);
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { scheduleEnabled = false }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var store = _factory.Services.GetRequiredService<BlindBackupSettingsStore>();
+        store.Load().ScheduleEnabled.Should().BeFalse("the operator's own answer is not the default");
+
+        // A partial update that does not mention the schedule keeps it.
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { keepDaily = 5 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var after = store.Load();
+        after.ScheduleEnabled.Should().BeFalse();
+        after.ScheduleRuns(_factory.DataPath).Should().BeFalse("the schedule is off and stays off");
+        (await client.GetFromJsonAsync<JsonElement>("/api/blind/backup/settings"))
+            .GetProperty("settings").GetProperty("scheduleEnabled").GetBoolean().Should().BeFalse();
+    }
+
     [Fact]
     public async Task Settings_PasswordIsMasked_OnReadAndUpdate()
     {

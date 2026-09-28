@@ -10,6 +10,14 @@ public class LegacyPasswordSlotMigrationService(
     IDbConnectionFactory dbFactory)
 {
     private const string MigrationKey = "legacy_password_unified";
+
+    /// <summary>
+    /// The slot type every node had before the password unification (docs/encryption.md,
+    /// "Password Unification"): one shared slot for the whole vault, promoted to a per-user slot on
+    /// the first successful unlock. <see cref="InitializationService.IsInitializedAsync"/> reads it
+    /// as proof that an upgraded vault is a vault, not an empty node.
+    /// </summary>
+    public const string LegacySlotType = "password";
     private static readonly SemaphoreSlim _semaphore = new(1, 1);
 
     public record MigrationResult(bool Migrated, string? SyntheticAdminUsername);
@@ -32,7 +40,7 @@ public class LegacyPasswordSlotMigrationService(
             }
 
             var allSlots = await keySlotRepo.GetAllAsync();
-            var passwordSlots = allSlots.Where(s => s.SlotType == "password").ToList();
+            var passwordSlots = allSlots.Where(s => s.SlotType == LegacySlotType).ToList();
 
             if (passwordSlots.Count == 0)
             {

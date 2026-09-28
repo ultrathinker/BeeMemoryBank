@@ -29,6 +29,7 @@ public static class DependencyInjection
         services.TryAddSingleton<IActorProvider>(new NullActorProvider());
         services.TryAddScoped<IRecoveryBoxPublisher, NullRecoveryBoxPublisher>();
 
+        services.AddScoped<RestoreBootstrapMarker>();
         services.AddScoped<InitializationService>();
         services.AddScoped<ArticleService>();
         services.AddScoped<ArticleDiffService>();
