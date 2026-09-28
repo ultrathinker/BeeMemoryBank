@@ -20,7 +20,7 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// </summary>
 public sealed class ChatRekeyStep : IRekeyStep
 {
-    public const string StepName = "chat";
+    public const string StepName = "ChatRekey";
 
     private const string MainFile = "beememorybank.db";
 
