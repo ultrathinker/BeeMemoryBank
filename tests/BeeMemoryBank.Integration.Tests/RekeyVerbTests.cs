@@ -63,6 +63,10 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         // The node, stopped: a copy of its data directory without the transient SQLite side files.
         _d = Path.Combine(_root, "vault");
         CopyTree(factory.DataPath, _d);
+        // Files of the §5 carry-over list, as a real data directory has them.
+        await File.WriteAllTextAsync(Path.Combine(_d, ".internal-key"), "internal");
+        Directory.CreateDirectory(Path.Combine(_d, "certs"));
+        await File.WriteAllTextAsync(Path.Combine(_d, "certs", "ca.pem"), "ca");
         _tree = Tree(_d);
     }
 
@@ -304,9 +308,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
     {
         var outcome = await RunAsync(peers: new PeerRevokeDouble(async ctx =>
         {
-            using var src = new SqliteConnection(new SqliteConnectionStringBuilder
-                { DataSource = Path.Combine(ctx.SourceDir, RekeyRunner.MainDb), Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
-            src.Open();
+            using var src = RekeyRunner.OpenLive(Path.Combine(ctx.SourceDir, RekeyRunner.MainDb));
             var old = src.QuerySingle<(byte[] W, byte[] Iv)>("SELECT encrypted_dek, dek_iv FROM tbl_article_body WHERE article_id = @a COLLATE NOCASE",
                 new { a = _article.ToString() });
             await ctx.Main.ExecuteAsync("UPDATE tbl_article_body SET encrypted_dek = @W, dek_iv = @Iv WHERE article_id = @a COLLATE NOCASE",
@@ -323,9 +325,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
     {
         var outcome = await RunAsync(peers: new PeerRevokeDouble(async ctx =>
         {
-            using var src = new SqliteConnection(new SqliteConnectionStringBuilder
-                { DataSource = Path.Combine(ctx.SourceDir, RekeyRunner.MainDb), Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
-            src.Open();
+            using var src = RekeyRunner.OpenLive(Path.Combine(ctx.SourceDir, RekeyRunner.MainDb));
             var oldBlob = src.ExecuteScalar<byte[]>("SELECT data FROM tbl_blob LIMIT 1");
             await ctx.Main.ExecuteAsync("INSERT INTO tbl_migration_marker (key, value, set_at) VALUES ('smuggled', @oldBlob, 'now')", new { oldBlob });
         }));
