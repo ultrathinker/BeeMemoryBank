@@ -263,8 +263,13 @@ public static class RekeyRunner
         return conn;
     }
 
-    private static Task VacuumIntoAsync(SqliteConnection conn, string target) =>
-        conn.ExecuteAsync("VACUUM INTO @target", new { target });
+    /// <summary>VACUUM INTO writes only the target, but query_only refuses it: lifted for this one statement.</summary>
+    private static async Task VacuumIntoAsync(SqliteConnection conn, string target)
+    {
+        await conn.ExecuteAsync("PRAGMA query_only = OFF");
+        try { await conn.ExecuteAsync("VACUUM INTO @target", new { target }); }
+        finally { await conn.ExecuteAsync("PRAGMA query_only = ON"); }
+    }
 
     private static async Task RequireClassifiedAsync(SqliteConnection conn, IReadOnlyDictionary<string, TableFate> fates, string file)
     {
