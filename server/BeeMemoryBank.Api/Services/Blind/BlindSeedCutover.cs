@@ -11,6 +11,11 @@ namespace BeeMemoryBank.Api.Services;
 /// back to the old database or finished at the next start (<see cref="Recover"/>), never left on a new
 /// database without its media or its replayed events.
 ///
+/// <para>A marker that cannot be read at all is the one state the files alone must decide: the old
+/// database and media in the directory mean a switch had begun, so the cutover is
+/// <see cref="Unresolved"/> — kept, and refused as a base for a new seed — rather than deleted as
+/// one that never started (Codex #3).</para>
+///
 /// <para>Layout, in the data volume (not in blind-tmp, which every start empties):
 /// <c>blind-cutover/marker.json</c> (seed id, phase), <c>new.db</c>, <c>media/</c> (the complete new
 /// media directory), and, once the switch has begun, <c>old.db</c> (+ -wal/-shm) and <c>old-media/</c>.
@@ -22,6 +27,13 @@ public sealed class BlindSeedCutover
     public const string Staged = "staged";
     public const string Switching = "switching";
     public const string Done = "done";
+
+    /// <summary>
+    /// Not a phase the cutover writes: the marker is missing or cannot be read while the directory
+    /// still holds what only a switch creates. Read as "never started", that state cost the old
+    /// database and media — the only way back (Codex #3).
+    /// </summary>
+    public const string Unresolved = "unresolved";
 
     private static readonly string[] Sidecars = ["-wal", "-shm"];
 
@@ -54,11 +66,14 @@ public sealed class BlindSeedCutover
     {
         if (Directory.Exists(_dir))
         {
-            switch (ReadMarker()?.Phase)
+            switch (PhaseOf().Phase)
             {
                 case Switching:
                     throw new BlindSeedRejectedException(
                         "An earlier seed's switch was interrupted and is not resolved; this node rolls it back at its next start. Restart it, then send the seed again.");
+                case Unresolved:
+                    throw new BlindSeedRejectedException(
+                        "An earlier seed's cutover is unresolved: its marker is missing or unreadable and the database it replaced is still kept in blind-cutover. Nothing was discarded. Restart this node, which keeps or restores what is there; resolve blind-cutover by hand if it stays unresolved. No seed is accepted until then.");
                 case Done:
                     FinishDone();
                     break;
@@ -165,6 +180,8 @@ public sealed class BlindSeedCutover
         }
         else if (ReadMarker()?.LiveMediaExisted == false && Directory.Exists(_liveMedia))
         {
+            // (Only ever reached from a marker that says "switching": with one that cannot be read at
+            // all there is no rollback to get here through — see RecoverUnresolved.)
             // There was no media directory before the switch: the live one is the seed's.
             Directory.Delete(_liveMedia, recursive: true);
         }
@@ -192,22 +209,41 @@ public sealed class BlindSeedCutover
         Directory.Delete(_dir, recursive: true);
     }
 
+    /// <summary>
+    /// The phase of the cutover directory, judged from the marker <b>and</b> from what is in it. A
+    /// marker that cannot be read is not an absent one: the old database and media beside it are the
+    /// only way back, and only a directory holding none of them can be dropped as never started
+    /// (Codex #3). <see cref="SwitchFiles"/> moves the old database aside first and the old media
+    /// second, so either one being there means the switch had begun.
+    /// </summary>
+    private (string Phase, Guid? SeedId) PhaseOf()
+    {
+        if (ReadMarker() is { } marker) return (marker.Phase, marker.SeedId);
+        if (File.Exists(OldDbPath) || Directory.Exists(OldMediaDir)) return (Unresolved, null);
+        return (Staged, null);
+    }
+
     private Marker? ReadMarker()
     {
+        if (!File.Exists(MarkerPath)) return null;
         try
         {
-            return File.Exists(MarkerPath) ? JsonSerializer.Deserialize<Marker>(File.ReadAllText(MarkerPath)) : null;
+            return JsonSerializer.Deserialize<Marker>(File.ReadAllText(MarkerPath));
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            // A marker is replaced atomically; an unreadable one was never the current one.
+            // A marker is replaced atomically, so one that cannot be read is torn or damaged — the
+            // state of a process that died inside the switch, which is exactly when the answer
+            // matters. Reported as unreadable (null here, plus the files, in PhaseOf), never as
+            // absent.
             return null;
         }
     }
 
     /// <summary>
     /// At start, before the database is opened: finishes a cutover that got to "done", rolls back one
-    /// that was switching, and drops one that never started switching.
+    /// that was switching, keeps — and repairs — one whose marker cannot be read, and drops one that
+    /// never started switching.
     /// </summary>
     public static void Recover(string dataPath, ILogger logger)
     {
@@ -215,22 +251,60 @@ public sealed class BlindSeedCutover
         if (!Directory.Exists(cutover._dir)) return;
         SqliteConnection.ClearAllPools();
 
-        var marker = cutover.ReadMarker();
-        switch (marker?.Phase)
+        var (phase, seedId) = cutover.PhaseOf();
+        switch (phase)
         {
             case Done:
                 cutover.FinishDone();
-                logger.LogWarning("Blind seed {SeedId}: finished a cutover interrupted after it was complete", marker.SeedId);
+                logger.LogWarning("Blind seed {SeedId}: finished a cutover interrupted after it was complete", seedId);
                 break;
             case Switching:
                 cutover.RollBack();
-                logger.LogWarning("Blind seed {SeedId}: rolled back a cutover interrupted mid-switch; the seed can be sent again", marker.SeedId);
+                logger.LogWarning("Blind seed {SeedId}: rolled back a cutover interrupted mid-switch; the seed can be sent again", seedId);
+                break;
+            case Unresolved:
+                cutover.RecoverUnresolved(logger);
                 break;
             default:
                 Directory.Delete(cutover._dir, recursive: true);
                 logger.LogInformation("Blind seed: dropped a cutover that never started switching");
                 break;
         }
+    }
+
+    /// <summary>
+    /// A cutover directory whose marker is missing or unreadable while the database (or the media
+    /// directory) it replaced is still in it: the switch may have happened, and nothing here can say
+    /// whether it finished — so nothing is discarded (Codex #3). The old files are put back where the
+    /// node cannot start without them (a live database or live media directory that is gone), and
+    /// otherwise left exactly where they are for an operator, with the state spelled out; the next
+    /// seed is refused until it is resolved.
+    /// </summary>
+    private void RecoverUnresolved(ILogger logger)
+    {
+        var restoredDb = false;
+        if (!File.Exists(_livePath) && File.Exists(OldDbPath))
+        {
+            // Nothing live to lose, and a node without its database does not start: the old one,
+            // sidecars first, goes back as the live one.
+            foreach (var suffix in Sidecars)
+                if (File.Exists(OldDbPath + suffix)) File.Move(OldDbPath + suffix, _livePath + suffix, overwrite: true);
+            File.Move(OldDbPath, _livePath);
+            restoredDb = true;
+        }
+
+        var restoredMedia = false;
+        if (!Directory.Exists(_liveMedia) && Directory.Exists(OldMediaDir))
+        {
+            Directory.Move(OldMediaDir, _liveMedia);
+            restoredMedia = true;
+        }
+
+        logger.LogError(
+            "Blind seed: the cutover marker in {Dir} is missing or unreadable, and the database this node replaced is still there{Db}{Media}. Nothing was discarded; no new seed is accepted until this is resolved. Restart after checking blind-cutover, or restore the marker.",
+            _dir,
+            restoredDb ? " — it has been put back as the live database, there being none" : "",
+            restoredMedia ? " — the old media directory has been put back, there being none" : "");
     }
 
     private static byte[] HashOf(string path)
