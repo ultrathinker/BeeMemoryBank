@@ -168,8 +168,11 @@ public class DeviceBoxPublishGuardTests : IAsyncLifetime
         RecoveryBoxCrypto.Unwrap("ThirdPassword3", active.Preset, active.Salt, active.Wrapped, active.Iv).Should().Equal(dek);
         RecoveryBoxCrypto.TryUnwrap(NewPassword, active.Preset, active.Salt, active.Wrapped, active.Iv).Should().BeNull();
 
+        // The superseded box keeps no key material, in its row or in the log (F7): only the active box's event is served.
+        boxes[0].Wrapped.Should().BeEmpty();
+        boxes[0].Salt.Should().BeEmpty();
         var logged = (await _f.EventLogRepo.GetRecentAsync(100, 0, EventTypes.RecoveryBoxSet)).Where(e => e.EventType == EventTypes.RecoveryBoxSet).ToList();
-        logged.Should().HaveCount(2);
+        logged.Should().ContainSingle();
         logged.Should().OnlyContain(e => Ed25519Signer.Verify(identity.Ed25519PublicKey, EventSignature.BuildPayload(e), e.Signature));
     }
 
