@@ -141,18 +141,16 @@ public sealed class RekeyPreflight : IRekeyPreflight
 
                 var articleComments = comments.GetValueOrDefault(article) ?? [];
                 if (articleComments.Count == 0) continue;
-                var onlyInEvents = false;
                 if (opened.Count == 0)
-                {
                     foreach (var w in fallback.GetValueOrDefault(article) ?? [])
                         if (OpenEntityKey(EnvelopeFraming.Article, article, w.Wrapped, w.Iv, keys) is { } key)
                             opened.Add(key);
-                    onlyInEvents = opened.Count > 0;
-                }
-                // The product no longer shows these (CommentService reads the body's key only), and the event log
-                // that holds their key is cleared: named here so the report names them, whatever the re-seal does.
-                if (onlyInEvents)
-                    warnings.Add($"article {article}: its body is purged; the key of its {articleComments.Count} comment(s) is only in the event log");
+                // A purged body: the product no longer shows its comments (CommentService reads the body's key only),
+                // and the re-seal drops the sealed ones from the copy (RowResealStep, option C); the old vault keeps
+                // them. A warning, so the report names them; a comment no key opens still blocks below (only the
+                // pre-flight can prove it was openable).
+                if (!(wrappers.GetValueOrDefault(article) ?? []).Any(w => w.Table == "tbl_article_body"))
+                    warnings.Add($"article {article}: its body is purged; its {articleComments.Count} sealed comment(s) are dropped from the re-keyed vault (the old vault keeps them)");
 
                 // Every comment, not only the first: each is opened the way CommentService reads it.
                 foreach (var c in articleComments)
