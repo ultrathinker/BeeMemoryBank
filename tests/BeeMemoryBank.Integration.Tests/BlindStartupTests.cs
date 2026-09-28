@@ -48,7 +48,11 @@ public class BlindStartupTests
         using var blind = new BlindNodeFactory();
         Directory.CreateDirectory(blind.DataPath);
         var keyPath = Path.Combine(blind.DataPath, FileNodeKey.FileName);
-        await File.WriteAllBytesAsync(keyPath, []); // the torn write
+        // The torn write, with the permissions that write would have left behind (0600): a
+        // world-readable file is refused rather than regenerated over, by design.
+        await File.WriteAllBytesAsync(keyPath, []);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
 
         var start = () => blind.Services;
 

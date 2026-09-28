@@ -56,7 +56,12 @@ public sealed class FileNodeKeyTests : IDisposable
     public void AFileThatHoldsNoSeed_IsRegenerated_AndNoTempIsLeftBehind()
     {
         var key = NewKey();
-        File.WriteAllBytes(key.Path, []); // what a torn write left
+        // What a torn write left — and with the permissions that write would have left it with
+        // (0600). Created world-readable, the node refuses the file instead of regenerating over a
+        // key another account may be able to read, which is its own test.
+        File.WriteAllBytes(key.Path, []);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(key.Path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
 
         var pub = key.LoadOrCreate(out var created);
 
