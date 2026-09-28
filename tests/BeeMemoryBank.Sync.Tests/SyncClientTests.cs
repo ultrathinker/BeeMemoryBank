@@ -5,6 +5,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using Dapper;
 using FluentAssertions;
 using Xunit;
 
@@ -515,6 +516,93 @@ public class SyncClientTests : IAsyncLifetime
         var after = await positions.GetAsync(_remoteNodeId);
         after!.LastSequenceNum.Should().Be(7, "an empty pull brings nothing new");
         after.UpdatedAt.Should().BeAfter(before, "we did pull from this peer, and that is what the anchor reads");
+    }
+
+    /// <summary>
+    /// Codex round 2, security #2. The node id rides on the wire and is not covered by the signature,
+    /// so an event that merely <i>claims</i> to come from this node proves nothing — and the F5 skip
+    /// used to take that claim at face value and advance the cursor over it. A peer that fabricates
+    /// one with a sequence past the end of what we hold makes us walk past every real event behind it,
+    /// and on a blind node past the blind-authorship invariant as well.
+    ///
+    /// <para>An unproven claim now goes through the ordinary apply: the cursor stops at it and the
+    /// event is refused the way any unverifiable originator is.</para>
+    /// </summary>
+    [Fact]
+    public async Task SyncWith_ForgedEventClaimingOurOwnNodeId_IsNotSkipped_AndTheCursorDoesNotMove()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var self = (await _node.NodeRepo.GetAsync())!;
+        var page = new[] { PulledEvent(self.NodeId, sequenceNum: 42) };
+        _mockHandler.MapRoute("/api/sync/events", req => req.Method == HttpMethod.Get
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(page), Encoding.UTF8, "application/json")
+            }
+            : new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 }), Encoding.UTF8, "application/json")
+            });
+        var positions = new SyncPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPosition
+        {
+            RemoteNodeId = _remoteNodeId, LastSequenceNum = 5, UpdatedAt = DateTime.UtcNow
+        });
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        (await positions.GetAsync(_remoteNodeId))!.LastSequenceNum.Should().Be(5,
+            "an event that names us but cannot be proven ours must never move the cursor");
+        (await _node.QuarantineRepo.GetAllAsync()).Should().NotBeEmpty(
+            "it is refused exactly as any other event we cannot verify");
+    }
+
+    /// <summary>
+    /// The other half of the same rule, and the reason the skip exists at all (F5): an event of ours
+    /// that IS proven — here by the signature, with the row a compaction would have taken away already
+    /// gone — is still skipped, and never quarantined.
+    /// </summary>
+    [Fact]
+    public async Task SyncWith_OurOwnEventProvenByItsSignature_IsSkipped_EvenWhenOurLogNoLongerHasIt()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var self = (await _node.NodeRepo.GetAsync())!;
+        await _node.ArticleService.CreateAsync("Mine", "/Root", [], "content");
+        var mine = (await _node.EventLogRepo.GetAfterSequenceAsync(0)).Last();
+        mine.NodeId.Should().Be(self.NodeId);
+        mine.EventType.Should().Be(BeeMemoryBank.Sync.EventTypes.ArticleCreate);
+
+        // What a compaction leaves behind: the event is ours and signed by us, but our own log no
+        // longer holds the row, so the applier's "already applied" shortcut cannot see it.
+        using (var conn = _node.Factory.CreateConnection())
+            await conn.ExecuteAsync("DELETE FROM tbl_event WHERE event_id = @id", new { id = mine.EventId });
+        (await _node.EventLogRepo.ExistsAsync(mine.EventId)).Should().BeFalse();
+
+        mine.SequenceNum = 9;
+        var page = new[] { mine };
+        _mockHandler.MapRoute("/api/sync/events", req => req.Method == HttpMethod.Get
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(page, new JsonSerializerOptions(JsonSerializerDefaults.Web)), Encoding.UTF8, "application/json")
+            }
+            : new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 }), Encoding.UTF8, "application/json")
+            });
+        var positions = new SyncPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPosition
+        {
+            RemoteNodeId = _remoteNodeId, LastSequenceNum = 4, UpdatedAt = DateTime.UtcNow
+        });
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        (await positions.GetAsync(_remoteNodeId))!.LastSequenceNum.Should().Be(9,
+            "a proven own event is ours: there is nothing to apply, and the cursor moves past it");
+        (await _node.QuarantineRepo.GetAllAsync()).Should().BeEmpty(
+            "and nothing to defer — a quarantine row would stop the state anchor for good");
     }
 
     /// <summary>An event as it arrives in a pull page.</summary>
