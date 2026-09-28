@@ -2,7 +2,12 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Rekey;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -14,7 +19,9 @@ public class RekeyReportEndpointTests : IAsyncLifetime
 {
     private readonly BmbWebApplicationFactory _factory = new();
 
-    public async Task InitializeAsync() => await _factory.InitializeNodeAsync();
+    private const string Password = "rekeyReportPw1!";
+
+    public async Task InitializeAsync() => await _factory.InitializeNodeAsync(password: Password);
 
     public Task DisposeAsync()
     {
@@ -91,16 +98,38 @@ public class RekeyReportEndpointTests : IAsyncLifetime
         resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
+    /// <summary>An agent inherits its owner's superadmin flag; the report is still not an agent's to read.</summary>
     [Fact]
-    public async Task AnAgentKey_DoesNotReadIt()
+    public async Task ASuperadminsAgent_DoesNotReadIt()
     {
         RekeyReport.Write(_factory.DataPath, Sample(null));
-        var client = _factory.Server.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "bee_not-a-real-agent-key");
+        using var client = _factory.Server.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", await SuperadminAgentKeyAsync());
+        client.DefaultRequestHeaders.Add("X-Internal-Key", BmbWebApplicationFactory.InternalKeyForTests);
 
         var resp = await client.GetAsync("/api/rekey/report");
 
-        resp.StatusCode.Should().BeOneOf(HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden);
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await resp.Content.ReadAsStringAsync()).Should().NotContain("peer-1");
+    }
+
+    private async Task<string> SuperadminAgentKeyAsync()
+    {
+        var login = await _factory.CreateClient().PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password });
+        login.EnsureSuccessStatusCode();
+        var userId = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("userId").GetInt32();
+
+        var masterDek = _factory.Services.GetRequiredService<SessionService>().GetMasterDek();
+        var apiKey = AgentKeyHelper.GenerateApiKey();
+        var (ciphertext, iv) = AgentKeyHelper.EncryptDek(apiKey, masterDek);
+        Array.Clear(masterDek);
+        using var scope = _factory.Services.CreateScope();
+        await scope.ServiceProvider.GetRequiredService<IAgentRepository>().CreateAsync(new Agent
+        {
+            Name = "Rekey Report Agent", KeyPrefix = AgentKeyHelper.GetKeyPrefix(apiKey), KeyHash = AgentKeyHelper.ComputeKeyHash(apiKey),
+            EncryptedDek = ciphertext, DekIV = iv, Status = "A", CreatedAt = DateTime.UtcNow, OwnerUserId = userId,
+        });
+        return apiKey;
     }
 
     private static RekeyReport Sample(string? oldVault) => new(
