@@ -293,24 +293,6 @@ public sealed class RekeyPreflight : IRekeyPreflight
 
     // ─── chat.db ────────────────────────────────────────────────────────────
 
-    /// <param name="Plain">A legacy plaintext column (null: none).</param>
-    private sealed record ChatColumn(string Table, string Cipher, string Iv, string Version, string? Plain, bool Bytes, Func<string, byte[]> Aad);
-
-    // The AADs of the chat repositories (ChatMessageRepository, ChatAttachmentRepository, ChatSettingsRepository,
-    // ChatConversationRepository); a column a schema does not have yet is skipped.
-    private static readonly ChatColumn[] ChatColumns =
-    [
-        new("chat_message", "content_ciphertext", "content_iv", "content_key_v", "content_text", false, _ => "bmb-chat-message-content-v1"u8.ToArray()),
-        new("chat_message", "tool_calls_ciphertext", "tool_calls_iv", "tool_calls_key_v", "tool_calls_json", false, _ => "bmb-chat-message-toolcalls-v1"u8.ToArray()),
-        new("chat_attachment", "blob", "iv", "key_v", null, true, _ => "bmb-chat-attachment-blob-v1"u8.ToArray()),
-        new("chat_api_key", "ciphertext", "iv", "key_v", null, false, _ => "bmb-openrouter-key-v1"u8.ToArray()),
-        new("chat_api_key", "key_prefix_ciphertext", "key_prefix_iv", "key_prefix_key_v", null, false, id => Encoding.UTF8.GetBytes($"bmb-chat-api-key-prefix-v1:{Guid.Parse(id):D}")),
-        new("chat_conversation", "title_ciphertext", "title_iv", "title_key_v", null, false, id => Encoding.UTF8.GetBytes($"bmb-chat-conversation-title-v1:{Guid.Parse(id):D}")),
-    ];
-
-    /// <summary>The key-version values of a chat.db column (ChatDataProtector): 1 = the chat key, NULL = legacy, -1 = unreadable.</summary>
-    private const long ChatKeyVersion = 1, LegacyUnreadable = -1;
-
     private static void CheckChat(SqliteConnection main, SqliteConnection chat, RekeyKeys keys, List<RekeyProblem> blocking, CancellationToken ct)
     {
         byte[]? chatKey = null;
@@ -324,7 +306,7 @@ public sealed class RekeyPreflight : IRekeyPreflight
         }
         try
         {
-            foreach (var column in ChatColumns)
+            foreach (var column in ChatColumns.All)
             {
                 if (!HasColumn(chat, column.Table, column.Cipher) || !HasColumn(chat, column.Table, column.Version)) continue;
                 var rows = Query(chat,
@@ -333,9 +315,9 @@ public sealed class RekeyPreflight : IRekeyPreflight
                 foreach (var r in rows)
                 {
                     ct.ThrowIfCancellationRequested();
-                    var where = $"{column.Table}.{column.Cipher}";
+                    var where = column.Name;
                     if (column.Bytes && r.Iv is null && r.Version is null) continue; // a legacy attachment's plaintext bytes
-                    if (r.Version == LegacyUnreadable)
+                    if (r.Version == ChatColumns.LegacyUnreadable)
                     {
                         blocking.Add(new RekeyProblem(where, r.Id, "marked unreadable: sealed under a key this node no longer has"));
                         continue;
@@ -348,12 +330,12 @@ public sealed class RekeyPreflight : IRekeyPreflight
                     var aad = column.Aad(r.Id);
                     bool opened = r.Version switch
                     {
-                        ChatKeyVersion => chatKey is not null && Opens(() => Decrypt(column.Bytes, r.Cipher, r.Iv, chatKey, aad)),
+                        ChatColumns.ChatKeyVersion => chatKey is not null && Opens(() => Decrypt(column.Bytes, r.Cipher, r.Iv, chatKey, aad)),
                         null => keys.OldCandidates.Any(k => Opens(() => Decrypt(column.Bytes, r.Cipher, r.Iv, k, aad))),
                         _ => false,
                     };
                     if (!opened)
-                        blocking.Add(new RekeyProblem(where, r.Id, r.Version is null or ChatKeyVersion
+                        blocking.Add(new RekeyProblem(where, r.Id, r.Version is null or ChatColumns.ChatKeyVersion
                             ? "does not open under its key"
                             : $"is at chat key version {r.Version}, which this node does not know"));
                 }
