@@ -20,8 +20,7 @@ public class NodeSetupService
     private readonly IDbConnectionFactory _dbFactory;
     private readonly ISyncPositionRepository _syncPositionRepo;
     private readonly ILamportClock _clock;
-    private readonly SnapshotJoinClient _snapshotJoinClient;
-    private readonly HttpClient _http;
+    private readonly Func<HttpClient, SnapshotJoinClient> _snapshotJoinClientOver;
     private readonly ILogger<NodeSetupService> _logger;
 
     private static readonly JsonSerializerOptions _jsonOptions = new()
@@ -38,8 +37,7 @@ public class NodeSetupService
         IDbConnectionFactory dbFactory,
         ISyncPositionRepository syncPositionRepo,
         ILamportClock clock,
-        SnapshotJoinClient snapshotJoinClient,
-        HttpClient http,
+        Func<HttpClient, SnapshotJoinClient> snapshotJoinClientOver,
         ILogger<NodeSetupService> logger)
     {
         _initSvc = initSvc;
@@ -50,8 +48,7 @@ public class NodeSetupService
         _dbFactory = dbFactory;
         _syncPositionRepo = syncPositionRepo;
         _clock = clock;
-        _snapshotJoinClient = snapshotJoinClient;
-        _http = http;
+        _snapshotJoinClientOver = snapshotJoinClientOver;
         _logger = logger;
     }
 
@@ -65,10 +62,19 @@ public class NodeSetupService
         return identity;
     }
 
-    public async Task<NodeIdentity> JoinAsync(string name, string remoteUrl, string password)
+    /// <summary>
+    /// Joins the network through <paramref name="remoteUrl"/>. With a <paramref name="code"/> from a
+    /// computer's Connect page, every request of the join — the master password first of all — goes
+    /// only to a server holding the key the code pins, and <c>/api/join</c> carries the code's token.
+    /// </summary>
+    public async Task<NodeIdentity> JoinAsync(string name, string remoteUrl, string password, JoinCode? code = null)
     {
         if (await _initSvc.IsInitializedAsync())
             throw new InvalidOperationException("Node already initialized. Delete the database to re-join.");
+
+        // Never the app's default client: it follows redirects, and a 307 would resend the password.
+        using var http = JoinHttp.CreateClient(code?.SpkiPin);
+        var snapshotJoinClient = _snapshotJoinClientOver(http);
 
         var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
         var nodeId = Guid.NewGuid();
@@ -85,8 +91,18 @@ public class NodeSetupService
         HttpResponseMessage response;
         try
         {
-            response = await _http.PostAsJsonAsync(
-                $"{remoteUrl.TrimEnd('/')}/api/join", joinRequest, _jsonOptions);
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{remoteUrl.TrimEnd('/')}/api/join")
+            {
+                Content = JsonContent.Create(joinRequest, options: _jsonOptions)
+            };
+            if (code?.Token != null) request.Headers.Add(JoinCode.TokenHeader, code.Token);
+            response = await http.SendAsync(request);
+        }
+        catch (HttpRequestException ex) when (code != null && ex.HttpRequestError == HttpRequestError.SecureConnectionError)
+        {
+            throw new InvalidOperationException(
+                "The computer at this address is not the one the join code belongs to (its key does not match), " +
+                "so the password was not sent. Open Connect a device on the computer again and use the new code.");
         }
         catch (Exception ex)
         {
@@ -218,7 +234,7 @@ public class NodeSetupService
                     // Without this, every other Superadmin in the cluster gets demoted to
                     // plain peer locally → their whitelist_*/hard_delete/restore_network
                     // events get rejected once a 3rd node joins.
-                    IsSuperadmin = entry.IsSuperadmin
+                    IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin)
                 });
             }
             catch (Exception ex)
@@ -237,21 +253,15 @@ public class NodeSetupService
             Status = "A",
             CreatedAt = now,
             UpdatedAt = now,
-            // Trust-on-first-use of the bootstrap node, not "trust-on-join": this node never has a
-            // whitelist row for itself (see EventApplier's "a node must never be in its own
-            // whitelist"), so its own is_superadmin status cannot travel in the join response —
-            // there is nothing to read it from. The operator vouched for this specific node by
-            // typing its URL and the master password that secures the whole vault; that is the
-            // trust anchor a fresh mesh has to bootstrap from. This is orthogonal to (and does not
-            // reintroduce) the default this node itself receives from /api/join, which is always
-            // content-only until an existing superadmin explicitly promotes it.
-            IsSuperadmin = true
+            // The host just proved it holds the master password by handing over a slot it opens,
+            // and it records this phone as a superadmin for the same reason (JoinAuthority, BMB-42).
+            IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId)
         });
 
         _logger.LogInformation("Starting snapshot import from {Url}", remoteUrl);
         try
         {
-            var (cpSeq, lamportTs) = await _snapshotJoinClient.DownloadAndImportAsync(
+            var (cpSeq, lamportTs) = await snapshotJoinClient.DownloadAndImportAsync(
                 remoteUrl,
                 nodeId,
                 privateKey,

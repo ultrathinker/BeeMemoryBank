@@ -50,6 +50,8 @@
     <PackageReference Include="Xamarin.AndroidX.Biometric" />
     <PackageReference Include="Xamarin.AndroidX.Work.Runtime" />
     <PackageReference Include="Markdig" />
+    <!-- The blind copy shows its pairing code as a QR (PngByteQRCode: no System.Drawing). -->
+    <PackageReference Include="QRCoder" />
     <!-- BeeMemoryBank.Storage references SQLitePCLRaw.lib.e_sqlite3 directly, to force the native
          SQLite above the vulnerable 2.1.11 (CVE-2025-6965). That package ships desktop RIDs only
          — the Android build lives in the separate SQLitePCLRaw.lib.e_sqlite3.android AAR — but

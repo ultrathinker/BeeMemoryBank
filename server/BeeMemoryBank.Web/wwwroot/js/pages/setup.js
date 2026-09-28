@@ -12,6 +12,12 @@
         if (formJoin) formJoin.style.display = (mode === 'join') ? 'block' : 'none';
     }
 
+    // Buttons that ask the Windows app for a native picker (DesktopShellCommands) are rendered hidden:
+    // outside the app's WebView2 their address leads nowhere, so a browser never shows them.
+    if (window.chrome && window.chrome.webview) {
+        document.querySelectorAll('[data-desktop-only]').forEach(function (el) { el.hidden = false; });
+    }
+
     var btnExisting = document.getElementById('btn-mode-existing');
     var linkLegacyBack = document.getElementById('link-legacy-back');
     if (btnExisting) {

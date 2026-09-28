@@ -68,7 +68,9 @@ public static class JoinCommand
         await output.WriteLineAsync($"Generated nodeId: {nodeId}");
         await output.WriteLineAsync($"Connecting to {remoteUrl}...");
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        // No redirects: the join carries the master password, and a 307/308 would resend it elsewhere.
+        using var http = JoinHttp.CreateClient();
+        http.Timeout = TimeSpan.FromSeconds(30);
         var joinRequest = new
         {
             masterPassword = password,
@@ -231,15 +233,9 @@ public static class JoinCommand
             Status = "A",
             CreatedAt = now,
             UpdatedAt = now,
-            // Trust-on-first-use of the bootstrap node, not "trust-on-join": this node never has a
-            // whitelist row for itself (see EventApplier's "a node must never be in its own
-            // whitelist"), so its own is_superadmin status cannot travel in the join response —
-            // there is nothing to read it from. The operator vouched for this specific node by
-            // typing its URL and the master password that secures the whole vault; that is the
-            // trust anchor a fresh mesh has to bootstrap from. This is orthogonal to (and does not
-            // reintroduce) the default this node itself receives from /api/join, which is always
-            // content-only until an existing superadmin explicitly promotes it.
-            IsSuperadmin = true
+            // The host just proved it holds the master password by handing over a slot it opens,
+            // and it records this node as a superadmin for the same reason (JoinAuthority, BMB-42).
+            IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId)
         };
         await whitelistRepo.CreateAsync(remoteEntry);
 
@@ -263,7 +259,10 @@ public static class JoinCommand
                         ApiAddress = entry.ApiAddress,
                         Status = "A",
                         CreatedAt = now,
-                        UpdatedAt = now
+                        UpdatedAt = now,
+                        // Without it every other superadmin of the mesh is a plain peer here, and
+                        // their whitelist/hard-delete/restore events are refused on this node only.
+                        IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin)
                     });
                 }
                 catch (Microsoft.Data.Sqlite.SqliteException ex)
@@ -304,7 +303,8 @@ public static class JoinCommand
         Guid NodeId,
         string DisplayName,
         string Ed25519PublicKeyB64,
-        string? ApiAddress);
+        string? ApiAddress,
+        bool IsSuperadmin = false);
 
     private record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
 

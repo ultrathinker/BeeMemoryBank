@@ -1,0 +1,68 @@
+@page
+@model BeeMemoryBank.Web.Pages.AndroidBlindCopyModel
+@{
+    ViewData["Title"] = "Add an Android blind copy";
+}
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content">
+    <h2 style="font-size:1.4rem;font-weight:700;margin:0 0 16px 0;">
+        <sl-icon name="phone" style="margin-right:6px;"></sl-icon>Add an Android blind copy
+    </h2>
+    <p class="text-muted" style="margin-bottom:18px;max-width:720px;">
+        A phone in "Blind copy" mode keeps an encrypted copy of this network and makes backups, but never
+        holds the master key. It does not listen for connections: it calls a blind node or a hub, which
+        must already be in this network.
+    </p>
+
+    @if (Model.ErrorMessage != null)
+    {
+        <sl-alert variant="danger" open style="margin-bottom:12px;max-width:720px;">@Model.ErrorMessage</sl-alert>
+    }
+
+    @if (Model.Paired != null)
+    {
+        <div class="card" style="max-width:720px;" id="call-code">
+            <p style="margin-bottom:12px;">
+                <strong>@Model.Paired.DisplayName</strong> is in the network. On the phone, scan this code or paste
+                its text: it tells the phone where to call and which certificate to trust.
+            </p>
+            <img src="@Model.CallCodeQr" alt="Where-to-call code" style="width:256px;height:256px;image-rendering:pixelated;" />
+            <textarea readonly rows="3" style="width:100%;font-family:monospace;margin-top:8px;">@Model.Paired.CallCode</textarea>
+            <sl-button href="/BlindNodes" style="margin-top:8px;">Back to Blind nodes</sl-button>
+        </div>
+    }
+    else if (Model.Listeners == null)
+    {
+        <sl-alert variant="warning" open>Could not load the nodes a phone can call. Check the API connection.</sl-alert>
+    }
+    else if (Model.Listeners.Count == 0)
+    {
+        <sl-alert variant="warning" open style="max-width:720px;">
+            This network has no node a phone can call. Add a blind node first (or a hub with a pinned
+            certificate): this PC alone cannot serve a phone.
+        </sl-alert>
+    }
+    else
+    {
+        <div class="card" style="max-width:720px;">
+            <form method="post">
+                <label for="code">Code shown by the phone</label>
+                <textarea id="code" name="code" rows="3" placeholder="bmb-blind-phone:?..." required style="width:100%;font-family:monospace;"></textarea>
+                <label for="listenerId" style="display:block;margin-top:12px;">The phone will call</label>
+                <select id="listenerId" name="listenerId" required>
+                    @foreach (var l in Model.Listeners)
+                    {
+                        <option value="@l.NodeId">@l.DisplayName (@(l.IsBlind ? "blind node" : "hub"), @l.Address)</option>
+                    }
+                </select>
+                <div style="margin-top:12px;">
+                    <sl-button type="submit" variant="primary" size="small">
+                        <sl-icon slot="prefix" name="link-45deg"></sl-icon> Add
+                    </sl-button>
+                </div>
+            </form>
+        </div>
+    }
+</div>
+</div>

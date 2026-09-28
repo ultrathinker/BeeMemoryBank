@@ -74,7 +74,7 @@ public partial class EventApplier
                 existing.DisplayName = p.DisplayName;
                 existing.ApiAddress = p.ApiAddress;
                 existing.CanGenerateEmbeddings = p.CanGenerateEmbeddings;
-                existing.IsSuperadmin = p.IsSuperadmin;
+                existing.IsSuperadmin = p.IsSuperadmin && !BlindNodeId.IsBlind(p.NodeId);
                 existing.TlsSpki = p.TlsSpki;
                 existing.Status = "A";
                 existing.UpdatedAt = DateTime.UtcNow;
@@ -93,7 +93,9 @@ public partial class EventApplier
             Ed25519PublicKey = Convert.FromBase64String(p.PublicKeyB64),
             ApiAddress = p.ApiAddress,
             CanGenerateEmbeddings = p.CanGenerateEmbeddings,
-            IsSuperadmin = p.IsSuperadmin,
+            // A blind node is never a superadmin, whatever the event says (plan 3.2, BMB-42): it holds no
+            // DEK, and a peer that marked it so — by mistake or on purpose — must not hand it authority here.
+            IsSuperadmin = p.IsSuperadmin && !BlindNodeId.IsBlind(p.NodeId),
             TlsSpki = p.TlsSpki,
             Status = "A",
             CreatedAt = now,
@@ -170,7 +172,13 @@ public partial class EventApplier
             //
             // Demoting itself stays allowed: giving up your own privileges needs no protection, and
             // refusing it would block the legitimate "this node is stepping down" case.
-            if (evt.NodeId == p.NodeId && isSuperadmin && !existing.IsSuperadmin)
+            if (isSuperadmin && BlindNodeId.IsBlind(p.NodeId))
+            {
+                logger.LogWarning(
+                    "Ignoring whitelist_update from {Sender} raising blind node {NodeId} to superadmin: a blind node never is one",
+                    evt.NodeId, p.NodeId);
+            }
+            else if (evt.NodeId == p.NodeId && isSuperadmin && !existing.IsSuperadmin)
             {
                 logger.LogWarning(
                     "Ignoring self-promotion: node {NodeId} sent a whitelist_update raising its own is_superadmin",

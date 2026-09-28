@@ -128,10 +128,8 @@ curl -X PUT "http://127.0.0.1:5013/api/whitelist/$NODE2/address" -H "$J" -H "X-I
 ./seed.sh
 ```
 
-After the join, the trust asymmetry from the September trust-model change is visible directly, and
-is the fastest way to confirm a build has it: `test1` lists `test2` with `isSuperadmin: false`
-(a content-only peer), while `test2` lists `test1` with `isSuperadmin: true` (the node it entered
-through, trusted on first use).
+After the join both sides list each other with `isSuperadmin: true`: whoever knows the master
+password is a superadmin (BMB-42).
 
 ## The seeded corpus
 

@@ -33,6 +33,7 @@ public static class RecoveryApiServices
         services.AddScoped<BlindRestoreCodeService>();
         services.AddSingleton<RecoveryRestoreService>();
         services.AddSingleton<BlindRestoreClient>();
+        services.AddSingleton<IBackupFileRestoreSource, BeeMemoryBank.Api.Services.BlindPhone.AndroidBackupRestoreSource>();
         services.AddSingleton<RestoreProgress>();
         services.AddHttpClient();
         return services;

@@ -10,10 +10,10 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Exercises the real HTTP endpoints (not a hand-built <see cref="WhitelistEntry"/>) for the two
-/// halves of the trust-model change: <c>POST /api/join</c> must no longer hand a new peer authority
-/// over cluster state, and <c>PUT /api/whitelist/{nodeId}/superadmin</c> is how that authority is
-/// granted afterward, deliberately, by an existing superadmin.
+/// Exercises the real HTTP endpoints (not a hand-built <see cref="WhitelistEntry"/>) for the trust
+/// model: <c>POST /api/join</c> records whoever proved the master password as a superadmin (BMB-42),
+/// and <c>PUT /api/whitelist/{nodeId}/superadmin</c> is how that authority is changed afterwards,
+/// deliberately, by an existing superadmin.
 /// </summary>
 public class JoinDefaultAuthorityEndpointTests : IAsyncLifetime
 {
@@ -40,13 +40,12 @@ public class JoinDefaultAuthorityEndpointTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The regression this whole change is about: JoinEndpoints.cs used to write every new peer
-    /// in with <c>IsSuperadmin = true</c> ("trust-on-join"), which handed a device that only wanted
-    /// to sync content the same authority as the admin's own server. Flip the default back to
-    /// prove this test actually catches that.
+    /// BMB-42: a peer recorded content-only after proving the master password applied its own hard
+    /// delete and password-change notice locally while this node refused them — a permanent split.
+    /// The row and the whitelist_add the mesh hears about must both say superadmin.
     /// </summary>
     [Fact]
-    public async Task Join_NewPeer_IsContentOnlyByDefault()
+    public async Task Join_NewPeer_IsSuperadmin_InRowAndInWhitelistAddEvent()
     {
         var nodeId = Guid.NewGuid();
         var (publicKey, _) = Ed25519Signer.GenerateKeyPair();
@@ -65,18 +64,48 @@ public class JoinDefaultAuthorityEndpointTests : IAsyncLifetime
         getResp.StatusCode.Should().Be(HttpStatusCode.OK);
         var entry = await getResp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
 
-        entry.GetProperty("isSuperadmin").GetBoolean().Should().BeFalse(
-            "a node that only proved it knows the master password must not gain authority over " +
-            "cluster state (whitelist changes, hard-delete, network restore) merely by joining");
+        entry.GetProperty("isSuperadmin").GetBoolean().Should().BeTrue(
+            "whoever knows the master password is a superadmin (owner's decision, BMB-42)");
+
+        using var scope = _factory.Services.CreateScope();
+        var eventLog = scope.ServiceProvider.GetRequiredService<IEventLogRepository>();
+        var add = (await eventLog.GetAfterSequenceAsync(0, 100))
+            .Single(e => e.EventType == EventTypes.WhitelistAdd && e.Payload.Contains(nodeId.ToString()));
+        JsonSerializer.Deserialize<WhitelistAddPayload>(add.Payload)!.IsSuperadmin.Should().BeTrue(
+            "the rest of the mesh learns the joiner's authority from this event, not from the row");
+    }
+
+    /// <summary>
+    /// A blind node holds no DEK and must never gain authority; /api/join is the path that hands out
+    /// the DEK, so a blind id is refused outright and leaves no row behind.
+    /// </summary>
+    [Fact]
+    public async Task Join_BlindNodeId_IsRefused_AndLeavesNoRow()
+    {
+        var nodeId = BlindNodeId.NewId();
+        var (publicKey, _) = Ed25519Signer.GenerateKeyPair();
+
+        var joinResp = await _client.PostAsJsonAsync("/api/join", new
+        {
+            masterPassword = Password,
+            nodeId,
+            displayName = "BlindBox",
+            ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
+            apiAddress = (string?)null
+        });
+
+        joinResp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await joinResp.Content.ReadAsStringAsync()).Should().Contain("blind");
+        using var scope = _factory.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>()
+            .GetByNodeIdAsync(nodeId, includeDeleted: true)).Should().BeNull();
     }
 
     [Fact]
     public async Task Join_NewPeer_ArticleSyncStillReachesIt()
     {
-        // The flip side of content-only: it is still a full sync member for content. Nothing about
-        // removing default cluster-state authority should touch the whitelist_add event itself or
-        // the peer's ability to receive/send article events (that path is never gated on
-        // is_superadmin — see EventApplier.ApplyAsync's requiresSuperadmin list).
+        // The joined peer is announced to the rest of the mesh and syncs content (that path is never
+        // gated on is_superadmin — see EventApplier.ApplyAsync's requiresSuperadmin list).
         var nodeId = Guid.NewGuid();
         var (publicKey, _) = Ed25519Signer.GenerateKeyPair();
 
@@ -116,9 +145,8 @@ public class JoinDefaultAuthorityEndpointTests : IAsyncLifetime
             apiAddress = (string?)null
         })).EnsureSuccessStatusCode();
 
-        // Pin the starting state explicitly rather than assume what /api/join just produced — this
-        // test is about the promotion endpoint itself, not a second assertion of the join default
-        // already covered by Join_NewPeer_IsContentOnlyByDefault above.
+        // Pin the starting state explicitly — a demoted peer, or one recorded before BMB-42 — since
+        // /api/join itself now records a superadmin.
         using (var seedScope = _factory.Services.CreateScope())
         {
             var repo = seedScope.ServiceProvider.GetRequiredService<IWhitelistRepository>();

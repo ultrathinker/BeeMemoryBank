@@ -35,6 +35,13 @@
                 @Html.AntiForgeryToken()
                 <sl-input name="backupPath" label="Backup folder, restic repository or backup file" required value="@Model.RestoreBackupPath"
                           help-text="A folder or restic repository needs its recovery set (*.recovery-set.json) next to it; a phone backup file carries its own. The blind node does not need to be running."></sl-input>
+                @* Windows app only (setup.js reveals it): the shell answers this address with the native file
+                   picker and comes back here with the chosen file filled in. *@
+                <div data-desktop-only hidden>
+                    <sl-button size="small" href="@BeeMemoryBank.Hosting.DesktopShellCommands.PickBackupFile">
+                        <sl-icon slot="prefix" name="phone"></sl-icon> Choose a phone backup file…
+                    </sl-button>
+                </div>
                 <sl-input name="password" type="password" label="Master password" required password-toggle></sl-input>
                 <sl-input name="adminUsername" label="Your login name" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedUsername"></sl-input>
                 <sl-input name="displayName" label="Name of this computer" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>

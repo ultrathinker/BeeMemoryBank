@@ -11,6 +11,9 @@ public class BootReceiver : BroadcastReceiver
     {
         if (context == null) return;
 
+        // A blind copy has no vault sync of its own; WorkManager keeps its schedule across reboots.
+        if (BeeMemoryBank.Mobile.Services.Blind.DeviceModeStore.IsBlind) return;
+
         // WorkManager backstop FIRST — it's the resilient path if the OEM blocks the foreground
         // service from auto-starting after boot (and it persists across reboots regardless).
         SyncWorkScheduler.Ensure(context);

@@ -14,6 +14,7 @@ using Microsoft.Extensions.Hosting.WindowsServices;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Hosting;
 using BeeMemoryBank.Infrastructure.Network;
+using BeeMemoryBank.Infrastructure.Tls;
 
 namespace BeeMemoryBank.Node;
 
@@ -240,6 +241,7 @@ public static class Program
             : new NodeOrchestrator(resolvedDataDirectory, childConfigs);
 
         WebApplication? app = null;
+        LanJoinListener? lanListener = null;
         var tcs = new TaskCompletionSource<int>();
 
         using var registration = stopToken.Register(() =>
@@ -379,13 +381,34 @@ public static class Program
                 return await tcs.Task;
             }
 
+            // "Connect a device" (plan section 10): unless the LAN listener is permanently on, the
+            // Connect page opens it on demand — see LanJoinListener. Needs the internal key (the
+            // page authenticates with it) and the local CA (Windows only).
+            LanControl? BuildLan(bool permanent)
+            {
+                var internalKey = apiConfig?.EnvironmentVariables?.GetValueOrDefault("BMB_INTERNAL_KEY")
+                    ?? Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
+                if (!OperatingSystem.IsWindows() || string.IsNullOrEmpty(internalKey)) return null;
+
+                var leaf = new NodeFront.CachedLeafCert(new LocalCaService(resolvedDataDirectory));
+                if (permanent) return new LanControl(null, leaf.Get, new NetshLanFirewall(), internalKey);
+
+                if (!orchestrator.ReadyChildren.TryGetValue("BeeMemoryBank.Api", out var api)
+                    || api.Urls.FirstOrDefault() is not { } apiUrl)
+                    return null;
+                lanListener ??= new LanJoinListener(apiUrl, leaf.Get,
+                    new System.Net.IPEndPoint(System.Net.IPAddress.Any, NodeFront.HttpsPort), TimeProvider.System);
+                return new LanControl(lanListener, null, new NetshLanFirewall(), internalKey);
+            }
+
             try
             {
                 app = BuildFront(
                     new[] { "--urls", $"http://127.0.0.1:{preferredFrontPort}" },
                     orchestrator.ReadyChildren,
                     httpsEnabled,
-                    resolvedDataDirectory);
+                    resolvedDataDirectory,
+                    BuildLan(httpsEnabled));
                 await app.StartAsync();
             }
             catch (IOException)
@@ -406,7 +429,8 @@ public static class Program
                         new[] { "--urls", "http://127.0.0.1:0" },
                         orchestrator.ReadyChildren,
                         httpsEnabled,
-                        resolvedDataDirectory);
+                        resolvedDataDirectory,
+                        BuildLan(httpsEnabled));
                     await app.StartAsync();
                 }
                 catch (IOException) when (httpsEnabled)
@@ -433,7 +457,8 @@ public static class Program
                         new[] { "--urls", "http://127.0.0.1:0" },
                         orchestrator.ReadyChildren,
                         httpsEnabled,
-                        resolvedDataDirectory);
+                        resolvedDataDirectory,
+                        BuildLan(httpsEnabled));
                     await app.StartAsync();
                 }
             }
@@ -499,6 +524,11 @@ public static class Program
         {
             lifeline?.Dispose();
 
+            if (lanListener != null)
+            {
+                try { await lanListener.DisposeAsync(); } catch { }
+            }
+
             if (app != null)
             {
                 try
@@ -515,10 +545,11 @@ public static class Program
         string[] webArgs,
         IReadOnlyDictionary<string, ReadyFileInfo> readyChildren,
         bool enableHttps = false,
-        string? dataPath = null)
+        string? dataPath = null,
+        LanControl? lan = null)
     {
         var builder = WebApplication.CreateBuilder(webArgs);
-        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath);
+        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath, lan);
         var app = builder.Build();
         front.MapEndpoints(app);
         return app;

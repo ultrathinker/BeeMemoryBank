@@ -99,6 +99,9 @@ public static class BlindEndpoints
             }
             var package = await builder.BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin, ct);
             ctx.Response.Headers["X-BMB-Package-Sha256"] = package.Sha256;
+            // The detached signature, as the restore route sends it: an Android blind node keeps it with the
+            // package in its backups, so a restore from a backup checks the same two signatures.
+            ctx.Response.Headers["X-BMB-Snapshot-Signature"] = Convert.ToBase64String(await File.ReadAllBytesAsync(package.FilePath + ".sig", ct));
             ctx.Response.Headers["X-BMB-Blind-Seed-Id"] = package.Manifest.SeedId.ToString();
             // The package is built per request; it goes away when the response is done with it.
             var stream = new FileStream(package.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read,

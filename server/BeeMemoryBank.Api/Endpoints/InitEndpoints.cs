@@ -125,7 +125,9 @@ public static class InitEndpoints
                 var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
                 var nodeId = Guid.NewGuid();
 
-                var http = httpClientFactory.CreateClient();
+                // No redirects: this request carries the master password, and a 307/308 would resend it to
+                // wherever the remote pointed. A 3xx then fails the join below like any non-success answer.
+                var http = httpClientFactory.CreateClient(SyncEndpoints.NoRedirectClientName);
                 http.Timeout = TimeSpan.FromSeconds(30);
 
                 var joinRequest = new
@@ -308,7 +310,7 @@ public static class InitEndpoints
                             // Without this, every other Superadmin in the cluster would be demoted
                             // to plain peer locally → their whitelist_*/hard_delete/restore_network
                             // events would be rejected once a 3rd node joins.
-                            IsSuperadmin = entry.IsSuperadmin
+                            IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin)
                         });
                     }
                     catch (Exception ex)
@@ -327,16 +329,10 @@ public static class InitEndpoints
                     Status = "A",
                     CreatedAt = now,
                     UpdatedAt = now,
-                    // Trust-on-first-use of the bootstrap node, not "trust-on-join": this node never
-                    // has a whitelist row for itself (see EventApplier's "a node must never be in
-                    // its own whitelist"), so its own is_superadmin status cannot travel in the join
-                    // response — there is nothing to read it from. The operator vouched for this
-                    // specific node by typing its URL and the master password that secures the
-                    // whole vault; that is the trust anchor a fresh mesh has to bootstrap from. This
-                    // is orthogonal to (and does not reintroduce) the default this node itself
-                    // receives from /api/join, which is always content-only until an existing
-                    // superadmin explicitly promotes it.
-                    IsSuperadmin = true
+                    // The host just proved it holds the master password by handing over a slot it
+                    // opens, and it records this node as a superadmin for the same reason
+                    // (JoinAuthority, BMB-42).
+                    IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId)
                 });
 
                 try

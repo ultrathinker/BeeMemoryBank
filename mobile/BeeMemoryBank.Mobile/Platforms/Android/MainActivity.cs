@@ -58,6 +58,13 @@ public class MainActivity : MauiAppCompatActivity
         }
     }
 
+    // "Save to…" of the blind copy's backups returns here from the system file picker.
+    protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
+    {
+        base.OnActivityResult(requestCode, resultCode, data);
+        if (requestCode == SafExport.RequestCode) SafExport.OnResult(resultCode, data);
+    }
+
     protected override void OnNewIntent(Intent? intent)
     {
         base.OnNewIntent(intent);

@@ -325,8 +325,17 @@ public partial class MainWindow : Window
         var activeId = _activeProfileId;
         if (string.IsNullOrEmpty(activeId)) return;
 
-        var folder = await Views.FolderPicker.PickAsync(this, "Choose the folder of your Bee Memory Bank profile");
+        var folder = await Views.FolderPicker.PickAsync(this, "Choose the folder of your Bee Memory Bank profile or backup");
         if (folder == null) return;
+
+        // A backup is not a profile to open: it restores with the master password. Hand it to the
+        // wizard's restore form, already filled in.
+        var target = Services.ExistingProfileTarget.Classify(folder);
+        if (target.Kind == Services.ExistingProfileKind.Backup)
+        {
+            ShowRestoreForm(target.BackupPath!);
+            return;
+        }
 
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var fullFolder = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(folder));
@@ -533,21 +542,38 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>
-    /// Address the first-run wizard navigates to (setup.js) when the user picks "Open an
-    /// existing profile" inside the app. The .invalid TLD can never resolve, so if the shell did
-    /// not handle it nothing would be reached.
-    /// </summary>
-    private const string OpenExistingProfileCommand = "https://bmb-desktop.invalid/open-existing-profile";
+    private async Task PickBackupFileAsync()
+    {
+        var file = await Views.FolderPicker.PickFileAsync(this, "Choose a Bee Memory Bank phone backup",
+            "Phone backup", "*" + Services.ExistingProfileTarget.AndroidBackupExtension);
+        if (file == null) return;
+        var target = Services.ExistingProfileTarget.Classify(file);
+        if (target.Kind == Services.ExistingProfileKind.Backup)
+            ShowRestoreForm(target.BackupPath!);
+        else
+            await new Views.MessageDialog("Not a backup", "This file is not a Bee Memory Bank phone backup.").ShowDialog(this);
+    }
+
+    private void ShowRestoreForm(string backupPath)
+    {
+        if (_frontUrl == null) return;
+        BmbWebView.Source = Services.ExistingProfileTarget.RestoreFormUrl(_frontUrl, backupPath);
+    }
 
     private void OnWebViewNavigationStarted(object? sender, WebViewNavigationStartingEventArgs e)
     {
-        if (e.Request != null
-            && string.Equals(e.Request.AbsoluteUri, OpenExistingProfileCommand, StringComparison.OrdinalIgnoreCase))
+        // The Setup page's "Open an existing profile" and the restore form's "Choose…" navigate to a
+        // command address (DesktopShellCommands) — a native picker instead of a path typed by hand.
+        switch (Services.ShellCommands.Match(e.Request))
         {
-            e.Cancel = true;
-            Dispatcher.UIThread.Post(async () => await OpenExistingProfileFolderAsync());
-            return;
+            case Services.ShellCommand.OpenExistingProfile:
+                e.Cancel = true;
+                Dispatcher.UIThread.Post(async () => await OpenExistingProfileFolderAsync());
+                return;
+            case Services.ShellCommand.PickBackupFile:
+                e.Cancel = true;
+                Dispatcher.UIThread.Post(async () => await PickBackupFileAsync());
+                return;
         }
 
         if (e.Request != null && !IsLocalOrigin(e.Request))

@@ -2,6 +2,7 @@ using BeeMemoryBank.Core;
 using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Media;
 using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Storage;
@@ -91,6 +92,13 @@ public static class MauiProgram
                 sp.GetRequiredService<DbConnectionFactory>(),
                 dataDir,
                 sp.GetRequiredService<ILogger<SnapshotJoinClient>>()));
+        // A join by code downloads its snapshot over the join's key-pinned connection (NodeSetupService).
+        builder.Services.AddTransient<Func<HttpClient, SnapshotJoinClient>>(sp => http =>
+            new SnapshotJoinClient(
+                http,
+                sp.GetRequiredService<DbConnectionFactory>(),
+                dataDir,
+                sp.GetRequiredService<ILogger<SnapshotJoinClient>>()));
 
 #if ANDROID
         builder.Services.AddSingleton<IBiometricService, BiometricService>();
@@ -100,6 +108,41 @@ public static class MauiProgram
         builder.Services.AddSingleton<IIngestKeyStore, IngestKeyStore>();
         builder.Services.AddScoped<INodeAuthSigner, KeystoreNodeAuthSigner>();
 #endif
+
+        // Android blind copy (plan section 10). Pieces not wired to the phone yet are the Pending*
+        // stand-ins (Services/Blind/PendingBlindPieces.cs).
+        builder.Services
+            .AddSingleton<IBlindPhoneStore, Services.Blind.PreferencesBlindStore>()
+            .AddSingleton<BlindPhoneState>()
+            .AddSingleton(_ => new BlindPhoneLog(Services.Blind.BlindPaths.Log(dataDir), TimeProvider.System))
+            .AddSingleton<IBlindIdentityRecorder, Services.Blind.PendingBlindIdentityRecorder>()
+            .AddSingleton<IBlindReplicaSource, Services.Blind.PendingBlindReplicaSource>()
+            .AddSingleton<IBlindPhoneSync, Services.Blind.PendingBlindPhoneSync>()
+            .AddSingleton<IBlindPackageSource, Services.Blind.PendingBlindPackageSource>()
+            .AddSingleton<IRecoverySetJsonSource, Services.Blind.PendingRecoverySetSource>()
+            .AddSingleton<BlindPhonePairing>()
+            .AddSingleton(sp => new BlindPhoneBackupRunner(
+                sp.GetRequiredService<BlindPhoneState>(),
+                sp.GetRequiredService<IBlindPhoneKeys>(),
+                sp.GetRequiredService<IBlindPackageSource>(),
+                sp.GetRequiredService<IRecoverySetJsonSource>(),
+                sp.GetRequiredService<IDeviceStateProvider>(),
+                sp.GetRequiredService<BlindPhoneLog>(),
+                Services.Blind.BlindPaths.Backups(dataDir), TimeProvider.System))
+            .AddSingleton(sp => new BlindHeavyWork(
+                sp.GetRequiredService<BlindPhoneState>(),
+                sp.GetRequiredService<IBlindReplicaSource>(),
+                sp.GetRequiredService<BlindPhoneBackupRunner>(),
+                sp.GetRequiredService<IDeviceStateProvider>(),
+                sp.GetRequiredService<BlindPhoneLog>(),
+                Services.Blind.BlindPaths.Replica(dataDir), TimeProvider.System));
+#if ANDROID
+        builder.Services
+            .AddSingleton<IBlindPhoneKeys, KeystoreBlindPhoneKeys>()
+            .AddSingleton<IDeviceStateProvider, AndroidDeviceState>();
+#endif
+        builder.Services.AddTransient<Pages.ModeChoicePage>();
+        builder.Services.AddTransient<Pages.BlindHomePage>();
 
         builder.Services.AddTransient<Pages.UnlockPage>();
         builder.Services.AddTransient<Pages.SetupPage>();

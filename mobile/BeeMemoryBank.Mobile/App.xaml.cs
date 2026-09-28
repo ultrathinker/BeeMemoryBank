@@ -50,8 +50,7 @@ public partial class App : Application
             // A superadmin peer already holds the master key, so following its rotations adds no
             // trust the phone had not given it. Runs at every start so a superadmin peer learned
             // since is covered too; a rotation left pending is applied at the next unlock.
-            await conn.ExecuteAsync(
-                "UPDATE tbl_whitelist SET auto_accept_dek_rotation = 1 WHERE is_superadmin = 1 AND auto_accept_dek_rotation = 0");
+            await PhoneRotationAutoArm.ArmAsync(conn);
         }
         catch (Exception ex)
         {
@@ -81,9 +80,17 @@ public partial class App : Application
         _session.Locked -= OnSessionLocked;
         _session.Locked += OnSessionLocked;
 
-        if (!await _initSvc.IsInitializedAsync())
+        if (Services.Blind.DeviceModeStore.IsBlind)
         {
-            Shell.Current.GoToAsync("//setup").FireAndForget();
+            // A blind copy: no unlock, no vault; its work runs in the background.
+            StartBlindWork();
+            Shell.Current.GoToAsync("//blind").FireAndForget();
+        }
+        else if (!await _initSvc.IsInitializedAsync())
+        {
+            // First start chooses the mode; an older install that never saw the choice is a full device.
+            var route = Services.Blind.DeviceModeStore.Get() == null ? "//mode" : "//setup";
+            Shell.Current.GoToAsync(route).FireAndForget();
         }
         else
         {
@@ -114,7 +121,7 @@ public partial class App : Application
         // After OnSleep locked the session, route the user to the unlock
         // page. Skip if the app is in setup or already on /unlock to avoid
         // loops during first-run.
-        if (!_session.IsUnlocked) RouteToUnlock();
+        if (!_session.IsUnlocked && !Services.Blind.DeviceModeStore.IsBlind) RouteToUnlock();
     }
 
     // Leave the content pages the moment the vault locks, not only on the next OnResume: when
@@ -124,6 +131,7 @@ public partial class App : Application
     // //unlock, every way back into the app lands on the unlock page.
     private void OnSessionLocked()
     {
+        if (Services.Blind.DeviceModeStore.IsBlind) return;
         MainThread.BeginInvokeOnMainThread(RouteToUnlock);
     }
 
@@ -136,7 +144,8 @@ public partial class App : Application
 
             var route = shell.CurrentState?.Location?.OriginalString ?? "";
             if (!route.Contains("unlock", StringComparison.OrdinalIgnoreCase) &&
-                !route.Contains("setup", StringComparison.OrdinalIgnoreCase))
+                !route.Contains("setup", StringComparison.OrdinalIgnoreCase) &&
+                !route.Contains("mode", StringComparison.OrdinalIgnoreCase))
             {
                 shell.GoToAsync("//unlock").FireAndForget();
             }
@@ -161,6 +170,14 @@ public partial class App : Application
     {
 #if ANDROID
         Platforms.Android.SyncWorkScheduler.Ensure(Platform.AppContext);
+#endif
+    }
+
+    /// <summary>Schedules the blind copy's sync and long jobs (WorkManager).</summary>
+    public static void StartBlindWork()
+    {
+#if ANDROID
+        Platforms.Android.BlindWorkScheduler.Ensure(Platform.AppContext);
 #endif
     }
 

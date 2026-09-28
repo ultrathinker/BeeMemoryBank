@@ -66,6 +66,9 @@ public class NodeFront
     /// </summary>
     public const int HttpsPort = 5311;
 
+    /// <summary>The <c>/node/lan</c> endpoints behind the Connect page; null when not wired.</summary>
+    public LanControl? Lan { get; init; }
+
     /// <summary>
     /// Registers Kestrel body limits and YARP proxy services. When
     /// <paramref name="enableHttps"/> is true (and on Windows, with a usable
@@ -332,6 +335,8 @@ public class NodeFront
             return Results.Json(status);
         });
 
+        Lan?.Map(nodeGroup);
+
         nodeGroup.MapPost("/lock", () =>
         {
             // TODO: Needs real wiring later when the internal-key client is implemented.
@@ -384,7 +389,7 @@ public class NodeFront
     /// actually rotates (every ~90 days), so per-handshake cost is a cheap idempotent reload and we
     /// don't accumulate CNG key containers on the hot path. Thread-safe via <see cref="_gate"/>.</para>
     /// </remarks>
-    private sealed class CachedLeafCert
+    internal sealed class CachedLeafCert
     {
         private readonly LocalCaService _caService;
         private readonly object _gate = new();
@@ -456,16 +461,18 @@ public static class NodeFrontBuilder
     /// </summary>
     /// <param name="enableHttps">See <see cref="NodeFront.RegisterServices"/>.</param>
     /// <param name="dataPath">See <see cref="NodeFront.RegisterServices"/>.</param>
+    /// <param name="lan">See <see cref="NodeFront.Lan"/>.</param>
     public static NodeFront Build(
         WebApplicationBuilder builder,
         IReadOnlyDictionary<string, ReadyFileInfo> children,
         bool enableHttps = false,
-        string? dataPath = null)
+        string? dataPath = null,
+        LanControl? lan = null)
     {
         if (builder == null) throw new ArgumentNullException(nameof(builder));
         if (children == null) throw new ArgumentNullException(nameof(children));
 
-        var front = new NodeFront(children);
+        var front = new NodeFront(children) { Lan = lan };
         front.RegisterServices(builder.Services, enableHttps, dataPath);
         builder.Services.AddSingleton(front);
 

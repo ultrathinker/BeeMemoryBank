@@ -27,6 +27,9 @@
         .instructions h3 { color: var(--text-primary); font-size: 0.95rem; margin: 18px 0 6px 0; }
         .instructions code { background: var(--bg-app); padding: 1px 5px; border-radius: 4px; font-size: 0.82rem; }
         .no-lan { text-align: center; color: var(--text-secondary); font-size: 0.9rem; padding: 24px 0; }
+        .endpoint .code { font-size: 0.72rem; word-break: break-all; color: var(--text-secondary); }
+        .firewall { border: 1px solid var(--sl-color-warning-600); border-radius: 10px; padding: 16px; margin-bottom: 16px; font-size: 0.85rem; line-height: 1.5; }
+        .firewall form, .action-row { text-align: center; margin-top: 12px; }
     </style>
 </head>
 <body class="sl-theme-dark">
@@ -35,31 +38,86 @@
             <sl-icon name="qr-code" style="font-size:1.4rem;vertical-align:middle;margin-right:6px;"></sl-icon>
             Connect a device
         </h2>
-        <p class="connect-subtitle">Scan a code with your phone to open this node over HTTPS.</p>
+        <p class="connect-subtitle">Join a phone to this computer's network, without a hub. <a href="/Admin">Back to Admin</a></p>
 
-        @if (!Model.HttpsEnabled)
+        @if (Model.Lan.Error != null)
+        {
+            <sl-alert variant="danger" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @Model.Lan.Error
+            </sl-alert>
+        }
+
+        @if (Model.Lan.Mode == "unavailable")
         {
             <sl-alert variant="warning" open style="margin-bottom:16px;">
                 <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-                <strong>HTTPS is not enabled on this node.</strong> The opt-in HTTPS listener
-                (port @ConnectModel.HttpsPort) isn't running, so a QR code would point at a
-                connection nothing answers. Enable HTTPS for this node first, then refresh this
-                page.
+                <strong>This node cannot open a LAN listener.</strong> Connecting a device this way
+                works in the BeeMemoryBank Windows app. Other devices can join through a hub.
             </sl-alert>
-        }
-        else if (Model.HasLanAddress)
-        {
-            @foreach (var ep in Model.Endpoints)
-            {
-                <div class="endpoint">
-                    <img class="qr" src="@ep.QrDataUri" alt="QR code for @ep.Url" />
-                    <span class="url">@ep.Url</span>
-                </div>
-            }
         }
         else
         {
-            <p class="no-lan">No LAN IPv4 address was detected on this machine. Connect to a network and refresh.</p>
+            @if (!Model.Lan.FirewallRule)
+            {
+                <div class="firewall">
+                    <p><strong>Windows Firewall will block the phone.</strong> To let devices on your
+                       local network reach this computer on port @Model.Lan.Port, BeeMemoryBank needs
+                       to add one firewall rule. Windows will ask for administrator permission; this
+                       happens once, and BeeMemoryBank never changes the firewall without asking.</p>
+                    <form method="post" asp-page-handler="Firewall">
+                        <sl-button type="submit" variant="default">
+                            <sl-icon slot="prefix" name="shield-check"></sl-icon>
+                            Allow in Windows Firewall&hellip;
+                        </sl-button>
+                    </form>
+                </div>
+            }
+
+            @if (!Model.Lan.Active)
+            {
+                <p class="instructions">This computer is not listening on the network right now.
+                   Opening it lets one phone join in the next 15 minutes; it closes by itself once
+                   the phone has joined or the time is up. The vault stays unlocked.</p>
+                <form method="post" asp-page-handler="Enable" class="action-row">
+                    <sl-button type="submit" variant="primary">
+                        <sl-icon slot="prefix" name="phone"></sl-icon>
+                        Connect a device
+                    </sl-button>
+                </form>
+            }
+            else if (Model.HasLanAddress)
+            {
+                @if (Model.Lan.ExpiresAt is { } expiresAt)
+                {
+                    <p class="connect-subtitle">Open until @expiresAt.ToLocalTime().ToString("HH:mm"), or until a phone has joined.</p>
+                }
+                @foreach (var ep in Model.Endpoints)
+                {
+                    <div class="endpoint">
+                        <img class="qr" src="@ep.QrDataUri" alt="Join code for @ep.Url" />
+                        <span class="url">@ep.Url</span>
+                        <sl-copy-button value="@ep.Code" copy-label="Copy join code"></sl-copy-button>
+                        <code class="code">@ep.Code</code>
+                    </div>
+                }
+                <div class="instructions">
+                    <p>On the phone, choose <strong>Join</strong>, paste this join code (or scan the
+                       QR with the camera and copy its text), and enter the master password. The
+                       phone checks this computer's key from the code before it sends the password
+                       anywhere.</p>
+                </div>
+                @if (Model.Lan.Mode == "on-demand")
+                {
+                    <form method="post" asp-page-handler="Disable" class="action-row">
+                        <sl-button type="submit" variant="default">Stop listening</sl-button>
+                    </form>
+                }
+            }
+            else
+            {
+                <p class="no-lan">No LAN IPv4 address was detected on this machine. Connect to a network and refresh.</p>
+            }
         }
 
         <div class="download-row">
@@ -70,8 +128,9 @@
         </div>
 
         <div class="instructions">
-            <p>Your phone must trust this node's CA certificate before it will accept the HTTPS
-               connection. Open the downloaded <code>ca.crt</code> on your device and install it.</p>
+            <p>Joining with the code above needs no certificate. To open this node's web pages from
+               another device's browser, that device must trust this node's CA certificate: open
+               the downloaded <code>ca.crt</code> on it and install it.</p>
 
             <h3>Android</h3>
             <p>Open the file, name the certificate (e.g. <code>BeeMemoryBank</code>), and choose

@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,6 +56,15 @@ public partial class SetupPage : ContentPage
         if (string.IsNullOrWhiteSpace(name)) { ShowError("Enter node name"); return; }
         if (password.Length < 6) { ShowError("Password must be at least 6 characters"); return; }
 
+        // A join code from a computer's Connect page: the join goes only to the computer whose key
+        // it pins. A damaged code is refused, never read as a plain address — that would drop the pin.
+        JoinCode? code = null;
+        if (JoinCode.LooksLikeJoinCode(serverUrl) && !JoinCode.TryParse(serverUrl, out code))
+        {
+            ShowError("This join code is damaged. Copy it again from Connect a device on the computer.");
+            return;
+        }
+
         // Set busy BEFORE the standalone confirmation dialog: that dialog yields to the message
         // loop, so leaving the guard until after it would let a second tap slip through and start
         // a parallel setup.
@@ -65,7 +75,7 @@ public partial class SetupPage : ContentPage
             bool isJoin = !string.IsNullOrWhiteSpace(serverUrl);
             if (isJoin)
             {
-                serverUrl = NormalizeUrl(serverUrl);
+                serverUrl = code?.Address ?? NormalizeUrl(serverUrl);
             }
             else
             {
@@ -84,7 +94,7 @@ public partial class SetupPage : ContentPage
             await Task.Run(async () =>
             {
                 if (isJoin)
-                    await _setupSvc.JoinAsync(name, serverUrl, password);
+                    await _setupSvc.JoinAsync(name, serverUrl, password, code);
                 else
                     await _setupSvc.InitAsync(name, password);
 

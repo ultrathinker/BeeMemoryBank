@@ -269,6 +269,8 @@ else
     builder.Services.AddScoped<BlindPreflight>();
     builder.Services.AddSingleton<BlindNodeManager>();
     builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.IBlindPeerReseeder>(sp => sp.GetRequiredService<BlindNodeManager>());
+    // Pairing an Android blind node, which calls one of the nodes above (plan section 10).
+    builder.Services.AddSingleton<BeeMemoryBank.Api.Services.BlindPhone.BlindPhonePairingService>();
     AddMcp(builder.Services);
 }
 

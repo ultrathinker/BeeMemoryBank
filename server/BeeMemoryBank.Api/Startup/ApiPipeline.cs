@@ -130,6 +130,7 @@ app.MapInitEndpoints();
 app.MapSyncEndpoints();
 app.MapBlindReplicaEndpoint();
 app.MapBlindNodeManagementEndpoints();
+app.MapBlindPhonePairingEndpoints();
 app.MapSnapshotEndpoints();
     app.MapDekRotationEndpoints();
     app.MapUpdateEndpoints();

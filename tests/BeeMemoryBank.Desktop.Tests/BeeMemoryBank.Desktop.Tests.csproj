@@ -5,6 +5,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\desktop\BeeMemoryBank.Desktop\BeeMemoryBank.Desktop.csproj" />
+    <!-- ExistingProfileTargetTests writes a real Android backup, so the app's copy of its magic cannot drift. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Node.Tests.StubProcess\BeeMemoryBank.Node.Tests.StubProcess.csproj" />
   </ItemGroup>
 

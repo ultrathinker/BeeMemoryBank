@@ -33,9 +33,9 @@
                    CornerRadius="8"
                    Padding="16">
                 <VerticalStackLayout Spacing="8">
-                    <Label Text="Server URL"
+                    <Label Text="Server URL or join code"
                            FontAttributes="Bold" />
-                    <Label Text="Connect to an existing BeeMemoryBank server. Leave empty to create a standalone offline node."
+                    <Label Text="Connect to an existing BeeMemoryBank server, or paste the join code from Connect a device on your computer. Leave empty to create a standalone offline node."
                            FontSize="12"
                            TextColor="{StaticResource SecondaryTextColor}"
                            LineBreakMode="WordWrap" />

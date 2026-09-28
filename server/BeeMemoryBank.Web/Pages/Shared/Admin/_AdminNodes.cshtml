@@ -64,6 +64,18 @@ else
     </sl-button>
 </div>
 
+<!-- Connect a device — join a phone to this computer over the LAN, without a hub -->
+<h3 style="margin-bottom:12px;"><sl-icon name="phone"></sl-icon> Connect a device</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        Let a phone on your local network join this computer for 15 minutes, with a join code
+        that also proves to the phone it reached this computer.
+    </p>
+    <sl-button variant="primary" size="small" href="/Connect">
+        <sl-icon slot="prefix" name="qr-code"></sl-icon> Connect a device
+    </sl-button>
+</div>
+
 <!-- Software Updates -->
 <h3 style="margin-bottom:12px;"><sl-icon name="arrow-up-circle"></sl-icon> Software Updates</h3>
 <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
@@ -172,6 +184,22 @@ else
     <span id="local-events-counter" class="text-muted text-sm"></span>
 </div>
 
+@{ var passwordPeersToPromote = BeeMemoryBank.Web.Pages.PromotePasswordPeersModel.CandidatesOf(Model.Whitelist); }
+@if (passwordPeersToPromote.Count > 0)
+{
+    <!-- BMB-42: devices joined before "whoever knows the master password is a superadmin" -->
+    <sl-alert variant="warning" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>@passwordPeersToPromote.Count device(s) joined with the master password are not superadmins yet.</strong>
+        Their hard deletes and password changes are refused by the rest of the network, so the copies drift apart.
+        <div style="margin-top:8px;">
+            <sl-button size="small" variant="warning" href="/PromotePasswordPeers">
+                <sl-icon slot="prefix" name="shield-check"></sl-icon> Grant superadmin to all devices joined with the password&hellip;
+            </sl-button>
+        </div>
+    </sl-alert>
+}
+
 @if (Model.Whitelist != null && Model.Whitelist.Count > 0)
 {
     <div class="card" style="padding:0;overflow:hidden;margin-bottom:32px;">
@@ -220,7 +248,7 @@ else
                             }
                             @if (entry.IsSuperadmin && !isSelf)
                             {
-                                <sl-tooltip content="This peer can revoke other peers, hard-delete content across the whole network, and restore every node from its own snapshot. New joins no longer start this way — this peer was explicitly promoted, or joined before that change." placement="top">
+                                <sl-tooltip content="This peer can revoke other peers, hard-delete content across the whole network, and restore every node from its own snapshot. Every device that joins with the master password starts this way." placement="top">
                                     <sl-badge variant="warning" pill style="margin-left:4px;">superadmin</sl-badge>
                                 </sl-tooltip>
                             }
@@ -272,6 +300,9 @@ else
                                     class="btn-open-change-url"
                                     data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress">
                                 </sl-icon-button>
+                                @* A blind node can never be promoted (the Api refuses it too); demoting one stays possible. *@
+                                @if (entry.IsSuperadmin || !BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(entry.NodeId))
+                                {
                                 <form method="post" asp-page-handler="SetPeerSuperadmin" style="display:inline;">
                                     <input type="hidden" name="nodeId" value="@entry.NodeId" />
                                     <input type="hidden" name="isSuperadmin" value="@((!entry.IsSuperadmin).ToString().ToLower())" />
@@ -283,6 +314,7 @@ else
                                         data-demote="@(entry.IsSuperadmin.ToString().ToLower())">
                                     </sl-icon-button>
                                 </form>
+                                }
                                 <form method="post" asp-page-handler="RevokeNode" style="display:inline;">
                                     <input type="hidden" name="nodeId" value="@entry.NodeId" />
                                     <sl-icon-button name="trash" label="Revoke"

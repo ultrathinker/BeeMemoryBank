@@ -223,10 +223,8 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
             Status = "A",
             CreatedAt = now,
             UpdatedAt = now,
-            // Mirrors JoinCommand.cs / NodeSetupService.cs / InitEndpoints.cs's own join flow:
-            // trust-on-first-use of the bootstrap node (the operator vouched for it by using its
-            // master password), independent of the content-only default a fresh joiner itself now
-            // gets from /api/join. See SECURITY.md#trust-model.
+            // Mirrors JoinCommand.cs / NodeSetupService.cs / InitEndpoints.cs's own join flow: the
+            // bootstrap node proved the master password, so it is a superadmin (JoinAuthority).
             IsSuperadmin = true
         });
     }

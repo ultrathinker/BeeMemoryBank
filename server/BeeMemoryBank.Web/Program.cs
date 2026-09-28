@@ -214,6 +214,8 @@ builder.Services.AddAuthentication("BeeWebCookie")
 // /api-proxy/session/settings PUT handler.
 builder.Services.AddSingleton<WebSessionSettingsService>();
 builder.Services.AddSingleton<BrandingService>();
+// "Open an existing profile" and the restore form: an Android blind node's backup file is a backup.
+builder.Services.AddSingleton<IBackupFileRecognizer, AndroidBackupFileRecognizer>();
 builder.Services.AddOptions<CookieAuthenticationOptions>("BeeWebCookie")
     .Configure<WebSessionSettingsService>((opts, settings) =>
     {

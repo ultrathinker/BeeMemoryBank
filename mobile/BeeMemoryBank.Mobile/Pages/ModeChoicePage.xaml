@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.Mobile.Pages.ModeChoicePage"
+             Title="BeeMemoryBank"
+             BackgroundColor="{StaticResource BackgroundColor}"
+             Shell.FlyoutBehavior="Disabled"
+             Shell.NavBarIsVisible="False">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="32" Spacing="16"
+                             MaximumWidthRequest="420"
+                             HorizontalOptions="Center" VerticalOptions="Center">
+
+            <Label Text="BeeMemoryBank" FontSize="28" FontAttributes="Bold"
+                   TextColor="{StaticResource PrimaryColor}" HorizontalOptions="Center" />
+            <Label Text="How will this phone be used?" FontSize="16"
+                   TextColor="{StaticResource SecondaryTextColor}" HorizontalOptions="Center" />
+
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}"
+                   CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Regular device" FontAttributes="Bold" />
+                    <Label Text="Read and write your notes on this phone. Needs the master password."
+                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Button Text="Use as a regular device" AutomationId="ModeFullButton"
+                            Style="{StaticResource PrimaryButton}" Clicked="OnFullClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}"
+                   CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Blind copy" FontAttributes="Bold" />
+                    <Label Text="Keeps an encrypted copy of your network and makes backups of it. It never sees your notes or the master password. It calls a hub or a server blind node, so the network needs one of those."
+                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Entry x:Name="BlindNameEntry" AutomationId="BlindNameEntry" Placeholder="Name of this phone"
+                           MaxLength="64" Style="{StaticResource BaseEntry}" />
+                    <Button Text="Use as a blind copy" AutomationId="ModeBlindButton"
+                            Style="{StaticResource PrimaryButton}" Clicked="OnBlindClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <Label Text="The choice is made once. Changing it later means wiping this phone's data."
+                   FontSize="12" TextColor="{StaticResource SecondaryTextColor}" HorizontalOptions="Center"
+                   HorizontalTextAlignment="Center" />
+
+            <Label x:Name="ErrorLabel" TextColor="{StaticResource ErrorColor}" IsVisible="False" FontSize="14" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

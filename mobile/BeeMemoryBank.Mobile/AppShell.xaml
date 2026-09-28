@@ -58,6 +58,11 @@
                   FlyoutItemIsVisible="False" />
     <ShellContent Route="initialSync" ContentTemplate="{DataTemplate pages:InitialSyncPage}"
                   FlyoutItemIsVisible="False" />
+    <!-- First-start choice and the blind copy's screen (plan section 10) -->
+    <ShellContent Route="mode" ContentTemplate="{DataTemplate pages:ModeChoicePage}"
+                  FlyoutItemIsVisible="False" />
+    <ShellContent Route="blind" ContentTemplate="{DataTemplate pages:BlindHomePage}"
+                  FlyoutItemIsVisible="False" />
 
     <FlyoutItem Title="Status" Icon="icon_status.svg">
         <ShellContent Route="status" ContentTemplate="{DataTemplate pages:StatusPage}" />

@@ -144,14 +144,19 @@ public static class WhitelistEndpoints
             IAuditLogRepository auditRepo,
             HttpContext ctx) =>
         {
-            // A node that joins with the master password now arrives content-only (JoinEndpoints.cs):
-            // it can sync articles but has no say over cluster state. This endpoint is how a node
-            // gets that authority — an explicit, deliberate act by an existing superadmin — and also
-            // how it is taken away again without cutting the peer off from content entirely. Before
+            // A node that joins with the master password arrives as a superadmin (JoinAuthority,
+            // BMB-42). This endpoint is how that authority is taken away again without cutting the
+            // peer off from content entirely — and how a peer recorded content-only before BMB-42
+            // gets it back. Before
             // demotion existed, "no longer trust this peer with cluster state" meant revoking it
             // outright, which also stopped it receiving content; this is the step in between.
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+
+            // A blind node holds no DEK and must never steer cluster state (plan 3.2): refuse to
+            // raise one, whatever its row says. Demoting one stays allowed — it only takes away.
+            if (req.IsSuperadmin && BlindNodeId.IsBlind(nodeId))
+                return Results.BadRequest(new ErrorResponse("A blind node can never be a superadmin"));
 
             var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
             if (entry == null || entry.Status != "A")
@@ -279,6 +284,11 @@ public static class WhitelistEndpoints
             if (localIdentity != null && localIdentity.NodeId == nodeId)
                 return Results.BadRequest(new ErrorResponse("Cannot set auto-accept for the local node"));
 
+            // A blind node holds no DEK and never steers cluster state; letting its restore replace this
+            // vault unattended is the one thing it must never be trusted with.
+            if (req.AutoAccept && BlindNodeId.IsBlind(nodeId))
+                return Results.BadRequest(new ErrorResponse("Auto-accept restore can never be enabled for a blind node."));
+
             await repo.SetAutoAcceptRestoreAsync(nodeId.ToString(), req.AutoAccept);
             return Results.Ok(new { success = true, autoAccept = req.AutoAccept });
         });
@@ -305,11 +315,11 @@ public static class WhitelistEndpoints
 
             // Enabling auto-accept DEK rotation for a peer means "I let this peer rewrap my entire
             // vault's DEK, unattended, whenever it proposes a rotation" — a superadmin-level trust.
-            // A joining node now defaults to content-only (is_superadmin=0, d10a2053); refuse to arm
+            // A demoted peer (or one recorded before BMB-42) is content-only; refuse to arm
             // auto-accept for a non-superadmin peer so an operator can't accidentally grant DEK
             // authority to a content-only node it would otherwise reason is harmless. Disabling is
             // always allowed.
-            if (req.AutoAccept && !entry.IsSuperadmin)
+            if (req.AutoAccept && (!entry.IsSuperadmin || BlindNodeId.IsBlind(nodeId)))
                 return Results.BadRequest(new ErrorResponse(
                     "Auto-accept DEK rotation can only be enabled for a superadmin peer."));
 

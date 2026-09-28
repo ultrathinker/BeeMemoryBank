@@ -35,6 +35,14 @@ public static class JoinEndpoints
             if (req.NodeId == identity.NodeId)
                 return Results.BadRequest(new ErrorResponse("A node cannot join itself"));
 
+            // A blind node never holds the DEK, and this endpoint exists to hand it over. Every event
+            // such a node signed would be refused mesh-wide by the authorship ban anyway (plan 3.2),
+            // so a row for it here could only ever be a misconfiguration. Blind nodes are paired
+            // through their own pairing code instead.
+            if (BlindNodeId.IsBlind(req.NodeId))
+                return Results.BadRequest(new ErrorResponse(
+                    "A blind node cannot join with the master password; pair it with its blind pairing code"));
+
             // 2. Validate password: try EVERY password-bearing slot, not just the first one found.
             // Fresh nodes have a "user" slot instead of legacy "password". Accept both
             // types so multi-node join works on nodes of either vintage.
@@ -148,10 +156,22 @@ public static class JoinEndpoints
                 // that has to reach the mesh like any other whitelist change — the new-peer branch
                 // below logs too, and a re-join that wrote only the local row would leave every
                 // other node with stale reachability for this peer forever.
-                var version = await eventLogger.LogWhitelistUpdateAsync(req.NodeId, apiAddress, req.DisplayName);
+                //
+                // The re-join proved the master password again, so it also raises the peer to
+                // superadmin (BMB-42) — the way a device recorded content-only before that change
+                // gets there, and the mesh hears it in the same event.
+                //
+                // No address in the request means "not supplied", not "clear it": phones and `bmb join`
+                // never send one. Writing the null here while peers ignore a null address in the event
+                // left this node alone without a way to reach the peer. The known address is kept and
+                // announced, so every node ends up with the same one.
+                var isSuperadmin = JoinAuthority.ForPasswordPeer(req.NodeId);
+                var address = apiAddress ?? existing.ApiAddress;
+                var version = await eventLogger.LogWhitelistUpdateAsync(req.NodeId, address, req.DisplayName, isSuperadmin);
 
                 existing.DisplayName = req.DisplayName;
-                existing.ApiAddress = apiAddress;
+                existing.ApiAddress = address;
+                existing.IsSuperadmin = isSuperadmin;
                 existing.UpdatedAt = DateTime.UtcNow;
                 existing.LamportTs = version.LamportTs;
                 existing.SourceNodeId = version.SourceNodeId;
@@ -169,25 +189,12 @@ public static class JoinEndpoints
                     Status = "A",
                     CreatedAt = now,
                     UpdatedAt = now,
-                    // Content-only by default: a node that joins with the master password proves
-                    // it belongs to the vault, nothing more. is_superadmin is a SEPARATE grant —
-                    // authority over cluster state (EventApplier's requiresSuperadmin gate:
-                    // whitelist_add/revoke/update, hard_delete, restore_network,
-                    // master_password_changed), not over content. Every joined peer can still
-                    // create/update/delete articles and have that sync normally; that path is
-                    // never gated on this flag.
-                    //
-                    // Before this changed, every joiner got is_superadmin = 1, so a phone joined
-                    // only to read notes could revoke any other peer, hard-delete content
-                    // network-wide, or trigger a destructive restore. Promotion is now a separate,
-                    // deliberate act: PUT /api/whitelist/{nodeId}/superadmin (WhitelistEndpoints.cs)
-                    // emits its own whitelist_update so the whole mesh agrees on it.
-                    //
-                    // Consequence: a peer that joined through a non-superadmin relay cannot
-                    // originate whitelist/hard-delete/restore events that other nodes will accept
-                    // until an existing superadmin promotes it — see docs/sync.md#trust-model and
-                    // SECURITY.md#trust-model for which workflows that affects.
-                    IsSuperadmin = false
+                    // Whoever knows the master password is a superadmin (owner's decision, BMB-42).
+                    // The password has just handed this node the DEK, which outweighs anything a
+                    // superadmin-only event can do. Recording it content-only used to let it hard
+                    // delete or change the password locally while this node refused the event —
+                    // a divergence nothing ever repaired. See JoinAuthority.
+                    IsSuperadmin = JoinAuthority.ForPasswordPeer(req.NodeId)
                 };
                 // Log first so the row carries the version of the add the mesh is told about;
                 // otherwise this row starts at version 0 and any later event beats it, including

@@ -51,7 +51,24 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 last_protocol_seen_at      AS LastProtocolSeenAt,
                 tls_spki                   AS TlsSpki
               FROM tbl_whitelist WHERE node_id = @nodeId COLLATE NOCASE AND status = 'A'";
-        return await conn.QuerySingleOrDefaultAsync<WhitelistEntry>(sql, new { nodeId });
+        return Normalized(await conn.QuerySingleOrDefaultAsync<WhitelistEntry>(sql, new { nodeId }));
+    }
+
+    /// <summary>
+    /// A blind node never carries authority, whatever its row says (plan 3.2, BMB-42). Migration 033
+    /// cleans rows at rest; this covers a row written since by any path that bypasses the guarded writes
+    /// (a snapshot, an older build, a hand edit), so no decision built on these reads — the superadmin
+    /// gate, auto-accept of a rotation or restore — ever sees a blind superadmin.
+    /// </summary>
+    private static WhitelistEntry? Normalized(WhitelistEntry? entry)
+    {
+        if (entry != null && BlindNodeId.IsBlind(entry.NodeId))
+        {
+            entry.IsSuperadmin = false;
+            entry.AutoAcceptDekRotation = false;
+            entry.AutoAcceptRestore = false;
+        }
+        return entry;
     }
 
     public async Task<List<WhitelistEntry>> GetAllActiveAsync()
@@ -76,7 +93,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 last_protocol_version      AS LastProtocolVersion,
                 last_protocol_seen_at      AS LastProtocolSeenAt,
                 tls_spki                   AS TlsSpki
-              FROM tbl_whitelist WHERE status = 'A' ORDER BY (substr(display_name,1,1)='_') DESC, display_name")).ToList();
+              FROM tbl_whitelist WHERE status = 'A' ORDER BY (substr(display_name,1,1)='_') DESC, display_name"))
+            .Select(e => Normalized(e)!).ToList();
     }
 
     public async Task CreateAsync(WhitelistEntry entry)
@@ -168,6 +186,7 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
 
     public async Task<bool> GetAutoAcceptRestoreAsync(string nodeId)
     {
+        if (BlindNodeId.IsBlind(nodeId)) return false; // see Normalized
         using var conn = OpenConnection();
         // status = 'A' filter: a revoked peer ('R') with auto_accept_restore=1 from before
         // revocation must NOT trigger auto-apply on incoming events. Their Ed25519 key still
@@ -183,16 +202,18 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
     {
         using var conn = OpenConnection();
         // node_id stored UPPERCASE; callers pass lowercase Guid.ToString(). COLLATE NOCASE so
-        // UPDATE actually matches. Same in SetAutoAcceptDekRotationAsync below.
+        // UPDATE actually matches. Same in SetAutoAcceptDekRotationAsync below. Neither flag is ever
+        // stored for a blind node, whoever asks (see Normalized): it must not exist at rest either.
         await conn.ExecuteAsync(
             @"UPDATE tbl_whitelist
               SET auto_accept_restore = @autoAccept, updated_at = @now
               WHERE node_id = @nodeId COLLATE NOCASE",
-            new { nodeId, autoAccept = autoAccept ? 1 : 0, now = DateTime.UtcNow });
+            new { nodeId, autoAccept = autoAccept && !BlindNodeId.IsBlind(nodeId) ? 1 : 0, now = DateTime.UtcNow });
     }
 
     public async Task<bool> GetAutoAcceptDekRotationAsync(string nodeId)
     {
+        if (BlindNodeId.IsBlind(nodeId)) return false; // see Normalized
         using var conn = OpenConnection();
         // status = 'A' filter — same rationale as GetAutoAcceptRestoreAsync above.
         var val = await conn.ExecuteScalarAsync<long?>(
@@ -208,6 +229,6 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
             @"UPDATE tbl_whitelist
               SET auto_accept_dek_rotation = @autoAccept, updated_at = @now
               WHERE node_id = @nodeId COLLATE NOCASE",
-            new { nodeId, autoAccept = autoAccept ? 1 : 0, now = DateTime.UtcNow });
+            new { nodeId, autoAccept = autoAccept && !BlindNodeId.IsBlind(nodeId) ? 1 : 0, now = DateTime.UtcNow });
     }
 }
