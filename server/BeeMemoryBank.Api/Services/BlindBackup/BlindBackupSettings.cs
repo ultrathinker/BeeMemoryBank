@@ -61,8 +61,39 @@ public sealed partial class BlindBackupSettings
 
     /// <summary>Daily backup time ("HH:mm"). Interpreted as UTC — containers run UTC by default.</summary>
     public string ScheduleTime { get; set; } = "03:00";
-    /// <summary>Schedule enabled; requires a fully configured repository and password.</summary>
-    public bool ScheduleEnabled { get; set; }
+
+    /// <summary>
+    /// The daily schedule. <c>null</c> means nobody has decided — the console toggle has never been
+    /// flipped, <c>bmb blind init</c> never said, and the file has no <c>scheduleEnabled</c> key —
+    /// and an undecided schedule runs as soon as the node can back up at all
+    /// (<see cref="ScheduleRuns"/>). That is the release-A default: a node with a repository backs
+    /// up without the operator having to find a second switch. <c>true</c>/<c>false</c> is the
+    /// operator's own answer (console toggle, a hand-edited settings file) and the default never
+    /// overrides it.
+    /// </summary>
+    public bool? ScheduleEnabled { get; set; }
+
+    /// <summary>
+    /// What the operator (or the default) wants, whether or not the node can do it yet: used to
+    /// decide how strictly a settings write is checked. An explicit "on" over an incomplete
+    /// configuration must be refused rather than stored as a promise the node will not keep; a
+    /// node that is simply not configured yet has asked for nothing and may be saved in pieces.
+    /// </summary>
+    public bool ScheduleWanted => ScheduleEnabled ?? true;
+
+    /// <summary>
+    /// Whether the schedule actually runs: wanted, and possible — a configured repository with its
+    /// password (<see cref="Validate"/>). This is the one the scheduler asks.
+    /// </summary>
+    public bool ScheduleRuns(string nodeDataPath) => ScheduleWanted && Validate(nodeDataPath).Ok;
+
+    /// <summary>
+    /// Whether a settings write is checked by the strict rule (<see cref="Validate"/>) rather than
+    /// the draft rule (<see cref="ValidateValues"/>): a schedule that runs must not be broken by a
+    /// partial update, and an explicit "on" must not be saved over a configuration that cannot run
+    /// it. An off schedule over an incomplete draft is the only case the draft rule is for.
+    /// </summary>
+    public bool ScheduleGuarded(string nodeDataPath) => ScheduleEnabled ?? ScheduleRuns(nodeDataPath);
     /// <summary>restic check --read-data-subset percentage on the weekly schedule.</summary>
     public int CheckSubsetPercent { get; set; } = 5;
 
