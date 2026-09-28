@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -33,6 +34,8 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
 {
     private const string Password = "rekeyOwnerPw1";
     private const string Admin2Password = "rekeyAdmin2Pw1";
+    private const string ReaderPassword = "rekeyReaderPw1";
+    private static readonly (string User, string Password)[] OtherUsers = [("admin2", Admin2Password), ("reader", ReaderPassword)];
     private const long PlantedLamport = 1_000_000;
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "bmb-rekey-km-" + Guid.NewGuid().ToString("N"));
@@ -58,7 +61,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             var sp = scope.ServiceProvider;
             adminId = (await sp.GetRequiredService<IUserRepository>().GetByUsernameAsync("admin"))!.Id;
             await sp.GetRequiredService<UserService>().CreateUserAsync("admin2", "Admin Two", Admin2Password, "superadmin");
-            await sp.GetRequiredService<UserService>().CreateUserAsync("reader", "Reader", "rekeyReaderPw1", "user");
+            await sp.GetRequiredService<UserService>().CreateUserAsync("reader", "Reader", ReaderPassword, "user");
             _recoveryCode = await sp.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
             await sp.GetRequiredService<ArticleService>().CreateAsync("Kept", "/Notes", [], "body");
             var whitelist = sp.GetRequiredService<IWhitelistRepository>();
@@ -86,6 +89,11 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         var created = await client.PostAsJsonAsync("/api/agents", new { name = "owner-agent" });
         created.EnsureSuccessStatusCode();
         _agentKey = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("apiKey").GetString()!;
+        (await AgentMcpStatusAsync(factory)).Should().NotBe(HttpStatusCode.Unauthorized, "before the re-key the agent key is accepted");
+        using (var scope = factory.Services.CreateScope())
+            foreach (var (user, pw) in OtherUsers)
+                (await scope.ServiceProvider.GetRequiredService<UserService>().AuthenticateAsync(user, pw))
+                    .Should().NotBeNull($"before the re-key {user} signs in");
         session.Lock();
         await AgentRequestAsync(factory);
         session.IsUnlocked.Should().BeTrue("before the re-key the agent key unlocks the vault by itself");
@@ -180,6 +188,39 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnOldAgentKey_IsRefused_WhileTheOwnerHasTheVaultUnlocked()
+    {
+        var outcome = await RunAsync();
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+
+        using var node = new NodeAt(_d);
+        (await node.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue();
+
+        (await AgentMcpStatusAsync(node)).Should().Be(HttpStatusCode.Unauthorized, "every agent is revoked by the re-key");
+    }
+
+    [Fact]
+    public async Task OtherUsersOldPasswords_FailAtLogin_UntilTheOwnerResetsThem()
+    {
+        var outcome = await RunAsync();
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+
+        using var node = new NodeAt(_d);
+        var session = node.Services.GetRequiredService<SessionService>();
+        using var scope = node.Services.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserService>();
+        foreach (var (user, pw) in OtherUsers)
+            (await users.AuthenticateAsync(user, pw)).Should().BeNull($"{user}'s old password no longer signs in");
+        (await users.AuthenticateAsync("admin", Password)).Should().NotBeNull("the owner signs in");
+
+        // The owner resets a user the usual way (Admin -> Users), and that user signs in again.
+        (await session.UnlockAsync(Password)).Should().BeTrue();
+        var reader = (await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByUsernameAsync("reader"))!;
+        await users.AdminChangePasswordAsync(reader.Id, "rekeyReaderNew1");
+        (await users.AuthenticateAsync("reader", "rekeyReaderNew1")).Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task AWriteAfterTheReKey_SortsAfterEveryRowTheNodeHolds_AndIsSignedByTheNode()
     {
         var outcome = await RunAsync();
@@ -218,6 +259,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         report.ClearedSlots.Should().Contain(s => s.EndsWith(" admin2")).And.Contain(s => s.EndsWith(" recovery"))
             .And.Contain(s => s.EndsWith(" os_auto_unlock"));
         report.ClearedAgents.Should().ContainSingle().Which.Should().EndWith(" owner-agent");
+        report.ResetUsers.Should().HaveCount(2).And.Contain(u => u.EndsWith(" admin2")).And.Contain(u => u.EndsWith(" reader"));
         report.RevokedPeers.Should().BeEquivalentTo([$"{_fullPeer} Laptop", $"{_blindPeer} Blind"]);
     }
 
@@ -275,6 +317,16 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             Steps = RekeyPlan.Steps.Select(f => f()).ToList(),
             Preflight = RekeyPlan.Preflight!(),
         });
+
+    /// <summary>An MCP call with the old agent key, as an agent makes it (no internal key).</summary>
+    private async Task<HttpStatusCode> AgentMcpStatusAsync(BmbWebApplicationFactory node)
+    {
+        using var agent = node.Server.CreateClient();
+        agent.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _agentKey);
+        var resp = await agent.PostAsync("/mcp", new StringContent(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""", System.Text.Encoding.UTF8, "application/json"));
+        return resp.StatusCode;
+    }
 
     private async Task AgentRequestAsync(BmbWebApplicationFactory node)
     {

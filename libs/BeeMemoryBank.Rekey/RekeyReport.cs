@@ -10,6 +10,8 @@ namespace BeeMemoryBank.Rekey;
 /// </summary>
 /// <param name="Result">"done", "preflight-refused", "failed" or "swap-pending" (exit codes 0, 2, 3, 4).</param>
 /// <param name="OldVault">The old vault's folder, <c>D.pre-rekey-&lt;ts&gt;</c>, after the swap; null before it.</param>
+/// <param name="ResetUsers">Every user but the owner, as <c>&lt;id&gt; &lt;username&gt;</c>: none of them can sign in until
+/// the owner sets a new password for them.</param>
 public sealed record RekeyReport(
     string Result,
     DateTime StartedAt,
@@ -20,7 +22,8 @@ public sealed record RekeyReport(
     IReadOnlyList<string> ClearedSlots,
     IReadOnlyList<string> ClearedAgents,
     string? OldVault,
-    string? Error = null)
+    string? Error = null,
+    IReadOnlyList<string>? ResetUsers = null)
 {
     public const string FileName = "rekey-report.json";
 

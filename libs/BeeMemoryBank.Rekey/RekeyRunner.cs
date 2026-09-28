@@ -369,10 +369,12 @@ internal sealed class RekeyRunLog
         ClearedSlots: NotesOf("KeyMaterial", "cleared-slot:"),
         ClearedAgents: NotesOf("KeyMaterial", "cleared-agent:"),
         OldVault: result == RekeyReport.Done ? OldVault : null,
-        Error: error);
+        Error: error,
+        ResetUsers: NotesOf("KeyMaterial", "reset-user:"));
 
     /// <summary>PeerRevokeStep's <c>revoked:&lt;node id&gt; &lt;name&gt;</c>, KeyMaterialStep's
-    /// <c>cleared-slot:&lt;slot&gt; &lt;user&gt;</c> and <c>cleared-agent:&lt;id&gt; &lt;name&gt;</c>.</summary>
+    /// <c>cleared-slot:&lt;slot&gt; &lt;user&gt;</c>, <c>cleared-agent:&lt;id&gt; &lt;name&gt;</c> and
+    /// <c>reset-user:&lt;id&gt; &lt;username&gt;</c>.</summary>
     private List<string> NotesOf(string step, string prefix) =>
         Steps.Where(s => s.Name == step).SelectMany(s => s.Notes).Where(n => n.StartsWith(prefix, StringComparison.Ordinal))
             .Select(n => n[prefix.Length..]).ToList();
