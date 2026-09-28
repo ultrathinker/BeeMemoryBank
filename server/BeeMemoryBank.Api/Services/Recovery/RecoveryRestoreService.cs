@@ -238,20 +238,86 @@ public class RecoveryRestoreService(
             // 2. The replicated state.
             await import(sp);
 
-            // 3. A new identity, slot and admin under the current key.
-            var nodeId = Guid.NewGuid();
-            var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
+            // 3. Identity, slot and admin under the current key — RESUMED, never repeated.
+            //
+            // This is the step a crash interrupts most cheaply (it writes the identity row first),
+            // and IsInitializedAsync then reports the node as NOT initialized, which is exactly the
+            // instruction the operator needs: restore again. So the retry has to be re-entrant, and
+            // the two things it must never do are add a SECOND identity row and insert the admin a
+            // second time (review release-a2 spec#1, agy#3, sec#4):
+            //
+            //   * tbl_node_identity is read with an unordered LIMIT 1 by GetAsync AND by
+            //     StoreSentinelAsync, so two rows make "this node's identity" ambiguous — the id
+            //     returned here could be served by one row while the other one signs. The row a
+            //     torn attempt left is ADOPTED when its seed opens under the DEK this run derived
+            //     (a retry with the same recovery material does), and otherwise replaced IN PLACE
+            //     by its primary key: one row either way.
+            //   * tbl_user.username is UNIQUE, so a repeated insert fails the retry outright and
+            //     leaves a vault that can neither initialize nor unlock.
+            var connFactory = sp.GetRequiredService<DbConnectionFactory>();
             var nodeRepo = sp.GetRequiredService<INodeIdentityRepository>();
-            var (wrappedPk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, keys.Current, nodeId);
-            Array.Clear(privateKey);
-            await nodeRepo.CreateAsync(new NodeIdentity
-            {
-                NodeId = nodeId, DisplayName = who.DisplayName.Trim(), Ed25519PublicKey = publicKey,
-                Ed25519PrivateKey = wrappedPk, Ed25519PrivateKeyIV = pkIv, Ed25519PrivateKeyV = 1,
-                CreatedAt = DateTime.UtcNow
-            });
+            var userRepo = sp.GetRequiredService<IUserRepository>();
+            var keySlotRepo = sp.GetRequiredService<IKeySlotRepository>();
+            var adminUsername = who.AdminUsername.Trim();
+            var now = DateTime.UtcNow;
 
-            var salt = KeyDerivation.GenerateSalt();
+            var partial = await nodeRepo.GetAsync();
+            Guid nodeId;
+            byte[] publicKey, wrappedPk, pkIv, privateKey;
+            if (partial is not null && OpensUnder(partial, keys.Current))
+            {
+                nodeId = partial.NodeId;
+                publicKey = partial.Ed25519PublicKey;
+                wrappedPk = partial.Ed25519PrivateKey;
+                pkIv = partial.Ed25519PrivateKeyIV!;
+            }
+            else
+            {
+                nodeId = Guid.NewGuid();
+                (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
+                (wrappedPk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, keys.Current, nodeId);
+                Array.Clear(privateKey);
+            }
+
+            if (partial is null)
+            {
+                await nodeRepo.CreateAsync(new NodeIdentity
+                {
+                    NodeId = nodeId, DisplayName = who.DisplayName.Trim(), Ed25519PublicKey = publicKey,
+                    Ed25519PrivateKey = wrappedPk, Ed25519PrivateKeyIV = pkIv, Ed25519PrivateKeyV = 1,
+                    CreatedAt = now
+                });
+            }
+            else
+            {
+                // In place, by the row that is there — replacing whatever a previous attempt left,
+                // whether that is a half-written row or one sealed under a DEK this run cannot open.
+                using var conn = connFactory.CreateConnection();
+                await conn.ExecuteAsync(
+                    @"UPDATE tbl_node_identity
+                         SET node_id = @NodeId, display_name = @Name, ed25519_public_key = @Pk,
+                             ed25519_private_key = @Wrapped, ed25519_private_key_iv = @Iv,
+                             ed25519_private_key_v = 1, created_at = @Now
+                       WHERE node_id = @Old",
+                    new
+                    {
+                        NodeId = nodeId, Name = who.DisplayName.Trim(), Pk = publicKey, Wrapped = wrappedPk,
+                        Iv = pkIv, Now = now.ToString("O"), Old = partial.NodeId
+                    });
+            }
+
+            // The slot and the admin: the rows a torn attempt left are reused, not duplicated. A
+            // second slot wrapping the same DEK would be invisible to the operator and would still
+            // accept the OLD password after the next password change (ChangePasswordAsync rotates
+            // the one slot the user points at), so reusing the row matters, not just the row count.
+            var existingAdmin = await userRepo.GetByUsernameAsync(adminUsername);
+            var existingSlot = existingAdmin?.KeySlotId is { } id
+                ? (await keySlotRepo.GetAllAsync()).FirstOrDefault(s => s.SlotId == id)
+                : null;
+
+            // A reused slot keeps its own salt: the KEK must be derived from what is on the row, or
+            // the wrap and the salt would disagree and the vault would open for nobody.
+            var salt = existingSlot?.Salt ?? KeyDerivation.GenerateSalt();
             var kek = KeyDerivation.DeriveKek(who.Password, salt);
             MasterKeyStore slot;
             try
@@ -261,23 +327,54 @@ public class RecoveryRestoreService(
                 {
                     SlotType = "user", EncryptedMasterDek = encDek, IV = iv, Salt = salt,
                     ArgonMemory = CryptoConstants.DefaultArgonMemory, ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                    ArgonParallelism = CryptoConstants.DefaultArgonParallelism, CreatedAt = DateTime.UtcNow
+                    ArgonParallelism = CryptoConstants.DefaultArgonParallelism, CreatedAt = existingSlot?.CreatedAt ?? now
                 };
             }
             finally
             {
                 Array.Clear(kek);
             }
-            slot.SlotId = await sp.GetRequiredService<IKeySlotRepository>().CreateAsync(slot);
-            await sp.GetRequiredService<IUserRepository>().CreateAsync(new User
+
+            var passwordHash = UserService.HashPassword(who.Password);
+            if (existingSlot is not null)
             {
-                Username = who.AdminUsername.Trim(), DisplayName = who.AdminUsername.Trim(),
-                PasswordHash = UserService.HashPassword(who.Password), Role = UserRoles.Superadmin,
-                KeySlotId = slot.SlotId, IsActive = true, CreatedAt = DateTime.UtcNow
-            });
+                slot.SlotId = existingSlot.SlotId;
+                await keySlotRepo.UpdateSlotKeyAsync(existingSlot.SlotId, slot.EncryptedMasterDek, slot.IV);
+            }
+            else
+            {
+                slot.SlotId = await keySlotRepo.CreateAsync(slot);
+            }
+
+            if (existingAdmin is null)
+            {
+                await userRepo.CreateAsync(new User
+                {
+                    Username = adminUsername, DisplayName = adminUsername,
+                    PasswordHash = passwordHash, Role = UserRoles.Superadmin,
+                    KeySlotId = slot.SlotId, IsActive = true, CreatedAt = now
+                });
+            }
+            else
+            {
+                // Raw, so the row keeps everything this restore does not own (its id, its chat
+                // access, its last login) and the UNIQUE username is never touched.
+                using var conn = connFactory.CreateConnection();
+                await conn.ExecuteAsync(
+                    @"UPDATE tbl_user
+                         SET display_name = @Name, password_hash = @Hash, role = @Role,
+                             key_slot_id = @Slot, is_active = 1
+                       WHERE username = @Username COLLATE NOCASE",
+                    new
+                    {
+                        Name = adminUsername, Hash = passwordHash, Role = UserRoles.Superadmin,
+                        Slot = slot.SlotId, Username = adminUsername
+                    });
+            }
             await nodeRepo.StoreSentinelAsync(MasterKeyManager.ComputeSentinel(keys.Current));
 
-            var connFactory = sp.GetRequiredService<DbConnectionFactory>();
+            await VerifyBootstrappedIdentityAsync(nodeRepo, nodeId, publicKey, keys.Current);
+
             using (var conn = connFactory.CreateConnection())
             {
                 await conn.ExecuteAsync(
@@ -343,6 +440,78 @@ public class RecoveryRestoreService(
     /// the node again. The blind node restored from is the exception: the restore code the user typed names its
     /// key, so it stays active, but never as a superadmin. Local only.
     /// </summary>
+    /// <summary>
+    /// True when the identity row a previous restore attempt left still holds a seed this run can
+    /// open — a v=1 row whose wrapped seed decrypts under the DEK derived from the recovery material.
+    /// A row that is not (a half-write, or one sealed by a different recovery set) is not adopted:
+    /// the bootstrap replaces it in place instead, so the node never signs with a key nobody holds.
+    /// </summary>
+    private static bool OpensUnder(NodeIdentity identity, byte[] dek)
+    {
+        if (identity.Ed25519PrivateKeyV != 1 || identity.Ed25519PrivateKeyIV is null
+            || identity.Ed25519PrivateKey.Length == 0)
+            return false;
+        byte[]? seed = null;
+        try
+        {
+            seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+                identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
+                identity.NodeId, dek);
+            return true;
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            // Malformed row (the version/IV pair does not describe a wrapped seed) — not adopted.
+            return false;
+        }
+        finally
+        {
+            if (seed is not null) Array.Clear(seed);
+        }
+    }
+
+    /// <summary>
+    /// Before the restore claims success: the identity that was PERSISTED is the one this method
+    /// returns, and its stored seed really signs as the returned public key.
+    ///
+    /// <para>The reviewers' failure mode was exactly the gap between those three facts: a retry
+    /// could leave two rows, report one id and have the other one sign (release-a2 spec#1), and a
+    /// node whose returned identity is not its signing identity cannot pair, claim a blind node or
+    /// authenticate anywhere — while the restore says it succeeded. This turns that into a failed
+    /// restore instead.</para>
+    /// </summary>
+    private static async Task VerifyBootstrappedIdentityAsync(
+        INodeIdentityRepository nodeRepo, Guid nodeId, byte[] publicKey, byte[] dek)
+    {
+        var persisted = await nodeRepo.GetAsync();
+        if (persisted is null || persisted.NodeId != nodeId
+            || !persisted.Ed25519PublicKey.AsSpan().SequenceEqual(publicKey))
+            throw new InvalidOperationException(
+                "The restore bootstrap left an identity that is not the one being returned; refusing to report a restore "
+                + "whose node would authenticate as a different key. Nothing else was changed — restore again.");
+
+        var probe = "bmb-restore-identity-probe"u8.ToArray();
+        byte[]? seed = null;
+        try
+        {
+            seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+                persisted.Ed25519PrivateKey, persisted.Ed25519PrivateKeyIV, persisted.Ed25519PrivateKeyV,
+                persisted.NodeId, dek);
+            if (!Ed25519Signer.Verify(persisted.Ed25519PublicKey, probe, Ed25519Signer.Sign(seed, probe)))
+                throw new InvalidOperationException(
+                    "The restored identity's stored seed does not sign as its public key; the node could not "
+                    + "authenticate to any peer. Restore again.");
+        }
+        finally
+        {
+            if (seed is not null) Array.Clear(seed);
+        }
+    }
+
     private static async Task<IReadOnlyList<RestoredPeerRef>> DeactivateUnvouchedPeersAsync(
         DbConnectionFactory connFactory, AnchorVerification anchor, Guid? blindSource)
     {
