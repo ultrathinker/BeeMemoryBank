@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Crypto;
 
@@ -78,6 +79,7 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
     {
         seed = [];
         if (!File.Exists(Path)) return false;
+        RefuseIfLink();
         RefuseIfOthersCanRead();
         var bytes = File.ReadAllBytes(Path);
         if (bytes.Length != SeedLength)
@@ -98,14 +100,24 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
     /// a power cut in that window left a file that <see cref="Exists"/> reports and
     /// <see cref="ReadSeed"/> refuses, and the node never started again — its identity row (v=2)
     /// points at a key that is not there. The rename is what makes the file appear only complete.</para>
+    ///
+    /// <para>The temp name is random and created with <see cref="FileMode.CreateNew"/>, and the
+    /// final path is refused when it is a link (review release-a2 sec#9). A fixed
+    /// <c>name.tmp</c> beside the key is a path anything else on the box can pre-create — as a
+    /// symlink to somewhere else, in which case <see cref="FileMode.Create"/> would follow it and
+    /// write the seed through the link, outside the data volume and with whatever permissions the
+    /// target has; and two starts at once would write the same temp file. CreateNew refuses a path
+    /// that already exists — a symlink included: POSIX open(O_CREAT|O_EXCL) fails on one rather than
+    /// following it — and an unpredictable name has nothing to pre-create.</para>
     /// </summary>
     private byte[] WriteNewSeed(bool replaceExisting)
     {
+        RefuseIfLink();
         var (publicKey, seed) = Ed25519Signer.GenerateKeyPair();
-        var temp = Path + ".tmp";
+        var temp = Path + "." + Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant() + ".tmp";
         try
         {
-            var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
+            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
             // Set at creation, not chmod-ed afterwards: there is no moment the seed is on disk
             // with the umask's default permissions.
             if (!OperatingSystem.IsWindows())
@@ -185,6 +197,21 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
         throw new InvalidDataException(File.Exists(Path)
             ? $"Node identity key {Path} does not hold a {SeedLength}-byte Ed25519 seed (it is empty or truncated)."
             : $"Node identity key {Path} is missing.");
+    }
+
+    /// <summary>
+    /// A link is not this node's key file. Reading through one would adopt a seed from wherever it
+    /// points — outside the data volume, on a filesystem with different permissions — and a rename
+    /// onto one replaces the link while whatever it pointed at keeps the old contents, so the node
+    /// would come back with the identity it thought it had replaced. Refused, not resolved: a key
+    /// file is one file in the data volume, and a link there is either an attack or a mistake.
+    /// </summary>
+    private void RefuseIfLink()
+    {
+        if (new FileInfo(Path).LinkTarget is not null)
+            throw new InvalidOperationException(
+                $"Node identity key {Path} is a symlink or junction; refusing to use it. " +
+                "The key belongs in the node's data volume as a regular file.");
     }
 
     /// <summary>

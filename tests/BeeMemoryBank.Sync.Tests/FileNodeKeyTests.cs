@@ -99,6 +99,56 @@ public sealed class FileNodeKeyTests : IDisposable
         key.Matches(pub).Should().BeTrue();
     }
 
+    /// <summary>
+    /// A key path that is a link is refused rather than followed: reading through one adopts a seed
+    /// from outside the data volume, and a rename onto one replaces the link while its target keeps
+    /// the old contents — the node would come back with the identity it thought it had replaced
+    /// (review release-a2 sec#9).
+    /// </summary>
+    [Fact]
+    public void AKeyPathThatIsALink_IsRefused_NotFollowed()
+    {
+        if (OperatingSystem.IsWindows()) return; // symlinks need privileges there; the code path is the same
+
+        var elsewhere = Path.Combine(_dir, "elsewhere.key");
+        var real = NewKey();
+        real.Create();
+        Directory.CreateDirectory(Path.Combine(_dir, "targets"));
+        var victim = Path.Combine(_dir, "targets", "victim.key");
+        File.WriteAllBytes(victim, File.ReadAllBytes(real.Path));
+        File.Delete(real.Path);
+        File.CreateSymbolicLink(real.Path, victim);
+        File.Delete(elsewhere);
+
+        var act = () => real.ReadSeed();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*symlink*");
+        var replace = () => real.LoadOrCreate(out _);
+        replace.Should().Throw<InvalidOperationException>("regenerating over a link would replace the link, not the key");
+        File.ReadAllBytes(victim).Should().HaveCount(32, "nothing wrote through the link");
+    }
+
+    /// <summary>
+    /// The temporary file is created with an unpredictable name and CreateNew, so a pre-created
+    /// <c>.tmp</c> — a symlink to somewhere else, say — is neither followed nor overwritten. The
+    /// old fixed name beside the key was exactly that invitation.
+    /// </summary>
+    [Fact]
+    public void TheTempFileIsRandom_AndAPreCreatedOneIsNotUsed()
+    {
+        var key = NewKey();
+        // The name an attacker would guess, made a directory so a write through it would fail
+        // loudly rather than silently landing somewhere.
+        var decoy = key.Path + ".tmp";
+        Directory.CreateDirectory(decoy);
+
+        var pub = key.Create();
+
+        Directory.Exists(decoy).Should().BeTrue("the decoy was not touched");
+        key.Matches(pub).Should().BeTrue();
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty("the temp file is renamed, not left behind");
+    }
+
     [Fact]
     public void ReadSeed_RefusesAKeyOthersCanRead()
     {
