@@ -91,7 +91,7 @@ public class RekeyPreflightTests : IAsyncLifetime
     [Fact]
     public async Task EveryComment_IsOpened_NotOnlyTheFirst()
     {
-        Mutate($"UPDATE tbl_comment SET ciphertext = randomblob(length(ciphertext)) WHERE comment_id = '{_data.LastComment}'");
+        Mutate($"UPDATE tbl_comment SET ciphertext = randomblob(length(ciphertext)) WHERE comment_id = '{_data.LastComment}' COLLATE NOCASE");
 
         var report = await RunAsync();
 
@@ -114,7 +114,7 @@ public class RekeyPreflightTests : IAsyncLifetime
     [Fact]
     public async Task SoftDeletedRows_AreInventoriedToo()
     {
-        Mutate($"UPDATE tbl_comment SET ciphertext = randomblob(length(ciphertext)) WHERE comment_id = '{_data.DeletedComment}'",
+        Mutate($"UPDATE tbl_comment SET ciphertext = randomblob(length(ciphertext)) WHERE comment_id = '{_data.DeletedComment}' COLLATE NOCASE",
                $"UPDATE tbl_media SET encrypted_dek = randomblob(length(encrypted_dek)) WHERE id = '{Upper(_data.DeletedMedia)}'");
 
         var report = await RunAsync();
@@ -432,7 +432,8 @@ public class RekeyPreflightTests : IAsyncLifetime
     private void MutateIn(string db, params string[] sql)
     {
         using var conn = Open(db, readOnly: false);
-        foreach (var statement in sql) conn.Execute(statement);
+        foreach (var statement in sql)
+            conn.Execute(statement).Should().BeGreaterThan(0, $"the test's premise is that '{statement}' changes a row");
     }
 
     /// <summary>Every file of the vault's directory, with its bytes' hash.</summary>
