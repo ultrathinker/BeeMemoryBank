@@ -37,6 +37,8 @@ public sealed record RekeySwapJournal(
     {
         var path = PathFor(dataDir);
         if (!File.Exists(path)) return null;
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"The re-key journal {path} is a link, not a file the swap wrote.");
         return JsonSerializer.Deserialize<RekeySwapJournal>(File.ReadAllText(path))
                ?? throw new InvalidDataException($"The re-key journal {path} is empty.");
     }
@@ -102,12 +104,24 @@ public static class RekeySwapResolver
     public static RekeySwapResolution Resolve(string dataDir)
     {
         var d = RekeySwapJournal.Normalize(dataDir);
-        var journal = RekeySwapJournal.Read(d);
-        if (journal == null) return ResolveWithoutJournal(d);
+        RekeySwapJournal? read;
+        try
+        {
+            read = RekeySwapJournal.Read(d);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or NotSupportedException)
+        {
+            // A journal that does not parse tells nothing: it is moved aside (kept, for whoever looks; left in place it
+            // would stop every later re-key) and the siblings decide, as for a lost journal (R1-6).
+            File.Move(RekeySwapJournal.PathFor(d), RekeySwapJournal.PathFor(d) + ".unreadable-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'"), overwrite: true);
+            return ResolveWithoutJournal(d);
+        }
+        if (read == null) return ResolveWithoutJournal(d);
+        var journal = Trusted(d, read);
 
         var dExists = Directory.Exists(d);
-        var oldExists = Directory.Exists(journal.Old);
-        var newExists = Directory.Exists(journal.New);
+        var oldExists = IsRealDirectory(journal.Old);
+        var newExists = IsRealDirectory(journal.New);
 
         // A D that something created empty while the vault was at the old dir (an older start path) holds nothing.
         if (dExists && newExists && oldExists && IsEmpty(d))
@@ -158,8 +172,10 @@ public static class RekeySwapResolver
     public static void CompleteFirstStart(string dataDir)
     {
         var d = RekeySwapJournal.Normalize(dataDir);
-        var journal = RekeySwapJournal.Read(d);
-        if (journal is not { Phase: RekeySwapJournal.Swapped } || !Directory.Exists(d) || Directory.Exists(journal.New)) return;
+        RekeySwapJournal? journal;
+        try { journal = RekeySwapJournal.Read(d); }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or NotSupportedException) { return; } // Resolve decides such a journal
+        if (journal is not { Phase: RekeySwapJournal.Swapped } || !Directory.Exists(d) || Directory.Exists(RekeySwapJournal.NewDirFor(d))) return;
         RekeySwapJournal.Delete(d);
         File.Delete(RekeySwapJournal.LockPathFor(d));
     }
@@ -174,8 +190,8 @@ public static class RekeySwapResolver
     {
         if (Directory.Exists(d)) return new(d, false);
         var newDir = RekeySwapJournal.NewDirFor(d);
-        var parked = RekeySwapJournal.ParkedOldDirs(d);
-        if (Directory.Exists(newDir) && File.Exists(Path.Combine(newDir, RekeySwapJournal.VerifiedMarker)))
+        var parked = RekeySwapJournal.ParkedOldDirs(d).Where(IsRealDirectory).ToList();
+        if (IsRealDirectory(newDir) && File.Exists(Path.Combine(newDir, RekeySwapJournal.VerifiedMarker)))
         {
             RenameWithRetry(newDir, d);
             // Recorded as swapped, so the first start clears it (and the re-key lock) like any other swap.
@@ -192,6 +208,49 @@ public static class RekeySwapResolver
     }
 
     private static bool IsEmpty(string dir) => !Directory.EnumerateFileSystemEntries(dir).Any();
+
+    /// <summary>
+    /// The journal is untrusted state (review release-b R1-6): it names the directories, but nothing it names is moved
+    /// unless it is exactly what the swap itself would have created next to D.
+    /// <list type="bullet">
+    /// <item><b>new</b> is always <c>D.rekey-new</c>, derived from D; the journal's value is ignored.</item>
+    /// <item><b>old</b> is kept only if it is a sibling of D named <c>D.pre-rekey-yyyyMMddTHHmmssZ</c>. Otherwise it is
+    ///   the newest such sibling that exists, or a fresh name for a swap that has not moved D yet.</item>
+    /// <item>An unknown phase is read as <c>prepared</c>: the decision is taken from the disk anyway.</item>
+    /// </list>
+    /// A directory that is a junction or a symbolic link is never treated as either vault (<see cref="IsRealDirectory"/>).
+    /// </summary>
+    private static RekeySwapJournal Trusted(string d, RekeySwapJournal journal)
+    {
+        var newDir = RekeySwapJournal.NewDirFor(d);
+        var old = IsParkedOldName(d, journal.Old)
+            ? RekeySwapJournal.Normalize(journal.Old!)
+            : RekeySwapJournal.ParkedOldDirs(d).FirstOrDefault(IsRealDirectory) ?? RekeySwapJournal.OldDirFor(d, DateTimeOffset.UtcNow);
+        var phase = journal.Phase is RekeySwapJournal.Prepared or RekeySwapJournal.OldMoved or RekeySwapJournal.Swapped
+            ? journal.Phase
+            : RekeySwapJournal.Prepared;
+        return new RekeySwapJournal(newDir, old, phase);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ParkedSuffix =
+        new(@"^\.pre-rekey-\d{8}T\d{6}Z$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static bool IsParkedOldName(string d, string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)) return false;
+        string full;
+        try { full = RekeySwapJournal.Normalize(candidate); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+        var name = Path.GetFileName(d);
+        return string.Equals(Path.GetDirectoryName(full), Path.GetDirectoryName(d), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+               && Path.GetFileName(full).StartsWith(name, StringComparison.Ordinal)
+               && ParkedSuffix.IsMatch(Path.GetFileName(full)[name.Length..]);
+    }
+
+    /// <summary>A directory that exists and is not a junction or symbolic link: only such a directory is ever a vault here.</summary>
+    public static bool IsRealDirectory(string? path) =>
+        !string.IsNullOrEmpty(path) && Directory.Exists(path)
+        && (new DirectoryInfo(path).Attributes & FileAttributes.ReparsePoint) == 0;
 
     /// <summary>
     /// A durable directory rename (<see cref="DurableFs.MoveDirectory"/>), retried briefly: on Windows a handle still
