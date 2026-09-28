@@ -118,7 +118,7 @@ public static class RekeyRunner
             using var vaultLease = VaultStartup.TryAcquireExclusive(d);
             if (vaultLease == null)
                 return Fail(RekeyExit.FailedBeforeSwap,
-                    "The vault is in use (an Api, a node or a bmb command holds vault.lease): stop it first.");
+                    "The vault is in use (an Api, a node or a bmb command holds its vault.lease): stop it first.");
 
             var missing = RequiredSteps.Where(n => options.Steps.All(s => s.Name != n)).ToList();
             if (missing.Count > 0 || options.Preflight == null)
@@ -206,7 +206,7 @@ public static class RekeyRunner
             // could not be renamed on Windows (and would carry a stray file). The re-key lock, held, still keeps a
             // node from starting.
             nodeLock.Dispose();
-            vaultLease.Dispose(); // lives inside D too; the held re-key lock keeps every start out from here on
+            // The vault lease stays held through the swap: it is next to D, so it does not stand in the renames' way.
             report.OldVault = RekeySwapJournal.OldDirFor(d, now);
             RekeyReport.Write(newDir, report.ToReport(RekeyReport.Done, null));
             progress.Report("swap", 0, 1);

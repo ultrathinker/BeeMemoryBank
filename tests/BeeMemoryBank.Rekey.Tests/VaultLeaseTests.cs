@@ -27,7 +27,7 @@ public sealed class VaultLeaseTests : IDisposable
     }
 
     private Dictionary<string, string> Tree() =>
-        Directory.EnumerateFiles(_d, "*", SearchOption.AllDirectories).Where(f => Path.GetFileName(f) != VaultStartup.LeaseFile)
+        Directory.EnumerateFiles(_d, "*", SearchOption.AllDirectories)
             .ToDictionary(f => Path.GetRelativePath(_d, f), f => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(f))));
 
     [Fact]

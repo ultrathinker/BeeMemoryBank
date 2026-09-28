@@ -1,6 +1,6 @@
 namespace BeeMemoryBank.AppPaths;
 
-/// <summary>A process's hold on <c>D/vault.lease</c>: shared by everything that opens the vault, exclusive for the re-key.</summary>
+/// <summary>A process's hold on <c>&lt;D&gt;.vault.lease</c>: shared by everything that opens the vault, exclusive for the re-key.</summary>
 public sealed class VaultLease : IDisposable
 {
     private readonly FileStream _file;
@@ -21,7 +21,8 @@ public sealed class VaultInUseException(string message) : InvalidOperationExcept
 /// <item>A re-key that is running (its <c>&lt;D&gt;.rekey.lock</c> held) refuses the start before anything is resolved:
 ///   the verb may be in the middle of its own renames.</item>
 /// <item>Otherwise an interrupted swap is finished or rolled back (<see cref="RekeySwapResolver.Resolve"/>).</item>
-/// <item><c>D/vault.lease</c> is held <b>shared</b> for the life of the process: any number of these processes at once
+/// <item><c>&lt;D&gt;.vault.lease</c>, next to D like the re-key's other files, is held <b>shared</b> for the life of the
+///   process: any number of these processes at once
 ///   (a node and its child Api, an Api and a CLI command), while the verb, which needs it <b>exclusive</b>, is refused
 ///   for as long as one of them runs, and none of them can start while the verb holds it.</item>
 /// <item>The re-key lock is checked once more with the lease held, closing the window between the first check and the
@@ -32,9 +33,11 @@ public sealed class VaultInUseException(string message) : InvalidOperationExcept
 /// </summary>
 public static class VaultStartup
 {
-    public const string LeaseFile = "vault.lease";
-
-    public static string LeasePathFor(string dataDir) => Path.Combine(RekeySwapJournal.Normalize(dataDir), LeaseFile);
+    /// <summary>
+    /// Next to D, not in it: the verb creating it leaves the old vault byte-identical, and an open lease handle never
+    /// sits inside a directory the swap renames (which Windows refuses).
+    /// </summary>
+    public static string LeasePathFor(string dataDir) => RekeySwapJournal.Normalize(dataDir) + ".vault.lease";
 
     /// <summary>Passes the gate. Throws <see cref="VaultInUseException"/> while a re-key runs. The caller keeps the lease
     /// for its whole life (a field or a DI singleton: a local the JIT sees as dead may be finalized, which releases it).</summary>
@@ -43,10 +46,9 @@ public static class VaultStartup
         var refusal = Refusal(dataDir);
         if (refusal != null) throw new VaultInUseException(refusal);
         var resolution = RekeySwapResolver.Resolve(dataDir);
-        Directory.CreateDirectory(resolution.DataDir);
         var lease = TryAcquireShared(resolution.DataDir)
             ?? throw new VaultInUseException(
-                $"A content re-key holds the vault {resolution.DataDir} ({LeaseFile} is held exclusively). Start again once it has finished.");
+                $"A content re-key holds the vault {resolution.DataDir} ({LeasePathFor(resolution.DataDir)} is held exclusively). Start again once it has finished.");
         if (Refusal(resolution.DataDir) is { } late)
         {
             lease.Dispose();
@@ -73,6 +75,7 @@ public static class VaultStartup
     {
         try
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             if (access == FileAccess.Read && !File.Exists(path))
                 using (new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { }
             return new VaultLease(new FileStream(path, FileMode.OpenOrCreate, access, share, bufferSize: 1));
