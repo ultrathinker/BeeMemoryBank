@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -173,6 +174,120 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         Func<Task> fullCycle = () => node2.Processor.ProcessPendingAsync(CancellationToken.None);
         await fullCycle.Should().NotThrowAsync();
         (await node2.ArticleRepo.GetByIdAsync(article1.Id))!.IndexPending.Should().BeFalse("the processor must have reindexed the re-flagged article from scratch");
+    }
+
+    /// <summary>
+    /// The fallback's other half: a rebuild that only clears the persisted index leaves whatever
+    /// <see cref="EnsureWarmStartedAsync"/> had <b>already adopted</b> live in the process-wide
+    /// <see cref="IndexBuilder"/>. That is the ordinary case rather than an edge one — the failure
+    /// that triggers the fallback (an unreadable segment) is found <i>while adopting</i>, after the
+    /// segments before it are already live — and because a rebuild only re-indexes active,
+    /// unprotected articles, the adopted content it strands is exactly the content that must never
+    /// be served again: an article protected since it was indexed, and one deleted since. Neither is
+    /// ever visited again, so their terms and ids stay findable through <c>SearchService</c> for the
+    /// rest of the process's life.
+    ///
+    /// <para>
+    /// The failure has to be discovered while <b>adopting</b>, not while loading: the warm-start
+    /// loads every segment first and adopts them in a second pass, so a segment that will not load
+    /// aborts before anything is adopted at all (see
+    /// <c>CorruptedSegmentFile_TriggersFullRebuild_...</c> above). The trigger here is the WP-13
+    /// case — a segment whose container decrypts fine but whose payload claims an inner format
+    /// version from the future — which only fails in the adoption pass. The two articles sit in
+    /// separate persisted segments so that <i>whichever</i> one this pass adopts first is a
+    /// since-removed article, so the assertions below cannot pass on ordering luck; the unreadable
+    /// segment is moved to the last <c>rowid</c> so the pass has certainly adopted before it fails
+    /// (asserted below, not assumed).
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task WarmStartFallback_AfterAdoptingASegment_DropsTheInMemoryIndex_SoRemovedContentStopsBeingServed()
+    {
+        var node1 = await CreateNode(initialize: true);
+
+        // Each article seals and persists into its own segment (CreateNode's threshold is 1).
+        var protectedArticle = await node1.ArticleService.CreateAsync("Doc P", "/", [], "secretterm content alpha");
+        await node1.Processor.ProcessPendingAsync(CancellationToken.None);
+        var deletedArticle = await node1.ArticleService.CreateAsync("Doc Q", "/", [], "gonefterm content beta");
+        await node1.Processor.ProcessPendingAsync(CancellationToken.None);
+
+        node1.Builder.Lookup(Stem("secretterm")).Should().Contain(protectedArticle.Id, "test setup: the article about to be protected is in a persisted segment");
+        node1.Builder.Lookup(Stem("gonefterm")).Should().Contain(deletedArticle.Id, "test setup: the article about to be deleted is in a persisted segment");
+
+        // Both now leave the set a rebuild re-indexes -- PendingIndexProcessor indexes only active,
+        // unprotected articles, and neither of these will ever be visited again -- while their terms
+        // stay in the persisted segments (protecting or deleting an article does not tombstone the
+        // index; only a later ingest of that article would).
+        await node1.ArticleService.ProtectAsync(protectedArticle.Id, "a-passphrase-1", null);
+        await node1.ArticleService.DeleteAsync(deletedArticle.Id);
+
+        Guid unreadableSegmentId = await StoreUnreadableSegmentAsync(node1);
+        var manifestOrder = await node1.ManifestRepo.GetAllManifestsAsync();
+        manifestOrder[^1].SegmentId.Should().Be(unreadableSegmentId,
+            "this test's construction depends on the unreadable segment being adopted (and therefore failing) last, after both real segments are already in the builder");
+
+        var node2 = await CreateNode(initialize: false);
+        Func<Task> warmStart = () => node2.Lifecycle.EnsureWarmStartedAsync(CancellationToken.None);
+        await warmStart.Should().NotThrowAsync("an unreadable segment must trigger a rebuild, never crash");
+
+        node2.Builder.SealedSegmentCount.Should().Be(0, "the rebuild must drop the segments this same pass had already adopted, not just the manifest rows pointing at them");
+        node2.Builder.Lookup(Stem("secretterm")).Should().BeEmpty("a rebuild re-indexes neither a protected article nor anything else it does not index, so only dropping the in-memory index removes its terms");
+        node2.Builder.Lookup(Stem("gonefterm")).Should().BeEmpty("nor a deleted article's");
+
+        var reloadedProtected = await node2.ArticleRepo.GetByIdAsync(protectedArticle.Id);
+        reloadedProtected!.IndexPending.Should().BeTrue("the rebuild re-flags it, but the processor will skip it for being protected and clear the flag again -- it is never coming back");
+        (await IndexPendingAsync(node2, deletedArticle.Id)).Should().BeFalse(
+            "a deleted article is not re-flagged at all -- the rebuild re-flags only active ones -- so nothing but dropping the in-memory index takes it out of the index");
+    }
+
+    /// <summary>
+    /// One article's <c>index_pending</c> flag, read straight from the table: a soft-deleted article
+    /// is not returned by <see cref="IArticleRepository.GetByIdAsync"/>, and its flag is exactly what
+    /// this test has to look at.
+    /// </summary>
+    private static async Task<bool> IndexPendingAsync(TestNode node, Guid articleId)
+    {
+        using var conn = node.Factory.CreateConnection();
+        // The id goes in as a Guid, as every other statement binds it (SQLite compares TEXT
+        // case-sensitively, so the string form would miss the row).
+        long pending = await Dapper.SqlMapper.ExecuteScalarAsync<long>(
+            conn, "SELECT index_pending FROM tbl_article WHERE id = @id", new { id = articleId });
+        return pending == 1;
+    }
+
+    /// <summary>
+    /// Persists one real, validly-encrypted segment whose <b>decrypted payload</b> claims an inner
+    /// format version from the future -- what a newer node's segment looks like to this build -- and
+    /// moves its manifest row to the highest <c>rowid</c>, so the warm-start's adoption pass reaches
+    /// it last. The container itself loads fine (that is the point: it is not the load pass this test
+    /// needs to fail), so it is rejected only by the inner-version check inside
+    /// <see cref="EnsureWarmStartedAsync"/>'s <b>adoption</b> pass -- see
+    /// <see cref="SearchIndexLifecycleFormatVersionResilienceTests"/> -- by which time every earlier
+    /// segment is already live in the builder. Returns the segment's id so the caller can assert it
+    /// really is last.
+    /// </summary>
+    private async Task<Guid> StoreUnreadableSegmentAsync(TestNode node)
+    {
+        byte[] segmentBytes = SegmentWriter.Build(
+        [
+            new SegmentDocument(0, Guid.NewGuid(), Guid.NewGuid(), ["futureterm"]),
+        ]);
+        BinaryPrimitives.WriteInt32LittleEndian(
+            segmentBytes.AsSpan(SegmentLayout.HeaderFormatVersionOffset, 4), SegmentLayout.FormatVersion + 1);
+
+        var store = new EncryptedSegmentStore(node.ManifestRepo, node.Session, _segmentsDir);
+        var segmentId = Guid.NewGuid();
+        await store.StoreAsync(segmentId, segmentBytes, docCount: 1);
+
+        // GetAllManifestsAsync has no ORDER BY, so the scan walks this ordinary rowid table in
+        // ascending rowid order; an explicit rowid above every other row is what makes this segment
+        // last rather than merely probably-last (the caller asserts the resulting order).
+        using var conn = node.Factory.CreateConnection();
+        await Dapper.SqlMapper.ExecuteAsync(
+            conn,
+            "UPDATE tbl_search_index_manifest SET rowid = @rowid WHERE segment_id = @id",
+            new { rowid = long.MaxValue, id = segmentId.ToString() });
+        return segmentId;
     }
 
     // ── WP-19: merge output survives a restart ──────────────────────────────────────
