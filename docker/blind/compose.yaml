@@ -39,8 +39,20 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - BMB_ROLE=blind
       - BMB_DATA_PATH=/app/data
+      # The published sync port speaks HTTPS with the node's own self-signed certificate (plan 4.4):
+      # every full device dials it that way and pins the certificate from the pair code. Without
+      # BMB_BLIND_HTTPS_PORT the Api listens in plain HTTP on ASPNETCORE_URLS, no code can be issued
+      # (BlindPairing needs BMB_PUBLIC_ADDRESS) and a PC would refuse an http:// address anyway
+      # (BlindPairCode.Parse). BMB_BLIND_LOCAL_PORT keeps a plain loopback port beside it for the
+      # console and `docker exec … bmb` — it is never published and never leaves the container.
+      - BMB_BLIND_HTTPS_PORT=5610
+      - BMB_BLIND_LOCAL_PORT=5612
+      # What the pair code tells a PC to dial. BMB_LAN_ADDR is the same address the port above is
+      # published on, and compose refuses to start without it, so the two cannot drift apart.
+      - "BMB_PUBLIC_ADDRESS=https://${BMB_LAN_ADDR:?set BMB_LAN_ADDR to this host's LAN address, e.g. BMB_LAN_ADDR=192.168.1.20}:5610"
       # Where local tools find the Api: the console, and `docker exec bmb-blind bmb blind …`.
-      - BMB_API_URL=http://127.0.0.1:5610
+      # The LOCAL plain port, not 5610 — that one speaks TLS the mesh pins, not the local tools.
+      - BMB_API_URL=http://127.0.0.1:5612
     restart: unless-stopped
 
 # Named volumes with explicit names (not the <project>_<volume> default), so `docker volume ls`

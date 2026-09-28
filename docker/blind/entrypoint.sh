@@ -18,18 +18,35 @@ if [ -z "$BMB_INTERNAL_KEY" ]; then
     export BMB_INTERNAL_KEY=$(cat "$KEY_FILE")
 fi
 
-# The Api listens on the container's bridge (host-side publishing decides exposure — see the
-# main image's docker-entrypoint.sh for why a 127.0.0.1 bind here would be wrong). Keyless
-# callers reach only the PublicSurface routes; everything else answers 404 without the key.
+# The Api's two listeners are decided by the blind role itself (ApiServices.UseBlindHttps) and not
+# by ASPNETCORE_URLS: the sync port speaks HTTPS with the node's self-signed certificate, and a
+# plain loopback port sits beside it for local tools. Both default here as well, so the image is
+# consistent however it is started — a bare `docker run` gets the same surfaces compose does.
+# The sync listener is on the container's bridge (host-side publishing decides exposure — see the
+# main image's docker-entrypoint.sh for why a 127.0.0.1 bind here would be wrong); the local one is
+# loopback-only inside the container. Keyless callers reach only the PublicSurface routes;
+# everything else answers 404 without the key.
+export BMB_BLIND_HTTPS_PORT="${BMB_BLIND_HTTPS_PORT:-5610}"
+export BMB_BLIND_LOCAL_PORT="${BMB_BLIND_LOCAL_PORT:-5612}"
+
+# What the pair code tells a PC to dial. Compose sets it from BMB_LAN_ADDR; a container started by
+# hand is derived from the same variable, because a node without it cannot issue a code at all and
+# says so only in the log.
+if [ -z "$BMB_PUBLIC_ADDRESS" ] && [ -n "$BMB_LAN_ADDR" ]; then
+    export BMB_PUBLIC_ADDRESS="https://${BMB_LAN_ADDR}:${BMB_BLIND_HTTPS_PORT}"
+fi
+
+# Where local tools reach the Api: the plain loopback port, never the TLS one (only the mesh holds
+# that certificate's pin). Inherited by the console below and by `docker exec … bmb`.
+export BMB_API_URL="${BMB_API_URL:-http://127.0.0.1:${BMB_BLIND_LOCAL_PORT}}"
+
 BMB_ROLE=blind \
-ASPNETCORE_URLS=http://0.0.0.0:5610 \
     dotnet /app/api/BeeMemoryBank.Api.dll &
 api=$!
 
 # The console talks to the Api over the container's own loopback.
 (
     cd /app/console
-    BMB_API_URL=http://127.0.0.1:5610 \
     ASPNETCORE_URLS=http://0.0.0.0:5611 \
         exec dotnet BeeMemoryBank.BlindConsole.dll
 ) &
