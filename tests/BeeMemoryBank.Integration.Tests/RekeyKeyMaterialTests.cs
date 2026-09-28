@@ -7,7 +7,6 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Rekey;
-using BeeMemoryBank.Rekey.Steps;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
 using Microsoft.AspNetCore.Hosting;
@@ -28,7 +27,7 @@ namespace BeeMemoryBank.Integration.Tests;
 ///   cleared log), and the node still signs with its own identity;</item>
 /// <item>the report lists what was cleared and revoked.</item>
 /// </list>
-/// ChatRekeyStep (R2) is a double here: the chat key under D_c, chat.db emptied.
+/// The run is the whole plan as the verb runs it (<see cref="RekeyPlan"/>): the real pre-flight and every step.
 /// </summary>
 public sealed class RekeyKeyMaterialTests : IAsyncLifetime
 {
@@ -215,7 +214,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         var outcome = await RunAsync();
         outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
 
-        var report = JsonSerializer.Deserialize<RekeyReport>(await File.ReadAllTextAsync(Path.Combine(_d, RekeyRunner.ReportFile)), RekeyReport.Json)!;
+        var report = RekeyReport.TryRead(_d)!;
         report.ClearedSlots.Should().Contain(s => s.EndsWith(" admin2")).And.Contain(s => s.EndsWith(" recovery"))
             .And.Contain(s => s.EndsWith(" os_auto_unlock"));
         report.ClearedAgents.Should().ContainSingle().Which.Should().EndWith(" owner-agent");
@@ -267,14 +266,14 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
 
     // ------------------------------------------------------------------------------------------------ helpers
 
+    /// <summary>The whole plan, as the verb runs it: the real pre-flight and every real step.</summary>
     private Task<RekeyOutcome> RunAsync() =>
         RekeyRunner.RunAsync(new RekeyOptions
         {
             DataDir = _d,
             OwnerPassword = Password,
-            Steps = [new KeyMaterialStep(), new RowResealStep(), new ChatDouble(), new DerivedDataClearStep(), new PeerRevokeStep(), new EventLogResetStep()],
-            Preflight = new PreflightDouble(),
-            ChatTables = ChatTablesAllCleared(),
+            Steps = RekeyPlan.Steps.Select(f => f()).ToList(),
+            Preflight = RekeyPlan.Preflight!(),
         });
 
     private async Task AgentRequestAsync(BmbWebApplicationFactory node)
@@ -292,41 +291,6 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             base.ConfigureWebHost(builder);
             builder.UseSetting("BeeMemoryBank:DataPath", dataDir);
         }
-    }
-
-    /// <summary>R2's ChatRekeyStep, reduced: the chat key under D_c, chat.db emptied.</summary>
-    private sealed class ChatDouble : IRekeyStep
-    {
-        public string Name => "ChatRekey";
-
-        public async Task<RekeyStepResult> RunAsync(RekeyContext ctx)
-        {
-            if (ctx.Chat != null)
-                foreach (var t in (await ctx.Chat.QueryAsync<string>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL%'")).ToList())
-                    await ctx.Chat.ExecuteAsync($"DELETE FROM [{t}]");
-            foreach (var name in (await ctx.Main.QueryAsync<string>("SELECT key_name FROM tbl_node_data_key")).ToList())
-            {
-                var (w, iv) = NodeDataKeyEnvelope.Wrap(name, name == ChatDataKeyEnvelope.KeyName ? ctx.Keys.ChatKey : RandomNumberGenerator.GetBytes(32), ctx.Keys.CampaignDek);
-                await ctx.Main.ExecuteAsync("UPDATE tbl_node_data_key SET wrapped_key = @w, iv = @iv WHERE key_name = @name", new { w, iv, name });
-            }
-            return new(Name, new Dictionary<string, long>(), []);
-        }
-
-        public Task<IReadOnlyList<RekeyProblem>> VerifyAsync(RekeyContext ctx) => Task.FromResult<IReadOnlyList<RekeyProblem>>([]);
-    }
-
-    private sealed class PreflightDouble : IRekeyPreflight
-    {
-        public Task<RekeyPreflightReport> RunAsync(string sourceDir, SqliteConnection liveMain, SqliteConnection? liveChat, RekeyKeys keys, CancellationToken ct) =>
-            Task.FromResult(new RekeyPreflightReport([], [], 0));
-    }
-
-    private IReadOnlyDictionary<string, TableFate>? ChatTablesAllCleared()
-    {
-        var chat = Path.Combine(_d, RekeyRunner.ChatDb);
-        if (!File.Exists(chat)) return null;
-        using var c = RekeyRunner.OpenLive(chat);
-        return c.Query<string>("SELECT name FROM sqlite_master WHERE type = 'table'").ToDictionary(n => n, _ => TableFate.Cleared, StringComparer.OrdinalIgnoreCase);
     }
 
     private static void CopyTree(string from, string to)
