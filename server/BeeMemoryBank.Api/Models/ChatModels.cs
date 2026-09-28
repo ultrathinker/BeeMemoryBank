@@ -15,7 +15,13 @@ public class ChatApiKey
 {
     public Guid Id { get; set; }
     public string Label { get; set; } = "";
+    /// <summary>The display fragment (first characters of the secret). Plaintext only on a legacy
+    /// row; otherwise sealed in the three columns below and filled in by
+    /// <c>ChatSettingsRepository.OpenPrefixesAsync</c>.</summary>
     public string KeyPrefix { get; set; } = "";
+    public byte[]? KeyPrefixCiphertext { get; set; }
+    public byte[]? KeyPrefixIv { get; set; }
+    public int? KeyPrefixKeyVersion { get; set; }
     public byte[] Ciphertext { get; set; } = [];
     public byte[] Iv { get; set; } = [];
     /// <summary>chat_api_key.key_v — which key <see cref="Ciphertext"/> is sealed under (ChatDataProtector).</summary>

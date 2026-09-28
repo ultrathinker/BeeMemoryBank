@@ -107,11 +107,17 @@ public class ChatHistoryBackfillProcessorTests : IAsyncLifetime
         using var scope = _factory.Services.CreateScope();
         var dbFactory = scope.ServiceProvider.GetRequiredService<ChatDbConnectionFactory>();
         var conversationId = Guid.NewGuid();
-        var convoRepo = scope.ServiceProvider.GetRequiredService<ChatConversationRepository>();
-        await convoRepo.CreateAsync(new ChatConversation
+        // A conversation sealed through the repository needs the vault unlocked; the message row
+        // below is what this test is about, so its conversation is a bare legacy row.
+        using (var conn = (SqliteConnection)dbFactory.CreateConnection())
+        using (var cmd = conn.CreateCommand())
         {
-            Id = conversationId, UserId = UserId, Title = "t", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
-        });
+            cmd.CommandText = "INSERT INTO chat_conversation (id, user_id, title, created_at, updated_at) VALUES (@id, @uid, 't', @now, @now)";
+            cmd.Parameters.AddWithValue("@id", conversationId);
+            cmd.Parameters.AddWithValue("@uid", UserId);
+            cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
+            await cmd.ExecuteNonQueryAsync();
+        }
         await InsertLegacyMessageAsync(dbFactory, conversationId, Guid.NewGuid(), "plaintext while locked", null);
 
         var processor = CreateProcessor();

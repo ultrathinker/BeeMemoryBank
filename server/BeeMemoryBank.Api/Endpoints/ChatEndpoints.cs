@@ -124,8 +124,9 @@ public static partial class ChatEndpoints
 
         group.MapGet("/keys", async (ChatSettingsRepository repo) =>
         {
-            // Listing never decrypts — only key_prefix is exposed. Still superadmin-only.
+            // Only the key prefix is opened (it is sealed too), never the secret. Still superadmin-only.
             var keys = await repo.ListAsync();
+            await repo.OpenPrefixesAsync(keys);
             return Results.Ok(keys.Select(k => new ChatKeyResponse(
                 k.Id, k.Label, k.KeyPrefix, k.Enabled, k.Priority,
                 k.LastUsedAt, k.LastError, k.DisabledUntil, k.CreatedAt)));

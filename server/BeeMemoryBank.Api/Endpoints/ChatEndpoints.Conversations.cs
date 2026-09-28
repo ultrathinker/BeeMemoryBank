@@ -170,8 +170,12 @@ public static partial class ChatEndpoints
 
         // Rename a conversation (title). User-scoped.
         group.MapMethods("/conversations/{id:guid}", new[] { "PATCH" }, async (Guid id, HttpContext ctx,
-            ChatConversationRepository convoRepo) =>
+            ChatConversationRepository convoRepo, SessionService session) =>
         {
+            // The title is sealed under the chat key, which needs an unlocked vault.
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Vault is locked"), statusCode: 409);
+
             RenameConversationRequest? body;
             try { body = await ctx.Request.ReadFromJsonAsync<RenameConversationRequest>(SseJsonOpts); }
             catch { body = null; }

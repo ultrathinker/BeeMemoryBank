@@ -115,13 +115,18 @@ public sealed class ChatHistoryBackfillProcessor(
         var msgRepo = services.GetRequiredService<ChatMessageRepository>();
         var attachRepo = services.GetRequiredService<ChatAttachmentRepository>();
         var settingsRepo = services.GetRequiredService<ChatSettingsRepository>();
+        var convoRepo = services.GetRequiredService<ChatConversationRepository>();
 
-        int messages, attachments, apiKeys;
+        int messages, attachments, apiKeys, titles, prefixes;
         try
         {
             messages = await msgRepo.MigrateLegacyBatchAsync(batchSize, session, ct);
             attachments = await attachRepo.MigrateLegacyBatchAsync(batchSize, session, ct);
             apiKeys = await settingsRepo.MigrateLegacyBatchAsync(batchSize, session, ct);
+            // Plaintext titles and key prefixes: sealed here, but not counted by CountLegacyAsync —
+            // they are under no master DEK, so a rotation cannot strand them.
+            titles = await convoRepo.MigrateLegacyBatchAsync(batchSize, ct);
+            prefixes = await settingsRepo.MigrateLegacyPrefixBatchAsync(batchSize, ct);
         }
         catch (Core.Exceptions.SessionLockedException)
         {
@@ -130,11 +135,11 @@ public sealed class ChatHistoryBackfillProcessor(
             return 0;
         }
 
-        var total = messages + attachments + apiKeys;
+        var total = messages + attachments + apiKeys + titles + prefixes;
         if (total > 0)
             logger.LogInformation(
-                "Moved legacy chat data onto the node chat key: {Messages} message row(s), {Attachments} attachment(s), {ApiKeys} provider key(s)",
-                messages, attachments, apiKeys);
+                "Moved legacy chat data onto the node chat key: {Messages} message row(s), {Attachments} attachment(s), {ApiKeys} provider key(s), {Titles} title(s), {Prefixes} key prefix(es)",
+                messages, attachments, apiKeys, titles, prefixes);
         return total;
     }
 

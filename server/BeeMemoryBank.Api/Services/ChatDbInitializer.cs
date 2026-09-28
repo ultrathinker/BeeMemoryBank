@@ -109,6 +109,24 @@ public sealed class ChatDbInitializer
         await EnsureColumnAsync(conn, "chat_api_key", "key_v",
             "ALTER TABLE chat_api_key ADD COLUMN key_v INTEGER");
 
+        // A conversation title is the first 120 characters of the user's first message, and a
+        // provider key's key_prefix is the first 12 characters of the secret itself: both are sealed
+        // under the chat key like every other chat.db column (ChatConversationRepository,
+        // ChatSettingsRepository), and the plaintext columns are written empty. They stay NOT NULL
+        // only because SQLite cannot relax a column constraint without rebuilding the table.
+        await EnsureColumnAsync(conn, "chat_conversation", "title_ciphertext",
+            "ALTER TABLE chat_conversation ADD COLUMN title_ciphertext BLOB");
+        await EnsureColumnAsync(conn, "chat_conversation", "title_iv",
+            "ALTER TABLE chat_conversation ADD COLUMN title_iv BLOB");
+        await EnsureColumnAsync(conn, "chat_conversation", "title_key_v",
+            "ALTER TABLE chat_conversation ADD COLUMN title_key_v INTEGER");
+        await EnsureColumnAsync(conn, "chat_api_key", "key_prefix_ciphertext",
+            "ALTER TABLE chat_api_key ADD COLUMN key_prefix_ciphertext BLOB");
+        await EnsureColumnAsync(conn, "chat_api_key", "key_prefix_iv",
+            "ALTER TABLE chat_api_key ADD COLUMN key_prefix_iv BLOB");
+        await EnsureColumnAsync(conn, "chat_api_key", "key_prefix_key_v",
+            "ALTER TABLE chat_api_key ADD COLUMN key_prefix_key_v INTEGER");
+
         // Partial indexes backing the legacy-migration scans (ChatMessageRepository /
         // ChatAttachmentRepository.MigrateLegacyBatchAsync). Each index only contains rows still
         // needing migration, so it self-shrinks to empty as rows get migrated and stays empty
@@ -126,7 +144,8 @@ public sealed class ChatDbInitializer
             // in the matching MigrateLegacyBatchAsync exactly (SQLite only uses a partial index when
             // the query's WHERE implies the index's).
             $"CREATE INDEX IF NOT EXISTS idx_chat_message_legacy_key ON chat_message(id) WHERE {ChatMessageRepository.LegacyKeyPredicate}",
-            $"CREATE INDEX IF NOT EXISTS idx_chat_attachment_legacy_key ON chat_attachment(id) WHERE {ChatAttachmentRepository.LegacyKeyPredicate}"
+            $"CREATE INDEX IF NOT EXISTS idx_chat_attachment_legacy_key ON chat_attachment(id) WHERE {ChatAttachmentRepository.LegacyKeyPredicate}",
+            $"CREATE INDEX IF NOT EXISTS idx_chat_conversation_legacy_title ON chat_conversation(id) WHERE {ChatConversationRepository.LegacyTitlePredicate}"
         })
         {
             await using var indexCmd = conn.CreateCommand();

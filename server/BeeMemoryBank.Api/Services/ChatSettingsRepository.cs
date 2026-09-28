@@ -20,7 +20,15 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory, Chat
     // Constant AAD for OpenRouter-key encryption (distinct from RemoteAccountService's token AAD).
     private static readonly byte[] KeyAad = "bmb-openrouter-key-v1"u8.ToArray();
 
+    // The key prefix is the first characters of the secret itself, so it gets its own AAD and is
+    // sealed like the secret; the AAD binds it to its row.
+    private static byte[] PrefixAad(Guid id) => System.Text.Encoding.UTF8.GetBytes($"bmb-chat-api-key-prefix-v1:{id:D}");
+
+    /// <summary>Shown instead of a sealed key prefix while the vault is locked or it does not open.</summary>
+    public const string SealedPrefixPlaceholder = "[sealed]";
+
     private const string KeyCols = @"id AS Id, label AS Label, key_prefix AS KeyPrefix,
+        key_prefix_ciphertext AS KeyPrefixCiphertext, key_prefix_iv AS KeyPrefixIv, key_prefix_key_v AS KeyPrefixKeyVersion,
         ciphertext AS Ciphertext, iv AS Iv, key_v AS KeyVersion, enabled AS Enabled, priority AS Priority,
         disabled_until AS DisabledUntil, last_error AS LastError, last_used_at AS LastUsedAt,
         created_at AS CreatedAt";
@@ -58,20 +66,78 @@ public sealed class ChatSettingsRepository(ChatDbConnectionFactory factory, Chat
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"INSERT INTO chat_api_key
-              (id, label, key_prefix, ciphertext, iv, key_v, enabled, priority,
+              (id, label, key_prefix, key_prefix_ciphertext, key_prefix_iv, key_prefix_key_v,
+               ciphertext, iv, key_v, enabled, priority,
                disabled_until, last_error, last_used_at, created_at)
-              VALUES (@Id, @Label, @KeyPrefix, @Ciphertext, @Iv, @KeyVersion, @Enabled, @Priority,
+              VALUES (@Id, @Label, '', @KeyPrefixCiphertext, @KeyPrefixIv, @KeyPrefixKeyVersion,
+                      @Ciphertext, @Iv, @KeyVersion, @Enabled, @Priority,
                       @DisabledUntil, @LastError, @LastUsedAt, @CreatedAt)",
             key);
     }
 
-    /// <summary>Encrypts <paramref name="secret"/> under the chat key into
-    /// <paramref name="key"/>'s Ciphertext/Iv/KeyVersion, ready for <see cref="CreateAsync"/>.</summary>
+    /// <summary>Encrypts <paramref name="secret"/> and <paramref name="key"/>'s KeyPrefix under the
+    /// chat key into its sealed columns, ready for <see cref="CreateAsync"/>, which never writes the
+    /// prefix in plaintext.</summary>
     public async Task SealSecretAsync(Models.ChatApiKey key, string secret)
     {
         using var lease = await protector.AcquireAsync();
         (key.Ciphertext, key.Iv) = lease.EncryptText(secret, KeyAad);
         key.KeyVersion = ChatDataProtector.ChatKeyVersion;
+        (key.KeyPrefixCiphertext, key.KeyPrefixIv) = lease.EncryptText(key.KeyPrefix, PrefixAad(key.Id));
+        key.KeyPrefixKeyVersion = ChatDataProtector.ChatKeyVersion;
+    }
+
+    /// <summary>
+    /// Fills in each key's <see cref="Models.ChatApiKey.KeyPrefix"/> from its sealed columns. A
+    /// legacy row keeps its plaintext prefix; a sealed one reads as
+    /// <see cref="SealedPrefixPlaceholder"/> while the vault is locked or when it does not open.
+    /// </summary>
+    public async Task OpenPrefixesAsync(IReadOnlyList<Models.ChatApiKey> keys)
+    {
+        ChatKeyLease? lease = null;
+        if (keys.Any(k => k.KeyPrefixKeyVersion is not null))
+        {
+            try { lease = await protector.TryAcquireForReadAsync(); }
+            catch (Core.Exceptions.SessionLockedException) { }
+        }
+
+        using (lease)
+        {
+            foreach (var k in keys.Where(k => k.KeyPrefixKeyVersion is not null))
+            {
+                k.KeyPrefix = (k.KeyPrefixKeyVersion == ChatDataProtector.ChatKeyVersion
+                               && k.KeyPrefixCiphertext is { Length: > 0 } && k.KeyPrefixIv is { Length: > 0 }
+                        ? protector.TryDecryptText(lease, k.KeyPrefixCiphertext, k.KeyPrefixIv, k.KeyPrefixKeyVersion, PrefixAad(k.Id))
+                        : null) ?? SealedPrefixPlaceholder;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Seals up to <paramref name="batchSize"/> key prefixes still in the plaintext column; returns
+    /// how many it looked at (0 = nothing left). Guarded by <c>key_prefix_key_v IS NULL</c>, so it is
+    /// safe to overlap with itself.
+    /// </summary>
+    public async Task<int> MigrateLegacyPrefixBatchAsync(int batchSize, CancellationToken ct)
+    {
+        using var conn = OpenConnection();
+        var legacy = (await conn.QueryAsync<(Guid Id, string KeyPrefix)>(
+            "SELECT id, key_prefix FROM chat_api_key WHERE key_prefix_key_v IS NULL AND key_prefix != '' LIMIT @batchSize",
+            new { batchSize })).ToList();
+        if (legacy.Count == 0) return 0;
+
+        using var lease = await protector.AcquireAsync(ct);
+        foreach (var (id, prefix) in legacy)
+        {
+            if (ct.IsCancellationRequested) break;
+            var (ciphertext, iv) = lease.EncryptText(prefix, PrefixAad(id));
+            await conn.ExecuteAsync(
+                @"UPDATE chat_api_key
+                  SET key_prefix = '', key_prefix_ciphertext = @ciphertext, key_prefix_iv = @iv, key_prefix_key_v = @version
+                  WHERE id = @id AND key_prefix_key_v IS NULL",
+                new { id, ciphertext, iv, version = ChatDataProtector.ChatKeyVersion });
+        }
+        return legacy.Count;
     }
 
     /// <summary>
