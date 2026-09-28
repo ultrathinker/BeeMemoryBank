@@ -309,6 +309,40 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         AssertOldVaultInUse(await RunAsync(events: new EventLogResetDouble(verifyFails: true)), RekeyExit.FailedBeforeSwap);
     }
 
+    /// <summary>
+    /// Option C through the whole verb: an article whose body was purged, with a sealed comment. The run finishes
+    /// (exit 0), the comment is gone from the new vault and listed in the report without content, the D1 check passes
+    /// (nothing opens under the old key), and the old vault still holds it.
+    /// </summary>
+    [Fact]
+    public async Task AVaultWithACommentOfAPurgedBody_ReKeys_DroppingAndListingIt()
+    {
+        string commentId;
+        using (var conn = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Pooling=False"))
+        {
+            conn.Open();
+            commentId = conn.ExecuteScalar<string>("SELECT comment_id FROM tbl_comment WHERE article_id = @a COLLATE NOCASE", new { a = _article.ToString() });
+            conn.Execute("DELETE FROM tbl_article_body WHERE article_id = @a COLLATE NOCASE", new { a = _article.ToString() });
+            conn.Execute("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        SqliteConnection.ClearAllPools();
+        foreach (var side in Directory.GetFiles(_d, "*-wal").Concat(Directory.GetFiles(_d, "*-shm"))) File.Delete(side);
+        _tree = Tree(_d);
+
+        var outcome = await RunAsync();
+
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+        using (var db = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Pooling=False"))
+        {
+            db.Open();
+            db.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_comment WHERE comment_id = @commentId", new { commentId }).Should().Be(0);
+        }
+        var report = RekeyReport.TryRead(_d)!;
+        report.Steps.Single(s => s.Name == "RowReseal").Notes.Should().ContainSingle(n => n.StartsWith(RowResealStep.DroppedCommentNote + commentId + " article:"));
+        var old = RekeySwapJournal.Read(_d)!.Old;
+        Tree(old).Should().BeEquivalentTo(_tree, "the old vault, comment included, is untouched");
+    }
+
     /// <summary>One body put back under its old wrapper after the re-seal: the D1 check refuses the copy.</summary>
     [Fact]
     public async Task TheD1Check_RefusesACopyWithOneRowLeftUnderTheOldKey()

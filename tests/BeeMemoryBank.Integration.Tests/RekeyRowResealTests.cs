@@ -305,6 +305,44 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
         EnvelopeFraming.Media.DecryptBody(_encMedia, m.W, k, ct, m.Iv).Should().Equal(_mediaBytes);
     }
 
+    /// <summary>
+    /// Option C (orchestrator): a sealed comment whose article body was purged is unreadable today and has its key only
+    /// in the event log, which the re-key clears. It is dropped from the copy and listed without content.
+    /// </summary>
+    [Fact]
+    public async Task ASealedCommentOfAPurgedBody_IsDroppedFromTheCopy_AndListedWithoutContent()
+    {
+        string commentId, createdAt;
+        using (var conn = Db.CreateConnection())
+        {
+            (commentId, createdAt) = await conn.QuerySingleAsync<(string, string)>(
+                "SELECT comment_id, created_at FROM tbl_comment WHERE id = @_deletedComment", new { _deletedComment });
+            await conn.ExecuteAsync("DELETE FROM tbl_article_body WHERE article_id = @a COLLATE NOCASE", new { a = _deleted.ToString() });
+        }
+        var ctx = await CopyAsync();
+        using var keys = ctx.Keys;
+
+        var result = await new RowResealStep().RunAsync(ctx);
+        await new DerivedDataClearStep().RunAsync(ctx);
+
+        (await ctx.Main.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_comment WHERE id = @_deletedComment", new { _deletedComment }))
+            .Should().Be(0, "dropped from the copy");
+        var note = result.Notes.Should().ContainSingle(n => n.StartsWith(RowResealStep.DroppedCommentNote)).Subject;
+        note.Should().Be($"{RowResealStep.DroppedCommentNote}{commentId} article:{await ArticleIdAsync(_deleted)} created:{createdAt}");
+        note.Should().NotContain("a comment later deleted", "no content goes into the report");
+        result.Counts["comments_dropped_body_purged"].Should().Be(1);
+        (await new RowResealStep().VerifyAsync(ctx)).Should().BeEmpty();
+        using (var live = Db.CreateConnection())
+            (await live.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_comment WHERE id = @_deletedComment", new { _deletedComment }))
+                .Should().Be(1, "the old vault keeps it");
+    }
+
+    private async Task<string> ArticleIdAsync(Guid id)
+    {
+        using var conn = Db.CreateConnection();
+        return await conn.ExecuteScalarAsync<string>("SELECT id FROM tbl_article WHERE id = @a COLLATE NOCASE", new { a = id.ToString() });
+    }
+
     [Fact]
     public async Task MediaWithNeitherBlobNorFile_FailsTheAttempt()
     {

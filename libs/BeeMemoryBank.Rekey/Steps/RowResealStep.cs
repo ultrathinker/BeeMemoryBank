@@ -36,6 +36,10 @@ public sealed class RowResealStep : IRekeyStep
 {
     public string Name => "RowReseal";
 
+    /// <summary>The note of a sealed comment dropped because its article's body was purged:
+    /// <c>dropped-comment:&lt;comment id&gt; article:&lt;article id&gt; created:&lt;created_at&gt;</c>. No content.</summary>
+    public const string DroppedCommentNote = "dropped-comment:";
+
     public const string Body = "tbl_article_body", Comment = "tbl_comment", Version = "tbl_article_version",
         Conflict = "tbl_conflict_version", Media = "tbl_media", Blob = "tbl_blob", Secret = "tbl_sealed_secret",
         Remote = "tbl_remote_account";
@@ -148,12 +152,28 @@ public sealed class RowResealStep : IRekeyStep
                 "SELECT article_id, ciphertext_hash, iv, encrypted_dek, dek_iv FROM tbl_article_body ORDER BY article_id", transaction: tx)).ToList();
             var comments = (await Db.QueryAsync<CommentRow>(
                     @"SELECT id AS RowId, article_id AS ArticleId, comment_id AS CommentId, encrypted AS Encrypted, text AS Text,
-                             ciphertext AS Ct, iv AS Iv FROM tbl_comment", transaction: tx))
+                             ciphertext AS Ct, iv AS Iv, created_at AS CreatedAt FROM tbl_comment", transaction: tx))
                 .ToLookup(c => c.ArticleId, StringComparer.OrdinalIgnoreCase);
+            // Comments of an article whose body was purged (the cleanup purges a body 30 days after a soft delete and
+            // leaves its comments). A sealed one is already unreadable in the product ("article key unavailable"): its key
+            // survives only in the event log, which the re-key clears. Re-sealing it under a key stored nowhere would
+            // destroy it anyway, and keeping it under the old key would leave it to the old keys (D1). It is dropped
+            // from the copy and listed, without content, in the report; the old vault keeps it until the owner deletes
+            // it. A plaintext one is readable and holds no old-key material: it stays as it is.
             var withBody = bodies.Select(b => b.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var orphans in comments.Where(g => !withBody.Contains(g.Key)))
                 foreach (var c in orphans)
-                    Problems.Add(new(Comment, CommentKey(c.RowId, c.CommentId), "its article has no body: no key to seal it under"));
+                {
+                    var key = CommentKey(c.RowId, c.CommentId);
+                    if (c.Encrypted == 0)
+                    {
+                        Notes.Add($"kept-plaintext-comment:{key} article:{c.ArticleId}");
+                        continue;
+                    }
+                    await Db.ExecuteAsync("DELETE FROM tbl_comment WHERE id = @RowId", new { c.RowId }, tx);
+                    Notes.Add($"{DroppedCommentNote}{key} article:{c.ArticleId} created:{c.CreatedAt}");
+                    Count("comments_dropped_body_purged");
+                }
 
             var done = 0;
             foreach (var b in bodies)
@@ -360,7 +380,7 @@ public sealed class RowResealStep : IRekeyStep
 
         var comments = (await db.QueryAsync<CommentRow>(
                 @"SELECT id AS RowId, article_id AS ArticleId, comment_id AS CommentId, encrypted AS Encrypted, text AS Text,
-                         ciphertext AS Ct, iv AS Iv FROM tbl_comment"))
+                         ciphertext AS Ct, iv AS Iv, created_at AS CreatedAt FROM tbl_comment"))
             .ToLookup(c => c.ArticleId, StringComparer.OrdinalIgnoreCase);
         var bodyIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var b in await db.QueryAsync<(string Id, string? Hash, byte[]? Iv, byte[]? Wrapped, byte[]? DekIv)>(
@@ -386,7 +406,8 @@ public sealed class RowResealStep : IRekeyStep
             }
         }
         foreach (var g in comments.Where(g => !bodyIds.Contains(g.Key)))
-            foreach (var c in g) problems.Add(new(Comment, CommentKey(c.RowId, c.CommentId), "its article has no body"));
+            foreach (var c in g.Where(c => c.Encrypted != 0))
+                problems.Add(new(Comment, CommentKey(c.RowId, c.CommentId), "a sealed comment of a purged article is left under its old key"));
 
         foreach (var (table, sql) in new[]
                  {
@@ -454,6 +475,7 @@ public sealed class RowResealStep : IRekeyStep
         public string Text { get; set; } = "";
         public byte[]? Ct { get; set; }
         public byte[]? Iv { get; set; }
+        public string? CreatedAt { get; set; }
     }
 
     private sealed class ArticleScopedRow
