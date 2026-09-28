@@ -460,39 +460,6 @@ public class SyncClientTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// F5. A blind node that was reseeded replays the tail it had received onto the package and
-    /// re-logs it under the new database's sequences, so a pull brings back events this node authored.
-    /// While such an event is still in our own log the applier's "already applied" shortcut drops it;
-    /// after a compaction it is not, so it reaches the whitelist lookup — where we are not a peer of
-    /// ourselves — and is recorded as a failure. That row is not cosmetic: the state anchor publishes
-    /// nothing while tbl_sync_quarantine holds one, so anchors stop for good.
-    /// </summary>
-    [Fact]
-    public async Task SyncWith_OurOwnEventComingBackFromAPeer_IsSkipped_NotRecordedAsAFailure()
-    {
-        MapIdentity(SyncProtocolVersion.Current);
-        var self = (await _node.NodeRepo.GetAsync())!;
-        _mockHandler.MapRoute("/api/sync/events", req => req.Method == HttpMethod.Get
-            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    JsonSerializer.Serialize(new[] { PulledEvent(self.NodeId, sequenceNum: 9) }), Encoding.UTF8, "application/json")
-            }
-            : new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    JsonSerializer.Serialize(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 }), Encoding.UTF8, "application/json")
-            });
-        var positions = new SyncPositionRepository(_node.Factory);
-
-        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
-
-        (await _node.QuarantineRepo.GetAllAsync()).Should().BeEmpty(
-            "an event of our own is applied here already, or was compacted into the state — never a reason to stop anchoring");
-        (await positions.GetAsync(_remoteNodeId))!.LastSequenceNum.Should().Be(9, "the cursor still moves past it");
-    }
-
-    /// <summary>
     /// F6. A quiet network: the peer answers every pull with nothing new, so the sequence number never
     /// moves and its position row is never touched again. The state anchor judges "caught up with this
     /// peer" by that row's timestamp (<c>StateAnchorScheduler.FreshPull</c>), so it ages out and no
@@ -559,9 +526,15 @@ public class SyncClientTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The other half of the same rule, and the reason the skip exists at all (F5): an event of ours
-    /// that IS proven — here by the signature, with the row a compaction would have taken away already
-    /// gone — is still skipped, and never quarantined.
+    /// The other half of the same rule, and the reason the skip exists at all (F5): a blind node that
+    /// was reseeded replays the tail it had received onto the package and re-logs it under the new
+    /// database's sequences, so a pull brings back events this node authored. An event of ours that IS
+    /// proven — here by the signature, with the row a compaction would have taken away already gone —
+    /// is still skipped, and never quarantined: a quarantine row stops the state anchor for good.
+    ///
+    /// <para>This test replaced an earlier F5 one that pinned the same thing with an event carrying no
+    /// signature at all; under the rule above that event is not provably ours, and refusing it is now
+    /// the correct answer (the forged-event test beside it pins exactly that).</para>
     /// </summary>
     [Fact]
     public async Task SyncWith_OurOwnEventProvenByItsSignature_IsSkipped_EvenWhenOurLogNoLongerHasIt()
