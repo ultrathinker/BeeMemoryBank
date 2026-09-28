@@ -213,17 +213,21 @@ public class SyncClient(
                 }
             }
 
-            if (remoteEvents.Count > 0)
+            // Recorded on every successful pull, empty page included (F6): the row's timestamp is what
+            // "this node has caught up with this peer" is judged by — the state anchor publishes only
+            // when every peer it pulls from was pulled from within StateAnchorScheduler.FreshPull —
+            // and in a quiet network nothing ever moves the sequence number, so a row only written
+            // when events arrive ages out and no anchor is published again. The sequence number still
+            // only moves when something was applied (or skipped): an empty pull says nothing new.
+            await syncPositionRepo.UpsertAsync(new SyncPosition
             {
-                await syncPositionRepo.UpsertAsync(new SyncPosition
-                {
-                    RemoteNodeId = remoteIdentity.NodeId,
-                    LastSequenceNum = lastApplied,
-                    UpdatedAt = DateTime.UtcNow
-                });
-                logger.LogInformation("Pull: applied {Applied}, dropped {Dropped}. Position: {Seq}",
-                    appliedCount, droppedCount, lastApplied);
-            }
+                RemoteNodeId = remoteIdentity.NodeId,
+                LastSequenceNum = lastApplied,
+                UpdatedAt = DateTime.UtcNow
+            });
+            if (remoteEvents.Count > 0)
+                logger.LogInformation("Pull: applied {Applied}, dropped {Dropped}, own {Own}. Position: {Seq}",
+                    appliedCount, droppedCount, ownCount, lastApplied);
 
             // Always report our current position back to the remote — even when we're fully caught up
             // and there were no new events. Otherwise the remote never learns our position and shows
