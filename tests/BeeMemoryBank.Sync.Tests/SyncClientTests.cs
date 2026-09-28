@@ -458,6 +458,79 @@ public class SyncClientTests : IAsyncLifetime
         reportQuery.Should().Contain($"protocolVersion={SyncProtocolVersion.Current}");
     }
 
+    /// <summary>
+    /// F5. A blind node that was reseeded replays the tail it had received onto the package and
+    /// re-logs it under the new database's sequences, so a pull brings back events this node authored.
+    /// While such an event is still in our own log the applier's "already applied" shortcut drops it;
+    /// after a compaction it is not, so it reaches the whitelist lookup — where we are not a peer of
+    /// ourselves — and is recorded as a failure. That row is not cosmetic: the state anchor publishes
+    /// nothing while tbl_sync_quarantine holds one, so anchors stop for good.
+    /// </summary>
+    [Fact]
+    public async Task SyncWith_OurOwnEventComingBackFromAPeer_IsSkipped_NotRecordedAsAFailure()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var self = (await _node.NodeRepo.GetAsync())!;
+        _mockHandler.MapRoute("/api/sync/events", req => req.Method == HttpMethod.Get
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new[] { PulledEvent(self.NodeId, sequenceNum: 9) }), Encoding.UTF8, "application/json")
+            }
+            : new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 }), Encoding.UTF8, "application/json")
+            });
+        var positions = new SyncPositionRepository(_node.Factory);
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        (await _node.QuarantineRepo.GetAllAsync()).Should().BeEmpty(
+            "an event of our own is applied here already, or was compacted into the state — never a reason to stop anchoring");
+        (await positions.GetAsync(_remoteNodeId))!.LastSequenceNum.Should().Be(9, "the cursor still moves past it");
+    }
+
+    /// <summary>
+    /// F6. A quiet network: the peer answers every pull with nothing new, so the sequence number never
+    /// moves and its position row is never touched again. The state anchor judges "caught up with this
+    /// peer" by that row's timestamp (<c>StateAnchorScheduler.FreshPull</c>), so it ages out and no
+    /// anchor is ever published again — the pull itself is the evidence, not the events.
+    /// </summary>
+    [Fact]
+    public async Task SyncWith_NothingToPull_StillRefreshesThePosition()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var positions = new SyncPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPosition
+        {
+            RemoteNodeId = _remoteNodeId,
+            LastSequenceNum = 7,
+            UpdatedAt = DateTime.UtcNow - TimeSpan.FromHours(3)
+        });
+
+        var before = DateTime.UtcNow;
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        var after = await positions.GetAsync(_remoteNodeId);
+        after!.LastSequenceNum.Should().Be(7, "an empty pull brings nothing new");
+        after.UpdatedAt.Should().BeAfter(before, "we did pull from this peer, and that is what the anchor reads");
+    }
+
+    /// <summary>An event as it arrives in a pull page.</summary>
+    private static object PulledEvent(Guid origin, long sequenceNum) => new
+    {
+        eventId = Guid.NewGuid(),
+        nodeId = origin,
+        lamportTs = 1,
+        sequenceNum,
+        eventType = EventTypes.FolderCreate,
+        payload = "{}",
+        signature = Convert.ToBase64String(new byte[64]),
+        protocolVersion = 2,
+        createdAt = DateTime.UtcNow
+    };
+
     private void MapIdentity(int protocolVersion) =>
         _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {
