@@ -309,24 +309,28 @@ public class RecoveryEventApplierTests : IAsyncLifetime
     {
         using var cts = new CancellationTokenSource();
         long violations = 0, snapshots = 0;
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reader = Task.Run(async () =>
         {
             using var conn = _node.Factory.CreateConnection();
             while (!cts.IsCancellationRequested)
             {
-                Interlocked.Increment(ref snapshots);
                 if (await conn.ExecuteScalarAsync<long>(InactiveLoggedSql) > 0) Interlocked.Increment(ref violations);
+                Interlocked.Increment(ref snapshots);
+                reading.TrySetResult();
             }
         });
+        await reading.Task; // the reader is running before the first box arrives
 
         for (var i = 0; i < 60; i++)
             await Apply(_phone.BoxSet(Guid.NewGuid(), "device", "d64t3", i % 2 == 0 ? FpA : FpB, lamport: 100 + i));
+        var during = Interlocked.Read(ref snapshots);
         cts.Cancel();
         await reader;
+        during.Should().BeGreaterThan(1, "the reader looked while the boxes were being applied");
 
         using var conn = _node.Factory.CreateConnection();
         (await conn.ExecuteScalarAsync<long>(InactiveLoggedSql)).Should().Be(0, "at the end, rows trimmed past the limit leave no event");
-        Interlocked.Read(ref snapshots).Should().BeGreaterThan(0);
         Interlocked.Read(ref violations).Should().Be(0, "no committed state may serve an inactive box's material");
         (await LoggedBoxIds()).Should().ContainSingle("only the active box's event is logged");
     }
