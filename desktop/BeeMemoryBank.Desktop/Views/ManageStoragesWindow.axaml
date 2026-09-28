@@ -96,6 +96,15 @@
                                                 Background="#2D2D3D"
                                                 Foreground="#FFFFFF"
                                                 CornerRadius="6" />
+                                        <Button Content="Re-key..."
+                                                Click="OnRekeyClick"
+                                                Tag="{Binding Id}"
+                                                Margin="0,3,6,3"
+                                                Padding="10,6"
+                                                FontSize="12"
+                                                Background="#2D2D3D"
+                                                Foreground="#FFFFFF"
+                                                CornerRadius="6" />
                                         <Button Content="Open folder"
                                                 Click="OnOpenFolderClick"
                                                 Tag="{Binding Id}"

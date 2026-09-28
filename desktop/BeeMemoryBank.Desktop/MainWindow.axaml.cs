@@ -316,6 +316,49 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Re-keys the ACTIVE profile's vault (<see cref="Services.DesktopRekeyService"/>): the splash panel covers the
+    /// WebView while the node is stopped, the verb runs and the node starts again; on success the WebView opens the
+    /// report page. Only the active profile, since the verb needs its node stopped and started again.
+    /// </summary>
+    public async Task<Services.DesktopRekeyResult> RekeyActiveProfileAsync(string password)
+    {
+        var profileId = _activeProfileId ?? throw new InvalidOperationException("No profile is open.");
+        var profile = _profiles.GetById(profileId);
+
+        WebPanel.IsVisible = false;
+        ErrorPanel.IsVisible = false;
+        SplashPanel.IsVisible = true;
+        StatusText.Text = "Re-keying the vault...";
+
+        Services.DesktopRekeyResult result;
+        try
+        {
+            result = await new Services.DesktopRekeyService(_nodeLifecycle).RunAsync(
+                profile.DataPath, password, nodeIsRunning: true, progress: null, new Progress<string>(UpdateStatus), _switchLifetimeCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            result = new Services.DesktopRekeyResult { Outcome = Services.RekeyOutcome.NotRun, Message = "The re-key was cancelled." };
+        }
+
+        if (result.FrontUrl != null)
+        {
+            ApplySuccessfulNodeStart(profile, result.FrontUrl);
+            if (result.ReportUrl != null) BmbWebView.Source = new Uri(result.ReportUrl);
+        }
+        else if (result.Outcome == Services.RekeyOutcome.NotRun)
+        {
+            SplashPanel.IsVisible = false;
+            WebPanel.IsVisible = true;
+        }
+        else
+        {
+            ShowError($"{result.Message}\n\nThe node did not start again: {result.StartError}");
+        }
+        return result;
+    }
+
+    /// <summary>
     /// "Open an existing profile" from the first-run wizard: pick a folder that holds a vault
     /// and make the active (still empty) profile use it. A folder that another profile already
     /// uses is simply switched to.

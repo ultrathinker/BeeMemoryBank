@@ -150,6 +150,60 @@ public partial class ManageStoragesWindow : Window
         }
     }
 
+    private async void OnRekeyClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.Tag is string id)
+        {
+            await RekeyAsync(id);
+        }
+    }
+
+    /// <summary>The offline re-key of the active profile's vault (<see cref="MainWindow.RekeyActiveProfileAsync"/>).</summary>
+    private async Task RekeyAsync(string id)
+    {
+        ProfileEntry profile;
+        try { profile = _profiles.GetById(id); }
+        catch (KeyNotFoundException) { RefreshProfileList(); return; }
+
+        if (!string.Equals(id, _owner.ActiveProfileId, StringComparison.Ordinal))
+        {
+            await ShowMessageAsync("Open the profile first", $"Only the profile that is open can be re-keyed. Switch to “{profile.Name}”, then re-key it.");
+            return;
+        }
+
+        var password = await new RekeyPasswordDialog(profile.Name).ShowDialog<string?>(this);
+        if (password == null) return;
+
+        var originalTitle = Title;
+        IsEnabled = false;
+        Title = "Profiles — re-keying...";
+        Services.DesktopRekeyResult result;
+        try
+        {
+            result = await _owner.RekeyActiveProfileAsync(password);
+        }
+        finally
+        {
+            IsEnabled = true;
+            Title = originalTitle;
+        }
+
+        switch (result.Outcome)
+        {
+            case Services.RekeyOutcome.Done when result.ReportUrl != null:
+                Close(); // the report page is open in the main window
+                break;
+            case Services.RekeyOutcome.PreflightRefused:
+                await ShowMessageAsync("The re-key did not start",
+                    result.Message + (result.Problems.Count == 0 ? "" : "\n\n" + string.Join("\n", result.Problems.Take(20))
+                        + (result.Problems.Count > 20 ? $"\n… and {result.Problems.Count - 20} more" : "")));
+                break;
+            default:
+                await ShowMessageAsync("Re-key", result.Message + (result.StartError is null ? "" : $"\n\nThe node did not start: {result.StartError}"));
+                break;
+        }
+    }
+
     private async void OnMoveClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button btn && btn.Tag is string id)
