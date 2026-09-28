@@ -89,7 +89,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         var created = await client.PostAsJsonAsync("/api/agents", new { name = "owner-agent" });
         created.EnsureSuccessStatusCode();
         _agentKey = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("apiKey").GetString()!;
-        (await AgentMcpStatusAsync(factory)).Should().NotBe(HttpStatusCode.Unauthorized, "before the re-key the agent key is accepted");
+        (await AgentKeyRecognizedAsync(factory)).Should().BeTrue("before the re-key the agent key is accepted");
         using (var scope = factory.Services.CreateScope())
             foreach (var (user, pw) in OtherUsers)
                 (await scope.ServiceProvider.GetRequiredService<UserService>().AuthenticateAsync(user, pw))
@@ -196,7 +196,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         using var node = new NodeAt(_d);
         (await node.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue();
 
-        (await AgentMcpStatusAsync(node)).Should().Be(HttpStatusCode.Unauthorized, "every agent is revoked by the re-key");
+        (await AgentKeyRecognizedAsync(node)).Should().BeFalse("every agent is revoked by the re-key");
     }
 
     [Fact]
@@ -318,14 +318,22 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             Preflight = RekeyPlan.Preflight!(),
         });
 
-    /// <summary>An MCP call with the old agent key, as an agent makes it (no internal key).</summary>
-    private async Task<HttpStatusCode> AgentMcpStatusAsync(BmbWebApplicationFactory node)
+    /// <summary>
+    /// An MCP tool call with the old agent key, as an agent makes it (no internal key): whether the node recognizes the
+    /// key. An unrecognized bee_ key is answered by McpSessionGuardMiddleware with "your agent key was not recognized";
+    /// a live one goes on to the tool.
+    /// </summary>
+    private async Task<bool> AgentKeyRecognizedAsync(BmbWebApplicationFactory node)
     {
         using var agent = node.Server.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _agentKey);
+        agent.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+        agent.DefaultRequestHeaders.Accept.ParseAdd("text/event-stream");
         var resp = await agent.PostAsync("/mcp", new StringContent(
-            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""", System.Text.Encoding.UTF8, "application/json"));
-        return resp.StatusCode;
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bee_get_tree","arguments":{}}}""",
+            System.Text.Encoding.UTF8, "application/json"));
+        var body = await resp.Content.ReadAsStringAsync();
+        return resp.StatusCode != HttpStatusCode.Unauthorized && !body.Contains("agent key was not recognized");
     }
 
     private async Task AgentRequestAsync(BmbWebApplicationFactory node)
