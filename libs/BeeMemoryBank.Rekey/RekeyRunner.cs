@@ -96,6 +96,11 @@ public static class RekeyRunner
         var progress = options.Progress;
         var now = options.Now ?? DateTimeOffset.UtcNow;
 
+        // Before anything is locked, created or read: a vault reached through a junction or link (D itself, or a
+        // directory above it) would have the re-key read, copy and rename through it (review release-b-fix #2).
+        if (NoFollow.IsOrUnderLink(d))
+            return Fail(RekeyExit.FailedBeforeSwap,
+                $"{d} is, or sits under, a junction or symbolic link. Run the re-key on the vault's real path.");
         if (!Directory.Exists(d) || !File.Exists(Path.Combine(d, MainDb)))
             return Fail(RekeyExit.FailedBeforeSwap, $"{d} holds no vault ({MainDb} is missing).");
         if (RekeySwapJournal.Read(d) != null)

@@ -48,7 +48,7 @@ public sealed class VaultLeaseTests : IDisposable
 
         verb.Should().NotBeNull();
         VaultStartup.TryAcquireShared(_d).Should().BeNull();
-        var enter = () => VaultStartup.Enter(_d);
+        var enter = () => VaultStartup.Enter(_d, TimeSpan.FromSeconds(1));
         enter.Should().Throw<VaultInUseException>().WithMessage("*re-key holds the vault*");
     }
 
@@ -65,6 +65,62 @@ public sealed class VaultLeaseTests : IDisposable
         enter.Should().Throw<VaultInUseException>().WithMessage("*re-key is running*");
         File.Exists(Path.Combine(_d, RekeyRunner.MainDb)).Should().BeTrue("nothing was renamed");
         RekeySwapJournal.Read(_d)!.Phase.Should().Be(RekeySwapJournal.Prepared);
+    }
+
+    /// <summary>A swap stopped between its renames: D gone, the old vault parked, the new one waiting.</summary>
+    private void StageInterruptedSwap()
+    {
+        var newDir = RekeySwapJournal.NewDirFor(_d);
+        var oldDir = RekeySwapJournal.OldDirFor(_d, DateTimeOffset.UtcNow);
+        Directory.Move(_d, oldDir);
+        Directory.CreateDirectory(newDir);
+        File.WriteAllText(Path.Combine(newDir, RekeyRunner.MainDb), "new vault");
+        RekeySwapJournal.Write(_d, new RekeySwapJournal(newDir, oldDir, RekeySwapJournal.OldMoved));
+    }
+
+    /// <summary>
+    /// Review release-b-fix #1: nothing is resolved without the lease. While someone holds it exclusively (a re-key, or
+    /// another start in the middle of resolving) and no re-key lock is to be seen, a start neither renames anything nor
+    /// touches the journal; it waits, then is refused.
+    /// </summary>
+    [Fact]
+    public void WhileTheLeaseIsHeldExclusively_AStartResolvesNothing()
+    {
+        StageInterruptedSwap();
+        using var holder = VaultStartup.TryAcquireExclusive(_d)!;
+
+        var enter = () => VaultStartup.Enter(_d, TimeSpan.FromSeconds(1));
+
+        enter.Should().Throw<VaultInUseException>();
+        Directory.Exists(_d).Should().BeFalse("no rename happened without the lease");
+        Directory.Exists(RekeySwapJournal.NewDirFor(_d)).Should().BeTrue();
+        RekeySwapJournal.Read(_d)!.Phase.Should().Be(RekeySwapJournal.OldMoved, "the journal was not touched");
+    }
+
+    /// <summary>Two starts at once on the same interrupted swap: it is resolved once, and both get in.</summary>
+    [Fact]
+    public async Task TwoStartsAtOnce_ResolveTheSwapOnce_AndBothGetIn()
+    {
+        StageInterruptedSwap();
+        using var gate = new Barrier(2);
+
+        var starts = Enumerable.Range(0, 2).Select(_ => Task.Run(() =>
+        {
+            gate.SignalAndWait();
+            return VaultStartup.Enter(_d, TimeSpan.FromSeconds(10));
+        })).ToArray();
+        var entered = await Task.WhenAll(starts);
+
+        try
+        {
+            File.ReadAllText(Path.Combine(_d, RekeyRunner.MainDb)).Should().Be("new vault");
+            entered.Count(e => e.Resolution.FirstStartAfterSwap).Should().Be(2, "both see the first start on the swapped-in vault");
+            RekeySwapJournal.Read(_d)!.Phase.Should().Be(RekeySwapJournal.Swapped);
+        }
+        finally
+        {
+            foreach (var e in entered) e.Lease.Dispose();
+        }
     }
 
     [Fact]

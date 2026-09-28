@@ -39,22 +39,62 @@ public static class VaultStartup
     /// </summary>
     public static string LeasePathFor(string dataDir) => RekeySwapJournal.Normalize(dataDir) + ".vault.lease";
 
-    /// <summary>Passes the gate. Throws <see cref="VaultInUseException"/> while a re-key runs. The caller keeps the lease
-    /// for its whole life (a field or a DI singleton: a local the JIT sees as dead may be finalized, which releases it).</summary>
-    public static (RekeySwapResolution Resolution, VaultLease Lease) Enter(string dataDir)
+    /// <summary>
+    /// Passes the gate. Throws <see cref="VaultInUseException"/> while a re-key runs. The caller keeps the lease for its
+    /// whole life (a field or a DI singleton: a local the JIT sees as dead may be finalized, which releases it).
+    /// <para>Nothing is resolved without the lease (review release-b-fix #1). The swap resolver renames directories, so
+    /// it runs only with the lease held <b>exclusively</b>. Then no re-key (which needs it exclusively too) and no
+    /// other start can be in the middle of the same journal, and the re-key lock is checked again under it. Afterwards
+    /// the lease is taken shared for the life of the process. A start that finds others holding it shared joins them:
+    /// they passed this gate, so the swap is already resolved. One that finds it held exclusively waits up to
+    /// <paramref name="wait"/> (another start resolving) and is then refused (a re-key holding the vault).</para>
+    /// </summary>
+    public static (RekeySwapResolution Resolution, VaultLease Lease) Enter(string dataDir, TimeSpan? wait = null)
     {
-        var refusal = Refusal(dataDir);
-        if (refusal != null) throw new VaultInUseException(refusal);
-        var resolution = RekeySwapResolver.Resolve(dataDir);
-        var lease = TryAcquireShared(resolution.DataDir)
-            ?? throw new VaultInUseException(
-                $"A content re-key holds the vault {resolution.DataDir} ({LeasePathFor(resolution.DataDir)} is held exclusively). Start again once it has finished.");
-        if (Refusal(resolution.DataDir) is { } late)
+        var d = RekeySwapJournal.Normalize(dataDir);
+        var until = DateTime.UtcNow + (wait ?? TimeSpan.FromSeconds(15));
+        while (true)
         {
-            lease.Dispose();
-            throw new VaultInUseException(late);
+            if (Refusal(d) is { } running) throw new VaultInUseException(running);
+
+            RekeySwapResolution? resolved = null;
+            using (var exclusive = TryAcquireExclusive(d))
+            {
+                if (exclusive != null)
+                {
+                    if (Refusal(d) is { } late) throw new VaultInUseException(late);
+                    resolved = RekeySwapResolver.Resolve(d);
+                }
+            }
+
+            // Shared from here. Between releasing the exclusive hold and taking this one another start may resolve
+            // (it finds nothing left to do) or a re-key may take the lease (this one then fails, and its lock refuses).
+            var shared = TryAcquireShared(d);
+            if (shared != null)
+            {
+                if (Refusal(d) is { } late)
+                {
+                    shared.Dispose();
+                    throw new VaultInUseException(late);
+                }
+                return (resolved ?? Joined(d), shared);
+            }
+
+            if (DateTime.UtcNow >= until)
+                throw new VaultInUseException(
+                    $"A content re-key holds the vault {d} ({LeasePathFor(d)} is held exclusively). Start again once it has finished.");
+            Thread.Sleep(100);
         }
-        return (resolution, lease);
+    }
+
+    /// <summary>A start that joined others already past the gate: the swap is resolved; only say whether it is the
+    /// first start on a swapped-in vault.</summary>
+    private static RekeySwapResolution Joined(string d)
+    {
+        RekeySwapJournal? journal = null;
+        try { journal = RekeySwapJournal.Read(d); }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidDataException or NotSupportedException) { }
+        return new RekeySwapResolution(d, journal?.Phase == RekeySwapJournal.Swapped && Directory.Exists(d));
     }
 
     private static string? Refusal(string dataDir) =>

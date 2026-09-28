@@ -148,8 +148,8 @@ public sealed class NodeVaultGateTests : IDisposable
         await using var node = Start(WriteConfig());
 
         (await WaitForAsync(() => File.Exists(ReadyFile))).Should().BeTrue(node.Output);
-        (await WaitForAsync(() => !File.Exists(RekeySwapJournal.PathFor(_d)), 20)).Should().BeTrue(
-            "the journal goes after the first successful start\n" + node.Output);
-        File.Exists(RekeySwapJournal.LockPathFor(_d)).Should().BeFalse("and so does the re-key lock");
+        // Journal first, then the lock: wait for both (checking the lock the moment the journal vanishes races the node).
+        (await WaitForAsync(() => !File.Exists(RekeySwapJournal.PathFor(_d)) && !File.Exists(RekeySwapJournal.LockPathFor(_d)), 20))
+            .Should().BeTrue("the journal and the re-key lock go after the first successful start\n" + node.Output);
     }
 }
