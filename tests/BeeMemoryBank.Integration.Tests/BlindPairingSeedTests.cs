@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Api.Endpoints;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
