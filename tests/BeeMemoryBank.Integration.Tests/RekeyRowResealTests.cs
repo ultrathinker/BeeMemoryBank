@@ -102,6 +102,8 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
     public Task DisposeAsync()
     {
         SqliteConnection.ClearAllPools();
+        foreach (var copy in _copies)
+            try { Directory.Delete(Path.GetDirectoryName(copy)!, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         _factory.Dispose();
         return Task.CompletedTask;
     }
@@ -241,6 +243,7 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
         await ctx.Main.ExecuteAsync("VACUUM"); // the orchestrator's scrub (L), so freed pages do not count
 
         (await new RowResealStep().VerifyAsync(ctx)).Should().NotContain(p => p.Table == RowResealStep.Blob);
+        ctx.Main.Close(); // Windows does not let the file be read while the connection holds it
         var file = await File.ReadAllBytesAsync(Path.Combine(ctx.WorkDir, "beememorybank.db"));
         foreach (var old in oldCiphertexts.Where(o => o.Length >= 16))
             file.AsSpan().IndexOf(old.AsSpan(0, 16)).Should().Be(-1, "no old ciphertext survives in the copy");
