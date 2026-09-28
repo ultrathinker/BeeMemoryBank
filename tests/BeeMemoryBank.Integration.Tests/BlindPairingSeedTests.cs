@@ -804,6 +804,41 @@ public class BlindPairingSeedTests : IAsyncLifetime
         File.Exists(oldDb).Should().BeTrue("the unresolved switch's old database is kept");
     }
 
+    /// <summary>
+    /// Codex round 2, security #7 / agy #5. A restic backup reads <c>dataPath/media</c> while the
+    /// cutover renames that whole directory aside and moves the package's in — and later deletes the
+    /// old one. On Windows the rename fails under an open handle and the seed is refused; on Linux
+    /// the reader captures a half-moved tree. The cutover must therefore take the same reservation
+    /// the backup jobs do (BlindJobManager) and wait for the one running before it touches media.
+    /// </summary>
+    [Fact]
+    public async Task Reseed_WhileABackupJobIsRunning_WaitsForItBeforeMovingMedia()
+    {
+        await AddBlindNodeAsync();
+        await TrustSuperadminOnBothAsync();
+        var cutOff = await _blind.Services.GetRequiredService<IEventLogRepository>().GetMaxSequenceAsync();
+        var (http, req) = await ReseedRequestAsync(cutOff);
+
+        var jobs = _blind.Services.GetRequiredService<BlindJobManager>();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        jobs.TryStart("backup", async (_, ct) =>
+        {
+            started.TrySetResult();
+            await release.Task.WaitAsync(ct);
+        }).Should().NotBeNull("the manager is free before the seed");
+
+        var send = http.SendAsync(req);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var finishedWhileTheJobRan = await Task.WhenAny(send, Task.Delay(TimeSpan.FromSeconds(3))) == send;
+
+        release.TrySetResult();
+        var resp = await send;
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        finishedWhileTheJobRan.Should().BeFalse(
+            "the seed switched the media directories while a restic reader was holding them open");
+    }
+
     private async Task<BlindPackage> BuildPackageWithoutAsync(Guid _, long includesUpTo)
     {
         using var scope = _pc.Services.CreateScope();
