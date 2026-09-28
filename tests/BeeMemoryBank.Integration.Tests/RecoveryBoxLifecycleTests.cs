@@ -5,10 +5,13 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
 using Dapper;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -234,6 +237,96 @@ public class RecoveryBoxLifecycleTests : IAsyncLifetime
 
         (await Cleanup().RunAsync(await AdminSlotAsync(), Password)).Should().BeEmpty();
         (await StatusOfAsync(box)).Status.Should().Be("A");
+    }
+
+    // --- the old password after a change (F7) ------------------------------------------------
+
+    [Fact]
+    public async Task AfterPasswordChangeAndCleanup_TheOldPasswordOpensNothingInACopyOfTheDatabase()
+    {
+        // The recovery tables and the event log are what a blind node stores and backs up; this node
+        // writes the same rows and events a blind node applies. A copy of either kind is the attacker's:
+        // the database files as they lie on disk, and a VACUUM INTO copy as a backup holds it.
+        await AddPeerAsync(BlindNodeId.NewId(), "Blind");
+        await Triggers().OnSuperadminLogin(await AdminAsync(), Password);
+        var oldBox = (await OwnStrongBoxesAsync()).Should().ContainSingle().Subject;
+
+        const string newPassword = "ChangedPass2";
+        (await _client.PostAsJsonAsync("/api/keys/change-password", new { oldPassword = Password, newPassword }))
+            .EnsureSuccessStatusCode();
+        (await WaitUntilAsync(async () => (await OwnStrongBoxesAsync()).Any(b => b.BoxId != oldBox.BoxId)))
+            .Should().BeTrue("the change builds a strong box under the new password");
+        // The next superadmin login runs the cleanup; then the scrub the sync scheduler runs every cycle.
+        await Triggers().OnSuperadminLogin(await AdminAsync(), newPassword);
+        await StoredEventRepair.RetryPendingScrubAsync(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance);
+
+        var dbPath = new SqliteConnectionStringBuilder(Db().DatabaseId).DataSource;
+        var dir = Directory.CreateTempSubdirectory("bmb-f7-").FullName;
+        try
+        {
+            var fileCopy = Path.Combine(dir, "files.db");
+            CopyShared(dbPath, fileCopy);
+            if (File.Exists(dbPath + "-wal")) CopyShared(dbPath + "-wal", fileCopy + "-wal");
+            var backupCopy = Path.Combine(dir, "backup.db");
+            using (var conn = Db().CreateConnection())
+                await conn.ExecuteAsync("VACUUM INTO @P", new { P = backupCopy });
+
+            foreach (var copy in new[] { fileCopy, backupCopy })
+                (await BoxesThePasswordOpensAsync(copy, Password)).Should().BeEmpty(
+                    $"no row or logged event in {Path.GetFileName(copy)} may open to the old password");
+
+            // The bytes themselves, raw or as the base64 an event carries, are nowhere in the files.
+            var raw = File.ReadAllBytes(fileCopy)
+                .Concat(File.Exists(fileCopy + "-wal") ? File.ReadAllBytes(fileCopy + "-wal") : []).ToArray();
+            raw.AsSpan().IndexOf(oldBox.Wrapped).Should().Be(-1, "the old box's wrapped key is gone from the file");
+            raw.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(Convert.ToBase64String(oldBox.Wrapped)))
+                .Should().Be(-1, "and so is its event's copy of it");
+
+            // The new password still recovers the vault from the same copy.
+            (await BoxesThePasswordOpensAsync(backupCopy, newPassword)).Should().NotBeEmpty();
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>The attacker: every box row, whatever its status, and every logged box event, tried with the password.</summary>
+    private static async Task<List<string>> BoxesThePasswordOpensAsync(string dbPath, string password)
+    {
+        var candidates = new List<(string Id, string Kind, string Preset, byte[] Salt, byte[] Wrapped, byte[] Iv)>();
+        using (var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False"))
+        {
+            await conn.OpenAsync();
+            candidates.AddRange((await conn.QueryAsync<(string, string, string, byte[], byte[], byte[])>(
+                "SELECT box_id, kind, kdf_preset, salt, wrapped, iv FROM tbl_recovery_box")));
+            foreach (var payload in await conn.QueryAsync<string>(
+                "SELECT payload FROM tbl_event WHERE event_type = 'recovery_box_set'"))
+            {
+                var p = System.Text.Json.JsonSerializer.Deserialize<BeeMemoryBank.Sync.RecoveryBoxSetPayload>(payload)!;
+                candidates.Add(("event:" + p.BoxId, p.Kind, p.KdfPreset,
+                    Convert.FromBase64String(p.Salt), Convert.FromBase64String(p.Wrapped), Convert.FromBase64String(p.Iv)));
+            }
+        }
+
+        var opened = new List<string>();
+        foreach (var c in candidates.Where(c => RecoveryBoxKdf.IsWellFormed(c.Kind, c.Salt, c.Wrapped, c.Iv)))
+        {
+            var dek = await HeavyDerivationQueue.RunAsync(() =>
+                RecoveryBoxCrypto.TryUnwrap(password, c.Preset, c.Salt, c.Wrapped, c.Iv));
+            if (dek != null) opened.Add(c.Id);
+        }
+        return opened;
+    }
+
+    /// <summary>Copies a file the node holds open (SQLite shares it for reading and writing).</summary>
+    private static void CopyShared(string from, string to)
+    {
+        using var src = new FileStream(from, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var dst = File.Create(to);
+        src.CopyTo(dst);
     }
 
     // --- helpers ----------------------------------------------------------------------------

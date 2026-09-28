@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Recovery;
 using Dapper;
 
 namespace BeeMemoryBank.Sync.Tests;
@@ -179,6 +180,121 @@ public class RecoveryEventApplierTests : IAsyncLifetime
         await Apply(_phone.BoxSet(boxes[0], "device", "d64t3", FpA, lamport: 100));
         (await Box(boxes[^1]))!.Status.Should().Be("A");
         (await ActiveBoxes()).Should().NotContain(boxes[0]);
+    }
+
+    // --- an inactive box keeps no key material (F7) -----------------------------------------
+    // A box stops being active when a newer one supersedes it or a retire covers it. From then on the
+    // old password must not open anything this node holds: not the row, and not the logged event that
+    // carried the same bytes and would be served to every peer that pulls.
+
+    [Fact]
+    public async Task Supersede_DestroysTheOlderBoxMaterial_InTheRowAndTheEventLog()
+    {
+        var older = Guid.NewGuid();
+        var newer = Guid.NewGuid();
+
+        await Apply(_phone.BoxSet(older, "device", "d64t3", FpA, lamport: 10));
+        await Apply(_phone.BoxSet(newer, "device", "d64t3", FpB, lamport: 20));
+
+        (await MaterialLengths(older)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().NotContain(older);
+        (await MaterialLengths(newer)).Should().Be((32, 49, 12), "the active box is untouched");
+        (await LoggedBoxIds()).Should().Contain(newer);
+    }
+
+    [Fact]
+    public async Task LateOlderBox_IsStoredWithoutMaterial_AndNotKeptInTheLog()
+    {
+        var older = Guid.NewGuid();
+        var newer = Guid.NewGuid();
+
+        await Apply(_phone.BoxSet(newer, "device", "d64t3", FpB, lamport: 20));
+        await Apply(_phone.BoxSet(older, "device", "d64t3", FpA, lamport: 10));
+
+        (await Box(older))!.Status.Should().Be("R");
+        (await MaterialLengths(older)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().BeEquivalentTo([newer]);
+    }
+
+    [Fact]
+    public async Task Retire_DestroysTheTargetMaterial_InTheRowAndTheEventLog()
+    {
+        var strong = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+        await Apply(_phone.BoxSet(device, "device", "d64t3", FpA, lamport: 11));
+
+        await Apply(_pc.Retire([device], strong, lamport: 12));
+
+        (await Box(device))!.Status.Should().Be("R");
+        (await MaterialLengths(device)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().BeEquivalentTo([strong]);
+    }
+
+    [Fact]
+    public async Task DeferredRetire_DestroysTheMaterialWhenItApplies()
+    {
+        var strong = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        await Apply(_phone.BoxSet(device, "device", "d64t3", FpA, lamport: 11));
+        await Apply(_pc.Retire([device], strong, lamport: 12));
+        (await MaterialLengths(device)).Should().Be((32, 49, 12), "the retire waits for its covering box");
+
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+
+        (await MaterialLengths(device)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().BeEquivalentTo([strong]);
+    }
+
+    [Fact]
+    public async Task RedeliveredEventOfAnInactiveBox_DoesNotBringItsMaterialBack()
+    {
+        var strong = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        var deviceEvent = _phone.BoxSet(device, "device", "d64t3", FpA, lamport: 11);
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+        await Apply(deviceEvent);
+        await Apply(_pc.Retire([device], strong, lamport: 12));
+
+        // A peer that still holds the event sends it again: same id, same bytes.
+        await Apply(deviceEvent);
+
+        (await MaterialLengths(device)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().NotContain(device);
+    }
+
+    [Fact]
+    public async Task DestroyingMaterial_LeavesTheFileScrubOwed()
+    {
+        await Apply(_phone.BoxSet(Guid.NewGuid(), "device", "d64t3", FpA, lamport: 10));
+        (await ScrubOwed()).Should().BeFalse("nothing was destroyed yet");
+
+        await Apply(_phone.BoxSet(Guid.NewGuid(), "device", "d64t3", FpB, lamport: 20));
+
+        (await ScrubOwed()).Should().BeTrue("freed pages and WAL frames may still hold the bytes until the scrub");
+    }
+
+    [Fact]
+    public async Task Purge_CleansMaterialLeftByAnOlderBuild()
+    {
+        // What a node that ran an older build holds: a retired row with its bytes, and its event logged.
+        var strong = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        var deviceEvent = _phone.BoxSet(device, "device", "d64t3", FpA, lamport: 11);
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+        await Apply(deviceEvent);
+        using (var conn = _node.Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync("UPDATE tbl_recovery_box SET status = 'R' WHERE box_id = @B COLLATE NOCASE",
+                new { B = device.ToString() });
+        }
+        (await MaterialLengths(device)).Should().Be((32, 49, 12));
+
+        (await RecoveryBoxMaterialPurge.RunAsync(_node.Factory)).Should().BeGreaterThan(0);
+
+        (await MaterialLengths(device)).Should().Be((0, 0, 0));
+        (await LoggedBoxIds()).Should().BeEquivalentTo([strong]);
+        (await RecoveryBoxMaterialPurge.RunAsync(_node.Factory)).Should().Be(0, "a second run finds nothing");
     }
 
     // --- recovery_box_retire ----------------------------------------------------------------
@@ -439,6 +555,30 @@ public class RecoveryEventApplierTests : IAsyncLifetime
         using var conn = _node.Factory.CreateConnection();
         return (await conn.QueryAsync<string>("SELECT box_id FROM tbl_recovery_box WHERE status = 'A'"))
             .Select(Guid.Parse).ToList();
+    }
+
+    private async Task<(long Salt, long Wrapped, long Iv)> MaterialLengths(Guid id)
+    {
+        using var conn = _node.Factory.CreateConnection();
+        return await conn.QuerySingleAsync<(long, long, long)>(
+            "SELECT length(salt), length(wrapped), length(iv) FROM tbl_recovery_box WHERE box_id = @Id COLLATE NOCASE",
+            new { Id = id.ToString() });
+    }
+
+    /// <summary>The boxes whose recovery_box_set event is in this node's log (what it would serve to a peer).</summary>
+    private async Task<List<Guid>> LoggedBoxIds()
+    {
+        using var conn = _node.Factory.CreateConnection();
+        return (await conn.QueryAsync<string>("SELECT payload FROM tbl_event WHERE event_type = @T",
+                new { T = EventTypes.RecoveryBoxSet }))
+            .Select(p => Guid.Parse(JsonSerializer.Deserialize<RecoveryBoxSetPayload>(p)!.BoxId)).ToList();
+    }
+
+    private async Task<bool> ScrubOwed()
+    {
+        using var conn = _node.Factory.CreateConnection();
+        return await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_blind_state WHERE key = @K",
+            new { K = StoredEventRepair.CleanupPendingKey }) > 0;
     }
 
     private async Task<long> PendingRetires()
