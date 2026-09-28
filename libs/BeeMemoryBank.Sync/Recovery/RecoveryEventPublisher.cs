@@ -61,11 +61,11 @@ public class RecoveryEventPublisher(
         // Rows first, log second — the order ApplyAsync uses for a peer's event. A crash in between
         // leaves a local row nobody was told about, which the next publication supersedes; the other
         // order could ship an event whose effect this node itself never recorded.
+        // A recovery_box_set is logged by its apply, in the transaction that writes the rows and clears whatever it
+        // makes inactive (F7): logging it again here would be a second, separate transaction.
         await applier.ApplyOwnRecoveryEventAsync(evt);
-        await eventLogRepo.AppendAsync(evt);
-        // Our own new box superseded our old one, or our retire covered others: their material goes (F7).
-        if (eventType is EventTypes.RecoveryBoxSet or EventTypes.RecoveryBoxRetire)
-            await applier.PurgeInactiveBoxMaterialAsync();
+        if (eventType != EventTypes.RecoveryBoxSet)
+            await eventLogRepo.AppendAsync(evt);
         syncTrigger.Signal();
         return evt;
     }

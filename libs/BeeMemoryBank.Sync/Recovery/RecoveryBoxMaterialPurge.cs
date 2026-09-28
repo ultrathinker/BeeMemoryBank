@@ -22,9 +22,9 @@ namespace BeeMemoryBank.Sync.Recovery;
 /// neither a free page nor an old WAL frame keeps the bytes. Copies made while a box was still active
 /// are out of reach, as the plan accepts (6.9).</para>
 ///
-/// <para>Idempotent and cheap when there is nothing to do. It runs after every recovery_box_set and
-/// recovery_box_retire this node applies or publishes (after the event is logged, so a redelivered
-/// event of an inactive box is removed again) and at startup, for what an older build left.</para>
+/// <para>Idempotent and cheap when there is nothing to do. It runs at startup, for what an older build left: the
+/// applier itself clears a box and its event in the same transaction that makes the box inactive, and never logs an
+/// inactive box's event (see EventApplier.Recovery).</para>
 /// </summary>
 public static class RecoveryBoxMaterialPurge
 {
@@ -40,15 +40,25 @@ public static class RecoveryBoxMaterialPurge
               WHERE status <> 'A' AND (length(salt) > 0 OR length(wrapped) > 0 OR length(iv) > 0)",
             transaction: tx);
 
-        // Only events of a box that IS here and inactive: an event whose box row is missing may be one a
-        // restore logged before applying it, and must not be lost.
+        // The events of a box that is here and inactive; and the events whose row an older build trimmed past the
+        // ten-row limit (release-a2 review, spec #2), recognised by content: no row with that id, and an active box of
+        // the same author and kind with a later timestamp, so the event's box can never be active again. An event
+        // whose row is missing for any other reason (one a restore logged before applying it) is kept.
         var events = await conn.ExecuteAsync(
             @"DELETE FROM tbl_event
               WHERE event_type = @Type
-                AND EXISTS (SELECT 1 FROM tbl_recovery_box b
-                            WHERE b.status <> 'A'
-                              AND b.box_id = (CASE WHEN json_valid(tbl_event.payload)
-                                                   THEN json_extract(tbl_event.payload, '$.box_id') END) COLLATE NOCASE)",
+                AND (EXISTS (SELECT 1 FROM tbl_recovery_box b
+                             WHERE b.status <> 'A' AND b.box_id = (CASE WHEN json_valid(tbl_event.payload)
+                                 THEN json_extract(tbl_event.payload, '$.box_id') END) COLLATE NOCASE)
+                  OR (NOT EXISTS (SELECT 1 FROM tbl_recovery_box b
+                                  WHERE b.box_id = (CASE WHEN json_valid(tbl_event.payload)
+                                      THEN json_extract(tbl_event.payload, '$.box_id') END) COLLATE NOCASE)
+                      AND EXISTS (SELECT 1 FROM tbl_recovery_box a
+                                  WHERE a.status = 'A' AND a.lamport_ts > tbl_event.lamport_ts
+                                    AND a.author_node_id = (CASE WHEN json_valid(tbl_event.payload)
+                                        THEN json_extract(tbl_event.payload, '$.author_node_id') END) COLLATE NOCASE
+                                    AND a.kind = (CASE WHEN json_valid(tbl_event.payload)
+                                        THEN json_extract(tbl_event.payload, '$.kind') END))))",
             new { Type = EventTypes.RecoveryBoxSet }, tx);
 
         if (rows + events > 0)

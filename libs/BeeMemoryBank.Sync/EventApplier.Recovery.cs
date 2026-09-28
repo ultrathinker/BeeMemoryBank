@@ -32,8 +32,8 @@ public partial class EventApplier
     private const int MaxAnchorVectorEntries = 4096;
     private const int MaxSealedSecretBytes = 4096;
     // Superseded and retired boxes are kept (a late event must find its row and stay superseded), though
-    // without their key material (PurgeInactiveBoxMaterialAsync), and a peer publishing box after box must
-    // not grow every node's table without bound.
+    // without their key material or their logged event (cleared in the transaction that made them inactive),
+    // and a peer publishing box after box must not grow every node's table without bound.
     internal const int MaxInactiveBoxesPerAuthorAndKind = 10;
 
     /// <summary>
@@ -51,13 +51,6 @@ public partial class EventApplier
         EventTypes.SealedSecretSet => ApplySealedSecretSetAsync(evt),
         _ => throw new ArgumentException($"{evt.EventType} is not a recovery event.", nameof(evt)),
     };
-
-    /// <summary>
-    /// Clears the key material of every box that is not active here, and removes their logged events
-    /// (<see cref="Recovery.RecoveryBoxMaterialPurge"/>). Called once the event that changed a box's state
-    /// is in the log.
-    /// </summary>
-    public virtual Task PurgeInactiveBoxMaterialAsync() => Recovery.RecoveryBoxMaterialPurge.RunAsync(connFactory);
 
     private async Task ApplyRecoveryBoxSetAsync(SyncEvent evt)
     {
@@ -85,69 +78,123 @@ public partial class EventApplier
 
         var incoming = new RowVersion(evt.LamportTs, evt.NodeId);
 
-        using (var conn = connFactory.CreateConnection())
-        using (var tx = conn.BeginTransaction())
+        // One transaction for everything this event changes: the rows, the key material of every box it makes
+        // inactive, their logged events, and its own event (release-a2 review, security #1). A reader — a peer pulling
+        // the log, a backup — sees either the state before or the state after; no committed state ever logs a box
+        // that is not active here, and a crash leaves nothing for a later purge.
+        using var conn = connFactory.CreateConnection();
+        await conn.ExecuteAsync("PRAGMA secure_delete = ON");
+        using var tx = conn.BeginTransaction();
+
+        // A box id is written once. A redelivery is a no-op, and nothing — not even the author — can bring a retired
+        // or superseded box back by sending its event again. Its event is not logged again either: an active box's
+        // event already is, an inactive box's never is.
+        var exists = await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM tbl_recovery_box WHERE box_id = @BoxId COLLATE NOCASE",
+            new { BoxId = Id(boxId) }, tx);
+        if (exists > 0)
         {
-            // A box id is written once. A redelivery is a no-op, and nothing — not even the author —
-            // can bring a retired or superseded box back by sending its event again.
-            var exists = await conn.ExecuteScalarAsync<long>(
-                "SELECT COUNT(*) FROM tbl_recovery_box WHERE box_id = @BoxId COLLATE NOCASE",
-                new { BoxId = Id(boxId) }, tx);
-            if (exists > 0)
-            {
-                tx.Commit();
-                return;
-            }
-
-            // One active box per (author, kind): the highest version wins, whatever order the events
-            // arrive in. A late older box is stored already superseded; a newer one supersedes the rest.
-            var rivals = await conn.QueryAsync<(long LamportTs, string? SourceNodeId)>(
-                @"SELECT lamport_ts, source_node_id FROM tbl_recovery_box
-                  WHERE author_node_id = @Author COLLATE NOCASE AND kind = @Kind",
-                new { Author = Id(author), Kind = p.Kind }, tx);
-            var superseded = rivals.Any(r => ConflictResolver.IncomingWins(
-                existing: incoming, incoming: new RowVersion(r.LamportTs, ParseNodeId(r.SourceNodeId))));
-
-            if (!superseded)
-            {
-                await conn.ExecuteAsync(
-                    @"UPDATE tbl_recovery_box SET status = 'R'
-                      WHERE author_node_id = @Author COLLATE NOCASE AND kind = @Kind AND status = 'A'",
-                    new { Author = Id(author), Kind = p.Kind }, tx);
-            }
-
-            await conn.ExecuteAsync(
-                @"INSERT INTO tbl_recovery_box
-                    (box_id, kind, author_node_id, dek_fingerprint, epoch_hint, kdf_preset, salt, wrapped, iv,
-                     created_at, status, retired_by_box_id, lamport_ts, source_node_id)
-                  VALUES (@BoxId, @Kind, @Author, @Fingerprint, @Epoch, @Preset, @Salt, @Wrapped, @Iv,
-                     @CreatedAt, @Status, NULL, @Lamport, @Source)",
-                new
-                {
-                    BoxId = Id(boxId), p.Kind, Author = Id(author), Fingerprint = p.DekFingerprint, Epoch = p.EpochHint,
-                    Preset = p.KdfPreset, Salt = salt, Wrapped = wrapped, Iv = iv,
-                    CreatedAt = evt.CreatedAt.ToUniversalTime().ToString("O"),
-                    Status = superseded ? "R" : "A", Lamport = evt.LamportTs, Source = Id(evt.NodeId)
-                }, tx);
-
-            // Only the newest inactive rows stay. Everything deleted here is older than at least ten
-            // rows of the same author and kind, so if its event ever comes back it is stored superseded
-            // (and trimmed again) — deleting it cannot bring it back as the active box.
-            var inactive = (await conn.QueryAsync<(string BoxId, long LamportTs, string? SourceNodeId)>(
-                @"SELECT box_id, lamport_ts, source_node_id FROM tbl_recovery_box
-                  WHERE author_node_id = @Author COLLATE NOCASE AND kind = @Kind AND status = 'R'",
-                new { Author = Id(author), Kind = p.Kind }, tx)).ToList();
-            inactive.Sort((x, y) => ConflictResolver.IncomingWins(
-                existing: new RowVersion(x.LamportTs, ParseNodeId(x.SourceNodeId)),
-                incoming: new RowVersion(y.LamportTs, ParseNodeId(y.SourceNodeId))) ? 1 : -1);
-            foreach (var old in inactive.Skip(MaxInactiveBoxesPerAuthorAndKind))
-                await conn.ExecuteAsync("DELETE FROM tbl_recovery_box WHERE box_id = @BoxId", new { old.BoxId }, tx);
-
             tx.Commit();
+            return;
         }
 
+        // One active box per (author, kind): the highest version wins, whatever order the events arrive in. A late
+        // older box is stored already superseded, without its material; a newer one supersedes the rest.
+        var rivals = await conn.QueryAsync<(long LamportTs, string? SourceNodeId)>(
+            @"SELECT lamport_ts, source_node_id FROM tbl_recovery_box
+              WHERE author_node_id = @Author COLLATE NOCASE AND kind = @Kind",
+            new { Author = Id(author), Kind = p.Kind }, tx);
+        var superseded = rivals.Any(r => ConflictResolver.IncomingWins(
+            existing: incoming, incoming: new RowVersion(r.LamportTs, ParseNodeId(r.SourceNodeId))));
+
+        var madeInactive = new List<string>();
+        if (!superseded)
+        {
+            madeInactive.AddRange(await conn.QueryAsync<string>(
+                @"SELECT box_id FROM tbl_recovery_box
+                  WHERE author_node_id = @Author COLLATE NOCASE AND kind = @Kind AND status = 'A'",
+                new { Author = Id(author), Kind = p.Kind }, tx));
+            await conn.ExecuteAsync(
+                @"UPDATE tbl_recovery_box SET status = 'R'
+                  WHERE author_node_id = @Author COLLATE NOCASE AND kind = @Kind AND status = 'A'",
+                new { Author = Id(author), Kind = p.Kind }, tx);
+        }
+
+        await conn.ExecuteAsync(
+            @"INSERT INTO tbl_recovery_box
+                (box_id, kind, author_node_id, dek_fingerprint, epoch_hint, kdf_preset, salt, wrapped, iv,
+                 created_at, status, retired_by_box_id, lamport_ts, source_node_id)
+              VALUES (@BoxId, @Kind, @Author, @Fingerprint, @Epoch, @Preset, @Salt, @Wrapped, @Iv,
+                 @CreatedAt, @Status, NULL, @Lamport, @Source)",
+            new
+            {
+                BoxId = Id(boxId), p.Kind, Author = Id(author), Fingerprint = p.DekFingerprint, Epoch = p.EpochHint,
+                Preset = p.KdfPreset, Salt = superseded ? Array.Empty<byte>() : salt,
+                Wrapped = superseded ? Array.Empty<byte>() : wrapped, Iv = superseded ? Array.Empty<byte>() : iv,
+                CreatedAt = evt.CreatedAt.ToUniversalTime().ToString("O"),
+                Status = superseded ? "R" : "A", Lamport = evt.LamportTs, Source = Id(evt.NodeId)
+            }, tx);
+
+        // Only the newest inactive rows stay. Everything deleted here is older than at least ten rows of the same
+        // author and kind, so if its event ever comes back it is stored superseded (and trimmed again) — deleting it
+        // cannot bring it back as the active box. Its logged event goes with it (release-a2 review, spec #2).
+        var inactive = (await conn.QueryAsync<(string BoxId, long LamportTs, string? SourceNodeId)>(
+            @"SELECT box_id, lamport_ts, source_node_id FROM tbl_recovery_box
+              WHERE author_node_id = @Author COLLATE NOCASE AND kind = @Kind AND status = 'R'",
+            new { Author = Id(author), Kind = p.Kind }, tx)).ToList();
+        inactive.Sort((x, y) => ConflictResolver.IncomingWins(
+            existing: new RowVersion(x.LamportTs, ParseNodeId(x.SourceNodeId)),
+            incoming: new RowVersion(y.LamportTs, ParseNodeId(y.SourceNodeId))) ? 1 : -1);
+        var trimmed = inactive.Skip(MaxInactiveBoxesPerAuthorAndKind).Select(r => r.BoxId).ToList();
+        await DeleteBoxEventsAsync(conn, tx, trimmed);
+        foreach (var old in trimmed)
+            await conn.ExecuteAsync("DELETE FROM tbl_recovery_box WHERE box_id = @BoxId", new { BoxId = old }, tx);
+
         // The box that just arrived may be the covering box, or the target, a waiting retire needs.
-        await ApplyPendingRetiresAsync();
+        madeInactive.AddRange(await ApplyPendingRetiresAsync(conn, tx));
+
+        var nowActive = !superseded && await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM tbl_recovery_box WHERE box_id = @BoxId COLLATE NOCASE AND status = 'A'",
+            new { BoxId = Id(boxId) }, tx) > 0;
+        if (nowActive)
+            await conn.ExecuteAsync(
+                @"INSERT OR IGNORE INTO tbl_event
+                  (event_id, node_id, lamport_ts, event_type, article_id, entity_id, payload, signature, protocol_version, created_at, actor_type, actor_name, via_agent_name)
+                  VALUES (@EventId, @NodeId, @LamportTs, @EventType, @ArticleId, @EntityId, @Payload, @Signature, @ProtocolVersion, @CreatedAt, @ActorType, @ActorName, @ViaAgentName)",
+                evt, tx);
+
+        await ScrubBoxesAsync(conn, tx, madeInactive, markOwed: madeInactive.Count + trimmed.Count > 0);
+        tx.Commit();
+    }
+
+    /// <summary>The logged recovery_box_set events of these boxes, deleted.</summary>
+    private static async Task<int> DeleteBoxEventsAsync(IDbConnection conn, IDbTransaction tx, IReadOnlyCollection<string> boxIds)
+    {
+        if (boxIds.Count == 0) return 0;
+        return await conn.ExecuteAsync(
+            @"DELETE FROM tbl_event WHERE event_type = @Type
+                AND lower(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.box_id') END) IN @Ids",
+            new { Type = EventTypes.RecoveryBoxSet, Ids = boxIds.Select(b => b.ToLowerInvariant()).ToList() }, tx);
+    }
+
+    /// <summary>
+    /// Boxes that just became inactive: their salt, wrap and IV cleared and their logged events deleted, in the caller's
+    /// transaction (the connection runs with secure_delete). The file scrub of <see cref="StoredEventRepair"/> is marked
+    /// as owed in the same transaction, for the old page images in the WAL and in free pages.
+    /// </summary>
+    private static async Task ScrubBoxesAsync(IDbConnection conn, IDbTransaction tx, IReadOnlyCollection<string> boxIds, bool markOwed)
+    {
+        foreach (var id in boxIds)
+            await conn.ExecuteAsync(
+                "UPDATE tbl_recovery_box SET salt = X'', wrapped = X'', iv = X'' WHERE box_id = @Id COLLATE NOCASE AND status <> 'A'",
+                new { Id = id }, tx);
+        await DeleteBoxEventsAsync(conn, tx, boxIds);
+        if (!markOwed) return;
+        var now = DateTime.UtcNow.ToString("O");
+        await conn.ExecuteAsync(
+            @"INSERT INTO tbl_blind_state (key, value, updated_at) VALUES (@key, @now, @now)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            new { key = StoredEventRepair.CleanupPendingKey, now }, tx);
     }
 
     private async Task ApplyRecoveryBoxRetireAsync(SyncEvent evt)
@@ -168,40 +215,38 @@ public partial class EventApplier
             if (target != covering) targets.Add(target);
         }
 
-        // Every target goes through the waiting list, applied or not: the rule "only while the
-        // covering box is active here, otherwise wait" then lives in exactly one place.
-        using (var conn = connFactory.CreateConnection())
-        using (var tx = conn.BeginTransaction())
+        // Every target goes through the waiting list, applied or not: the rule "only while the covering box is active
+        // here, otherwise wait" then lives in exactly one place. Queued, applied and scrubbed in one transaction.
+        using var conn = connFactory.CreateConnection();
+        await conn.ExecuteAsync("PRAGMA secure_delete = ON");
+        using var tx = conn.BeginTransaction();
+        foreach (var target in targets.Distinct())
         {
-            foreach (var target in targets.Distinct())
-            {
-                await conn.ExecuteAsync(
-                    @"INSERT OR IGNORE INTO tbl_recovery_box_pending_retire
-                        (event_id, box_id, covering_box_id, lamport_ts, source_node_id, received_at)
-                      VALUES (@EventId, @BoxId, @Covering, @Lamport, @Source, @Now)",
-                    new
-                    {
-                        EventId = Id(evt.EventId), BoxId = Id(target), Covering = Id(covering),
-                        Lamport = evt.LamportTs, Source = Id(evt.NodeId), Now = DateTime.UtcNow.ToString("O")
-                    }, tx);
-            }
-            tx.Commit();
+            await conn.ExecuteAsync(
+                @"INSERT OR IGNORE INTO tbl_recovery_box_pending_retire
+                    (event_id, box_id, covering_box_id, lamport_ts, source_node_id, received_at)
+                  VALUES (@EventId, @BoxId, @Covering, @Lamport, @Source, @Now)",
+                new
+                {
+                    EventId = Id(evt.EventId), BoxId = Id(target), Covering = Id(covering),
+                    Lamport = evt.LamportTs, Source = Id(evt.NodeId), Now = DateTime.UtcNow.ToString("O")
+                }, tx);
         }
-
-        await ApplyPendingRetiresAsync();
+        var retired = await ApplyPendingRetiresAsync(conn, tx);
+        await ScrubBoxesAsync(conn, tx, retired, markOwed: retired.Count > 0);
+        tx.Commit();
     }
 
     /// <summary>
     /// Applies every waiting retire whose covering box is an ACTIVE strong box here and whose target
     /// has arrived. A retire whose covering box holds a different key than the target is refused for
     /// good: it would remove the last way to that key, which is exactly what a retire must never do.
-    /// Everything else keeps waiting — never dropped (plan 6.3).
+    /// Everything else keeps waiting — never dropped (plan 6.3). Runs in the caller's transaction and returns the boxes
+    /// it retired, for the caller to scrub in the same transaction.
     /// </summary>
-    private async Task ApplyPendingRetiresAsync()
+    private async Task<List<string>> ApplyPendingRetiresAsync(IDbConnection conn, IDbTransaction tx)
     {
-        using var conn = connFactory.CreateConnection();
-        using var tx = conn.BeginTransaction();
-
+        var retired = new List<string>();
         var ready = (await conn.QueryAsync<(string EventId, string BoxId, string CoveringBoxId, string TargetFingerprint, string CoveringFingerprint)>(
             @"SELECT p.event_id, p.box_id, p.covering_box_id, t.dek_fingerprint, c.dek_fingerprint
               FROM tbl_recovery_box_pending_retire p
@@ -214,10 +259,11 @@ public partial class EventApplier
         {
             if (string.Equals(r.TargetFingerprint, r.CoveringFingerprint, StringComparison.Ordinal))
             {
-                await conn.ExecuteAsync(
-                    @"UPDATE tbl_recovery_box SET status = 'R', retired_by_box_id = @Covering
-                      WHERE box_id = @BoxId COLLATE NOCASE AND status = 'A'",
-                    new { Covering = r.CoveringBoxId, r.BoxId }, tx);
+                if (await conn.ExecuteAsync(
+                        @"UPDATE tbl_recovery_box SET status = 'R', retired_by_box_id = @Covering
+                          WHERE box_id = @BoxId COLLATE NOCASE AND status = 'A'",
+                        new { Covering = r.CoveringBoxId, r.BoxId }, tx) > 0)
+                    retired.Add(r.BoxId);
             }
             else
             {
@@ -230,8 +276,7 @@ public partial class EventApplier
                 "DELETE FROM tbl_recovery_box_pending_retire WHERE event_id = @EventId AND box_id = @BoxId",
                 new { r.EventId, r.BoxId }, tx);
         }
-
-        tx.Commit();
+        return retired;
     }
 
     private async Task ApplyRetiredLinkSetAsync(SyncEvent evt)
