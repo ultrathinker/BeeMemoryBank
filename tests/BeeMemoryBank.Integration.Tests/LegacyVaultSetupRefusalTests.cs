@@ -74,11 +74,13 @@ public class LegacyVaultSetupRefusalTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A half-written identity (the shape the restore bootstrap can leave) is "not initialized" on
-    /// purpose — the restore has to be allowed to finish it — and must still not be initialized over.
+    /// The shape that reads as uninitialized while an identity row exists: a restore bootstrap in
+    /// progress. The node says "not initialized" on purpose (the restore must be allowed to finish),
+    /// and the setup path must STILL refuse — the half-written identity is this node's, and a new
+    /// master DEK written next to the recovery material's would be the only one the node knows.
     /// </summary>
     [Fact]
-    public async Task StandaloneSetup_OnAnIdentityRowWithNothingBehindIt_IsRefused()
+    public async Task StandaloneSetup_OnANodeMidRestore_IsRefused()
     {
         using (var conn = _factory.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
         {
@@ -86,15 +88,16 @@ public class LegacyVaultSetupRefusalTests : IAsyncLifetime
             await conn.ExecuteAsync("DELETE FROM tbl_user");
             await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
         }
+        await _factory.Services.GetRequiredService<RestoreBootstrapMarker>().SetAsync();
         var before = await CountsAsync();
         using var client = _factory.CreateClient();
 
         (await client.GetFromJsonAsync<JsonElement>("/api/init/status"))
-            .GetProperty("initialized").GetBoolean().Should().BeFalse("it must stay restorable");
+            .GetProperty("initialized").GetBoolean().Should().BeFalse("the bootstrap is only half done");
 
         (await client.PostAsJsonAsync("/api/init/standalone", StandaloneBody()))
             .StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await CountsAsync()).Should().Be(before);
+        (await CountsAsync()).Should().Be(before, "and nothing was written over it");
     }
 
     /// <summary>The other direction, so the guard is not simply "setup never works": an empty node
@@ -112,5 +115,28 @@ public class LegacyVaultSetupRefusalTests : IAsyncLifetime
         using var scope = empty.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
             .Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The rehearsal's vault (R2's REHEARSAL.md, on a copy of the owner's real server): an identity
+    /// row whose <c>sentinel_value</c> is NULL, because 1.0.11 neither writes nor requires one. It is
+    /// an initialized node — the whole point of the 1.0.11 semantics — and setup still refuses it,
+    /// which is the pair the rehearsal needs to see.
+    /// </summary>
+    [Fact]
+    public async Task AVaultWithANullSentinel_IsInitialized_AndSetupIsRefused()
+    {
+        using (var conn = _factory.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
+        var before = await CountsAsync();
+        using var client = _factory.CreateClient();
+
+        (await client.GetFromJsonAsync<JsonElement>("/api/init/status"))
+            .GetProperty("initialized").GetBoolean()
+            .Should().BeTrue("1.0.11 says so, and the vault is intact behind that row");
+
+        (await client.PostAsJsonAsync("/api/init/standalone", StandaloneBody()))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await CountsAsync()).Should().Be(before);
     }
 }

@@ -235,6 +235,16 @@ public class RecoveryRestoreService(
                 throw new InvalidDataException(
                     $"The recovery material claims Lamport time {maxImported}, beyond the {MaxRestoredLamport} a restore accepts; refusing it.");
 
+            // Everything that can refuse this restore without writing anything (the gate above, a
+            // password that opens no box, a source claiming impossible Lamport time) has now
+            // refused. From here the bootstrap writes, so it raises the marker that says "this node
+            // is halfway through a restore": without it, a crash in the middle of the bootstrap
+            // leaves an identity row that IsInitializedAsync reads as a finished node, and the
+            // operator's next attempt is refused with "restore needs a fresh node" (review
+            // release-a2 batch 2; the marker is lowered with the write that completes the
+            // bootstrap, see step 3).
+            await sp.GetRequiredService<RestoreBootstrapMarker>().SetAsync(ct);
+
             // 2. The replicated state.
             await import(sp);
 
@@ -377,10 +387,16 @@ public class RecoveryRestoreService(
 
             using (var conn = connFactory.CreateConnection())
             {
+                // One transaction for the last writes of the bootstrap AND the marker that says it
+                // is not finished: commit both or neither. Lowering the marker anywhere else would
+                // leave a window in which the node reports a finished vault over a half-written one
+                // (the brick this marker exists for), and a marker that outlived a complete
+                // bootstrap would send the operator back to the restore wizard forever.
+                using var tx = conn.BeginTransaction();
                 await conn.ExecuteAsync(
                     "INSERT OR IGNORE INTO tbl_migration_marker (key, value, set_at) VALUES ('legacy_password_unified', '1', @T)",
-                    new { T = DateTime.UtcNow.ToString("O") });
-                await conn.ExecuteAsync("UPDATE tbl_node_identity SET dek_epoch = @E", new { E = Math.Max(1, keys.EpochHint) });
+                    new { T = DateTime.UtcNow.ToString("O") }, tx);
+                await conn.ExecuteAsync("UPDATE tbl_node_identity SET dek_epoch = @E", new { E = Math.Max(1, keys.EpochHint) }, tx);
 
                 // Older keys, sealed under the current one like DekRewrapper keeps them: a body that
                 // arrives late under one of them, or already sits in the state, still opens.
@@ -391,11 +407,14 @@ public class RecoveryRestoreService(
                     var (wrapped, iv) = NodeDataKeyEnvelope.Wrap(name, oldDek, keys.Current);
                     await conn.ExecuteAsync(
                         $"INSERT OR IGNORE INTO {NodeDataKeyEnvelope.TableName} (key_name, wrapped_key, iv, created_at) VALUES (@N, @W, @I, @T)",
-                        new { N = name, W = wrapped, I = iv, T = DateTime.UtcNow.ToString("O") });
+                        new { N = name, W = wrapped, I = iv, T = DateTime.UtcNow.ToString("O") }, tx);
                 }
 
                 // Search index and embeddings are node-local: rebuild them from the imported content.
-                await conn.ExecuteAsync("UPDATE tbl_article SET embedding_pending = 1, index_pending = 1 WHERE status = 'A'");
+                await conn.ExecuteAsync("UPDATE tbl_article SET embedding_pending = 1, index_pending = 1 WHERE status = 'A'", transaction: tx);
+
+                RestoreBootstrapMarker.Clear(conn, tx);
+                tx.Commit();
             }
 
             // 4. Strictly above every imported Lamport value, so this node's next write wins over them.

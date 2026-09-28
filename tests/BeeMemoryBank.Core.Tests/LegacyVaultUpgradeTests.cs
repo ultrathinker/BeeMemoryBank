@@ -59,7 +59,7 @@ public class LegacyVaultUpgradeTests : IAsyncDisposable
         var keySlots = new KeySlotRepository(factory);
         var nodeRepo = new NodeIdentityRepository(factory);
         var userRepo = new UserRepository(factory);
-        var init = new InitializationService(nodeRepo, keySlots, userRepo, factory);
+        var init = new InitializationService(nodeRepo, keySlots, userRepo, factory, new RestoreBootstrapMarker(factory));
         await init.InitializeAsync("admin", "LegacyNode", Password);
 
         // Sanity: the vault this build makes is the modern shape, so what follows is a real change.
@@ -178,22 +178,24 @@ public class LegacyVaultUpgradeTests : IAsyncDisposable
     }
 
     /// <summary>
-    /// The same guard where the shape is NOT recognizable: an identity row with nothing behind it is
-    /// "not initialized" (the restore path must be allowed to finish it) — and must still not be
-    /// initialized over, or the half-written row and the new one would both claim to be this node.
+    /// The same guard where the shape reads as incomplete: while a restore bootstrap is in progress
+    /// the node answers "not initialized" (on purpose — the restore may finish it) and must still
+    /// not be initialized over, or the half-written row and the new one would both claim to be this
+    /// node, and the new master DEK would be the only one the node knows.
     /// </summary>
     [Fact]
-    public async Task InitializingOverAnIdentityRowWithNothingBehindIt_IsAlsoRefused()
+    public async Task InitializingOverAnIdentityRowMidRestore_IsAlsoRefused()
     {
-        var (_, init, _) = await BuildLegacyVaultAsync(keepUsers: true);
-        using (var conn = _factory!.CreateConnection())
+        var (factory, init, _) = await BuildLegacyVaultAsync(keepUsers: true);
+        using (var conn = factory.CreateConnection())
         {
             await conn.ExecuteAsync("DELETE FROM tbl_key_slot");
             await conn.ExecuteAsync("DELETE FROM tbl_user");
             await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
         }
+        await new RestoreBootstrapMarker(factory).SetAsync();
 
-        (await init.IsInitializedAsync()).Should().BeFalse("nothing can open it — restore may finish it");
+        (await init.IsInitializedAsync()).Should().BeFalse("a bootstrap is in progress — restore may finish it");
         (await init.IsClaimedAsync()).Should().BeTrue("but the identity row is still somebody's");
 
         var act = () => init.InitializeAsync("setupadmin", "Fresh setup", "another-password-1");
@@ -202,21 +204,56 @@ public class LegacyVaultUpgradeTests : IAsyncDisposable
     }
 
     /// <summary>
-    /// And the shape DK1-2's rule exists for stays a brick of the other kind: an identity row with
-    /// nothing behind it — no slot, no sentinel, no user — is not an initialized node, so the restore
-    /// that would finish it is allowed to run.
+    /// The real 1.0.11 vault, from the rehearsal on a copy of the owner's server (review release-a2
+    /// batch 2): an identity row, and <c>sentinel_value</c> NULL — the sentinel only became part of
+    /// the vault later, and 1.0.11 neither writes nor requires one. Such a vault is initialized and
+    /// unlocks with its password (a missing sentinel is nothing to verify a slot against, not a
+    /// refusal), so any test that asks for the sentinel on top of the row reads a working vault as
+    /// an empty one and points its operator at the setup wizard.
     /// </summary>
     [Fact]
-    public async Task AnIdentityRowWithNothingBehindIt_IsStillNotInitialized()
+    public async Task AVaultWithANullSentinel_IsInitialized_AndUnlocksWithItsPassword()
+    {
+        var (factory, init, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        using (var conn = factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
+
+        (await init.IsInitializedAsync()).Should().BeTrue("1.0.11 answered true here, and this is its vault");
+
+        (await session.UnlockAsync(Password)).Should().BeTrue(
+            "the vault opens with the password it was made with; the sentinel is not a gate");
+        session.IsUnlocked.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The one shape that IS "not initialized" while an identity row exists: a restore bootstrap in
+    /// progress. The bootstrap writes the identity row first and the slot, the admin and the
+    /// sentinel after it, so a crash in between leaves a node that cannot be unlocked — the
+    /// operator's next move is to restore again, and the flag has to say so for that retry to be
+    /// allowed in (the retry then resumes rather than repeats; RecoveryRestoreService).
+    /// </summary>
+    [Fact]
+    public async Task ANodeWithARestoreBootstrapInProgress_IsNotInitialized()
     {
         var (factory, init, _) = await BuildLegacyVaultAsync(keepUsers: true);
-        using (var conn = factory.CreateConnection())
-        {
-            await conn.ExecuteAsync("DELETE FROM tbl_key_slot");
-            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
-        }
+        var marker = new RestoreBootstrapMarker(factory);
 
+        (await marker.IsSetAsync()).Should().BeFalse("nothing is being restored in this test");
+        (await init.IsInitializedAsync()).Should().BeTrue("and the node is a node");
+
+        await marker.SetAsync();
+
+        (await marker.IsSetAsync()).Should().BeTrue();
         (await init.IsInitializedAsync()).Should().BeFalse(
-            "nothing can open this vault, and it must not be mistaken for one that can");
+            "half a bootstrap is not an initialized node: the restore that would finish it must be allowed to run");
+
+        // Lowered the way the restore lowers it — with the write that completes the bootstrap.
+        using (var conn = factory.CreateConnection())
+        using (var tx = conn.BeginTransaction())
+        {
+            RestoreBootstrapMarker.Clear(conn, tx);
+            tx.Commit();
+        }
+        (await init.IsInitializedAsync()).Should().BeTrue("the bootstrap finished: the node is a node again");
     }
 }

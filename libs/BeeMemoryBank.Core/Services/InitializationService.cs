@@ -11,77 +11,61 @@ public class InitializationService(
     INodeIdentityRepository nodeRepo,
     IKeySlotRepository keySlotRepo,
     IUserRepository userRepo,
-    IDbConnectionFactory dbFactory)
+    IDbConnectionFactory dbFactory,
+    RestoreBootstrapMarker? restoreMarker = null)
 {
+    // Optional only for the callers that build this service by hand (tests, the odd tool): the
+    // default is a working marker over the same database, never "no marker" — a flag that silently
+    // stops being read is worse than no flag, and the host passes the registered one.
+    private readonly RestoreBootstrapMarker _restoreMarker = restoreMarker ?? new RestoreBootstrapMarker(dbFactory);
     /// <summary>
-    /// Whether this database holds a node somebody can actually use — which is not the same as
-    /// "there is a row in tbl_node_identity".
+    /// Whether this database holds a node: the identity row exists — 1.0.11's answer, deliberately
+    /// unchanged — and no restore bootstrap is in progress.
     ///
-    /// <para>An external-key identity (v=2, a blind node) is the whole of that node's
-    /// initialization: it has no vault, so there is no owner, slot or sentinel to look for.</para>
+    /// <para><b>Why the old question was wrong, in one number: NULL.</b> The rehearsal on a copy of
+    /// a real 1.0.11 server vault (review release-a2 batch 2) found an identity row whose
+    /// <c>sentinel_value</c> is NULL, because the sentinel only became part of the vault later.
+    /// 1.0.11 counts any identity row as initialized and unlocks such a vault happily
+    /// (<c>SessionService</c> treats a missing sentinel as nothing to check against, then heals it);
+    /// a release that asks for the sentinel, an owner or a slot on top of the row therefore reads
+    /// that vault as an empty one and sends its operator to the setup wizard — where the wizard
+    /// would have written a second identity and a second master DEK over data still sealed under
+    /// the first (R2's MIXED-A U2c). Legacy password slots were the same mistake in a different
+    /// shape: an upgraded vault is not usable until its first unlock runs the migration that
+    /// promotes the slot, so any test that describes the post-migration shape re-bricks exactly the
+    /// vault it is meant to protect.</para>
     ///
-    /// <para>Every other node needs a vault that can be opened: an active user with a key slot, and
-    /// the sentinel that says which master key that slot is bound to. The identity row alone used to
-    /// be the entire test, and the restore bootstrap writes that row first — a crash anywhere in the
-    /// rest of it (the slot, the admin, the sentinel) left a node that called itself initialized,
-    /// refused the next restore with "restore needs a fresh node", and had no slot to unlock with.
-    /// Nothing but wiping the volume cleared that (review release-a #6). Writing the whole bootstrap
-    /// in one transaction is the other way to close it; this closes it for every partial write, from
-    /// any version, not only the ones a transaction would cover.</para>
+    /// <para>The identity row is not enough in exactly one case, and it is a writer's own: the
+    /// restore bootstrap writes that row first and the slot, the admin, the sentinel and the older
+    /// keys after it. A crash in between leaves a node that cannot be unlocked and must be restored
+    /// again — so while that bootstrap is running, <see cref="RestoreBootstrapMarker"/> is up and
+    /// this answers false, which is what lets the retry in (and the retry resumes rather than
+    /// repeats). The marker is lowered in the same transaction as the write that completes the
+    /// bootstrap.</para>
     ///
-    /// <para>Both halves have been written by every initialization path since the first release —
-    /// init, join, the phone's setup, restore — so no healthy node changes its answer here. The one
-    /// way a real node looks uninitialized is a database somebody emptied by hand, which is exactly
-    /// a node that should get the setup wizard rather than fail to unlock forever.</para>
-    ///
-    /// <para><b>A vault from before the password unification is the exception that must not be
-    /// missed.</b> Nodes older than the per-user slot era carry a single shared
-    /// <c>slot_type='password'</c> row and no user pointing at a slot — the users are linked, and
-    /// that row is promoted, by <see cref="LegacyPasswordSlotMigrationService"/> on the FIRST
-    /// SUCCESSFUL UNLOCK. So on an upgraded vault that has not been unlocked yet, the modern half
-    /// of this test is false while the vault is perfectly intact and one password away from being
-    /// usable again. Answering "not initialized" there sends the operator (and the Web and phone
-    /// clients) to the setup wizard instead of the unlock prompt, and the migration that would fix
-    /// the shape never runs — the upgrade brick (review release-a2, agy#2 / sec#5).</para>
+    /// <para>A setup path must not rely on this answer for anything: it is shape-reading, and the
+    /// shapes are open-ended (a torn restore is "not initialized" on purpose, and its data must
+    /// still not be written over). <see cref="IsClaimedAsync"/> is the check setup paths make.</para>
     /// </summary>
     public async Task<bool> IsInitializedAsync()
     {
-        var identity = await nodeRepo.GetAsync();
-        if (identity is null) return false;
-        if (identity.Ed25519PrivateKeyV == NodeIdentityCrypto.ExternalKeyVersion) return true;
-
-        var slots = await keySlotRepo.GetAllAsync();
-
-        // The legacy shape, checked first because it is proof on its own: a shared password slot is
-        // a vault with a password, and nothing in this build creates one (AddPasswordSlotAsync
-        // allows "user" and "recovery" only, and every initialization path writes a user slot). The
-        // sentinel is deliberately not required here: it would re-brick exactly the vaults this
-        // branch exists for, and a torn restore — the case the sentinel guards — writes a user slot,
-        // never this one.
-        if (slots.Any(s => s.SlotType == LegacyPasswordSlotMigrationService.LegacySlotType)) return true;
-
-        // The sentinel: it is one value on the row already read, and a node without it cannot be
-        // unlocked by any slot (SessionService verifies every slot against it).
-        if (await nodeRepo.GetSentinelAsync() is null) return false;
-
-        // Then an owner: an active user that has a key slot. The slot rows and the users are read
-        // through the repositories, not by joining tables here.
-        var slotIds = slots.Select(s => s.SlotId).ToHashSet();
-        return (await userRepo.ListActiveAsync()).Any(u => u.KeySlotId is { } id && slotIds.Contains(id));
+        if (await nodeRepo.GetAsync() is null) return false;
+        return !await _restoreMarker.IsSetAsync();
     }
 
     /// <summary>
     /// Whether this database already belongs to a node, however uninitialized its shape looks: any
     /// identity row, or any key slot.
     ///
-    /// <para>Deliberately coarser than <see cref="IsInitializedAsync"/> — it is the check a SETUP
-    /// path makes before writing a new identity and a new master DEK. On a vault whose shape nobody
-    /// recognizes (a pre-unification one, a half-written one), answering "not initialized" is
-    /// survivable; initializing over it is not: the operator's data is still there, still wrapped
-    /// under the old key, and the new DEK is the only one the node knows. R2's live mixed-version
-    /// test caught exactly that: on a legacy vault, /api/init/standalone succeeded, wrote a SECOND
-    /// tbl_node_identity row and a setupadmin with a fresh DEK. IsInitializedAsync now recognizes
-    /// the legacy shape, and this is the second line of defence behind it (review release-a2, U2c).</para>
+    /// <para>Deliberately coarser than <see cref="IsInitializedAsync"/>, and it is the check a SETUP
+    /// path makes before writing a new identity and a new master DEK. IsInitializedAsync answers a
+    /// question about a shape, and one shape — a restore bootstrap in progress — must answer "not
+    /// initialized" so the restore can be retried. Setup must not read that as an invitation: the
+    /// half-written identity is still this node's, its data is still wrapped under a key only the
+    /// recovery material holds, and a new master DEK written next to it would be the only one the
+    /// node knows. R2's live mixed-version test caught exactly that outcome on a legacy vault:
+    /// /api/init/standalone succeeded and wrote a SECOND tbl_node_identity row and a setupadmin
+    /// with a fresh DEK (review release-a2, U2c).</para>
     /// </summary>
     public async Task<bool> IsClaimedAsync()
         => await nodeRepo.GetAsync() is not null || (await keySlotRepo.GetAllAsync()).Count > 0;
@@ -91,7 +75,7 @@ public class InitializationService(
         if (await IsInitializedAsync())
             throw new InvalidOperationException("Node is already initialized.");
 
-        // The coarse guard too: whatever IsInitializedAsync answered about this database's SHAPE,
+        // And the coarse guard, whatever IsInitializedAsync answered about this database's SHAPE:
         // a database that already carries an identity or a key slot is somebody's vault.
         if (await IsClaimedAsync())
             throw new InvalidOperationException(

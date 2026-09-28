@@ -339,13 +339,19 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     /// crash in between (a power cut, a killed container — the restore is not a transaction) left a
     /// node that called itself initialized, refused the next restore with "restore needs a fresh
     /// node" and had no slot to unlock with. Nothing cleared it but wiping the volume by hand.
+    ///
+    /// <para>The swarm's answer is the flag the bootstrap raises before its first write: the node
+    /// answers "not initialized" while it is up (which is the instruction the operator needs —
+    /// restore again) and the retry is let in and resumes. What the crash leaves is therefore the
+    /// row AND that flag, which is what this test builds.</para>
     /// </summary>
     [Fact]
     public async Task ARestoreThatDiedAfterTheNodeRow_IsNotInitialized_AndTheNextAttemptSucceeds()
     {
         using var target = new RecoveryTestFactory();
         var nodeRepo = target.Services.GetRequiredService<INodeIdentityRepository>();
-        // Exactly what the crash leaves behind: the row, and nothing else.
+        // Exactly what the crash leaves behind: the row, nothing else, and the flag the bootstrap
+        // raised before writing it.
         await nodeRepo.CreateAsync(new NodeIdentity
         {
             NodeId = Guid.NewGuid(), DisplayName = "Half restored",
@@ -354,10 +360,17 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             CreatedAt = DateTime.UtcNow
         });
         using (var scope = target.Services.CreateScope())
+        {
+            // …and the flag the bootstrap raised before its first write.
+            await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().SetAsync();
+
             (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
                 .Should().BeFalse(
-                    "there is no key slot, no admin and no sentinel — this node cannot be unlocked, "
-                    + "and calling it initialized is what made the brick permanent");
+                    "a bootstrap is in progress: this node cannot be unlocked yet, and calling it "
+                    + "initialized is what made the brick permanent");
+            (await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().IsSetAsync())
+                .Should().BeTrue();
+        }
 
         var result = await target.Services.GetRequiredService<BlindRestoreClient>().RestoreFromBackupAsync(source.BackupFolder, Who);
 
@@ -658,7 +671,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         target.RouteOutboundHttpThrough(blind.Server.CreateHandler());
 
         // The crash: an identity row and nothing else — the first write of the bootstrap, before the
-        // slot, the admin and the sentinel.
+        // slot, the admin and the sentinel — plus the flag the bootstrap raised before writing it.
         var halfId = Guid.NewGuid();
         await target.Services.GetRequiredService<INodeIdentityRepository>().CreateAsync(new NodeIdentity
         {
@@ -668,8 +681,11 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             CreatedAt = DateTime.UtcNow
         });
         using (var scope = target.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().SetAsync();
             (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
                 .Should().BeFalse("the operator's next move is to restore again, not to set up a new vault");
+        }
 
         using var targetClient = target.CreateClient();
         var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
@@ -734,6 +750,17 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             row.IsSuperadmin.Should().BeTrue();
         }
         (await blindClient.GetAsync("/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // And the flag the crashed attempt left is gone: the bootstrap committed its last write and
+        // the marker with it, so the node answers "initialized" from here on (a marker that outlived
+        // a finished bootstrap would send the operator to the restore wizard forever).
+        using (var scope = target.Services.CreateScope())
+        {
+            (await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().IsSetAsync())
+                .Should().BeFalse();
+            (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
+                .Should().BeTrue();
+        }
 
         await AssertEverythingOpensAsync(target);
     }
