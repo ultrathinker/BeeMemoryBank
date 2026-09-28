@@ -45,6 +45,8 @@ if (builder.Environment.IsProduction() &&
 var dataPath = builder.Configuration["BeeMemoryBank:DataPath"]
     ?? Environment.GetEnvironmentVariable("BMB_DATA_PATH")
     ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
+// An offline re-key's swap is finished (or rolled back) before anything creates or opens D.
+dataPath = BeeMemoryBank.AppPaths.RekeySwapResolver.Resolve(dataPath).DataDir;
 
 Directory.CreateDirectory(dataPath);
 
@@ -72,6 +74,8 @@ var app = builder.Build();
 
 app.UseLoopbackForwardedHeaders();
 await app.RunBeeApiStartupTasksAsync(dataPath);
+// The first start on a swapped-in vault succeeded: the re-key journal and lock go.
+BeeMemoryBank.AppPaths.RekeySwapResolver.CompleteFirstStart(dataPath);
 app.UseBeeApiPipeline();
 app.MapBeeApiEndpoints();
 

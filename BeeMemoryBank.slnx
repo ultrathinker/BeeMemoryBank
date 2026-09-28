@@ -29,6 +29,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BeeMemoryBank.AppPaths.Tests/BeeMemoryBank.AppPaths.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.Rekey.Tests/BeeMemoryBank.Rekey.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.BlindConsole.Tests/BeeMemoryBank.BlindConsole.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Cli.Tests/BeeMemoryBank.Cli.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Core.Tests/BeeMemoryBank.Core.Tests.csproj" />

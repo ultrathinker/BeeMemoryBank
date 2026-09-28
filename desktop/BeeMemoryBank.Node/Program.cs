@@ -134,6 +134,8 @@ public static class Program
                     : BeeMemoryBank.AppPaths.BmbPaths.DefaultVaultDir;
             }
             resolvedDataDirectory = Path.GetFullPath(dataDirectory!);
+            // An offline re-key's swap is finished (or rolled back) before anything creates or opens D.
+            resolvedDataDirectory = BeeMemoryBank.AppPaths.RekeySwapResolver.Resolve(resolvedDataDirectory).DataDir;
 
             try
             {
