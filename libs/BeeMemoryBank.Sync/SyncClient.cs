@@ -145,8 +145,25 @@ public class SyncClient(
 
             long lastApplied = afterSeq;
             int droppedCount = 0;
+            int ownCount = 0;
             foreach (var evt in remoteEvents)
             {
+                // Our own event, come back to us (F5). A blind node that was reseeded replays the tail
+                // it had received onto the package and re-logs it under the new database's sequences,
+                // and we pull that back. While the event is still in our own log the applier's
+                // "already applied" shortcut catches it — after a compaction it is not, so it reaches
+                // the whitelist lookup, where we are not a peer of ourselves, and is quarantined as
+                // deferred. A quarantine row is not cosmetic: the state anchor publishes nothing while
+                // one exists, so anchors stop for good. Skipped here, by the same rule the applier
+                // already applies to a self-echo — there is nothing to apply, and nothing to defer:
+                // the event is ours, and its content is either here or was compacted into the state.
+                if (evt.NodeId == identity.NodeId)
+                {
+                    lastApplied = evt.SequenceNum;
+                    ownCount++;
+                    continue;
+                }
+
                 try
                 {
                     var result = await eventApplier.ApplyAsync(evt);
