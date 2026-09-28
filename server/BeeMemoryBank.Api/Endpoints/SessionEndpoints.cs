@@ -1,6 +1,7 @@
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -36,7 +37,7 @@ public static class SessionEndpoints
             return Results.Ok(new UnlockResponse(true, migratedSynthetic));
         }).RequireNonAgent().WithMetadata(new SkipInternalKey());
 
-        group.MapPost("/login", async (LoginRequest req, SessionService session, UserService userService, IUserRepository userRepo) =>
+        group.MapPost("/login", async (LoginRequest req, SessionService session, UserService userService, IUserRepository userRepo, RecoveryTriggers recovery) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.Json(new ErrorResponse("Username and password are required"), statusCode: 400);
@@ -87,7 +88,12 @@ public static class SessionEndpoints
                 // have one; skipped while the vault is locked (no master DEK to wrap), in
                 // which case the next login retries.
                 if (isUnlocked)
+                {
                     await userService.ProvisionMissingKeySlotAsync(user, req.Password);
+                    // The password is in memory: strong recovery box for the current key if this
+                    // node has none, then cleanup of covered device boxes (plan 6.3). Background.
+                    _ = recovery.OnSuperadminLogin(user, req.Password);
+                }
             }
             else
             {

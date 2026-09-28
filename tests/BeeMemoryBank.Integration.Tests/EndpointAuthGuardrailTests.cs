@@ -258,6 +258,18 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         // initialized. There is no role to check yet.
         "POST /api/init/standalone",
         "POST /api/init/join",
+        // Restore of a fresh node from a blind node or its backup (BMB-43): the same bootstrap
+        // position — no user yet, refused once the node is initialized; the master password in the
+        // body is what opens the recovery material.
+        "POST /api/restore/blind",
+        "POST /api/restore/backup",
+        // Stops that restore; only ever cancels a restore that is running (none once initialized).
+        "POST /api/restore/cancel",
+        // The answer to "N recovery boxes were not tried" for the restore waiting on it (none once initialized).
+        "POST /api/restore/continue",
+        // Confirms devices a restore kept inactive, from the wizard before anyone is signed in: the master
+        // password in the body is the authentication (as for the restore itself).
+        "POST /api/restore/confirm-peers",
 
         // Credential exchange — username + password in the body is the authentication.
         "POST /api/auth/remote-token",
@@ -268,6 +280,12 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         "POST /api/sync/blobs/check",
         "POST /api/sync/blobs/get",
         "POST /api/sync/probe-relay",
+
+        // Blind node (BMB-43): the code is issued from the blind node's own console with the
+        // internal key, and redeemed by a restored device that has only that code. A blind node has
+        // no users and no Web; on every other node both routes answer 404.
+        "POST /api/blind/restore-code",
+        "POST /api/blind/claim",
     ];
 
     /// <summary>
@@ -498,6 +516,15 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         // everyone who is not a superadmin -- no event id, no error text. This is the ONLY route
         // under /api/dek-rotation that is not superadmin-gated; the rest of the group still is.
         "GET /api/dek-rotation/progress",
+
+        // Blind node (BMB-43): the restore package and events are authorised by the one-time restore
+        // code, the issue log by the blind console's internal key (a blind node has no users); all
+        // three answer 404 anywhere but a blind node. The restore progress is polled by the Setup
+        // page of a node that has no user yet.
+        "GET /api/blind/restore/package",
+        "GET /api/blind/restore/events",
+        "GET /api/blind/restore-codes",
+        "GET /api/restore/progress",
 
         // Read-only mirrors served to ANOTHER person's node, authenticated by a bmbrt_ remote
         // token issued to it. A remote token is never superadmin, so these can never be gated on

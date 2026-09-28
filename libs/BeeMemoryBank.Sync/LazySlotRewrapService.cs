@@ -108,6 +108,13 @@ public class LazySlotRewrapService(
             }
 
             var (newEncDek, newIv) = MasterKeyManager.WrapMasterDek(currentCandidate, kek);
+            var rewrapped = new MasterKeyStore
+            {
+                SlotId = slot.SlotId, SlotType = slot.SlotType, Salt = slot.Salt,
+                ArgonMemory = slot.ArgonMemory, ArgonIterations = slot.ArgonIterations,
+                ArgonParallelism = slot.ArgonParallelism, CreatedAt = slot.CreatedAt,
+                EncryptedMasterDek = [.. newEncDek], IV = [.. newIv],
+            };
             try
             {
                 await keySlotRepo.UpdateSlotKeyAsync(slot.SlotId, newEncDek, newIv);
@@ -119,6 +126,11 @@ public class LazySlotRewrapService(
             }
 
             logger.LogInformation("Lazy-rewrapped key slot {SlotId} to current DEK epoch", slot.SlotId);
+
+            // The rewrapped slot holds the NEW DEK: publish it as this device's box, or the blind
+            // nodes keep only a box for the retired key (plan 6.5).
+            await scope.ServiceProvider.GetRequiredService<IRecoveryBoxPublisher>()
+                .PublishDeviceBoxAsync(rewrapped, currentCandidate);
 
             return new LazyRewrapResult(true, currentCandidate);
         }

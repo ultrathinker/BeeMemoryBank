@@ -36,6 +36,22 @@ public sealed class LamportClock : ILamportClock
     public long Tick() => Interlocked.Increment(ref _current);
 
     /// <summary>
+    /// Moves the clock to at least <paramref name="value"/>, without <see cref="Update"/>'s per-step cap.
+    /// For a node restored from recovery material (BMB-43): it has no clock of its own yet and must
+    /// start above every Lamport value it imported. The caller bounds <paramref name="value"/>.
+    /// </summary>
+    public void RaiseTo(long value)
+    {
+        long current;
+        do
+        {
+            current = Interlocked.Read(ref _current);
+            if (current >= value) return;
+        }
+        while (Interlocked.CompareExchange(ref _current, value, current) != current);
+    }
+
+    /// <summary>
     /// Sets max(local, remote) + 1, thread-safe. Clamps remote to prevent overflow:
     /// a malicious or buggy peer sending long.MaxValue would otherwise wrap to
     /// long.MinValue (unchecked Math.Max + 1) and corrupt the local clock forever.

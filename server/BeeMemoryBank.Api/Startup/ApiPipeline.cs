@@ -103,6 +103,7 @@ if (app.Services.GetRequiredService<INodeRole>().IsBlind)
     app.MapBlindSeedEndpoints();
     app.MapBlindNodeEndpoints(); // BMB-54: blind status, backups, console, wipe
     app.MapBlindReplicaEndpoint();
+    app.MapBlindRestoreEndpoints(); // BMB-53: restore codes, the restore package and events, the claim
     return;
 }
 
@@ -116,6 +117,9 @@ app.MapRemoteAuthEndpoints();
 app.MapRemoteAccountEndpoints();
 app.MapSearchEndpoints();
 app.MapKeyEndpoints();
+app.MapRecoveryEndpoints();
+app.MapBlindRestoreEndpoints();
+app.MapRestoreEndpoints();
 app.MapWhitelistEndpoints();
 app.MapAgentEndpoints();
 app.MapFavoriteEndpoints();

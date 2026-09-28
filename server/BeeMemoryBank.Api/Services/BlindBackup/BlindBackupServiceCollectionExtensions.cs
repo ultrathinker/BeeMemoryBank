@@ -1,6 +1,7 @@
 using BeeMemoryBank.Api.Services.BlindConsole;
 using BeeMemoryBank.Api.Services.BlindStatus;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Services.BlindBackup;
@@ -29,8 +30,9 @@ public static class BlindBackupServiceCollectionExtensions
             sp.GetRequiredService<BlindJobManager>(),
             dataPath,
             sp.GetRequiredService<ILogger<ResticRunner>>()));
-        // RecoverySetBuilder (BMB-53) replaces this registration when it merges.
-        services.AddSingleton<IRecoverySetSource, StubRecoverySetSource>();
+        // The real source (RecoverySetBuilder, BMB-53) is registered by AddRecoveryApi; the stub only
+        // where nothing else is.
+        services.TryAddSingleton<IRecoverySetSource, StubRecoverySetSource>();
         services.AddSingleton<RecoverySetWriter>();
         services.AddSingleton<ResticRepositoryLock>();
         services.AddSingleton(sp => new BlindBackupService(

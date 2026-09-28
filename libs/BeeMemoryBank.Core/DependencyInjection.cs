@@ -27,6 +27,7 @@ public static class DependencyInjection
         services.TryAddSingleton<ILamportClock, NullLamportClock>();
         services.TryAddScoped<IEventLogger, NullEventLogger>();
         services.TryAddSingleton<IActorProvider>(new NullActorProvider());
+        services.TryAddScoped<IRecoveryBoxPublisher, NullRecoveryBoxPublisher>();
 
         services.AddScoped<InitializationService>();
         services.AddScoped<ArticleService>();

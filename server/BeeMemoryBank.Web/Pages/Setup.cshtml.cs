@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace BeeMemoryBank.Web.Pages;
 
-public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
+public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
 {
     public string? ErrorMessage { get; set; }
 
@@ -44,6 +44,12 @@ public class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageModel
             Step = "legacy";
             return Page();
         }
+
+        // A blind node's backup is not a profile to copy: it opens with the master password
+        // through its recovery set (plan 6.8). See Setup.Restore.cshtml.cs.
+        if (LooksLikeBlindBackup(sourcePath,
+                HttpContext.RequestServices.GetServices<BeeMemoryBank.Web.Services.IBackupFileRecognizer>()))
+            return RedirectToPage("/Setup", new { step = "restore", backup = sourcePath });
 
         var candidate = LegacyMigrationService.ValidatePath(sourcePath);
         if (candidate == null || !candidate.IsValid)

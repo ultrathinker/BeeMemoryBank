@@ -14,7 +14,8 @@ public class UserService(
     IRoleRepository roleRepo,
     FolderAccessService folderAccess,
     IRemoteApiTokenRepository? remoteTokenRepo = null,
-    IAgentRepository? agentRepo = null)
+    IAgentRepository? agentRepo = null,
+    IRecoveryBoxPublisher? recoveryBoxes = null)
 {
     // Roles are rows in tbl_role. The only role this service special-cases
     // is "superadmin", because that is the one that owns a key slot; every other role is just a
@@ -68,7 +69,7 @@ public class UserService(
             kek = KeyDerivation.DeriveKek(password, salt);
             var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, kek);
 
-            return await keySlotRepo.CreateAsync(new MasterKeyStore
+            var slot = new MasterKeyStore
             {
                 SlotType = "user",
                 EncryptedMasterDek = encryptedDek,
@@ -78,7 +79,15 @@ public class UserService(
                 ArgonIterations = CryptoConstants.DefaultArgonIterations,
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
                 CreatedAt = DateTime.UtcNow
-            });
+            };
+            slot.SlotId = await keySlotRepo.CreateAsync(slot);
+
+            // Every UserService path that gives a password a slot — self-service and admin password
+            // change, provisioning at login, creating or promoting a superadmin — comes through here,
+            // so this one call is what puts the new password's device box on the blind nodes.
+            if (recoveryBoxes != null)
+                await recoveryBoxes.PublishDeviceBoxAsync(slot, masterDek);
+            return slot.SlotId;
         }
         finally
         {

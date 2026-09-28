@@ -409,6 +409,20 @@ public class SessionService(
             catch { /* logged inside the retrier */ }
         }));
 
+        // Blind-node recovery material (plan 6.4, 6.8): publish a chain link for every DEK this node
+        // retired and re-seal secrets still under a retired key. Needs the DEK; silent when nothing
+        // is missing, so running it on every unlock is what makes it "continuous".
+        TrackPostUnlockCatchUp(Task.Run(async () =>
+        {
+            try
+            {
+                using var s = capturedScopeFactory.CreateScope();
+                var reconciler = s.ServiceProvider.GetService<IRecoveryReconciler>();
+                if (reconciler != null) await reconciler.ReconcileAsync();
+            }
+            catch { /* logged inside the reconciler */ }
+        }));
+
         // Lazy migration of legacy v=0 plaintext private key in tbl_node_identity.
         // Existing nodes (created before the v=1 flip) have a plaintext seed in
         // ed25519_private_key. On first successful unlock we re-encrypt under the

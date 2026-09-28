@@ -49,7 +49,8 @@ public record RetiredLinkSetPayload(
 
 /// <summary>
 /// state_anchor — superadmin only. <see cref="PositionVector"/>: source node id (UPPERCASE) → highest
-/// position the digest includes. <see cref="Hmac"/> = HMAC-SHA256(HKDF(DEK, "bmb-blind-state-v1"),
+/// position the digest includes. <see cref="Digest"/> carries its encoding: <c>"sd&lt;format&gt;:" + hex</c>
+/// (Recovery/StateDigest.cs), so an anchor of another format is recognised, not silently mismatched. <see cref="Hmac"/> = HMAC-SHA256(HKDF(DEK, "bmb-blind-state-v1"),
 /// canonical(anchor_id, dek_fingerprint, position_vector, digest, created_at)), hex.
 /// </summary>
 public record StateAnchorPayload(

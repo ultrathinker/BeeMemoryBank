@@ -59,7 +59,14 @@ public class SnapshotTablesCoverageTests
         // Search state. Rebuilt locally from the content that IS replicated, and the index key is
         // wrapped with this node's own DEK.
         "tbl_search_index_key", "tbl_search_index_manifest", "tbl_search_segment_tombstone",
-        "tbl_article_chunk_embedding"
+        "tbl_article_chunk_embedding",
+
+        // Blind-node recovery bookkeeping (migration 030): retires waiting for their covering box,
+        // and which boxes this PC's own slot has already been tried on.
+        "tbl_recovery_box_pending_retire", "tbl_recovery_box_check",
+
+        // One-time restore codes a blind node issued (migration 031) — a credential and its log.
+        "tbl_blind_restore_code"
     ];
 
     [Fact]

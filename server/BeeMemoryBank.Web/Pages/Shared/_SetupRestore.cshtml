@@ -1,0 +1,223 @@
+@model BeeMemoryBank.Web.Pages.SetupModel
+@inject BeeMemoryBank.Web.Services.ApiClient Api
+@{
+    var step = Model.Step;
+    var progress = step == "restoring" ? await Api.GetBlindRestoreProgressAsync() : null;
+}
+
+<!-- ═══ Restore from a blind node / from its backup (plan 6.7, 6.8) ═══ -->
+<div class="wizard-panel @(step == "restore" ? "active" : "")" id="panel-restore">
+    <a href="/Setup" class="back-link"><sl-icon name="arrow-left"></sl-icon> Back</a>
+    <p style="color:var(--text-secondary);font-size:0.88rem;">
+        Use the master password of any of your devices. A restore code is issued on the blind node's own
+        page and is valid for 15 minutes.
+    </p>
+    <sl-tab-group>
+        <sl-tab slot="nav" panel="restore-blind" active="@(Model.RestoreBackupPath == null)">From a blind node</sl-tab>
+        <sl-tab slot="nav" panel="restore-backup" active="@(Model.RestoreBackupPath != null)">From a backup</sl-tab>
+
+        <sl-tab-panel name="restore-blind">
+            <form method="post" asp-page-handler="RestoreBlind" class="tab-panel-form">
+                @Html.AntiForgeryToken()
+                <sl-input name="code" label="Restore code" required placeholder="BMBRESTORE1.…"
+                          help-text="From the blind node's console. It names the blind node and its keys: a node answering with any other key is refused."></sl-input>
+                <sl-input name="address" label="Blind node address (optional)" placeholder="https://192.0.2.10:5610"
+                          help-text="Only if the address in the code does not reach the blind node from here."></sl-input>
+                <sl-input name="password" type="password" label="Master password" required password-toggle></sl-input>
+                <sl-input name="adminUsername" label="Your login name" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedUsername"></sl-input>
+                <sl-input name="displayName" label="Name of this computer" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>
+                <div class="form-actions"><sl-button type="submit" variant="primary">Restore</sl-button></div>
+            </form>
+        </sl-tab-panel>
+
+        <sl-tab-panel name="restore-backup">
+            <form method="post" asp-page-handler="RestoreBackup" class="tab-panel-form">
+                @Html.AntiForgeryToken()
+                <sl-input name="backupPath" label="Backup folder, restic repository or backup file" required value="@Model.RestoreBackupPath"
+                          help-text="A folder or restic repository needs its recovery set (*.recovery-set.json) next to it; a phone backup file carries its own. The blind node does not need to be running."></sl-input>
+                <sl-input name="password" type="password" label="Master password" required password-toggle></sl-input>
+                <sl-input name="adminUsername" label="Your login name" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedUsername"></sl-input>
+                <sl-input name="displayName" label="Name of this computer" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>
+                <div class="form-actions"><sl-button type="submit" variant="primary">Restore</sl-button></div>
+            </form>
+        </sl-tab-panel>
+    </sl-tab-group>
+</div>
+
+<!-- ═══ Restore running / finished ═══ -->
+<div class="wizard-panel @(step == "restoring" ? "active" : "")" id="panel-restoring">
+    @if (progress == null || progress.State == "running")
+    {
+        <meta http-equiv="refresh" content="2" />
+        <div class="done-icon"><sl-spinner style="font-size:2.5rem;"></sl-spinner></div>
+        <p style="text-align:center;">Restoring… opening the recovery boxes can take a minute.</p>
+        <form method="post" asp-page-handler="RestoreCancel" class="done-actions">
+            <sl-button type="submit">Cancel</sl-button>
+        </form>
+    }
+    else if (progress.State == "boxes_remaining")
+    {
+        <sl-alert variant="warning" open>
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            @if (progress.RemainingBoxes > 0)
+            {
+                <strong>@progress.RemainingBoxes recovery box(es) were not tried.</strong>
+            }
+            else
+            {
+                <strong>The attempt limit was reached on the last recovery box.</strong>
+            }
+            Nothing has been written yet. A recovery set can be padded with junk boxes, and until every box is tried
+            without hitting the limit nothing proves which master key is the newest. Trying without a limit takes a few
+            seconds per box and can be cancelled. Going on without it restores the data, but it stays unconfirmed.
+        </sl-alert>
+        <div class="done-actions">
+            <form method="post" asp-page-handler="RestoreContinue">
+                <input type="hidden" name="boxes" value="all" />
+                <sl-button type="submit" variant="primary">Try every box without a limit</sl-button>
+            </form>
+            <form method="post" asp-page-handler="RestoreContinue">
+                <input type="hidden" name="boxes" value="skip" />
+                <sl-button type="submit">Restore without them (unconfirmed)</sl-button>
+            </form>
+            <form method="post" asp-page-handler="RestoreCancel">
+                <sl-button type="submit">Cancel</sl-button>
+            </form>
+        </div>
+    }
+    else if (progress.State == "cancelled")
+    {
+        <sl-alert variant="neutral" open>
+            <sl-icon slot="icon" name="info-circle"></sl-icon>
+            The restore was cancelled. Nothing was written.
+        </sl-alert>
+        <div class="done-actions"><sl-button href="/Setup?step=restore">Start again</sl-button></div>
+    }
+    else if (progress.State == "failed")
+    {
+        <sl-alert variant="danger" open>
+            <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+            @progress.Error
+        </sl-alert>
+        <div class="done-actions"><sl-button href="/Setup?step=restore">Try again</sl-button></div>
+    }
+    else
+    {
+        <div class="done-icon"><sl-icon name="check-circle"></sl-icon></div>
+        @* Only an anchor under the master DEK vouches for the data (plan 5.5); nothing the source says about
+           itself does. The anchor's date in large type: it is how far back the data is vouched for. *@
+        @if (progress.Anchor?.State == "confirmed")
+        {
+            <h3 style="text-align:center;">Confirmed as of @progress.Anchor.CreatedAt</h3>
+            <p style="text-align:center;color:var(--text-secondary);">The restored data matches the integrity anchor made under your master key.</p>
+        }
+        else if (progress.Anchor?.State == "partially_confirmed")
+        {
+            var anchor = progress.Anchor;
+            <h3 style="text-align:center;">Partly confirmed — not everything could be checked</h3>
+            <sl-alert variant="warning" open>
+                <span>The integrity anchor of @anchor.CreatedAt matches what could be compared. @anchor.NewerRows later change(s) are not covered
+                by it (@anchor.NewerRowsSigned carry a valid signature from a key the blind node listed — that is not proof), and
+                <strong>@anchor.UncheckedRows item(s) stored alongside them were not checked at all</strong>: an alteration among them would
+                not show. Review the items below before relying on them.</span>
+            </sl-alert>
+            @if (anchor.Unchecked is { Count: > 0 })
+            {
+                <details open><summary>Not checked (@anchor.UncheckedRows)</summary>
+                    <ul class="restore-items">@foreach (var u in anchor.Unchecked) { <li>@u.Type @u.Id</li> }</ul>
+                </details>
+            }
+            @if (anchor.Unverified is { Count: > 0 })
+            {
+                <details><summary>Later changes without a signature from a known key (@anchor.Unverified.Count)</summary>
+                    <ul class="restore-items">@foreach (var u in anchor.Unverified) { <li>@u.Type @u.Id</li> }</ul>
+                </details>
+            }
+        }
+        else if (progress.RemainingBoxes > 0)
+        {
+            <sl-alert variant="danger" open>
+                <strong>Unconfirmed.</strong> @progress.RemainingBoxes recovery box(es) were not tried, so nothing proves
+                which master key is the newest. The data may be an older state or altered; treat it as unverified until you
+                have checked it.
+            </sl-alert>
+        }
+        else if (progress.Anchor?.HeadProven == false)
+        {
+            <sl-alert variant="danger" open>
+                <strong>Unconfirmed.</strong> Your password opened several master keys, and the material does not prove
+                which one is the newest (a link between them is missing). The data may be an older state or altered;
+                treat it as unverified until you have checked it.
+            </sl-alert>
+        }
+        else
+        {
+            <sl-alert variant="danger" open>
+                <strong>Unconfirmed.</strong> No integrity anchor made under your master key matches this data. It may be
+                incomplete or altered; treat it as unverified until you have checked it.
+            </sl-alert>
+        }
+        @if (Model.ConfirmedPeers is { } confirmedCount)
+        {
+            <sl-alert variant="success" open>@confirmedCount device(s) confirmed: they sync with this one again.</sl-alert>
+        }
+        else if (progress.UnconfirmedPeers is { Count: > 0 } unvouched)
+        {
+            <sl-alert variant="warning" open>
+                No integrity anchor under your master key vouches for these devices, so they were restored inactive — they
+                cannot sync with this one until you confirm them or pair them again. Confirm the ones you recognise now
+                (your master password again), or later in Admin → Nodes.
+            </sl-alert>
+            @if (Model.ConfirmPeersError is { } confirmError)
+            {
+                <sl-alert variant="danger" open>@confirmError</sl-alert>
+            }
+            <form method="post" asp-page-handler="RestoreConfirmPeers" class="tab-panel-form" id="confirm-restored-peers">
+                @foreach (var peer in unvouched)
+                {
+                    <label style="display:block;">
+                        <input type="checkbox" name="nodeIds" value="@peer.Id" checked />
+                        @peer.Name @(peer.WasSuperadmin ? "(was superadmin — confirming does not restore that)" : "")
+                    </label>
+                }
+                <sl-input name="password" type="password" label="Master password" required password-toggle></sl-input>
+                <div class="form-actions"><sl-button type="submit">Confirm the selected devices</sl-button></div>
+            </form>
+        }
+        @if (progress.Claim is "pending" or "refused")
+        {
+            <sl-alert variant="warning" open>
+                This device is restored and set up, but the blind node @(progress.Claim == "refused" ? "refused" : "did not answer")
+                the claim, so it does not trust this device yet. Issue a new restore code on the blind node and pair this device with it again.
+            </sl-alert>
+        }
+        @if (progress.Anchor?.History == "matches")
+        {
+            <p style="text-align:center;color:var(--text-secondary);">Version history and conflict copies match the anchor too.</p>
+        }
+        else if (progress.Anchor?.History == "differs")
+        {
+            <sl-alert variant="neutral" open>
+                Version history and conflict copies differ from the anchor in @progress.Anchor.HistoryDifferingGroups of 64 groups.
+                @progress.Anchor.HistoryUnverified history item(s) in those groups are not vouched for; items removed from them cannot be
+                named. History is kept by each device for itself, so this is expected after edits made after the anchor or on another
+                device; do not rely on old versions without checking them.
+            </sl-alert>
+            @if (progress.Anchor.HistoryNotVouched is { Count: > 0 })
+            {
+                <details><summary>History items not vouched for (@progress.Anchor.HistoryUnverified)</summary>
+                    <ul class="restore-items">@foreach (var u in progress.Anchor.HistoryNotVouched) { <li>@u.Type @u.Id</li> }</ul>
+                </details>
+            }
+        }
+        @if (progress.Anchor?.AsOf != null)
+        {
+            <p style="text-align:center;color:var(--text-secondary);font-size:0.85rem;">
+                "Confirmed" means: the data as of that moment. A source can still hand over an older state that was
+                genuine once; if the date is earlier than you expect, look for a newer copy.
+            </p>
+        }
+        <p style="margin-top:12px;">Sign in with the master password. Then revoke the lost devices and change the master key; other surviving devices have to be paired again.</p>
+        <div class="done-actions"><sl-button variant="primary" href="/Login">Sign in</sl-button></div>
+    }
+</div>

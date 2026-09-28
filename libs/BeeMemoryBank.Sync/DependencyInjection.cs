@@ -1,3 +1,4 @@
+using BeeMemoryBank.Sync.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Embeddings;
@@ -73,6 +74,8 @@ public static class DependencyInjection
         // DekRotationService over this (AddSingleton beats TryAddSingleton) because it also
         // proposes, accepts and reports progress — but both run the identical rewrap.
         services.TryAddSingleton<IDekRotationApplier, DekRotation.PeerDekRotationApplier>();
+
+        services.AddRecovery();
 
         return services;
     }

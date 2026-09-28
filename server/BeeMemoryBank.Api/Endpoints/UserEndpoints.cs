@@ -3,6 +3,7 @@
 
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -121,7 +122,7 @@ public static class UserEndpoints
         // Self-service password change — any authenticated user can change their own password.
         // Not RequireSuperadmin: the rule here is "acting on yourself", which the filter cannot
         // express — it is the forwarded X-User-Id, not the role, that decides who is affected.
-        group.MapPost("/me/change-password", async (ChangePasswordRequest req, UserService userService, HttpContext ctx) =>
+        group.MapPost("/me/change-password", async (ChangePasswordRequest req, UserService userService, HttpContext ctx, IUserRepository users, RecoveryTriggers recovery) =>
         {
             var userIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
             if (string.IsNullOrEmpty(userIdStr) || !int.TryParse(userIdStr, out var userId))
@@ -130,6 +131,10 @@ public static class UserEndpoints
             try
             {
                 await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword);
+                // A superadmin's password is a master password: rebuild this node's strong recovery
+                // box with it while it is in memory (plan 6.3). Background; the response does not wait.
+                if ((await users.GetByIdAsync(userId))?.KeySlotId != null)
+                    _ = recovery.OnPasswordChanged(req.NewPassword);
                 return Results.Ok();
             }
             catch (UnauthorizedAccessException)

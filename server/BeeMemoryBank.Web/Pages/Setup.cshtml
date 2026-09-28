@@ -121,8 +121,17 @@
                         <small>Use a folder that already holds your Bee Memory Bank data.</small>
                     </div>
                 </button>
+                <a class="mode-card" href="/Setup?step=restore" style="text-decoration:none;color:inherit;">
+                    <sl-icon name="life-preserver"></sl-icon>
+                    <div class="mode-card-text">
+                        <strong>Restore from a blind node</strong>
+                        <small>All devices lost? Bring your notes back with the master password.</small>
+                    </div>
+                </a>
             </div>
         </div>
+
+        <partial name="_SetupRestore" model="Model" />
 
         <!-- ═══ STEP 2: Forms ═══ -->
         <div class="wizard-panel @(currentStepNum == 2 ? "active" : "")" id="panel-form">

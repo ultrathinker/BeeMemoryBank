@@ -91,6 +91,13 @@ public static class PublicSurface
         new("POST", "/api/join"),
         new("GET", "/api/blind/status"), // BMB-54: a superadmin peer's sync token; the handler checks it
 
+        // Restore from a blind node (BMB-43, plan 6.7): a new device has nothing but the one-time
+        // restore code the blind node's console issued; each handler checks it, and answers 404
+        // on any node that is not in the blind role.
+        new("GET", "/api/blind/restore/package"),
+        new("GET", "/api/blind/restore/events"),
+        new("POST", "/api/blind/claim"),
+
         // A peer pulling the snapshot for a network-wide restore we are hosting. Authenticated by
         // the same sync bearer token — see the handler, which checks it explicitly.
         new("GET", "/api/snapshots/restore/{eventId}/file"),

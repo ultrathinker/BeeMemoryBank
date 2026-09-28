@@ -1,0 +1,24 @@
+@model BeeMemoryBank.Web.Models.RecoveryStatusDto?
+
+@* Nothing to say until blind-node recovery is in use: no boxes at all means no blind node yet. *@
+@if (Model is { ActiveBoxes: > 0 } status)
+{
+    @if (status.DevicesWithOtherPassword.Count > 0)
+    {
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+            <strong>The master password on @string.Join(", ", status.DevicesWithOtherPassword) does not match this PC's.</strong><br />
+            Change it there to the same password. Until you do, the blind node keeps a lighter recovery box
+            for that device, and your backups are only as strong as the weakest password among them.
+        </sl-alert>
+    }
+    @if (!status.CurrentKeyCovered)
+    {
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="key"></sl-icon>
+            <strong>No recovery box holds the current master key.</strong><br />
+            A restore from the blind node would open data only up to the last key that has one. Sign in on a
+            computer to build one.
+        </sl-alert>
+    }
+}

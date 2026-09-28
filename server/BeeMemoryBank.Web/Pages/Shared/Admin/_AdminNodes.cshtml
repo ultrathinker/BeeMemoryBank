@@ -1,6 +1,26 @@
 @using System.Text.Json
 @model BeeMemoryBank.Web.Pages.AdminModel
 
+@if (Model.RestoredPeers.Count > 0)
+{
+    <!-- Devices a restore kept inactive -->
+    <h3 style="margin-bottom:12px;"><sl-icon name="shield-exclamation"></sl-icon> Restored devices awaiting confirmation</h3>
+    <div class="card" style="margin-bottom:32px;" id="restored-peers">
+        <p style="margin-top:0;color:var(--text-secondary);">No integrity anchor under your master key vouched for these devices when
+            this node was restored, so they cannot sync with it yet. Confirm the ones you recognise; pair the others again.</p>
+        @foreach (var peer in Model.RestoredPeers)
+        {
+            <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+                <span style="flex:1;"><strong>@peer.DisplayName</strong> <code style="font-size:0.78rem;">@peer.NodeId</code> @peer.ApiAddress</span>
+                <form method="post" asp-page-handler="ConfirmRestoredPeer" style="display:inline;">
+                    <input type="hidden" name="nodeId" value="@peer.NodeId" />
+                    <sl-button size="small" type="submit">Confirm</sl-button>
+                </form>
+            </div>
+        }
+    </div>
+}
+
 <!-- Node Identity -->
 <h3 style="margin-bottom:12px;"><sl-icon name="fingerprint"></sl-icon> Node Identity</h3>
 @if (Model.Identity != null)

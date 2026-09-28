@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Services;
 
 namespace BeeMemoryBank.Api.Endpoints;
@@ -32,6 +33,7 @@ public static class KeyEndpoints
             IEventLogger eventLogger,
             INodeIdentityRepository nodeRepo,
             IWhitelistRepository whitelistRepo,
+            RecoveryTriggers recovery,
             HttpContext ctx) =>
         {
             if (!session.IsUnlocked)
@@ -53,6 +55,10 @@ public static class KeyEndpoints
             {
                 await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword);
             }
+
+            // The new password is in memory only now: build this node's strong recovery box with it,
+            // in the background (plan 6.3).
+            _ = recovery.OnPasswordChanged(req.NewPassword);
 
             // This node is now in step with itself again, whatever a peer told us earlier.
             await nodeRepo.ClearMasterPasswordNoticeAsync();

@@ -13,7 +13,8 @@ public class KeyManagementService(
     IKeySlotRepository keySlotRepo,
     SessionService session,
     IUserRepository userRepo,
-    IDbConnectionFactory connFactory)
+    IDbConnectionFactory connFactory,
+    IRecoveryBoxPublisher? recoveryBoxes = null)
 {
     /// <summary>
     /// Legacy password-change endpoint, kept for backward compatibility with older mobile app
@@ -107,6 +108,10 @@ public class KeyManagementService(
             // association); only this user's key_slot_id bookkeeping would be left stale, not
             // vault access.
             await userRepo.RepointKeySlotAsync(oldSlot.SlotId, newSlotId);
+
+            newSlot.SlotId = newSlotId;
+            if (recoveryBoxes != null)
+                await recoveryBoxes.PublishDeviceBoxAsync(newSlot, masterDek);
         }
         finally
         {
@@ -203,7 +208,9 @@ public class KeyManagementService(
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
                 CreatedAt = DateTime.UtcNow
             };
-            await keySlotRepo.CreateAsync(slot);
+            slot.SlotId = await keySlotRepo.CreateAsync(slot);
+            if (recoveryBoxes != null)
+                await recoveryBoxes.PublishDeviceBoxAsync(slot, masterDek);
         }
         finally
         {

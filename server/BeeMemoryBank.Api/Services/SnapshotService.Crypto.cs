@@ -202,7 +202,8 @@ public partial class SnapshotService
         return buf;
     }
 
-    private static async Task<byte[]> ComputeSignaturePayloadAsync(byte[] manifestBytes, string tarGzPath, CancellationToken ct = default)
+    // Internal: the blind-package restore checks the whole archive against the sidecar before anything else.
+    internal static async Task<byte[]> ComputeSignaturePayloadAsync(byte[] manifestBytes, string tarGzPath, CancellationToken ct = default)
     {
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hasher.AppendData(DomainTagSidecar);

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -300,6 +301,11 @@ public partial class DekRotationService
                 "dek_rotation_completed",
                 "web",
                 $"DEK rotation completed; epoch {payload.NewDekEpoch - 1}\u2192{payload.NewDekEpoch}; initiator={initiator.Id} ({initiator.DisplayName}); pre-rotation snapshot={snap.FileName}; auto-unlock agent keys removed={agentsDeleted}");
+
+            // Blind-node recovery (plan 6.5): the rotation was started here and the password is in
+            // memory — device box for the rewrapped slot, chain link, re-seals, new strong box.
+            _ = scope.ServiceProvider.GetRequiredService<RecoveryTriggers>()
+                .OnRotationAccepted(initiatorSlot.SlotId, masterPassword);
 
             _logger.LogInformation(
                 "DEK rotation completed. Epoch {OldEpoch}\u2192{NewEpoch}. Initiator={Initiator} ({InitiatorName}). Snapshot={Snap}. AutoUnlockAgentsRemoved={Agents}.",

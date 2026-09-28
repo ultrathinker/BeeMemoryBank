@@ -29,6 +29,9 @@ public class AdminModel(ApiClient api) : PageModel
     public bool ShowRecoveryKeyReminder { get; set; }
     public List<PeerPendingDekRotationDto> PeerPendingRotations { get; set; } = new();
 
+    /// <summary>Devices a restore kept inactive until a superadmin confirms them (no anchor vouched for them).</summary>
+    public List<RestoredPeerDto> RestoredPeers { get; set; } = new();
+
     public bool OsAutoUnlockEnabled { get; set; }
     public bool OsAutoUnlockSupported { get; set; }
 
@@ -130,6 +133,13 @@ public class AdminModel(ApiClient api) : PageModel
                 ? "Peer promoted to superadmin."
                 : "Peer demoted. It can no longer revoke peers, hard-delete content or restore the network." })
             : RedirectToPage(new { err = error ?? "Failed to change peer authority" });
+    }
+
+    public async Task<IActionResult> OnPostConfirmRestoredPeerAsync(Guid nodeId)
+    {
+        return await api.ConfirmRestoredPeerAsync(nodeId)
+            ? RedirectToPage(new { msg = "Device confirmed: it syncs with this one again. Promote it separately if it should be a superadmin." })
+            : RedirectToPage(new { err = "Could not confirm the device." });
     }
 
     public async Task<IActionResult> OnPostRevokeNodeAsync(Guid nodeId)
@@ -364,6 +374,7 @@ public class AdminModel(ApiClient api) : PageModel
             api.GetSnapshotCheckpointsAsync().ContinueWith(t => SnapshotCheckpoints = t.Result),
             api.GetDekRotationProgressAsync().ContinueWith(t => DekRotationProgress = t.Result),
             api.GetPeerPendingDekRotationsAsync().ContinueWith(t => PeerPendingRotations = t.Result ?? new()),
+            api.GetRestoredPeersAsync().ContinueWith(t => RestoredPeers = t.Result),
             api.GetServerVersionAsync().ContinueWith(t => CurrentVersion = t.Result),
             api.GetUpdateStatusAsync().ContinueWith(t => UpdateStatus = t.Result),
             api.GetSearchMetricsAsync().ContinueWith(t => SearchMetrics = t.Result),

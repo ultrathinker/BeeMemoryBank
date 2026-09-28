@@ -4,6 +4,7 @@ using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Api.Services.BlindBackup;
+using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
@@ -53,6 +54,7 @@ else
     builder.Services.AddOnnxEmbeddings(dataPath);
 builder.Services.AddImageTranscoder();
 builder.Services.AddSync();
+builder.Services.AddRecoveryApi();
 builder.Services.AddSingleton<SyncTokenStore>();
 // Per-node, not per-process: see SyncChallengeRateLimiter.
 builder.Services.AddSingleton<BeeMemoryBank.Api.Endpoints.SyncEndpoints.SyncChallengeRateLimiter>();

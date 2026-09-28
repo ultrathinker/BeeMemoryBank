@@ -98,6 +98,9 @@ public partial class EventApplier(
             //   re-added inside that window — quietly resurrecting writes the revocation was meant
             //   to discard.
             var revoked = await whitelistRepo.GetByNodeIdAsync(evt.NodeId, includeDeleted: true);
+            // A row a restore kept unconfirmed is not an answer yet: defer, it applies once confirmed.
+            if (revoked is { Status: BeeMemoryBank.Core.Models.WhitelistStatuses.Unconfirmed })
+                throw new OriginatorUnconfirmedException(evt.NodeId);
             if (revoked != null)
             {
                 logger.LogWarning("Event {EventId} ({Type}) rejected: originator {NodeId} is revoked",
@@ -283,6 +286,11 @@ public partial class EventApplier(
             case EventTypes.MasterPasswordChanged:
                 await ApplyMasterPasswordChangedAsync(evt);
                 break;
+            case EventTypes.RecoveryBoxSet: await ApplyRecoveryBoxSetAsync(evt); break;
+            case EventTypes.RecoveryBoxRetire: await ApplyRecoveryBoxRetireAsync(evt); break;
+            case EventTypes.RetiredLinkSet: await ApplyRetiredLinkSetAsync(evt); break;
+            case EventTypes.StateAnchor: await ApplyStateAnchorAsync(evt); break;
+            case EventTypes.SealedSecretSet: await ApplySealedSecretSetAsync(evt); break;
             default:
                 // Skip unknown event types (forward compatibility)
                 break;

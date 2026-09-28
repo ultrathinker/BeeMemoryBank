@@ -1,0 +1,496 @@
+using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Recovery;
+using Dapper;
+using Microsoft.Data.Sqlite;
+
+namespace BeeMemoryBank.Api.Services.Recovery;
+
+/// <summary>Who the restored device becomes: its admin account (with the master password) and name.</summary>
+public sealed record RestoreIdentity(string AdminUsername, string DisplayName, string Password);
+
+/// <summary>The blind node a network restore came from; it becomes this device's first peer.</summary>
+/// <param name="CpSeq">Its log head the package covers (the signed manifest's cp_sequence).</param>
+/// <param name="TlsSpki">The pin the user typed with the code: the blind node's row keeps it.</param>
+public sealed record RestoreBlindPeer(Guid NodeId, string DisplayName, byte[] PublicKey, string ApiAddress, long CpSeq, string? TlsSpki = null);
+
+/// <summary>What a restore did.</summary>
+/// <param name="RemainingBoxes">Recovery boxes the user chose not to try (<see cref="RestoreBoxPolicy.SkipRemaining"/>).</param>
+/// <param name="Claim">
+/// A network restore's claim on the blind node, made after the restore committed: "complete", "pending"
+/// (no answer within <see cref="BlindRestoreClient.ClaimTimeout"/>) or "refused"; null for a backup.
+/// </param>
+/// <param name="UnconfirmedPeers">
+/// Peers the source named that no anchor under the master key vouches for: restored INACTIVE
+/// (<see cref="RestoredPeerStatus.Unconfirmed"/>) until the user confirms or re-pairs them.
+/// </param>
+public sealed record RestoreResult(Guid NodeId, byte[] PublicKey, AnchorVerification Anchor, int RetiredKeys, long LamportTs,
+    int RemainingBoxes = 0, string? Claim = null, IReadOnlyList<RestoredPeerRef>? UnconfirmedPeers = null);
+
+/// <summary>A peer named in a restore result; <paramref name="WasSuperadmin"/>: as the source listed it.</summary>
+public sealed record RestoredPeerRef(Guid NodeId, string DisplayName, bool WasSuperadmin);
+
+/// <summary>The whitelist status of a restored row no anchor vouched for: kept, never used, until confirmed.</summary>
+public static class RestoredPeerStatus
+{
+    public const string Unconfirmed = WhitelistStatuses.Unconfirmed;
+}
+
+/// <summary>
+/// What a restore does about recovery boxes left untried by the attempt budget (<see cref="RecoveredKeys.RemainingBoxes"/>).
+/// </summary>
+public enum RestoreBoxPolicy
+{
+    /// <summary>Stop before anything is written (<see cref="RecoveryBoxesRemainingException"/>) and let the user choose.</summary>
+    Default,
+    /// <summary>The user chose to try every remaining box; cancellable like any restore.</summary>
+    TryAll,
+    /// <summary>The user chose to go on without them: the head stays unproven, nothing is confirmed.</summary>
+    SkipRemaining,
+}
+
+/// <summary>
+/// Brings up a new device from recovery material (plan 6.7 step 3, 6.8): the master password is tried
+/// on the boxes, the chain is unwound, the key is chosen by the anchor — all BEFORE anything is written,
+/// so a wrong password leaves nothing behind. Then the replicated state is imported, a fresh identity,
+/// slot and admin are created under the current key, every older key is kept (late bodies under them
+/// still open), the Lamport clock ends strictly above every imported Lamport value (a state claiming
+/// more than <see cref="MaxRestoredLamport"/> is refused before anything is written),
+/// the anchor is checked and the search index and embeddings are queued for a rebuild. The new slot is
+/// published as this device's box; the strong box follows at the first login.
+/// </summary>
+public class RecoveryRestoreService(
+    IServiceScopeFactory scopes,
+    BeeMemoryBank.Sync.LamportClock clock,
+    ILogger<RecoveryRestoreService> logger)
+{
+    /// <summary>
+    /// The highest Lamport value a restore accepts. A fresh node has no clock of its own to measure a
+    /// jump against, so the bound is absolute: 2^53 events is beyond any real mesh (one tick per event),
+    /// yet far enough from long.MaxValue that a crafted package cannot push this node's clock to the
+    /// edge of overflow, where every later event would collide.
+    /// </summary>
+    public const long MaxRestoredLamport = 1L << 53;
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+
+    /// <summary>
+    /// A blind package (BlindPackageBuilder). Read with the blind seed's own reader
+    /// (<see cref="SnapshotService.ExtractVerifiedAsync"/>: every file against the signed manifest), the
+    /// embedded signature checked against <paramref name="producerPublicKey"/>, and its signed
+    /// blind-manifest.json taken as the evidence: whitelist (superadmin flags, TLS pins) and positions.
+    /// </summary>
+    /// <param name="events">The signed events that came with the package (the blind node's restore route).</param>
+    public async Task<RestoreResult> RestoreFromPackageAsync(
+        string packagePath, byte[] signature, byte[] producerPublicKey, RestoreIdentity who,
+        RestoreBlindPeer? blind, IReadOnlyList<SyncEvent> events, CancellationToken ct = default,
+        RestoreBoxPolicy boxes = RestoreBoxPolicy.Default)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"bmb-restore-{Guid.NewGuid():N}");
+        try
+        {
+            VerifiedSnapshot package;
+            BlindManifest manifest;
+            using (var scope = scopes.CreateScope())
+            {
+                try
+                {
+                    package = await scope.ServiceProvider.GetRequiredService<SnapshotService>().ExtractVerifiedAsync(packagePath, dir);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // A file that does not match its manifest hash, an unknown layout: not a package to restore from.
+                    throw new InvalidDataException($"Not a valid blind package: {ex.Message}", ex);
+                }
+                // Both signatures up front: the embedded one covers every file through the manifest, the sidecar
+                // the whole archive (what the join import checks again), so nothing is resolved from a package
+                // the import would refuse.
+                if (!package.IsSignedBy(producerPublicKey)
+                    || !Ed25519Signer.Verify(producerPublicKey,
+                        await SnapshotService.ComputeSignaturePayloadAsync(package.ManifestBytes, packagePath, ct), signature))
+                    throw new InvalidDataException("The package signature does not verify.");
+                var manifestPath = Path.Combine(package.Directory, BlindManifest.FileName);
+                if (!File.Exists(manifestPath))
+                    throw new InvalidDataException("Not a blind package: blind-manifest.json is missing.");
+                manifest = BlindManifest.Parse(await File.ReadAllBytesAsync(manifestPath, ct));
+            }
+            var producer = blind?.NodeId ?? manifest.ProducerNodeId;
+            if (manifest.ProducerNodeId != producer)
+                throw new InvalidDataException("The package was not built by the node it came from.");
+            // One row per node, and the producer's own row naming the key that signed the package.
+            if (manifest.Whitelist.GroupBy(p => p.NodeId).Any(g => g.Count() > 1))
+                throw new InvalidDataException("The package's manifest lists a node twice.");
+            var producerRow = manifest.Whitelist.SingleOrDefault(p => p.NodeId == producer);
+            if (producerRow == null || !ProducerKeyMatches(producerRow.PublicKeyB64, producerPublicKey))
+                throw new InvalidDataException("The package's manifest does not name its producer with the key that signed it.");
+
+            var evidence = new RestoreEvidence(RestoreEvidenceFromManifest.Of(manifest), events);
+            return await RestoreCoreAsync(package.DatabasePath, recoverySet: null, who, blind is null ? null : blind with { CpSeq = manifest.CpSequence },
+                evidence, async sp =>
+                {
+                    await sp.GetRequiredService<SnapshotService>().RestoreForJoinAsync(packagePath, signature, producerPublicKey);
+                    // Beyond the join snapshot: what lets the restored node refuse late events about
+                    // something deleted for good (plan 3.6).
+                    ImportTables(sp.GetRequiredService<DbConnectionFactory>(), package.DatabasePath, BlindPackageBuilder.ExtraTables);
+                }, ct, boxes);
+        }
+        finally
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+            catch (IOException) { /* a temp folder; the OS cleans the temp folder */ }
+        }
+    }
+
+    /// <summary>
+    /// A database copy from a backup (plan 6.8), with the recovery set that lay next to it. No producer
+    /// signature here — the anchor is what vouches for the state. The whitelist, positions and signed
+    /// events come from the copy itself.
+    /// </summary>
+    public async Task<RestoreResult> RestoreFromDatabaseAsync(
+        string databasePath, RecoverySet? recoverySet, RestoreIdentity who, CancellationToken ct = default,
+        RestoreBoxPolicy boxes = RestoreBoxPolicy.Default)
+    {
+        var evidence = await DatabaseRestoreEvidence.ReadAsync(databasePath);
+        return await RestoreCoreAsync(databasePath, recoverySet, who, blind: null, evidence, sp =>
+        {
+            ImportTables(sp.GetRequiredService<DbConnectionFactory>(), databasePath,
+                [.. SnapshotTables.Replicated, .. BlindPackageBuilder.ExtraTables]);
+            return Task.CompletedTask;
+        }, ct, boxes);
+    }
+
+    /// <summary>
+    /// The keys, under <paramref name="boxes"/>: with <see cref="RestoreBoxPolicy.Default"/> a set whose boxes
+    /// were not all tried, or whose search stopped at a budget limit, stops here
+    /// (<see cref="RecoveryBoxesRemainingException"/>) — nothing is written yet.
+    /// </summary>
+    /// <param name="defaultBudget">The budget of a <see cref="RestoreBoxPolicy.Default"/> run (tests); null = the defaults.</param>
+    public static async Task<RecoveredKeys> ResolveKeysAsync(RecoverySet set, string password, RestoreBoxPolicy boxes, CancellationToken ct,
+        RecoveryAttemptBudget? defaultBudget = null)
+    {
+        RecoveredKeys? keys;
+        try
+        {
+            keys = await RecoveryKeyResolver.ResolveAsync(set, password, ct,
+                boxes == RestoreBoxPolicy.TryAll ? RecoveryAttemptBudget.Unlimited() : defaultBudget);
+        }
+        catch (RecoveryBoxesRemainingException) when (boxes == RestoreBoxPolicy.SkipRemaining)
+        {
+            keys = null;
+        }
+        if (keys == null)
+            throw new UnauthorizedAccessException("The master password opens none of the recovery boxes.");
+        if ((keys.RemainingBoxes > 0 || keys.BudgetExhausted) && boxes == RestoreBoxPolicy.Default)
+        {
+            var remaining = keys.RemainingBoxes;
+            keys.Dispose();
+            throw new RecoveryBoxesRemainingException(remaining);
+        }
+        return keys;
+    }
+
+    private async Task<RestoreResult> RestoreCoreAsync(
+        string databaseForKeys, RecoverySet? recoverySet, RestoreIdentity who, RestoreBlindPeer? blind,
+        RestoreEvidence evidence, Func<IServiceProvider, Task> import, CancellationToken ct,
+        RestoreBoxPolicy boxes)
+    {
+        if (string.IsNullOrWhiteSpace(who.AdminUsername) || string.IsNullOrWhiteSpace(who.DisplayName))
+            throw new ArgumentException("Admin username and device name are required.");
+
+        await Gate.WaitAsync(ct);
+        try
+        {
+            using var scope = scopes.CreateScope();
+            var sp = scope.ServiceProvider;
+            if (await sp.GetRequiredService<InitializationService>().IsInitializedAsync())
+                throw new InvalidOperationException("This node is already initialized; restore needs a fresh node.");
+
+            // 1. Keys first, from the copy, before anything is written here.
+            if (recoverySet == null)
+            {
+                using var source = new SqliteConnection($"Data Source={databaseForKeys};Mode=ReadOnly;Pooling=False");
+                source.Open();
+                recoverySet = await RecoverySetBuilder.BuildAsync(source);
+            }
+            using var keys = await ResolveKeysAsync(recoverySet, who.Password, boxes, ct);
+            // Several unlinked keys: which is newest is not proven, so nothing will be confirmed. The key to
+            // write under is still best taken from the data itself: the one that opens the newest body.
+            if (!keys.HeadProven && NewestBodyHead(databaseForKeys, keys) is { } byData)
+                keys.UseHead(byData);
+
+            // The clock the restored node must start above, checked before anything is written.
+            long maxImported;
+            using (var source = new SqliteConnection($"Data Source={databaseForKeys};Mode=ReadOnly;Pooling=False"))
+            {
+                source.Open();
+                // What is imported, and nothing a producer says about its clock: the restored node only has to
+                // end above the rows it takes over (no event is imported), and an unsigned claim would let a
+                // hostile source push its clock to the edge.
+                maxImported = await MaxLamportAsync(source);
+            }
+            if (maxImported is < 0 or >= MaxRestoredLamport)
+                throw new InvalidDataException(
+                    $"The recovery material claims Lamport time {maxImported}, beyond the {MaxRestoredLamport} a restore accepts; refusing it.");
+
+            // 2. The replicated state.
+            await import(sp);
+
+            // 3. A new identity, slot and admin under the current key.
+            var nodeId = Guid.NewGuid();
+            var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
+            var nodeRepo = sp.GetRequiredService<INodeIdentityRepository>();
+            var (wrappedPk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, keys.Current, nodeId);
+            Array.Clear(privateKey);
+            await nodeRepo.CreateAsync(new NodeIdentity
+            {
+                NodeId = nodeId, DisplayName = who.DisplayName.Trim(), Ed25519PublicKey = publicKey,
+                Ed25519PrivateKey = wrappedPk, Ed25519PrivateKeyIV = pkIv, Ed25519PrivateKeyV = 1,
+                CreatedAt = DateTime.UtcNow
+            });
+
+            var salt = KeyDerivation.GenerateSalt();
+            var kek = KeyDerivation.DeriveKek(who.Password, salt);
+            MasterKeyStore slot;
+            try
+            {
+                var (encDek, iv) = MasterKeyManager.WrapMasterDek(keys.Current, kek);
+                slot = new MasterKeyStore
+                {
+                    SlotType = "user", EncryptedMasterDek = encDek, IV = iv, Salt = salt,
+                    ArgonMemory = CryptoConstants.DefaultArgonMemory, ArgonIterations = CryptoConstants.DefaultArgonIterations,
+                    ArgonParallelism = CryptoConstants.DefaultArgonParallelism, CreatedAt = DateTime.UtcNow
+                };
+            }
+            finally
+            {
+                Array.Clear(kek);
+            }
+            slot.SlotId = await sp.GetRequiredService<IKeySlotRepository>().CreateAsync(slot);
+            await sp.GetRequiredService<IUserRepository>().CreateAsync(new User
+            {
+                Username = who.AdminUsername.Trim(), DisplayName = who.AdminUsername.Trim(),
+                PasswordHash = UserService.HashPassword(who.Password), Role = UserRoles.Superadmin,
+                KeySlotId = slot.SlotId, IsActive = true, CreatedAt = DateTime.UtcNow
+            });
+            await nodeRepo.StoreSentinelAsync(MasterKeyManager.ComputeSentinel(keys.Current));
+
+            var connFactory = sp.GetRequiredService<DbConnectionFactory>();
+            using (var conn = connFactory.CreateConnection())
+            {
+                await conn.ExecuteAsync(
+                    "INSERT OR IGNORE INTO tbl_migration_marker (key, value, set_at) VALUES ('legacy_password_unified', '1', @T)",
+                    new { T = DateTime.UtcNow.ToString("O") });
+                await conn.ExecuteAsync("UPDATE tbl_node_identity SET dek_epoch = @E", new { E = Math.Max(1, keys.EpochHint) });
+
+                // Older keys, sealed under the current one like DekRewrapper keeps them: a body that
+                // arrives late under one of them, or already sits in the state, still opens.
+                foreach (var (fp, oldDek) in keys.Retired)
+                {
+                    var name = IRetiredMasterDekStore.KeyNamePrefix + (recoverySet.Links
+                        .FirstOrDefault(l => l.OldFingerprint == fp)?.CommitId ?? "fp-" + fp);
+                    var (wrapped, iv) = NodeDataKeyEnvelope.Wrap(name, oldDek, keys.Current);
+                    await conn.ExecuteAsync(
+                        $"INSERT OR IGNORE INTO {NodeDataKeyEnvelope.TableName} (key_name, wrapped_key, iv, created_at) VALUES (@N, @W, @I, @T)",
+                        new { N = name, W = wrapped, I = iv, T = DateTime.UtcNow.ToString("O") });
+                }
+
+                // Search index and embeddings are node-local: rebuild them from the imported content.
+                await conn.ExecuteAsync("UPDATE tbl_article SET embedding_pending = 1, index_pending = 1 WHERE status = 'A'");
+            }
+
+            // 4. Strictly above every imported Lamport value, so this node's next write wins over them.
+            clock.RaiseTo(maxImported);
+            var lamport = clock.Tick();
+
+            // 5. Who it trusts and how far it has pulled from each: the manifest's whitelist (superadmin
+            // flags and pins included) and positions, the blind node it came from with the address the
+            // user typed. Never a row for itself.
+            await ImportPeersAsync(sp, evidence.Manifest, blind, nodeId);
+
+            // 6. The anchor: date, and whether the state at it is intact.
+            AnchorVerification anchor;
+            using (var conn = connFactory.CreateConnection())
+                anchor = await StateAnchorService.VerifyAsync(conn, keys.Current, evidence.Events,
+                    evidence.Manifest?.Keys ?? new Dictionary<Guid, byte[]>(), keys.HeadProven);
+
+            // 6b. A peer stays active only where a DEK-authenticated anchor vouches for its row (its trust section):
+            // what the source says about who is in the mesh is as unverified as its data otherwise.
+            var unconfirmedPeers = await DeactivateUnvouchedPeersAsync(connFactory, anchor, blind?.NodeId);
+            await nodeRepo.MarkInitialSyncCompletedAsync();
+
+            // 7. This device's box, like every other slot change.
+            await sp.GetRequiredService<IRecoveryBoxPublisher>().PublishDeviceBoxAsync(slot, keys.Current);
+
+            logger.LogInformation(
+                "Restore complete: node {Node}, {Retired} older key(s) kept, anchor {Anchor} ({Confirmed})",
+                nodeId, keys.Retired.Count, anchor.AnchorId ?? "none", anchor.State);
+            return new RestoreResult(nodeId, publicKey, anchor, keys.Retired.Count, lamport, keys.RemainingBoxes,
+                UnconfirmedPeers: unconfirmedPeers);
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Every restored row the anchor does not vouch for (<see cref="AnchorVerification.Vouches"/>) — all of them
+    /// when no anchor matches — is kept but made inactive (<see cref="RestoredPeerStatus.Unconfirmed"/>, no
+    /// superadmin flag): it cannot authenticate, sync or author anything here until the user confirms it or pairs
+    /// the node again. The blind node restored from is the exception: the restore code the user typed names its
+    /// key, so it stays active, but never as a superadmin. Local only.
+    /// </summary>
+    private static async Task<IReadOnlyList<RestoredPeerRef>> DeactivateUnvouchedPeersAsync(
+        DbConnectionFactory connFactory, AnchorVerification anchor, Guid? blindSource)
+    {
+        using var conn = connFactory.CreateConnection();
+        var unvouched = (await conn.QueryAsync<(string Id, string Name, long Super)>(
+                "SELECT node_id, display_name, is_superadmin FROM tbl_whitelist WHERE status = 'A'"))
+            .Where(r => Guid.TryParse(r.Id, out _))
+            .Select(r => new RestoredPeerRef(Guid.Parse(r.Id), r.Name, r.Super != 0))
+            .Where(r => !anchor.Vouches(r.NodeId))
+            .ToList();
+        var listed = new List<RestoredPeerRef>();
+        foreach (var r in unvouched)
+        {
+            if (r.NodeId == blindSource)
+            {
+                await conn.ExecuteAsync("UPDATE tbl_whitelist SET is_superadmin = 0 WHERE node_id = @Id COLLATE NOCASE", new { Id = r.NodeId.ToString() });
+                continue;
+            }
+            await conn.ExecuteAsync("UPDATE tbl_whitelist SET status = @U, is_superadmin = 0 WHERE node_id = @Id COLLATE NOCASE",
+                new { U = RestoredPeerStatus.Unconfirmed, Id = r.NodeId.ToString() });
+            listed.Add(r);
+        }
+        return listed;
+    }
+
+    private static bool ProducerKeyMatches(string? rowKeyB64, byte[] producerPublicKey)
+    {
+        try { return rowKeyB64 != null && Convert.FromBase64String(rowKeyB64).AsSpan().SequenceEqual(producerPublicKey); }
+        catch (FormatException) { return false; }
+    }
+
+    private static async Task ImportPeersAsync(IServiceProvider sp, RestoreManifest? manifest, RestoreBlindPeer? blind, Guid self)
+    {
+        var whitelist = sp.GetRequiredService<IWhitelistRepository>();
+        var positions = sp.GetRequiredService<ISyncPositionRepository>();
+        var now = DateTime.UtcNow;
+        var peers = (manifest?.Whitelist ?? []).Where(p => p.NodeId != self).GroupBy(p => p.NodeId).Select(g => g.First()).ToList();
+        if (blind != null && peers.All(p => p.NodeId != blind.NodeId))
+            peers.Add(new RestorePeer(blind.NodeId, blind.DisplayName, blind.PublicKey, null, IsSuperadmin: false, null));
+
+        foreach (var peer in peers)
+        {
+            var isBlindSource = blind != null && peer.NodeId == blind.NodeId;
+            await whitelist.CreateAsync(new WhitelistEntry
+            {
+                NodeId = peer.NodeId, DisplayName = peer.DisplayName, Ed25519PublicKey = peer.PublicKey,
+                ApiAddress = isBlindSource ? blind!.ApiAddress.TrimEnd('/') : peer.ApiAddress,
+                // The blind node we came from: the pin the user typed. Everyone else: the pin the manifest carries.
+                TlsSpki = isBlindSource ? blind!.TlsSpki ?? peer.TlsSpki : peer.TlsSpki,
+                IsSuperadmin = peer.IsSuperadmin, Status = "A", CreatedAt = now, UpdatedAt = now,
+                // The row's LWW version as the source held it: an older whitelist_update must still lose.
+                LamportTs = peer.LamportTs, SourceNodeId = peer.SourceNodeId
+            });
+        }
+        sp.GetService<SpkiPinRegistry>()?.Invalidate();
+
+        // The source's pull positions are NOT taken over. They count in each peer's own log, differ from node to
+        // node (no anchor can cover them), and nothing in the package shows how far a peer's log really is
+        // represented in it: a position set too high would skip that peer's events for good, one set too low
+        // only replays events the appliers already resolve (LWW, idempotent). So every peer starts at 0 — a
+        // peer whose log was compacted below that answers 410 and asks for a snapshot, never silence.
+
+        // What this node pulled from the blind node: everything the package covered (its own signed checkpoint —
+        // the one position the producer speaks for itself about; whatever it withheld comes from the peers).
+        if (blind != null)
+            await positions.UpsertAsync(new SyncPosition
+            {
+                RemoteNodeId = blind.NodeId, LastSequenceNum = manifest?.IncludesUpTo ?? blind.CpSeq, UpdatedAt = now
+            });
+    }
+
+    // Of several unproven heads, the one that opens the most recently written body (by content version).
+    private static string? NewestBodyHead(string databasePath, RecoveredKeys keys)
+    {
+        using var conn = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
+        conn.Open();
+        var bodies = conn.Query<(string Id, byte[] Dek, byte[] Iv)>(
+            @"SELECT a.id, b.encrypted_dek, b.dek_iv FROM tbl_article_body b JOIN tbl_article a ON a.id = b.article_id
+              ORDER BY a.lamport_ts DESC LIMIT 20");
+        var heads = keys.Heads.Select(fp => (fp, Key: fp == keys.CurrentFingerprint ? keys.Current : keys.Retired[fp])).ToList();
+        foreach (var body in bodies)
+        {
+            if (!Guid.TryParse(body.Id, out var id)) continue;
+            foreach (var (fp, key) in heads)
+            {
+                try
+                {
+                    Array.Clear(EnvelopeFraming.Article.UnwrapDek(id, body.Dek, body.Iv, key));
+                    return fp;
+                }
+                catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or ArgumentException) { }
+            }
+        }
+        return null;
+    }
+
+    // Every Lamport column of the imported replicated state (a copy from an older schema may lack some).
+    private static readonly (string Table, string Column)[] LamportColumns =
+    [
+        ("tbl_article", "lamport_ts"), ("tbl_folder", "lamport_ts"), ("tbl_media", "lamport_ts"),
+        ("tbl_comment", "lamport_ts"), ("tbl_comment", "delete_lamport_ts"), ("tbl_tombstone", "lamport_ts"),
+        ("tbl_conflict_version", "lamport_ts"), ("tbl_recovery_box", "lamport_ts"),
+        ("tbl_state_anchor", "lamport_ts"), ("tbl_sealed_secret", "lamport_ts"), ("tbl_whitelist", "lamport_ts"),
+    ];
+
+    private static async Task<long> MaxLamportAsync(SqliteConnection conn)
+    {
+        var tables = (await conn.QueryAsync<string>("SELECT name FROM sqlite_master WHERE type = 'table'"))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        long max = 0;
+        foreach (var (table, column) in LamportColumns.Where(c => tables.Contains(c.Table)))
+            max = Math.Max(max, await conn.ExecuteScalarAsync<long?>($"SELECT MAX({column}) FROM {table}") ?? 0);
+        return max;
+    }
+
+    // The join path's import, from a plain database file: the given tables, by column name.
+    private static void ImportTables(DbConnectionFactory connFactory, string databasePath, IEnumerable<string> tables)
+    {
+        using var conn = (SqliteConnection)connFactory.CreateConnection();
+        using (var off = conn.CreateCommand()) { off.CommandText = "PRAGMA foreign_keys = OFF"; off.ExecuteNonQuery(); }
+        using (var attach = conn.CreateCommand())
+        {
+            attach.CommandText = $"ATTACH DATABASE '{databasePath.Replace("'", "''")}' AS snap";
+            attach.ExecuteNonQuery();
+        }
+        try
+        {
+            using var tx = conn.BeginTransaction();
+            foreach (var table in tables)
+            {
+                if (!SnapshotTableImport.SnapshotHasTable(conn, tx, table)) continue;
+                SnapshotTableImport.CopyTable(conn, tx, table, orIgnore: true);
+            }
+            SnapshotTableImport.AdoptLegacyInlineCiphertext(conn, tx);
+            tx.Commit();
+        }
+        finally
+        {
+            using (var detach = conn.CreateCommand()) { detach.CommandText = "DETACH DATABASE snap"; detach.ExecuteNonQuery(); }
+            using var on = conn.CreateCommand();
+            on.CommandText = "PRAGMA foreign_keys = ON";
+            on.ExecuteNonQuery();
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (IOException) { /* a temp file; the OS cleans the temp folder */ }
+    }
+}

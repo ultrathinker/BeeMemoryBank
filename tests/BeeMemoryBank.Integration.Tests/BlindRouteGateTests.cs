@@ -16,12 +16,14 @@ namespace BeeMemoryBank.Integration.Tests;
 /// <para>The peer-facing routes of pairing and seeding (BMB-52) are the other exception: a peer
 /// presents the pair code's one-time secret or its sync token, never the internal key, so a role
 /// gate cannot apply. Each is in the public-surface allow-list (pinned by the shared guardrail) and
-/// authorizes in its handler; here a 'user' caller must simply get nowhere with them.</para>
+/// authorizes in its handler; here a 'user' caller must simply get nowhere with them. So do the restore
+/// routes a restoring device calls with the one-time restore code (BMB-53): package, events, claim.</para>
 /// </summary>
 public class BlindRouteGateTests : IAsyncLifetime
 {
     private static readonly HashSet<string> PeerAuthenticated =
-        ["/api/blind/seed", "/api/blind/seed/{seedId:guid}", "/api/blind/replica"];
+        ["/api/blind/seed", "/api/blind/seed/{seedId:guid}", "/api/blind/replica",
+         "/api/blind/restore/package", "/api/blind/restore/events", "/api/blind/claim"];
 
     private readonly BlindNodeFactory _factory = new();
 

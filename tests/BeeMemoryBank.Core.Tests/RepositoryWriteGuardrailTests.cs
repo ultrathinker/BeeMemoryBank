@@ -217,6 +217,16 @@ public class RepositoryWriteGuardrailTests
         new("server/BeeMemoryBank.Api/Endpoints/SnapshotEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/UserEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/WhitelistEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
+        new("server/BeeMemoryBank.Api/Endpoints/BlindRestoreEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
+        new("server/BeeMemoryBank.Api/Services/Recovery/BlindRestoreCodeService.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
+
+        // ── Blind node claim (BMB-43, plan 6.7): the restored device becomes this blind node's
+        // superadmin LOCALLY. A blind node authors no events at all (its events are refused by every
+        // receiver), and the new root of trust is meant to exist only here — no restore_network.
+        new("server/BeeMemoryBank.Api/Endpoints/BlindRestoreEndpoints.cs", "IWhitelistRepository", "CreateAsync",
+            "Blind node trusting a restored device locally: a blind node cannot publish whitelist_add, by design."),
+        new("server/BeeMemoryBank.Api/Endpoints/BlindRestoreEndpoints.cs", "IWhitelistRepository", "UpdateAsync",
+            "Blind node trusting a restored device locally: a blind node cannot publish whitelist_update, by design."),
     ];
 
     [Fact]
