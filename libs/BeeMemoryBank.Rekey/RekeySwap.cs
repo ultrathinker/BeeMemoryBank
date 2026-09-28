@@ -45,6 +45,9 @@ public static class RekeySwap
     /// </summary>
     public static IReadOnlyList<string> CarryOver(string dataDir, string newDir, List<string>? skippedLinks, Action<string>? fault = null)
     {
+        // The source root is judged too, not only what is under it (review release-b-fix #2).
+        if (NoFollow.IsOrUnderLink(dataDir))
+            throw new InvalidOperationException($"{dataDir} is, or sits under, a junction or symbolic link; nothing is carried over from it.");
         var copied = new List<string>();
         foreach (var name in CarriedOver)
         {

@@ -17,6 +17,25 @@ public static class NoFollow
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return false; }
     }
 
+    /// <summary>
+    /// Whether <paramref name="path"/> itself, or any directory above it, is a junction, a symbolic link or another
+    /// reparse point (review release-b-fix #2). The volume root is not judged. A vault reached through a link would make
+    /// the re-key read, copy and rename through it, so the verb refuses such a path and asks for the real one.
+    /// </summary>
+    public static bool IsOrUnderLink(string path)
+    {
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var root = Path.GetPathRoot(full);
+        for (var current = full; !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current))
+        {
+            if (root != null && string.Equals(Path.TrimEndingDirectorySeparator(current), Path.TrimEndingDirectorySeparator(root),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                break;
+            if (IsLink(current)) return true;
+        }
+        return false;
+    }
+
     /// <summary>A recursive walk that does not enter links (they are not returned either).</summary>
     public static readonly EnumerationOptions Walk = new()
     {
