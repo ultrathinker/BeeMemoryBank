@@ -201,35 +201,22 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
 
     /// <summary>
     /// The wipe takes one barrier for every other writer before it deletes anything, and it waits
-    /// rather than racing (review release-a2 agy#4, sec#6, spec#3): an event write in flight holds it
-    /// at the gate, a database connection still open holds it at the drain, and while it waits it has
-    /// already paused the sync loop — a pull that lands after the wipe would resurrect mesh state on
-    /// a node the operator just disconnected. Held in both places, it must not complete; released, it
-    /// must finish and leave nothing behind but the recreated identity.
+    /// rather than racing (review release-a2 agy#4, sec#6, spec#3). Each half of the barrier gets its
+    /// own test so each one is provable on its own: an event write in flight holds the wipe at the
+    /// gate, and a database connection still open holds it at the drain. Both were holes a pull, an
+    /// applier or a reader could walk through while the tables were deleted under them.
     /// </summary>
     [Fact]
-    public async Task Wipe_WaitsForAWriteAndAConnectionInFlight_InsteadOfRacingThem()
+    public async Task Wipe_WaitsForAnEventWriteInFlight()
     {
-        // Something of the mesh to lose, so "empty afterwards" means something.
-        var peerId = Guid.NewGuid();
-        await _factory.Services.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
-        {
-            NodeId = peerId, DisplayName = "peer", Ed25519PublicKey = new byte[32], Status = "A",
-            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow, LamportTs = 1, SourceNodeId = peerId,
-        });
-
-        using (var client = _factory.CreateClient())
-            await SetConsolePasswordAsync(client);
+        using var client = _factory.CreateClient();
+        await SetConsolePasswordAsync(client);
 
         var scheduler = _factory.Services.GetRequiredService<SyncScheduler>();
         scheduler.IsPaused.Should().BeFalse("nothing has asked the loop to stand down yet");
 
-        // 1. An event write in flight — exactly what an applier or the log trimmer holds.
+        // Exactly what an applier or the log trimmer holds while it writes.
         var writer = await EventWriteGate.Instance.EnterAsync();
-        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
-        var held = connFactory.CreateConnection(); // 2. and a connection nobody will release yet
-        held.Open();
-
         using var wipeClient = _factory.CreateClient();
         var wipe = wipeClient.PostAsJsonAsync("/api/blind/wipe",
             new { consolePassword = "console-pw-123", confirmNodeName = "BlindWipeNode" });
@@ -237,29 +224,61 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
         {
             await Task.Delay(400);
             wipe.IsCompleted.Should().BeFalse("the wipe waits at the event-write gate while a write is in flight");
+        }
+        finally
+        {
+            writer.Dispose(); // idempotent: an exception must not leave the process-wide gate held
+        }
 
-            writer.Dispose();
+        (await wipe).StatusCode.Should().Be(HttpStatusCode.OK, await (await wipe).Content.ReadAsStringAsync());
+        scheduler.IsPaused.Should().BeFalse("the barrier is released again");
+        await AssertWipedAsync();
+    }
+
+    /// <summary>
+    /// The other half: a connection somebody still holds. The wipe waits for it — and while it waits
+    /// the sync loop is already paused, because a pull landing after the wipe would resurrect mesh
+    /// state on a node the operator just disconnected.
+    /// </summary>
+    [Fact]
+    public async Task Wipe_WaitsForAnOpenConnection_AndPausesTheSyncLoopWhileItWaits()
+    {
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        using var client = _factory.CreateClient();
+        await SetConsolePasswordAsync(client);
+
+        var scheduler = _factory.Services.GetRequiredService<SyncScheduler>();
+        var held = connFactory.CreateConnection();
+        held.Open();
+        using var wipeClient = _factory.CreateClient();
+        var wipe = wipeClient.PostAsJsonAsync("/api/blind/wipe",
+            new { consolePassword = "console-pw-123", confirmNodeName = "BlindWipeNode" });
+        try
+        {
             await Task.Delay(400);
-            wipe.IsCompleted.Should().BeFalse("and then waits for the connection still open on the database");
+            wipe.IsCompleted.Should().BeFalse("the wipe waits for the connection still open on the database");
             scheduler.IsPaused.Should().BeTrue("the barrier is held: the sync loop is paused for the duration");
         }
         finally
         {
-            writer.Dispose();      // idempotent: an exception above must not leave the process-wide gate held
             held.Dispose();
         }
 
         (await wipe).StatusCode.Should().Be(HttpStatusCode.OK, await (await wipe).Content.ReadAsStringAsync());
         scheduler.IsPaused.Should().BeFalse("the barrier is released again");
+        await AssertWipedAsync();
+    }
 
-        using (var conn = connFactory.CreateConnection())
-        {
-            foreach (var table in new[] { "tbl_article", "tbl_event", "tbl_whitelist", "tbl_sync_position" })
-                (await conn.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM [{table}]"))
-                    .Should().Be(0, $"{table} is cleared by the wipe");
-            (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_node_identity")).Should().Be(1,
-                "and the one row the node needs to be pairable again is recreated");
-        }
+    /// <summary>Clear tables, and the one recreated identity the node needs to be pairable again.</summary>
+    private async Task AssertWipedAsync()
+    {
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        using var conn = connFactory.CreateConnection();
+        foreach (var table in new[] { "tbl_article", "tbl_event", "tbl_whitelist", "tbl_sync_position" })
+            (await conn.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM [{table}]"))
+                .Should().Be(0, $"{table} is cleared by the wipe");
+        (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_node_identity")).Should().Be(1,
+            "and the one row the node needs to be pairable again is recreated");
     }
 
     /// <summary>
