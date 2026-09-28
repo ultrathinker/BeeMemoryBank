@@ -154,10 +154,16 @@ public class SyncClient(
                 // "already applied" shortcut catches it — after a compaction it is not, so it reaches
                 // the whitelist lookup, where we are not a peer of ourselves, and is quarantined as
                 // deferred. A quarantine row is not cosmetic: the state anchor publishes nothing while
-                // one exists, so anchors stop for good. Skipped here, by the same rule the applier
-                // already applies to a self-echo — there is nothing to apply, and nothing to defer:
-                // the event is ours, and its content is either here or was compacted into the state.
-                if (evt.NodeId == identity.NodeId)
+                // one exists, so anchors stop for good.
+                //
+                // Skipped only when it is PROVEN ours (Codex round 2, security #2): the node id rides
+                // on the wire and is not covered by the signature, so "it says our id" is worth
+                // nothing on its own. A peer that fabricates an event with our id — and a sequence
+                // past the end of what we hold — would otherwise make us walk past the real events
+                // behind it, cursor and all, and on a blind node past the blind-authorship invariant
+                // too. An unproven one goes through the ordinary apply, where the invariants, the
+                // whitelist and the signature run, and the cursor moves only as far as that allows.
+                if (evt.NodeId == identity.NodeId && await IsProvenOwnAsync(evt, identity))
                 {
                     lastApplied = evt.SequenceNum;
                     ownCount++;
@@ -430,6 +436,25 @@ public class SyncClient(
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<List<SyncEvent>>(JsonOpts, ct)
             ?? [];
+    }
+
+    /// <summary>
+    /// Whether an event claiming to come from this node really is one of ours: it is already in our
+    /// own log, or it carries a signature that verifies under our own public key. The signature covers
+    /// the event id, node id, lamport time, type, entity, payload, protocol version and creation time
+    /// (<see cref="EventSignature.BuildPayload"/>), so it cannot be produced without our private key —
+    /// which is what makes skipping such an event safe rather than merely convenient. Everything else
+    /// — including an event that names us but carries a signature we cannot check — is left to
+    /// <see cref="EventApplier"/>, whose answer for an unverifiable one is the ordinary refusal.
+    ///
+    /// <para>The signature is also what covers the compacted case: an event we authored, whose row a
+    /// compaction has since removed, is no longer in our log but is still ours beyond doubt.</para>
+    /// </summary>
+    private async Task<bool> IsProvenOwnAsync(SyncEvent evt, NodeIdentity identity)
+    {
+        if (await eventLogRepo.ExistsAsync(evt.EventId)) return true;
+        return identity.Ed25519PublicKey is { Length: > 0 }
+            && Ed25519Signer.Verify(identity.Ed25519PublicKey, EventSignature.BuildPayload(evt), evt.Signature);
     }
 
     private async Task ReportPositionAsync(
