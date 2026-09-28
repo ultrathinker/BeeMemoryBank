@@ -20,12 +20,14 @@ namespace BeeMemoryBank.Rekey;
 public static class RekeySwap
 {
     /// <summary>
-    /// §5 "carried over": TLS and network config, the Web↔Api key and the plaintext audit logs. The databases are not
+    /// §5 "carried over": TLS and network config and the plaintext audit logs. The databases are not
     /// in the list: the new vault's are the re-keyed copies. Everything else stays behind in the old directory.
     /// </summary>
     public static readonly IReadOnlyList<string> CarriedOver =
     [
-        "certs", "tls", "internet-access", "ddns-state.json", ".internal-key", "wipe-audit.log", "reset-audit.log",
+        // Not .internal-key: it is the Web-to-Api trust credential, and an old copy of it must not open the new
+        // vault; KeyMaterialStep writes a fresh one into the new vault (L-2).
+        "certs", "tls", "internet-access", "ddns-state.json", "wipe-audit.log", "reset-audit.log",
     ];
 
     /// <summary>The fault points of the swap, for the brick tests.</summary>
