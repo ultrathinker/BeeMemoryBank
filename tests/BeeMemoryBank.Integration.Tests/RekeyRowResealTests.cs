@@ -93,7 +93,7 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
         // Derived data: a tag vector, a chunk embedding, an article projection.
         await conn.ExecuteAsync("INSERT INTO tbl_concept_tag (name, created_at, embedding, embedding_model_version) VALUES ('tag', @t, x'0102', 'm1')",
             new { t = DateTime.UtcNow.ToString("O") });
-        await conn.ExecuteAsync("INSERT INTO tbl_article_chunk_embedding (article_id, chunk_index, projection, scale, model_version) VALUES (@a, 0, x'0102', 1.0, 'm1')",
+        await conn.ExecuteAsync("INSERT INTO tbl_article_chunk_embedding (article_id, chunk_index, projection, scale, model_version) VALUES ((SELECT id FROM tbl_article WHERE id = @a COLLATE NOCASE), 0, x'0102', 1.0, 'm1')",
             new { a = _live.ToString() });
         await conn.ExecuteAsync("UPDATE tbl_article SET embedding_projection = x'0102', embedding_pending = 0, index_pending = 0");
         Array.Clear(dek);
