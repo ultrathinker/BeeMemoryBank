@@ -158,6 +158,130 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
         File.ReadAllText(InCutover("old.db")).Should().Be("old main");
     }
 
+    /// <summary>
+    /// Codex round 2, security #9, the naming half. The marker's temporary file used to be the fixed
+    /// name <c>marker.json.tmp</c>, opened with <c>FileMode.Create</c>: anything already sitting at
+    /// that predictable name is truncated and then renamed onto the marker — an unrelated file
+    /// consumed, and, when that name is a link someone planted, the write landing wherever it points.
+    /// A random name opened with <c>CreateNew</c> cannot be squatted.
+    /// </summary>
+    [Fact]
+    public void WhateverSitsAtTheOldTempName_IsNotConsumedByAMarkerWrite()
+    {
+        Directory.CreateDirectory(_data);
+        var cutover = new BlindSeedCutover(_data);
+        cutover.Prepare();
+        File.WriteAllText(InCutover("marker.json.tmp"), "someone else's file");
+
+        cutover.WriteMarker(Guid.NewGuid(), BlindSeedCutover.Staged);
+
+        File.ReadAllText(InCutover("marker.json.tmp")).Should().Be("someone else's file",
+            "a fixed temporary name is a name anyone can put a file (or a link) at");
+        File.ReadAllText(InCutover("marker.json")).Should().Contain(BlindSeedCutover.Staged,
+            "the marker itself is still written");
+    }
+
+    /// <summary>
+    /// The same rule on the paths the cutover reads, writes and deletes: a link is not the cutover's
+    /// own file, and working through it reaches outside the data root. A linked marker is refused
+    /// outright rather than written over or believed.
+    /// </summary>
+    [Fact]
+    public void ALinkedMarker_IsRefused_AndWhatItPointsAtIsUntouched()
+    {
+        Directory.CreateDirectory(_data);
+        var outside = Path.Combine(Path.GetTempPath(), "bmb-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            var target = Path.Combine(outside, "not-ours.json");
+            File.WriteAllText(target, "{\"SeedId\":\"6f1c2b34-0f8a-4d31-9a5e-2b7c8d9e0f11\",\"Phase\":\"switching\"}");
+            var cutover = new BlindSeedCutover(_data);
+            cutover.Prepare();
+            if (!TryCreateDirectoryLink(InCutover("marker.json"), outside)) return; // no link, no test
+
+            var write = () => cutover.WriteMarker(Guid.NewGuid(), BlindSeedCutover.Staged);
+            write.Should().Throw<BlindSeedRejectedException>("a marker that is a link is not this cutover's marker");
+            File.ReadAllText(target).Should().Contain("switching", "nothing outside the data root was written or read as ours");
+        }
+        finally
+        {
+            TryDeleteTree(outside);
+        }
+    }
+
+    /// <summary>
+    /// And the directory itself: a <c>blind-cutover</c> that is a link would have its recursive delete
+    /// (the drop of a staged cutover, the tidying after a done one) walk into the tree it points at.
+    /// Refused instead, with the linked tree intact.
+    /// </summary>
+    [Fact]
+    public void ACutoverDirectoryThatIsALink_IsRefused_AndTheTreeItPointsAtSurvives()
+    {
+        Directory.CreateDirectory(_data);
+        var outside = Path.Combine(Path.GetTempPath(), "bmb-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, "sentinel.txt"), "not the cutover's to delete");
+            var cutover = new BlindSeedCutover(_data);
+            if (!TryCreateDirectoryLink(BlindSeedCutover.DirOf(_data), outside)) return; // no link, no test
+
+            var prepare = () => cutover.Prepare();
+            prepare.Should().Throw<BlindSeedRejectedException>("the cutover directory must be a plain directory of ours");
+            File.Exists(Path.Combine(outside, "sentinel.txt")).Should().BeTrue(
+                "a recursive delete of a linked directory takes the tree it points at with it");
+        }
+        finally
+        {
+            TryDeleteTree(outside);
+        }
+    }
+
+    /// <summary>
+    /// A directory link, created the way each platform allows without elevation: a junction on
+    /// Windows (no privilege needed), a symbolic link elsewhere. False when the platform refused —
+    /// the test that asked then has nothing to exercise and says so by returning.
+    /// </summary>
+    private static bool TryCreateDirectoryLink(string link, string target)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using var cmd = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                    "cmd", $"/c mklink /J \"{link}\" \"{target}\"")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                })!;
+                cmd.WaitForExit();
+                return cmd.ExitCode == 0 && Directory.Exists(link);
+            }
+            Directory.CreateSymbolicLink(link, target);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The test's own temporary tree, links in it or not.</summary>
+    private static void TryDeleteTree(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+        catch
+        {
+            // A leftover temporary directory is the test's own; nothing depends on it going.
+        }
+    }
+
     /// <summary>A marker file that was cut off mid-write — readable as a file, not as a marker.</summary>
     private void TornMarker() =>
         File.WriteAllText(InCutover("marker.json"), "{\"SeedId\":\"6f1c2b34-0f8a-4d31-9a5e-2b7c8d9e0f11\",\"Phase\":\"swit");
