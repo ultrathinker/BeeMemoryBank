@@ -552,6 +552,63 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// F4 (live stand): the replay of the blind node's own tail has to be allowed to write what the
+    /// event says — including creating a folder. Reached through the seeding request, it ran with the
+    /// <i>seeding peer's</i> caller scope, which is deny-everything for folder paths: the apply was
+    /// refused ("Write access denied for path"), classified permanent, and quarantined — so an event
+    /// the blind held beyond the package (a phone push, or anything in a new folder) was lost on it
+    /// for good. It now runs under the system scope, exactly like the sync apply it mirrors.
+    /// </summary>
+    [Fact]
+    public async Task Reseed_ReplaysAnEventThatCreatesANewFolder()
+    {
+        await AddBlindNodeAsync();
+
+        // An article both nodes hold, in a folder both of them have.
+        var created = await _pcClient.PostAsJsonAsync("/api/articles",
+            new { title = "Moving", treePath = "/Notes", content = "body" });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var articleId = Guid.Parse((await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!);
+        await CopyBlobsAsync();
+        var createdEvents = (await _pc.Services.GetRequiredService<IEventLogRepository>().GetAfterSequenceAsync(0))
+            .Where(e => e.ArticleId == articleId).ToList();
+        createdEvents.Should().NotBeEmpty("the article's own events are what the blind node takes in");
+        foreach (var evt in createdEvents)
+            await ApplyOnBlindRawAsync(evt);
+
+        // The package is built here, before the move: its tables hold the article in /Notes and no
+        // /Offline folder at all, so the move reaches the blind node only through the replay.
+        var cutOff = await ScalarAsync(_blind, "SELECT MAX(sequence_num) FROM tbl_event");
+        BlindPackage package;
+        using (var scope = _pc.Services.CreateScope())
+            package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+                .BuildAsync(Guid.NewGuid(), includesUpTo: cutOff, producerIsSuperadmin: true);
+
+        // The move itself: an ordinary article event in a folder the package has never heard of.
+        await _pc.Services.GetRequiredService<ArticleService>().MoveAsync(articleId, "/Offline");
+        await CopyBlobsAsync();
+        var move = (await _pc.Services.GetRequiredService<IEventLogRepository>().GetAfterSequenceAsync(0))
+            .Where(e => e.ArticleId == articleId)
+            .OrderByDescending(e => e.LamportTs)
+            .First(e => e.EventType == EventTypes.ArticleUpdate);
+        await ApplyOnBlindRawAsync(move);
+        (await ScalarAsync(_blind, "SELECT COUNT(*) FROM tbl_event WHERE sequence_num > @cutOff", new { cutOff }))
+            .Should().Be(1, "the move is the blind node's own tail, in no package");
+
+        var (http, request) = await ReseedRequestAsync(cutOff, prebuilt: package);
+        using (http)
+        {
+            var resp = await http.SendAsync(request);
+            resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        }
+
+        (await TextAsync(_blind, "SELECT tree_path FROM tbl_article WHERE id = @id", new { id = articleId }))
+            .Should().Be("/Offline", "the replayed event creates its folder and lands — nothing the blind held beyond the package is lost");
+        (await ScalarAsync(_blind, "SELECT COUNT(*) FROM tbl_sync_quarantine WHERE event_id = @id", new { id = move.EventId }))
+            .Should().Be(0, "and it is not quarantined as something that can never apply");
+    }
+
+    /// <summary>
     /// Plan 5.2, the blind node's half: what arrived after the package's cut-off is in no package,
     /// so the blind node replays its own events after "includes up to X" onto the new database.
     /// </summary>
@@ -920,17 +977,42 @@ public class BlindPairingSeedTests : IAsyncLifetime
 
     private async Task<Guid> ApplyOnBlindAsync(SyncEvent evt)
     {
+        await ApplyOnBlindRawAsync(evt);
+        return JsonSerializer.Deserialize<WhitelistAddPayload>(evt.Payload)!.NodeId;
+    }
+
+    /// <summary>Applies any event on the blind node the way its own sync applies one, and insists it landed.</summary>
+    private async Task ApplyOnBlindRawAsync(SyncEvent evt)
+    {
         using var scope = _blind.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<EventApplier>().ApplyAsync(evt)).Should().Be(EventApplyResult.Applied);
-        return JsonSerializer.Deserialize<WhitelistAddPayload>(evt.Payload)!.NodeId;
+    }
+
+    /// <summary>Every blob this node has, copied to the blind node (its apply is the receiver's side of BlobTransport).</summary>
+    private async Task CopyBlobsAsync()
+    {
+        using var conn = _pc.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        using var scope = _blind.Services.CreateScope();
+        var blobs = scope.ServiceProvider.GetRequiredService<IBlobRepository>();
+        foreach (var data in await conn.QueryAsync<byte[]>("SELECT data FROM tbl_blob"))
+            await blobs.StoreAsync(data);
     }
 
     private static async Task<NodeIdentity> IdentityAsync(BmbWebApplicationFactory node) =>
         (await node.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
 
-    private static async Task<long> ScalarAsync(BmbWebApplicationFactory node, string sql)
+    private static async Task<long> ScalarAsync(BmbWebApplicationFactory node, string sql) =>
+        await ScalarAsync(node, sql, null);
+
+    private static async Task<long> ScalarAsync(BmbWebApplicationFactory node, string sql, object? param)
     {
         using var conn = node.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
-        return await conn.ExecuteScalarAsync<long>(sql);
+        return await conn.ExecuteScalarAsync<long>(sql, param);
+    }
+
+    private static async Task<string?> TextAsync(BmbWebApplicationFactory node, string sql, object? param)
+    {
+        using var conn = node.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        return await conn.ExecuteScalarAsync<string?>(sql, param);
     }
 }
