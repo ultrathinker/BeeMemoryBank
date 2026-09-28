@@ -206,6 +206,7 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
         }
         finally
         {
+            TryRemoveDirectoryLink(InCutover("marker.json"));
             TryDeleteTree(outside);
         }
     }
@@ -239,6 +240,7 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
         }
         finally
         {
+            TryRemoveDirectoryLink(BlindSeedCutover.DirOf(_data));
             TryDeleteTree(outside);
         }
     }
@@ -271,6 +273,23 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes a directory link itself — never recursively. On Windows the recursive delete throws on
+    /// a reparse point ("The parameter is incorrect"), and on any platform it must not touch what the
+    /// link points at. Called before the class's own cleanup, which walks the data root.
+    /// </summary>
+    private static void TryRemoveDirectoryLink(string link)
+    {
+        try
+        {
+            if (Directory.Exists(link)) Directory.Delete(link);
+        }
+        catch
+        {
+            // The test's own link; nothing depends on it going.
         }
     }
 
