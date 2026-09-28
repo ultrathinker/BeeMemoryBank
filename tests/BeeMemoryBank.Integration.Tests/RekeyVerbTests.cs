@@ -258,7 +258,14 @@ public sealed class RekeyVerbTests : IAsyncLifetime
     [Fact]
     public async Task APreflightBlock_LeavesDByteIdentical_AndCreatesNothing()
     {
-        AssertOldVaultInUse(await RunAsync(block: true), RekeyExit.PreflightRefused);
+        var outcome = await RunAsync(block: true);
+
+        AssertOldVaultInUse(outcome, RekeyExit.PreflightRefused);
+        // The report says why, next to D (not in it, and no rekey-new): what Desktop shows on exit 2.
+        outcome.ReportPath.Should().Be(Path.Combine(RekeyRunner.StoppedReportDirFor(_d), RekeyReport.FileName));
+        var report = RekeyReport.TryRead(RekeyRunner.StoppedReportDirFor(_d))!;
+        report.Result.Should().Be(RekeyReport.PreflightRefused);
+        report.Preflight!.Blocking.Should().ContainSingle(p => p.Problem == "an unopenable key");
     }
 
     [Fact]

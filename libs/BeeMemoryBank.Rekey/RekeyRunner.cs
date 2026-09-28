@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
@@ -61,22 +60,43 @@ public static class RekeyRunner
     public static readonly IReadOnlyList<string> RequiredSteps =
         ["KeyMaterial", "RowReseal", "ChatRekey", "DerivedDataClear", "PeerRevoke", "EventLogReset"];
 
-    public const string MainDb = "beememorybank.db", ChatDb = "chat.db", ReportFile = "rekey-report.json";
+    public const string MainDb = "beememorybank.db", ChatDb = "chat.db", ReportFile = RekeyReport.FileName;
 
     public const string FaultAfterCopy = "after-copy", FaultAfterSteps = "after-steps", FaultAfterVerify = "after-verify",
         FaultAfterScrub = "after-scrub";
 
+    /// <summary>
+    /// Where the report of a run that stopped before the swap goes: <c>&lt;D&gt;.rekey-report/rekey-report.json</c>, next to
+    /// D, so a refusal still creates no <c>D.rekey-new</c>. A later successful run's report is in the new D.
+    /// </summary>
+    public static string StoppedReportDirFor(string dataDir) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(dataDir)) + ".rekey-report";
+
     public static async Task<RekeyOutcome> RunAsync(RekeyOptions options, CancellationToken ct = default)
     {
         var d = Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.DataDir));
+        var log = new RekeyRunLog { StartedAt = (options.Now ?? DateTimeOffset.UtcNow).UtcDateTime };
+        var outcome = await RunCoreAsync(options, d, log, ct);
+        if (log.PastLock && outcome.Exit is RekeyExit.PreflightRefused or RekeyExit.FailedBeforeSwap)
+        {
+            var dir = StoppedReportDirFor(d);
+            Directory.CreateDirectory(dir);
+            RekeyReport.Write(dir, log.ToReport(
+                outcome.Exit == RekeyExit.PreflightRefused ? RekeyReport.PreflightRefused : RekeyReport.Failed, outcome.Message));
+            outcome = outcome with { ReportPath = Path.Combine(dir, RekeyReport.FileName) };
+        }
+        return outcome;
+    }
+
+    private static async Task<RekeyOutcome> RunCoreAsync(RekeyOptions options, string d, RekeyRunLog report, CancellationToken ct)
+    {
         var progress = options.Progress;
         var now = options.Now ?? DateTimeOffset.UtcNow;
-        var report = new RekeyReport { DataDir = d, StartedAt = now };
 
         if (!Directory.Exists(d) || !File.Exists(Path.Combine(d, MainDb)))
             return Fail(RekeyExit.FailedBeforeSwap, $"{d} holds no vault ({MainDb} is missing).");
         if (RekeySwapJournal.Read(d) != null)
-            return new(RekeyExit.SwapPending, "swap-pending", null,
+            return new(RekeyExit.SwapPending, RekeyReport.SwapPending, null,
                 $"A swap is pending ({RekeySwapJournal.PathFor(d)}): start the node to finish it before re-keying again.");
 
         // Step 0: the order matters. The re-key lock first, so a node starting now refuses; then the node's own
@@ -85,6 +105,8 @@ public static class RekeyRunner
         if (rekeyLock == null) return Fail(RekeyExit.FailedBeforeSwap, "Another re-key of this vault is running.");
         var succeeded = false;
         var newDir = RekeySwapJournal.NewDirFor(d);
+        report.PastLock = true;
+        if (Directory.Exists(StoppedReportDirFor(d))) Directory.Delete(StoppedReportDirFor(d), recursive: true); // an older run's
         try
         {
             using var nodeLock = RekeyLock.TryAcquireNodeLock(d);
@@ -105,7 +127,6 @@ public static class RekeyRunner
             if (owner == null)
                 return Refused(report, new RekeyPreflightReport([new("tbl_key_slot", "owner", "the password opens no superadmin key slot of this vault")], [], 0));
             using var keys = owner.Value.Keys;
-            report.OwnerSlotId = owner.Value.SlotId;
 
             // Step 1: pre-flight, read-only on the live files.
             progress.Report("preflight", 0, 1);
@@ -179,9 +200,7 @@ public static class RekeyRunner
             // node from starting.
             nodeLock.Dispose();
             report.OldVault = RekeySwapJournal.OldDirFor(d, now);
-            report.Result = "done";
-            report.FinishedAt = DateTimeOffset.UtcNow;
-            await File.WriteAllTextAsync(Path.Combine(newDir, ReportFile), JsonSerializer.Serialize(report, RekeyReport.Json), ct);
+            RekeyReport.Write(newDir, report.ToReport(RekeyReport.Done, null));
             progress.Report("swap", 0, 1);
             try
             {
@@ -190,12 +209,12 @@ public static class RekeyRunner
             catch when (RekeySwapJournal.Read(d) != null)
             {
                 succeeded = true; // the journal finishes the swap at the next start; keep the new vault
-                return new(RekeyExit.SwapPending, "swap-pending", Path.Combine(newDir, ReportFile),
+                return new(RekeyExit.SwapPending, RekeyReport.SwapPending, Path.Combine(newDir, RekeyReport.FileName),
                     "The swap was interrupted; the next start of the node finishes it.");
             }
             succeeded = true;
             progress.Report("swap", 1, 1);
-            return new(RekeyExit.Done, "done", Path.Combine(d, ReportFile), $"Re-keyed. The old vault is at {report.OldVault}.");
+            return new(RekeyExit.Done, RekeyReport.Done, Path.Combine(d, RekeyReport.FileName), $"Re-keyed. The old vault is at {report.OldVault}.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException || ct.IsCancellationRequested)
         {
@@ -214,20 +233,18 @@ public static class RekeyRunner
         }
     }
 
-    private static RekeyOutcome Fail(RekeyExit exit, string message) => new(exit, "failed", null, message);
+    private static RekeyOutcome Fail(RekeyExit exit, string message) => new(exit, RekeyReport.Failed, null, message);
 
-    private static RekeyOutcome Refused(RekeyReport report, RekeyPreflightReport pre)
+    private static RekeyOutcome Refused(RekeyRunLog report, RekeyPreflightReport pre)
     {
         report.Preflight = pre;
-        report.Result = "refused";
-        return new(RekeyExit.PreflightRefused, "refused", null,
+        return new(RekeyExit.PreflightRefused, RekeyReport.PreflightRefused, null,
             "The pre-flight refused; nothing was created: " + string.Join("; ", pre.Blocking.Take(20).Select(p => $"{p.Table}:{p.RowKey} {p.Problem}")));
     }
 
-    private static RekeyOutcome FailVerify(RekeyReport report, IReadOnlyList<RekeyProblem> problems)
+    private static RekeyOutcome FailVerify(RekeyRunLog report, IReadOnlyList<RekeyProblem> problems)
     {
-        report.Result = "verify-failed";
-        return new(RekeyExit.FailedBeforeSwap, "failed", null,
+        return new(RekeyExit.FailedBeforeSwap, RekeyReport.Failed, null,
             $"Verify failed ({problems.Count} problem(s)); the vault was not changed: "
             + string.Join("; ", problems.Take(20).Select(p => $"{p.Table}:{p.RowKey} {p.Problem}")));
     }
@@ -337,28 +354,26 @@ public static class RekeyRunner
     }
 }
 
-/// <summary>§8.4 <c>rekey-report.json</c>, read by R2's report page.</summary>
-public sealed class RekeyReport
+/// <summary>What a run collects for <see cref="RekeyReport"/> (R2's record, the one shape of rekey-report.json).</summary>
+internal sealed class RekeyRunLog
 {
-    public static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
-    public string Result { get; set; } = "running";
-    public string DataDir { get; set; } = "";
+    public bool PastLock { get; set; }
+    public DateTime StartedAt { get; init; }
     public string? OldVault { get; set; }
-    public DateTimeOffset StartedAt { get; set; }
-    public DateTimeOffset? FinishedAt { get; set; }
-    public int? OwnerSlotId { get; set; }
     public RekeyPreflightReport? Preflight { get; set; }
-    public List<RekeyStepResult> Steps { get; set; } = [];
+    public List<RekeyStepResult> Steps { get; } = [];
 
-    /// <summary>From PeerRevokeStep's notes, each <c>revoked:&lt;node id&gt; &lt;name&gt;</c>.</summary>
-    public IEnumerable<string> RevokedPeers => NotesOf("PeerRevoke", "revoked:");
-    /// <summary>From KeyMaterialStep's notes, each <c>cleared-slot:&lt;slot&gt; &lt;user&gt;</c>.</summary>
-    public IEnumerable<string> ClearedSlots => NotesOf("KeyMaterial", "cleared-slot:");
-    /// <summary>From KeyMaterialStep's notes, each <c>cleared-agent:&lt;id&gt; &lt;name&gt;</c>.</summary>
-    public IEnumerable<string> ClearedAgents => NotesOf("KeyMaterial", "cleared-agent:");
+    public RekeyReport ToReport(string result, string? error) => new(
+        result, StartedAt, DateTime.UtcNow, Preflight, Steps,
+        RevokedPeers: NotesOf("PeerRevoke", "revoked:"),
+        ClearedSlots: NotesOf("KeyMaterial", "cleared-slot:"),
+        ClearedAgents: NotesOf("KeyMaterial", "cleared-agent:"),
+        OldVault: result == RekeyReport.Done ? OldVault : null,
+        Error: error);
 
-    private IEnumerable<string> NotesOf(string step, string prefix) =>
+    /// <summary>PeerRevokeStep's <c>revoked:&lt;node id&gt; &lt;name&gt;</c>, KeyMaterialStep's
+    /// <c>cleared-slot:&lt;slot&gt; &lt;user&gt;</c> and <c>cleared-agent:&lt;id&gt; &lt;name&gt;</c>.</summary>
+    private List<string> NotesOf(string step, string prefix) =>
         Steps.Where(s => s.Name == step).SelectMany(s => s.Notes).Where(n => n.StartsWith(prefix, StringComparison.Ordinal))
             .Select(n => n[prefix.Length..]).ToList();
 }
