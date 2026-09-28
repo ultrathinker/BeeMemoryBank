@@ -284,6 +284,24 @@ public class RekeyPreflightTests : RekeyVaultTestBase
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
     private static extern int mkfifo(string path, uint mode);
 
+    /// <summary>
+    /// Legacy plaintext in chat.db (a conversation title and a provider-key prefix from before they were sealed) is
+    /// detected and named: the re-key seals it, so it does not block, but the owner is told it was there.
+    /// </summary>
+    [Fact]
+    public async Task LegacyPlaintextTitlesAndKeyPrefixes_AreNamed_WithoutBlocking()
+    {
+        MutateIn(Chat,
+            "UPDATE chat_conversation SET title = 'legacy title', title_ciphertext = NULL, title_iv = NULL, title_key_v = NULL",
+            "UPDATE chat_api_key SET key_prefix = 'sk-legacy', key_prefix_ciphertext = NULL, key_prefix_iv = NULL, key_prefix_key_v = NULL");
+
+        var report = await RunAsync();
+
+        report.Blocking.Should().BeEmpty();
+        report.Warnings.Should().Contain(w => w.StartsWith("chat_conversation.title_ciphertext:") && w.Contains("plaintext"));
+        report.Warnings.Should().Contain(w => w.StartsWith("chat_api_key.key_prefix_ciphertext:") && w.Contains("plaintext"));
+    }
+
     /// <summary>The keys belong to the verb; the pre-flight neither clears nor keeps any of them.</summary>
     [Fact]
     public async Task TheCandidateKeys_AreLeftAsTheyWere()

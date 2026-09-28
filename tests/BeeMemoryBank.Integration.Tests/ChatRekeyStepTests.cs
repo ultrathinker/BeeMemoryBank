@@ -100,6 +100,69 @@ public class ChatRekeyStepTests : RekeyVaultTestBase
             raw.AsSpan().IndexOf(bytes).Should().BeLessThan(0, $"the old ciphertext of {id} must not be left in chat.db");
     }
 
+    /// <summary>
+    /// A conversation title and a provider-key prefix from before they were sealed: only the plaintext column holds
+    /// them (the hosted backfill had not run when the node stopped). The re-key seals both under the new chat key,
+    /// bound to their row, and clears the plaintext column to '' as the product does (the columns are NOT NULL).
+    /// </summary>
+    [Fact]
+    public async Task LegacyPlaintextTitlesAndKeyPrefixes_AreSealedUnderTheNewChatKey_AndTheirColumnsCleared()
+    {
+        var (conversation, apiKey) = PutBackLegacyTitleAndPrefix();
+
+        var (result, problems, keys) = await RunAsync();
+
+        problems.Should().BeEmpty();
+        result.Counts.Should().ContainKey("chat_conversation.title_ciphertext (was plaintext)");
+        result.Counts.Should().ContainKey("chat_api_key.key_prefix_ciphertext (was plaintext)");
+        using (var chat = Open(WorkChat, readOnly: true))
+        {
+            var t = chat.QuerySingle<(string Plain, byte[] Cipher, byte[] Iv, long Version)>(
+                "SELECT title, title_ciphertext, title_iv, title_key_v FROM chat_conversation WHERE id = @conversation", new { conversation });
+            t.Plain.Should().BeEmpty();
+            t.Version.Should().Be(1);
+            ArticleEncryptor.Decrypt(t.Cipher, t.Iv, keys.ChatKey, Encoding.UTF8.GetBytes($"bmb-chat-conversation-title-v1:{Guid.Parse(conversation):D}"))
+                .Should().Be("CHAT-SENTINEL-legacy-title");
+            var p = chat.QuerySingle<(string Plain, byte[] Cipher, byte[] Iv, long Version)>(
+                "SELECT key_prefix, key_prefix_ciphertext, key_prefix_iv, key_prefix_key_v FROM chat_api_key WHERE id = @apiKey", new { apiKey });
+            p.Plain.Should().BeEmpty();
+            p.Version.Should().Be(1);
+            ArticleEncryptor.Decrypt(p.Cipher, p.Iv, keys.ChatKey, Encoding.UTF8.GetBytes($"bmb-chat-api-key-prefix-v1:{Guid.Parse(apiKey):D}"))
+                .Should().Be("sk-SENTINEL-prefix");
+        }
+        SqliteConnection.ClearAllPools();
+        var raw = RawBytes(WorkChat);
+        foreach (var sentinel in new[] { "CHAT-SENTINEL-legacy-title", "sk-SENTINEL-prefix" })
+            raw.AsSpan().IndexOf(Encoding.UTF8.GetBytes(sentinel)).Should().BeLessThan(0, $"'{sentinel}' must not be left in chat.db");
+    }
+
+    [Fact]
+    public async Task Verify_FindsALegacyTitleOrKeyPrefixLeftInPlace()
+    {
+        using var keys = NewKeys();
+        var step = new ChatRekeyStep();
+        await step.RunAsync(Context(keys));
+        var (conversation, apiKey) = PutBackLegacyTitleAndPrefix();
+
+        var problems = await step.VerifyAsync(Context(keys));
+
+        problems.Should().Contain(p => p.Table == "chat_conversation.title_ciphertext" && p.RowKey == conversation && p.Problem.Contains("plaintext"));
+        problems.Should().Contain(p => p.Table == "chat_api_key.key_prefix_ciphertext" && p.RowKey == apiKey && p.Problem.Contains("plaintext"));
+    }
+
+    /// <summary>One conversation and one provider key of the copy put back as they were before sealing: plaintext only.</summary>
+    private (string Conversation, string ApiKey) PutBackLegacyTitleAndPrefix()
+    {
+        using var chat = Open(WorkChat, readOnly: false);
+        var conversation = chat.ExecuteScalar<string>("SELECT id FROM chat_conversation ORDER BY rowid LIMIT 1")!;
+        var apiKey = chat.ExecuteScalar<string>("SELECT id FROM chat_api_key ORDER BY rowid LIMIT 1")!;
+        chat.Execute(@"UPDATE chat_conversation SET title = 'CHAT-SENTINEL-legacy-title', title_ciphertext = NULL, title_iv = NULL, title_key_v = NULL
+                       WHERE id = @conversation", new { conversation });
+        chat.Execute(@"UPDATE chat_api_key SET key_prefix = 'sk-SENTINEL-prefix', key_prefix_ciphertext = NULL, key_prefix_iv = NULL, key_prefix_key_v = NULL
+                       WHERE id = @apiKey", new { apiKey });
+        return (conversation, apiKey);
+    }
+
     [Fact]
     public async Task TheCopysChatKeyRow_IsUnderTheNewDek_AndNoOldOne()
     {

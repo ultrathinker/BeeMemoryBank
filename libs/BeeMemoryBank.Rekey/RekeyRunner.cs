@@ -370,7 +370,8 @@ internal sealed class RekeyRunLog
         ClearedAgents: NotesOf("KeyMaterial", "cleared-agent:"),
         OldVault: result == RekeyReport.Done ? OldVault : null,
         Error: error,
-        ResetUsers: NotesOf("KeyMaterial", "reset-user:"));
+        ResetUsers: NotesOf("KeyMaterial", "reset-user:"),
+        RevokedTokens: NotesOf("KeyMaterial", "revoked-token:"));
 
     /// <summary>PeerRevokeStep's <c>revoked:&lt;node id&gt; &lt;name&gt;</c>, KeyMaterialStep's
     /// <c>cleared-slot:&lt;slot&gt; &lt;user&gt;</c>, <c>cleared-agent:&lt;id&gt; &lt;name&gt;</c> and

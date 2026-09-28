@@ -12,6 +12,8 @@ namespace BeeMemoryBank.Rekey;
 /// <param name="OldVault">The old vault's folder, <c>D.pre-rekey-&lt;ts&gt;</c>, after the swap; null before it.</param>
 /// <param name="ResetUsers">Every user but the owner, as <c>&lt;id&gt; &lt;username&gt;</c>: none of them can sign in until
 /// the owner sets a new password for them.</param>
+/// <param name="RevokedTokens">Every remote API token (bmbrt_), the owner's included, as
+/// <c>&lt;id&gt; &lt;username&gt; &lt;label&gt;</c>: the nodes that held them must be given new ones.</param>
 public sealed record RekeyReport(
     string Result,
     DateTime StartedAt,
@@ -23,7 +25,8 @@ public sealed record RekeyReport(
     IReadOnlyList<string> ClearedAgents,
     string? OldVault,
     string? Error = null,
-    IReadOnlyList<string>? ResetUsers = null)
+    IReadOnlyList<string>? ResetUsers = null,
+    IReadOnlyList<string>? RevokedTokens = null)
 {
     public const string FileName = "rekey-report.json";
 

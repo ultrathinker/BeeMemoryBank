@@ -35,6 +35,8 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
     private const string Password = "rekeyOwnerPw1";
     private const string Admin2Password = "rekeyAdmin2Pw1";
     private const string ReaderPassword = "rekeyReaderPw1";
+    private const string OldInternalKey = "OLD-INTERNAL-KEY-SENTINEL-0123456789abcdef";
+    private readonly List<string> _remoteTokens = [];
     private static readonly (string User, string Password)[] OtherUsers = [("admin2", Admin2Password), ("reader", ReaderPassword)];
     private const long PlantedLamport = 1_000_000;
 
@@ -83,6 +85,17 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             session.Lock();
             (await session.UnlockAsync(credential)).Should().BeTrue("before the re-key this credential unlocks");
         }
+
+        // Remote API tokens (bmbrt_), as another person's node holds them: one issued by the owner, one by a user.
+        _remoteTokens.Clear();
+        foreach (var (user, pw) in new[] { ("admin", Password), ("reader", ReaderPassword) })
+        {
+            var issued = await client.PostAsJsonAsync("/api/auth/remote-token", new { username = user, password = pw, label = $"{user}-friend" });
+            issued.EnsureSuccessStatusCode();
+            _remoteTokens.Add((await issued.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString()!);
+        }
+        foreach (var token in _remoteTokens)
+            (await RemoteTokenStatusAsync(factory, token)).Should().Be(HttpStatusCode.OK, "before the re-key the remote token is accepted");
 
         // An agent of the owner: it carries the master key and unlocks the vault by itself.
         client.DefaultRequestHeaders.Add("X-User-Id", adminId.ToString());
@@ -144,6 +157,8 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
 
         _d = Path.Combine(_root, "vault-" + Guid.NewGuid().ToString("N")[..8]);
         CopyTree(factory.DataPath, _d);
+        // The Web-to-Api key a Docker or dev node keeps in D (the test host passes its key in the environment instead).
+        await File.WriteAllTextAsync(Path.Combine(_d, ".internal-key"), OldInternalKey);
     }
 
     public Task DisposeAsync()
@@ -197,6 +212,39 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         (await node.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue();
 
         (await AgentKeyRecognizedAsync(node)).Should().BeFalse("every agent is revoked by the re-key");
+    }
+
+    [Fact]
+    public async Task EveryRemoteToken_TheOwnersIncluded_IsRefused_AndListed()
+    {
+        var outcome = await RunAsync();
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+
+        using var node = new NodeAt(_d);
+        (await node.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue();
+        foreach (var token in _remoteTokens)
+            (await RemoteTokenStatusAsync(node, token)).Should().Be(HttpStatusCode.Unauthorized, "every remote token is revoked by the re-key");
+
+        var report = RekeyReport.TryRead(_d)!;
+        report.RevokedTokens.Should().HaveCount(2).And.Contain(t => t.Contains(" admin ")).And.Contain(t => t.Contains(" reader "));
+    }
+
+    [Fact]
+    public async Task TheNewVault_HasAFreshInternalKey_NotTheOldOne()
+    {
+        var outcome = await RunAsync();
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+
+        var file = Path.Combine(_d, ".internal-key");
+        File.Exists(file).Should().BeTrue("a Docker or dev start reads the key from D");
+        var key = (await File.ReadAllTextAsync(file)).Trim();
+        key.Should().NotBe(OldInternalKey, "the old key is a full-trust credential of the old vault");
+        key.Should().MatchRegex("^[0-9A-F]{64}$");
+        if (!OperatingSystem.IsWindows())
+            File.GetUnixFileMode(file).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        foreach (var f in Directory.EnumerateFiles(_d, "*", SearchOption.AllDirectories))
+            (await File.ReadAllBytesAsync(f)).AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(OldInternalKey))
+                .Should().BeLessThan(0, $"the old internal key must not be anywhere in the new vault ({f})");
     }
 
     [Fact]
@@ -334,6 +382,14 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             System.Text.Encoding.UTF8, "application/json"));
         var body = await resp.Content.ReadAsStringAsync();
         return resp.StatusCode != HttpStatusCode.Unauthorized && !body.Contains("agent key was not recognized");
+    }
+
+    /// <summary>A read of the remote mirror with a bmbrt_ token, as another person's node makes it (no internal key).</summary>
+    private static async Task<HttpStatusCode> RemoteTokenStatusAsync(BmbWebApplicationFactory node, string token)
+    {
+        using var remote = node.Server.CreateClient();
+        remote.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return (await remote.GetAsync("/api/folders/accessible")).StatusCode;
     }
 
     private async Task AgentRequestAsync(BmbWebApplicationFactory node)
