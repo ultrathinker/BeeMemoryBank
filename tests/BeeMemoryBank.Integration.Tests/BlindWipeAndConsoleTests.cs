@@ -255,9 +255,15 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
             new { consolePassword = "console-pw-123", confirmNodeName = "BlindWipeNode" });
         try
         {
-            await Task.Delay(400);
+            // Polled, not a fixed sleep: before it pauses the loop the wipe takes two process-wide barriers
+            // (EventWriteGate, HeavyOperationLock), and in a full run another test class may hold one of them
+            // for longer than any fixed delay.
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!scheduler.IsPaused && !wipe.IsCompleted && DateTime.UtcNow < deadline) await Task.Delay(50);
             wipe.IsCompleted.Should().BeFalse("the wipe waits for the connection still open on the database");
             scheduler.IsPaused.Should().BeTrue("the barrier is held: the sync loop is paused for the duration");
+            await Task.Delay(400);
+            wipe.IsCompleted.Should().BeFalse("and it keeps waiting while the connection is open");
         }
         finally
         {
