@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 1.0.12: blind nodes, recovery by master password, offline re-key (2026-09-29)
+
+**Update every device together: 1.0.12 speaks sync protocol 3 and does not sync with 1.0.11 or older.**
+An older device is refused cleanly (nothing is half-applied and nothing is quarantined) and shows
+"not synced" without a reason until it is updated; sync resumes by itself once both sides are on 1.0.12.
+
+- **Blind nodes: a backup relay that holds no keys.** A blind node (`BMB_ROLE=blind`) keeps a copy of the
+  mesh as ciphertext only. It never unlocks, never derives a key and cannot author events: events
+  authored by a blind node, and key rotations that seal a key for one, are refused and never relayed. A
+  blind row can never be a superadmin or auto-accept peers. It ships as a Docker image with a local
+  console (loopback only, its own password), a `bmb blind` command line (secrets never on the command
+  line), pairing by one-time pair codes, a seed and a lossless reseed from a signed package, and backups
+  with restic to a folder or S3 (schedule, retention, a weekly check, "Save a copy to…"). "Disconnect and
+  wipe" removes everything the node holds. On Android a phone can hold a blind copy too: background sync
+  and resumable encrypted backup files on Wi-Fi and charger.
+- **Sync protocol 3 as an enforcement boundary, and pinned TLS.** Authentication answers 426 below
+  protocol 3, tokens are bound to the declared protocol, and the client neither pulls nor pushes below it.
+  Every sync client, mobile included, can pin the peer's TLS key; join codes carry the pin (QR and text),
+  and a pinned request never follows a redirect or falls back to plain HTTP.
+- **Recovery by the master password when every full device is gone.** Recovery boxes seal the master key
+  under the password (device boxes while passwords differ, one strong box otherwise), and a state anchor
+  published by a superadmin lets a restore say what it can vouch for. A new node can be restored from a
+  blind node, a backup folder or restic, through a Setup wizard; the restore code carries the pin, and
+  superadmin flags and peers survive only where the anchor vouches for them.
+- **Join a device on the fly.** A running node opens a LAN join listener without a restart and without
+  losing the unlock: one-time token, only the join calls exposed, off after 15 minutes or once the
+  joined device has its snapshot. Any device that knows the master password may join.
+- **Offline re-key (`bmb rekey`).** For after a key has leaked: with the node stopped, `bmb rekey`
+  re-seals the vault under fresh keys on a copy, proves that no old master, entity or data key opens
+  anything in the copy and that no old ciphertext survives in its files, scrubs it, and swaps it in with
+  a journaled, crash-safe swap. Desktop has it as "Re-key…" under Manage profiles, with progress and a
+  report page. Every agent is revoked, every other user is locked until the owner resets the password,
+  and only the owner's slot survives. Every other device, blind nodes included, is revoked and has to
+  join or pair again, and a peer that asks for the old log is sent to a snapshot. A comment sealed under a
+  key that only the event log kept is dropped from the copy and listed in the report.
+- **Chat titles and provider key prefixes are sealed** under the chat key, like the messages.
+- **A master key has a fingerprint.** Recovery boxes, key links and anchors name their key by it,
+  because rotation numbers are not unique across devices.
+
 #### Confidential per-peer DEK rotation — X25519 envelopes (ADR 0006, 2026-09-04/05)
 
 A DEK rotation used to wrap the new Master DEK under the *old* one and ship it inside the signed
@@ -189,6 +228,56 @@ revoke rows that predate the row-versioning migration above and never got their 
 `whitelist_revoke` event to anchor a version against.
 
 ### Fixed
+
+#### 1.0.12: fixes from the review rounds (2026-09-29)
+
+The blind-node, recovery and re-key work went through several review rounds; each fix has a test that
+fails without it.
+
+- **A blind node paired again after a re-key never synced.** The full node asked it for events from
+  nothing and was refused on every cycle, so nothing was pushed either. A full node that holds no pull
+  position for the blind node now takes the blind node's own checkpoint as its pull position, once, and
+  only when the answer is the "position too old" refusal and its checkpoint does not contradict the head it
+  reports; the Blind nodes page shows it as "Adopted checkpoint N". A position the node already holds is
+  never moved by a refusal, and any refusal that is not taken stays a refusal, worded as the blind node's
+  (a refusal from any other kind of peer still asks for a wipe and rejoin).
+- **Sync:**
+  - the log is cut by what a peer acknowledged, not by what it was served, so a slow peer no longer
+    loses events it never received;
+  - an event of our own pulled back from a peer is skipped only when it is proven ours, and a forged
+    event that names us is not skipped;
+  - a pull that brings nothing still counts as a pull;
+  - a position a peer reports must fit the log it claims to have read;
+  - the owner-flow mark lasts one apply, not the whole flow.
+- **Blind nodes:**
+  - a completed reseed wipes the database it replaced, and a reseed waits for a running backup;
+  - the cutover writes and deletes only its own plain paths, and never through a link;
+  - the wipe takes a barrier for every writer before it deletes anything, and a wiped node gets its
+    identity back before the wipe answers;
+  - a cutover marker nobody can read is unresolved, not absent, and a key file a crash left empty or torn
+    no longer stops the node;
+  - "already set" and "wrong password" are different refusals, and the key file's temporary path is
+    unpredictable and never a link;
+  - the status counts what the node holds, and a network of one PC and a blind node bootstraps its
+    authority from the pair code.
+- **Recovery:**
+  - an inactive recovery box keeps no key material;
+  - a box change is one transaction, and trimmed boxes take their events with them;
+  - a half-written restore is not an initialized node, and a restore that stopped resumes instead of
+    repeating itself.
+- **A database that already holds a node is never initialized over,** and a vault from before the
+  password unification counts as an initialized vault.
+- **Re-key:**
+  - every Api process holds the vault lease, and the verb refuses while one runs;
+  - every `bmb` command passes the vault gate before it opens the data, and a swap is resolved only with
+    the lease held exclusively;
+  - the swap journal and its renames are durable, a lost journal is recognised, and the journal is never
+    trusted: only the swap's own siblings are moved;
+  - a vault reached through a junction or symbolic link is refused, and the re-key never follows one out
+    of the data folder;
+  - the node completes its first start after a swap, and the old internal key is not carried over;
+  - the pre-flight is read-only, fails closed, and refuses what the re-seal would fail on.
+- **Search:** a full rebuild drops the in-memory index too.
 
 #### 1.0.11: key rotation, protected comments (2026-09-27)
 
