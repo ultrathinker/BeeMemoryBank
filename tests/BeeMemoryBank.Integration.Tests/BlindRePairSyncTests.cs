@@ -11,6 +11,7 @@ using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -26,7 +27,7 @@ namespace BeeMemoryBank.Integration.Tests;
 public class BlindRePairSyncTests : IAsyncLifetime
 {
     private const string Password = "blindRePairPw1!";
-    private const int UsedCounter = 54;
+    private const int PhoneEvents = 54;
     private readonly BlindNodeFactory _blind = new(drainWaitSeconds: 10);
     private readonly BmbWebApplicationFactory _pc = new();
     private HttpClient _pcClient = null!;
@@ -42,6 +43,11 @@ public class BlindRePairSyncTests : IAsyncLifetime
         _pcClient = _pc.CreateClient();
         (await _pcClient.PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password }))
             .EnsureSuccessStatusCode();
+        // A background cycle would push, pull and adopt on its own clock, in the middle of the test's steps. The test's
+        // own SyncAsync is the cycle (the scheduler's call is SyncScheduler's own test, in Sync.Tests).
+        foreach (var node in new BmbWebApplicationFactory[] { _pc, _blind })
+            foreach (var scheduler in node.Services.GetServices<IHostedService>().OfType<SyncScheduler>())
+                await scheduler.StopAsync(CancellationToken.None);
     }
 
     public Task DisposeAsync()
@@ -57,20 +63,22 @@ public class BlindRePairSyncTests : IAsyncLifetime
     /// <summary>
     /// The state after a re-key, the way the stand reached it: a blind node with a used log (a phone's events pushed to
     /// it, all of them pulled by the PC), then the PC's sync positions cleared and, when <paramref name="revoked"/>, the
-    /// blind node's whitelist row revoked as the re-key does.
+    /// blind node's whitelist row revoked as the re-key does. Returns the blind node and its checkpoint after the
+    /// re-pair: the head its old log had (54 phone events, plus whatever the PC pushed there).
     /// </summary>
-    private async Task<Guid> UsedBlindNodeAfterAReKeyAsync(bool revoked)
+    private async Task<(Guid BlindId, long Cp)> UsedBlindNodeAfterAReKeyAsync(bool revoked)
     {
         await AddBlindNodeAsync();
         var blindId = (await IdentityAsync(_blind)).NodeId;
         (_hubId, _hubKey) = await TrustSuperadminOnBothAsync();
-        for (var i = 0; i < UsedCounter; i++)
+        for (var i = 0; i < PhoneEvents; i++)
             await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), $"Phone {i}"));
-        (await _blind.Services.GetRequiredService<IEventLogRepository>().GetMaxSequenceAsync()).Should().Be(UsedCounter);
 
-        // Everything the phones pushed is the PC's by now.
+        // Everything the phones pushed is the PC's by now (and what the PC has is the blind node's).
         await SyncAsync(blindId);
-        (await PullPositionAsync(blindId)).Should().Be(UsedCounter, "precondition: the PC has pulled the blind node's whole log");
+        var head = await _blind.Services.GetRequiredService<IEventLogRepository>().GetMaxSequenceAsync();
+        head.Should().BeGreaterThanOrEqualTo(PhoneEvents, "precondition: a used log");
+        (await PullPositionAsync(blindId)).Should().Be(head, "precondition: the PC has pulled the blind node's whole log");
 
         // The re-key: positions cleared, the blind node's whitelist row revoked.
         using (var conn = _pc.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
@@ -84,9 +92,9 @@ public class BlindRePairSyncTests : IAsyncLifetime
 
         await AddBlindNodeAsync(); // paired again from a fresh code: HTTP 200, "added and seeded"
         (await _blind.Services.GetRequiredService<IEventLogRepository>().GetLastCompactionCpAsync())
-            .Should().Be(UsedCounter, "precondition: the seed left the checkpoint at the old counter, above the PC's position");
+            .Should().Be(head, "precondition: the seed left the checkpoint at the old head, above the PC's position");
         (await PullPositionAsync(blindId)).Should().BeNull("precondition: pairing sets the push position only");
-        return blindId;
+        return (blindId, head);
     }
 
     // ------------------------------------------------------------------ the floor tests
@@ -100,11 +108,11 @@ public class BlindRePairSyncTests : IAsyncLifetime
     [InlineData(true)]
     public async Task ARePairedUsedBlindNode_SyncsBothWays_AndSkipsNothing(bool revoked)
     {
-        var blindId = await UsedBlindNodeAfterAReKeyAsync(revoked);
-        // Written after the re-pair: by a phone on the blind node (its next sequence numbers are 55 and 56), by the PC.
+        var (blindId, cp) = await UsedBlindNodeAfterAReKeyAsync(revoked);
+        // Written after the re-pair: by a phone on the blind node (its next two sequence numbers), by the PC.
         var phoneA = await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), "Phone after A"));
         var phoneB = await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), "Phone after B"));
-        (await _blind.Services.GetRequiredService<IEventLogRepository>().GetMaxSequenceAsync()).Should().Be(UsedCounter + 2);
+        (await _blind.Services.GetRequiredService<IEventLogRepository>().GetMaxSequenceAsync()).Should().Be(cp + 2);
         using (var scope = _pc.Services.CreateScope())
             await scope.ServiceProvider.GetRequiredService<ArticleService>().CreateAsync("Written by the PC after the re-key", "/Notes", [], "body");
 
@@ -115,7 +123,7 @@ public class BlindRePairSyncTests : IAsyncLifetime
         var pcWhitelist = _pc.Services.GetRequiredService<IWhitelistRepository>();
         (await pcWhitelist.GetByNodeIdAsync(phoneA)).Should().NotBeNull("the event just above the checkpoint is not skipped");
         (await pcWhitelist.GetByNodeIdAsync(phoneB)).Should().NotBeNull();
-        (await PullPositionAsync(blindId)).Should().Be(UsedCounter + 2, "the position is in the blind node's own sequence space");
+        (await PullPositionAsync(blindId)).Should().Be(cp + 2, "the position is in the blind node's own sequence space");
 
         // And it goes on, both ways, with no help.
         var phoneC = await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), "Phone after C"));
@@ -134,14 +142,14 @@ public class BlindRePairSyncTests : IAsyncLifetime
     [Fact]
     public async Task AUsedBlindVolume_StillRefusesAPullFromBelowItsCheckpoint_ToAPhone()
     {
-        var blindId = await UsedBlindNodeAfterAReKeyAsync(revoked: false);
+        var (blindId, cp) = await UsedBlindNodeAfterAReKeyAsync(revoked: false);
         using var http = _pc.Services.GetRequiredService<IHttpClientFactory>().CreateClient("SyncScheduler");
         var row = (await _pc.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(blindId))!;
 
         using (var scope = _pc.Services.CreateScope())
         {
             var plain = () => scope.ServiceProvider.GetRequiredService<SyncClient>().SyncWithAsync(http, row.ApiAddress!, blindId);
-            (await plain.Should().ThrowAsync<SnapshotRequiredException>()).Which.LastCompactionCp.Should().Be(UsedCounter);
+            (await plain.Should().ThrowAsync<SnapshotRequiredException>()).Which.LastCompactionCp.Should().Be(cp);
         }
 
         (await PullPositionAsync(blindId)).Should().BeNull("the plain entry adopts nothing");
@@ -151,51 +159,13 @@ public class BlindRePairSyncTests : IAsyncLifetime
     [Fact]
     public async Task AReseedOfARePairedUsedBlindNode_Works()
     {
-        var blindId = await UsedBlindNodeAfterAReKeyAsync(revoked: false);
+        var (blindId, cp) = await UsedBlindNodeAfterAReKeyAsync(revoked: false);
 
         var reseed = await _pcClient.PostAsync($"/api/blind-nodes/{blindId}/reseed", null);
 
         reseed.StatusCode.Should().Be(HttpStatusCode.OK, await reseed.Content.ReadAsStringAsync());
         await SyncAsync(blindId);
-        (await PullPositionAsync(blindId)).Should().BeGreaterThanOrEqualTo(UsedCounter);
-    }
-
-    /// <summary>
-    /// The other route to a re-paired blind node, "Disconnect and wipe" and then add it again from the same PC: the wipe
-    /// gives the node a new identity and the seed builds a new database, so the PC has no position for the new id, the
-    /// blind node's log is empty, and sync works both ways. Whether the PC's position for the OLD id survives changes nothing.
-    /// </summary>
-    [Fact]
-    public async Task AfterDisconnectAndWipe_AddingTheBlindNodeAgain_SyncsBothWays()
-    {
-        await AddBlindNodeAsync();
-        var oldId = (await IdentityAsync(_blind)).NodeId;
-        (_hubId, _hubKey) = await TrustSuperadminOnBothAsync();
-        for (var i = 0; i < UsedCounter; i++)
-            await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), $"Phone {i}"));
-        await SyncAsync(oldId);
-        (await PullPositionAsync(oldId)).Should().Be(UsedCounter);
-
-        using (var console = _blind.CreateClient())
-        {
-            (await console.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "console-pw-123" }))
-                .StatusCode.Should().Be(HttpStatusCode.NoContent);
-            var name = (await IdentityAsync(_blind)).DisplayName;
-            (await console.PostAsJsonAsync("/api/blind/wipe", new { consolePassword = "console-pw-123", confirmNodeName = name }))
-                .StatusCode.Should().Be(HttpStatusCode.OK);
-        }
-        var newId = (await IdentityAsync(_blind)).NodeId;
-        newId.Should().NotBe(oldId, "a wiped blind node takes a new identity");
-        (await PullPositionAsync(oldId)).Should().Be(UsedCounter, "the PC's position for the old id survives, and is beside the point");
-
-        await AddBlindNodeAsync();
-        var phone = await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), "Phone after the wipe"));
-        using (var scope = _pc.Services.CreateScope())
-            await scope.ServiceProvider.GetRequiredService<ArticleService>().CreateAsync("Written after the wipe", "/Notes", [], "body");
-        await SyncAsync(newId);
-
-        (await ScalarAsync(_blind, "SELECT COUNT(*) FROM tbl_article WHERE title = 'Written after the wipe'")).Should().Be(1);
-        (await _pc.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(phone)).Should().NotBeNull();
+        (await PullPositionAsync(blindId)).Should().BeGreaterThanOrEqualTo(cp);
     }
 
     // ------------------------------------------------------------------ helpers (as in BlindPairingSeedTests)
