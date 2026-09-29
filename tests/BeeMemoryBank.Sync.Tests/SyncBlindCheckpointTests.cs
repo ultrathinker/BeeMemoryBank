@@ -1,0 +1,291 @@
+using System.Text;
+using System.Text.Json;
+using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
+using Dapper;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Xunit;
+
+namespace BeeMemoryBank.Sync.Tests;
+
+/// <summary>
+/// A blind node seeded by this node keeps a log that starts at the seed's checkpoint (its last_compaction_cp), and
+/// answers 410 SEQUENCE_TOO_OLD to a pull from below it. A full node that has no pull position for it (a re-key
+/// clears them) must adopt that checkpoint and go on, or it never pushes anything to the blind node again. Only a
+/// blind peer, and only through the full node's entry (<see cref="SyncClient.SyncWithPeerAsync"/>, the scheduler's and
+/// the reseed's); a phone's <see cref="SyncClient.SyncWithAsync"/> and a full peer's 410 stay refusals.
+/// </summary>
+public class SyncBlindCheckpointTests : IAsyncLifetime
+{
+    private const long Checkpoint = 54;
+    private SyncTestFixture _node = null!;
+    private SyncClient _client = null!;
+    private SyncPositionRepository _positions = null!;
+    private MockHandler _handler = null!;
+    private HttpClient _http = null!;
+    private Guid _peerId;
+
+    public async Task InitializeAsync()
+    {
+        _node = new Fixture();
+        await _node.InitializeAsync();
+        await _node.InitService.InitializeAsync("admin", "LocalNode", "pass");
+        await _node.Session.UnlockAsync("pass");
+        await _node.ArticleService.CreateAsync("Test Article", "/Root", new List<string>(), "content");
+
+        _positions = new SyncPositionRepository(_node.Factory);
+        _client = new SyncClient(_node.NodeRepo, _node.EventLogRepo, _positions, new SyncPushPositionRepository(_node.Factory),
+            _node.EventApplier, _node.Session, new SessionNodeAuthSigner(_node.Session),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SyncClient>.Instance, new PeerNewerProtocolState(),
+            _node.QuarantineRepo, new BlobRepository(_node.Factory));
+
+        _peerId = BlindNodeId.NewId();
+        _handler = new MockHandler();
+        _http = new HttpClient(_handler) { BaseAddress = new Uri("http://remote.local") };
+        _handler.MapRoute("/api/sync/sentinel", _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        _handler.MapRoute("/api/sync/challenge", _ => Json(new { challenge = Convert.ToBase64String(new byte[32]), serverNodeId = _peerId }));
+        _handler.MapRoute("/api/sync/authenticate", _ => Json(new { token = "test-token" }));
+        _handler.MapRoute("/api/sync/report-position", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        _handler.MapRoute("/api/sync/blobs/check", req =>
+        {
+            var hashes = JsonDocument.Parse(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult())
+                .RootElement.GetProperty("hashes").EnumerateArray().Select(h => h.GetString()!).ToList();
+            return Json(new { missing = hashes });
+        });
+        _handler.MapRoute("/api/sync/blobs", _ => Json(new { stored = 1, rejected = 0 }));
+        MapIdentity();
+        MapEvents(_ => Checkpoint);
+    }
+
+    public async Task DisposeAsync()
+    {
+        _http.Dispose();
+        await _node.DisposeAsync();
+    }
+
+    private static HttpResponseMessage Json(object body, System.Net.HttpStatusCode status = System.Net.HttpStatusCode.OK) =>
+        new(status) { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
+
+    private void MapIdentity() =>
+        _handler.MapRoute("/api/sync/identity", _ => Json(new
+        {
+            nodeId = _peerId, displayName = "Peer", ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+            protocolVersion = SyncProtocolVersion.Current
+        }));
+
+    /// <summary>The peer's pull: 410 with <paramref name="checkpointFor"/>(afterSequence) when below it, else an empty page.</summary>
+    private void MapEvents(Func<long, long> checkpointFor) =>
+        _handler.MapRoute("/api/sync/events", req =>
+        {
+            if (req.Method == HttpMethod.Post)
+                return Json(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 });
+            var after = long.Parse(System.Web.HttpUtility.ParseQueryString(req.RequestUri!.Query)["afterSequence"] ?? "0");
+            var cp = checkpointFor(after);
+            return after < cp
+                ? Json(new { error = "SEQUENCE_TOO_OLD", last_compaction_cp = cp, current_head_seq = cp, message = "too old" },
+                    System.Net.HttpStatusCode.Gone)
+                : Json(Array.Empty<object>());
+        });
+
+    private async Task<long?> PositionAsync() => (await _positions.GetAsync(_peerId))?.LastSequenceNum;
+
+    private List<string> Pulls => _handler.CallLog.Where(c => c == "GET /api/sync/events").ToList();
+
+    [Fact]
+    public async Task ABlindPeerBelowItsCheckpoint_IsPulledAgainFromThatCheckpoint()
+    {
+        var afterValues = new List<long>();
+        MapEvents(after => { afterValues.Add(after); return Checkpoint; });
+
+        await _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        afterValues.Should().Equal([0L, Checkpoint], "one pull from nothing, refused; one from the peer's checkpoint");
+    }
+
+    [Fact]
+    public async Task ABlindPeerBelowItsCheckpoint_AdoptsItAsThePullPosition_NotThePackagesOrZero()
+    {
+        await _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        (await PositionAsync()).Should().Be(Checkpoint, "the blind node's own checkpoint, in its own sequence space");
+        _handler.CallLog.Should().Contain("POST /api/sync/events", "the push that the 410 used to cut off happens now");
+        Pulls.Should().HaveCount(2, "one refusal, one retry");
+    }
+
+    [Fact]
+    public async Task ABlindPeerThatRefusesAgainAfterTheAdoption_StillThrows()
+    {
+        var cp = Checkpoint;
+        MapEvents(after => cp += 10); // the peer's checkpoint keeps moving above whatever position is adopted
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<SnapshotRequiredException>();
+        (await PositionAsync()).Should().Be(Checkpoint + 10, "adopted once, not chased");
+        Pulls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task APlainSyncWithABlindPeer_IsRefusedAsBefore_ForAPhone()
+    {
+        var sync = () => _client.SyncWithAsync(_http, "http://remote.local", _peerId);
+
+        (await sync.Should().ThrowAsync<SnapshotRequiredException>()).Which.LastCompactionCp.Should().Be(Checkpoint);
+        (await PositionAsync()).Should().BeNull("a phone that pulled below a blind node's checkpoint adopts nothing");
+    }
+
+    [Fact]
+    public async Task AFullPeers410_IsNeverAdopted_EvenThroughTheFullNodesEntry()
+    {
+        _peerId = Guid.NewGuid();
+        MapIdentity();
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<SnapshotRequiredException>();
+        (await PositionAsync()).Should().BeNull();
+        Pulls.Should().HaveCount(1, "no retry");
+    }
+
+    /// <summary>
+    /// The other direction: the blind peer is behind OUR compaction (the pull works, the push is refused). That is not
+    /// a checkpoint to adopt, and it must reach the reseeder as the PushGapException it is.
+    /// </summary>
+    [Fact]
+    public async Task APushGapOfABlindPeer_IsNeverAdopted_AndStaysAPushGap()
+    {
+        MapEvents(_ => 0); // the pull is fine
+        using (var conn = _node.Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync(
+                "INSERT INTO tbl_compaction_log (compacted_at, cp_before, cp_after, events_removed, reason) VALUES ('2026-09-29T00:00:00Z', NULL, 5, 0, 'test')");
+        }
+        await new SyncPushPositionRepository(_node.Factory).UpsertAsync(
+            new SyncPushPosition { RemoteNodeId = _peerId, LastPushedSeq = 0, PushedAt = DateTime.UtcNow });
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<PushGapException>();
+        // (Release A records the row on every pull, an empty one included, so "unchanged" is 0 rather than absent.)
+        (await PositionAsync()).GetValueOrDefault().Should().Be(0, "a push gap is about the peer's copy of OUR log, not about our pull position");
+    }
+
+    [Fact]
+    public async Task APositionIsNeverMovedBackwards_ByACheckpointBelowIt()
+    {
+        await _positions.UpsertAsync(new SyncPosition { RemoteNodeId = _peerId, LastSequenceNum = 200, UpdatedAt = DateTime.UtcNow });
+        // A 410 whose checkpoint (100) is below the stored position (200): inconsistent, and never a reason to go back.
+        _handler.MapRoute("/api/sync/events", req => req.Method == HttpMethod.Post
+            ? Json(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 })
+            : Json(new { error = "SEQUENCE_TOO_OLD", last_compaction_cp = 100L, current_head_seq = 100L, message = "odd" },
+                System.Net.HttpStatusCode.Gone));
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<SnapshotRequiredException>();
+        (await PositionAsync()).Should().Be(200);
+    }
+
+    // ---------------------------------------------------------------------------- the scheduler's cycle
+
+    private async Task<(SyncScheduler Scheduler, CapturingLogger<SyncScheduler> Log, SnapshotRequiredState State)> SchedulerAsync()
+    {
+        await _node.WhitelistRepo.CreateAsync(new WhitelistEntry
+        {
+            NodeId = _peerId, DisplayName = "Peer", Ed25519PublicKey = new byte[32], ApiAddress = "http://remote.local",
+            Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        var services = new ServiceCollection()
+            .AddSingleton(new InvisibleModeService())
+            .AddSingleton(_node.WhitelistRepo)
+            .AddSingleton(_client)
+            .BuildServiceProvider();
+        var log = new CapturingLogger<SyncScheduler>();
+        var state = new SnapshotRequiredState();
+        var scheduler = new SyncScheduler(services.GetRequiredService<IServiceScopeFactory>(), log, new SyncTrigger(),
+            new FixedHttpClientFactory(_handler), snapshotRequiredState: state);
+        return (scheduler, log, state);
+    }
+
+    [Fact]
+    public async Task TheSchedulersCycle_WithABlindPeer_AdoptsItsCheckpoint_AndPushes()
+    {
+        var (scheduler, log, state) = await SchedulerAsync();
+
+        await scheduler.SyncAllAsync(CancellationToken.None);
+
+        (await PositionAsync()).Should().Be(Checkpoint);
+        _handler.CallLog.Should().Contain("POST /api/sync/events");
+        log.Entries.Should().NotContain(e => e.Level == LogLevel.Critical, "there is nothing to be alarmed about any more");
+        state.LastException.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ABlindRefusalThatSurvivesTheAdoption_SaysTheBlindNodeRefused_AndDoesNotAskForAWipe()
+    {
+        var cp = Checkpoint;
+        MapEvents(_ => cp += 10);
+        var (scheduler, log, state) = await SchedulerAsync();
+
+        await scheduler.SyncAllAsync(CancellationToken.None);
+
+        var critical = log.Entries.Should().ContainSingle(e => e.Level == LogLevel.Critical).Subject.Message;
+        critical.Should().Contain("Blind node").And.Contain("refused our pull").And.Contain("not to be wiped");
+        critical.Should().NotContain("Manual wipe");
+        state.LastException.Should().BeNull("the banner that tells a node to wipe itself is not raised for a blind node's refusal");
+    }
+
+    [Fact]
+    public async Task AFullPeersRefusal_StaysACritical_AndKeepsAskingForTheWipe()
+    {
+        _peerId = Guid.NewGuid();
+        MapIdentity();
+        var (scheduler, log, state) = await SchedulerAsync();
+
+        await scheduler.SyncAllAsync(CancellationToken.None);
+
+        log.Entries.Should().ContainSingle(e => e.Level == LogLevel.Critical).Which.Message.Should().Contain("Manual wipe & rejoin required");
+        state.LastException.Should().NotBeNull();
+        (await PositionAsync()).Should().BeNull();
+    }
+
+    private sealed class Fixture : SyncTestFixture { }
+
+    /// <summary>Hands the scheduler a client on the same fake peer; the scheduler disposes what it gets, not the handler.</summary>
+    private sealed class FixedHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(handler, disposeHandler: false) { BaseAddress = new Uri("http://remote.local") };
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception) + (exception is null ? "" : " [" + exception + "]")));
+    }
+
+    private sealed class MockHandler : HttpMessageHandler
+    {
+        private readonly Dictionary<string, Func<HttpRequestMessage, HttpResponseMessage>> _routes = new();
+        public List<string> CallLog { get; } = [];
+
+        public void MapRoute(string path, Func<HttpRequestMessage, HttpResponseMessage> handler) => _routes[path] = handler;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var uri = request.RequestUri ?? throw new InvalidOperationException("No URI");
+            CallLog.Add($"{request.Method} {uri.AbsolutePath}");
+            foreach (var (path, handler) in _routes)
+                if (uri.AbsolutePath.EndsWith(path, StringComparison.OrdinalIgnoreCase))
+                    return Task.FromResult(handler(request));
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        }
+    }
+}

@@ -223,7 +223,7 @@ public sealed class BlindNodeManager(
         {
             try
             {
-                await client.SyncWithAsync(http, row.ApiAddress!, row.NodeId, ct);
+                await client.SyncWithPeerAsync(http, row.ApiAddress!, row.NodeId, ct);
             }
             catch (PushGapException)
             {

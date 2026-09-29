@@ -30,6 +30,44 @@ public class SyncClient(
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
     /// <summary>
+    /// A full node's sync with one whitelisted peer (the scheduler's cycle, and the reseed's pull): <see cref="SyncWithAsync"/>,
+    /// plus one rule for a BLIND peer. A blind node is seeded from this node's own package, and its log then starts at
+    /// the checkpoint the seed left (its <c>last_compaction_cp</c>): everything at or below it is this node's own content.
+    /// A node that has no pull position for it, or one below that checkpoint (a used volume paired again after a re-key
+    /// cleared the positions), would be answered 410 SEQUENCE_TOO_OLD on every cycle, the pull would throw before the
+    /// push, and nothing would ever reach the blind node. So on that 410, and only for a blind peer, the pull position
+    /// becomes the peer's checkpoint and the sync is retried once; a second 410 propagates as before.
+    /// <para>The position adopted is the blind node's OWN checkpoint, in its own sequence space, never the package's
+    /// (which is in this node's space): using that would skip what the phones push to the blind node next. The blind
+    /// side's counter is not touched: other peers hold positions in that space.</para>
+    /// <para>Not for a phone: the mobile hosts call <see cref="SyncWithAsync"/>, where a peer that pulled below a blind
+    /// node's checkpoint still gets its 410. A 410 from a peer that is not blind is a real wipe-and-rejoin case and stays
+    /// one. A <see cref="PushGapException"/> is the other direction (the peer is behind us) and is never adopted.</para>
+    /// </summary>
+    public async Task<int> SyncWithPeerAsync(
+        HttpClient http, string remoteApiBase, Guid peerNodeId, CancellationToken ct = default)
+    {
+        try
+        {
+            return await SyncWithAsync(http, remoteApiBase, peerNodeId, ct);
+        }
+        catch (SnapshotRequiredException ex) when (ex is not PushGapException && BlindNodeId.IsBlind(peerNodeId) && ex.LastCompactionCp > 0)
+        {
+            var position = (await syncPositionRepo.GetAsync(peerNodeId))?.LastSequenceNum ?? 0;
+            if (position >= ex.LastCompactionCp) throw; // nothing to adopt: the refusal is about something else
+            await syncPositionRepo.UpsertAsync(new SyncPosition
+            {
+                RemoteNodeId = peerNodeId, LastSequenceNum = ex.LastCompactionCp, UpdatedAt = DateTime.UtcNow
+            });
+            logger.LogWarning(
+                "Blind node {NodeId} ({Url}) starts its log at checkpoint {Cp}; this node had pulled up to {Position}. " +
+                "Everything at or below it came from this node's own seed, so the pull position is now {Cp}.",
+                peerNodeId, ex.RemoteUrl, ex.LastCompactionCp, position, ex.LastCompactionCp);
+            return await SyncWithAsync(http, remoteApiBase, peerNodeId, ct);
+        }
+    }
+
+    /// <summary>
     /// Synchronizes with a remote node. Returns the number of new events applied locally.
     /// </summary>
     /// <param name="expectedPeerNodeId">

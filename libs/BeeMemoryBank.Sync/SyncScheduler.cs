@@ -161,7 +161,7 @@ public class SyncScheduler(
         return left > TimeSpan.Zero ? left : TimeSpan.Zero;
     }
 
-    private async Task<SyncCycleResult> SyncAllAsync(CancellationToken ct)
+    internal async Task<SyncCycleResult> SyncAllAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         
@@ -201,7 +201,7 @@ public class SyncScheduler(
             Exception? failure = null;
             try
             {
-                totalApplied += await syncClient.SyncWithAsync(http, node.ApiAddress!, node.NodeId, ct);
+                totalApplied += await syncClient.SyncWithPeerAsync(http, node.ApiAddress!, node.NodeId, ct);
                 snapshotRequiredState?.Clear();
                 if (_unreachable.NoteSuccess(node.NodeId) is var failedBefore and > 0)
                     logger.LogInformation("{NodeId} ({Address}) is reachable again after {Failures} failed attempts",
@@ -214,6 +214,17 @@ public class SyncScheduler(
                 failure = ex;
                 logger.LogWarning("{NodeId} ({Address}) missed events our compaction removed (pushed up to {Pushed}, cp={Cp})",
                     node.NodeId, node.ApiAddress, ex.PushedUpTo, ex.LastCompactionCp);
+            }
+            catch (SnapshotRequiredException ex) when (BlindNodeId.IsBlind(node.NodeId))
+            {
+                // A blind node refused our pull, so it is the blind node's log that starts above our position: this node
+                // is not out of sync, and a wipe of it would cure nothing. SyncWithPeerAsync adopts the blind node's
+                // checkpoint itself, so this is what is left when even that did not help (a checkpoint that moved again).
+                failure = ex;
+                logger.LogCritical(
+                    "Blind node {NodeId} ({Url}) refused our pull: its log starts above our position (its checkpoint cp={Cp}, head={Head}). " +
+                    "This node is not out of sync and is not to be wiped; reseed the blind node from the Blind nodes page.",
+                    node.NodeId, ex.RemoteUrl, ex.LastCompactionCp, ex.CurrentHeadSeq);
             }
             catch (SnapshotRequiredException ex)
             {
