@@ -94,6 +94,15 @@ public static class ErrorCodes
     /// <summary>The vault is locked, so a non-superadmin cannot be logged in. The Login page
     /// shows its "ask an administrator to unlock" state on this.</summary>
     public const string SessionLocked = "session_locked";
+
+    /// <summary>
+    /// A blind node's console password is already set and the request offered no current one, so
+    /// nothing was changed. Callers branch on THIS rather than on the message: <c>bmb blind init</c>
+    /// re-run on a configured node keeps the password it finds and goes on to the backup target, and
+    /// matching prose to decide that is how the branch silently stopped being reachable when the
+    /// message changed (review release-a2 sec#8).
+    /// </summary>
+    public const string ConsolePasswordAlreadySet = "console_password_already_set";
 }
 
 public record FolderInfoResponse(Guid Id, string Path, string Name, int ArticleCount, DateTime CreatedAt, DateTime UpdatedAt, bool IsSystem = false, bool IsRemote = false)

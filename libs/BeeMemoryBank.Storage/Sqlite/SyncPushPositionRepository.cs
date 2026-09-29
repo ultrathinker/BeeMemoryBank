@@ -10,7 +10,7 @@ public class SyncPushPositionRepository(DbConnectionFactory factory) : BaseRepos
     {
         using var conn = OpenConnection();
         return await conn.QuerySingleOrDefaultAsync<SyncPushPosition>(
-            "SELECT remote_node_id AS RemoteNodeId, last_pushed_seq AS LastPushedSeq, pushed_at AS PushedAt FROM tbl_sync_push_position WHERE remote_node_id = @remoteNodeId",
+            "SELECT remote_node_id AS RemoteNodeId, last_pushed_seq AS LastPushedSeq, pushed_at AS PushedAt, reported_seq AS ReportedSeq FROM tbl_sync_push_position WHERE remote_node_id = @remoteNodeId",
             new { remoteNodeId });
     }
 
@@ -30,7 +30,7 @@ public class SyncPushPositionRepository(DbConnectionFactory factory) : BaseRepos
     {
         using var conn = OpenConnection();
         return (await conn.QueryAsync<SyncPushPosition>(
-            "SELECT remote_node_id AS RemoteNodeId, last_pushed_seq AS LastPushedSeq, pushed_at AS PushedAt FROM tbl_sync_push_position")).ToList();
+            "SELECT remote_node_id AS RemoteNodeId, last_pushed_seq AS LastPushedSeq, pushed_at AS PushedAt, reported_seq AS ReportedSeq FROM tbl_sync_push_position")).ToList();
     }
 
     public async Task UpdatePositionAsync(Guid remoteNodeId, long lastPushedSeq)
@@ -45,6 +45,17 @@ public class SyncPushPositionRepository(DbConnectionFactory factory) : BaseRepos
             new { remoteNodeId, lastPushedSeq, now = DateTime.UtcNow });
     }
 
+    public async Task RecordReportedPositionAsync(Guid remoteNodeId, long reportedSeq)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"INSERT INTO tbl_sync_push_position (remote_node_id, last_pushed_seq, pushed_at, reported_seq)
+              VALUES (@remoteNodeId, 0, @now, @reportedSeq)
+              ON CONFLICT(remote_node_id) DO UPDATE SET
+                reported_seq = MAX(COALESCE(reported_seq, 0), excluded.reported_seq)",
+            new { remoteNodeId, reportedSeq, now = DateTime.UtcNow });
+    }
+
     public async Task<List<(Guid NodeId, long LastPushedSeq, DateTime PushedAt)>> GetAllActivePushPositionsAsync()
     {
         using var conn = OpenConnection();
@@ -56,11 +67,11 @@ public class SyncPushPositionRepository(DbConnectionFactory factory) : BaseRepos
         return rows.ToList();
     }
 
-    public async Task<List<(Guid NodeId, long? LastPushedSeq, DateTime? PushedAt)>> GetAllActivePeersWithPushPositionsAsync()
+    public async Task<List<(Guid NodeId, long? LastPushedSeq, DateTime? PushedAt, long? ReportedSeq)>> GetAllActivePeersWithPushPositionsAsync()
     {
         using var conn = OpenConnection();
-        var rows = await conn.QueryAsync<(Guid NodeId, long? LastPushedSeq, DateTime? PushedAt)>(
-            @"SELECT w.node_id, sp.last_pushed_seq, sp.pushed_at
+        var rows = await conn.QueryAsync<(Guid NodeId, long? LastPushedSeq, DateTime? PushedAt, long? ReportedSeq)>(
+            @"SELECT w.node_id, sp.last_pushed_seq, sp.pushed_at, sp.reported_seq
               FROM tbl_whitelist w
               LEFT JOIN tbl_sync_push_position sp ON sp.remote_node_id = w.node_id
               WHERE w.status = 'A'");

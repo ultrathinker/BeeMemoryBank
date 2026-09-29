@@ -7,8 +7,13 @@ console).
 
 | Port | Published as | What |
 |------|--------------|------|
-| 5610 | `${BMB_LAN_ADDR}:5610` (LAN address only) | Sync surface for the mesh's full nodes. Keyless callers reach only the peer routes (`PublicSurface`); everything else answers 404. |
+| 5610 | `${BMB_LAN_ADDR}:5610` (LAN address only) | Sync surface for the mesh's full nodes, in **HTTPS** — the node's own self-signed certificate, pinned by each peer from the pair code. Keyless callers reach only the peer routes (`PublicSurface`); everything else answers 404. |
 | 5611 | `127.0.0.1:5611` (host loopback only) | The console. Nothing on the LAN can reach it. |
+| 5612 | not published | Plain-HTTP loopback port *inside* the container, where the console process and `docker exec … bmb` reach the Api (`BMB_BLIND_LOCAL_PORT`). Only local tools use it: the TLS listener above is for the mesh. |
+
+The pair code the console prints carries `https://<BMB_LAN_ADDR>:5610` (`BMB_PUBLIC_ADDRESS`), so a
+PC dials the node the same way every other device does. A code with an `http://` address is refused
+by the PC, which is why the two are set together in `compose.yaml`.
 
 Volumes: `bmb-blind-data` (the node's whole state: database, media, settings, console password,
 job history, restic cache) and `bmb-blind-backups` (mounted at `/backups`, for a folder repository).
@@ -47,6 +52,11 @@ docker exec -i bmb-blind bmb blind init \
 The restic password will arrive from the pairing Windows node once pairing ships; until then it is
 set here or on the console page. Keep a copy: without it the repository cannot be opened.
 
+`init` is also how a node that is already set up gets a different backup target: it keeps the
+console password it finds (pass `current_console_password` in the secrets to change that too) and
+updates the settings. The endpoint needs the current password for a *password change*; the rest of
+the run is the local administrator's, which is what holding the node's internal key means.
+
 Open the console on the host at <http://127.0.0.1:5611>, or from another machine through a tunnel:
 `ssh -L 5611:127.0.0.1:5611 <host>`. Five wrong passwords lock the page for 15 minutes; every
 attempt is in the login journal.
@@ -56,6 +66,10 @@ attempt is in the login journal.
 - Daily at the configured UTC time, moved by a random ±15 minutes; a slot missed while the node
   was down is caught up within 12 hours. After the Sunday backup, `restic check
   --read-data-subset=5%` runs; a full check is a button (`bmb blind backup verify --full`).
+- The schedule turns itself on as soon as the repository and its password are in place — a
+  configured node backs up without a further step, and one line in the log says so. Turning the
+  console toggle off (or writing `"scheduleEnabled": false` in `settings.json`) is the operator's
+  answer and is never overruled by that default.
 - Each backup: `VACUUM INTO` a consistent copy of the database (needs 2.5× its size free),
   `restic backup` of that copy and the media folder, then `forget --prune` with the retention
   (default 7 daily, 4 weekly, 12 monthly, 3 yearly).

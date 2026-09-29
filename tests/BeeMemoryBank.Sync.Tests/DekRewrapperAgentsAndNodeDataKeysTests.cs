@@ -83,6 +83,42 @@ public class DekRewrapperAgentsAndNodeDataKeysTests : SyncTestFixture
         (await AgentNamesAsync()).Should().BeEquivalentTo(["ordinary user agent", "second ordinary agent"]);
     }
 
+    /// <summary>
+    /// A v=2 identity row (blind node, Android blind copy) keeps its seed outside the database, so
+    /// there is nothing for a rotation to re-wrap. It used to be read as a v1 row with a missing IV
+    /// — the row has no IV and no private key — and every rotation ended with "UNREADABLE ROWS:
+    /// tbl_node_identity — these need manual recovery" for an identity that was never at risk.
+    /// </summary>
+    [Fact]
+    public async Task Rotation_LeavesAnExternalKeyIdentityAlone_AndDoesNotCallItCorrupt()
+    {
+        await InitService.InitializeAsync("admin", "TestNode", Password);
+        await Session.UnlockAsync(Password);
+
+        // The row as a blind node writes it: public key only, no private material, no IV, v=2.
+        using (var conn = Factory.CreateConnection())
+            await conn.ExecuteAsync(
+                @"UPDATE tbl_node_identity
+                     SET ed25519_private_key = @empty, ed25519_private_key_iv = NULL, ed25519_private_key_v = @v",
+                new { empty = Array.Empty<byte>(), v = NodeIdentityCrypto.ExternalKeyVersion });
+
+        var oldDek = Session.GetMasterDek();
+        var (_, _, tally) = await DekRewrapper.RewrapAllAsync(
+            Factory, Session, oldDek, RandomNumberGenerator.GetBytes(32),
+            newEpoch: 2, commitEventId: Guid.NewGuid().ToString(), isInitiator: false);
+
+        tally.Unreadable.Should().Be(0,
+            "an external key is not a corrupt row: nothing about it is unreadable, and a rotation report that says so "
+            + "sends an operator chasing a recovery that does not exist");
+        tally.UnreadableExamples.Should().NotContain(e => e.Contains("tbl_node_identity"));
+
+        using var check = Factory.CreateConnection();
+        var row = await check.QuerySingleAsync<(byte[] Pk, int V)>(
+            "SELECT ed25519_private_key AS Pk, ed25519_private_key_v AS V FROM tbl_node_identity LIMIT 1");
+        row.V.Should().Be(NodeIdentityCrypto.ExternalKeyVersion, "the row is left exactly as it was");
+        row.Pk.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Rotation_KeepsNoKeyAgentsResolvableByTheirKeyHash()
     {

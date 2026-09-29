@@ -47,6 +47,35 @@ public class BlindBackupScheduleTests
             .Should().BeNull("enabling the schedule in the afternoon must not start a backup on the spot");
     }
 
+    /// <summary>
+    /// Release A: the schedule runs by itself once the node can back up, and an explicit answer —
+    /// either way — is the operator's and is never overruled by that default. The third value
+    /// matters on the wire: "nobody decided" is what lets an init that completes the configuration
+    /// leave a running schedule behind it, and what lets a half-filled form be saved as a draft.
+    /// </summary>
+    [Fact]
+    public void Schedule_UndecidedRunsOnceConfigured_AndAnExplicitAnswerWins()
+    {
+        var nodeData = Path.Combine(Path.GetTempPath(), "bmb-sched-node");
+        var repo = Path.Combine(Path.GetTempPath(), "bmb-sched-repo");
+
+        var draft = new BlindBackupSettings { RepoType = BlindRepoType.Folder, RepoFolder = repo };
+        draft.ScheduleEnabled.Should().BeNull();
+        draft.ScheduleRuns(nodeData).Should().BeFalse("no restic password — there is nothing to back up with");
+        draft.ScheduleGuarded(nodeData).Should().BeFalse("nothing is asked for and nothing runs: a draft may be incomplete");
+        draft.ScheduleEnabled = true;
+        draft.ScheduleGuarded(nodeData).Should().BeTrue(
+            "an explicit on over an incomplete configuration is refused, not stored as a promise");
+
+        var configured = new BlindBackupSettings { RepoType = BlindRepoType.Folder, RepoFolder = repo, ResticPassword = "pw" };
+        configured.ScheduleRuns(nodeData).Should().BeTrue("a configured node backs up without a further step");
+        configured.ScheduleGuarded(nodeData).Should().BeTrue("a schedule that runs must not be broken by a partial save");
+
+        configured.ScheduleEnabled = false;
+        configured.ScheduleRuns(nodeData).Should().BeFalse("the operator's off is the operator's off");
+        configured.ScheduleGuarded(nodeData).Should().BeFalse();
+    }
+
     [Fact]
     public void Jitter_MovesTheSlot()
     {

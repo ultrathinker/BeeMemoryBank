@@ -1,7 +1,12 @@
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Api.Services.BlindBackup;
+using BeeMemoryBank.Api.Startup;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Services.BlindConsole;
@@ -28,13 +33,18 @@ public sealed class BlindWipeFailedException(string message, Exception? inner = 
     : InvalidOperationException(message, inner);
 
 public sealed class BlindWipeService(
-    IDbConnectionFactory connFactory,
+    // The concrete factory: the quiesce/drain barrier this wipe takes (BeginQuiesce/WaitDrainedAsync)
+    // is on it, not on IDbConnectionFactory — a connection that stays open across the deletes is
+    // exactly what makes the wipe race a reader.
+    DbConnectionFactory connFactory,
     INodeIdentityRepository nodeRepo,
     SessionService session,
     MaintenanceModeService maintenance,
     SyncTokenStore tokens,
     BlindJobManager jobs,
     BlindBackupSettingsStore settings,
+    FileNodeKey identityKey,
+    SyncScheduler syncScheduler,
     string dataPath,
     ILogger<BlindWipeService> logger)
 {
@@ -67,19 +77,91 @@ public sealed class BlindWipeService(
             throw new BlindWipeRefusedException(
                 $"a backup job did not stop within {DrainTimeout.TotalSeconds:0} s — nothing was wiped; try again");
         tokens.Clear();
-        maintenance.Enter("Wiping the blind node…");
-        session.Lock();
-        try
+
+        // One barrier for every OTHER writer, taken in one documented order (review release-a2
+        // agy#4, sec#6, spec#3). Maintenance and the session lock below stop HTTP callers only:
+        //
+        //   1. the event-write gate — holds new event writes off (EventApplier, the log trimmer)
+        //      and waits for the ones already running; this flow is the owner, so its own writes
+        //      pass;
+        //   2. the sync loop — paused, its cycle in flight waited out: a pull writes sync positions
+        //      outside the gate, and one landing after the wipe would resurrect mesh state on a node
+        //      the operator just disconnected;
+        //   3. the heavy-operation lock — the other flows that bulk-rewrite tbl_event take it
+        //      (compaction, snapshot restore, DEK rotation) and must not be inside this database;
+        //   4. the database connections themselves — new ones wait, open ones are waited for, and a
+        //      connection still open after the wait fails the wipe before anything is deleted
+        //      instead of racing the deletes (the same gate the reseed cutover uses).
+        using (await EventWriteGate.Instance.QuiesceAsync(ct))
         {
-            WipeVaultDatabase();
-            DeleteBlindFiles();
-            FolderAccessService.InvalidateAll();
+            EventWriteGate.EnterOwnerFlow();
+            maintenance.Enter("Wiping the blind node…");
+            session.Lock();
+            await HeavyOperationLock.Instance.WaitAsync(ct);
+            try
+            {
+                using var syncPaused = await syncScheduler.PauseAsync(ct);
+                using var drained = connFactory.BeginQuiesce();
+                try
+                {
+                    await connFactory.WaitDrainedAsync(DrainTimeout, ct);
+                }
+                catch (TimeoutException)
+                {
+                    throw new BlindWipeRefusedException(
+                        $"a database connection stayed in use for {DrainTimeout.TotalSeconds:0} s — nothing was wiped; try again");
+                }
+
+                WipeVaultDatabase();
+                DeleteBlindFiles();
+                FolderAccessService.InvalidateAll();
+                await RecreateIdentityAsync(identity.DisplayName);
+            }
+            finally
+            {
+                jobs.EndWipe();
+                HeavyOperationLock.Instance.Release();
+                maintenance.Exit();
+            }
         }
-        finally
-        {
-            maintenance.Exit();
-            jobs.EndWipe();
-        }
+    }
+
+    /// <summary>
+    /// A wiped node gets its identity back before the wipe answers 200.
+    ///
+    /// <para>tbl_node_identity is cleared with every other table, and nothing used to recreate it
+    /// until the next process start (<see cref="BlindRoleStartup"/>): in between, the node was
+    /// unusable — the pair code and the status endpoint both answer "Node is not initialized", so
+    /// the operator who wipes and then re-pairs the node, in the same console session the wipe
+    /// deliberately keeps alive (console.json survives), hit a dead node and had to restart a
+    /// container to get a code. That is the brick this method removes.</para>
+    ///
+    /// <para>The key is the one thing that outlives the wipe, because it never was in the database
+    /// (identity key file, v=2). The fresh row takes a new NodeId — the mesh has just been told to
+    /// forget this node, and a new id is what a re-pairing PC whitelists; the display name is kept
+    /// so the operator recognises the box they are pairing.</para>
+    ///
+    /// <para>Verified before it counts, like the wipe itself: a row that is not a valid blind v=2
+    /// identity, or that does not match the key on disk, is exactly the broken state this exists to
+    /// prevent — better to fail the request loudly than to hand out a node that will refuse its own
+    /// pair code.</para>
+    /// </summary>
+    private async Task RecreateIdentityAsync(string? displayName)
+    {
+        await BlindRoleStartup.EnsureIdentityAsync(nodeRepo, identityKey, displayName, logger);
+
+        var identity = await nodeRepo.GetAsync();
+        if (identity is null
+            || identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion
+            || !BlindNodeId.IsBlind(identity.NodeId)
+            || !identityKey.Matches(identity.Ed25519PublicKey))
+            throw new BlindWipeFailedException(
+                "the node's data was wiped, but its identity could not be recreated — the node would "
+                + "refuse its own pair code; restart it to finish");
+
+        logger.LogInformation(
+            "Blind wipe: identity recreated from the surviving key file; the node can be paired again ({NodeId})",
+            identity.NodeId);
     }
 
     private void WipeVaultDatabase()

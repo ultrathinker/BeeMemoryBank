@@ -40,11 +40,13 @@ public sealed class BlindLogTrimmer(IServiceScopeFactory scopeFactory, ILogger<B
         var sp = scope.ServiceProvider;
         var events = sp.GetRequiredService<IEventLogRepository>();
 
-        // How far every active peer has read from us. One that never has pins the log whole: it
-        // would otherwise be cut off before its first pull.
+        // How far every active peer says it has read from us — its own report, never the delivery
+        // watermark, which moves when a page is merely served and so would let the log be cut ahead
+        // of a peer that has applied nothing yet (Codex round 2, security #3). One that never
+        // reported pins the log whole: it would otherwise be cut off before its first pull.
         var peers = await sp.GetRequiredService<ISyncPushPositionRepository>().GetAllActivePeersWithPushPositionsAsync();
         if (peers.Count == 0) return null;
-        var readByAll = peers.Min(p => p.LastPushedSeq ?? 0);
+        var readByAll = peers.Min(p => p.ReportedSeq ?? 0);
 
         var cutoff = Math.Min(readByAll, await LastAnchorCoversUpToAsync(sp.GetRequiredService<IDbConnectionFactory>()));
         if (cutoff <= (await events.GetLastCompactionCpAsync() ?? 0)) return null;

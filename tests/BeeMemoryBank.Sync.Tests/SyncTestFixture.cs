@@ -94,10 +94,16 @@ public abstract class SyncTestFixture : IAsyncLifetime
         EventApplier = new EventApplier(ArticleRepo, BodyRepo, EventLogRepo, WhitelistRepo,
             ConflictRepo, TombstoneRepo, WhitelistRepo, commentRepo, folderRepo, Clock, mediaRepo, NodeRepo, conceptTagService, conceptTagRepo,
             new FakeEmbeddingGenerator(), HardDeleteService, null,
-            replayShieldRepo, restoreEventStateRepo, new NullRestoreInitiator(),
+            replayShieldRepo, restoreEventStateRepo, CreateRestoreInitiator(),
             dekRotationStateRepo, new NullDekRotationApplier(), folderAccess, Factory, new BlobRepository(Factory),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance);
     }
+
+    /// <summary>
+    /// The restore initiator the applier is built with. A test that drives the auto-accept dispatch
+    /// (<c>EventApplier.Restore.cs</c>) overrides this to watch the detached task it starts.
+    /// </summary>
+    protected virtual BeeMemoryBank.Sync.IRestoreInitiator CreateRestoreInitiator() => new NullRestoreInitiator();
 
     /// <summary>
     /// Applies an event that originated on <paramref name="source"/> the way a real sync would:

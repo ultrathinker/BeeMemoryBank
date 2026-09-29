@@ -5,6 +5,11 @@ using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Api.Services.BlindConsole;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Blind;
+using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -171,8 +176,12 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
             new { consolePassword = "console-pw-123", confirmNodeName = "blindwipenode" });
         wipe.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // The node's own data is gone…
-        (await _factory.Services.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull();
+        // The node's own data is gone — including the identity it had, which is replaced by a fresh
+        // one so the node is not left unable to pair (see Wipe_LeavesANodeThatCanBePairedAgain_...).
+        var recreated = await _factory.Services.GetRequiredService<INodeIdentityRepository>().GetAsync();
+        recreated.Should().NotBeNull("a wiped node comes back with a usable identity, not as a brick");
+        recreated!.NodeId.Should().NotBe(Guid.Empty);
+        recreated.Ed25519PrivateKeyV.Should().Be(NodeIdentityCrypto.ExternalKeyVersion);
         (await whitelist.GetByNodeIdAsync(peerId)).Should().BeNull("the mesh's copy of the whitelist dies with the node");
         File.Exists(Path.Combine(_factory.DataPath, "media", "pic.enc")).Should().BeFalse();
         File.Exists(Path.Combine(_factory.DataPath, "blind", "settings.json")).Should().BeFalse(
@@ -188,6 +197,130 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
         File.Exists(Path.Combine(_factory.DataPath, "blind", "console.json")).Should().BeTrue(
             "the console password is local, never mesh data — keeping it lets the operator re-pair without the CLI");
         File.Exists(keepFile).Should().BeTrue("the wipe must never reach into the backup repository");
+    }
+
+    /// <summary>
+    /// The wipe takes one barrier for every other writer before it deletes anything, and it waits
+    /// rather than racing (review release-a2 agy#4, sec#6, spec#3). Each half of the barrier gets its
+    /// own test so each one is provable on its own: an event write in flight holds the wipe at the
+    /// gate, and a database connection still open holds it at the drain. Both were holes a pull, an
+    /// applier or a reader could walk through while the tables were deleted under them.
+    /// </summary>
+    [Fact]
+    public async Task Wipe_WaitsForAnEventWriteInFlight()
+    {
+        using var client = _factory.CreateClient();
+        await SetConsolePasswordAsync(client);
+
+        var scheduler = _factory.Services.GetRequiredService<SyncScheduler>();
+        scheduler.IsPaused.Should().BeFalse("nothing has asked the loop to stand down yet");
+
+        // Exactly what an applier or the log trimmer holds while it writes.
+        var writer = await EventWriteGate.Instance.EnterAsync();
+        using var wipeClient = _factory.CreateClient();
+        var wipe = wipeClient.PostAsJsonAsync("/api/blind/wipe",
+            new { consolePassword = "console-pw-123", confirmNodeName = "BlindWipeNode" });
+        try
+        {
+            await Task.Delay(400);
+            wipe.IsCompleted.Should().BeFalse("the wipe waits at the event-write gate while a write is in flight");
+        }
+        finally
+        {
+            writer.Dispose(); // idempotent: an exception must not leave the process-wide gate held
+        }
+
+        (await wipe).StatusCode.Should().Be(HttpStatusCode.OK, await (await wipe).Content.ReadAsStringAsync());
+        scheduler.IsPaused.Should().BeFalse("the barrier is released again");
+        await AssertWipedAsync();
+    }
+
+    /// <summary>
+    /// The other half: a connection somebody still holds. The wipe waits for it — and while it waits
+    /// the sync loop is already paused, because a pull landing after the wipe would resurrect mesh
+    /// state on a node the operator just disconnected.
+    /// </summary>
+    [Fact]
+    public async Task Wipe_WaitsForAnOpenConnection_AndPausesTheSyncLoopWhileItWaits()
+    {
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        using var client = _factory.CreateClient();
+        await SetConsolePasswordAsync(client);
+
+        var scheduler = _factory.Services.GetRequiredService<SyncScheduler>();
+        var held = connFactory.CreateConnection();
+        held.Open();
+        using var wipeClient = _factory.CreateClient();
+        var wipe = wipeClient.PostAsJsonAsync("/api/blind/wipe",
+            new { consolePassword = "console-pw-123", confirmNodeName = "BlindWipeNode" });
+        try
+        {
+            // Polled, not a fixed sleep: before it pauses the loop the wipe takes two process-wide barriers
+            // (EventWriteGate, HeavyOperationLock), and in a full run another test class may hold one of them
+            // for longer than any fixed delay.
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!scheduler.IsPaused && !wipe.IsCompleted && DateTime.UtcNow < deadline) await Task.Delay(50);
+            wipe.IsCompleted.Should().BeFalse("the wipe waits for the connection still open on the database");
+            scheduler.IsPaused.Should().BeTrue("the barrier is held: the sync loop is paused for the duration");
+            await Task.Delay(400);
+            wipe.IsCompleted.Should().BeFalse("and it keeps waiting while the connection is open");
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        (await wipe).StatusCode.Should().Be(HttpStatusCode.OK, await (await wipe).Content.ReadAsStringAsync());
+        scheduler.IsPaused.Should().BeFalse("the barrier is released again");
+        await AssertWipedAsync();
+    }
+
+    /// <summary>Clear tables, and the one recreated identity the node needs to be pairable again.</summary>
+    private async Task AssertWipedAsync()
+    {
+        var connFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        using var conn = connFactory.CreateConnection();
+        foreach (var table in new[] { "tbl_article", "tbl_event", "tbl_whitelist", "tbl_sync_position" })
+            (await conn.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM [{table}]"))
+                .Should().Be(0, $"{table} is cleared by the wipe");
+        (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_node_identity")).Should().Be(1,
+            "and the one row the node needs to be pairable again is recreated");
+    }
+
+    /// <summary>
+    /// The wipe clears tbl_node_identity with every other table, and the node used to stay without
+    /// one until the next process start: pair-code answered "Node is not initialized" and the only
+    /// way out was restarting the container. The operator's whole reason for wiping from the console
+    /// is to pair the node again from that console, so the identity is recreated in the wipe from the
+    /// key that survives it (v=2, never in the database).
+    /// </summary>
+    [Fact]
+    public async Task Wipe_LeavesANodeThatCanBePairedAgain_WithoutARestart()
+    {
+        var before = await _factory.Services.GetRequiredService<INodeIdentityRepository>().GetAsync();
+        before.Should().NotBeNull();
+
+        using var client = _factory.CreateClient();
+        await SetConsolePasswordAsync(client);
+        (await client.PostAsJsonAsync("/api/blind/wipe",
+            new { consolePassword = "console-pw-123", confirmNodeName = "BlindWipeNode" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Same running host, no restart: a code a PC would accept.
+        var response = await client.GetAsync("/api/blind/pair-code");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var code = BlindPairCode.Parse(json.GetProperty("code").GetString()!);
+        code.Address.Should().Be(BlindNodeFactory.PublicAddress);
+        BlindNodeId.IsBlind(code.NodeId).Should().BeTrue();
+        code.NodeId.Should().NotBe(before!.NodeId,
+            "the mesh has just been told to forget this node; a re-pairing PC whitelists a new id");
+        code.PublicKeyB64.Should().Be(Convert.ToBase64String(before.Ed25519PublicKey),
+            "the key never was in the database — it is the same box, with a new id");
+
+        // And the node is not merely answering: it can still sign as that identity.
+        (await _factory.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!
+            .Ed25519PrivateKeyV.Should().Be(NodeIdentityCrypto.ExternalKeyVersion);
     }
 }
 
@@ -248,6 +381,40 @@ public class BlindConsoleAuthTests : IAsyncLifetime
         var logins = await (await client.GetAsync("/api/blind/console/logins")).Content.ReadFromJsonAsync<JsonElement>();
         logins.EnumerateArray().First().GetProperty("remote").GetString().Should().Be("192.168.1.50",
             "the Api's own peer is always the console process; the journal must name the browser");
+    }
+
+    /// <summary>
+    /// The two refusals are different, and the difference is what <c>bmb blind init</c> branches on:
+    /// "already set, keep it and go on to the backup target" versus "that current password is wrong".
+    /// The endpoint told them apart by re-reading HasPassword() after the failed attempt, which is
+    /// true in BOTH cases — so a node with a password answered "wrong password" for a request that
+    /// carried none, the CLI's branch never fired, and re-running init on a configured node could
+    /// not reach the settings it was re-run for (review release-a2 agy#1, sec#8).
+    /// </summary>
+    [Fact]
+    public async Task Password_AlreadySetWithoutACurrentOne_IsItsOwnRefusal()
+    {
+        using var client = _factory.CreateClient();
+        await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "first-pw-123" });
+
+        var noCurrent = await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "second-pw-456" });
+        noCurrent.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var refusal = await noCurrent.Content.ReadFromJsonAsync<JsonElement>();
+        refusal.GetProperty("code").GetString().Should().Be(BeeMemoryBank.Api.Models.ErrorCodes.ConsolePasswordAlreadySet,
+            "callers branch on the code, not on the prose");
+        refusal.GetProperty("error").GetString().Should().Contain("already set");
+        // Nothing changed: the old password still opens the console.
+        (await (await client.PostAsJsonAsync("/api/blind/console/login", new { password = "first-pw-123" }))
+            .Content.ReadFromJsonAsync<JsonElement>()).GetProperty("ok").GetBoolean().Should().BeTrue();
+
+        // A current password that is offered and wrong is the other refusal, with no code to branch on.
+        var wrong = await client.PostAsJsonAsync("/api/blind/console/password",
+            new { currentPassword = "not-it", newPassword = "second-pw-456" });
+        wrong.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var wrongBody = await wrong.Content.ReadFromJsonAsync<JsonElement>();
+        wrongBody.GetProperty("error").GetString().Should().Contain("wrong");
+        wrongBody.TryGetProperty("code", out var code).Should().BeTrue("the field is always there");
+        code.ValueKind.Should().Be(JsonValueKind.Null, "and null unless the caller may branch on it");
     }
 
     [Fact]

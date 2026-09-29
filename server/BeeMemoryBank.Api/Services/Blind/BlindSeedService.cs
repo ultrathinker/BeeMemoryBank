@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Api.Startup;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -56,6 +57,7 @@ public sealed class BlindSeedService(
     string dataPath,
     SnapshotService snapshots,
     MaintenanceModeService maintenance,
+    BlindJobManager jobs,
     IServiceScopeFactory scopeFactory,
     IConfiguration config,
     ILogger<BlindSeedService> logger)
@@ -426,12 +428,22 @@ public sealed class BlindSeedService(
         var livePath = Path.Combine(dataPath, "beememorybank.db");
         using (await EventWriteGate.Instance.QuiesceAsync(ct))
         {
-            // This flow replays into the new database while everyone else waits.
-            EventWriteGate.EnterOwnerFlow();
+            // This flow replays into the new database while everyone else waits; the mark lasts as
+            // long as the gate is held, and no longer.
+            using var ownerFlow = EventWriteGate.EnterOwnerFlow();
             maintenance.Enter("Blind node is taking in a seed");
             await HeavyOperationLock.Instance.WaitAsync();
             try
             {
+                // The media tree this cutover is about to rename aside, move into and later delete is
+                // also what a restic backup reads (Codex round 2, security #7): block new jobs and wait
+                // for the one running, so no reader holds files in it while the directories move — on
+                // Windows the rename fails under an open handle, on Linux the reader captures a
+                // half-moved tree. Taken with the wipe's own gate, so a wipe and a cutover serialize.
+                using var exclusive = await jobs.TryBeginExclusiveAsync(_cutoverDrainWait)
+                    ?? throw new BlindSeedRejectedException(
+                        $"A blind backup job (or a wipe) was still running after {_cutoverDrainWait.TotalSeconds:0} s; nothing was changed. Send the seed again when it finishes.");
+
                 // Every connection to the live database takes part in the switch (review l-root4 #1):
                 // new ones wait, open ones are waited for, and the switch goes ahead only once none is
                 // left, so no reader or writer keeps the moved file open. This flow's own connections
@@ -723,25 +735,37 @@ public sealed class BlindSeedService(
         using var scope = scopeFactory.CreateScope();
         var applier = scope.ServiceProvider.GetRequiredService<EventApplier>();
         var quarantine = scope.ServiceProvider.GetRequiredService<ISyncQuarantineRepository>();
-        foreach (var evt in tail)
+        var scopeHolder = scope.ServiceProvider.GetRequiredService<CallerScopeHolder>();
+
+        // The replay is a sync apply and runs under the system scope, exactly as the batch handler's
+        // is (SyncEndpoints: RunAsSystemAsync around its apply loop). Without it the apply runs under
+        // the *seeding peer's* caller scope, which allows no folder path at all -- so an event whose
+        // article sits in a folder this blind node does not have yet (a phone push during the reseed
+        // window, anything in a new folder) is refused by FolderRepository.ThrowIfWriteDenied,
+        // classified permanent and quarantined: what the blind node held beyond the package, and in
+        // no package, is then lost on it for good.
+        return await scopeHolder.RunAsSystemAsync(async () =>
         {
-            try
+            foreach (var evt in tail)
             {
-                await applier.ApplyAsync(evt);
+                try
+                {
+                    await applier.ApplyAsync(evt);
+                }
+                catch (Exception ex) when (SyncFailureClassifier.Classify(ex) == SyncFailureKind.Permanent)
+                {
+                    await quarantine.RecordFailureAsync(evt.EventId, evt.EventType, evt.NodeId,
+                        "Blind reseed replay: " + ex.Message, SyncFailureKind.Permanent);
+                    logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) can never apply; quarantined", evt.EventId, evt.EventType);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) did not apply; rolling back", evt.EventId, evt.EventType);
+                    return $"{evt.EventId} ({evt.EventType}: {ex.Message})";
+                }
             }
-            catch (Exception ex) when (SyncFailureClassifier.Classify(ex) == SyncFailureKind.Permanent)
-            {
-                await quarantine.RecordFailureAsync(evt.EventId, evt.EventType, evt.NodeId,
-                    "Blind reseed replay: " + ex.Message, SyncFailureKind.Permanent);
-                logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) can never apply; quarantined", evt.EventId, evt.EventType);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) did not apply; rolling back", evt.EventId, evt.EventType);
-                return $"{evt.EventId} ({evt.EventType}: {ex.Message})";
-            }
-        }
-        return null;
+            return (string?)null;
+        });
     }
 
     private void TryDeleteTree(string dir)

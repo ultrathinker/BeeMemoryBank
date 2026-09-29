@@ -37,6 +37,34 @@ public class BlindStartupTests
     }
 
     /// <summary>
+    /// A first start that died mid-write left a file that exists and holds nothing. Reading it as a
+    /// key failed every later start (the v=2 identity row points at a key that is not there); the
+    /// node now mints the identity it never finished writing. The write itself is atomic now, so
+    /// this is the shape only older builds could leave behind — and volumes from them exist.
+    /// </summary>
+    [Fact]
+    public async Task AKeyFileLeftEmptyByACrash_IsCompletedWithAFreshKey()
+    {
+        using var blind = new BlindNodeFactory();
+        Directory.CreateDirectory(blind.DataPath);
+        var keyPath = Path.Combine(blind.DataPath, FileNodeKey.FileName);
+        // The torn write, with the permissions that write would have left behind (0600): a
+        // world-readable file is refused rather than regenerated over, by design.
+        await File.WriteAllBytesAsync(keyPath, []);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        var start = () => blind.Services;
+
+        start.Should().NotThrow("the node has no usable key on disk, so it is a first start");
+        var key = new FileNodeKey(keyPath);
+        key.ReadSeed().Should().HaveCount(32);
+        var identity = await blind.Services.GetRequiredService<INodeIdentityRepository>().GetAsync();
+        identity.Should().NotBeNull();
+        key.Matches(identity!.Ed25519PublicKey).Should().BeTrue();
+    }
+
+    /// <summary>
     /// Review L-stage0 #1: a blind volume that holds anything able to put the master DEK into the
     /// process — here a password key slot, or the update unlock handoff — is refused at start.
     /// </summary>
@@ -158,18 +186,23 @@ public class BlindStartupTests
         (await whitelist.GetByNodeIdAsync(oldPeer)).Should().NotBeNull();
     }
 
-    /// <summary>Review L-stage1 #4: one that died after it was complete is finished: new database live, old one kept.</summary>
+    /// <summary>
+    /// Review L-stage1 #4: one that died after it was complete is finished: new database live. The old one is wiped,
+    /// not kept as a .pre-seed copy: committed, it is no way back, only the vault under its old key.
+    /// </summary>
     [Fact]
     public async Task ACutoverInterruptedAfterItWasDone_IsFinishedAtStart()
     {
         using var blind = new BlindNodeFactory();
         var newPeer = Guid.NewGuid();
-        await StageInterruptedCutoverAsync(blind.DataPath, BlindSeedCutover.Done, oldPeer: Guid.NewGuid(), newPeer);
+        var oldPeer = Guid.NewGuid();
+        await StageInterruptedCutoverAsync(blind.DataPath, BlindSeedCutover.Done, oldPeer, newPeer);
 
         var whitelist = blind.Services.GetRequiredService<IWhitelistRepository>();
 
         (await whitelist.GetByNodeIdAsync(newPeer)).Should().NotBeNull("the new database stays live");
-        File.Exists(Path.Combine(blind.DataPath, "beememorybank.db.pre-seed")).Should().BeTrue();
+        (await whitelist.GetByNodeIdAsync(oldPeer)).Should().BeNull();
+        File.Exists(Path.Combine(blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse("the replaced database is wiped");
         Directory.Exists(BlindSeedCutover.DirOf(blind.DataPath)).Should().BeFalse();
     }
 

@@ -114,6 +114,20 @@ public class RepositoryWriteGuardrailTests
         // start, before anything could be logged — and a blind node never logs events at all.
         new("server/BeeMemoryBank.Api/Startup/BlindRoleStartup.cs", "INodeIdentityRepository", "CreateAsync", BootstrapReason),
 
+        // ── The restore bootstrap (RecoveryRestoreService): the same position as the setup wizard
+        // above, reached from the other end — the node is being given an identity, a slot, an admin
+        // and a sentinel on the way UP, so there is no vault to log into yet and no event this write
+        // could carry. Its Lamport clock is raised only after the bootstrap, deliberately: the node
+        // has to end strictly above the imported state, which is not known until the import is done.
+        // These three are node-local by construction — identity, sentinel, "first pull finished" —
+        // none of them is replicated content. They became visible to this scanner when the bootstrap
+        // gained its resume path (the helper's `INodeIdentityRepository nodeRepo` parameter made the
+        // variable name repository-typed for the whole file); the review that added them is here.
+        new("server/BeeMemoryBank.Api/Services/Recovery/RecoveryRestoreService.cs", "INodeIdentityRepository", "CreateAsync", BootstrapReason),
+        new("server/BeeMemoryBank.Api/Services/Recovery/RecoveryRestoreService.cs", "INodeIdentityRepository", "StoreSentinelAsync", BootstrapReason),
+        new("server/BeeMemoryBank.Api/Services/Recovery/RecoveryRestoreService.cs", "INodeIdentityRepository", "MarkInitialSyncCompletedAsync",
+            "Marks this node's own first pull as done (tbl_node_identity.initial_sync_completed, no LamportTs/SourceNodeId) — the interface's doc comment lists it as node-local, never synced."),
+
         // /api/join is reached AFTER the joining node already exists, by the node it is joining —
         // that side is past bootstrap, so it earns its allow-list entries individually below rather
         // than sharing BootstrapReason.
@@ -190,6 +204,8 @@ public class RepositoryWriteGuardrailTests
         // for the protocol itself, not application content.
         new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "ISyncPushPositionRepository", "UpdatePositionAsync",
             "Records how far a peer has pulled from this node — sync protocol bookkeeping, not content."),
+        new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "ISyncPushPositionRepository", "RecordReportedPositionAsync",
+            "Records how far a peer SAYS it has applied our log (POST /api/sync/report-position) — the same protocol bookkeeping the entry above covers, in the column the blind node's log trimmer cuts at rather than the delivery watermark."),
         new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "IBlobRepository", "StoreAsync",
             "Stores content-addressed blob bytes pushed by a peer during sync — this endpoint is the receiving side of the sync protocol itself."),
         new("server/BeeMemoryBank.Api/Endpoints/SnapshotEndpoints.cs", "IEventLogRepository", "AppendAsync",

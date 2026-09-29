@@ -50,7 +50,9 @@ public partial class EventApplier(
         // A blind reseed swaps the database file under this process: it holds applies off and waits
         // for the ones running, so none lands in the file being replaced (EventWriteGate).
         using var _ = await EventWriteGate.Instance.EnterAsync();
-        EventWriteGate.EnterOwnerFlow();
+        // Scoped to this one apply: the mark lets nested writes of the apply itself pass, and is
+        // given back when the apply is done — the caller's flow waits at the gate like any other.
+        using var ownerFlow = EventWriteGate.EnterOwnerFlow();
         return await ApplyCoreAsync(evt);
     }
 
@@ -299,7 +301,10 @@ public partial class EventApplier(
         // Record event AFTER successful apply. INSERT OR IGNORE handles the
         // TOCTOU race: if another process already inserted this event (concurrent apply),
         // the duplicate insert is harmlessly ignored since data changes are idempotent.
-        await eventLogRepo.AppendIfNotExistsAsync(evt);
+        // A recovery_box_set is the exception: its apply logs it in the same transaction as the rows, and only
+        // while its box is active here, so an inactive box's material is never in the log (F7).
+        if (evt.EventType != EventTypes.RecoveryBoxSet)
+            await eventLogRepo.AppendIfNotExistsAsync(evt);
         return EventApplyResult.Applied;
     }
 }

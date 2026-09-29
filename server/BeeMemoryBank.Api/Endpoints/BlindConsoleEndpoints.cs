@@ -26,11 +26,17 @@ public static class BlindConsoleEndpoints
         {
             if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 8)
                 return Results.BadRequest(new ErrorResponse("console password must be at least 8 characters"));
-            if (!auth.TrySetPassword(req.CurrentPassword, req.NewPassword))
+            // Two different refusals, told apart by what the request carried — not by re-reading
+// HasPassword() after the attempt, which cannot distinguish them: a node WITH a password answers
+// "wrong password" for a missing current one too, and the CLI's "already set, keep it and move on"
+// branch then never fires (review release-a2 agy#1, sec#8). The code is the contract; the message
+// is for the operator.
+            if (auth.HasPassword() && string.IsNullOrEmpty(req.CurrentPassword))
                 return Results.BadRequest(new ErrorResponse(
-                    auth.HasPassword()
-                        ? "the current console password is wrong"
-                        : "a console password is already set without a current password offered"));
+                    "a console password is already set without a current password offered",
+                    ErrorCodes.ConsolePasswordAlreadySet));
+            if (!auth.TrySetPassword(req.CurrentPassword, req.NewPassword))
+                return Results.BadRequest(new ErrorResponse("the current console password is wrong"));
             return Results.NoContent();
         });
 

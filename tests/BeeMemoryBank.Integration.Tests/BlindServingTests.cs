@@ -103,7 +103,12 @@ public class BlindServingTests : IAsyncLifetime
                 await applier.ApplyAsync(Signed(author, key.privateKey, lamport));
         }
         var pushed = _blind.Services.GetRequiredService<ISyncPushPositionRepository>();
+        // Reported, not delivered (Codex round 2, security #3): the trimmer cuts at what a peer
+        // acknowledged, so these are the numbers it reads — and the author was served further than
+        // it reported, which must not count for anything.
+        await pushed.RecordReportedPositionAsync(author, 2);
         await pushed.UpdatePositionAsync(author, 5);
+        await pushed.RecordReportedPositionAsync(reader, 4);
         await pushed.UpdatePositionAsync(reader, 4);
         var trimmer = _blind.Services.GetRequiredService<BlindLogTrimmer>();
 
@@ -115,12 +120,13 @@ public class BlindServingTests : IAsyncLifetime
                   VALUES ('a1', @author, 'fp', @vector, 'd', 'h', @at, 10)",
                 new { author = author.ToString(), vector = $"{{\"{author}\": 3}}", at = DateTime.UtcNow.ToString("O") });
 
-        (await trimmer.TrimAsync()).Should().Be(3, "the anchor covers up to the third event, every peer has read four");
+        (await trimmer.TrimAsync()).Should().Be(2,
+            "the anchor covers up to the third event, one peer acknowledged two and the other four — and what the first was merely served (5) counts for nothing");
         var events = _blind.Services.GetRequiredService<IEventLogRepository>();
-        (await events.GetMinSequenceAsync()).Should().Be(4);
+        (await events.GetMinSequenceAsync()).Should().Be(3);
         using var http = PeerClient(reader);
-        (await http.GetAsync("/api/sync/events?afterSequence=2")).StatusCode.Should().Be(HttpStatusCode.Gone);
-        (await http.GetAsync("/api/sync/events?afterSequence=3")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await http.GetAsync("/api/sync/events?afterSequence=1")).StatusCode.Should().Be(HttpStatusCode.Gone);
+        (await http.GetAsync("/api/sync/events?afterSequence=2")).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     private HttpClient PeerClient(Guid peer)

@@ -216,9 +216,24 @@ public sealed class RestoreSourceFixture : IAsyncLifetime
         return id;
     }
 
+    /// <summary>
+    /// Each strong box as it was before the rotation that superseded it. A superseded box keeps no key material
+    /// in the database (F7), so a tamperer who wants the old boxes back needs a copy made before: this is it.
+    /// </summary>
+    public List<OldBox> OldStrongBoxes { get; } = [];
+
+    public sealed record OldBox(string BoxId, string Kind, string AuthorNodeId, string DekFingerprint, long EpochHint, string KdfPreset,
+        byte[] Salt, byte[] Wrapped, byte[] Iv, string CreatedAt, long LamportTs, string? SourceNodeId);
+
     private async Task RotateAsync(HttpClient client, SessionService session)
     {
         var before = DekFingerprint.Of(session.GetMasterDek());
+        using (var keep = Source.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            OldStrongBoxes.AddRange(await keep.QueryAsync<OldBox>(
+                @"SELECT box_id AS BoxId, kind AS Kind, author_node_id AS AuthorNodeId, dek_fingerprint AS DekFingerprint,
+                         epoch_hint AS EpochHint, kdf_preset AS KdfPreset, salt AS Salt, wrapped AS Wrapped, iv AS Iv,
+                         created_at AS CreatedAt, lamport_ts AS LamportTs, source_node_id AS SourceNodeId
+                  FROM tbl_recovery_box WHERE kind = 'strong' AND status = 'A'"));
         var propose = await client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
         propose.EnsureSuccessStatusCode();
         var commitEventId = (await propose.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("commitEventId").GetGuid().ToString();
@@ -333,6 +348,51 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         RecoverySet.Parse(set!).Boxes.Should().NotBeEmpty("the backup writes the real recovery set, not the stub's nothing");
     }
 
+    /// <summary>
+    /// The restore bootstrap writes the identity row first and the key slot, the admin and the
+    /// sentinel after it. "Initialized" used to mean no more than "that first row exists", so a
+    /// crash in between (a power cut, a killed container — the restore is not a transaction) left a
+    /// node that called itself initialized, refused the next restore with "restore needs a fresh
+    /// node" and had no slot to unlock with. Nothing cleared it but wiping the volume by hand.
+    ///
+    /// <para>The swarm's answer is the flag the bootstrap raises before its first write: the node
+    /// answers "not initialized" while it is up (which is the instruction the operator needs —
+    /// restore again) and the retry is let in and resumes. What the crash leaves is therefore the
+    /// row AND that flag, which is what this test builds.</para>
+    /// </summary>
+    [Fact]
+    public async Task ARestoreThatDiedAfterTheNodeRow_IsNotInitialized_AndTheNextAttemptSucceeds()
+    {
+        using var target = new RecoveryTestFactory();
+        var nodeRepo = target.Services.GetRequiredService<INodeIdentityRepository>();
+        // Exactly what the crash leaves behind: the row, nothing else, and the flag the bootstrap
+        // raised before writing it.
+        await nodeRepo.CreateAsync(new NodeIdentity
+        {
+            NodeId = Guid.NewGuid(), DisplayName = "Half restored",
+            Ed25519PublicKey = Ed25519Signer.GenerateKeyPair().publicKey,
+            Ed25519PrivateKey = [], Ed25519PrivateKeyIV = null, Ed25519PrivateKeyV = 1,
+            CreatedAt = DateTime.UtcNow
+        });
+        using (var scope = target.Services.CreateScope())
+        {
+            // …and the flag the bootstrap raised before its first write.
+            await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().SetAsync();
+
+            (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
+                .Should().BeFalse(
+                    "a bootstrap is in progress: this node cannot be unlocked yet, and calling it "
+                    + "initialized is what made the brick permanent");
+            (await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().IsSetAsync())
+                .Should().BeTrue();
+        }
+
+        var result = await target.Services.GetRequiredService<BlindRestoreClient>().RestoreFromBackupAsync(source.BackupFolder, Who);
+
+        result.NodeId.Should().NotBe(Guid.Empty);
+        await AssertEverythingOpensAsync(target);
+    }
+
     [Fact]
     public async Task FromBackupFolder_WithNoBlindNodeAtAll_EverythingOpens()
     {
@@ -391,8 +451,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         // The old strong boxes put back as active and every chain link removed: the password opens three
         // unlinked keys. The genuine anchor under the newest one must not confirm, since nothing proves
         // which key is newest.
-        var folder = await BackupCopyAsync(
-            "UPDATE tbl_recovery_box SET status = 'A' WHERE kind = 'strong'; DELETE FROM tbl_dek_retired_link;");
+        var folder = await OldStrongBoxesBackAsync("DELETE FROM tbl_dek_retired_link;");
         await RewriteRecoverySetAsync(folder);
         using var target = new RecoveryTestFactory();
 
@@ -407,7 +466,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     [Fact]
     public async Task OldBoxesKept_WithTheLinks_TheHeadIsTheNewestKey_AndConfirms()
     {
-        var folder = await BackupCopyAsync("UPDATE tbl_recovery_box SET status = 'A' WHERE kind = 'strong';");
+        var folder = await OldStrongBoxesBackAsync();
         await RewriteRecoverySetAsync(folder);
         using var target = new RecoveryTestFactory();
 
@@ -435,7 +494,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     /// </summary>
     private async Task<string> NewestBoxHiddenBehindJunkAsync()
     {
-        var folder = await BackupCopyAsync("UPDATE tbl_recovery_box SET status = 'A' WHERE kind = 'strong';");
+        var folder = await OldStrongBoxesBackAsync();
         await RewriteRecoverySetAsync(folder, set =>
         {
             set.Boxes.RemoveAll(b => b.Kind == "strong" && b.DekFingerprint == source.CurrentFingerprint);
@@ -594,7 +653,9 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     }
 
     /// <summary>A private copy of the backup folder with <paramref name="tamper"/> applied to its database.</summary>
-    private async Task<string> BackupCopyAsync(string tamper)
+    private Task<string> BackupCopyAsync(string tamper) => BackupCopyAsync(conn => conn.ExecuteAsync(tamper));
+
+    private async Task<string> BackupCopyAsync(Func<Microsoft.Data.Sqlite.SqliteConnection, Task> tamper)
     {
         var folder = Path.Combine(source.Work, "backup-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
@@ -602,8 +663,138 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             File.Copy(file, Path.Combine(folder, Path.GetFileName(file)));
         using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(folder, BlindPackageFile.DbFileName)};Pooling=False");
         conn.Open();
-        await conn.ExecuteAsync(tamper);
+        await tamper(conn);
         return folder;
+    }
+
+    /// <summary>
+    /// A copy with the old strong boxes put back as active, their material taken from before the rotations (the
+    /// database itself no longer holds it), then <paramref name="more"/>.
+    /// </summary>
+    private Task<string> OldStrongBoxesBackAsync(string more = "") => BackupCopyAsync(async conn =>
+    {
+        foreach (var b in source.OldStrongBoxes)
+            await conn.ExecuteAsync(
+                @"INSERT OR REPLACE INTO tbl_recovery_box
+                    (box_id, kind, author_node_id, dek_fingerprint, epoch_hint, kdf_preset, salt, wrapped, iv,
+                     created_at, status, retired_by_box_id, lamport_ts, source_node_id)
+                  VALUES (@BoxId, @Kind, @AuthorNodeId, @DekFingerprint, @EpochHint, @KdfPreset, @Salt, @Wrapped, @Iv,
+                     @CreatedAt, 'A', NULL, @LamportTs, @SourceNodeId)", b);
+        if (more.Length > 0) await conn.ExecuteAsync(more);
+    });
+
+    /// <summary>
+    /// A restore that died in the bootstrap leaves rows behind, and <c>IsInitializedAsync</c> then says
+    /// exactly the right thing: this node is not initialized, restore it again. The retry therefore has
+    /// to be re-entrant — one identity row, one admin, and the identity that is persisted is the one the
+    /// restore returns, the one that signs and the one the blind node's claim trusts (review release-a2
+    /// spec#1, agy#3, sec#4).
+    /// </summary>
+    [Fact]
+    public async Task ARestoreRetriedAfterATornBootstrap_KeepsOneIdentity_ThatIsTheOneThatSignsAndClaims()
+    {
+        var blind = source.Blind;
+        using var blindClient = blind.CreateClient();
+        var issued = await blindClient.PostAsync("/api/blind/restore-code", null);
+        issued.StatusCode.Should().Be(HttpStatusCode.OK, await issued.Content.ReadAsStringAsync());
+        var code = (await issued.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString()!;
+
+        using var target = new RecoveryTestFactory();
+        target.RouteOutboundHttpThrough(blind.Server.CreateHandler());
+
+        // The crash: an identity row and nothing else — the first write of the bootstrap, before the
+        // slot, the admin and the sentinel — plus the flag the bootstrap raised before writing it.
+        var halfId = Guid.NewGuid();
+        await target.Services.GetRequiredService<INodeIdentityRepository>().CreateAsync(new NodeIdentity
+        {
+            NodeId = halfId, DisplayName = "Half restored",
+            Ed25519PublicKey = Ed25519Signer.GenerateKeyPair().publicKey,
+            Ed25519PrivateKey = [], Ed25519PrivateKeyIV = null, Ed25519PrivateKeyV = 1,
+            CreatedAt = DateTime.UtcNow
+        });
+        using (var scope = target.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().SetAsync();
+            (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
+                .Should().BeFalse("the operator's next move is to restore again, not to set up a new vault");
+        }
+
+        using var targetClient = target.CreateClient();
+        var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
+        {
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password,
+            adminUsername = "admin", displayName = "Restored PC"
+        });
+        start.StatusCode.Should().Be(HttpStatusCode.Accepted, await start.Content.ReadAsStringAsync());
+        var progress = await WaitForRestoreAsync(targetClient);
+        progress.GetProperty("state").GetString().Should().Be("done", progress.ToString());
+
+        Guid restoredId, storedKeyNodeId;
+        byte[] storedKey;
+        using (var conn = target.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+        {
+            // One row, not two: every read of the identity is an unordered LIMIT 1, so a second row
+            // would make "this node's identity" a coin toss between the returned id and the signer.
+            (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_node_identity")).Should().Be(1);
+            storedKeyNodeId = Guid.Parse(await conn.ExecuteScalarAsync<string>("SELECT node_id FROM tbl_node_identity LIMIT 1")!);
+            (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_user WHERE username = 'admin' COLLATE NOCASE"))
+                .Should().Be(1, "the retry updates the admin row instead of colliding with its UNIQUE username");
+            (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_key_slot")).Should().Be(1,
+                "a second slot would keep accepting the old password after the next password change");
+        }
+        using (var scope = target.Services.CreateScope())
+        {
+            var identity = (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+            restoredId = identity.NodeId;
+            storedKey = identity.Ed25519PublicKey;
+        }
+
+        // The identity on disk is the one every later read will serve (the progress JSON does not
+        // carry it; the claim below and the signature below are what pin the reported result to it).
+        storedKeyNodeId.Should().Be(restoredId);
+        restoredId.Should().NotBe(halfId, "the torn row is replaced in place, not adopted as this node");
+
+        // …and the stored seed really signs as the stored public key (the node's whole ability to
+        // authenticate, pair and claim rests on those two being the same identity).
+        var probe = "bmb-restore-retry-probe"u8.ToArray();
+        using (var scope = target.Services.CreateScope())
+        {
+            var identity = (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+            var session = scope.ServiceProvider.GetRequiredService<SessionService>();
+            await session.UnlockAsync(RestoreSourceFixture.Password);
+            var seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+                identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
+                identity.NodeId, session.GetMasterDek());
+            try
+            {
+                Ed25519Signer.Verify(identity.Ed25519PublicKey, probe, Ed25519Signer.Sign(seed, probe))
+                    .Should().BeTrue("the persisted seed is the private half of the persisted key");
+            }
+            finally { Array.Clear(seed); }
+        }
+
+        // …and the blind node's claim trusts that same id with that same key.
+        using (var scope = blind.Services.CreateScope())
+        {
+            var row = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(restoredId);
+            row.Should().NotBeNull("the claim names the restored device");
+            row!.Ed25519PublicKey.Should().Equal(storedKey);
+            row.IsSuperadmin.Should().BeTrue();
+        }
+        (await blindClient.GetAsync("/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // And the flag the crashed attempt left is gone: the bootstrap committed its last write and
+        // the marker with it, so the node answers "initialized" from here on (a marker that outlived
+        // a finished bootstrap would send the operator to the restore wizard forever).
+        using (var scope = target.Services.CreateScope())
+        {
+            (await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().IsSetAsync())
+                .Should().BeFalse();
+            (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
+                .Should().BeTrue();
+        }
+
+        await AssertEverythingOpensAsync(target);
     }
 
     [Fact]

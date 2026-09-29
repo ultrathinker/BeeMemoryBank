@@ -106,15 +106,18 @@ public static class DependencyInjection
     /// </summary>
     public static IServiceCollection AddSyncScheduler(this IServiceCollection services, TimeSpan? interval = null, Func<IServiceProvider, Action?>? periodicCleanupFactory = null)
     {
-        services.AddHostedService(sp =>
-            new SyncScheduler(
-                sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SyncScheduler>>(),
-                sp.GetRequiredService<ISyncTrigger>(),
-                sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
-                interval,
-                periodicCleanupFactory?.Invoke(sp),
-                sp.GetRequiredService<SnapshotRequiredState>()));
+        // Registered as itself as well as a hosted service: a flow that is about to delete this
+        // node's tables asks the loop to stand down first (SyncScheduler.PauseAsync — the wipe and
+        // the reseed cutover both do), and it cannot ask a type the container does not hand out.
+        services.AddSingleton(sp => new SyncScheduler(
+            sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SyncScheduler>>(),
+            sp.GetRequiredService<ISyncTrigger>(),
+            sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
+            interval,
+            periodicCleanupFactory?.Invoke(sp),
+            sp.GetRequiredService<SnapshotRequiredState>()));
+        services.AddHostedService(sp => sp.GetRequiredService<SyncScheduler>());
         return services;
     }
 

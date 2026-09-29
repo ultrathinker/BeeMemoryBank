@@ -166,6 +166,10 @@ const fmtBytes = (n) => { if (n == null) return "—"; const u=["B","KB","MB","G
 const fmtDate = (iso) => { if (!iso) return "—"; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
 
 let timer = null;
+// Whether the operator has moved the schedule toggle since the settings were loaded. Only then
+// does the save send scheduleEnabled: the node's own default (on once configured) must not be
+// replaced by a decision nobody made.
+let schedTouched = false;
 
 async function api(method, path, body) {
   const headers = { "X-Bmb-Console": "1" };
@@ -236,6 +240,7 @@ async function loadBackups() {
   const c = s.json.settings || {};
   $("s-time").value = c.scheduleTime || "03:00";
   $("s-on").value = c.scheduleEnabled ? "on" : "off";
+  schedTouched = false;   // the toggle speaks only when the operator moves it (see the save)
   $("s-type").value = c.repoType === "S3" || c.repoType === 1 ? "s3" : "folder";
   $("s-path").value = c.repoFolder || (c.s3Prefix || "");
   $("s3-extra").style.display = $("s-type").value === "s3" ? "" : "none";
@@ -309,8 +314,12 @@ $("c-btn").onclick = async () => {
 };
 $("b-sched").onclick = () => { $("sched-box").open = !$("sched-box").open; };
 $("s-type").onchange = () => { $("s3-extra").style.display = $("s-type").value === "s3" ? "" : "none"; };
+$("s-on").onchange = () => { schedTouched = true; };
 $("s-save").onclick = async () => {
-  const body = { scheduleTime: $("s-time").value || "03:00", scheduleEnabled: $("s-on").value === "on",
+  // scheduleEnabled travels only when the operator moved the toggle. The node has its own default
+  // (on, as soon as the repository is configured), and a form that always echoed the field back
+  // would turn "I did not touch it" into a decision.
+  const body = { scheduleTime: $("s-time").value || "03:00",
     keepDaily: +$("s-kd").value, keepWeekly: +$("s-kw").value, keepMonthly: +$("s-km").value, keepYearly: +$("s-ky").value };
   if ($("s-type").value === "folder") { body.repoType = "folder"; body.repoFolder = $("s-path").value; }
   else {
@@ -320,6 +329,7 @@ $("s-save").onclick = async () => {
     if ($("s-sk").value) body.s3SecretKey = $("s-sk").value;
   }
   if ($("s-rpw").value) body.resticPassword = $("s-rpw").value;
+  if (schedTouched) body.scheduleEnabled = $("s-on").value === "on";
   const r = await api("PUT", "api/blind/backup/settings", body);
   if (r.status === 200) { alert("Settings saved."); loadBackups(); }
   else alert("Not saved: " + ((r.json && r.json.error) || r.status));

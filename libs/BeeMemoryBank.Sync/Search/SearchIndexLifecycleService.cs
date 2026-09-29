@@ -360,17 +360,38 @@ public sealed class SearchIndexLifecycleService(
     /// warm-start pass) collapse into a single rebuild rather than each independently re-flagging
     /// every article and clearing tables that the other just cleared.
     /// </para>
+    ///
+    /// <para>
+    /// <b>The in-memory index is dropped in the same critical section, and it has to be.</b>
+    /// Re-flagging every article only rebuilds what <see cref="PendingIndexProcessor"/> is willing to
+    /// index: active, unprotected articles. <see cref="IndexBuilder"/> is a process-wide singleton
+    /// that keeps whatever an earlier pass put in it, so a segment adopted moments ago by
+    /// <see cref="EnsureWarmStartedAsync"/> -- or content indexed before its article was protected or
+    /// deleted -- would survive the rebuild with its terms and article id intact, and
+    /// <c>SearchService</c> would keep returning it for the rest of the process's life. Worse, it is
+    /// the ordinary case rather than an edge one: this method's most common caller is the warm-start
+    /// fallback, which fails <i>while adopting</i> a manifest, after the segments before it are
+    /// already live. Resetting both halves here keeps "the persisted index is untrustworthy" and "the
+    /// in-memory index is untrustworthy" true together, which is what the caller assumes.
+    /// </para>
     /// </summary>
     public async Task TriggerFullRebuildAsync(CancellationToken ct = default)
     {
         await runtimeState.RebuildLock.WaitAsync(ct);
         try
         {
-            logger.LogWarning("Triggering a full search index rebuild: clearing the persisted manifest/tombstones and re-flagging every active article as index-pending.");
+            logger.LogWarning("Triggering a full search index rebuild: clearing the persisted manifest/tombstones, re-flagging every active article as index-pending, and dropping the in-memory index.");
             int affected = await articleRepo.MarkAllIndexPendingUnscopedAsync();
             await tombstoneRepo.DeleteAllAsync();
             await manifestRepo.DeleteAllManifestsAsync();
             runtimeState.ClearPersistedSegmentIds();
+
+            // Cleared last, so the in-memory index is empty even in the window between the durable
+            // reset and this call -- and see this method's own doc comment for why it cannot be
+            // skipped. SealCount/MergeCount are deliberately left alone: they are the monotonic
+            // counters the persistence plumbing compares before/after a call to detect a seal or a
+            // merge.
+            Builder.Reset();
             logger.LogWarning("Full search index rebuild triggered: {Count} active article(s) re-flagged as index-pending.", affected);
         }
         finally

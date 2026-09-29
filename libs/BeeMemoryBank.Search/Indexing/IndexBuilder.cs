@@ -1199,6 +1199,43 @@ public sealed class IndexBuilder
     }
 
     /// <summary>
+    /// Drops every document this builder holds -- the hot buffer and every live sealed segment -- so
+    /// nothing it has indexed so far can be found, ranked or merged again.
+    ///
+    /// <para>
+    /// <b>Why a full rebuild has to do this, and why leaving it out is a leak:</b> a rebuild
+    /// re-indexes the articles that <i>should</i> be in the index — active, unprotected ones — so
+    /// anything else an earlier pass had indexed is simply never visited again. An article protected
+    /// or deleted since it was indexed would keep its terms and its id, and keep being returned by
+    /// search, for the rest of the process's life. <see cref="SegmentedIndex"/>'s rebuild path
+    /// (<c>SearchIndexLifecycleService.TriggerFullRebuildAsync</c>) clears the persisted side; this
+    /// is the in-memory half of the same operation, and the two belong together.
+    /// </para>
+    ///
+    /// <para>
+    /// <see cref="SealCount"/> and <see cref="MergeCount"/> keep counting across a reset: they are
+    /// the before/after signals callers persist by, and making them go backwards would strand a
+    /// caller that is mid-batch. Segment ids keep counting too, so an id never names two different
+    /// segments in one process. This builder's own persisted-segment map is its caller's state and
+    /// is not touched here — the rebuild clears it alongside
+    /// (<c>SearchIndexRuntimeState.ClearPersistedSegmentIds</c>).
+    /// </para>
+    /// </summary>
+    public void Reset()
+    {
+        lock (_writeLock)
+        {
+            _hotBuffer.Clear();
+            _sealedSegments = [];
+            _lastSealedSegmentBytes = null;
+            _lastSealedSegmentId = 0;
+            _lastSealedSegmentDocumentCount = 0;
+            _lastMergedInfo = null;
+            _sealedTotalTermOccurrencesApprox = 0;
+        }
+    }
+
+    /// <summary>
     /// The merge-persistence twin of <see cref="GetMostRecentlySealedSegmentForPersistence"/>
     /// -- returns the most recent merge's output segment (if it produced one) plus the internal ids
     /// of every input segment that merge consumed, or null if no merge has ever happened in this

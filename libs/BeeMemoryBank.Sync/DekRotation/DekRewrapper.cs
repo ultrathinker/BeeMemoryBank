@@ -486,6 +486,13 @@ public static class DekRewrapper
 
         int version = (int)(long)row.V;
         if (version == 0) return; // plaintext seed, DEK-independent — nothing to re-wrap.
+        // v=2: the seed is not in the database at all (blind node, Android blind copy) — the row
+        // carries the public key and empty private columns, and the key file or the Keystore holds
+        // the seed. There is nothing here to re-wrap, and reading it as a v1 row is not a harmless
+        // miss: ed25519_private_key_iv is NULL, so the row fell into MarkUnreadable and every
+        // rotation reported "UNREADABLE ROWS: 1 (tbl_node_identity:…) — manual recovery required"
+        // for a node whose identity was never in any danger (review release-a #4).
+        if (version == NodeIdentityCrypto.ExternalKeyVersion) return;
 
         var nodeIdStr = (string)row.NodeId;
         var nodeId = Guid.Parse(nodeIdStr);

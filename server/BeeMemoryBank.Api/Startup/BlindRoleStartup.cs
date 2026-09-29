@@ -50,7 +50,11 @@ public static class BlindRoleStartup
         var identity = await nodeRepo.GetAsync();
         if (identity == null)
         {
-            var publicKey = key.Exists ? key.ReadPublicKey() : key.Create();
+            // LoadOrCreate: the file's seed when it has a usable one, a fresh key when it has none
+            // at all. Not `Exists ? Read : Create` — a file left empty by a start that died
+            // mid-write exists and has no seed in it, and that test sent the node down the read
+            // path, where it threw on every start from then on.
+            var publicKey = key.LoadOrCreate(out var created);
             var nodeId = BlindNodeId.NewId();
             await nodeRepo.CreateAsync(new NodeIdentity
             {
@@ -64,7 +68,9 @@ public static class BlindRoleStartup
                 InitialSyncCompleted = false,
                 CreatedAt = DateTime.UtcNow
             });
-            logger.LogInformation("Blind node identity created: {NodeId}", nodeId);
+            logger.LogInformation(created
+                ? "Blind node identity created: {NodeId}"
+                : "Blind node identity restored from the key on disk: {NodeId}", nodeId);
             return;
         }
 

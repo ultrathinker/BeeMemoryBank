@@ -20,6 +20,12 @@ public class BlindCliTests : IDisposable
         public List<string?> Roles { get; } = [];
         public (int Status, string Body) Answer { get; set; } = (200, "{}");
 
+        /// <summary>
+        /// What /console/password answers. 204 by default (the real Api's success); a node that
+        /// already has a password answers 400 with the "already set" message.
+        /// </summary>
+        public (int Status, string Body)? PasswordAnswer { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
         {
@@ -31,7 +37,7 @@ public class BlindCliTests : IDisposable
             // The password route answers 204 in the real Api; the scripted default stays 200 for
             // everything else so each test only pins what it cares about.
             var answer = request.RequestUri!.AbsolutePath.EndsWith("/console/password")
-                ? (Status: 204, Body: "")
+                ? PasswordAnswer ?? (Status: 204, Body: "")
                 : Answer;
             return new HttpResponseMessage((HttpStatusCode)answer.Status) { Content = new StringContent(answer.Body) };
         }
@@ -93,6 +99,76 @@ public class BlindCliTests : IDisposable
             && c.Body!.Contains("console-pw-9"));
         handler.Calls.Should().Contain(c => c.Method == "PUT" && c.Url.PathAndQuery == "/api/blind/backup/settings"
             && c.Body!.Contains("/backups/restic") && c.Body!.Contains("restic-pw"));
+    }
+
+    /// <summary>
+    /// `blind init` on a node that already has a console password: the run is there for the backup
+    /// target, and it used to die on the password step ("the current console password is wrong"),
+    /// so the target could not be changed from the CLI at all. Two ways out, both tested here.
+    /// </summary>
+    [Fact]
+    public async Task Init_OnANodeThatAlreadyHasAConsolePassword_KeepsItAndSavesTheTarget()
+    {
+        var handler = new ScriptedHandler
+        {
+            // The real node's payload, code included: the CLI branches on the code, and this test
+            // used to feed it the message it happened to look for, which the endpoint never sent
+            // (review release-a2 agy#1).
+            PasswordAnswer = (400, """{"error":"a console password is already set without a current password offered","code":"console_password_already_set"}"""),
+        };
+        var sw = new StringWriter();
+        var secrets = new Dictionary<string, string>
+        {
+            [BlindSecrets.ConsolePassword] = "console-pw-9",
+            [BlindSecrets.ResticPassword] = "restic-pw",
+        };
+        var rc = await BlindCommand.HandleInitAsync(_tempDir, secrets,
+            repoFolder: "/backups/other", s3: null, bucket: null, prefix: null, ak: null, Options(handler), sw);
+
+        rc.Should().Be(0, "the password step is not what this run is for");
+        sw.ToString().Should().Contain("kept").And.Contain(BlindSecrets.CurrentConsolePassword);
+        handler.Calls.Should().Contain(c => c.Method == "PUT" && c.Url.PathAndQuery == "/api/blind/backup/settings"
+            && c.Body!.Contains("/backups/other"), "the backup target is what init was re-run for");
+    }
+
+    [Fact]
+    public async Task Init_WithTheCurrentPassword_ChangesIt()
+    {
+        var handler = new ScriptedHandler();
+        var sw = new StringWriter();
+        var secrets = new Dictionary<string, string>
+        {
+            [BlindSecrets.ConsolePassword] = "console-pw-10",
+            [BlindSecrets.CurrentConsolePassword] = "console-pw-9",
+        };
+        (await BlindCommand.HandleInitAsync(_tempDir, secrets,
+            repoFolder: null, s3: null, bucket: null, prefix: null, ak: null, Options(handler), sw))
+            .Should().Be(0);
+
+        handler.Calls.Should().ContainSingle(c => c.Url.PathAndQuery == "/api/blind/console/password"
+            && c.Body!.Contains("\"currentPassword\":\"console-pw-9\""),
+            "a password change needs the password it is changing");
+    }
+
+    /// <summary>A wrong current password is a refusal, not something to walk past.</summary>
+    [Fact]
+    public async Task Init_WithAWrongCurrentPassword_Fails()
+    {
+        var handler = new ScriptedHandler
+        {
+            PasswordAnswer = (400, """{"error":"the current console password is wrong"}"""),
+        };
+        var sw = new StringWriter();
+        var secrets = new Dictionary<string, string>
+        {
+            [BlindSecrets.ConsolePassword] = "console-pw-10",
+            [BlindSecrets.CurrentConsolePassword] = "not-it",
+        };
+        (await BlindCommand.HandleInitAsync(_tempDir, secrets,
+            repoFolder: "/backups/other", s3: null, bucket: null, prefix: null, ak: null, Options(handler), sw))
+            .Should().Be(1);
+        handler.Calls.Should().NotContain(c => c.Url.PathAndQuery == "/api/blind/backup/settings",
+            "nothing else is done on a refusal");
     }
 
     [Fact]

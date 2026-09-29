@@ -47,17 +47,24 @@ public partial class EventApplier
         {
             logger.LogInformation("Auto-accepting RESTORE_NETWORK event {EventId} from {NodeId}",
                 evt.EventId, evt.NodeId);
-            _ = Task.Run(async () =>
+            // Detached from this apply's flow on purpose (EventWriteGate): the accept outlives the
+            // apply and must not inherit its owner mark, or the writes it makes would skip the gate
+            // and could land in the database file a reseed is replacing. It waits at the gate like
+            // any other write when one is being held.
+            using (ExecutionContext.SuppressFlow())
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    await restoreInitiator.AcceptRestoreAsync(evt.EventId.ToString(), payload, evt);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Auto-accept restore failed for event {EventId}", evt.EventId);
-                }
-            });
+                    try
+                    {
+                        await restoreInitiator.AcceptRestoreAsync(evt.EventId.ToString(), payload, evt);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Auto-accept restore failed for event {EventId}", evt.EventId);
+                    }
+                });
+            }
         }
         else
         {
@@ -169,23 +176,28 @@ public partial class EventApplier
         {
             logger.LogInformation("Auto-accepting DEK_ROTATION_COMMIT event {EventId} from {NodeId}",
                 evt.EventId, evt.NodeId);
-            _ = Task.Run(async () =>
+            // Same detachment as the restore accept above, for the same reason: this task outlives
+            // the apply and must wait at the gate rather than inherit the apply's owner mark.
+            using (ExecutionContext.SuppressFlow())
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    await dekRotationApplier.AutoAcceptCommitAsync(evt);
-                }
-                catch (SessionLockedException)
-                {
-                    logger.LogInformation(
-                        "DEK rotation auto-accept skipped for event {EventId}: session is locked, waiting for manual accept",
-                        evt.EventId);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Auto-accept DEK rotation failed for event {EventId}", evt.EventId);
-                }
-            });
+                    try
+                    {
+                        await dekRotationApplier.AutoAcceptCommitAsync(evt);
+                    }
+                    catch (SessionLockedException)
+                    {
+                        logger.LogInformation(
+                            "DEK rotation auto-accept skipped for event {EventId}: session is locked, waiting for manual accept",
+                            evt.EventId);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Auto-accept DEK rotation failed for event {EventId}", evt.EventId);
+                    }
+                });
+            }
         }
         else
         {
