@@ -171,7 +171,8 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
         var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
 
         await sync.Should().ThrowAsync<PushGapException>();
-        (await PositionAsync()).Should().BeNull("a push gap is about the peer's copy of OUR log, not about our pull position");
+        // (Release A records the row on every pull, an empty one included, so "unchanged" is 0 rather than absent.)
+        (await PositionAsync()).GetValueOrDefault().Should().Be(0, "a push gap is about the peer's copy of OUR log, not about our pull position");
     }
 
     [Fact]
