@@ -357,7 +357,7 @@ public class RekeyPreflightTests : RekeyVaultTestBase
 
     /// <summary>
     /// A FIFO in the OS temp folder is passed over, not opened: opening one blocks until a writer comes, and on Linux
-    /// every running .NET process keeps clr-debug-pipe-* FIFOs in /tmp. The pre-flight hung on E480 before this.
+    /// every running .NET process keeps clr-debug-pipe-* FIFOs in /tmp. The pre-flight hung on a Linux test box before this.
     /// </summary>
     [Fact]
     public async Task AFifoInTheOsTempFolder_DoesNotStallThePreflight()
