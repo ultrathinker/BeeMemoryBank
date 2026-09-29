@@ -267,6 +267,9 @@ else
     // The PC's side of blind nodes (plan 4.2, 5.2): pairing, pre-flight, reseed — and reseeding a
     // blind peer from the sync scheduler when it needs it.
     builder.Services.AddScoped<BlindPreflight>();
+    // The local flags table exists on every node; here it only holds the note of an adopted blind checkpoint (the
+    // Blind nodes page, SyncClient.SyncWithPeerAsync). A blind node registers it with its own services.
+    builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.BlindState>();
     builder.Services.AddSingleton<BlindNodeManager>();
     builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.IBlindPeerReseeder>(sp => sp.GetRequiredService<BlindNodeManager>());
     // Pairing an Android blind node, which calls one of the nodes above (plan section 10).
