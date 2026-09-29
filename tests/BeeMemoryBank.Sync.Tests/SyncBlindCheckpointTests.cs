@@ -78,19 +78,36 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
             protocolVersion = SyncProtocolVersion.Current
         }));
 
-    /// <summary>The peer's pull: 410 with <paramref name="checkpointFor"/>(afterSequence) when below it, else an empty page.</summary>
+    /// <summary>
+    /// The peer's pull: 410 with <paramref name="checkpointFor"/>(afterSequence) when below it, else an empty page. The
+    /// 410 has the shape a real blind node gives right after a seed: its log is empty, so the head it reports (the
+    /// highest row, not the counter) is 0 while the checkpoint is the old head (the crit line of stand B: cp=54, head=0).
+    /// </summary>
     private void MapEvents(Func<long, long> checkpointFor) =>
+        MapGone(after =>
+        {
+            var cp = checkpointFor(after);
+            return after < cp ? GoneBody(cp, head: 0) : null;
+        });
+
+    /// <summary>The peer's pull, with a 410 body of the test's own making (null = an empty page).</summary>
+    private void MapGone(Func<long, Dictionary<string, object?>?> bodyFor) =>
         _handler.MapRoute("/api/sync/events", req =>
         {
             if (req.Method == HttpMethod.Post)
                 return Json(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 });
             var after = long.Parse(System.Web.HttpUtility.ParseQueryString(req.RequestUri!.Query)["afterSequence"] ?? "0");
-            var cp = checkpointFor(after);
-            return after < cp
-                ? Json(new { error = "SEQUENCE_TOO_OLD", last_compaction_cp = cp, current_head_seq = cp, message = "too old" },
-                    System.Net.HttpStatusCode.Gone)
-                : Json(Array.Empty<object>());
+            return bodyFor(after) is { } body ? Json(body, System.Net.HttpStatusCode.Gone) : Json(Array.Empty<object>());
         });
+
+    /// <summary>A 410 body as SyncEndpoints writes it; a null member is left out, as a peer that does not send it would.</summary>
+    private static Dictionary<string, object?> GoneBody(long cp, long? head, string? error = "SEQUENCE_TOO_OLD")
+    {
+        var body = new Dictionary<string, object?> { ["last_compaction_cp"] = cp, ["message"] = "too old" };
+        if (head is { } h) body["current_head_seq"] = h;
+        if (error is not null) body["error"] = error;
+        return body;
+    }
 
     private async Task<long?> PositionAsync() => (await _positions.GetAsync(_peerId))?.LastSequenceNum;
 
@@ -191,6 +208,128 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
         (await PositionAsync()).Should().Be(200);
     }
 
+    // ---------------------------------------------------------------------------- what a 410 may and may not adopt
+
+    /// <summary>
+    /// Only the code SyncEndpoints writes for "your position is older than my log" is that refusal. Any other 410 (a
+    /// proxy's, a bug's, a peer's own idea) says nothing about a cursor, and must not become one.
+    /// </summary>
+    [Theory]
+    [InlineData("SOMETHING_ELSE")]
+    [InlineData("sequence_too_old")]
+    [InlineData("")]
+    [InlineData(null)]
+    public async Task A410WithoutTheSequenceTooOldCode_IsNeverAdopted(string? code)
+    {
+        MapGone(_ => GoneBody(Checkpoint, head: 0, error: code));
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<SnapshotRequiredException>();
+        (await PositionAsync()).Should().BeNull();
+        Pulls.Should().HaveCount(1, "no retry");
+    }
+
+    /// <summary>
+    /// A cursor that exists is the node's own record of what it has read, and a peer's 410 never moves it: that is how a
+    /// peer could push it past events it has never served. Release A stores a row for every pull, an empty one (0)
+    /// included, and that counts too.
+    /// </summary>
+    [Theory]
+    [InlineData(10)]
+    [InlineData(0)]
+    public async Task APeerWeHoldAPositionFor_IsNeverAdvancedByA410(long stored)
+    {
+        await _positions.UpsertAsync(new SyncPosition { RemoteNodeId = _peerId, LastSequenceNum = stored, UpdatedAt = DateTime.UtcNow });
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<SnapshotRequiredException>();
+        (await PositionAsync()).Should().Be(stored);
+        Pulls.Should().HaveCount(1, "no retry");
+        _handler.CallLog.Should().NotContain("POST /api/sync/events", "the pull failed before the push, as for any 410");
+    }
+
+    /// <summary>One adoption per pairing: after it a cursor exists, so a later 410 (the peer's log now starts higher) is a refusal.</summary>
+    [Fact]
+    public async Task ASecond410_AfterAnAdoption_IsNotAdoptedAgain()
+    {
+        var cp = Checkpoint;
+        MapGone(after => after < cp ? GoneBody(cp, head: 0) : null);
+        await _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+        (await PositionAsync()).Should().Be(Checkpoint);
+
+        cp = Checkpoint + 26; // the peer's log now starts above what was adopted
+        var pulls = Pulls.Count;
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<SnapshotRequiredException>();
+        (await PositionAsync()).Should().Be(Checkpoint, "an existing cursor is never advanced by a 410");
+        Pulls.Count.Should().Be(pulls + 1, "and there is no retry");
+    }
+
+    /// <summary>
+    /// The checkpoint has to fit inside the log the peer itself describes in the same answer: a claim above the head it
+    /// reports is not a checkpoint of that log. (An empty log reports head 0 while its checkpoint is the old head: see
+    /// the next tests.)
+    /// </summary>
+    [Theory]
+    [InlineData(54L, 10L)]
+    [InlineData(long.MaxValue, 100L)]
+    public async Task ACheckpointAboveTheHeadThePeerReports_IsRefused(long cp, long head)
+    {
+        MapGone(_ => GoneBody(cp, head));
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<SnapshotRequiredException>();
+        (await PositionAsync()).Should().BeNull();
+        Pulls.Should().HaveCount(1, "no retry");
+    }
+
+    [Fact]
+    public async Task A410ThatReportsNoHead_IsRefused()
+    {
+        MapGone(_ => GoneBody(Checkpoint, head: null));
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<SnapshotRequiredException>();
+        (await PositionAsync()).Should().BeNull();
+        Pulls.Should().HaveCount(1, "no retry");
+    }
+
+    /// <summary>The honest shapes: an empty log (head 0, the counter and the checkpoint at the old head), rows above the checkpoint, none above.</summary>
+    [Theory]
+    [InlineData(54L, 0L)]
+    [InlineData(54L, 54L)]
+    [InlineData(54L, 60L)]
+    public async Task AnHonestBlindNodesCheckpoint_IsAdopted(long cp, long head)
+    {
+        MapGone(after => after < cp ? GoneBody(cp, head) : null);
+
+        await _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        (await PositionAsync()).Should().Be(cp);
+        Pulls.Should().HaveCount(2, "one refusal, one retry from the checkpoint");
+        _handler.CallLog.Should().Contain("POST /api/sync/events");
+    }
+
+    /// <summary>
+    /// The accepted limit, written down so that changing it is a decision: a peer that says its log is empty cannot be
+    /// checked against a head, so its checkpoint is taken at its word. It can claim what it likes inside "nothing", which
+    /// is withholding events, and what it withholds a phone still has and pushes to this node directly.
+    /// </summary>
+    [Fact]
+    public async Task AnEmptyLogsCheckpoint_CannotBeChecked_AndIsTakenAtItsWord()
+    {
+        MapGone(after => after < 1_000_000 ? GoneBody(1_000_000, head: 0) : null);
+
+        await _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        (await PositionAsync()).Should().Be(1_000_000);
+    }
+
     // ---------------------------------------------------------------------------- the scheduler's cycle
 
     private async Task<(SyncScheduler Scheduler, CapturingLogger<SyncScheduler> Log, SnapshotRequiredState State)> SchedulerAsync()
@@ -238,6 +377,20 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
         critical.Should().Contain("Blind node").And.Contain("refused our pull").And.Contain("not to be wiped");
         critical.Should().NotContain("Manual wipe");
         state.LastException.Should().BeNull("the banner that tells a node to wipe itself is not raised for a blind node's refusal");
+    }
+
+    [Fact]
+    public async Task AForgedCheckpoint_IsNotAdopted_AndTheCriticalSaysTheBlindNodeRefused()
+    {
+        MapGone(_ => GoneBody(long.MaxValue, head: 100));
+        var (scheduler, log, state) = await SchedulerAsync();
+
+        await scheduler.SyncAllAsync(CancellationToken.None);
+
+        (await PositionAsync()).Should().BeNull();
+        _handler.CallLog.Should().NotContain("POST /api/sync/events");
+        log.Entries.Should().ContainSingle(e => e.Level == LogLevel.Critical).Which.Message.Should().Contain("Blind node").And.Contain("refused our pull");
+        state.LastException.Should().BeNull();
     }
 
     [Fact]
