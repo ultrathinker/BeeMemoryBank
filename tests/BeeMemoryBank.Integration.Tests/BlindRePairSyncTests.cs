@@ -115,7 +115,9 @@ public class BlindRePairSyncTests : IAsyncLifetime
         using (var scope = _pc.Services.CreateScope())
             await scope.ServiceProvider.GetRequiredService<ArticleService>().CreateAsync("Written by the PC after the re-key", "/Notes", [], "body");
 
+        (await AdoptedCheckpointOnThePageAsync(blindId)).Should().BeNull("nothing has been adopted before the first cycle");
         await SyncAsync(blindId); // used to throw SnapshotRequiredException, once per cycle, forever
+        (await AdoptedCheckpointOnThePageAsync(blindId)).Should().Be(cp, "the Blind nodes page says which checkpoint was adopted");
 
         (await ScalarAsync(_blind, "SELECT COUNT(*) FROM tbl_article WHERE title = 'Written by the PC after the re-key'"))
             .Should().Be(1, "the PC's note reaches the blind node");
@@ -148,10 +150,47 @@ public class BlindRePairSyncTests : IAsyncLifetime
         using (var scope = _pc.Services.CreateScope())
         {
             var plain = () => scope.ServiceProvider.GetRequiredService<SyncClient>().SyncWithAsync(http, row.ApiAddress!, blindId);
-            (await plain.Should().ThrowAsync<SnapshotRequiredException>()).Which.LastCompactionCp.Should().Be(cp);
+            var refusal = (await plain.Should().ThrowAsync<SnapshotRequiredException>()).Which;
+            refusal.LastCompactionCp.Should().Be(cp);
+            // The real shape of the honest 410, and the reason the full node's bound cannot be "not above the head": right
+            // after a seed the log is empty, so the head it reports is 0 while the checkpoint is the old head.
+            refusal.ErrorCode.Should().Be("SEQUENCE_TOO_OLD");
+            refusal.HeadReported.Should().BeTrue();
+            refusal.CurrentHeadSeq.Should().Be(0);
         }
 
         (await PullPositionAsync(blindId)).Should().BeNull("the plain entry adopts nothing");
+    }
+
+    /// <summary>
+    /// A cursor that exists is never advanced by a 410. A PC that still holds a position below the blind node's new
+    /// checkpoint (here a stale 10) is told so, the position stays, and nothing is noted as adopted.
+    /// </summary>
+    [Fact]
+    public async Task AUsedBlindNode_WhosePeerStillHoldsAPosition_IsRefusedNotAdopted()
+    {
+        var (blindId, cp) = await UsedBlindNodeAfterAReKeyAsync(revoked: false);
+        await _pc.Services.GetRequiredService<ISyncPositionRepository>().UpsertAsync(
+            new SyncPosition { RemoteNodeId = blindId, LastSequenceNum = 10, UpdatedAt = DateTime.UtcNow });
+
+        var sync = () => SyncAsync(blindId);
+
+        (await sync.Should().ThrowAsync<SnapshotRequiredException>()).Which.LastCompactionCp.Should().Be(cp);
+        (await PullPositionAsync(blindId)).Should().Be(10);
+        (await AdoptedCheckpointOnThePageAsync(blindId)).Should().BeNull();
+    }
+
+    /// <summary>A new pairing clears the note about an earlier adoption: the page must not show a checkpoint that is history.</summary>
+    [Fact]
+    public async Task APairingAgain_ClearsTheNoteOfAnEarlierAdoption()
+    {
+        var (blindId, cp) = await UsedBlindNodeAfterAReKeyAsync(revoked: false);
+        await SyncAsync(blindId);
+        (await AdoptedCheckpointOnThePageAsync(blindId)).Should().Be(cp);
+
+        await AddBlindNodeAsync();
+
+        (await AdoptedCheckpointOnThePageAsync(blindId)).Should().BeNull();
     }
 
     /// <summary>The reseed's pull-everything goes through the same entry: a reseed of a re-paired used volume works.</summary>
@@ -176,6 +215,14 @@ public class BlindRePairSyncTests : IAsyncLifetime
         using var scope = _pc.Services.CreateScope();
         var row = (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(blindId))!;
         await scope.ServiceProvider.GetRequiredService<SyncClient>().SyncWithPeerAsync(http, row.ApiAddress!, blindId);
+    }
+
+    /// <summary>What GET /api/blind-nodes (the Blind nodes page's source) says about the adopted checkpoint.</summary>
+    private async Task<long?> AdoptedCheckpointOnThePageAsync(Guid blindId)
+    {
+        var nodes = await _pcClient.GetFromJsonAsync<JsonElement>("/api/blind-nodes/");
+        var node = nodes.EnumerateArray().Single(n => n.GetProperty("nodeId").GetGuid() == blindId);
+        return node.TryGetProperty("adoptedCheckpoint", out var cp) && cp.ValueKind == JsonValueKind.Number ? cp.GetInt64() : null;
     }
 
     private async Task<long?> PullPositionAsync(Guid blindId) =>

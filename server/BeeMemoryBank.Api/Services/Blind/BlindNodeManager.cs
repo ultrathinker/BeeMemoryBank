@@ -13,9 +13,11 @@ public sealed class BlindNodeUnreachableException(string message, Exception? inn
 /// <summary>A blind node as the PC's "Blind nodes" page shows it (plan 9, 5.6).</summary>
 /// <param name="Alarms">"old_protocol" — it last spoke a protocol below this build's;
 /// "silent" — no contact in <see cref="BlindNodeManager.SilentAfter"/>.</param>
+/// <param name="AdoptedCheckpoint">The checkpoint this node took from the blind node as its pull position, when it held
+/// none (see <see cref="SyncClient.SyncWithPeerAsync"/>); null when it never had to.</param>
 public sealed record BlindNodeStatus(
     Guid NodeId, string DisplayName, string? Address, int? Protocol, DateTime? LastContact,
-    IReadOnlyList<string> Alarms);
+    IReadOnlyList<string> Alarms, long? AdoptedCheckpoint = null);
 
 /// <param name="Warnings">What the pre-flight wants the operator to know, which did not stop the add.</param>
 public sealed record BlindNodeAdded(Guid NodeId, string DisplayName, long PackageCp, IReadOnlyList<string> Warnings);
@@ -46,6 +48,7 @@ public sealed class BlindNodeManager(
             .ToDictionary(p => p.RemoteNodeId, p => p.UpdatedAt);
         var pushed = (await sp.GetRequiredService<ISyncPushPositionRepository>().GetAllAsync())
             .ToDictionary(p => p.RemoteNodeId, p => p.PushedAt);
+        var adopted = await sp.GetRequiredService<BlindState>().GetAdoptedCheckpointsAsync();
 
         var now = DateTime.UtcNow;
         return rows.Select(r =>
@@ -56,7 +59,8 @@ public sealed class BlindNodeManager(
             var alarms = new List<string>();
             if (r.LastProtocolVersion is { } v && v < SyncProtocolVersion.Current) alarms.Add("old_protocol");
             if ((last ?? r.CreatedAt) < now - SilentAfter) alarms.Add("silent");
-            return new BlindNodeStatus(r.NodeId, r.DisplayName, r.ApiAddress, r.LastProtocolVersion, last, alarms);
+            return new BlindNodeStatus(r.NodeId, r.DisplayName, r.ApiAddress, r.LastProtocolVersion, last, alarms,
+                adopted.TryGetValue(r.NodeId, out var cp) ? cp : null);
         }).ToList();
     }
 
@@ -141,6 +145,7 @@ public sealed class BlindNodeManager(
         {
             File.Delete(package.FilePath);
         }
+        await sp.GetRequiredService<BlindState>().ClearAdoptedCheckpointAsync(code.NodeId);
         await StartPushingFromAsync(sp, code.NodeId, package.Manifest.CpSequence);
         logger.LogInformation("Blind node {NodeId} at {Address} added and seeded (cp {Cp})",
             code.NodeId, code.Address, package.Manifest.CpSequence);
@@ -178,6 +183,7 @@ public sealed class BlindNodeManager(
         {
             File.Delete(package.FilePath);
         }
+        await sp.GetRequiredService<BlindState>().ClearAdoptedCheckpointAsync(blindId);
         await StartPushingFromAsync(sp, blindId, package.Manifest.CpSequence);
         logger.LogInformation("Blind node {NodeId} reseeded (includes up to {UpTo}, cp {Cp})",
             blindId, includesUpTo, package.Manifest.CpSequence);

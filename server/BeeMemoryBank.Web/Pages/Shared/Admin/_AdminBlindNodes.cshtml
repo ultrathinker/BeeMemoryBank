@@ -38,6 +38,10 @@ else
                 <span>@(node.Address ?? "no address")</span>
                 <span>Protocol: @(node.Protocol?.ToString() ?? "unknown")</span>
                 <span>Last contact: @(node.LastContact?.ToLocalTime().ToString("g") ?? "never")</span>
+                @if (node.AdoptedCheckpoint is { } adopted)
+                {
+                    <span title="This node held no position for the blind node's log, and took the point where the log starts as its own.">Adopted checkpoint @adopted</span>
+                }
             </div>
             @if (node.Alarms.Contains("old_protocol"))
             {

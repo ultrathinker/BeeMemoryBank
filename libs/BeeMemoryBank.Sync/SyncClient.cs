@@ -4,6 +4,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Sync;
@@ -25,7 +26,8 @@ public class SyncClient(
     PeerNewerProtocolState peerNewerProtocolState,
     ISyncQuarantineRepository quarantineRepo,
     IBlobRepository blobRepo,
-    IRestoreRetrier? restoreRetrier = null)
+    IRestoreRetrier? restoreRetrier = null,
+    BlindState? blindState = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
@@ -33,16 +35,28 @@ public class SyncClient(
     /// A full node's sync with one whitelisted peer (the scheduler's cycle, and the reseed's pull): <see cref="SyncWithAsync"/>,
     /// plus one rule for a BLIND peer. A blind node is seeded from this node's own package, and its log then starts at
     /// the checkpoint the seed left (its <c>last_compaction_cp</c>): everything at or below it is this node's own content.
-    /// A node that has no pull position for it, or one below that checkpoint (a used volume paired again after a re-key
-    /// cleared the positions), would be answered 410 SEQUENCE_TOO_OLD on every cycle, the pull would throw before the
-    /// push, and nothing would ever reach the blind node. So on that 410, and only for a blind peer, the pull position
-    /// becomes the peer's checkpoint and the sync is retried once; a second 410 propagates as before.
+    /// A node that has NO pull position for it (a used volume paired again after a re-key cleared the positions) would be
+    /// answered 410 SEQUENCE_TOO_OLD on every cycle, the pull would throw before the push, and nothing would ever reach
+    /// the blind node. So on that 410 the pull position becomes the peer's checkpoint and the sync is retried once.
+    /// <para>The checkpoint is the peer's own word, so it is adopted only when ALL of these hold; otherwise the 410
+    /// propagates, and the scheduler reports it as the blind node's refusal:
+    /// (a) the body's code is <c>SEQUENCE_TOO_OLD</c>, not just any 410; (b) this node holds no pull position for the peer
+    /// (a cursor that exists is never advanced by a 410, which is also what makes an adoption happen once per pairing: it
+    /// leaves the cursor behind, so a second 410 is a refusal); (c) the peer is blind; (d) the checkpoint is above zero and
+    /// not above the head the same body reports (a body without a head is refused). A blind node's log is empty right
+    /// after a seed while its checkpoint is the old head, so it reports head 0: an empty log has no head to check the
+    /// checkpoint against and is taken at its word (see the last paragraph).</para>
     /// <para>The position adopted is the blind node's OWN checkpoint, in its own sequence space, never the package's
     /// (which is in this node's space): using that would skip what the phones push to the blind node next. The blind
     /// side's counter is not touched: other peers hold positions in that space.</para>
     /// <para>Not for a phone: the mobile hosts call <see cref="SyncWithAsync"/>, where a peer that pulled below a blind
     /// node's checkpoint still gets its 410. A 410 from a peer that is not blind is a real wipe-and-rejoin case and stays
     /// one. A <see cref="PushGapException"/> is the other direction (the peer is behind us) and is never adopted.</para>
+    /// <para>The accepted limit: a blind peer can still claim a checkpoint inside its own log (or, with an empty log, any
+    /// checkpoint), which equals withholding the events below it, and a peer that withholds events can do that anyway. What
+    /// it withholds is not lost: the phones that pushed those events to it also sync with this node directly. Nothing here
+    /// can be proven from the peer's numbers alone; what is checked is that a 410 cannot move a cursor that exists, cannot
+    /// carry a claim its own body contradicts, and cannot do it more than once per pairing.</para>
     /// </summary>
     public async Task<int> SyncWithPeerAsync(
         HttpClient http, string remoteApiBase, Guid peerNodeId, CancellationToken ct = default)
@@ -51,20 +65,50 @@ public class SyncClient(
         {
             return await SyncWithAsync(http, remoteApiBase, peerNodeId, ct);
         }
-        catch (SnapshotRequiredException ex) when (ex is not PushGapException && BlindNodeId.IsBlind(peerNodeId) && ex.LastCompactionCp > 0)
+        catch (SnapshotRequiredException ex) when (ex is not PushGapException && BlindNodeId.IsBlind(peerNodeId))
         {
-            var position = (await syncPositionRepo.GetAsync(peerNodeId))?.LastSequenceNum ?? 0;
-            if (position >= ex.LastCompactionCp) throw; // nothing to adopt: the refusal is about something else
+            if (await WhyNotToAdoptAsync(ex, peerNodeId) is { } why)
+            {
+                logger.LogWarning("Not taking the checkpoint of blind node {NodeId} ({Url}) as the pull position: {Why}.",
+                    peerNodeId, ex.RemoteUrl, why);
+                throw;
+            }
             await syncPositionRepo.UpsertAsync(new SyncPosition
             {
                 RemoteNodeId = peerNodeId, LastSequenceNum = ex.LastCompactionCp, UpdatedAt = DateTime.UtcNow
             });
             logger.LogWarning(
-                "Blind node {NodeId} ({Url}) starts its log at checkpoint {Cp}; this node had pulled up to {Position}. " +
-                "Everything at or below it came from this node's own seed, so the pull position is now {Cp}.",
-                peerNodeId, ex.RemoteUrl, ex.LastCompactionCp, position, ex.LastCompactionCp);
+                "Blind node {NodeId} ({Url}) starts its log at checkpoint {Cp} (its head is {Head}); this node held no pull " +
+                "position for it. Everything at or below the checkpoint came from this node's own seed, so the pull position " +
+                "is now {Cp}.",
+                peerNodeId, ex.RemoteUrl, ex.LastCompactionCp, ex.CurrentHeadSeq, ex.LastCompactionCp);
+            await RecordAdoptionAsync(peerNodeId, ex.LastCompactionCp);
             return await SyncWithAsync(http, remoteApiBase, peerNodeId, ct);
         }
+    }
+
+    /// <summary>Why a blind peer's 410 must not become a pull position, or null when it may (see <see cref="SyncWithPeerAsync"/>).</summary>
+    private async Task<string?> WhyNotToAdoptAsync(SnapshotRequiredException ex, Guid peerNodeId)
+    {
+        if (!string.Equals(ex.ErrorCode, SnapshotRequiredException.SequenceTooOldCode, StringComparison.Ordinal))
+            return $"its 410 does not carry the {SnapshotRequiredException.SequenceTooOldCode} code (it says \"{ex.ErrorCode ?? "nothing"}\")";
+        if (await syncPositionRepo.GetAsync(peerNodeId) is { } held)
+            return $"this node already holds a pull position for it ({held.LastSequenceNum}), and a 410 never moves a cursor that exists";
+        if (ex.LastCompactionCp <= 0)
+            return $"its checkpoint ({ex.LastCompactionCp}) is not above zero";
+        if (!ex.HeadReported || ex.CurrentHeadSeq < 0)
+            return "it does not say what its head is";
+        if (ex.CurrentHeadSeq > 0 && ex.LastCompactionCp > ex.CurrentHeadSeq)
+            return $"its checkpoint ({ex.LastCompactionCp}) is above the head ({ex.CurrentHeadSeq}) it reports for the same log";
+        return null;
+    }
+
+    /// <summary>What the Blind nodes page shows as "adopted checkpoint N". A failure to note it must not fail the sync.</summary>
+    private async Task RecordAdoptionAsync(Guid peerNodeId, long checkpoint)
+    {
+        if (blindState is null) return;
+        try { await blindState.SetAdoptedCheckpointAsync(peerNodeId, checkpoint); }
+        catch (Exception ex) { logger.LogWarning(ex, "Could not note the adopted checkpoint of blind node {NodeId}", peerNodeId); }
     }
 
     /// <summary>
@@ -460,16 +504,29 @@ public class SyncClient(
         {
             var body = await resp.Content.ReadAsStringAsync(ct);
             long lastCp = 0, headSeq = 0;
+            string? code = null;
+            var headReported = false;
             string msg = "Your position is older than remote retained history.";
             try
             {
                 using var doc = JsonDocument.Parse(body);
-                if (doc.RootElement.TryGetProperty("last_compaction_cp", out var cp)) lastCp = cp.GetInt64();
-                if (doc.RootElement.TryGetProperty("current_head_seq", out var head)) headSeq = head.GetInt64();
-                if (doc.RootElement.TryGetProperty("message", out var m)) msg = m.GetString() ?? msg;
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    // A member of another type is treated as absent, never as a number: the values decide what a
+                    // full node may adopt from a blind peer (SyncWithPeerAsync), so they are read strictly.
+                    if (root.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String) code = err.GetString();
+                    if (root.TryGetProperty("last_compaction_cp", out var cp) && cp.ValueKind == JsonValueKind.Number && cp.TryGetInt64(out var c)) lastCp = c;
+                    if (root.TryGetProperty("current_head_seq", out var head) && head.ValueKind == JsonValueKind.Number && head.TryGetInt64(out var h))
+                    {
+                        headSeq = h;
+                        headReported = true;
+                    }
+                    if (root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String) msg = m.GetString() ?? msg;
+                }
             }
-            catch { }
-            throw new SnapshotRequiredException(baseUrl, lastCp, headSeq, msg);
+            catch (JsonException) { }
+            throw new SnapshotRequiredException(baseUrl, lastCp, headSeq, msg, code, headReported);
         }
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<List<SyncEvent>>(JsonOpts, ct)

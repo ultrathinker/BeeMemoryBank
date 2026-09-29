@@ -5,6 +5,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Blind;
 using Dapper;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +27,7 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
     private SyncTestFixture _node = null!;
     private SyncClient _client = null!;
     private SyncPositionRepository _positions = null!;
+    private BlindState _blindState = null!;
     private MockHandler _handler = null!;
     private HttpClient _http = null!;
     private Guid _peerId;
@@ -39,10 +41,11 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
         await _node.ArticleService.CreateAsync("Test Article", "/Root", new List<string>(), "content");
 
         _positions = new SyncPositionRepository(_node.Factory);
+        _blindState = new BlindState(_node.Factory);
         _client = new SyncClient(_node.NodeRepo, _node.EventLogRepo, _positions, new SyncPushPositionRepository(_node.Factory),
             _node.EventApplier, _node.Session, new SessionNodeAuthSigner(_node.Session),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SyncClient>.Instance, new PeerNewerProtocolState(),
-            _node.QuarantineRepo, new BlobRepository(_node.Factory));
+            _node.QuarantineRepo, new BlobRepository(_node.Factory), blindState: _blindState);
 
         _peerId = BlindNodeId.NewId();
         _handler = new MockHandler();
@@ -328,6 +331,22 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
         await _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
 
         (await PositionAsync()).Should().Be(1_000_000);
+    }
+
+    /// <summary>The Blind nodes page shows "adopted checkpoint N" from this note, so the owner can see what was taken.</summary>
+    [Fact]
+    public async Task AnAdoption_IsNotedForTheBlindNodesPage_AndARefusalLeavesNoNote()
+    {
+        await _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+        (await _blindState.GetAdoptedCheckpointsAsync()).Should().Equal(new Dictionary<Guid, long> { [_peerId] = Checkpoint });
+
+        await _blindState.ClearAdoptedCheckpointAsync(_peerId);
+        (await _blindState.GetAdoptedCheckpointsAsync()).Should().BeEmpty("a new pairing or a reseed clears it");
+
+        await _positions.UpsertAsync(new SyncPosition { RemoteNodeId = _peerId, LastSequenceNum = 3, UpdatedAt = DateTime.UtcNow });
+        var refused = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+        await refused.Should().ThrowAsync<SnapshotRequiredException>();
+        (await _blindState.GetAdoptedCheckpointsAsync()).Should().BeEmpty("nothing was adopted");
     }
 
     // ---------------------------------------------------------------------------- the scheduler's cycle
