@@ -11,7 +11,6 @@ using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -43,11 +42,11 @@ public class BlindRePairSyncTests : IAsyncLifetime
         _pcClient = _pc.CreateClient();
         (await _pcClient.PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password }))
             .EnsureSuccessStatusCode();
-        // A background cycle would push, pull and adopt on its own clock, in the middle of the test's steps. The test's
-        // own SyncAsync is the cycle (the scheduler's call is SyncScheduler's own test, in Sync.Tests).
-        foreach (var node in new BmbWebApplicationFactory[] { _pc, _blind })
-            foreach (var scheduler in node.Services.GetServices<IHostedService>().OfType<SyncScheduler>())
-                await scheduler.StopAsync(CancellationToken.None);
+        // A background cycle would push, pull and adopt on its own clock, in the middle of the test's steps. The PC is
+        // made invisible, which turns its scheduler's cycles into no-ops (the blind node never calls the PC); the test's
+        // own SyncAsync is the cycle. (Not StopAsync: a BackgroundService that ends by cancellation takes the host down.)
+        // The scheduler's own call is covered in Sync.Tests.
+        _pc.Services.GetRequiredService<InvisibleModeService>().IsInvisible = true;
     }
 
     public Task DisposeAsync()
