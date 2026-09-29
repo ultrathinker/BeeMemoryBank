@@ -5,6 +5,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using Dapper;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -149,6 +150,28 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
         await sync.Should().ThrowAsync<SnapshotRequiredException>();
         (await PositionAsync()).Should().BeNull();
         Pulls.Should().HaveCount(1, "no retry");
+    }
+
+    /// <summary>
+    /// The other direction: the blind peer is behind OUR compaction (the pull works, the push is refused). That is not
+    /// a checkpoint to adopt, and it must reach the reseeder as the PushGapException it is.
+    /// </summary>
+    [Fact]
+    public async Task APushGapOfABlindPeer_IsNeverAdopted_AndStaysAPushGap()
+    {
+        MapEvents(_ => 0); // the pull is fine
+        using (var conn = _node.Factory.CreateConnection())
+        {
+            await conn.ExecuteAsync(
+                "INSERT INTO tbl_compaction_log (compacted_at, cp_before, cp_after, events_removed, reason) VALUES ('2026-09-29T00:00:00Z', NULL, 5, 0, 'test')");
+        }
+        await new SyncPushPositionRepository(_node.Factory).UpsertAsync(
+            new SyncPushPosition { RemoteNodeId = _peerId, LastPushedSeq = 0, PushedAt = DateTime.UtcNow });
+
+        var sync = () => _client.SyncWithPeerAsync(_http, "http://remote.local", _peerId);
+
+        await sync.Should().ThrowAsync<PushGapException>();
+        (await PositionAsync()).Should().BeNull("a push gap is about the peer's copy of OUR log, not about our pull position");
     }
 
     [Fact]
