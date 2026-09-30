@@ -17,18 +17,23 @@ public sealed class BlindBackupSettingsStore(string dataPath)
     public string DataPath => dataPath;
     private string FilePath => Path.Combine(_dir, "settings.json");
 
-    public BlindBackupSettings Load()
+    // Unreadable settings fall back to defaults rather than crashing the node: an operator can then
+    // repair the configuration through the console instead of losing the node.
+    public BlindBackupSettings Load() => TryLoad(out var settings) ? settings : new BlindBackupSettings();
+
+    /// <summary>False when the file exists but cannot be read; the settings are then the defaults.</summary>
+    private bool TryLoad(out BlindBackupSettings settings)
     {
-        if (!File.Exists(FilePath)) return new BlindBackupSettings();
+        settings = new BlindBackupSettings();
+        if (!File.Exists(FilePath)) return true;
         try
         {
-            return JsonSerializer.Deserialize<BlindBackupSettings>(File.ReadAllText(FilePath)) ?? new();
+            settings = JsonSerializer.Deserialize<BlindBackupSettings>(File.ReadAllText(FilePath)) ?? new();
+            return true;
         }
         catch (JsonException)
         {
-            // Unreadable settings fall back to defaults rather than crashing the node: an operator
-            // can then repair the configuration through the console instead of losing the node.
-            return new BlindBackupSettings();
+            return false;
         }
     }
 
@@ -44,6 +49,10 @@ public sealed class BlindBackupSettingsStore(string dataPath)
         lock (_write)
         {
             if (_closed) throw new SettingsClosedException();
+            // "A backup has used the repository" only ever turns on: a write that read the file
+            // before the first backup finished must not turn it back off (the console password
+            // default would then move the password of a repository that exists).
+            if (!settings.RepoInUse && Load().RepoInUse) settings.RepoInUse = true;
             Directory.CreateDirectory(_dir);
             var tmp = FilePath + ".tmp";
             // 0600 from creation, the temp file included: both carry the restic password in the
@@ -54,6 +63,69 @@ public sealed class BlindBackupSettingsStore(string dataPath)
             using (var w = new StreamWriter(tmp, System.Text.Encoding.UTF8, options))
                 w.Write(JsonSerializer.Serialize(settings, BlindBackupSettings.JsonOpts));
             File.Move(tmp, FilePath, overwrite: true);
+        }
+    }
+
+    /// <summary>
+    /// Read, change and save under the write lock; nothing is written when <paramref name="change"/> says
+    /// no, and nothing is written over a file that cannot be read: a change nobody asked for must not
+    /// replace what an operator could still repair by hand (it may hold the restic password).
+    /// </summary>
+    public bool Update(Func<BlindBackupSettings, bool> change)
+    {
+        lock (_write)
+        {
+            if (!TryLoad(out var s)) return false;
+            if (!change(s)) return false;
+            Save(s);
+            return true;
+        }
+    }
+
+    /// <summary>A backup found or created the repository: from now on its password is fixed (see <see cref="BlindBackupSettings.RepoInUse"/>).</summary>
+    public void MarkRepositoryInUse()
+    {
+        try
+        {
+            Update(s =>
+            {
+                if (s.RepoInUse) return false;
+                s.RepoInUse = true;
+                return true;
+            });
+        }
+        catch (SettingsClosedException)
+        {
+            // The node is being wiped; the settings this would mark are going away.
+        }
+    }
+
+    /// <summary>
+    /// The console password is the default restic password. Called from the handler that has just
+    /// stored a new console password, because that is the only moment the plaintext exists (the node
+    /// keeps a hash of it). It follows the console password until the operator enters a restic
+    /// password of their own or a repository exists: a repository is encrypted under the password it
+    /// was created with, so changing the setting afterwards would lock the owner out of the backups.
+    /// A password found without a recorded source (a file from before this field) counts as the
+    /// operator's own. Returns whether the restic password was set.
+    /// </summary>
+    public bool AdoptConsolePassword(string consolePassword)
+    {
+        try
+        {
+            return Update(s =>
+            {
+                if (s.RepositoryExists()) return false;
+                var followsConsole = s.ResticPasswordSource == ResticPasswordSources.Console;
+                if (!followsConsole && !string.IsNullOrEmpty(s.ResticPassword)) return false;
+                s.ResticPassword = consolePassword;
+                s.ResticPasswordSource = ResticPasswordSources.Console;
+                return true;
+            });
+        }
+        catch (SettingsClosedException)
+        {
+            return false;
         }
     }
 
@@ -96,6 +168,9 @@ public sealed class BlindBackupSettingsStore(string dataPath)
         S3AccessKey = string.IsNullOrEmpty(s.S3AccessKey) ? null : "••••",
         S3SecretKey = string.IsNullOrEmpty(s.S3SecretKey) ? null : "••••",
         ResticPassword = string.IsNullOrEmpty(s.ResticPassword) ? null : "••••",
+        // Not a secret: the form says whether the password follows the console password.
+        ResticPasswordSource = string.IsNullOrEmpty(s.ResticPassword) ? null : s.ResticPasswordSource,
+        RepoInUse = s.RepoInUse,
         KeepDaily = s.KeepDaily,
         KeepWeekly = s.KeepWeekly,
         KeepMonthly = s.KeepMonthly,

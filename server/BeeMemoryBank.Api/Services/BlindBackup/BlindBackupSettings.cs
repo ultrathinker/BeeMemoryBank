@@ -15,6 +15,16 @@ public enum BlindRepoType
     S3,
 }
 
+/// <summary>Values of <see cref="BlindBackupSettings.ResticPasswordSource"/>.</summary>
+public static class ResticPasswordSources
+{
+    /// <summary>Copied from the console password (the default; follows it until a repository exists).</summary>
+    public const string Console = "console";
+
+    /// <summary>Entered by the operator (console form, <c>bmb blind init</c>): wins over the default for good.</summary>
+    public const string Explicit = "explicit";
+}
+
 /// <summary>
 /// Local, non-replicated settings of a blind node's backup subsystem (plan §7): where the restic
 /// repository is, how long snapshots are kept, when backups run, how much CPU they may use.
@@ -52,6 +62,22 @@ public sealed partial class BlindBackupSettings
     /// setting so the backup subsystem is testable end to end.
     /// </summary>
     public string? ResticPassword { get; set; }
+
+    /// <summary>
+    /// Where <see cref="ResticPassword"/> came from (<see cref="ResticPasswordSources"/>). <c>null</c>
+    /// on a file written before this field existed: a password found there is somebody's own choice
+    /// and is never touched by a console password change.
+    /// </summary>
+    public string? ResticPasswordSource { get; set; }
+
+    /// <summary>
+    /// A backup found or created the restic repository (set once, never cleared while the settings
+    /// live): from then on the repository is encrypted under <see cref="ResticPassword"/>, and a
+    /// console password change must not move it. <see cref="BlindBackupSettingsStore.Save"/> keeps it
+    /// sticky, so a settings write that read the file before the first backup cannot drop it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RepoInUse { get; set; }
 
     // Standard retention (plan §7), each overridable.
     public int KeepDaily { get; set; } = 7;
@@ -166,6 +192,14 @@ public sealed partial class BlindBackupSettings
             return (false, "restic memory limit must look like 512MiB or 1GiB");
         return (true, null);
     }
+
+    /// <summary>
+    /// Whether the repository already exists: a backup has used it, or (a folder repository) restic's
+    /// <c>config</c> file is there. An S3 repository is only known through a backup that ran.
+    /// </summary>
+    public bool RepositoryExists() =>
+        RepoInUse || (RepoType == BlindRepoType.Folder && !string.IsNullOrWhiteSpace(RepoFolder)
+            && File.Exists(Path.Combine(RepoFolder, "config")));
 
     /// <summary>The RESTIC_REPOSITORY value for the configured repository. Only valid after <see cref="Validate"/> passed.</summary>
     public string ResticRepository() => RepoType == BlindRepoType.Folder

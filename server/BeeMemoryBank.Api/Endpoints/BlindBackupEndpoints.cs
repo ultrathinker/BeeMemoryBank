@@ -136,7 +136,13 @@ public static class BlindBackupEndpoints
         if (dto.S3Region.HasNewValue(out v)) s.S3Region = v;
         if (dto.S3AccessKey.HasNewValue(out v)) s.S3AccessKey = v;
         if (dto.S3SecretKey.HasNewValue(out v)) s.S3SecretKey = v;
-        if (dto.ResticPassword.HasNewValue(out v)) s.ResticPassword = v;
+        if (dto.ResticPassword.HasNewValue(out v))
+        {
+            // Entered by the operator: it wins over the console-password default from now on. An
+            // empty string clears it, and with it the decision.
+            s.ResticPassword = v;
+            s.ResticPasswordSource = string.IsNullOrEmpty(v) ? null : ResticPasswordSources.Explicit;
+        }
         if (dto.KeepDaily is { } kd) s.KeepDaily = kd;
         if (dto.KeepWeekly is { } kw) s.KeepWeekly = kw;
         if (dto.KeepMonthly is { } km) s.KeepMonthly = km;

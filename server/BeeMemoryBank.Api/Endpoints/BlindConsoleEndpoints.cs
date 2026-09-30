@@ -1,5 +1,6 @@
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Api.Services.BlindConsole;
 using BeeMemoryBank.Core.Interfaces;
 
@@ -22,7 +23,8 @@ public static class BlindConsoleEndpoints
         // process calls it on the browser's behalf before any console session exists.
         var group = app.MapGroup("/api/blind/console").RequireInternalKey().RequireSuperadmin().WithTags("Blind");
 
-        group.MapPost("/password", (PasswordRequest req, BlindConsoleAuthService auth) =>
+        group.MapPost("/password", (PasswordRequest req, BlindConsoleAuthService auth,
+            BlindBackupSettingsStore backupSettings, ILogger<BlindBackupSettingsStore> logger) =>
         {
             if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 8)
                 return Results.BadRequest(new ErrorResponse("console password must be at least 8 characters"));
@@ -37,6 +39,12 @@ public static class BlindConsoleEndpoints
                     ErrorCodes.ConsolePasswordAlreadySet));
             if (!auth.TrySetPassword(req.CurrentPassword, req.NewPassword))
                 return Results.BadRequest(new ErrorResponse("the current console password is wrong"));
+            // The console password is also the default restic password. The plaintext is in hand
+            // only here (the node stores a hash of it), so the default is applied in this handler —
+            // for `bmb blind init` and the console page alike. It does nothing once the operator has
+            // entered a restic password or a repository exists (see AdoptConsolePassword).
+            if (backupSettings.AdoptConsolePassword(req.NewPassword))
+                logger.LogInformation("Restic password set to the console password (no restic password of its own, no repository yet)");
             return Results.NoContent();
         });
 

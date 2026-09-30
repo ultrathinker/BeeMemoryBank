@@ -49,8 +49,13 @@ docker exec -i bmb-blind bmb blind init \
     --s3-access-key AKIA… < ./blind-secrets.env      # the file: chmod 600, then delete it
 ```
 
-The restic password will arrive from the pairing Windows node once pairing ships; until then it is
-set here or on the console page. Keep a copy: without it the repository cannot be opened.
+The restic password defaults to the console password: when `init` (or the console page) sets or
+changes the console password on a node that has no restic password of its own and no repository
+yet, the same value becomes the restic password. A different one can be entered before the first
+backup (`restic_password` here, or the field in the console's backup settings) and then always
+wins. Once the repository exists (a backup has run) a console password change no longer touches
+it: the repository stays encrypted under the password it was created with. Keep a copy of the
+restic password: without it the repository cannot be opened.
 
 `init` is also how a node that is already set up gets a different backup target: it keeps the
 console password it finds (pass `current_console_password` in the secrets to change that too) and
@@ -59,7 +64,8 @@ the run is the local administrator's, which is what holding the node's internal 
 
 Open the console on the host at <http://127.0.0.1:5611>, or from another machine through a tunnel:
 `ssh -L 5611:127.0.0.1:5611 <host>`. Five wrong passwords lock the page for 15 minutes; every
-attempt is in the login journal.
+attempt is in the login journal. The page's "Console password" section changes the password (it
+asks for the current one, counted like a sign-in) and signs the other browsers out.
 
 ## Backups
 

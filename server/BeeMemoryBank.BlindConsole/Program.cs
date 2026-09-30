@@ -144,6 +144,23 @@ app.MapMethods("/proxy/{*path}", new[] { "GET", "POST", "PUT" }, async (string p
                 statusCode: locked ? StatusCodes.Status423Locked : StatusCodes.Status401Unauthorized);
         body = "{}";
     }
+    else if (path == "api/blind/console/password")
+    {
+        // Changing the console password asks for the current one again, for the same reason: an
+        // unattended logged-in tab must not be enough to take the node over. Verified like a login
+        // (attempt limit, lockout, journal), so a wrong current password counts toward the lock.
+        // The length rule is the Api's too; it is checked first so a typo in the new password does
+        // not spend an attempt.
+        var change = await ReadPasswordChangeAsync(ctx);
+        if (change.New is not { Length: >= 8 })
+            return Results.Json(new { error = "the new password must be at least 8 characters" },
+                statusCode: StatusCodes.Status400BadRequest);
+        var (ok, locked) = await VerifyAsync(change.Current, ctx);
+        if (!ok)
+            return Results.Json(new { error = locked ? "locked" : "wrong current password" },
+                statusCode: locked ? StatusCodes.Status423Locked : StatusCodes.Status401Unauthorized);
+        body = JsonSerializer.Serialize(new { currentPassword = change.Current, newPassword = change.New });
+    }
     else if (method is "POST" or "PUT")
     {
         using var reader = new StreamReader(ctx.Request.Body);
@@ -151,6 +168,9 @@ app.MapMethods("/proxy/{*path}", new[] { "GET", "POST", "PUT" }, async (string p
     }
 
     var (status, content, contentType) = await proxy.SendAsync(method, path, body, ctx.RequestAborted);
+    // The password changed: every other browser's session ends, this one stays.
+    if (path == "api/blind/console/password" && status is >= 200 and < 300)
+        sessions.DropAllExcept(ctx.Request.Cookies[ApiProxy.CookieName]);
     ctx.Response.StatusCode = status;
     ctx.Response.ContentType = contentType;
     await ctx.Response.WriteAsync(content, ctx.RequestAborted);
@@ -172,6 +192,21 @@ static async Task<string?> ReadPasswordAsync(HttpContext ctx)
     {
         // No password to check — the failed verification that follows is the honest answer.
         return null;
+    }
+}
+
+static async Task<(string? Current, string? New)> ReadPasswordChangeAsync(HttpContext ctx)
+{
+    try
+    {
+        using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted);
+        string? Field(string name) =>
+            doc.RootElement.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+        return (Field("currentPassword"), Field("newPassword"));
+    }
+    catch (JsonException)
+    {
+        return (null, null);
     }
 }
 

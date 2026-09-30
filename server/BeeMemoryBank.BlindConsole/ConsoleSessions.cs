@@ -42,4 +42,12 @@ public sealed class ConsoleSessions(TimeSpan? ttl = null)
     {
         if (token is not null) _sessions.TryRemove(token, out _);
     }
+
+    /// <summary>Ends every session except <paramref name="keep"/>: what a password change does to the other browsers.</summary>
+    public void DropAllExcept(string? keep)
+    {
+        foreach (var token in _sessions.Keys)
+            if (token != keep)
+                _sessions.TryRemove(token, out _);
+    }
 }

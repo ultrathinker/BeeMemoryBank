@@ -200,6 +200,9 @@ public sealed class BlindBackupService(
         {
             throw new InvalidOperationException($"repository unreachable ({probe.ExitCode}): {Truncate(probe.Stderr, 400)}");
         }
+        // The repository exists now, under the password this run used: the console password must not
+        // move that password any more (BlindBackupSettingsStore.AdoptConsolePassword).
+        settingsStore.MarkRepositoryInUse();
     }
 
     private async Task RetainAsync(BlindJobContext ctx, BlindBackupSettings s, CancellationToken ct)

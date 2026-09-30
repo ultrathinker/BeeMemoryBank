@@ -236,6 +236,98 @@ public class BlindConsoleTests : IDisposable
             .Which.Body.Should().Be("{}", "the console password is the console's business, not the restore endpoint's");
     }
 
+    // ── "Console password" (the page changes it; the current one is asked again) ─────────────────
+
+    private const string PasswordRoute = "/proxy/api/blind/console/password";
+
+    [Fact]
+    public async Task PasswordChange_WrongCurrent_IsRefused_ForwardsNothing_ButTheAttemptWentToTheLogin()
+    {
+        using var client = await LoginAsync();
+        _api.LoginAnswer = (200, """{"ok":false,"locked":false}""");
+        _api.Calls.Clear();
+
+        var resp = await client.PostAsJsonAsync(PasswordRoute, new { currentPassword = "wrong", newPassword = "brand-new-pw" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString()
+            .Should().Contain("wrong", "a bare 401 means the session ended; this one names the password");
+        _api.Calls.Should().ContainSingle(c => c.Path == "api/blind/console/login",
+            "the Api's login is what counts the attempt, journals it and locks after five");
+        _api.Calls.Should().NotContain(c => c.Path == "api/blind/console/password");
+    }
+
+    [Fact]
+    public async Task PasswordChange_WhileLocked_IsRefused_ForwardsNothing()
+    {
+        using var client = await LoginAsync();
+        _api.LoginAnswer = (200, """{"ok":false,"locked":true}""");
+        _api.Calls.Clear();
+
+        (await client.PostAsJsonAsync(PasswordRoute, new { currentPassword = "console-pw", newPassword = "brand-new-pw" }))
+            .StatusCode.Should().Be(HttpStatusCode.Locked);
+        _api.Calls.Should().NotContain(c => c.Path == "api/blind/console/password");
+    }
+
+    [Fact]
+    public async Task PasswordChange_TooShortNewPassword_IsRefused_BeforeAnyVerification()
+    {
+        using var client = await LoginAsync();
+        _api.Calls.Clear();
+
+        (await client.PostAsJsonAsync(PasswordRoute, new { currentPassword = "console-pw", newPassword = "short" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        _api.Calls.Should().BeEmpty("a typo in the new password spends no attempt and reaches no route");
+    }
+
+    [Fact]
+    public async Task PasswordChange_RightCurrent_VerifiesFirst_ThenForwardsBoth_AndEndsTheOtherSessions()
+    {
+        using var mine = await LoginAsync();
+        using var other = await LoginAsync();
+        _api.Answer = (204, "");
+        _api.Calls.Clear();
+
+        (await mine.PostAsJsonAsync(PasswordRoute, new { currentPassword = "console-pw", newPassword = "brand-new-pw" }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        _api.Calls.Select(c => c.Path).Should().Equal("api/blind/console/login", "api/blind/console/password");
+        using var sent = JsonDocument.Parse(_api.Calls[1].Body!);
+        sent.RootElement.GetProperty("currentPassword").GetString().Should().Be("console-pw");
+        sent.RootElement.GetProperty("newPassword").GetString().Should().Be("brand-new-pw");
+
+        _api.Answer = (200, "{}");
+        (await mine.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.OK,
+            "the session that changed it stays valid");
+        (await other.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "every other session ends with the old password");
+    }
+
+    [Fact]
+    public async Task PasswordChange_RefusedByTheApi_KeepsTheOtherSessions()
+    {
+        using var mine = await LoginAsync();
+        using var other = await LoginAsync();
+        _api.Answer = (400, """{"error":"the current console password is wrong"}""");
+
+        (await mine.PostAsJsonAsync(PasswordRoute, new { currentPassword = "console-pw", newPassword = "brand-new-pw" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        _api.Answer = (200, "{}");
+        (await other.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.OK,
+            "nothing changed, nobody is signed out");
+    }
+
+    [Fact]
+    public async Task PasswordChange_WithoutASession_IsUnauthorized_AndForwardsNothing()
+    {
+        using var anon = PageClient();
+
+        (await anon.PostAsJsonAsync(PasswordRoute, new { currentPassword = "console-pw", newPassword = "brand-new-pw" }))
+            .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        _api.Calls.Should().BeEmpty("the internal key is not spent by an unauthenticated browser");
+    }
+
     [Fact]
     public async Task Proxy_ForwardsTheOneOffCopy()
     {

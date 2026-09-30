@@ -39,7 +39,7 @@ public static class BlindCommand
                 [BlindSecrets.ConsolePassword] = "Console page password (min 8 characters)",
                 [BlindSecrets.CurrentConsolePassword] =
                     "Current console password (only to change an existing one; Enter to keep it)",
-                [BlindSecrets.ResticPassword] = "restic repository password (Enter to set it later)",
+                [BlindSecrets.ResticPassword] = "restic repository password (Enter to use the console password)",
             };
             if (s3 is not null) prompts[BlindSecrets.S3SecretKey] = "S3 secret key";
             Environment.Exit(await HandleInitAsync(

@@ -104,7 +104,8 @@
         <label>Access key<input id="s-ak"></label>
         <label>Secret key<input id="s-sk" type="password"></label>
       </div>
-      <label>restic password<input id="s-rpw" type="password" placeholder="delivered by the pairing Windows device"></label>
+      <label>restic password<input id="s-rpw" type="password" autocomplete="new-password"></label>
+      <p class="note" id="s-rpw-note">Defaults to the console password. A different one can be entered here before the first backup; once you enter one, later console password changes leave it alone. After the first backup the repository is tied to the password it was created with.</p>
       <p class="note">Snapshots to keep (default: 7 · 4 · 12 · 3):</p>
       <div class="grid2">
         <label>Daily<input id="s-kd" type="number" min="0"></label>
@@ -143,6 +144,16 @@
   <section>
     <h2>Sign-in log</h2>
     <div id="logins" class="note">Loading…</div>
+  </section>
+
+  <section>
+    <h2>Console password</h2>
+    <p class="note">The password for this page. At least 8 characters; 12 or more is better. Other browsers that are signed in are signed out when it changes.</p>
+    <p><label>Current password<input id="pw-cur" type="password" autocomplete="current-password"></label></p>
+    <p><label>New password<input id="pw-new" type="password" autocomplete="new-password"></label></p>
+    <p><label>New password again<input id="pw-rep" type="password" autocomplete="new-password"></label></p>
+    <button id="pw-btn">Change password</button>
+    <p class="hidden" id="pw-out"></p>
   </section>
 
   <section>
@@ -249,6 +260,9 @@ async function loadBackups() {
   if (c.s3Prefix) $("s-prefix").value = c.s3Prefix;
   $("s-ak").value = c.s3AccessKey && !c.s3AccessKey.includes("•") ? c.s3AccessKey : "";
   $("s-sk").value = ""; $("s-rpw").value = "";
+  // Never the password itself, only where it comes from.
+  $("s-rpw").placeholder = !c.resticPassword ? "not set (the console password becomes the default)"
+    : c.resticPasswordSource === "console" ? "same as the console password (default)" : "set (hidden)";
   $("s-kd").value = c.keepDaily ?? 7; $("s-kw").value = c.keepWeekly ?? 4;
   $("s-km").value = c.keepMonthly ?? 12; $("s-ky").value = c.keepYearly ?? 3;
 }
@@ -362,6 +376,26 @@ async function loadRestoreLog() {
       (x.usedAt ? fmtDate(x.usedAt) : x.revoked ? "revoked" : "no") + "</td></tr>").join("") + "</table>"
     : "No codes issued yet.";
 }
+
+$("pw-btn").onclick = async () => {
+  const out = $("pw-out");
+  const say = (text, cls) => { out.textContent = text; out.className = cls; };
+  if ($("pw-new").value !== $("pw-rep").value) { say("The new password and its repeat differ.", "err"); return; }
+  if ($("pw-new").value.length < 8) { say("The new password must be at least 8 characters.", "err"); return; }
+  const r = await api("POST", "api/blind/console/password", { currentPassword: $("pw-cur").value, newPassword: $("pw-new").value });
+  if (r.status === 204 || r.status === 200) {
+    for (const id of ["pw-cur", "pw-new", "pw-rep"]) $(id).value = "";
+    say("Password changed. Other browsers were signed out.", "ok");
+    loadLogins(); loadBackups();
+    return;
+  }
+  // 401 with a message is the wrong password; a bare 401 is a session that has ended.
+  if (r.status === 401 && !(r.json && r.json.error)) { location.reload(); return; }
+  say(r.status === 401 ? "Wrong current password."
+    : r.status === 423 ? "Locked for 15 minutes after failed attempts."
+    : "Not changed: " + ((r.json && r.json.error) || ("HTTP " + r.status)), "err");
+  loadLogins();
+};
 
 $("w-btn").onclick = async () => {
   if (!confirm("WIPE all data of this blind node? The backup repository and the other devices are NOT affected.")) return;

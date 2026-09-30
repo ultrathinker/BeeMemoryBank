@@ -11,6 +11,9 @@
          reached via `extern alias WebApp;` / `extern alias WebProject;` in the files that need them
          (BmbWebHostFactory, and the real-socket Web->API identity test for non-ASCII display names). -->
     <ProjectReference Include="..\..\server\BeeMemoryBank.Web\BeeMemoryBank.Web.csproj" Aliases="WebApp,WebProject" />
+    <!-- Aliased for the same reason: the console page's own `Program` (BlindConsolePasswordTests hosts it
+         in front of a real blind node, so the password change is tested through both processes). -->
+    <ProjectReference Include="..\..\server\BeeMemoryBank.BlindConsole\BeeMemoryBank.BlindConsole.csproj" Aliases="BlindConsoleApp" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />

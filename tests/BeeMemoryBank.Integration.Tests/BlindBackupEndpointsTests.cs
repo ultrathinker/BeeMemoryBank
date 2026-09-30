@@ -253,6 +253,30 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ABackup_MarksTheRepositoryInUse_SoALaterConsolePasswordChangeLeavesResticAlone()
+    {
+        using var client = Client();
+        Directory.CreateDirectory(_repoDir);
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { repoType = "folder", repoFolder = _repoDir }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "console-pw-one" }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+        var store = _factory.Services.GetRequiredService<BlindBackupSettingsStore>();
+        store.Load().ResticPassword.Should().Be("console-pw-one", "the console password is the default restic password");
+        store.Load().RepoInUse.Should().BeFalse("no backup has run yet");
+
+        (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await WaitUntilDoneAsync(client)).GetProperty("state").GetString().Should().Be("done");
+        store.Load().RepoInUse.Should().BeTrue("the backup found or created the repository");
+
+        (await client.PostAsJsonAsync("/api/blind/console/password",
+            new { newPassword = "console-pw-two", currentPassword = "console-pw-one" }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+        store.Load().ResticPassword.Should().Be("console-pw-one",
+            "the repository the backup used is encrypted under it");
+    }
+
+    [Fact]
     public async Task SettingsSavedMidBackup_DoNotMoveTheRunningJob()
     {
         _recoverySet.Json = """{"format":"bmb-recovery-set-v1"}""";
