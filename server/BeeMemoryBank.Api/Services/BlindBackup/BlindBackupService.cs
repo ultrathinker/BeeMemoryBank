@@ -188,6 +188,14 @@ public sealed class BlindBackupService(
 
     private async Task EnsureRepoAsync(BlindBackupSettings s, CancellationToken ct)
     {
+        // One synchronized step: read the password, look for the repository, create it, mark it in use. A
+        // console password change that landed since this job began (a long vacuum, a pause) is picked up
+        // here, and one that arrives from now on waits its turn (AdoptConsolePassword skips): the
+        // repository is created with the password the settings keep.
+        using var lease = await settingsStore.EnterRepositoryAsync(ct);
+        if (settingsStore.TryLoad(out var latest) && latest.RepositoryKey() == s.RepositoryKey()
+            && !string.IsNullOrEmpty(latest.ResticPassword))
+            s.ResticPassword = latest.ResticPassword;
         var probe = await RunResticAsync(
             new ResticCall(s, ["snapshots", "--host", ResticHost, "--json"]), ct);
         if (probe.RepoMissing)
@@ -202,7 +210,7 @@ public sealed class BlindBackupService(
         }
         // The repository exists now, under the password this run used: the console password must not
         // move that password any more (BlindBackupSettingsStore.AdoptConsolePassword).
-        settingsStore.MarkRepositoryInUse();
+        settingsStore.MarkRepositoryInUse(s.RepositoryKey());
     }
 
     private async Task RetainAsync(BlindJobContext ctx, BlindBackupSettings s, CancellationToken ct)

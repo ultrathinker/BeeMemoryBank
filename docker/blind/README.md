@@ -54,7 +54,11 @@ changes the console password on a node that has no restic password of its own an
 yet, the same value becomes the restic password. A different one can be entered before the first
 backup (`restic_password` here, or the field in the console's backup settings) and then always
 wins. Once the repository exists (a backup has run) a console password change no longer touches
-it: the repository stays encrypted under the password it was created with. Keep a copy of the
+it: the repository stays encrypted under the password it was created with, so the settings refuse
+a different restic password from then on (to use another one, point the backup at a new
+repository, another folder or S3 prefix, and enter its password in the same save). A remote (S3)
+repository counts as existing as soon as one was saved: this node cannot look inside a bucket, so
+the console password is never taken as the restic password after that. Keep a copy of the
 restic password: without it the repository cannot be opened.
 
 `init` is also how a node that is already set up gets a different backup target: it keeps the

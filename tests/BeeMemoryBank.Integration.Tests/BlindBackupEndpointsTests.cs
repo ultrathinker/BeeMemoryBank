@@ -263,11 +263,11 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
             .StatusCode.Should().Be(HttpStatusCode.NoContent);
         var store = _factory.Services.GetRequiredService<BlindBackupSettingsStore>();
         store.Load().ResticPassword.Should().Be("console-pw-one", "the console password is the default restic password");
-        store.Load().RepoInUse.Should().BeFalse("no backup has run yet");
+        store.Load().RepositoryInUse().Should().BeFalse("no backup has run yet");
 
         (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
         (await WaitUntilDoneAsync(client)).GetProperty("state").GetString().Should().Be("done");
-        store.Load().RepoInUse.Should().BeTrue("the backup found or created the repository");
+        store.Load().RepositoryInUse().Should().BeTrue("the backup found or created the repository");
 
         (await client.PostAsJsonAsync("/api/blind/console/password",
             new { newPassword = "console-pw-two", currentPassword = "console-pw-one" }))
@@ -276,6 +276,128 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
             "the repository the backup used is encrypted under it");
     }
 
+    // ── the restic password and the repository it created (review round 2) ──────────────────────
+
+    private BlindBackupSettingsStore Store => _factory.Services.GetRequiredService<BlindBackupSettingsStore>();
+
+    private async Task<HttpResponseMessage> ChangeConsolePasswordAsync(HttpClient client, string current, string next) =>
+        await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = next, currentPassword = current });
+
+    /// <summary>The first backup: a job that read its settings, waits (pause, a long vacuum) and only then creates the repository.</summary>
+    [Fact]
+    public async Task TheFirstBackup_CreatesTheRepositoryUnderTheSavedPassword_WhenTheConsolePasswordChangedWhileItWasParked()
+    {
+        _restic.InitMissingOnce = true;
+        using var client = Client();
+        Directory.CreateDirectory(_repoDir);
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { repoType = "folder", repoFolder = _repoDir }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "console-pw-one" }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await client.PostAsJsonAsync("/api/blind/backup/mode", new { mode = "pause" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        await Task.Delay(300); // the job has read its settings (password one) and is parked
+
+        (await ChangeConsolePasswordAsync(client, "console-pw-one", "console-pw-two")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await client.PostAsJsonAsync("/api/blind/backup/mode", new { mode = "economy" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await WaitUntilDoneAsync(client)).GetProperty("state").GetString().Should().Be("done");
+
+        _restic.Calls.Should().Contain(c => c.StartsWith("init"));
+        _restic.Passwords.Should().OnlyContain(p => p == Store.Load().ResticPassword,
+            "the repository is created with the password the settings end up holding, or it is orphaned");
+    }
+
+    /// <summary>The console password changes while the first backup is inside the repository probe, before `restic init`.</summary>
+    [Fact]
+    public async Task TheFirstBackup_KeepsItsPassword_WhenTheConsolePasswordChangesDuringTheProbe()
+    {
+        _restic.InitMissingOnce = true;
+        _restic.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = Client();
+        Directory.CreateDirectory(_repoDir);
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { repoType = "folder", repoFolder = _repoDir }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "console-pw-one" }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        for (var i = 0; i < 100 && !_restic.Calls.Any(c => c.StartsWith("snapshots")); i++) await Task.Delay(50);
+
+        (await ChangeConsolePasswordAsync(client, "console-pw-one", "console-pw-two")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        _restic.ListGate.SetResult();
+        (await WaitUntilDoneAsync(client)).GetProperty("state").GetString().Should().Be("done");
+
+        _restic.Passwords.Should().OnlyContain(p => p == Store.Load().ResticPassword,
+            "the password of a repository that is being created is pinned until it exists");
+    }
+
+    private async Task<HttpClient> ClientWithARepositoryInUseAsync()
+    {
+        var client = Client();
+        await ConfigureRepoAsync(client); // folder repository, explicit password "test-restic-pw"
+        (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await WaitUntilDoneAsync(client)).GetProperty("state").GetString().Should().Be("done");
+        return client;
+    }
+
+    [Theory]
+    [InlineData("another-restic-pw")]
+    [InlineData("")]
+    public async Task OnceABackupHasUsedTheRepository_ANewOrEmptyResticPassword_IsRefused_WithAPlainSentence(string password)
+    {
+        using var client = await ClientWithARepositoryInUseAsync();
+
+        var refused = await client.PutAsJsonAsync("/api/blind/backup/settings", new { resticPassword = password });
+
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var error = (await refused.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
+        error.Should().Contain("cannot be changed").And.Contain("existing repository").And.Contain("new repository",
+            "what is wrong, and what to do instead");
+        Store.Load().ResticPassword.Should().Be("test-restic-pw", "every backup already made would become unreadable");
+    }
+
+    [Fact]
+    public async Task OnceABackupHasUsedTheRepository_TheSamePassword_TheMask_AndOtherSettings_StillSave()
+    {
+        using var client = await ClientWithARepositoryInUseAsync();
+
+        foreach (var body in new object[]
+                 {
+                     new { resticPassword = "test-restic-pw" }, new { resticPassword = "••••" }, new { keepDaily = 5 },
+                 })
+            (await client.PutAsJsonAsync("/api/blind/backup/settings", body)).StatusCode.Should().Be(HttpStatusCode.OK);
+        Store.Load().ResticPassword.Should().Be("test-restic-pw");
+    }
+
+    [Fact]
+    public async Task PointingTheBackupAtAnotherRepository_WithItsOwnPassword_IsTheWayToUseAnotherPassword()
+    {
+        using var client = await ClientWithARepositoryInUseAsync();
+
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { repoFolder = _repoDir + "-b", resticPassword = "second-pw" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Store.Load().ResticPassword.Should().Be("second-pw");
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { resticPassword = "second-pw-fixed" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "nothing has used the new repository yet: a typo can still be corrected");
+    }
+
+    [Fact]
+    public async Task APasswordChangeWhileTheFirstBackupIsCreatingTheRepository_IsAskedToWait()
+    {
+        _restic.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = Client();
+        await ConfigureRepoAsync(client);
+        (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        for (var i = 0; i < 100 && !_restic.Calls.Any(c => c.StartsWith("snapshots")); i++) await Task.Delay(50);
+
+        var refused = await client.PutAsJsonAsync("/api/blind/backup/settings", new { resticPassword = "another-restic-pw" });
+
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await refused.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString().Should().Contain("backup");
+        _restic.ListGate.SetResult();
+        await WaitUntilDoneAsync(client);
+        Store.Load().ResticPassword.Should().Be("test-restic-pw");
+    }
     [Fact]
     public async Task SettingsSavedMidBackup_DoNotMoveTheRunningJob()
     {
@@ -647,6 +769,8 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
         }
 
         public List<string> Calls { get; } = [];
+        /// <summary>The restic password of every call, in order: what the repository was created and opened with.</summary>
+        public List<string?> Passwords { get; } = [];
         /// <summary>When set, a listing's `snapshots` (no job) waits on it — a listing caught inside restic.</summary>
         public TaskCompletionSource? ListGate { get; set; }
         /// <summary>When set, a `copy` waits on it (cancellable) — a copy to interrupt.</summary>
@@ -669,6 +793,7 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
         {
             var args = call.Args;
             Calls.Add(string.Join(' ', args));
+            Passwords.Add(call.Settings.ResticPassword);
             Repositories.Add(call.Repository ?? call.Settings.ResticRepository());
             if (args[0] == "backup")
             {

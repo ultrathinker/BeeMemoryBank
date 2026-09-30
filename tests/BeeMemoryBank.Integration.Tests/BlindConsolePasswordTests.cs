@@ -196,7 +196,7 @@ public class BlindConsolePasswordTests : IAsyncLifetime
     [Fact]
     public async Task ThePageChange_LeavesResticAloneOnceARepositoryExists()
     {
-        Settings.MarkRepositoryInUse(); // what the first backup does
+        Settings.MarkRepositoryInUse(Settings.Load().RepositoryKey()); // what the first backup does
         using var page = await SignInAsync();
 
         (await ChangeAsync(page, Old, New)).StatusCode.Should().Be(HttpStatusCode.NoContent);

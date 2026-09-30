@@ -36,8 +36,20 @@ public static class BlindBackupEndpoints
         {
             if (jobs.IsWiping)
                 return Results.Conflict(new ErrorResponse("the node is being wiped"));
+            // A restic password change is decided while no backup is creating the repository: it would
+            // otherwise land between that backup's "read" and its "init".
+            using var lease = dto.ResticPassword.HasNewValue(out _) ? store.TryEnterRepository() : null;
+            if (dto.ResticPassword.HasNewValue(out _) && lease is null)
+                return Results.Conflict(new ErrorResponse(
+                    "A backup is checking or creating the repository right now. Save the password again in a minute."));
             var s = store.Load();
+            var passwordBefore = s.ResticPassword;
             Apply(dto, s);
+            // A repository is encrypted under the password it was created with; changing the setting would
+            // not re-encrypt it (this node does not run `restic key passwd`), so every backup already made
+            // would stop opening. Pointing at ANOTHER repository (the location changes) is the way to another password.
+            if (s.RepositoryInUse() && s.ResticPassword != passwordBefore)
+                return Results.Conflict(new ErrorResponse(ResticPasswordFixedMessage));
             // The RESULT is checked, not the request: with the schedule on, a partial update (a
             // typo in the memory limit, an emptied password) would otherwise be saved, and the
             // scheduler would then skip every backup in silence. A draft may be incomplete, but
@@ -152,6 +164,11 @@ public static class BlindBackupEndpoints
         if (dto.CheckSubsetPercent is { } cs) s.CheckSubsetPercent = cs;
         if (dto.ResticGoMemLimit is { } gm) s.ResticGoMemLimit = gm;
     }
+
+    private const string ResticPasswordFixedMessage =
+        "The restic password cannot be changed: a backup repository already exists under it, and this node does not re-encrypt an existing " +
+        "repository, so every backup already made would stop opening. To use another password, point the backup at a new repository " +
+        "(another folder or S3 prefix) and enter its password in the same save.";
 
     private static object WithConfigured(BlindBackupSettings masked, bool configured) => new
     {

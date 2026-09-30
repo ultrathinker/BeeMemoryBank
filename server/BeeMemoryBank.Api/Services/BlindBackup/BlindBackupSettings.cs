@@ -71,13 +71,29 @@ public sealed partial class BlindBackupSettings
     public string? ResticPasswordSource { get; set; }
 
     /// <summary>
-    /// A backup found or created the restic repository (set once, never cleared while the settings
-    /// live): from then on the repository is encrypted under <see cref="ResticPassword"/>, and a
-    /// console password change must not move it. <see cref="BlindBackupSettingsStore.Save"/> keeps it
-    /// sticky, so a settings write that read the file before the first backup cannot drop it.
+    /// The repository (<see cref="RepositoryKey"/>) a backup found or created. From then on it is
+    /// encrypted under <see cref="ResticPassword"/>: the console password must not move it and the
+    /// settings refuse another one (a repository is not re-encrypted here). Tied to the location, so
+    /// pointing the backup at another repository starts over. <see cref="BlindBackupSettingsStore.Save"/>
+    /// keeps it, so a write that read the file before the first backup cannot drop it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RepoInUseKey { get; set; }
+
+    /// <summary>
+    /// What the first build of this feature wrote: "in use at whatever location is configured".
+    /// Read into <see cref="RepoInUseKey"/> and never written again; the settings GET also fills it, for the form.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool RepoInUse { get; set; }
+
+    /// <summary>
+    /// A non-folder (S3) repository was configured once. This node cannot look inside a bucket, so from
+    /// then on a repository may exist and the console password is never taken as the restic password.
+    /// Sticky, like <see cref="RepoInUseKey"/>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RemoteRepoSeen { get; set; }
 
     // Standard retention (plan §7), each overridable.
     public int KeepDaily { get; set; } = 7;
@@ -193,13 +209,22 @@ public sealed partial class BlindBackupSettings
         return (true, null);
     }
 
+    /// <summary>Names the repository these settings point at: what <see cref="RepoInUseKey"/> is about.</summary>
+    public string RepositoryKey() => RepoType == BlindRepoType.Folder
+        ? "folder:" + (string.IsNullOrWhiteSpace(RepoFolder) ? "" : Path.GetFullPath(RepoFolder))
+        : $"s3:{S3Endpoint?.TrimEnd('/')}/{S3Bucket}/{S3Prefix}";
+
+    /// <summary>A backup has used the repository these settings point at (its password is fixed).</summary>
+    public bool RepositoryInUse() => RepoInUseKey == RepositoryKey();
+
     /// <summary>
-    /// Whether the repository already exists: a backup has used it, or (a folder repository) restic's
-    /// <c>config</c> file is there. An S3 repository is only known through a backup that ran.
+    /// Whether a repository may already exist, so the console password must not become the restic
+    /// password: a backup has used it, a folder repository has its <c>config</c> file, or a remote
+    /// repository was ever configured (this node cannot look inside a bucket).
     /// </summary>
     public bool RepositoryExists() =>
-        RepoInUse || (RepoType == BlindRepoType.Folder && !string.IsNullOrWhiteSpace(RepoFolder)
-            && File.Exists(Path.Combine(RepoFolder, "config")));
+        RepositoryInUse() || RepoType != BlindRepoType.Folder || RemoteRepoSeen
+        || (!string.IsNullOrWhiteSpace(RepoFolder) && File.Exists(Path.Combine(RepoFolder, "config")));
 
     /// <summary>The RESTIC_REPOSITORY value for the configured repository. Only valid after <see cref="Validate"/> passed.</summary>
     public string ResticRepository() => RepoType == BlindRepoType.Folder

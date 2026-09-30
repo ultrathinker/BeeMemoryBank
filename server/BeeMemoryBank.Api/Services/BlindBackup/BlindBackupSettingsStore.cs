@@ -22,13 +22,15 @@ public sealed class BlindBackupSettingsStore(string dataPath)
     public BlindBackupSettings Load() => TryLoad(out var settings) ? settings : new BlindBackupSettings();
 
     /// <summary>False when the file exists but cannot be read; the settings are then the defaults.</summary>
-    private bool TryLoad(out BlindBackupSettings settings)
+    public bool TryLoad(out BlindBackupSettings settings)
     {
         settings = new BlindBackupSettings();
         if (!File.Exists(FilePath)) return true;
         try
         {
             settings = JsonSerializer.Deserialize<BlindBackupSettings>(File.ReadAllText(FilePath)) ?? new();
+            if (settings.RepoInUse && settings.RepoInUseKey is null) settings.RepoInUseKey = settings.RepositoryKey(); // first build's flag
+            settings.RepoInUse = false;
             return true;
         }
         catch (JsonException)
@@ -49,10 +51,12 @@ public sealed class BlindBackupSettingsStore(string dataPath)
         lock (_write)
         {
             if (_closed) throw new SettingsClosedException();
-            // "A backup has used the repository" only ever turns on: a write that read the file
-            // before the first backup finished must not turn it back off (the console password
-            // default would then move the password of a repository that exists).
-            if (!settings.RepoInUse && Load().RepoInUse) settings.RepoInUse = true;
+            // "A backup has used the repository" and "a remote repository was configured" only ever turn
+            // on: a write that read the file before the first backup finished must not turn them back off
+            // (the console password default would then move the password of a repository that exists).
+            var onDisk = Load();
+            settings.RepoInUseKey ??= onDisk.RepoInUseKey;
+            settings.RemoteRepoSeen |= onDisk.RemoteRepoSeen || settings.RepoType != BlindRepoType.Folder;
             Directory.CreateDirectory(_dir);
             var tmp = FilePath + ".tmp";
             // 0600 from creation, the temp file included: both carry the restic password in the
@@ -82,15 +86,34 @@ public sealed class BlindBackupSettingsStore(string dataPath)
         }
     }
 
-    /// <summary>A backup found or created the repository: from now on its password is fixed (see <see cref="BlindBackupSettings.RepoInUse"/>).</summary>
-    public void MarkRepositoryInUse()
+    // Held by the first backup from "read the restic password" to "the repository exists and is marked in
+    // use", so the password a repository is created with is the one the settings keep. A console password
+    // change (which would move it) and a settings write that changes it do not wait: they skip / are refused.
+    private readonly SemaphoreSlim _repoGate = new(1, 1);
+
+    private sealed class Lease(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
+
+    public async Task<IDisposable> EnterRepositoryAsync(CancellationToken ct)
+    {
+        await _repoGate.WaitAsync(ct);
+        return new Lease(_repoGate);
+    }
+
+    /// <summary>Null when a backup is finding or creating the repository right now.</summary>
+    public IDisposable? TryEnterRepository() => _repoGate.Wait(0) ? new Lease(_repoGate) : null;
+
+    /// <summary>A backup found or created the repository <paramref name="repositoryKey"/>: from now on its password is fixed (see <see cref="BlindBackupSettings.RepoInUseKey"/>).</summary>
+    public void MarkRepositoryInUse(string repositoryKey)
     {
         try
         {
             Update(s =>
             {
-                if (s.RepoInUse) return false;
-                s.RepoInUse = true;
+                if (s.RepoInUseKey == repositoryKey) return false;
+                s.RepoInUseKey = repositoryKey;
                 return true;
             });
         }
@@ -111,6 +134,10 @@ public sealed class BlindBackupSettingsStore(string dataPath)
     /// </summary>
     public bool AdoptConsolePassword(string consolePassword)
     {
+        // A backup that is creating the repository right now keeps the password it read: the new one
+        // must not land between its "read" and its "init" (it would orphan the repository).
+        using var lease = TryEnterRepository();
+        if (lease is null) return false;
         try
         {
             return Update(s =>
@@ -170,7 +197,7 @@ public sealed class BlindBackupSettingsStore(string dataPath)
         ResticPassword = string.IsNullOrEmpty(s.ResticPassword) ? null : "••••",
         // Not a secret: the form says whether the password follows the console password.
         ResticPasswordSource = string.IsNullOrEmpty(s.ResticPassword) ? null : s.ResticPasswordSource,
-        RepoInUse = s.RepoInUse,
+        RepoInUse = s.RepositoryInUse(),
         KeepDaily = s.KeepDaily,
         KeepWeekly = s.KeepWeekly,
         KeepMonthly = s.KeepMonthly,

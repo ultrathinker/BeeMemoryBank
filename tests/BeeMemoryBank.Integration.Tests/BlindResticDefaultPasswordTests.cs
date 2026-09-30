@@ -59,6 +59,37 @@ public class BlindResticDefaultPasswordTests : IAsyncLifetime
         shown.GetProperty("settings").GetProperty("resticPasswordSource").GetString().Should().Be("console");
     }
 
+    private static readonly object S3Settings = new
+    {
+        repoType = "s3", s3Endpoint = "http://s3.example:9000", s3Bucket = "bmb", s3Prefix = "blind-repo",
+        s3AccessKey = "ak", s3SecretKey = "sk",
+    };
+
+    [Fact]
+    public async Task AnS3RepositoryPointedAtLater_MayExist_SoTheConsolePasswordNeverMovesResticPassword()
+    {
+        using var client = _factory.CreateClient();
+        await SetConsolePasswordAsync(client, "console-pw-one"); // the default is adopted at init
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", S3Settings)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await SetConsolePasswordAsync(client, "console-pw-two", current: "console-pw-one");
+
+        Store.Load().ResticPassword.Should().Be("console-pw-one",
+            "the S3 repository it now points at may have been created with the first password");
+    }
+
+    [Fact]
+    public async Task ARepositoryLocationOnceSavedAsS3_StaysUnadoptable_EvenAfterSwitchingBackToAFolder()
+    {
+        using var client = _factory.CreateClient();
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", S3Settings)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { repoType = "folder", repoFolder = _repoDir }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await SetConsolePasswordAsync(client, "console-pw-one");
+
+        Store.Load().ResticPassword.Should().BeNull("a remote repository was configured once: it may exist, and this node cannot look");
+    }
     [Fact]
     public async Task AnExplicitResticPassword_SetFirst_IsNotTouchedByTheConsolePassword()
     {
@@ -123,12 +154,12 @@ public class BlindResticDefaultPasswordTests : IAsyncLifetime
         await SetConsolePasswordAsync(client, "console-pw-one");
         Store.Load().ResticPassword.Should().Be("console-pw-one");
 
-        Store.MarkRepositoryInUse(); // the first backup found or created the repository
+        Store.MarkRepositoryInUse(Store.Load().RepositoryKey()); // the first backup found or created the repository
 
         await SetConsolePasswordAsync(client, "console-pw-two", current: "console-pw-one");
         Store.Load().ResticPassword.Should().Be("console-pw-one",
             "the repository is encrypted under the first password; a changed setting would lock the owner out of the backups");
-        Store.Load().RepoInUse.Should().BeTrue();
+        Store.Load().RepositoryInUse().Should().BeTrue();
         (await ReadSettingsAsync(client)).GetProperty("settings").GetProperty("repoInUse").GetBoolean().Should().BeTrue();
     }
 
@@ -144,6 +175,23 @@ public class BlindResticDefaultPasswordTests : IAsyncLifetime
 
         Store.Load().ResticPassword.Should().BeNull(
             "somebody else's repository is encrypted under a password this node cannot guess");
+    }
+
+    [Fact]
+    public async Task TheFlagOfTheFirstBuild_MeansInUseAtTheConfiguredLocation()
+    {
+        // The image built before the flag was tied to a location wrote "RepoInUse": true.
+        using var client = _factory.CreateClient();
+        Directory.CreateDirectory(_repoDir);
+        Store.Save(new BlindBackupSettings
+        {
+            RepoFolder = _repoDir, ResticPassword = "the-first-password", ResticPasswordSource = ResticPasswordSources.Console, RepoInUse = true,
+        });
+
+        await SetConsolePasswordAsync(client, "console-pw-one");
+
+        Store.Load().ResticPassword.Should().Be("the-first-password");
+        Store.Load().RepositoryInUse().Should().BeTrue();
     }
 
     [Fact]
@@ -181,11 +229,11 @@ public class BlindResticDefaultPasswordTests : IAsyncLifetime
     {
         // A settings write that read the file before the first backup, saved after it.
         var stale = Store.Load();
-        Store.MarkRepositoryInUse();
+        Store.MarkRepositoryInUse(stale.RepositoryKey());
 
         Store.Save(stale);
 
-        Store.Load().RepoInUse.Should().BeTrue("a repository, once used, stays used until the wipe deletes the settings");
+        Store.Load().RepositoryInUse().Should().BeTrue("a repository, once used, stays used until the wipe deletes the settings");
     }
 
     private static async Task<JsonElement> ReadSettingsAsync(HttpClient client) =>
