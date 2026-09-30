@@ -60,8 +60,13 @@ repository, another folder or S3 prefix, and enter its password in the same save
 repository counts as existing as soon as one was saved: this node cannot look inside a bucket, so
 the console password is never taken as the restic password after that. A folder repository is
 recognised by its `config` file (a repository made by 1.0.12, another spelling of the folder or a
-symlink to it needs no migration); a bucket settings file from 1.0.12 that has a password counts
-as in use until the backup is pointed at another location. Keep a copy of the
+symlink to it needs no migration); a folder whose `config` cannot be inspected (no permission, an I/O
+error) counts as a repository too, only a folder that is explicitly empty or missing does not. A bucket settings file from 1.0.12 that has a password counts
+as in use until the backup is pointed at another location. Pointing the backup at another S3 prefix
+together with that repository's password in the same save is the supported way to switch: the node
+never initialises a repository it cannot open, so a prefix that already holds one and a wrong password
+stop the backup with restic's own error and change nothing there (only restic's "repository does not
+exist" leads to `restic init`, which also refuses to overwrite an existing repository). Keep a copy of the
 restic password: without it the repository cannot be opened.
 
 `init` is also how a node that is already set up gets a different backup target: it keeps the

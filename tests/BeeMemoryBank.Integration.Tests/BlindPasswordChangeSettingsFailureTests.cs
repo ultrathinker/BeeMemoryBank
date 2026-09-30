@@ -88,6 +88,27 @@ public class BlindPasswordChangeSettingsFailureTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AFolderThatCannotBeEntered_IsNotTakenForNoSettingsFile()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var client = _factory.CreateClient();
+        (await SetAsync(client, "console-pw-one")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        var dir = Path.GetDirectoryName(SettingsFile)!;
+        File.SetUnixFileMode(dir, UnixFileMode.None);
+        try
+        {
+            if (CanRead(SettingsFile)) return; // root ignores modes
+
+            await ShouldBeRefusedPlainlyAsync(await SetAsync(client, "console-pw-two", current: "console-pw-one"));
+        }
+        finally
+        {
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        Auth.Verify("console-pw-one", null).Ok.Should().BeTrue("nothing was changed");
+    }
+
+    [Fact]
     public async Task ASettingsFileThatReadsButCannotBeWritten_StillChangesThePassword_AndLeavesResticAlone()
     {
         if (!OperatingSystem.IsWindows()) return; // there the read-only attribute is the only per-file write lock

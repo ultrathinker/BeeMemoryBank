@@ -218,12 +218,29 @@ public sealed partial class BlindBackupSettings
     public bool RepositoryInUse() => RepoInUseKey is { } used && SameRepository(used, RepositoryKey());
 
     /// <summary>
-    /// Whether a folder repository is there: restic's <c>config</c> file in the configured folder. Content, not
+    /// Whether a folder repository MAY be there: restic's <c>config</c> in the configured folder. Content, not
     /// a name, so another spelling of the folder, a symlink to it, a repository this node never used and one made
-    /// by 1.0.12 (which recorded nothing) are all recognised without canonicalising a path.
+    /// by 1.0.12 (which recorded nothing) are all recognised without canonicalising a path. Only an explicit
+    /// "not found" (the folder or the file is not there) says no: an access or I/O error, or something else named
+    /// <c>config</c>, says maybe (<c>File.Exists</c> would say no to both).
     /// </summary>
-    public bool FolderRepositoryPresent() =>
-        RepoType == BlindRepoType.Folder && !string.IsNullOrWhiteSpace(RepoFolder) && File.Exists(Path.Combine(RepoFolder, "config"));
+    public bool FolderRepositoryMayExist()
+    {
+        if (RepoType != BlindRepoType.Folder || string.IsNullOrWhiteSpace(RepoFolder)) return false;
+        try
+        {
+            File.GetAttributes(Path.Combine(RepoFolder, "config"));
+            return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
 
     /// <summary>
     /// Whether a repository may already exist, so the console password must not become the restic
@@ -231,7 +248,7 @@ public sealed partial class BlindBackupSettings
     /// configured (this node cannot look inside a bucket).
     /// </summary>
     public bool RepositoryExists() =>
-        RepositoryInUse() || RepoType != BlindRepoType.Folder || RemoteRepoSeen || FolderRepositoryPresent();
+        RepositoryInUse() || RepoType != BlindRepoType.Folder || RemoteRepoSeen || FolderRepositoryMayExist();
 
     // Two keys name the same repository when their spelling-independent forms match: a bucket by scheme, host
     // (case-insensitive), port (the scheme's default when absent) and the path segments without empty ones; a

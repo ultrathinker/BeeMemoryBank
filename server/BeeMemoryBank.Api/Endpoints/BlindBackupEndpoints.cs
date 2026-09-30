@@ -52,7 +52,7 @@ public static class BlindBackupEndpoints
             // second repository and a 1.0.12 file are all covered. A node with no password yet has nothing to
             // orphan: giving an existing repository its password is how it is reconnected (after a wipe, say).
             if (s.ResticPassword != passwordBefore && !string.IsNullOrEmpty(passwordBefore)
-                && (s.RepositoryInUse() || s.FolderRepositoryPresent()))
+                && (s.RepositoryInUse() || s.FolderRepositoryMayExist()))
                 return Results.Conflict(new ErrorResponse(ResticPasswordFixedMessage));
             // The RESULT is checked, not the request: with the schedule on, a partial update (a
             // typo in the memory limit, an emptied password) would otherwise be saved, and the

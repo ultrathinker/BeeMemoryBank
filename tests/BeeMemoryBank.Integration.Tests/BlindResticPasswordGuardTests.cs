@@ -130,6 +130,75 @@ public class BlindResticPasswordGuardTests : IAsyncLifetime
         await ShouldBeRefusedAsync(await PutAsync(client, new { repoFolder = repo.ToUpperInvariant(), resticPassword = Other }));
     }
 
+    // ── a folder that cannot be inspected may hold a repository: only "config is absent" allows a change ──
+
+    /// <summary>Linux: no permission on the repository folder, so `config` cannot be looked at. Returns false when the
+    /// permissions do not bite (root), and the caller has nothing to prove.</summary>
+    private static bool Lock(string dir)
+    {
+        if (OperatingSystem.IsWindows()) return false;
+        File.SetUnixFileMode(dir, UnixFileMode.None);
+        try { File.GetAttributes(Path.Combine(dir, "config")); }
+        catch (UnauthorizedAccessException) { return true; }
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return false;
+    }
+
+    private static void Unlock(string dir)
+    {
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    [Fact]
+    public async Task AFolderRepositoryThatCannotBeInspected_IsTreatedAsExisting_ForAPasswordChange()
+    {
+        var repo = Repository("locked");
+        Write1012(new { RepoType = 0, RepoFolder = repo, ResticPassword = Old });
+        using var client = _factory.CreateClient();
+        if (!Lock(repo)) return;
+        try
+        {
+            await ShouldBeRefusedAsync(await PutAsync(client, new { resticPassword = Other }));
+            await ShouldBeRefusedAsync(await PutAsync(client, new { resticPassword = "" }));
+        }
+        finally
+        {
+            Unlock(repo);
+        }
+        Store.Load().ResticPassword.Should().Be(Old);
+    }
+
+    [Fact]
+    public async Task AFolderThatCannotBeInspected_IsNotAdoptedByTheConsolePassword()
+    {
+        var repo = Repository("locked-default");
+        using var client = _factory.CreateClient();
+        (await PutAsync(client, new { repoFolder = repo })).StatusCode.Should().Be(HttpStatusCode.OK);
+        if (!Lock(repo)) return;
+        try
+        {
+            (await client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = "console-pw-one" }))
+                .StatusCode.Should().Be(HttpStatusCode.NoContent);
+        }
+        finally
+        {
+            Unlock(repo);
+        }
+        Store.Load().ResticPassword.Should().BeNull("a repository may be in there: the console password is never its password by default");
+    }
+
+    [Fact]
+    public async Task ADirectoryNamedConfig_IsNotProofThatNothingIsThere()
+    {
+        var folder = EmptyFolder("odd");
+        Directory.CreateDirectory(Path.Combine(folder, "config"));
+        Write1012(new { RepoType = 0, RepoFolder = folder, ResticPassword = Old });
+        using var client = _factory.CreateClient();
+
+        await ShouldBeRefusedAsync(await PutAsync(client, new { resticPassword = Other }));
+    }
+
     // ── what still saves ─────────────────────────────────────────────────────────────────────────
 
     [Fact]

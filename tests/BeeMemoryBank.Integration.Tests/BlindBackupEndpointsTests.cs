@@ -368,6 +368,41 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
         Store.Load().ResticPassword.Should().Be("test-restic-pw");
     }
 
+    /// <summary>
+    /// The sanctioned flow for a bucket, which this node cannot look into: the location AND the password of the other
+    /// repository in one save. If that repository cannot be opened with the stored password the backup stops with an
+    /// error and creates nothing: only restic's "repository does not exist" answer (exit 10) leads to `init`.
+    /// </summary>
+    [Fact]
+    public async Task ABucketPointedAtAnotherPrefixWithItsPassword_Saves_AndARepositoryThatDoesNotOpen_IsAnErrorNotAnInit()
+    {
+        using var client = Client();
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new
+        {
+            repoType = "s3", s3Endpoint = "http://s3.example:9000", s3Bucket = "bmb", s3Prefix = "repo-a",
+            s3AccessKey = "ak", s3SecretKey = "sk", resticPassword = "password-a",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await WaitUntilDoneAsync(client)).GetProperty("state").GetString().Should().Be("done");
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { resticPassword = "password-x" }))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict, "the password alone stays fixed by repository A");
+
+        (await client.PutAsJsonAsync("/api/blind/backup/settings", new { s3Prefix = "repo-b", resticPassword = "password-b" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "location and password in one save is the way to another password");
+        Store.Load().ResticPassword.Should().Be("password-b");
+
+        // Repository B exists but was made with another password: restic answers 12, not 10.
+        _restic.ProbeAnswer = (12, "Fatal: wrong password or no key found");
+        _restic.Calls.Clear();
+        (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var job = await WaitUntilDoneAsync(client);
+
+        job.GetProperty("state").GetString().Should().Be("failed");
+        job.GetProperty("detail").GetString().Should().Contain("wrong password");
+        _restic.Calls.Should().NotContain(c => c.StartsWith("init"), "an existing repository is never initialised over");
+        _restic.Calls.Should().NotContain(c => c.StartsWith("backup"));
+    }
+
     [Fact]
     public async Task PointingTheBackupAtAnotherRepository_WithItsOwnPassword_IsTheWayToUseAnotherPassword()
     {
@@ -778,6 +813,8 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
         /// <summary>RESTIC_REPOSITORY of every call, in order — what the runner would have used.</summary>
         public List<string> Repositories { get; } = [];
         public bool InitMissingOnce;
+        /// <summary>When set, the repository probe (`snapshots`) answers this exit code and stderr: a repository restic cannot open.</summary>
+        public (int Code, string Stderr)? ProbeAnswer { get; set; }
         public bool SawStageDb;
         public bool BlockBackup
         {
@@ -814,6 +851,8 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
                 await listGate.Task.WaitAsync(ct);
             if (args[0] == "copy" && CopyGate is { } copyGate)
                 await copyGate.Task.WaitAsync(ct);
+            if (args[0] == "snapshots" && ProbeAnswer is { } probe)
+                return new ResticResult(probe.Code, "", probe.Stderr);
             if (args[0] == "snapshots" && InitMissingOnce && !_initDone)
             {
                 _initDone = true;

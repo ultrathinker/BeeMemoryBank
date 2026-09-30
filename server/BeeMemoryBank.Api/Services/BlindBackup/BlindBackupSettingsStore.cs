@@ -34,10 +34,18 @@ public sealed class BlindBackupSettingsStore(string dataPath)
             problem = "a folder is where the file should be";
             return false;
         }
-        if (!File.Exists(FilePath)) return true;
         try
         {
-            settings = JsonSerializer.Deserialize<BlindBackupSettings>(File.ReadAllText(FilePath)) ?? new();
+            string text;
+            try
+            {
+                text = File.ReadAllText(FilePath);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return true; // no settings yet: only an explicit "not found" says so (File.Exists is also false when access is denied)
+            }
+            settings = JsonSerializer.Deserialize<BlindBackupSettings>(text) ?? new();
             if (settings.RepoInUse && settings.RepoInUseKey is null) settings.RepoInUseKey = settings.RepositoryKey(); // first build's flag
             settings.RepoInUse = false;
             // 1.0.12 wrote no marker: a bucket with a password, and neither the marker nor the remote flag, may
