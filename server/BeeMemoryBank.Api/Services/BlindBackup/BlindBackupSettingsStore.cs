@@ -40,6 +40,11 @@ public sealed class BlindBackupSettingsStore(string dataPath)
             settings = JsonSerializer.Deserialize<BlindBackupSettings>(File.ReadAllText(FilePath)) ?? new();
             if (settings.RepoInUse && settings.RepoInUseKey is null) settings.RepoInUseKey = settings.RepositoryKey(); // first build's flag
             settings.RepoInUse = false;
+            // 1.0.12 wrote no marker: a bucket with a password, and neither the marker nor the remote flag, may
+            // already hold backups (this node cannot look). Treated as in use there until pointed elsewhere.
+            if (settings.RepoType != BlindRepoType.Folder && settings.RepoInUseKey is null && !settings.RemoteRepoSeen
+                && !string.IsNullOrEmpty(settings.ResticPassword))
+                settings.RepoInUseKey = settings.RepositoryKey();
             return true;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)

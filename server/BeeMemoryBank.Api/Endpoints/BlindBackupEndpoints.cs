@@ -47,8 +47,12 @@ public static class BlindBackupEndpoints
             Apply(dto, s);
             // A repository is encrypted under the password it was created with; changing the setting would
             // not re-encrypt it (this node does not run `restic key passwd`), so every backup already made
-            // would stop opening. Pointing at ANOTHER repository (the location changes) is the way to another password.
-            if (s.RepositoryInUse() && s.ResticPassword != passwordBefore)
+            // would stop opening. It exists when a backup used this location (the marker) or, for a folder, when
+            // its `config` is there: asked of the location AFTER this update, so another spelling, a symlink, a
+            // second repository and a 1.0.12 file are all covered. A node with no password yet has nothing to
+            // orphan: giving an existing repository its password is how it is reconnected (after a wipe, say).
+            if (s.ResticPassword != passwordBefore && !string.IsNullOrEmpty(passwordBefore)
+                && (s.RepositoryInUse() || s.FolderRepositoryPresent()))
                 return Results.Conflict(new ErrorResponse(ResticPasswordFixedMessage));
             // The RESULT is checked, not the request: with the schedule on, a partial update (a
             // typo in the memory limit, an emptied password) would otherwise be saved, and the

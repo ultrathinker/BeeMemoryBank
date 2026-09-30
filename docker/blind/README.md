@@ -58,7 +58,10 @@ it: the repository stays encrypted under the password it was created with, so th
 a different restic password from then on (to use another one, point the backup at a new
 repository, another folder or S3 prefix, and enter its password in the same save). A remote (S3)
 repository counts as existing as soon as one was saved: this node cannot look inside a bucket, so
-the console password is never taken as the restic password after that. Keep a copy of the
+the console password is never taken as the restic password after that. A folder repository is
+recognised by its `config` file (a repository made by 1.0.12, another spelling of the folder or a
+symlink to it needs no migration); a bucket settings file from 1.0.12 that has a password counts
+as in use until the backup is pointed at another location. Keep a copy of the
 restic password: without it the repository cannot be opened.
 
 `init` is also how a node that is already set up gets a different backup target: it keeps the

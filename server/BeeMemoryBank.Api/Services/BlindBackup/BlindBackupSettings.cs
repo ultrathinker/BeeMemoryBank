@@ -215,16 +215,34 @@ public sealed partial class BlindBackupSettings
         : $"s3:{S3Endpoint?.TrimEnd('/')}/{S3Bucket}/{S3Prefix}";
 
     /// <summary>A backup has used the repository these settings point at (its password is fixed).</summary>
-    public bool RepositoryInUse() => RepoInUseKey == RepositoryKey();
+    public bool RepositoryInUse() => RepoInUseKey is { } used && SameRepository(used, RepositoryKey());
+
+    /// <summary>
+    /// Whether a folder repository is there: restic's <c>config</c> file in the configured folder. Content, not
+    /// a name, so another spelling of the folder, a symlink to it, a repository this node never used and one made
+    /// by 1.0.12 (which recorded nothing) are all recognised without canonicalising a path.
+    /// </summary>
+    public bool FolderRepositoryPresent() =>
+        RepoType == BlindRepoType.Folder && !string.IsNullOrWhiteSpace(RepoFolder) && File.Exists(Path.Combine(RepoFolder, "config"));
 
     /// <summary>
     /// Whether a repository may already exist, so the console password must not become the restic
-    /// password: a backup has used it, a folder repository has its <c>config</c> file, or a remote
-    /// repository was ever configured (this node cannot look inside a bucket).
+    /// password: a backup has used it, a folder repository is there, or a remote repository was ever
+    /// configured (this node cannot look inside a bucket).
     /// </summary>
     public bool RepositoryExists() =>
-        RepositoryInUse() || RepoType != BlindRepoType.Folder || RemoteRepoSeen
-        || (!string.IsNullOrWhiteSpace(RepoFolder) && File.Exists(Path.Combine(RepoFolder, "config")));
+        RepositoryInUse() || RepoType != BlindRepoType.Folder || RemoteRepoSeen || FolderRepositoryPresent();
+
+    // Two keys name the same repository when their spelling-independent forms match: a bucket by scheme, host
+    // (case-insensitive), port (the scheme's default when absent) and the path segments without empty ones; a
+    // folder without a trailing separator, and without case on Windows.
+    private static bool SameRepository(string a, string b) =>
+        string.Equals(Canonical(a), Canonical(b), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static string Canonical(string key) =>
+        key.StartsWith("s3:", StringComparison.Ordinal) && Uri.TryCreate(key[3..], UriKind.Absolute, out var u)
+            ? $"s3:{u.Scheme}://{u.Host}:{u.Port}/{string.Join('/', u.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries))}"
+            : key.Length > 1 ? Path.TrimEndingDirectorySeparator(key) : key;
 
     /// <summary>The RESTIC_REPOSITORY value for the configured repository. Only valid after <see cref="Validate"/> passed.</summary>
     public string ResticRepository() => RepoType == BlindRepoType.Folder
