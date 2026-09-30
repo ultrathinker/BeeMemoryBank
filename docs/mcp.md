@@ -44,7 +44,7 @@ Search by title, folder names, and optionally full article body content. Does no
 - `bee_continue` — read the continuation of a truncated response (`guid`, `offset`). Pass `ignoreLimit: true` to fetch all remaining content in one call instead of the next chunk, bypassing your own limit for that call only (still capped at the same hard 100,000-token ceiling). Responses are stored for 24 hours.
 
 ### bee_get_upload_script, bee_save_media (BeeUploadTools.cs)
-- `bee_get_upload_script` — returns a self-contained Python script for uploading files from disk to BeeMemoryBank **without** passing content through the LLM context. Supports `create`, `update`, and `upload-media` subcommands. Uses only stdlib (no pip install required).
+- `bee_get_upload_script` — returns a self-contained Python script for uploading files from disk to BeeMemoryBank **without** passing content through the LLM context. Supports `create`, `update`, and `upload-media` subcommands. Uses only stdlib (no pip install required). `--client-name` is required: the name of the agent's main MCP client, reported as `clientInfo.name` (a gateway creates a new client for every new name, so never invent one). `--bearer` is optional (through a gateway the gateway supplies the credentials); `--tool-prefix` puts a gateway's server prefix in front of the tool names (e.g. `bee-memory-bank__`).
 - `bee_save_media` — save a media file directly from a base64 payload (`fileName`, `contentBase64`, `articleId?`), for cases where the agent already has the content in-context (small files) rather than on disk. Capped at 20MB.
 
 ### Tag tools (BeeConceptTools.cs)

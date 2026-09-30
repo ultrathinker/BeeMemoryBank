@@ -43,7 +43,10 @@ public class BeeUploadTools(
         "The script talks to the MCP endpoint directly via JSON-RPC — no REST API access required.\n" +
         "Call once, save the script to disk, remember the path. Never call again.\n" +
         "The script uses only Python stdlib (no pip install needed). Also supports uploading images " +
-        "(upload-media command) as an unlinked media record you can then reference from an article.")]
+        "(upload-media command) as an unlinked media record you can then reference from an article.\n" +
+        "Pass the name of your main agent with --client-name (required); do not invent a new name, every " +
+        "new name creates a new client in the gateway. --bearer is optional (leave it out when a gateway " +
+        "supplies the credentials); --tool-prefix puts a gateway's server prefix in front of the tool names.")]
     public string GetUploadScript()
     {
         return UploadScript;
@@ -63,7 +66,9 @@ public class BeeUploadTools(
         "24 hours if never referenced in a saved article body. Password-protected (second-layer encrypted) " +
         "articles cannot have media attached at all — the article's passphrase would not cover it.\n" +
         "For large files or when avoiding base64 in your own context matters, prefer the script from " +
-        "bee_get_upload_script instead (its upload-media command does the base64 encoding locally, outside your context).")]
+        "bee_get_upload_script instead (its upload-media command does the base64 encoding locally, outside your context). " +
+        "When you use the script, pass the name of your main agent with --client-name; do not invent a new name, " +
+        "every new name creates a new client in the gateway.")]
     [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> SaveMedia(
         [Description("File name. For images (isAttachment=false) this determines the type by extension (.png/.jpg/.jpeg/.gif/.webp/.svg) and is not used as a display name. For attachments (isAttachment=true) it IS the display/download name shown to users, so use a real name.")] string fileName,
@@ -134,15 +139,30 @@ public class BeeUploadTools(
 # BeeMemoryBank File Upload — uploads files directly from disk, bypassing LLM context.
 # Uses the MCP protocol directly (JSON-RPC over HTTP). No REST API access required.
 #
-# Usage:
+# Usage, directly against BeeMemoryBank (an agent bearer key):
 #   python bmb-upload.py --url https://bmb.example.com/mcp --bearer bee_xxx \
+#       --client-name "Claude Code - Personal" \
 #       create <file> <title> <treePath> [--tags tag1,tag2]
 #   python bmb-upload.py --url https://bmb.example.com/mcp --bearer bee_xxx \
+#       --client-name "Claude Code - Personal" \
 #       update <file> <articleId> [--tags tag1,tag2]
 #   python bmb-upload.py --url https://bmb.example.com/mcp --bearer bee_xxx \
+#       --client-name "Claude Code - Personal" \
+#       upload-media <file> [--article-id <articleId>] [--attachment]
+#
+# Usage, through an MCP gateway (the gateway supplies the credentials, so no --bearer; it serves
+# BeeMemoryBank's tools under a server prefix, so pass --tool-prefix):
+#   python bmb-upload.py --url http://127.0.0.1:39100/mcp \
+#       --client-name "Claude Code - Personal" --tool-prefix bee-memory-bank__ \
 #       upload-media <file> [--article-id <articleId>] [--attachment]
 #
 # --url: the MCP endpoint URL (same one you use in your MCP client config).
+# --client-name (required): the name of YOUR main MCP client as your gateway already knows it, for
+#   example "Claude Code - Personal". Never invent a new name: every new name creates a new client
+#   in the gateway.
+# --bearer (optional): the agent key. Leave it out when a gateway supplies the credentials.
+# --tool-prefix (optional, default empty): put in front of the tool names, e.g. bee-memory-bank__
+#   makes the script call bee-memory-bank__bee_save_media.
 # The file content goes straight from disk to the server — never through your context window.
 # Requires: Python 3.6+ (stdlib only, no pip install needed).
 
@@ -204,19 +224,20 @@ def mcp_post(url, headers, payload):
             return c, session_id
     return None, session_id
 
-def mcp_tool_call(mcp_url, bearer, tool_name, arguments):
+def mcp_tool_call(mcp_url, bearer, client_name, tool_name, arguments):
     headers = {
-        "Authorization": f"Bearer {bearer}",
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
 
     init_resp, session_id = mcp_post(mcp_url, headers, {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "bmb-upload", "version": "2.0"}
+            "clientInfo": {"name": client_name, "version": "2.0"}
         }
     })
     if init_resp is None:
@@ -257,7 +278,11 @@ def print_mcp_result(resp):
 def main():
     parser = argparse.ArgumentParser(description="BeeMemoryBank file upload via MCP")
     parser.add_argument("--url", required=True, help="MCP endpoint URL (e.g. https://bmb.example.com/mcp)")
-    parser.add_argument("--bearer", required=True, help="Agent bearer token (bee_xxx)")
+    parser.add_argument("--client-name", default=None, dest="client_name",
+                        help="REQUIRED. Name of your main MCP client as your gateway knows it, e.g. \"Claude Code - Personal\". Never a new name.")
+    parser.add_argument("--bearer", default=None, help="Agent bearer token (bee_xxx). Omit when a gateway supplies the credentials.")
+    parser.add_argument("--tool-prefix", default="", dest="tool_prefix",
+                        help="Put in front of the tool names, e.g. bee-memory-bank__ for a gateway that serves the tools under that prefix.")
     sub = parser.add_subparsers(dest="action")
 
     cr = sub.add_parser("create", help="Create new article from file")
@@ -278,10 +303,17 @@ def main():
     md.add_argument("--attachment", action="store_true", help="Upload as a generic file attachment (any file type) instead of an inline image.")
 
     args = parser.parse_args()
+    if not (args.client_name or "").strip():
+        die("--client-name is required. Pass the name of your main MCP client exactly as your gateway "
+            "already knows it, for example --client-name \"Claude Code - Personal\". "
+            "Do not invent a new name: every new name creates a new client in the gateway.", 2)
     if not args.action:
         parser.print_help(); sys.exit(1)
 
     mcp_url = args.url.rstrip("/")
+
+    def call(tool_name, arguments):
+        print_mcp_result(mcp_tool_call(mcp_url, args.bearer, args.client_name, args.tool_prefix + tool_name, arguments))
 
     if args.action == "upload-media":
         try:
@@ -295,7 +327,7 @@ def main():
             arguments["articleId"] = args.article_id
         if args.attachment:
             arguments["isAttachment"] = True
-        print_mcp_result(mcp_tool_call(mcp_url, args.bearer, "bee_save_media", arguments))
+        call("bee_save_media", arguments)
         return
 
     try:
@@ -309,12 +341,12 @@ def main():
         arguments = {"title": args.title, "treePath": args.treePath, "content": content}
         if tags:
             arguments["tags"] = tags
-        print_mcp_result(mcp_tool_call(mcp_url, args.bearer, "bee_save_article", arguments))
+        call("bee_save_article", arguments)
     elif args.action == "update":
         arguments = {"id": args.articleId, "content": content}
         if args.tags is not None:
             arguments["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
-        print_mcp_result(mcp_tool_call(mcp_url, args.bearer, "bee_update_article", arguments))
+        call("bee_update_article", arguments)
 
 if __name__ == "__main__":
     main()
