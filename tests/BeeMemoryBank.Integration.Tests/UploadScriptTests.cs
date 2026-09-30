@@ -145,6 +145,25 @@ public class UploadScriptTests
         mcp.Requests.Should().BeEmpty();
     }
 
+    [PythonTheory]
+    [InlineData(301)]
+    [InlineData(302)]
+    [InlineData(303)]
+    [InlineData(307)]
+    [InlineData(308)]
+    public async Task ARedirect_IsNotFollowed_AndTheBearerNeverReachesTheOtherHost(int status)
+    {
+        await using var elsewhere = await FakeMcp.StartAsync();
+        await using var mcp = await FakeMcp.StartAsync((status, elsewhere.Url));
+
+        var run = await RunScriptAsync("--url", mcp.Url, "--bearer", "bee_secret", "--client-name", ClientName, "upload-media", FixturePath.Value);
+
+        elsewhere.Requests.Should().BeEmpty("the other host must see no request, and so no bearer");
+        mcp.Requests.Should().ContainSingle("the redirected request is not repeated anywhere");
+        run.ExitCode.Should().NotBe(0);
+        run.Stderr.Should().Contain(elsewhere.Url).And.Contain("final URL");
+    }
+
     // ───── plumbing ─────
 
     private static Task<(int ExitCode, string Stdout, string Stderr)> RunScriptAsync(params string[] args) =>
@@ -233,25 +252,37 @@ public class UploadScriptTests
 
         public IReadOnlyList<Seen> Requests { get { lock (_seen) return _seen.ToList(); } }
 
-        public static async Task<FakeMcp> StartAsync()
+        /// <param name="redirect">When set, every request is answered with this status and a Location
+        /// header pointing at the given URL, and nothing else is done.</param>
+        public static async Task<FakeMcp> StartAsync((int Status, string Location)? redirect = null)
         {
             var builder = WebApplication.CreateSlimBuilder();
             builder.WebHost.UseUrls("http://127.0.0.1:0");
             var mcp = new FakeMcp(builder.Build());
-            mcp._app.MapPost("/mcp", async (HttpContext ctx) =>
+            // Any method and path, so a request the script should never have made is seen too.
+            mcp._app.Run(async ctx =>
             {
-                var body = (await JsonNode.ParseAsync(ctx.Request.Body))!;
+                var body = ctx.Request.ContentLength > 0 ? (await JsonNode.ParseAsync(ctx.Request.Body))! : new JsonObject();
                 lock (mcp._seen) mcp._seen.Add(new Seen(ctx.Request.Headers.Authorization.ToString() is { Length: > 0 } a ? a : null, body));
+                if (redirect is { } r)
+                {
+                    ctx.Response.StatusCode = r.Status;
+                    ctx.Response.Headers.Location = r.Location;
+                    return;
+                }
                 var id = body["id"]?.DeepClone();
                 switch (body["method"]?.GetValue<string>())
                 {
                     case "initialize":
                         ctx.Response.Headers["Mcp-Session-Id"] = "fake-session";
-                        return Results.Json(new { jsonrpc = "2.0", id, result = new { protocolVersion = "2025-03-26", capabilities = new { }, serverInfo = new { name = "fake", version = "1" } } });
+                        await ctx.Response.WriteAsJsonAsync(new { jsonrpc = "2.0", id, result = new { protocolVersion = "2025-03-26", capabilities = new { }, serverInfo = new { name = "fake", version = "1" } } });
+                        break;
                     case "tools/call":
-                        return Results.Json(new { jsonrpc = "2.0", id, result = new { content = new[] { new { type = "text", text = "{\"mediaId\":\"00000000-0000-0000-0000-000000000001\"}" } } } });
+                        await ctx.Response.WriteAsJsonAsync(new { jsonrpc = "2.0", id, result = new { content = new[] { new { type = "text", text = "{\"mediaId\":\"00000000-0000-0000-0000-000000000001\"}" } } } });
+                        break;
                     default:
-                        return Results.Accepted();
+                        ctx.Response.StatusCode = StatusCodes.Status202Accepted;
+                        break;
                 }
             });
             await mcp._app.StartAsync();

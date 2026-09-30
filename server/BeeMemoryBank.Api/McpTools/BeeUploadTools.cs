@@ -156,7 +156,8 @@ public class BeeUploadTools(
 #       --client-name "Claude Code - Personal" --tool-prefix bee-memory-bank__ \
 #       upload-media <file> [--article-id <articleId>] [--attachment]
 #
-# --url: the MCP endpoint URL (same one you use in your MCP client config).
+# --url: the MCP endpoint URL (same one you use in your MCP client config). Redirects are not
+#   followed (they would carry your credentials): give the final URL.
 # --client-name (required): the name of YOUR main MCP client as your gateway already knows it, for
 #   example "Claude Code - Personal". Never invent a new name: every new name creates a new client
 #   in the gateway.
@@ -176,6 +177,13 @@ def die(msg, code=1):
     print(msg, file=sys.stderr)
     sys.exit(code)
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    # A call is a JSON-RPC POST carrying your credentials: it is never sent on to another URL.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+opener = urllib.request.build_opener(NoRedirect)
+
 def mcp_post(url, headers, payload):
     """POST a JSON-RPC message. Returns (response_matching_request_id, session_id).
     For notifications (no id in payload) returns (None, session_id)."""
@@ -185,11 +193,15 @@ def mcp_post(url, headers, payload):
     for k, v in headers.items():
         req.add_header(k, v)
     try:
-        with urllib.request.urlopen(req) as resp:
+        with opener.open(req) as resp:
             content_type = (resp.headers.get("Content-Type") or "").lower()
             body = resp.read().decode("utf-8")
             session_id = resp.headers.get("Mcp-Session-Id")
     except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            die(f"HTTP {e.code}: the MCP endpoint redirected to {e.headers.get('Location', '(no Location header)')}. "
+                "The script does not follow redirects, because that would send your credentials on. "
+                "Use the final URL of the MCP endpoint as --url.")
         body = e.read().decode("utf-8", errors="replace")
         die(f"HTTP {e.code} from MCP: {body[:500]}")
     except urllib.error.URLError as e:
