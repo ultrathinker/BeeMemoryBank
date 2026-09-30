@@ -1010,6 +1010,26 @@ public class McpToolsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BeeGetFile_IdTogetherWithTheArticleSelector_IsAParameterErrorNamingTheAllowedForms()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+
+        foreach (var blocks in new[]
+        {
+            await GetFile(("id", pdf.Id), ("articleId", articleId), ("fileName", "report.pdf")),
+            await GetFile(("id", pdf.Id), ("articleId", articleId)),
+            await GetFile(("id", pdf.Id), ("fileName", "report.pdf")),
+        })
+            ErrorOf(blocks).Should().Contain("'id' alone").And.Contain("'articleId' together with 'fileName'");
+    }
+
+    [Fact]
+    public async Task BeeGetFile_NeitherSelector_NamesTheAllowedForms()
+    {
+        ErrorOf(await GetFile()).Should().Contain("'id' alone").And.Contain("'articleId' together with 'fileName'");
+    }
+
+    [Fact]
     public async Task BeeGetFile_UnknownMedia_IsAnError()
     {
         var id = Guid.NewGuid();

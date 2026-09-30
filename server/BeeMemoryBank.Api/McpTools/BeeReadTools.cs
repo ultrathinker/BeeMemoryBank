@@ -619,11 +619,12 @@ public class BeeReadTools(
     [Description(
         "Get a file attached to an article, as the file itself: nothing is converted, extracted or chunked.\n" +
         "Find files in the 'files' list of bee_get_article and pass the entry's mediaId as 'id'. " +
-        "Alternatively pass 'articleId' + 'fileName' (an error listing the ids comes back when several " +
+        "Or pass 'articleId' + 'fileName' instead, never both forms (an error listing the ids comes back when several " +
         "files of the article share that name).\n" +
         "Images (PNG, JPEG, GIF, WEBP) are returned unchanged as an inline image content block; every " +
         "other file as an embedded resource (blob) carrying the file name and its content type. " +
-        "Files above 10 MB are refused with an error; to look at a large image use bee_get_image, which shrinks it.")]
+        "Files above 10 MB, and files of a password-protected article, are refused with an error; to look at a " +
+        "large image use bee_get_image, which shrinks it.")]
     [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<IEnumerable<ContentBlock>> GetFile(
         [Description("Media ID (GUID): the mediaId of an entry in bee_get_article's 'files' list. Omit when passing articleId + fileName.")] Guid? id = null,
@@ -633,11 +634,17 @@ public class BeeReadTools(
         if (!session.IsUnlocked)
             return [ErrorBlock("session is locked. Unlock first.")];
 
+        // Exactly one selector form: 'id' alone, or 'articleId' together with 'fileName'. A mix is
+        // refused rather than resolved, so a stray second selector can never pick a different file.
+        var hasName = !string.IsNullOrEmpty(fileName);
+        var byId = id != null && articleId == null && !hasName;
+        var byName = id == null && articleId != null && hasName;
+        if (!byId && !byName)
+            return [ErrorBlock("pass either the media 'id' alone, or 'articleId' together with 'fileName'; not a mix of them.")];
+
         var mediaId = id;
-        if (mediaId == null)
+        if (byName)
         {
-            if (articleId == null || string.IsNullOrEmpty(fileName))
-                return [ErrorBlock("pass the media 'id', or 'articleId' together with 'fileName'.")];
             var named = await articleService.GetMetadataAsync(articleId.Value);
             if (named == null)
                 return [ErrorBlock($"article {articleId} not found")];
