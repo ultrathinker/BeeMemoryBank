@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 1.0.13: blind node console password, a link in Admin, clear errors (2026-09-30)
+
+No sync protocol or database change; devices on 1.0.12 keep syncing. Only the full node (server, desktop)
+and the blind node image change; the Android app is unchanged.
+
+- **The blind node console can change its password.** A new "Console password" section asks for the
+  current password (through the same sign-in, with the same attempt limit and lockout), refuses a short new
+  one first, and ends every other browser session. A change made with `bmb blind init` ends them too.
+- **The console password is the default backup (restic) password.** It is taken as the restic password
+  only while no repository exists; after that the restic password is fixed by the repository. The settings
+  refuse another restic password wherever a repository exists (a folder repository is recognised by its
+  `config` file, a bucket once saved counts as existing, a folder that cannot be inspected counts as
+  existing) and say what to do: point the backup at a new repository and enter its password in the same
+  save. Creating the repository and pinning its password are one step, so a backup that starts while the
+  password changes can no longer orphan it. If the backup settings cannot be read, the console password is
+  not changed.
+- **Admin has a "Blind nodes" card** that opens the Blind nodes page (superadmin only).
+- **The Blind nodes page explains what is wrong.** A failed add no longer clears the pair code and says,
+  per device, what to do: for example that a device has not been seen on the current version for over 7
+  days, and that it must be updated and opened once, or removed under Admin, Nodes. Unreachable address,
+  expired code, busy node, no disk space and a locked vault have their own plain sentences.
+
 #### 1.0.12: blind nodes, recovery by master password, offline re-key (2026-09-29)
 
 **Update every device together: 1.0.12 speaks sync protocol 3 and does not sync with 1.0.11 or older.**
