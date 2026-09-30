@@ -57,6 +57,13 @@ public class BlobRepository(DbConnectionFactory factory) : BaseRepository(factor
             "SELECT data FROM tbl_blob WHERE hash = @hash", new { hash });
     }
 
+    public async Task<long?> GetLengthAsync(string hash)
+    {
+        using var conn = OpenConnection();
+        return await conn.QuerySingleOrDefaultAsync<long?>(
+            "SELECT length(data) FROM tbl_blob WHERE hash = @hash", new { hash });
+    }
+
     public async Task<HashSet<string>> GetExistingAsync(IReadOnlyCollection<string> hashes)
     {
         var found = new HashSet<string>(StringComparer.Ordinal);

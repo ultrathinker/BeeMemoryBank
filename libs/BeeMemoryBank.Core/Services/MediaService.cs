@@ -177,6 +177,19 @@ public class MediaService(
         return media;
     }
 
+    /// <summary>
+    /// The plaintext size the stored bytes actually have: the blob's length (asked of the database,
+    /// not loaded) less the GCM tag. <see cref="Media.FileSize"/> is only what the row claims. Null when
+    /// the row has no blob to ask about (no blob store, or the bytes are in the legacy .enc file).
+    /// </summary>
+    public async Task<long?> GetStoredSizeAsync(Media media)
+    {
+        if (blobRepo == null || string.IsNullOrEmpty(media.CiphertextSha256))
+            return null;
+        var length = await blobRepo.GetLengthAsync(media.CiphertextSha256);
+        return length == null ? null : Math.Max(0, length.Value - CryptoConstants.TagSize);
+    }
+
     public async Task<(byte[] data, string contentType, string fileName)?> GetContentAsync(Guid id)
     {
         var media = await mediaRepo.GetByIdAsync(id);

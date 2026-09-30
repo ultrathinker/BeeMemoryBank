@@ -42,6 +42,16 @@ public class BlobRepositoryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetLength_IsTheStoredByteCount_AndNullForAnUnknownHash()
+    {
+        var data = new byte[70_000];
+        var hash = await _repo.StoreAsync(data);
+
+        (await _repo.GetLengthAsync(hash)).Should().Be(70_000);
+        (await _repo.GetLengthAsync(BlobHash.Compute([9, 9, 9]))).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Hash_MatchesSqliteSha256Function()
     {
         // Migration 016 backfilled tbl_blob with SQLite's sha256(); everything written since uses

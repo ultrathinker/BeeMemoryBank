@@ -35,6 +35,7 @@ public class McpToolsTests : IAsyncLifetime
     private BeeWriteTools _writeTools = null!;
     private BeeUploadTools _uploadTools = null!;
     private MediaService _mediaService = null!;
+    private CountingBlobRepository _blobs = null!;
     private IndexBuilder _indexBuilder = null!;
 
     private const string Password = "mcpTestPassword";
@@ -73,7 +74,7 @@ public class McpToolsTests : IAsyncLifetime
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
         // Real EventLogger + BlobRepository so media ciphertext lands in the blob store as in production
         // (media has no .enc file any more); bee_get_file reads the bytes back.
-        var blobRepo = new BlobRepository(_factory);
+        var blobRepo = _blobs = new CountingBlobRepository(new BlobRepository(_factory));
         var mediaEventLogger = new EventLogger(nodeRepo, new EventLogRepository(_factory), clock, new NullActorProvider(), new SyncTrigger(), _session, blobRepo);
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, mediaEventLogger, mediaOptions, _factory, new ImageSharpImageTranscoder(), blobRepo: blobRepo);
 
@@ -1028,6 +1029,21 @@ public class McpToolsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BeeGetFile_RowThatUnderReportsItsSize_IsRefusedBeforeTheBlobIsLoaded()
+    {
+        var article = await _articleService.CreateAsync("Liar Host", "/Files", [], "body");
+        var big = await _mediaService.CreateAsync("big.bin", "application/octet-stream", new byte[TenMb + 1], article.Id, isAttachment: true);
+        using (var conn = _factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_media SET file_size = 100 WHERE id = @id", new { id = big.Id });
+        var readsBefore = _blobs.Reads;
+
+        var text = ErrorOf(await GetFile(("id", big.Id)));
+
+        text.Should().Contain("big.bin").And.Contain((TenMb + 1).ToString());
+        _blobs.Reads.Should().Be(readsBefore, "the cap is applied to the stored length, asked of the database, before the blob is loaded");
+    }
+
+    [Fact]
     public async Task BeeGetFile_ExactlyAtTheCap_IsServed()
     {
         var article = await _articleService.CreateAsync("Cap Host", "/Files", [], "body");
@@ -1150,4 +1166,17 @@ public class McpToolsTests : IAsyncLifetime
         result.Should().Contain("bee_save_media");
     }
 
+    /// <summary>The real blob store, counting how often blob bytes are loaded.</summary>
+    private sealed class CountingBlobRepository(IBlobRepository inner) : IBlobRepository
+    {
+        public int Reads { get; private set; }
+
+        public Task<string> StoreAsync(byte[] data, System.Data.IDbTransaction? transaction = null) => inner.StoreAsync(data, transaction);
+        public Task<byte[]?> GetAsync(string hash) { Reads++; return inner.GetAsync(hash); }
+        public Task<long?> GetLengthAsync(string hash) => inner.GetLengthAsync(hash);
+        public Task<HashSet<string>> GetExistingAsync(IReadOnlyCollection<string> hashes) => inner.GetExistingAsync(hashes);
+        public Task<List<BeeMemoryBank.Core.Models.StoredBlob>> GetManyAsync(IReadOnlyCollection<string> hashes, long byteBudget) => inner.GetManyAsync(hashes, byteBudget);
+        public Task<int> SweepUnreferencedAsync(DateTime createdBefore) => inner.SweepUnreferencedAsync(createdBefore);
+        public Task<(long Count, long Bytes)> GetStatsAsync() => inner.GetStatsAsync();
+    }
 }

@@ -29,6 +29,12 @@ public interface IBlobRepository
 
     Task<byte[]?> GetAsync(string hash);
 
+    /// <summary>
+    /// The byte length of a stored blob, asked of the database without loading the bytes; null when
+    /// the hash is not stored. Lets a caller refuse an oversized blob before reading it.
+    /// </summary>
+    Task<long?> GetLengthAsync(string hash);
+
     /// <summary>Which of <paramref name="hashes"/> this node already has.</summary>
     Task<HashSet<string>> GetExistingAsync(IReadOnlyCollection<string> hashes);
 

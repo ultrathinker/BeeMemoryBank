@@ -669,9 +669,12 @@ public class BeeReadTools(
                 return [new TextContentBlock { Text = ProtectedArticleFileError }];
         }
 
-        // Refuse on the row's size before decrypting; the decrypted length is checked again below.
-        if (media.FileSize > MaxGetFileBytes)
-            return [FileTooLargeBlock(media.FileName, media.FileSize)];
+        // Refuse before loading and decrypting anything: on the larger of the size the row claims and the
+        // size the stored blob really has (the database reports its length without reading it). The
+        // decrypted length is checked once more below.
+        var size = Math.Max(media.FileSize, await mediaService.GetStoredSizeAsync(media) ?? 0);
+        if (size > MaxGetFileBytes)
+            return [FileTooLargeBlock(media.FileName, size)];
 
         var content = await mediaService.GetContentAsync(mediaId.Value);
         if (content == null)
