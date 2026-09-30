@@ -37,6 +37,13 @@ public static class BlindConsoleEndpoints
                 return Results.BadRequest(new ErrorResponse(
                     "a console password is already set without a current password offered",
                     ErrorCodes.ConsolePasswordAlreadySet));
+            // The console password is also the default restic password, so the backup settings are read BEFORE
+            // anything changes: a file this node cannot read refuses the change, and nothing is half-applied.
+            if (!backupSettings.TryLoad(out _, out var unreadable))
+                return Results.Json(new ErrorResponse(
+                    $"The console password was not changed: the backup settings ({unreadable}) cannot be read, and the console password " +
+                    "is also the default restic password. Fix or restore blind/settings.json in the node's data folder " +
+                    "(permissions or content), then try again."), statusCode: StatusCodes.Status409Conflict);
             if (!auth.TrySetPassword(req.CurrentPassword, req.NewPassword))
                 return Results.BadRequest(new ErrorResponse("the current console password is wrong"));
             // The console password is also the default restic password. The plaintext is in hand

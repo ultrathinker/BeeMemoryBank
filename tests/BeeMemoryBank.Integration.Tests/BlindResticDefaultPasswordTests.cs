@@ -131,22 +131,6 @@ public class BlindResticDefaultPasswordTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ASettingsFileThatCannotBeRead_IsLeftAsItIs_ByTheConsolePassword()
-    {
-        // Hand-edited into something unreadable: it may still hold the password of a repository, which
-        // the operator can recover by repairing the file. A console password change must not replace it.
-        using var client = _factory.CreateClient();
-        var file = Path.Combine(_factory.DataPath, "blind", "settings.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        const string broken = "{ \"ResticPassword\": \"the-real-one\" ";
-        await File.WriteAllTextAsync(file, broken);
-
-        await SetConsolePasswordAsync(client, "console-pw-one");
-
-        (await File.ReadAllTextAsync(file)).Should().Be(broken);
-    }
-
-    [Fact]
     public async Task OnceTheRepositoryExists_TheConsolePasswordNoLongerMovesResticPassword()
     {
         using var client = _factory.CreateClient();

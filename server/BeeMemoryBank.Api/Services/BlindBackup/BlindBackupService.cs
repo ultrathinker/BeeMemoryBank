@@ -193,7 +193,7 @@ public sealed class BlindBackupService(
         // here, and one that arrives from now on waits its turn (AdoptConsolePassword skips): the
         // repository is created with the password the settings keep.
         using var lease = await settingsStore.EnterRepositoryAsync(ct);
-        if (settingsStore.TryLoad(out var latest) && latest.RepositoryKey() == s.RepositoryKey()
+        if (settingsStore.TryLoad(out var latest, out _) && latest.RepositoryKey() == s.RepositoryKey()
             && !string.IsNullOrEmpty(latest.ResticPassword))
             s.ResticPassword = latest.ResticPassword;
         var probe = await RunResticAsync(

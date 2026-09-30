@@ -19,12 +19,21 @@ public sealed class BlindBackupSettingsStore(string dataPath)
 
     // Unreadable settings fall back to defaults rather than crashing the node: an operator can then
     // repair the configuration through the console instead of losing the node.
-    public BlindBackupSettings Load() => TryLoad(out var settings) ? settings : new BlindBackupSettings();
+    public BlindBackupSettings Load() => TryLoad(out var settings, out _) ? settings : new BlindBackupSettings();
 
-    /// <summary>False when the file exists but cannot be read; the settings are then the defaults.</summary>
-    public bool TryLoad(out BlindBackupSettings settings)
+    /// <summary>
+    /// False when the settings cannot be read (not JSON, no permission, held by another process, a
+    /// directory in the file's place); <paramref name="problem"/> says why and the settings are the defaults.
+    /// </summary>
+    public bool TryLoad(out BlindBackupSettings settings, out string? problem)
     {
         settings = new BlindBackupSettings();
+        problem = null;
+        if (Directory.Exists(FilePath))
+        {
+            problem = "a folder is where the file should be";
+            return false;
+        }
         if (!File.Exists(FilePath)) return true;
         try
         {
@@ -33,8 +42,9 @@ public sealed class BlindBackupSettingsStore(string dataPath)
             settings.RepoInUse = false;
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
+            problem = ex is JsonException ? "its content is not valid" : ex.Message;
             return false;
         }
     }
@@ -79,7 +89,7 @@ public sealed class BlindBackupSettingsStore(string dataPath)
     {
         lock (_write)
         {
-            if (!TryLoad(out var s)) return false;
+            if (!TryLoad(out var s, out _)) return false;
             if (!change(s)) return false;
             Save(s);
             return true;
@@ -150,8 +160,10 @@ public sealed class BlindBackupSettingsStore(string dataPath)
                 return true;
             });
         }
-        catch (SettingsClosedException)
+        catch (Exception ex) when (ex is SettingsClosedException or IOException or UnauthorizedAccessException)
         {
+            // The settings were readable a moment ago (the handler checked) and cannot be written now: the
+            // console password is changed, the restic password stays as it was: the safe direction.
             return false;
         }
     }
