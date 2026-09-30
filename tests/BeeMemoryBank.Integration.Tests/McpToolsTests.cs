@@ -1075,6 +1075,70 @@ public class McpToolsTests : IAsyncLifetime
         ErrorOf(await GetFile(("id", pdf.Id)));
     }
 
+    // ───── files of a protected (password) article ─────
+    //
+    // Media is wrapped by the master key, not by the article's passphrase. Locally the two rules
+    // keep them apart (ProtectAsync refuses an article that has media, MediaService.CreateAsync
+    // refuses a protected article), but a synced article_update can protect an article that holds
+    // media here, and a synced media_create can name a protected article. The rows below are that state.
+
+    private async Task<(Guid ArticleId, Core.Models.Media Pdf)> ProtectedArticleWithPdfAsync()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+        using var conn = _factory.CreateConnection();
+        await conn.ExecuteAsync("UPDATE tbl_article SET protected = 1 WHERE id = @id", new { id = articleId });
+        return (articleId, pdf);
+    }
+
+    [Fact]
+    public async Task ProtectAsync_RefusesAnArticleThatHasMedia()
+    {
+        var (articleId, _) = await ArticleWithPdfAsync();
+
+        var protect = () => _articleService.ProtectAsync(articleId, "protectPass", null);
+
+        (await protect.Should().ThrowAsync<InvalidOperationException>()).WithMessage("*attached media*");
+    }
+
+    [Fact]
+    public async Task BeeGetFile_FileOfAProtectedArticle_IsRefused_ByIdAndByName()
+    {
+        var (articleId, pdf) = await ProtectedArticleWithPdfAsync();
+
+        foreach (var blocks in new[]
+        {
+            await GetFile(("id", pdf.Id)),
+            await GetFile(("articleId", articleId), ("fileName", "report.pdf")),
+            await GetFile(("articleId", articleId), ("fileName", "no-such-name.pdf")),
+        })
+            ErrorOf(blocks).Should().Contain("password-protected").And.Contain("web or mobile UI");
+    }
+
+    [Fact]
+    public async Task BeeGetImage_ImageOfAProtectedArticle_IsRefused()
+    {
+        var article = await _articleService.CreateAsync("Protected Image Host", "/Files", [], "body");
+        var image = await _mediaService.CreateAsync("pic.png", "image/png", Convert.FromBase64String(MinimalPngBase64), article.Id);
+        using (var conn = _factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_article SET protected = 1 WHERE id = @id", new { id = article.Id });
+
+        var blocks = await McpToolInvoker.CallAsync(_readTools, "bee_get_image", ("id", image.Id));
+
+        ErrorOf(blocks).Should().Contain("password-protected").And.Contain("web or mobile UI");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BeeGetArticle_ProtectedArticleHoldingMedia_ListsNoFiles(bool content)
+    {
+        var (articleId, _) = await ProtectedArticleWithPdfAsync();
+
+        var obj = JsonDocument.Parse(await _readTools.GetArticle(articleId, content)).RootElement;
+
+        obj.TryGetProperty("files", out _).Should().BeFalse();
+    }
+
     // ───── bee_get_upload_script ─────────────────────────────────────────────
 
     [Fact]

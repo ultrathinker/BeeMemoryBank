@@ -229,7 +229,7 @@ public class BeeReadTools(
                     relatedCount,
                     relatedStrength,
                     content = gate.Content,
-                    files = await ListFilesAsync(id),
+                    files = await ListFilesAsync(article),
                     createdAt = article.CreatedAt,
                     updatedAt = article.UpdatedAt
                 }, JsonOptsSkipNulls));
@@ -243,7 +243,7 @@ public class BeeReadTools(
                     tags,
                     relatedCount,
                     relatedStrength,
-                    files = await ListFilesAsync(id),
+                    files = await ListFilesAsync(article),
                     createdAt = article.CreatedAt,
                     updatedAt = article.UpdatedAt
                 }, JsonOptsSkipNulls));
@@ -251,10 +251,13 @@ public class BeeReadTools(
     }
 
     // One entry per media item of the article, metadata only; null (so the field is omitted) when
-    // there are none. Same source as GET /api/articles/{id}/media, which applies the caller's folder scope.
-    private async Task<object[]?> ListFilesAsync(Guid articleId)
+    // there are none or the article is protected (its files are not offered, see ProtectedArticleFileError).
+    // Same source as GET /api/articles/{id}/media, which applies the caller's folder scope.
+    private async Task<object[]?> ListFilesAsync(BeeMemoryBank.Core.Models.Article article)
     {
-        var media = await mediaService.GetByArticleIdAsync(articleId);
+        if (article.Protected)
+            return null;
+        var media = await mediaService.GetByArticleIdAsync(article.Id);
         if (media.Count == 0)
             return null;
         return media
@@ -504,6 +507,8 @@ public class BeeReadTools(
             var article = await articleService.GetMetadataAsync(media.ArticleId.Value);
             if (article == null)
                 return [new TextContentBlock { Text = "Error: access denied" }];
+            if (article.Protected)
+                return [new TextContentBlock { Text = ProtectedArticleFileError }];
         }
 
         byte[] data;
@@ -593,6 +598,12 @@ public class BeeReadTools(
         return [new TextContentBlock { Text = $"Error: image too large to fit within {maxSizeKb}KB limit" }];
     }
 
+    // Media is wrapped by the master key, not by an article's passphrase, so a file linked to a
+    // protected article (attached before it was protected, or received through sync) must not reach an
+    // agent. bee_get_image and bee_get_file share this answer.
+    private const string ProtectedArticleFileError =
+        "Error: this file belongs to a password-protected article and can only be opened by a person in the web or mobile UI.";
+
     // Largest file bee_get_file returns. The bytes travel base64-encoded inside the tool result and
     // the whole result lands in the client's context, so this bounds that, not storage (uploads go to 20 MB).
     public const long MaxGetFileBytes = 10 * 1024 * 1024;
@@ -627,8 +638,11 @@ public class BeeReadTools(
         {
             if (articleId == null || string.IsNullOrEmpty(fileName))
                 return [ErrorBlock("pass the media 'id', or 'articleId' together with 'fileName'.")];
-            if (await articleService.GetMetadataAsync(articleId.Value) == null)
+            var named = await articleService.GetMetadataAsync(articleId.Value);
+            if (named == null)
                 return [ErrorBlock($"article {articleId} not found")];
+            if (named.Protected)
+                return [new TextContentBlock { Text = ProtectedArticleFileError }];
 
             var matches = (await mediaService.GetByArticleIdAsync(articleId.Value))
                 .Where(m => m.FileName == fileName).ToList();
@@ -651,6 +665,8 @@ public class BeeReadTools(
             var article = await articleService.GetMetadataAsync(media.ArticleId.Value);
             if (article == null)
                 return [ErrorBlock("access denied")];
+            if (article.Protected)
+                return [new TextContentBlock { Text = ProtectedArticleFileError }];
         }
 
         // Refuse on the row's size before decrypting; the decrypted length is checked again below.
