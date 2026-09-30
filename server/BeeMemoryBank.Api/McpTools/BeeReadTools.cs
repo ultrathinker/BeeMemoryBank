@@ -33,6 +33,12 @@ public class BeeReadTools(
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
+    // For answers where an optional field (bee_get_article's 'files') must be absent, not null.
+    private static readonly JsonSerializerOptions JsonOptsSkipNulls = new(JsonOpts)
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
     // Shared by bee_list_articles' updatedAfter and bee_get_article_diff's baselineAt. RoundtripKind
     // preserves whatever Kind the input string implies (Z-suffixed -> Utc, bare -> Unspecified) so the
     // resulting DateTime re-serializes via the global Dapper DateTimeTypeHandler ("o" format) back into
@@ -121,9 +127,11 @@ public class BeeReadTools(
     [Description(
         "Get an article (full body by default). Pass content=false for metadata only.\n" +
         "Returns JSON: { id, title, treePath, tags, relatedCount, relatedStrength, createdAt, updatedAt" +
-        "[, content] }. 'tags' is a string array of tag names on the article. 'relatedCount' = how many " +
+        "[, content][, files] }. 'tags' is a string array of tag names on the article. 'relatedCount' = how many " +
         "other articles share at least one tag with this one; 'relatedStrength' = total sum of shared-tag " +
-        "counts across all related articles.\n" +
+        "counts across all related articles. 'files' is present only when the article has attached files " +
+        "(images and attachments), also with content=false: [{ mediaId, fileName, contentType, sizeBytes, " +
+        "kind ('image' or 'attachment'), createdAt }] — metadata only, never the file bytes.\n" +
         "Soft-deleted articles return \"Error: article {id} was deleted\" (distinct from " +
         "\"not found\" for a nonexistent id), for callers with access to the article's folder.")]
     public async Task<string> GetArticle(
@@ -221,9 +229,10 @@ public class BeeReadTools(
                     relatedCount,
                     relatedStrength,
                     content = gate.Content,
+                    files = await ListFilesAsync(id),
                     createdAt = article.CreatedAt,
                     updatedAt = article.UpdatedAt
-                }, JsonOpts));
+                }, JsonOptsSkipNulls));
 
             default: // Ok, metadata only (content=false)
                 return responseManager.ProcessResponse(JsonSerializer.Serialize(new
@@ -234,10 +243,32 @@ public class BeeReadTools(
                     tags,
                     relatedCount,
                     relatedStrength,
+                    files = await ListFilesAsync(id),
                     createdAt = article.CreatedAt,
                     updatedAt = article.UpdatedAt
-                }, JsonOpts));
+                }, JsonOptsSkipNulls));
         }
+    }
+
+    // One entry per media item of the article, metadata only; null (so the field is omitted) when
+    // there are none. Same source as GET /api/articles/{id}/media, which applies the caller's folder scope.
+    private async Task<object[]?> ListFilesAsync(Guid articleId)
+    {
+        var media = await mediaService.GetByArticleIdAsync(articleId);
+        if (media.Count == 0)
+            return null;
+        return media
+            .OrderBy(m => m.CreatedAt).ThenBy(m => m.FileName, StringComparer.Ordinal)
+            .Select(m => (object)new
+            {
+                mediaId = m.Id,
+                fileName = m.FileName,
+                contentType = m.ContentType,
+                sizeBytes = m.FileSize,
+                kind = m.Kind,
+                createdAt = m.CreatedAt
+            })
+            .ToArray();
     }
 
     [McpServerTool(Name = "bee_get_tree")]

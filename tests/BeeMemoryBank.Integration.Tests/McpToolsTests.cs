@@ -337,6 +337,68 @@ public class McpToolsTests : IAsyncLifetime
         result.Should().StartWith("Error:");
     }
 
+    // ───── bee_get_article: files ────────────────────────────────────────────
+
+    private static readonly byte[] PdfBytes = "%PDF-1.4 tiny"u8.ToArray();
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BeeGetArticle_WithMedia_ListsOneFilesEntryPerMediaItem(bool content)
+    {
+        var article = await _articleService.CreateAsync("Files Host", "/Files", [], "body");
+        var image = await _mediaService.CreateAsync("pic.png", "image/png", Convert.FromBase64String(MinimalPngBase64), article.Id);
+        var pdf = await _mediaService.CreateAsync("report.pdf", "application/pdf", PdfBytes, article.Id, isAttachment: true);
+
+        var result = await _readTools.GetArticle(article.Id, content);
+
+        var files = JsonDocument.Parse(result).RootElement.GetProperty("files").EnumerateArray().ToList();
+        files.Should().HaveCount(2);
+        foreach (var expected in new[] { image, pdf })
+        {
+            var entry = files.Single(f => f.GetProperty("mediaId").GetGuid() == expected.Id);
+            entry.GetProperty("fileName").GetString().Should().Be(expected.FileName);
+            entry.GetProperty("contentType").GetString().Should().Be(expected.ContentType);
+            entry.GetProperty("sizeBytes").GetInt64().Should().Be(expected.FileSize);
+            entry.GetProperty("kind").GetString().Should().Be(expected.Kind);
+            entry.GetProperty("createdAt").GetDateTimeOffset().Should().BeCloseTo(expected.CreatedAt, TimeSpan.FromSeconds(1));
+        }
+        files.Select(f => f.GetProperty("kind").GetString()).Should().BeEquivalentTo(["image", "attachment"]);
+        // Metadata only: nothing of the file itself travels in the article answer.
+        result.Should().NotContain(Convert.ToBase64String(PdfBytes));
+    }
+
+    [Fact]
+    public async Task BeeGetArticle_WithoutMedia_HasNoFilesField()
+    {
+        var article = await _articleService.CreateAsync("No Files", "/Files", [], "body");
+
+        foreach (var content in new[] { true, false })
+        {
+            var obj = JsonDocument.Parse(await _readTools.GetArticle(article.Id, content)).RootElement;
+            obj.TryGetProperty("files", out _).Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task BeeGetArticle_WhenLocked_HasNoFilesField()
+    {
+        var article = await _articleService.CreateAsync("Locked Files", "/Files", [], "body");
+        await _mediaService.CreateAsync("report.pdf", "application/pdf", PdfBytes, article.Id, isAttachment: true);
+        _session.Lock();
+        try
+        {
+            var obj = JsonDocument.Parse(await _readTools.GetArticle(article.Id)).RootElement;
+
+            obj.GetProperty("isLocked").GetBoolean().Should().BeTrue();
+            obj.TryGetProperty("files", out _).Should().BeFalse();
+        }
+        finally
+        {
+            await _session.UnlockAsync(Password);
+        }
+    }
+
     // ───── bee_get_tree ──────────────────────────────────────────────────────
 
     [Fact]

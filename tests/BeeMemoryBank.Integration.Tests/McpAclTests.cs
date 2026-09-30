@@ -32,6 +32,7 @@ public class McpAclTests : IAsyncLifetime
     private DbConnectionFactory _factory = null!;
     private SessionService _session = null!;
     private ArticleService _articleService = null!;
+    private MediaService _mediaService = null!;
 
     private BeeSearchTools _searchTools = null!;
     private BeeReadTools _readTools = null!;
@@ -80,6 +81,7 @@ public class McpAclTests : IAsyncLifetime
         _conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
         var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory, new ImageSharpImageTranscoder());
+        _mediaService = mediaService;
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), _conceptTagService, _factory);
         _indexBuilder = new IndexBuilder();
@@ -276,6 +278,41 @@ public class McpAclTests : IAsyncLifetime
 
         result.Should().Be("Error: article " + secret.Id + " not found");
         result.Should().NotContain("classified info");
+        ClearCaller();
+    }
+
+    [Fact]
+    public async Task Acl_BeeGetArticle_FilesOfASecretArticle_AreNotListed()
+    {
+        var secret = await _articleService.CreateAsync("Secret Files", "/Secret", [], "top secret");
+        await _mediaService.CreateAsync("plans.pdf", "application/pdf", "%PDF-1.4 tiny"u8.ToArray(), secret.Id, isAttachment: true);
+
+        await SetRestrictedCaller();
+        var result = await _readTools.GetArticle(secret.Id, content: false);
+
+        result.Should().Be("Error: article " + secret.Id + " not found");
+        result.Should().NotContain("plans.pdf");
+        ClearCaller();
+    }
+
+    [Fact]
+    public async Task Acl_BeeGetArticle_AccessDeniedAnswer_HasNoFilesField()
+    {
+        // The AccessDenied answer (metadata visible, body withheld) is reached when the ambient scope
+        // lets the article through but the caller's own folder ACL denies it -- here the restricted
+        // user's identity arrives on the request while the scope holder is still the system scope.
+        var secret = await _articleService.CreateAsync("Secret Files 2", "/Secret", [], "top secret");
+        await _mediaService.CreateAsync("plans.pdf", "application/pdf", "%PDF-1.4 tiny"u8.ToArray(), secret.Id, isAttachment: true);
+        var ctx = new DefaultHttpContext();
+        ctx.Request.Headers["X-User-Id"] = _restrictedUserId.ToString();
+        ctx.Request.Headers["X-User-Role"] = "user";
+        _httpContextAccessor.HttpContext = ctx;
+
+        var result = await _readTools.GetArticle(secret.Id, content: true);
+
+        var obj = JsonDocument.Parse(result).RootElement;
+        obj.GetProperty("accessDenied").GetBoolean().Should().BeTrue();
+        obj.TryGetProperty("files", out _).Should().BeFalse();
         ClearCaller();
     }
 
