@@ -37,6 +37,8 @@ public sealed class BlindConsoleAuthService(
         [JsonPropertyName("logins")] public List<LoginEntry> Logins { get; set; } = [];
         /// <summary>Set once, when the fifth failure lands; nothing moves it until it passes.</summary>
         [JsonPropertyName("locked_until")] public DateTime? LockedUntil { get; set; }
+        /// <summary>Bumped on every password change, by whoever makes it: a console session is valid for one generation only.</summary>
+        [JsonPropertyName("generation")] public long Generation { get; set; }
     }
 
     public sealed class LoginEntry
@@ -72,6 +74,12 @@ public sealed class BlindConsoleAuthService(
         lock (_sync) return Load().HashB64 is not null;
     }
 
+    /// <summary>The password generation the console stamps on a session at sign-in and compares on every request.</summary>
+    public long Generation()
+    {
+        lock (_sync) return Load().Generation;
+    }
+
     /// <summary>
     /// Sets (or replaces) the console password. Replacing requires the current one — except the
     /// very first set, which is the pairing-time initialization done by <c>bmb blind init</c>.
@@ -97,6 +105,7 @@ public sealed class BlindConsoleAuthService(
             var hash = Hash(newPassword, salt);
             s.HashB64 = Convert.ToBase64String(hash);
             s.SaltB64 = Convert.ToBase64String(salt);
+            s.Generation++;
             s.Logins.Insert(0, new LoginEntry { At = Now, Outcome = "password-set", Remote = null });
             Trim(s);
             Save(s);

@@ -55,9 +55,15 @@ public static class BlindConsoleEndpoints
         group.MapPost("/login", (LoginRequest req, BlindConsoleAuthService auth, HttpContext ctx) =>
         {
             var remote = req.Remote is { Length: > 0 and <= 64 } r ? r : ctx.Connection.RemoteIpAddress?.ToString();
+            // Read BEFORE the verification: a password change in between leaves the session one
+            // generation behind (refused at its first request), never ahead.
+            var generation = auth.Generation();
             var (ok, locked) = auth.Verify(req.Password ?? "", remote);
-            return Results.Ok(new { ok, locked });
+            return Results.Ok(new { ok, locked, generation });
         });
+
+        // The console asks on every request: a session of another generation is over.
+        group.MapGet("/generation", (BlindConsoleAuthService auth) => Results.Ok(new { generation = auth.Generation() }));
 
         group.MapGet("/logins", (BlindConsoleAuthService auth) =>
             Results.Ok(auth.RecentLogins()));

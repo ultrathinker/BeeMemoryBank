@@ -111,6 +111,20 @@ public class BlindConsolePasswordTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task APasswordChangeMadeDirectlyAtTheApi_AsBmbBlindInitDoes_EndsEveryBrowserSession()
+    {
+        using var one = await SignInAsync();
+        using var two = await SignInAsync();
+
+        (await _api.PostAsJsonAsync("/api/blind/console/password", new { currentPassword = Old, newPassword = New }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        (await one.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "a session opened with the old password must not outlive it, whoever changed it");
+        (await two.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await CanSignInAsync(New)).Should().BeTrue();
+    }
+    [Fact]
     public async Task WrongCurrentPassword_IsRefused_ChangesNothing_AndCountsTowardTheLockout()
     {
         using var page = await SignInAsync();

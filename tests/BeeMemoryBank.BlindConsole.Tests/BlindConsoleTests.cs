@@ -23,12 +23,20 @@ public class BlindConsoleTests : IDisposable
         /// status call must not also change what /login answers — LoginAsync depends on it).</summary>
         public (int, string) Answer { get; set; } = (200, "{}");
         public (int, string) LoginAnswer { get; set; } = (200, """{"ok":true}""");
+        /// <summary>The Api's password generation: every accepted password change bumps it, as the real one does.</summary>
+        public long Generation { get; set; }
+        public bool GenerationFails { get; set; }
 
         public Task<(int Status, string Content, string ContentType)> SendAsync(
             string method, string path, string? jsonBody, CancellationToken ct)
         {
+            if (path == "api/blind/console/generation")
+                return Task.FromResult(GenerationFails
+                    ? (503, "{}", "application/json")
+                    : (200, $$"""{"generation":{{Generation}}}""", "application/json"));
             Calls.Add((method, path, jsonBody));
             var answer = path == "api/blind/console/login" ? LoginAnswer : Answer;
+            if (path == "api/blind/console/password" && answer.Item1 is >= 200 and < 300) Generation++;
             return Task.FromResult((answer.Item1, answer.Item2, "application/json"));
         }
     }
@@ -316,6 +324,33 @@ public class BlindConsoleTests : IDisposable
         _api.Answer = (200, "{}");
         (await other.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.OK,
             "nothing changed, nobody is signed out");
+    }
+
+    [Fact]
+    public async Task ASessionOfAnOlderPasswordGeneration_IsRefused_WhoeverChangedThePassword()
+    {
+        using var client = await LoginAsync();
+        _api.Generation++; // `bmb blind init` or a direct call changed the password at the Api
+
+        (await client.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        _api.Generation--;
+        (await client.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "an ended session does not come back");
+    }
+
+    [Fact]
+    public async Task WhenTheGenerationCannotBeRead_TheRequestIsRefused_ButTheSessionSurvives()
+    {
+        using var client = await LoginAsync();
+        _api.GenerationFails = true;
+        _api.Calls.Clear();
+
+        (await client.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        _api.Calls.Should().BeEmpty("nothing is forwarded on a session that cannot be checked");
+
+        _api.GenerationFails = false;
+        (await client.GetAsync("/proxy/api/blind/status")).StatusCode.Should().Be(HttpStatusCode.OK,
+            "an Api that hiccups does not sign everybody out for good");
     }
 
     [Fact]

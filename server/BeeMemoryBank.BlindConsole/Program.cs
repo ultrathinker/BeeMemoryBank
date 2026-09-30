@@ -91,7 +91,7 @@ var allowed = new HashSet<(string Method, string Path)>
 app.MapPost("/login", async (HttpContext ctx) =>
 {
     var password = await ReadPasswordAsync(ctx);
-    var (ok, locked) = await VerifyAsync(password, ctx);
+    var (ok, locked, generation) = await VerifyAsync(password, ctx);
     if (!ok)
     {
         ctx.Response.StatusCode = 401;
@@ -99,7 +99,7 @@ app.MapPost("/login", async (HttpContext ctx) =>
         return;
     }
 
-    var token = sessions.Issue();
+    var token = sessions.Issue(generation);
     ctx.Response.Cookies.Append(ApiProxy.CookieName, token, new CookieOptions
     {
         HttpOnly = true,
@@ -125,7 +125,9 @@ app.MapPost("/logout", (HttpContext ctx) =>
 // key even on an allowed route.
 app.MapMethods("/proxy/{*path}", new[] { "GET", "POST", "PUT" }, async (string path, HttpContext ctx) =>
 {
-    if (!sessions.IsValid(ctx.Request.Cookies[ApiProxy.CookieName]))
+    // A session is valid for one password generation: ANY password change (this page, `bmb blind init`,
+    // a direct call) ends the others at their next request. An Api that does not answer ends it too.
+    if (!sessions.IsValid(ctx.Request.Cookies[ApiProxy.CookieName], await CurrentGenerationAsync(ctx)))
         return Results.Unauthorized();
 
     var method = ctx.Request.Method;
@@ -138,7 +140,7 @@ app.MapMethods("/proxy/{*path}", new[] { "GET", "POST", "PUT" }, async (string p
         // "Issue a recovery code" asks for the console password again (plan §9): a restore code hands the
         // whole vault's ciphertext to whoever holds it, so an unattended logged-in tab must not
         // be enough. Verified like a login (journal, attempt limit); the Api gets no password.
-        var (ok, locked) = await VerifyAsync(await ReadPasswordAsync(ctx), ctx);
+        var (ok, locked, _) = await VerifyAsync(await ReadPasswordAsync(ctx), ctx);
         if (!ok)
             return Results.Json(new { error = locked ? "locked" : "wrong console password" },
                 statusCode: locked ? StatusCodes.Status423Locked : StatusCodes.Status401Unauthorized);
@@ -155,7 +157,7 @@ app.MapMethods("/proxy/{*path}", new[] { "GET", "POST", "PUT" }, async (string p
         if (change.New is not { Length: >= 8 })
             return Results.Json(new { error = "the new password must be at least 8 characters" },
                 statusCode: StatusCodes.Status400BadRequest);
-        var (ok, locked) = await VerifyAsync(change.Current, ctx);
+        var (ok, locked, _) = await VerifyAsync(change.Current, ctx);
         if (!ok)
             return Results.Json(new { error = locked ? "locked" : "wrong current password" },
                 statusCode: locked ? StatusCodes.Status423Locked : StatusCodes.Status401Unauthorized);
@@ -168,9 +170,9 @@ app.MapMethods("/proxy/{*path}", new[] { "GET", "POST", "PUT" }, async (string p
     }
 
     var (status, content, contentType) = await proxy.SendAsync(method, path, body, ctx.RequestAborted);
-    // The password changed: every other browser's session ends, this one stays.
-    if (path == "api/blind/console/password" && status is >= 200 and < 300)
-        sessions.DropAllExcept(ctx.Request.Cookies[ApiProxy.CookieName]);
+    // The password changed: this session moves to the new generation, every other one is left behind.
+    if (path == "api/blind/console/password" && status is >= 200 and < 300 && await CurrentGenerationAsync(ctx) is { } changed)
+        sessions.SetGeneration(ctx.Request.Cookies[ApiProxy.CookieName], changed);
     ctx.Response.StatusCode = status;
     ctx.Response.ContentType = contentType;
     await ctx.Response.WriteAsync(content, ctx.RequestAborted);
@@ -213,7 +215,7 @@ static async Task<(string? Current, string? New)> ReadPasswordChangeAsync(HttpCo
 // Verification (Argon2 + attempt limiting + the login journal) lives Api-side: the CLI shares
 // it, and the journal must survive a console restart. The browser's address goes along because
 // the Api only ever sees the console's own connection — a journal of "127.0.0.1" says nothing.
-async Task<(bool Ok, bool Locked)> VerifyAsync(string? password, HttpContext ctx)
+async Task<(bool Ok, bool Locked, long Generation)> VerifyAsync(string? password, HttpContext ctx)
 {
     var (status, body, _) = await proxy.SendAsync("POST", "api/blind/console/login",
         JsonSerializer.Serialize(new { password, remote = ctx.Connection.RemoteIpAddress?.ToString() }),
@@ -223,11 +225,28 @@ async Task<(bool Ok, bool Locked)> VerifyAsync(string? password, HttpContext ctx
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
         return (status == 200 && root.TryGetProperty("ok", out var ok) && ok.GetBoolean(),
-            root.TryGetProperty("locked", out var locked) && locked.ValueKind == JsonValueKind.True);
+            root.TryGetProperty("locked", out var locked) && locked.ValueKind == JsonValueKind.True,
+            root.TryGetProperty("generation", out var generation) && generation.ValueKind == JsonValueKind.Number ? generation.GetInt64() : 0);
     }
     catch (JsonException)
     {
-        return (false, false);
+        return (false, false, 0);
+    }
+}
+
+// The password generation the Api holds now; null when it cannot be read (the session is then refused).
+async Task<long?> CurrentGenerationAsync(HttpContext ctx)
+{
+    try
+    {
+        var (status, body, _) = await proxy.SendAsync("GET", "api/blind/console/generation", null, ctx.RequestAborted);
+        using var doc = JsonDocument.Parse(body);
+        return status == 200 && doc.RootElement.TryGetProperty("generation", out var g) && g.ValueKind == JsonValueKind.Number
+            ? g.GetInt64() : null;
+    }
+    catch (Exception ex) when (ex is HttpRequestException or JsonException)
+    {
+        return null;
     }
 }
 
