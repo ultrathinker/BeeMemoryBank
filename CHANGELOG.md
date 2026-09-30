@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 1.0.14: agents can get the files of an article; the upload script stops creating clients (2026-09-30)
+
+No sync protocol or database change; devices on 1.0.12 and 1.0.13 keep syncing. Server and desktop only; the Android app is unchanged.
+
+- **Agents can get the files of an article.** `bee_get_article` lists the article's files (`files`: id, name, type,
+  size, image or attachment, date; metadata only, also with `content=false`), and the new `bee_get_file` returns one
+  of them as a file: an image as an image, any other file as an embedded resource with its name and type. Pass the
+  media `id`, or `articleId` with `fileName`. Same access rules as `bee_get_image`; files above 10 MB are refused with
+  a plain error. Files of a password-protected article are refused by `bee_get_file` and `bee_get_image` and are not
+  listed. Whether a client shows a non-image file to its model depends on the client.
+- **The upload script no longer creates a new client in the gateway on every use.** It needs `--client-name` (the
+  agent's main client, never a new name) and reports it as the client name; `--bearer` is optional, and `--tool-prefix`
+  (for example `bee-memory-bank__`) lets it call the tools through an MCP gateway. It never follows a redirect, so a
+  bearer cannot be sent on to another host. The usage comment and the descriptions of `bee_get_upload_script` and
+  `bee_save_media` say so.
+
 #### 1.0.13: blind node console password, a link in Admin, clear errors (2026-09-30)
 
 No sync protocol or database change; devices on 1.0.12 keep syncing. Only the full node (server, desktop)
