@@ -19,7 +19,11 @@ namespace BeeMemoryBank.Integration.Tests;
 /// properties get their own tests: it requires BOTH confirmations (console password re-entry and
 /// the node's own name), and it destroys only THIS node's data volume — the restic repository,
 /// wherever it lives, must survive it untouched.
+/// The wipe takes the process-wide HeavyOperationLock, so this class is in the collection that serializes
+/// the others that do (compaction, restore, DEK rotation); without it a compaction test failed on a slow
+/// CI runner with "Another compaction is already in progress" (GitHub Actions, release 1.0.14).
 /// </summary>
+[Collection(HeavyOperationCollection.Name)]
 public class BlindWipeEndpointsTests : IAsyncLifetime
 {
     private readonly BlindNodeFactory _factory = new();
