@@ -57,7 +57,7 @@ BMB_API_URL=http://localhost:5300 ASPNETCORE_URLS=http://localhost:5301 ./BeeMem
 server/
 ├── BeeMemoryBank.Api/       — REST API (33 endpoint groups) + MCP server
 │   ├── Endpoints/           — 39 files, 33 groups: Activity, Admin, Agent, Article, AutoUnlock, BeeImport, Chat (split across 7 files), Comment, Compaction, ConceptTag, Copy, DekRotation, Download, Folder, HardDelete, Init, InternetAccess, Join, Key, Media, ObsidianImport, RemoteAccount, RemoteAuth, Restriction, Search, Session, Snapshot, Sync, Tree, Update, User, Version, Whitelist
-│   ├── McpTools/            — 7 tool groups: Search (2 tools), Read (7), Write (10), Session (2), Upload (2), Audit (1), Concept (8) — 32 tools total
+│   ├── McpTools/            — 7 tool groups: Search (2 tools), Read (8), Write (10), Session (2), Upload (2), Audit (1), Concept (8) — 33 tools total
 │   ├── Middleware/           — AgentAuthMiddleware (bearer → auto-unlock)
 │   ├── Services/            — SyncTokenStore, SnapshotService, HttpActorProvider, DekRotationService, LazySlotRewrapService
 │   └── Models/              — DTOs for endpoints

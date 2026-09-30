@@ -131,7 +131,7 @@ public class BeeReadTools(
         "other articles share at least one tag with this one; 'relatedStrength' = total sum of shared-tag " +
         "counts across all related articles. 'files' is present only when the article has attached files " +
         "(images and attachments), also with content=false: [{ mediaId, fileName, contentType, sizeBytes, " +
-        "kind ('image' or 'attachment'), createdAt }] — metadata only, never the file bytes.\n" +
+        "kind ('image' or 'attachment'), createdAt }] — metadata only, never the file bytes; fetch one with bee_get_file.\n" +
         "Soft-deleted articles return \"Error: article {id} was deleted\" (distinct from " +
         "\"not found\" for a nonexistent id), for callers with access to the article's folder.")]
     public async Task<string> GetArticle(
@@ -592,6 +592,93 @@ public class BeeReadTools(
 
         return [new TextContentBlock { Text = $"Error: image too large to fit within {maxSizeKb}KB limit" }];
     }
+
+    // Largest file bee_get_file returns. The bytes travel base64-encoded inside the tool result and
+    // the whole result lands in the client's context, so this bounds that, not storage (uploads go to 20 MB).
+    public const long MaxGetFileBytes = 10 * 1024 * 1024;
+
+    // What an LLM API accepts as an image block. Any other file, SVG included, is sent as an embedded
+    // resource: an image block with another media type makes the client's next request fail.
+    private static readonly HashSet<string> ImageBlockContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/png", "image/jpeg", "image/gif", "image/webp"
+    };
+
+    [McpServerTool(Name = "bee_get_file")]
+    [Description(
+        "Get a file attached to an article, as the file itself: nothing is converted, extracted or chunked.\n" +
+        "Find files in the 'files' list of bee_get_article and pass the entry's mediaId as 'id'. " +
+        "Alternatively pass 'articleId' + 'fileName' (an error listing the ids comes back when several " +
+        "files of the article share that name).\n" +
+        "Images (PNG, JPEG, GIF, WEBP) are returned unchanged as an inline image content block; every " +
+        "other file as an embedded resource (blob) carrying the file name and its content type. " +
+        "Files above 10 MB are refused with an error; to look at a large image use bee_get_image, which shrinks it.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
+    public async Task<IEnumerable<ContentBlock>> GetFile(
+        [Description("Media ID (GUID): the mediaId of an entry in bee_get_article's 'files' list. Omit when passing articleId + fileName.")] Guid? id = null,
+        [Description("Article ID (GUID). Pass together with fileName instead of id.")] Guid? articleId = null,
+        [Description("File name exactly as listed in the article's 'files'. Pass together with articleId instead of id.")] string? fileName = null)
+    {
+        if (!session.IsUnlocked)
+            return [ErrorBlock("session is locked. Unlock first.")];
+
+        var mediaId = id;
+        if (mediaId == null)
+        {
+            if (articleId == null || string.IsNullOrEmpty(fileName))
+                return [ErrorBlock("pass the media 'id', or 'articleId' together with 'fileName'.")];
+            if (await articleService.GetMetadataAsync(articleId.Value) == null)
+                return [ErrorBlock($"article {articleId} not found")];
+
+            var matches = (await mediaService.GetByArticleIdAsync(articleId.Value))
+                .Where(m => m.FileName == fileName).ToList();
+            if (matches.Count == 0)
+                return [ErrorBlock($"article {articleId} has no file named '{fileName}'. List its files with bee_get_article.")];
+            if (matches.Count > 1)
+                return [ErrorBlock($"article {articleId} has {matches.Count} files named '{fileName}'. " +
+                    $"Pass the id of the one you want: {string.Join(", ", matches.Select(m => m.Id))}.")];
+            mediaId = matches[0].Id;
+        }
+
+        // The same access gate as bee_get_image: the media row and its article's folder must be
+        // visible to the caller, and a deleted article's files are not served.
+        var media = await mediaRepo.GetByIdAsync(mediaId.Value);
+        if (media == null)
+            return [ErrorBlock($"media {mediaId} not found")];
+
+        if (media.ArticleId != null)
+        {
+            var article = await articleService.GetMetadataAsync(media.ArticleId.Value);
+            if (article == null)
+                return [ErrorBlock("access denied")];
+        }
+
+        // Refuse on the row's size before decrypting; the decrypted length is checked again below.
+        if (media.FileSize > MaxGetFileBytes)
+            return [FileTooLargeBlock(media.FileName, media.FileSize)];
+
+        var content = await mediaService.GetContentAsync(mediaId.Value);
+        if (content == null)
+            return [ErrorBlock($"media {mediaId} not found or access denied")];
+        var (data, contentType, name) = content.Value;
+        if (data.Length > MaxGetFileBytes)
+            return [FileTooLargeBlock(name, data.Length)];
+
+        ContentBlock file = ImageBlockContentTypes.Contains(contentType)
+            ? ToImageBlock(data, contentType)
+            : new EmbeddedResourceBlock
+            {
+                Resource = BlobResourceContents.FromBytes(
+                    data, $"bee-media://{media.Id}/{Uri.EscapeDataString(name)}", contentType)
+            };
+        return [new TextContentBlock { Text = $"File: {name} ({contentType}, {data.Length} bytes)" }, file];
+    }
+
+    private static TextContentBlock ErrorBlock(string message) => new() { Text = $"Error: {message}" };
+
+    private static TextContentBlock FileTooLargeBlock(string fileName, long sizeBytes) =>
+        ErrorBlock($"file '{fileName}' is {sizeBytes} bytes, above the {MaxGetFileBytes} bytes " +
+                   $"({MaxGetFileBytes / (1024 * 1024)} MB) limit of bee_get_file.");
 
     private static ImageContentBlock ToImageBlock(byte[] imageBytes, string mimeType)
     {

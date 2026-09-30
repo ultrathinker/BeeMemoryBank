@@ -17,14 +17,15 @@ Search by title, folder names, and optionally full article body content. Does no
 - `bee_search` — `keywords: string` — fast metadata search (title, folder names). Returns: `[{id, title, treePath}]`
 - `bee_search_content` — `keywords: string`, `mode: string?` (`hybrid` default / `keyword` / `semantic`, invalid value is an error) — ranked search of article bodies (BM25 + chunk-embedding semantic similarity via RRF), plus title/folder matches merged in. Requires an unlocked session; degrades to title-only search (with a `notice`) when locked or when ranked/semantic search is unavailable on this node. Returns: `[{id, title, treePath}]`
 
-### bee_list_articles, bee_get_article, bee_get_tree, bee_get_article_versions, bee_get_article_version, bee_get_article_diff, bee_get_image (BeeReadTools.cs)
+### bee_list_articles, bee_get_article, bee_get_tree, bee_get_article_versions, bee_get_article_version, bee_get_article_diff, bee_get_image, bee_get_file (BeeReadTools.cs)
 - `bee_list_articles` — list articles with optional path filter (`treePath: string?`) and `updatedAfter` filter. Returns: `[{id, title, treePath, status, createdAt, updatedAt}]`
-- `bee_get_article` — metadata and optionally decrypted content (`id: Guid`, `content: bool`, default false). Returns: `{id, title, treePath, tags, relatedCount, relatedStrength, content?, createdAt, updatedAt}`
+- `bee_get_article` — metadata and optionally decrypted content (`id: Guid`, `content: bool`, default false). Returns: `{id, title, treePath, tags, relatedCount, relatedStrength, content?, files?, createdAt, updatedAt}`. `files` is present only when the article has attached files, also with `content=false`: `[{mediaId, fileName, contentType, sizeBytes, kind ("image" or "attachment"), createdAt}]`, metadata only
 - `bee_get_tree` — folder tree with their articles (`path: string?`)
 - `bee_get_article_versions` — list version history for an article, metadata only (`id: Guid`). Returns: `[{id, versionNumber, title, treePath, createdAt, updatedBy}]`
 - `bee_get_article_version` — get decrypted content of a specific version (`id: Guid`, `versionNumber: int`). Requires unlocked session. Returns version metadata + decrypted `content`
 - `bee_get_article_diff` — markdown-block diff between an article's current content and its state as of a given baseline timestamp (`id: Guid`, `baselineAt: DateTime`). Requires unlocked session.
 - `bee_get_image` — get an image from an article (`id: Guid`, `maxSizeKb: int?`). Decrypts on the fly and resizes to fit within token limits. Returns image as an inline content block.
+- `bee_get_file` — get a file attached to an article as the file itself (`id: Guid`, or `articleId: Guid` + `fileName: string`; an error lists the ids when several files share the name). Images (PNG, JPEG, GIF, WEBP) come back unchanged as an inline image content block, every other file as an embedded resource (blob) with its file name and content type; nothing is converted or extracted. Same access rules as `bee_get_image`. Files above 10 MB are refused with an error. Requires unlocked session.
 
 ### bee_save_article, bee_update_article, bee_delete_article, bee_append_to_article, bee_prepend_to_article, bee_move_folder, bee_delete_folder, bee_rename_folder, bee_copy_to, bee_replace_in_article (BeeWriteTools.cs)
 - `bee_save_article` — create (`title`, `treePath`, `content`, `tags?`). Auto-creates missing folders in `treePath`. Warns when content exceeds 5000 characters.
@@ -77,7 +78,8 @@ Large responses are automatically truncated:
 server/BeeMemoryBank.Api/McpTools/
 ├── BeeSearchTools.cs    — bee_search, bee_search_content
 ├── BeeReadTools.cs      — bee_list_articles, bee_get_article, bee_get_tree,
-│                          bee_get_article_versions, bee_get_article_version, bee_get_article_diff, bee_get_image
+│                          bee_get_article_versions, bee_get_article_version, bee_get_article_diff, bee_get_image,
+│                          bee_get_file
 ├── BeeWriteTools.cs     — bee_save_article, bee_update_article, bee_delete_article,
 │                          bee_delete_folder, bee_append_to_article, bee_prepend_to_article,
 │                          bee_move_folder, bee_rename_folder, bee_copy_to, bee_replace_in_article
@@ -91,12 +93,12 @@ server/BeeMemoryBank.Api/McpTools/
 └── TokenEstimator.cs    — token estimation for truncation
 ```
 
-## 32 MCP Tools
+## 33 MCP Tools
 
 | Group | Tools |
 |---|---|
 | **Search** (2) | `bee_search`, `bee_search_content` |
-| **Read** (7) | `bee_list_articles`, `bee_get_article`, `bee_get_tree`, `bee_get_image`, `bee_get_article_version`, `bee_get_article_versions`, `bee_get_article_diff` |
+| **Read** (8) | `bee_list_articles`, `bee_get_article`, `bee_get_tree`, `bee_get_image`, `bee_get_file`, `bee_get_article_version`, `bee_get_article_versions`, `bee_get_article_diff` |
 | **Write** (10) | `bee_save_article`, `bee_update_article`, `bee_delete_article`, `bee_append_to_article`, `bee_prepend_to_article`, `bee_move_folder`, `bee_delete_folder`, `bee_copy_to`, `bee_rename_folder`, `bee_replace_in_article` |
 | **Tags** (8) | `bee_get_related`, `bee_search_by_tag`, `bee_list_tags`, `bee_add_tags`, `bee_remove_tag`, `bee_rename_tag`, `bee_merge_tags`, `bee_delete_tag` |
 | **Session** (2) | `bee_set_max_tokens`, `bee_continue` |

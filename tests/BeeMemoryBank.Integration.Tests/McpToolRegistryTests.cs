@@ -26,6 +26,7 @@ public class McpToolRegistryTests
     [InlineData("bee_get_article_version")]
     [InlineData("bee_get_article_diff")]
     [InlineData("bee_get_image")]
+    [InlineData("bee_get_file")]
     [InlineData("bee_save_media")]
     [InlineData("bee_save_article")]
     [InlineData("bee_replace_in_article")]
@@ -71,6 +72,7 @@ public class McpToolRegistryTests
         "bee_get_article_version",
         "bee_get_article_diff",
         "bee_get_image",
+        "bee_get_file",
         "bee_save_media",
         "bee_save_article",
         "bee_replace_in_article",

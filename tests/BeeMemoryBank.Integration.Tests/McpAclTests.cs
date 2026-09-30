@@ -14,6 +14,7 @@ using BeeMemoryBank.Sync;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol.Protocol;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -80,7 +81,11 @@ public class McpAclTests : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(_factory, _scopeHolder);
         _conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
-        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory, new ImageSharpImageTranscoder());
+        // Real EventLogger + BlobRepository so media ciphertext lands in the blob store as in production
+        // (media has no .enc file any more); bee_get_file reads the bytes back.
+        var blobRepo = new BlobRepository(_factory);
+        var mediaEventLogger = new EventLogger(nodeRepo, new EventLogRepository(_factory), clock, new NullActorProvider(), new SyncTrigger(), _session, blobRepo);
+        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, mediaEventLogger, mediaOptions, _factory, new ImageSharpImageTranscoder(), blobRepo: blobRepo);
         _mediaService = mediaService;
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), _conceptTagService, _factory);
@@ -313,6 +318,35 @@ public class McpAclTests : IAsyncLifetime
         var obj = JsonDocument.Parse(result).RootElement;
         obj.GetProperty("accessDenied").GetBoolean().Should().BeTrue();
         obj.TryGetProperty("files", out _).Should().BeFalse();
+        ClearCaller();
+    }
+
+    [Fact]
+    public async Task Acl_BeeGetFile_DeniesSecretFolder_ByIdAndByArticleIdAndFileName()
+    {
+        var secret = await _articleService.CreateAsync("Secret File Host", "/Secret", [], "top secret");
+        var file = await _mediaService.CreateAsync("plans.pdf", "application/pdf", "%PDF-1.4 tiny"u8.ToArray(), secret.Id, isAttachment: true);
+
+        await SetRestrictedCaller();
+        var byId = await McpToolInvoker.CallAsync(_readTools, "bee_get_file", ("id", file.Id));
+        var byName = await McpToolInvoker.CallAsync(_readTools, "bee_get_file", ("articleId", secret.Id), ("fileName", "plans.pdf"));
+
+        foreach (var blocks in new[] { byId, byName })
+            blocks.Should().ContainSingle().Which.Should().BeOfType<TextContentBlock>()
+                .Which.Text.Should().StartWith("Error:");
+        ClearCaller();
+    }
+
+    [Fact]
+    public async Task Acl_BeeGetFile_ServesAFileOfAnAllowedFolder()
+    {
+        var open = await _articleService.CreateAsync("Public File Host", "/Public", [], "text");
+        var file = await _mediaService.CreateAsync("notes.pdf", "application/pdf", "%PDF-1.4 tiny"u8.ToArray(), open.Id, isAttachment: true);
+
+        await SetRestrictedCaller();
+        var blocks = await McpToolInvoker.CallAsync(_readTools, "bee_get_file", ("id", file.Id));
+
+        blocks.OfType<EmbeddedResourceBlock>().Should().ContainSingle();
         ClearCaller();
     }
 

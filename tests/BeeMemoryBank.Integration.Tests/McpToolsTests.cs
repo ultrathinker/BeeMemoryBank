@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
@@ -9,9 +10,12 @@ using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using Dapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -67,7 +71,11 @@ public class McpToolsTests : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(_factory, scopeHolder);
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
-        _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory, new ImageSharpImageTranscoder());
+        // Real EventLogger + BlobRepository so media ciphertext lands in the blob store as in production
+        // (media has no .enc file any more); bee_get_file reads the bytes back.
+        var blobRepo = new BlobRepository(_factory);
+        var mediaEventLogger = new EventLogger(nodeRepo, new EventLogRepository(_factory), clock, new NullActorProvider(), new SyncTrigger(), _session, blobRepo);
+        _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, mediaEventLogger, mediaOptions, _factory, new ImageSharpImageTranscoder(), blobRepo: blobRepo);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, _factory);
         _indexBuilder = new IndexBuilder();
@@ -883,6 +891,188 @@ public class McpToolsTests : IAsyncLifetime
 
         result.Should().StartWith("Error:");
         result.Should().Contain("password-protected");
+    }
+
+    // ───── bee_get_file ──────────────────────────────────────────────────────
+
+    private const long TenMb = 10 * 1024 * 1024;
+
+    private Task<IReadOnlyList<ContentBlock>> GetFile(params (string Name, object? Value)[] args) =>
+        McpToolInvoker.CallAsync(_readTools, "bee_get_file", args);
+
+    private static string ErrorOf(IReadOnlyList<ContentBlock> blocks)
+    {
+        blocks.Should().ContainSingle("an error answer is one text block and carries no file");
+        var text = blocks[0].Should().BeOfType<TextContentBlock>().Subject.Text;
+        text.Should().StartWith("Error:");
+        return text;
+    }
+
+    private async Task<(Guid ArticleId, Core.Models.Media Pdf)> ArticleWithPdfAsync()
+    {
+        var article = await _articleService.CreateAsync("File Host", "/Files", [], "body");
+        var pdf = await _mediaService.CreateAsync("report.pdf", "application/pdf", PdfBytes, article.Id, isAttachment: true);
+        return (article.Id, pdf);
+    }
+
+    [Fact]
+    public async Task BeeGetFile_Attachment_ReturnsAnEmbeddedBlobCarryingNameAndContentType()
+    {
+        var (_, pdf) = await ArticleWithPdfAsync();
+
+        var blocks = await GetFile(("id", pdf.Id));
+
+        var resource = blocks.OfType<EmbeddedResourceBlock>().Should().ContainSingle().Subject;
+        var blob = resource.Resource.Should().BeOfType<BlobResourceContents>().Subject;
+        blob.DecodedData.ToArray().Should().Equal(PdfBytes);
+        blob.MimeType.Should().Be("application/pdf");
+        blob.Uri.Should().EndWith("/report.pdf").And.Contain(pdf.Id.ToString());
+        blocks.OfType<TextContentBlock>().Single().Text.Should().Contain("report.pdf").And.Contain("application/pdf");
+
+        // The wire form a client receives: a "resource" content item whose blob is the file, base64.
+        var wire = JsonNode.Parse(JsonSerializer.Serialize<ContentBlock>(resource, McpJsonUtilities.DefaultOptions))!;
+        wire["type"]!.GetValue<string>().Should().Be("resource");
+        wire["resource"]!["blob"]!.GetValue<string>().Should().Be(Convert.ToBase64String(PdfBytes));
+        wire["resource"]!["mimeType"]!.GetValue<string>().Should().Be("application/pdf");
+    }
+
+    [Fact]
+    public async Task BeeGetFile_Image_ReturnsAnImageBlockWithTheStoredBytes()
+    {
+        var article = await _articleService.CreateAsync("Image Host", "/Files", [], "body");
+        var image = await _mediaService.CreateAsync("pic.png", "image/png", Convert.FromBase64String(MinimalPngBase64), article.Id);
+
+        var blocks = await GetFile(("id", image.Id));
+
+        var block = blocks.OfType<ImageContentBlock>().Should().ContainSingle().Subject;
+        blocks.OfType<EmbeddedResourceBlock>().Should().BeEmpty();
+        block.MimeType.Should().Be(image.ContentType);
+        block.DecodedData.ToArray().Should().Equal((await _mediaService.GetContentAsync(image.Id))!.Value.data);
+    }
+
+    [Fact]
+    public async Task BeeGetFile_Svg_IsAnEmbeddedResource_NotAnImageBlock()
+    {
+        // LLM APIs accept png/jpeg/gif/webp as images; an image block with image/svg+xml would make
+        // the client's next request fail, so the SVG travels as a file.
+        var article = await _articleService.CreateAsync("Svg Host", "/Files", [], "body");
+        var svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"u8.ToArray();
+        var media = await _mediaService.CreateAsync("logo.svg", "image/svg+xml", svg, article.Id);
+
+        var blocks = await GetFile(("id", media.Id));
+
+        blocks.OfType<ImageContentBlock>().Should().BeEmpty();
+        var blob = blocks.OfType<EmbeddedResourceBlock>().Single().Resource.Should().BeOfType<BlobResourceContents>().Subject;
+        blob.MimeType.Should().Be("image/svg+xml");
+        blob.DecodedData.ToArray().Should().Equal(svg);
+    }
+
+    [Fact]
+    public async Task BeeGetFile_ByArticleIdAndFileName_ReturnsThatFile()
+    {
+        var (articleId, _) = await ArticleWithPdfAsync();
+
+        var blocks = await GetFile(("articleId", articleId), ("fileName", "report.pdf"));
+
+        var blob = blocks.OfType<EmbeddedResourceBlock>().Single().Resource.Should().BeOfType<BlobResourceContents>().Subject;
+        blob.DecodedData.ToArray().Should().Equal(PdfBytes);
+    }
+
+    [Fact]
+    public async Task BeeGetFile_ByArticleIdAndFileName_NoSuchName_IsAnError()
+    {
+        var (articleId, _) = await ArticleWithPdfAsync();
+
+        ErrorOf(await GetFile(("articleId", articleId), ("fileName", "other.pdf"))).Should().Contain("other.pdf");
+    }
+
+    [Fact]
+    public async Task BeeGetFile_ByArticleIdAndFileName_TwoFilesWithThatName_ErrorListsTheIds()
+    {
+        var article = await _articleService.CreateAsync("Twins", "/Files", [], "body");
+        var first = await _mediaService.CreateAsync("same.txt", "text/plain", "one"u8.ToArray(), article.Id, isAttachment: true);
+        var second = await _mediaService.CreateAsync("same.txt", "text/plain", "two"u8.ToArray(), article.Id, isAttachment: true);
+
+        var text = ErrorOf(await GetFile(("articleId", article.Id), ("fileName", "same.txt")));
+
+        text.Should().Contain(first.Id.ToString()).And.Contain(second.Id.ToString());
+    }
+
+    [Fact]
+    public async Task BeeGetFile_NeitherIdNorArticleIdWithFileName_IsAnError()
+    {
+        var (articleId, _) = await ArticleWithPdfAsync();
+
+        ErrorOf(await GetFile()).Should().Contain("articleId");
+        ErrorOf(await GetFile(("articleId", articleId))).Should().Contain("fileName");
+        ErrorOf(await GetFile(("fileName", "report.pdf"))).Should().Contain("articleId");
+    }
+
+    [Fact]
+    public async Task BeeGetFile_UnknownMedia_IsAnError()
+    {
+        var id = Guid.NewGuid();
+
+        ErrorOf(await GetFile(("id", id))).Should().Contain(id.ToString()).And.Contain("not found");
+    }
+
+    [Fact]
+    public async Task BeeGetFile_AboveTheCap_IsAPlainErrorWithNameSizeAndCap()
+    {
+        var article = await _articleService.CreateAsync("Big Host", "/Files", [], "body");
+        var big = await _mediaService.CreateAsync("big.bin", "application/octet-stream", new byte[TenMb + 1], article.Id, isAttachment: true);
+
+        var text = ErrorOf(await GetFile(("id", big.Id)));
+
+        text.Should().Contain("big.bin").And.Contain((TenMb + 1).ToString()).And.Contain(TenMb.ToString());
+    }
+
+    [Fact]
+    public async Task BeeGetFile_ExactlyAtTheCap_IsServed()
+    {
+        var article = await _articleService.CreateAsync("Cap Host", "/Files", [], "body");
+        var media = await _mediaService.CreateAsync("cap.bin", "application/octet-stream", new byte[TenMb], article.Id, isAttachment: true);
+
+        var blocks = await GetFile(("id", media.Id));
+
+        blocks.OfType<EmbeddedResourceBlock>().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task BeeGetFile_WhenLocked_IsAnError()
+    {
+        var (_, pdf) = await ArticleWithPdfAsync();
+        _session.Lock();
+        try
+        {
+            ErrorOf(await GetFile(("id", pdf.Id))).Should().Contain("locked");
+        }
+        finally
+        {
+            await _session.UnlockAsync(Password);
+        }
+    }
+
+    [Fact]
+    public async Task BeeGetFile_FilesOfADeletedArticle_AreNotServed()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+        await _articleService.DeleteAsync(articleId);
+
+        ErrorOf(await GetFile(("id", pdf.Id)));
+        ErrorOf(await GetFile(("articleId", articleId), ("fileName", "report.pdf")));
+    }
+
+    [Fact]
+    public async Task BeeGetFile_MediaRowStillActiveButArticleDeleted_IsNotServed()
+    {
+        // The tool must not lean on the media rows having been soft-deleted along with the article
+        // (they can lag behind, e.g. when the article delete arrives by sync first).
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+        using (var conn = _factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_article SET status = 'D' WHERE id = @id", new { id = articleId });
+
+        ErrorOf(await GetFile(("id", pdf.Id)));
     }
 
     // ───── bee_get_upload_script ─────────────────────────────────────────────
