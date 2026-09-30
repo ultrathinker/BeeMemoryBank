@@ -133,7 +133,7 @@ public static class BlindEndpoints
             }
             catch (BlindPreflightFailedException ex)
             {
-                return Results.Json(new { error = ex.Message, problems = ex.Problems }, statusCode: 409);
+                return Results.Json(new { error = ex.Message, problems = ex.Problems, details = ex.Details }, statusCode: 409);
             }
             catch (BlindNodeUnreachableException ex)
             {

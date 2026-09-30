@@ -50,6 +50,8 @@ public class BlindPreflightTests : IAsyncLifetime
         var ex = await RunAsync().Should().ThrowAsync<BlindPreflightFailedException>();
 
         ex.Which.Problems.Should().ContainSingle().Which.Should().Contain("\"Hub\"").And.Contain("promote");
+        ex.Which.Details.Should().Equal([new BlindPreflightProblem(BlindPreflightProblem.NotSuperadmin, "Hub")],
+            "the Blind nodes page words each problem from this, in plain language");
     }
 
     [Fact]
@@ -97,6 +99,7 @@ public class BlindPreflightTests : IAsyncLifetime
         var ex = await RunAsync().Should().ThrowAsync<BlindPreflightFailedException>();
 
         ex.Which.Problems.Should().ContainSingle().Which.Should().Contain("\"Old phone\"").And.Contain("protocol 2");
+        ex.Which.Details.Should().Equal([new BlindPreflightProblem(BlindPreflightProblem.OldProtocol, "Old phone", Protocol: 2)]);
     }
 
     /// <summary>
@@ -128,6 +131,7 @@ public class BlindPreflightTests : IAsyncLifetime
             createdAt: DateTime.UtcNow - BlindPreflight.UnknownProtocolGrace - TimeSpan.FromDays(1)));
         var ex = await RunAsync().Should().ThrowAsync<BlindPreflightFailedException>();
         ex.Which.Problems.Should().ContainSingle().Which.Should().Contain("\"Drawer phone\"");
+        ex.Which.Details.Should().Equal([new BlindPreflightProblem(BlindPreflightProblem.UnknownProtocol, "Drawer phone", Days: 7)]);
     }
 
     /// <summary>

@@ -8,7 +8,7 @@
         the node its first copy.
     </p>
     <form method="post" asp-page-handler="Add">
-        <textarea name="code" rows="3" placeholder="BMBBLIND1...." required style="width:100%;font-family:monospace;"></textarea>
+        <textarea name="code" rows="3" placeholder="BMBBLIND1...." required style="width:100%;font-family:monospace;">@Model.Code</textarea>
         <sl-button type="submit" variant="primary" size="small" style="margin-top:8px;">
             <sl-icon slot="prefix" name="link-45deg"></sl-icon> Add
         </sl-button>

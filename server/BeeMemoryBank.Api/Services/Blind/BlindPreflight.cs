@@ -6,10 +6,31 @@ using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.Api.Services;
 
-public sealed class BlindPreflightFailedException(IReadOnlyList<string> problems)
+/// <summary>
+/// One pre-flight problem as data: what a client needs to explain it in its own words (the Blind
+/// nodes page). <paramref name="Protocol"/> is the version an old device runs, <paramref name="Days"/>
+/// how long a device has gone unseen.
+/// </summary>
+public sealed record BlindPreflightProblem(string Kind, string Device, int? Protocol = null, int? Days = null)
+{
+    /// <summary>A full peer answered, but not with its standing: it refused this PC or runs a build that cannot answer.</summary>
+    public const string Refused = "refused";
+    /// <summary>A full peer does not see this PC as superadmin.</summary>
+    public const string NotSuperadmin = "not_superadmin";
+    /// <summary>A full node last spoke a protocol below 3.</summary>
+    public const string OldProtocol = "old_protocol";
+    /// <summary>A full node nobody has seen declare a protocol for longer than the grace period.</summary>
+    public const string UnknownProtocol = "unknown_protocol";
+}
+
+public sealed class BlindPreflightFailedException(
+    IReadOnlyList<string> problems, IReadOnlyList<BlindPreflightProblem>? details = null)
     : InvalidOperationException("This PC cannot add a blind node yet: " + string.Join(" ", problems))
 {
     public IReadOnlyList<string> Problems { get; } = problems;
+
+    /// <summary>The same problems as data, one per entry of <see cref="Problems"/>, in the same order.</summary>
+    public IReadOnlyList<BlindPreflightProblem> Details { get; } = details ?? [];
 }
 
 /// <summary>
@@ -39,6 +60,7 @@ public sealed class BlindPreflight(
         var self = await nodeRepo.GetAsync() ?? throw new InvalidOperationException("Node is not initialized.");
         var peers = (await whitelist.GetAllActiveAsync()).Where(p => !BlindNodeId.IsBlind(p.NodeId)).ToList();
         var problems = new List<string>();
+        var details = new List<BlindPreflightProblem>();
 
         // The best protocol anyone has seen from each full node — ours first, then every peer's view.
         var seen = peers.ToDictionary(p => p.NodeId, p => p.LastProtocolVersion);
@@ -60,14 +82,18 @@ public sealed class BlindPreflight(
             {
                 problems.Add($"\"{peer.DisplayName}\" refused this PC (or answered something unreadable): check that this PC " +
                              $"is an active peer there and that \"{peer.DisplayName}\" runs a current build.");
+                details.Add(new BlindPreflightProblem(BlindPreflightProblem.Refused, peer.DisplayName));
                 continue;
             }
 
             See(peer.NodeId, standing.Protocol);
             foreach (var view in standing.Peers) See(view.NodeId, view.LastProtocolVersion);
             if (!standing.CallerIsSuperadmin)
+            {
                 problems.Add($"\"{peer.DisplayName}\" does not see this PC as superadmin: promote this PC on \"{peer.DisplayName}\" " +
                              "(Admin → Nodes → superadmin) and try again.");
+                details.Add(new BlindPreflightProblem(BlindPreflightProblem.NotSuperadmin, peer.DisplayName));
+            }
         }
 
         var now = time.GetUtcNow().UtcDateTime;
@@ -78,16 +104,19 @@ public sealed class BlindPreflight(
                 case { } v when v < 3:
                     problems.Add($"\"{peer.DisplayName}\" runs sync protocol {v}: update it first — an older node would accept " +
                                  "the blind node's events and could hand it the master key.");
+                    details.Add(new BlindPreflightProblem(BlindPreflightProblem.OldProtocol, peer.DisplayName, Protocol: v));
                     break;
                 case null when now - peer.CreatedAt > UnknownProtocolGrace:
                     problems.Add($"\"{peer.DisplayName}\" has not synced with this build for over {UnknownProtocolGrace.TotalDays:0} days: " +
                                  "update it or remove it from the network first.");
+                    details.Add(new BlindPreflightProblem(BlindPreflightProblem.UnknownProtocol, peer.DisplayName,
+                        Days: (int)UnknownProtocolGrace.TotalDays));
                     break;
             }
         }
 
         if (problems.Count > 0)
-            throw new BlindPreflightFailedException(problems);
+            throw new BlindPreflightFailedException(problems, details);
 
         // Nobody answered, so nothing in the network confirmed this PC's standing — a PC alone in its
         // network, or one whose peers are all offline. That does not stop the add (review r1-merge #3):

@@ -22,9 +22,27 @@
     {
         <sl-alert variant="warning" open style="margin-bottom:12px;">@Model.WarningMessage</sl-alert>
     }
-    @if (Model.ErrorMessage != null)
+    @if (Model.Error is { } error)
     {
-        <sl-alert variant="danger" open style="margin-bottom:12px;">@Model.ErrorMessage</sl-alert>
+        @* Plain sentence first (what is wrong, what to do), the devices to blame as a list, the
+           technical line last and small. *@
+        <sl-alert variant="danger" open id="blind-error" role="alert" style="margin-bottom:12px;">
+            <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+            <strong>@error.Message</strong>
+            @if (error.Items.Count > 0)
+            {
+                <ul style="margin:8px 0 0 18px;padding:0;">
+                    @foreach (var item in error.Items)
+                    {
+                        <li>@item</li>
+                    }
+                </ul>
+            }
+            @if (!string.IsNullOrEmpty(error.Detail))
+            {
+                <div class="text-muted text-sm" style="margin-top:8px;">Technical detail: @error.Detail</div>
+            }
+        </sl-alert>
     }
 
     <partial name="~/Pages/Shared/Admin/_AdminBlindNodes.cshtml" model="Model" />

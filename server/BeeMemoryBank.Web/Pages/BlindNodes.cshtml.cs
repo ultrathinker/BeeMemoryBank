@@ -16,23 +16,28 @@ public class BlindNodesModel(ApiClient api) : PageModel
 {
     public List<BlindNodeDto>? Nodes { get; set; }
     public string? SuccessMessage { get; set; }
-    public string? ErrorMessage { get; set; }
+    public BlindNodeError? Error { get; set; }
     public string? WarningMessage { get; set; }
 
-    public async Task OnGetAsync(string? msg, string? err, string? warn)
+    /// <summary>The pair code the operator pasted, given back in the box when the add failed.</summary>
+    public string? Code { get; set; }
+
+    public async Task OnGetAsync(string? msg, string? err, string? warn, string? detail)
     {
         SuccessMessage = msg;
-        ErrorMessage = err;
         WarningMessage = warn;
+        if (!string.IsNullOrEmpty(err)) Error = BlindNodeError.Of(err, detail);
         Nodes = await api.ListBlindNodesAsync();
     }
 
     public async Task<IActionResult> OnPostAddAsync(string code)
     {
+        // A failed add shows the page again, right here, with the code still in the box: the
+        // operator fixes what the message says and presses Add, instead of pasting the code afresh.
         if (string.IsNullOrWhiteSpace(code))
-            return RedirectToPage(new { err = "Paste the pair code shown by the blind node." });
+            return await ShowAsync(BlindNodeErrors.EmptyCode(), code);
         var (ok, error, warnings) = await api.AddBlindNodeAsync(code.Trim());
-        if (!ok) return RedirectToPage(new { err = error });
+        if (!ok) return await ShowAsync(error, code.Trim());
         return warnings.Count > 0
             ? RedirectToPage(new { msg = "Blind node added and seeded.", warn = string.Join(" ", warnings) })
             : RedirectToPage(new { msg = "Blind node added and seeded." });
@@ -43,14 +48,31 @@ public class BlindNodesModel(ApiClient api) : PageModel
         var (ok, error) = await api.ReseedBlindNodeAsync(nodeId);
         return ok
             ? RedirectToPage(new { msg = "Blind node reseeded." })
-            : RedirectToPage(new { err = error ?? "Reseed failed." });
+            : RedirectToPage(new { err = error!.Message, detail = error.Detail });
     }
 
     public async Task<IActionResult> OnPostDisconnectAsync(Guid nodeId)
     {
-        var ok = await api.RevokeNodeAsync(nodeId);
-        return ok
-            ? RedirectToPage(new { msg = "Blind node disconnected. Wipe it on its own console." })
-            : RedirectToPage(new { err = "Failed to disconnect the blind node." });
+        bool ok;
+        try
+        {
+            ok = await api.RevokeNodeAsync(nodeId);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            var down = BlindNodeErrors.AppDidNotAnswer(ex);
+            return RedirectToPage(new { err = down.Message, detail = down.Detail });
+        }
+        if (ok) return RedirectToPage(new { msg = "Blind node disconnected. Wipe it on its own console." });
+        var failed = BlindNodeErrors.ForDisconnect();
+        return RedirectToPage(new { err = failed.Message });
+    }
+
+    private async Task<IActionResult> ShowAsync(BlindNodeError? error, string? code)
+    {
+        Error = error;
+        Code = code;
+        Nodes = await api.ListBlindNodesAsync();
+        return Page();
     }
 }

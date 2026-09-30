@@ -17,13 +17,23 @@ public partial class ApiClient
     }
 
     /// <summary>
-    /// Pairs and seeds a blind node from its code; the error lists every pre-flight problem, the
-    /// warnings what the pre-flight said without stopping the add (no peer could confirm this PC).
+    /// Pairs and seeds a blind node from its code; the error says in plain words what is wrong and what
+    /// to do (every pre-flight problem, device by device), the warnings what the pre-flight said without
+    /// stopping the add (no peer could confirm this PC).
     /// </summary>
-    public async Task<(bool Ok, string? Error, IReadOnlyList<string> Warnings)> AddBlindNodeAsync(string code)
+    public async Task<(bool Ok, BlindNodeError? Error, IReadOnlyList<string> Warnings)> AddBlindNodeAsync(string code)
     {
-        var resp = await http.PostAsJsonAsync("/api/blind-nodes/", new { code }, JsonOpts);
-        var body = await resp.Content.ReadAsStringAsync();
+        HttpResponseMessage resp;
+        string body;
+        try
+        {
+            resp = await http.PostAsJsonAsync("/api/blind-nodes/", new { code }, JsonOpts);
+            body = await resp.Content.ReadAsStringAsync();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return (false, BlindNodeErrors.AppDidNotAnswer(ex), []);
+        }
         if (resp.IsSuccessStatusCode)
         {
             try
@@ -38,23 +48,21 @@ public partial class ApiClient
                 return (true, null, []);
             }
         }
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            var error = doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : null;
-            if (doc.RootElement.TryGetProperty("problems", out var problems))
-                error = string.Join(" ", problems.EnumerateArray().Select(p => p.GetString()));
-            return (false, error ?? "Could not add the blind node.", []);
-        }
-        catch (JsonException)
-        {
-            return (false, "Could not add the blind node.", []);
-        }
+        return (false, BlindNodeErrors.ForAdd(resp.StatusCode, body), []);
     }
 
-    public async Task<(bool Ok, string? Error)> ReseedBlindNodeAsync(Guid nodeId)
+    public async Task<(bool Ok, BlindNodeError? Error)> ReseedBlindNodeAsync(Guid nodeId)
     {
-        var resp = await http.PostAsync($"/api/blind-nodes/{nodeId}/reseed", null);
-        return resp.IsSuccessStatusCode ? (true, null) : (false, await ReadErrorAsync(resp));
+        try
+        {
+            var resp = await http.PostAsync($"/api/blind-nodes/{nodeId}/reseed", null);
+            return resp.IsSuccessStatusCode
+                ? (true, null)
+                : (false, BlindNodeErrors.ForReseed(resp.StatusCode, await resp.Content.ReadAsStringAsync()));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return (false, BlindNodeErrors.AppDidNotAnswer(ex));
+        }
     }
 }
