@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.BlindMobile.Pages.BlindHomePage"
+             Title="Blind copy"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="16" MaximumWidthRequest="520">
+
+            <!-- State -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="State" FontAttributes="Bold" />
+                    <Label x:Name="NameLabel" />
+                    <Label x:Name="NodeLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    <Label x:Name="PairLabel" LineBreakMode="WordWrap" />
+                    <Label x:Name="LoadLabel" LineBreakMode="WordWrap" />
+                    <Label x:Name="SyncLabel" />
+                    <Label x:Name="BackupLabel" />
+                    <Label x:Name="ConditionLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <ProgressBar x:Name="JobProgress" IsVisible="False" ProgressColor="{StaticResource PrimaryColor}" />
+                    <Label x:Name="JobLabel" IsVisible="False" FontSize="12" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Codes -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="1. Add this phone on the computer" FontAttributes="Bold" />
+                    <Label Text="On the Windows computer, open Blind nodes, choose Add Android blind copy, and scan or paste this code. It carries this phone's key and a one-time secret; show it only to your own computer."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Image x:Name="PhoneCodeImage" HeightRequest="240" WidthRequest="240" HorizontalOptions="Center" />
+                    <Label x:Name="PhoneCodeLabel" FontSize="11" LineBreakMode="CharacterWrap" />
+                    <Button Text="Copy this phone's code" Clicked="OnCopyPhoneCodeClicked" />
+                    <Button x:Name="RePairButton" Text="Re-pair…" IsVisible="False" Clicked="OnRePairClicked" />
+
+                    <Label Text="2. Paste the code the computer shows back" FontAttributes="Bold" Margin="0,12,0,0" />
+                    <Entry x:Name="CallCodeEntry" AutomationId="BlindCallCodeEntry" Placeholder="bmb-blind-call:?…"
+                           IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Button x:Name="ConnectButton" Text="Connect" Style="{StaticResource PrimaryButton}" Clicked="OnConnectClicked" />
+                    <Label x:Name="CallErrorLabel" TextColor="{StaticResource ErrorColor}" IsVisible="False" LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Backups -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Backups" FontAttributes="Bold" />
+                    <Label Text="Encrypted with this phone's backup key; the computer can open them with the master password. Made only on Wi-Fi, on the charger, at 20 % battery or more."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Button x:Name="BackupNowButton" Text="Back up now" Style="{StaticResource PrimaryButton}" Clicked="OnBackupNowClicked" />
+                    <Button x:Name="SaveToButton" Text="Save the latest backup to…" Clicked="OnSaveToClicked" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Label Text="Schedule" VerticalOptions="Center" />
+                        <Picker x:Name="SchedulePicker" WidthRequest="160" SelectedIndexChanged="OnScheduleChanged" />
+                    </HorizontalStackLayout>
+                    <Label x:Name="BackupsLabel" FontSize="12" LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Log -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="Log" FontAttributes="Bold" />
+                    <Label x:Name="LogLabel" FontSize="11" LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Danger -->
+            <Frame BorderColor="{StaticResource ErrorColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Disconnect and wipe" FontAttributes="Bold" TextColor="{StaticResource ErrorColor}" />
+                    <Label Text="Deletes this copy, its backups on the phone and its keys. Revoke the phone on the computer too. Backups you saved elsewhere stay where you saved them."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Button Text="Disconnect and wipe…" BackgroundColor="Transparent" TextColor="{StaticResource ErrorColor}" Clicked="OnWipeClicked" />
+                </VerticalStackLayout>
+            </Frame>
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>
