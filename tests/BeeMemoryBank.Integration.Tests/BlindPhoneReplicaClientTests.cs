@@ -53,6 +53,32 @@ public sealed class BlindPhoneReplicaClientTests : IDisposable
         File.Exists(Path.Combine(workDirectory, "replica.part")).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("not-base64")]
+    [InlineData(null)]
+    public async Task Download_RecoversFromMalformedPersistedPartialMetadata(string? signatureB64)
+    {
+        var phone = await CreatePhoneAsync();
+        var workDirectory = Path.Combine(phone.DataPath, "replica");
+        Directory.CreateDirectory(workDirectory);
+        var package = await _blind.Services.GetRequiredService<BlindReplicaPackageCache>()
+            .GetAsync(producerIsSuperadmin: false, CancellationToken.None);
+        await File.WriteAllBytesAsync(Path.Combine(workDirectory, "replica.part"), [0]);
+        await File.WriteAllTextAsync(Path.Combine(workDirectory, "replica.part.json"), JsonSerializer.Serialize(new
+        {
+            sha256 = package.Sha256,
+            signatureB64,
+            length = package.Length
+        }));
+        using var http = new HttpClient(_blind.Server.CreateHandler());
+
+        await phone.Client.FetchAndInstallAsync(http, phone.Target, workDirectory, progress: null, CancellationToken.None);
+
+        (await new NodeIdentityRepository(phone.Factory).GetAsync())!.NodeId.Should().Be(phone.Identity.NodeId);
+        File.Exists(Path.Combine(workDirectory, "replica.part")).Should().BeFalse();
+        File.Exists(Path.Combine(workDirectory, "replica.part.json")).Should().BeFalse();
+    }
+
     [Fact]
     public async Task Download_ReplacesAStaleCandidateDatabaseBeforeRetryingTheSamePackage()
     {
@@ -69,6 +95,42 @@ public sealed class BlindPhoneReplicaClientTests : IDisposable
 
         (await new NodeIdentityRepository(phone.Factory).GetAsync())!.NodeId.Should().Be(phone.Identity.NodeId);
         File.Exists(candidatePath).Should().BeFalse("the candidate is consumed by the successful cutover");
+    }
+
+    [Fact]
+    public async Task Download_MediaCopyFailureKeepsTheLiveDatabase()
+    {
+        var sourceMediaDirectory = Path.Combine(_blind.DataPath, "media");
+        Directory.CreateDirectory(sourceMediaDirectory);
+        await File.WriteAllBytesAsync(Path.Combine(sourceMediaDirectory, "copy-failure.enc"), [1, 2, 3]);
+        var phone = await CreatePhoneAsync((_, _, _) => Task.FromException(new IOException("simulated full storage")));
+        using var http = new HttpClient(_blind.Server.CreateHandler());
+
+        var act = () => phone.Client.FetchAndInstallAsync(http, phone.Target,
+            Path.Combine(phone.DataPath, "replica"), progress: null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<IOException>();
+        (await new SyncPositionRepository(phone.Factory).GetAsync(phone.Target.NodeId)).Should().BeNull(
+            "the database switch follows media copy and must not occur after a media-copy failure");
+        (await new NodeIdentityRepository(phone.Factory).GetAsync())!.NodeId.Should().Be(phone.Identity.NodeId);
+        Directory.GetDirectories(Path.Combine(phone.DataPath, "replica"), "verified-*").Should().BeEmpty(
+            "failed extraction staging must not remain after a media-copy failure");
+    }
+
+    [Fact]
+    public async Task Download_KeepsOnlyTheMostRecentReplicaRollbackDatabase()
+    {
+        var phone = await CreatePhoneAsync();
+        var directory = phone.DataPath;
+        const string databaseName = "beememorybank.db";
+        await File.WriteAllBytesAsync(Path.Combine(directory, databaseName + ".before-replica-" + Guid.NewGuid().ToString("N")), [1]);
+        await File.WriteAllBytesAsync(Path.Combine(directory, databaseName + ".before-replica-" + Guid.NewGuid().ToString("N")), [2]);
+        using var http = new HttpClient(_blind.Server.CreateHandler());
+
+        await phone.Client.FetchAndInstallAsync(http, phone.Target, Path.Combine(phone.DataPath, "replica"), progress: null, CancellationToken.None);
+
+        Directory.GetFiles(directory, databaseName + ".before-replica-*").Should().ContainSingle(
+            "only one previous live database may remain after a successful replica switch");
     }
 
     [Fact]
@@ -131,7 +193,7 @@ public sealed class BlindPhoneReplicaClientTests : IDisposable
         File.Exists(Path.Combine(workDirectory, "replica.part.json")).Should().BeFalse();
     }
 
-    private async Task<PhoneSetup> CreatePhoneAsync()
+    private async Task<PhoneSetup> CreatePhoneAsync(Func<string, string, CancellationToken, Task>? copyMediaFile = null)
     {
         var phoneData = Path.Combine(_blind.DataPath, "phone");
         var phoneDb = Path.Combine(phoneData, "beememorybank.db");
@@ -164,7 +226,7 @@ public sealed class BlindPhoneReplicaClientTests : IDisposable
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", server.Ed25519PublicKey, new byte[32]);
         var signer = new SeedSigner(phoneSeed);
         var client = new BlindPhoneReplicaClient(factory, new NodeIdentityRepository(factory), signer,
-            phoneData, phoneDb, NullLogger<BlindPhoneReplicaClient>.Instance);
+            phoneData, phoneDb, NullLogger<BlindPhoneReplicaClient>.Instance, copyMediaFile);
         return new PhoneSetup(phoneData, factory, identity, target, signer, client);
     }
 

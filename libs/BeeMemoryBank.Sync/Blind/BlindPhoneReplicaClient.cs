@@ -25,10 +25,14 @@ public sealed class BlindPhoneReplicaClient(
     INodeAuthSigner signer,
     string dataDirectory,
     string databasePath,
-    ILogger<BlindPhoneReplicaClient> logger)
+    ILogger<BlindPhoneReplicaClient> logger,
+    Func<string, string, CancellationToken, Task>? copyMediaFile = null)
 {
     private const string PackageHashHeader = "X-BMB-Package-Sha256";
     private const string SignatureHeader = "X-BMB-Snapshot-Signature";
+    private const long MaximumManifestBytes = 1L * 1024 * 1024;
+    private const long MaximumExtractedEntryBytes = 2L * 1024 * 1024 * 1024;
+    private const long MaximumExtractedBytes = 4L * 1024 * 1024 * 1024;
     private static readonly byte[] SignatureDomain = "BMB-MANIFEST-FILE-V1\0"u8.ToArray();
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -41,6 +45,7 @@ public sealed class BlindPhoneReplicaClient(
             throw new InvalidOperationException("The blind phone requires its v=2 external-key identity before replica download.");
 
         Directory.CreateDirectory(workDirectory);
+        CleanupExtractionArtifacts(workDirectory);
         var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct);
         var partPath = Path.Combine(workDirectory, "replica.part");
         var metadataPath = Path.Combine(workDirectory, "replica.part.json");
@@ -60,6 +65,12 @@ public sealed class BlindPhoneReplicaClient(
             // range request. Network and cancellation errors deliberately retain their partial bytes.
             CleanupDownloadArtifacts(workDirectory, partPath, metadataPath);
             throw;
+        }
+        finally
+        {
+            // Partial response bytes remain resumable after transport/cancellation failures, but an
+            // extracted staging tree is never resumable or safe to reuse after any failed install.
+            CleanupExtractionArtifacts(workDirectory);
         }
     }
 
@@ -154,16 +165,11 @@ public sealed class BlindPhoneReplicaClient(
     {
         var sha = ReadSingleHeader(response, PackageHashHeader);
         var signature = ReadSingleHeader(response, SignatureHeader);
-        if (sha is null || sha.Length != 64 || !sha.All(Uri.IsHexDigit))
-            throw new InvalidDataException($"Replica response has no valid {PackageHashHeader} header.");
-        if (signature is null) throw new InvalidDataException($"Replica response has no {SignatureHeader} header.");
-        try { _ = Convert.FromBase64String(signature); }
-        catch (FormatException ex) { throw new InvalidDataException("Replica signature header is not Base64.", ex); }
-
         var length = response.Content.Headers.ContentRange?.Length ?? response.Content.Headers.ContentLength;
         if (length is not > 0 || (offset > 0 && length <= offset))
             throw new InvalidDataException("Replica response has no valid complete content length.");
-        return new PackageMetadata(sha.ToUpperInvariant(), signature, length.Value);
+        ValidatePartialMetadata(sha, signature, length.Value);
+        return new PackageMetadata(sha!.ToUpperInvariant(), signature!, length.Value);
     }
 
     private static string? ReadSingleHeader(HttpResponseMessage response, string name)
@@ -177,16 +183,52 @@ public sealed class BlindPhoneReplicaClient(
     {
         if (!File.Exists(path)) return null;
         await using var stream = File.OpenRead(path);
-        try { return await JsonSerializer.DeserializeAsync<PackageMetadata>(stream, Json, ct); }
+        PackageMetadata? metadata;
+        try { metadata = await JsonSerializer.DeserializeAsync<PackageMetadata>(stream, Json, ct); }
         catch (JsonException ex) { throw new InvalidDataException("Partial replica metadata is invalid.", ex); }
+        if (metadata is null)
+            throw new InvalidDataException("Partial replica metadata is empty.");
+        ValidatePartialMetadata(metadata.Sha256, metadata.SignatureB64, metadata.Length);
+        return metadata;
     }
 
     private static async Task WriteMetadataAsync(string path, PackageMetadata value, CancellationToken ct)
     {
-        await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None,
-            4_096, FileOptions.Asynchronous);
-        await JsonSerializer.SerializeAsync(stream, value, Json, ct);
-        await stream.FlushAsync(ct);
+        var temporaryPath = path + ".tmp";
+        try
+        {
+            await using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                             4_096, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(stream, value, Json, ct);
+                await stream.FlushAsync(ct);
+            }
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
+    }
+
+    /// <summary>Rejects persisted resume fields that could otherwise throw outside the reset path.</summary>
+    internal static void ValidatePartialMetadata(string? sha256, string? signatureB64, long length)
+    {
+        if (sha256 is null || sha256.Length != 64 || !sha256.All(Uri.IsHexDigit))
+            throw new InvalidDataException($"Replica response has no valid {PackageHashHeader} header.");
+        if (signatureB64 is null)
+            throw new InvalidDataException($"Replica response has no {SignatureHeader} header.");
+        try
+        {
+            if (Convert.FromBase64String(signatureB64).Length != 64)
+                throw new InvalidDataException("Replica signature must be an Ed25519 signature.");
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidDataException("Replica signature is not Base64.", ex);
+        }
+        if (length <= 0)
+            throw new InvalidDataException("Replica response has no valid complete content length.");
     }
 
     private static async Task<byte[]> HashFileAsync(string path, CancellationToken ct)
@@ -204,6 +246,11 @@ public sealed class BlindPhoneReplicaClient(
     private static void CleanupDownloadArtifacts(string workDirectory, string partPath, string metadataPath)
     {
         ResetPartial(partPath, metadataPath);
+        CleanupExtractionArtifacts(workDirectory);
+    }
+
+    private static void CleanupExtractionArtifacts(string workDirectory)
+    {
         foreach (var directory in Directory.GetDirectories(workDirectory, "verified-*"))
             Directory.Delete(directory, recursive: true);
     }
@@ -286,7 +333,8 @@ public sealed class BlindPhoneReplicaClient(
             {
                 Directory.CreateDirectory(mediaTarget);
                 foreach (var file in Directory.GetFiles(mediaSource, "*.enc"))
-                    File.Copy(file, Path.Combine(mediaTarget, Path.GetFileName(file)), overwrite: true);
+                    await (copyMediaFile ?? CopyMediaFileAsync)(file,
+                        Path.Combine(mediaTarget, Path.GetFileName(file)), ct);
             }
 
             if (File.Exists(databasePath))
@@ -298,6 +346,7 @@ public sealed class BlindPhoneReplicaClient(
             {
                 File.Move(candidatePath, databasePath);
             }
+            PruneReplicaRollbackDatabases();
         }
         finally
         {
@@ -313,6 +362,37 @@ public sealed class BlindPhoneReplicaClient(
         using var candidate = new SqliteConnection($"Data Source={candidatePath}");
         SqliteConnection.ClearPool(candidate);
         File.Delete(candidatePath);
+    }
+
+    private static Task CopyMediaFileAsync(string source, string destination, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        File.Copy(source, destination, overwrite: true);
+        return Task.CompletedTask;
+    }
+
+    private void PruneReplicaRollbackDatabases()
+    {
+        var directory = Path.GetDirectoryName(databasePath);
+        if (string.IsNullOrEmpty(directory)) return;
+        var pattern = Path.GetFileName(databasePath) + ".before-replica-*";
+        foreach (var obsolete in Directory.GetFiles(directory, pattern)
+                     .OrderByDescending(File.GetLastWriteTimeUtc)
+                     .Skip(1))
+        {
+            try
+            {
+                File.Delete(obsolete);
+            }
+            catch (IOException ex)
+            {
+                logger.LogWarning(ex, "Could not remove obsolete blind replica rollback database {Path}", obsolete);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                logger.LogWarning(ex, "Could not remove obsolete blind replica rollback database {Path}", obsolete);
+            }
+        }
     }
 
     private static void ImportReplicaTables(DbConnectionFactory factory, string sourceDb)
@@ -344,15 +424,21 @@ public sealed class BlindPhoneReplicaClient(
     private static async Task<byte[]?> ReadEntryAsync(string archive, string name, CancellationToken ct)
     {
         await using var file = File.OpenRead(archive);
-        await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        using var tar = new TarReader(gzip);
+        return await ReadArchiveEntryAsync(file, name, MaximumManifestBytes, ct);
+    }
+
+    internal static async Task<byte[]?> ReadArchiveEntryAsync(
+        Stream archive, string name, long maximumBytes, CancellationToken ct)
+    {
+        await using var gzip = new GZipStream(archive, CompressionMode.Decompress, leaveOpen: true);
+        using var tar = new TarReader(gzip, leaveOpen: true);
         while (await tar.GetNextEntryAsync() is { } entry)
         {
             ct.ThrowIfCancellationRequested();
             if (entry.Name != name || entry.DataStream is null) continue;
             await using var input = entry.DataStream;
             using var output = new MemoryStream();
-            await input.CopyToAsync(output, ct);
+            await CopyWithLimitAsync(input, output, maximumBytes, ct);
             return output.ToArray();
         }
         return null;
@@ -364,6 +450,7 @@ public sealed class BlindPhoneReplicaClient(
         await using var file = File.OpenRead(archive);
         await using var gzip = new GZipStream(file, CompressionMode.Decompress);
         using var tar = new TarReader(gzip);
+        long extractedBytes = 0;
         while (await tar.GetNextEntryAsync() is { } entry)
         {
             ct.ThrowIfCancellationRequested();
@@ -374,7 +461,36 @@ public sealed class BlindPhoneReplicaClient(
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             await using var output = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None,
                 81_920, FileOptions.Asynchronous);
-            await entry.DataStream.CopyToAsync(output, ct);
+            var remaining = MaximumExtractedBytes - extractedBytes;
+            if (remaining <= 0)
+                throw new InvalidDataException("Replica archive exceeds the maximum extracted size.");
+            var copied = await CopyWithLimitAsync(entry.DataStream, output,
+                Math.Min(MaximumExtractedEntryBytes, remaining), ct);
+            extractedBytes += copied;
+        }
+    }
+
+    /// <summary>Copies at most <paramref name="maximumBytes"/> and rejects a stream with further bytes.</summary>
+    internal static async Task<long> CopyWithLimitAsync(
+        Stream input, Stream output, long maximumBytes, CancellationToken ct)
+    {
+        if (maximumBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        var buffer = new byte[81_920];
+        long copied = 0;
+        while (true)
+        {
+            var remaining = maximumBytes - copied;
+            if (remaining == 0)
+            {
+                if (await input.ReadAsync(buffer.AsMemory(0, 1), ct) != 0)
+                    throw new InvalidDataException("Replica archive entry exceeds its allowed size.");
+                return copied;
+            }
+
+            var count = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), ct);
+            if (count == 0) return copied;
+            await output.WriteAsync(buffer.AsMemory(0, count), ct);
+            copied += count;
         }
     }
 
