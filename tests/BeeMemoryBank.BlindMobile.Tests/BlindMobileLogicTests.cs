@@ -517,6 +517,203 @@ public class BlindMobileLogicTests
             listener.Stop();
         }
     }
+    [Fact]
+    public async Task TwoCodePairing_WithFakeListener_ExecutesFullLifecycle_AndEnforcesMandatorySpkiPin()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-twocode-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind-log.jsonl");
+
+        using var rsa1 = System.Security.Cryptography.RSA.Create(2048);
+        var req1 = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+            "CN=127.0.0.1", rsa1, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        using var cert1 = req1.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(5));
+        using var serverCert1 = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+            cert1.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx), null, System.Security.Cryptography.X509Certificates.X509KeyStorageFlags.Exportable);
+
+        using var rsa2 = System.Security.Cryptography.RSA.Create(2048);
+        var req2 = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+            "CN=127.0.0.1", rsa2, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        using var cert2 = req2.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(5));
+        using var serverCert2 = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+            cert2.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx), null, System.Security.Cryptography.X509Certificates.X509KeyStorageFlags.Exportable);
+
+        var listenerSpkiPin = BeeMemoryBank.Crypto.SpkiPin.Of(serverCert1);
+        var otherSpkiPin = BeeMemoryBank.Crypto.SpkiPin.Of(serverCert2);
+
+        var listener1 = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener1.Start();
+        var port1 = ((System.Net.IPEndPoint)listener1.LocalEndpoint).Port;
+
+        var listener2 = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener2.Start();
+        var port2 = ((System.Net.IPEndPoint)listener2.LocalEndpoint).Port;
+
+        using var cts = new CancellationTokenSource();
+
+        void StartEchoServer(System.Net.Sockets.TcpListener tcpListener, System.Security.Cryptography.X509Certificates.X509Certificate2 cert)
+        {
+            Task.Run(async () =>
+            {
+                try
+                {
+                    while (!cts.Token.IsCancellationRequested)
+                    {
+                        var client = await tcpListener.AcceptTcpClientAsync(cts.Token);
+                        _ = Task.Run(async () =>
+                        {
+                            using (client)
+                            using (var ssl = new System.Net.Security.SslStream(client.GetStream(), false))
+                            {
+                                try
+                                {
+                                    await ssl.AuthenticateAsServerAsync(cert);
+                                    var buffer = new byte[4096];
+                                    while (!cts.Token.IsCancellationRequested)
+                                    {
+                                        var read = await ssl.ReadAsync(buffer, cts.Token);
+                                        if (read == 0) break;
+                                        var reqText = System.Text.Encoding.ASCII.GetString(buffer, 0, read);
+                                        if (reqText.Contains("\r\n\r\n"))
+                                        {
+                                            var response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"u8.ToArray();
+                                            await ssl.WriteAsync(response, cts.Token);
+                                            await ssl.FlushAsync(cts.Token);
+                                        }
+                                    }
+                                }
+                                catch
+                                {
+                                }
+                            }
+                        }, cts.Token);
+                    }
+                }
+                catch when (cts.IsCancellationRequested) { }
+                catch (Exception) { }
+            });
+        }
+
+        StartEchoServer(listener1, serverCert1);
+        StartEchoServer(listener2, serverCert2);
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+            var keys = new InMemoryBlindPhoneKeys();
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+            var pairing = new BlindPhonePairing(state, keys, recorder, log);
+
+            // 1. Initial State: no identity, not paired, not awaiting answer
+            pairing.HasIdentity.Should().BeFalse();
+            pairing.IsPaired.Should().BeFalse();
+            pairing.AwaitingAnswer.Should().BeFalse();
+            pairing.PhoneCode().Should().BeNull();
+
+            // 2. Create Identity
+            await pairing.CreateIdentityAsync("Pixel Blind Phone");
+            pairing.HasIdentity.Should().BeTrue();
+            pairing.IsPaired.Should().BeFalse();
+            pairing.AwaitingAnswer.Should().BeTrue();
+
+            var phoneCode = pairing.PhoneCode();
+            phoneCode.Should().NotBeNull();
+            phoneCode!.DisplayName.Should().Be("Pixel Blind Phone");
+            BlindNodeId.IsBlind(phoneCode.NodeId).Should().BeTrue();
+
+            // Check DB identity row is v=2
+            var dbIdentity = await nodeRepo.GetAsync();
+            dbIdentity.Should().NotBeNull();
+            dbIdentity!.Ed25519PrivateKeyV.Should().Be(BeeMemoryBank.Crypto.NodeIdentityCrypto.ExternalKeyVersion);
+            dbIdentity.Ed25519PrivateKey.Should().BeEmpty();
+
+            // 3. Windows Hub side prepares enrollment from phone code
+            var listenerNodeId = BlindNodeId.NewId();
+            var (listenerPubKey, _) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            var enrollment = BlindPhoneEnrollment.Prepare(
+                phoneCode.ToString(),
+                $"https://127.0.0.1:{port1}",
+                listenerNodeId,
+                listenerSpkiPin,
+                listenerPubKey,
+                DateTime.UtcNow,
+                out var prepareError);
+
+            prepareError.Should().BeNull();
+            enrollment.Should().NotBeNull();
+            enrollment!.Entry.NodeId.Should().Be(phoneCode.NodeId);
+            enrollment.Entry.IsSuperadmin.Should().BeFalse();
+            enrollment.SealedSecretName.Should().Be($"android-backup:{phoneCode.NodeId}");
+            enrollment.CallCode.SpkiPin.Should().Be(listenerSpkiPin);
+
+            // 4. Verify state before accepting call code
+            pairing.IsPaired.Should().BeFalse();
+            state.CallCode.Should().BeNull();
+
+            // 5. Phone accepts call code from Windows Hub
+            var acceptErr = pairing.AcceptCallCode(enrollment.CallCode.ToString());
+            acceptErr.Should().BeNull();
+            pairing.IsPaired.Should().BeTrue();
+            pairing.AwaitingAnswer.Should().BeFalse();
+            state.CallCode.Should().NotBeNull();
+            state.CallCode!.Address.Should().Be($"https://127.0.0.1:{port1}");
+            state.CallCode.SpkiPin.Should().Be(listenerSpkiPin);
+
+            // Secret is spent immediately upon accepting call code
+            keys.LoadPairingSecret().Should().BeNull();
+            pairing.PhoneCode().Should().BeNull();
+
+            // 6. Connect to Fake Listener using BlindHttpClientProvider
+            var services = new ServiceCollection();
+            services.AddSingleton(state);
+            services.AddTransient<MaintenanceDetectingHandler>();
+            services.AddTransient<BlindHttpHandler>();
+            services.AddSingleton<BlindHttpClientProvider>();
+            services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
+
+            var sp = services.BuildServiceProvider();
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            var httpClient = factory.CreateClient();
+
+            // Connecting to the paired listener (port 1, matching SPKI pin) succeeds:
+            var res = await httpClient.GetAsync($"https://127.0.0.1:{port1}/");
+            res.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+
+            // Connecting to another server (port 2, mismatched SPKI pin) fails due to mandatory SPKI pin enforcement:
+            var actWrong = async () => await httpClient.GetAsync($"https://127.0.0.1:{port2}/");
+            await actWrong.Should().ThrowAsync<HttpRequestException>();
+
+            // 7. Replay resistance: re-submitting call code fails because secret was spent
+            var replayErr = pairing.AcceptCallCode(enrollment.CallCode.ToString());
+            replayErr.Should().Contain("already paired");
+
+            // 8. Re-pair flow generates a fresh one-time secret and new phone code
+            pairing.StartRePair();
+            pairing.AwaitingAnswer.Should().BeTrue();
+            var rePairCode = pairing.PhoneCode();
+            rePairCode.Should().NotBeNull();
+            rePairCode!.Secret.Should().NotEqual(phoneCode.Secret);
+            rePairCode.NodeId.Should().Be(phoneCode.NodeId, "NodeId remains stable across re-pairs");
+            rePairCode.BackupKey.Should().Equal(phoneCode.BackupKey, "Backup key remains stable across re-pairs");
+        }
+        finally
+        {
+            cts.Cancel();
+            listener1.Stop();
+            listener2.Stop();
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }
 
 internal sealed class TestHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> sendAsync) : HttpMessageHandler
