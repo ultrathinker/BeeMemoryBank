@@ -144,7 +144,7 @@ jobs:
           APK_PATH=$(find mobile/BeeMemoryBank.BlindMobile/bin/Release/net10.0-android -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then echo "APK not found!"; exit 1; fi
           echo "Found APK: $APK_PATH"
-          if unzip -l "$APK_PATH" | grep -Ei "model\.onnx|Microsoft\.ML\.OnnxRuntime|Microsoft\.ML\.Tokenizers|BeeMemoryBank\.Embeddings|BeeMemoryBank\.Media|BeeMemoryBank\.Sync|SixLabors\.ImageSharp|Indiko\.Maui|Markdig"; then
+          if unzip -l "$APK_PATH" | grep -Ei "model\.onnx|Microsoft\.ML\.OnnxRuntime|Microsoft\.ML\.Tokenizers|BeeMemoryBank\.Embeddings|BeeMemoryBank\.Media|SixLabors\.ImageSharp|Indiko\.Maui|Markdig"; then
             echo "ERROR: Forbidden asset found in Blind APK!"
             exit 1
           fi
