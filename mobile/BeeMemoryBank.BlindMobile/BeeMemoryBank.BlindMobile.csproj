@@ -5,6 +5,9 @@
     <TargetFrameworks>net10.0-android</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <UseMaui>true</UseMaui>
+    <!-- Without this the MAUI build ignores Platforms/Android/AndroidManifest.xml: the first Release APK had no INTERNET,
+         no foreground-service or notification permission, and android:allowBackup=true. BlindManifestTests reads the result. -->
+    <SingleProject>true</SingleProject>
     <ApplicationId>com.beememorybank.blind</ApplicationId>
     <ApplicationTitle>Bee Memory Bank Blind</ApplicationTitle>
     <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
