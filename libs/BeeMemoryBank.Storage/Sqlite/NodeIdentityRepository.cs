@@ -28,15 +28,14 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
     public async Task CreateAsync(NodeIdentity identity)
     {
         using var conn = OpenConnection();
-        var rows = await conn.ExecuteAsync(
+        await conn.ExecuteAsync(
             @"INSERT INTO tbl_node_identity
               (node_id, display_name, ed25519_public_key, ed25519_private_key,
                ed25519_private_key_iv, ed25519_private_key_v,
                can_generate_embeddings, initial_sync_completed, created_at)
-              SELECT @NodeId, @DisplayName, @Ed25519PublicKey, @Ed25519PrivateKey,
-                     @Ed25519PrivateKeyIV, @Ed25519PrivateKeyV,
-                     @CanGenerateEmbeddings, @InitialSyncCompleted, @CreatedAt
-              WHERE NOT EXISTS (SELECT 1 FROM tbl_node_identity)",
+              VALUES (@NodeId, @DisplayName, @Ed25519PublicKey, @Ed25519PrivateKey,
+                      @Ed25519PrivateKeyIV, @Ed25519PrivateKeyV,
+                      @CanGenerateEmbeddings, @InitialSyncCompleted, @CreatedAt)",
             new
             {
                 identity.NodeId,
@@ -49,21 +48,6 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
                 identity.InitialSyncCompleted,
                 identity.CreatedAt
             });
-
-        if (rows == 0)
-        {
-            var existing = await conn.QuerySingleOrDefaultAsync<Guid?>("SELECT node_id FROM tbl_node_identity LIMIT 1");
-            if (existing != identity.NodeId)
-            {
-                throw new InvalidOperationException($"Node already has identity {existing}, cannot overwrite with {identity.NodeId}.");
-            }
-        }
-    }
-
-    public async Task ClearAsync()
-    {
-        using var conn = OpenConnection();
-        await conn.ExecuteAsync("DELETE FROM tbl_node_identity");
     }
 
     public async Task MarkInitialSyncCompletedAsync()

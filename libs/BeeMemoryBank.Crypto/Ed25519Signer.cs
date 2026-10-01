@@ -23,13 +23,6 @@ public static class Ed25519Signer
         return (publicKeyParams.GetEncoded(), privateKeyParams.GetEncoded());
     }
 
-    /// <summary>Derives the Ed25519 public key (32 bytes) from a private key seed (32 bytes).</summary>
-    public static byte[] GetPublicKeyFromSeed(byte[] privateKey)
-    {
-        var privateKeyParams = new Ed25519PrivateKeyParameters(privateKey);
-        return privateKeyParams.GeneratePublicKey().GetEncoded();
-    }
-
     /// <summary>Signs data with the private key (seed, 32 bytes).</summary>
     public static byte[] Sign(byte[] privateKey, byte[] data)
     {

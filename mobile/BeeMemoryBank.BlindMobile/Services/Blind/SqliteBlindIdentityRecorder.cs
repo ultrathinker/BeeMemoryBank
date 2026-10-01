@@ -1,7 +1,8 @@
-using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sqlite;
+using Dapper;
 
 namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
@@ -13,50 +14,122 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 ///    that the private signing seed lives outside the database (in AndroidKeyStore) and never under DEK.
 /// 3. Private key columns remain empty/null; can_generate_embeddings = false.
 /// </summary>
-public sealed class SqliteBlindIdentityRecorder(INodeIdentityRepository nodeRepo) : IBlindIdentityRecorder
+public sealed class SqliteBlindIdentityRecorder(DbConnectionFactory factory) : IBlindIdentityRecorder
 {
     private static readonly SemaphoreSlim _gate = new(1, 1);
 
     public async Task<BlindIdentityRecord?> GetRecordedAsync(CancellationToken ct = default)
     {
-        var existing = await nodeRepo.GetAsync();
-        return existing is null
-            ? null
-            : new BlindIdentityRecord(existing.NodeId, existing.Ed25519PublicKey, existing.DisplayName);
+        using var conn = factory.CreateConnection();
+        var row = await conn.QuerySingleOrDefaultAsync<NodeIdentityRow>(
+            @"SELECT
+                node_id                  AS NodeId,
+                display_name             AS DisplayName,
+                ed25519_public_key       AS Ed25519PublicKey,
+                ed25519_private_key      AS Ed25519PrivateKey,
+                ed25519_private_key_iv   AS Ed25519PrivateKeyIV,
+                ed25519_private_key_v    AS Ed25519PrivateKeyV
+              FROM tbl_node_identity LIMIT 1");
+
+        if (row is null) return null;
+
+        // Invariant checks (Finding 2):
+        // Blind nodes must have:
+        // 1. A blind UUIDv8 NodeId (BlindNodeId.IsBlind(node_id))
+        // 2. ed25519_private_key_v = 2 (NodeIdentityCrypto.ExternalKeyVersion)
+        // 3. empty private key and null/empty IV (key material is never stored in DB for blind nodes)
+        if (!BlindNodeId.IsBlind(row.NodeId))
+        {
+            throw new InvalidOperationException($"Existing node identity {row.NodeId} in database is not a blind node ID. Refusing to adopt non-blind node as blind node.");
+        }
+
+        if (row.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
+        {
+            throw new InvalidOperationException($"Existing node identity in database has key version {row.Ed25519PrivateKeyV}, expected v={NodeIdentityCrypto.ExternalKeyVersion}. Refusing to adopt.");
+        }
+
+        if (row.Ed25519PrivateKey is { Length: > 0 } || row.Ed25519PrivateKeyIV is { Length: > 0 })
+        {
+            throw new InvalidOperationException("Existing node identity contains private key material in database; blind node identities must have external keys only.");
+        }
+
+        return new BlindIdentityRecord(
+            row.NodeId,
+            row.Ed25519PublicKey,
+            row.DisplayName,
+            row.Ed25519PrivateKeyV,
+            row.Ed25519PrivateKey,
+            row.Ed25519PrivateKeyIV);
     }
 
-    public Task ClearAsync(CancellationToken ct = default) => nodeRepo.ClearAsync();
+    public async Task ClearAsync(CancellationToken ct = default)
+    {
+        using var conn = factory.CreateConnection();
+        await conn.ExecuteAsync("DELETE FROM tbl_node_identity");
+    }
 
     public async Task RecordAsync(Guid nodeId, byte[] publicKey, string displayName, CancellationToken ct = default)
     {
+        if (!BlindNodeId.IsBlind(nodeId))
+        {
+            throw new ArgumentException($"Node ID {nodeId} must have the blind marker (UUIDv8).", nameof(nodeId));
+        }
+
         await _gate.WaitAsync(ct);
         try
         {
-            var existing = await nodeRepo.GetAsync();
+            using var conn = factory.CreateConnection();
+            var existing = await conn.QuerySingleOrDefaultAsync<Guid?>("SELECT node_id FROM tbl_node_identity LIMIT 1");
             if (existing is not null)
             {
-                if (existing.NodeId == nodeId) return;
-                throw new InvalidOperationException($"Node already has identity {existing.NodeId}, cannot overwrite with {nodeId}.");
+                if (existing == nodeId) return;
+                throw new InvalidOperationException($"Node already has identity {existing}, cannot overwrite with {nodeId}.");
             }
 
-            var identity = new NodeIdentity
+            var rows = await conn.ExecuteAsync(
+                @"INSERT INTO tbl_node_identity
+                  (node_id, display_name, ed25519_public_key, ed25519_private_key,
+                   ed25519_private_key_iv, ed25519_private_key_v,
+                   can_generate_embeddings, initial_sync_completed, created_at)
+                  SELECT @NodeId, @DisplayName, @Ed25519PublicKey, @Ed25519PrivateKey,
+                         @Ed25519PrivateKeyIV, @Ed25519PrivateKeyV,
+                         @CanGenerateEmbeddings, @InitialSyncCompleted, @CreatedAt
+                  WHERE NOT EXISTS (SELECT 1 FROM tbl_node_identity)",
+                new
+                {
+                    NodeId = nodeId,
+                    DisplayName = displayName,
+                    Ed25519PublicKey = publicKey,
+                    Ed25519PrivateKey = Array.Empty<byte>(),
+                    Ed25519PrivateKeyIV = (byte[]?)null,
+                    Ed25519PrivateKeyV = NodeIdentityCrypto.ExternalKeyVersion, // 2
+                    CanGenerateEmbeddings = 0,
+                    InitialSyncCompleted = 0,
+                    CreatedAt = DateTime.UtcNow
+                });
+
+            if (rows == 0)
             {
-                NodeId = nodeId,
-                DisplayName = displayName,
-                Ed25519PublicKey = publicKey,
-                Ed25519PrivateKey = [],
-                Ed25519PrivateKeyIV = null,
-                Ed25519PrivateKeyV = NodeIdentityCrypto.ExternalKeyVersion, // 2
-                CanGenerateEmbeddings = false,
-                InitialSyncCompleted = false,
-                DekEpoch = 1,
-                CreatedAt = DateTime.UtcNow
-            };
-            await nodeRepo.CreateAsync(identity);
+                var current = await conn.QuerySingleOrDefaultAsync<Guid?>("SELECT node_id FROM tbl_node_identity LIMIT 1");
+                if (current != nodeId)
+                {
+                    throw new InvalidOperationException($"Node already has identity {current}, cannot overwrite with {nodeId}.");
+                }
+            }
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private sealed class NodeIdentityRow
+    {
+        public Guid NodeId { get; set; }
+        public string DisplayName { get; set; } = "";
+        public byte[] Ed25519PublicKey { get; set; } = [];
+        public byte[]? Ed25519PrivateKey { get; set; }
+        public byte[]? Ed25519PrivateKeyIV { get; set; }
+        public int Ed25519PrivateKeyV { get; set; }
     }
 }

@@ -35,7 +35,13 @@ public interface IBlindPhoneKeys
     void Clear();
 }
 
-public sealed record BlindIdentityRecord(Guid NodeId, byte[] PublicKey, string DisplayName);
+public sealed record BlindIdentityRecord(
+    Guid NodeId,
+    byte[] PublicKey,
+    string DisplayName,
+    int PrivateKeyV = 2,
+    byte[]? PrivateKey = null,
+    byte[]? PrivateKeyIV = null);
 
 /// <summary>
 /// Records the phone's identity row. TODO(identity row v=2): write <c>tbl_node_identity</c> with

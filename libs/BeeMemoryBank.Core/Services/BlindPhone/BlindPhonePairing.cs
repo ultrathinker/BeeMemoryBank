@@ -55,12 +55,23 @@ public sealed class BlindPhonePairing(
             var existing = await identity.GetRecordedAsync(ct);
             if (existing is not null)
             {
+                // Invariants validation (Finding 2):
+                // Must be a blind node ID, v=2 external key, with empty private key & IV.
+                if (!BlindNodeId.IsBlind(existing.NodeId) ||
+                    existing.PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion ||
+                    (existing.PrivateKey is { Length: > 0 }) ||
+                    (existing.PrivateKeyIV is { Length: > 0 }))
+                {
+                    throw new InvalidOperationException(
+                        $"Existing identity {existing.NodeId} in database is not a valid blind v=2 external-key row. Refusing to adopt invalid identity.");
+                }
+
                 var seed = keys.LoadIdentitySeed();
                 if (seed is not null)
                 {
                     try
                     {
-                        var derivedPubKey = Ed25519Signer.GetPublicKeyFromSeed(seed);
+                        var derivedPubKey = DerivePublicKeyFromSeed(seed);
                         if (CryptographicOperations.FixedTimeEquals(derivedPubKey, existing.PublicKey))
                         {
                             // Recover existing identity: Keystore seed matches the database row
@@ -91,17 +102,17 @@ public sealed class BlindPhonePairing(
                     }
                 }
 
-                // Database row exists without matching Keystore key: roll back safely before creating new identity
-                await identity.ClearAsync(ct);
-                keys.Clear();
-                log.Add("pairing", $"Rolled back orphaned identity {existing.NodeId} without matching Keystore seed.");
-            }
-            else
-            {
-                // No database row: ensure any leftover uncommitted key material is cleared
-                keys.Clear();
+                // Database row exists without matching Keystore key: FAIL CLOSED (Finding 1)!
+                // Do NOT delete or replace existing identity automatically.
+                // Do NOT clear keys.
+                // The old replica can no longer authenticate; preserve data and require explicit recovery/wipe.
+                throw new InvalidOperationException(
+                    $"Existing node identity {existing.NodeId} exists in database but Keystore seed is missing or mismatched. Disconnect and wipe required.");
             }
 
+            // No database row: create fresh identity.
+            // Do NOT call keys.Clear() here (Finding 3): doing so in the ordinary app wipes ingest.Clear(),
+            // destroying the hardware-backed signing key (bmb_ingest.bin).
             var nodeId = BlindNodeId.NewId();
             var (publicKey, newSeed) = Ed25519Signer.GenerateKeyPair();
             var backupKey = RandomNumberGenerator.GetBytes(32);
@@ -119,15 +130,7 @@ public sealed class BlindPhonePairing(
                 CryptographicOperations.ZeroMemory(secret);
             }
 
-            try
-            {
-                await identity.RecordAsync(nodeId, publicKey, displayName, ct);
-            }
-            catch
-            {
-                keys.Clear();
-                throw;
-            }
+            await identity.RecordAsync(nodeId, publicKey, displayName, ct);
 
             state.PublicKey = publicKey;
             state.DisplayName = displayName;
@@ -236,4 +239,11 @@ public sealed class BlindPhonePairing(
             CryptographicOperations.ZeroMemory(secret);
         }
     }
+
+    private static byte[] DerivePublicKeyFromSeed(byte[] seed)
+    {
+        var privateKeyParams = new Org.BouncyCastle.Crypto.Parameters.Ed25519PrivateKeyParameters(seed);
+        return privateKeyParams.GeneratePublicKey().GetEncoded();
+    }
 }
+

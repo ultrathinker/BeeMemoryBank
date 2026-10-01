@@ -60,7 +60,7 @@ public class BlindMobileLogicTests
             await runner.RunMigrationsAsync();
 
             var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
-            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
 
             var nodeId = BlindNodeId.NewId();
             var (pubKey, seed) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
@@ -626,7 +626,7 @@ public class BlindMobileLogicTests
             await runner.RunMigrationsAsync();
 
             var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
-            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
 
             var tasks = Enumerable.Range(0, 10).Select(async i =>
             {
@@ -665,7 +665,7 @@ public class BlindMobileLogicTests
     }
 
     [Fact]
-    public async Task NodeIdentityRepository_CreateAsync_EnforcesSingleIdentityInvariantAtomically()
+    public async Task SqliteBlindIdentityRecorder_RecordAsync_EnforcesSingleIdentityInvariantAtomically()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "bmb-node-repo-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -678,33 +678,19 @@ public class BlindMobileLogicTests
             var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
             await runner.RunMigrationsAsync();
 
-            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
 
-            var id1 = new NodeIdentity
-            {
-                NodeId = BlindNodeId.NewId(),
-                DisplayName = "Node 1",
-                Ed25519PublicKey = new byte[32],
-                Ed25519PrivateKey = [],
-                Ed25519PrivateKeyV = 2,
-                CreatedAt = DateTime.UtcNow
-            };
-            await nodeRepo.CreateAsync(id1);
+            var id1 = BlindNodeId.NewId();
+            var key1 = new byte[32];
+            await recorder.RecordAsync(id1, key1, "Node 1");
 
             // Calling with same identity is idempotent:
-            await nodeRepo.CreateAsync(id1);
+            await recorder.RecordAsync(id1, key1, "Node 1");
 
             // Calling with a different identity must be rejected atomically:
-            var id2 = new NodeIdentity
-            {
-                NodeId = BlindNodeId.NewId(),
-                DisplayName = "Node 2",
-                Ed25519PublicKey = new byte[32],
-                Ed25519PrivateKey = [],
-                Ed25519PrivateKeyV = 2,
-                CreatedAt = DateTime.UtcNow
-            };
-            var act = async () => await nodeRepo.CreateAsync(id2);
+            var id2 = BlindNodeId.NewId();
+            var key2 = new byte[32];
+            var act = async () => await recorder.RecordAsync(id2, key2, "Node 2");
             await act.Should().ThrowAsync<InvalidOperationException>();
 
             using var conn = dbFactory.CreateConnection();
@@ -734,7 +720,7 @@ public class BlindMobileLogicTests
             await runner.RunMigrationsAsync();
 
             var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
-            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
             var keys = new InMemoryBlindPhoneKeys();
             var store = new InMemoryBlindPhoneStore();
             var state = new BlindPhoneState(store);
@@ -793,7 +779,7 @@ public class BlindMobileLogicTests
             await runner.RunMigrationsAsync();
 
             var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
-            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
             var keys = new InMemoryBlindPhoneKeys();
             var store = new InMemoryBlindPhoneStore();
             var state = new BlindPhoneState(store);
@@ -950,7 +936,7 @@ public class BlindMobileLogicTests
             await runner.RunMigrationsAsync();
 
             var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
-            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
             var keys = new InMemoryBlindPhoneKeys();
             var store = new InMemoryBlindPhoneStore();
             var state = new BlindPhoneState(store);
@@ -1057,6 +1043,340 @@ public class BlindMobileLogicTests
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task CreateIdentityAsync_WhenMissingSeed_FailsClosed_AndPreservesRowAndKeys()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-missing-seed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+            var keys = new InMemoryBlindPhoneKeys();
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+
+            // Setup valid blind v=2 row in database
+            var (origPubKey, _) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            var origNodeId = BlindNodeId.NewId();
+            await recorder.RecordAsync(origNodeId, origPubKey, "Original Name");
+
+            // Keys: backup key is present, but identity seed is MISSING (null)
+            var backupKey = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32 };
+            keys.SaveBackupKey(backupKey);
+            keys.LoadIdentitySeed().Should().BeNull();
+
+            var pairing = new BlindPhonePairing(state, keys, recorder, log);
+
+            // Act: Must fail closed!
+            var act = async () => await pairing.CreateIdentityAsync("Attempted Overwrite");
+            await act.Should().ThrowAsync<InvalidOperationException>();
+
+            // Assert: Database row must be preserved, NOT deleted or overwritten!
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                var count = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, "SELECT COUNT(*) FROM tbl_node_identity");
+                count.Should().Be(1, "tbl_node_identity row must not be deleted on missing seed");
+                var currentId = await Dapper.SqlMapper.ExecuteScalarAsync<Guid>(conn, "SELECT node_id FROM tbl_node_identity LIMIT 1");
+                currentId.Should().Be(origNodeId, "existing identity must remain unchanged");
+            }
+
+            // Assert: Phone keys must be preserved, NOT cleared!
+            keys.LoadBackupKey().Should().Equal(backupKey, "backup key must remain intact");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task CreateIdentityAsync_WhenMismatchedSeed_FailsClosed_AndPreservesRowAndKeys()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-mismatched-seed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+            var keys = new InMemoryBlindPhoneKeys();
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+
+            // Setup valid blind v=2 row in database
+            var (origPubKey, _) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            var origNodeId = BlindNodeId.NewId();
+            await recorder.RecordAsync(origNodeId, origPubKey, "Original Name");
+
+            // Keys: backup key is present, and identity seed has a DIFFERENT key
+            var backupKey = new byte[32];
+            backupKey[0] = 42;
+            keys.SaveBackupKey(backupKey);
+            var (_, differentSeed) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            keys.SaveIdentitySeed(differentSeed);
+
+            var pairing = new BlindPhonePairing(state, keys, recorder, log);
+
+            // Act: Must fail closed!
+            var act = async () => await pairing.CreateIdentityAsync("Attempted Overwrite");
+            await act.Should().ThrowAsync<InvalidOperationException>();
+
+            // Assert: Database row must be preserved, NOT deleted or overwritten!
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                var count = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, "SELECT COUNT(*) FROM tbl_node_identity");
+                count.Should().Be(1, "tbl_node_identity row must not be deleted on mismatched seed");
+                var currentId = await Dapper.SqlMapper.ExecuteScalarAsync<Guid>(conn, "SELECT node_id FROM tbl_node_identity LIMIT 1");
+                currentId.Should().Be(origNodeId, "existing identity must remain unchanged");
+            }
+
+            // Assert: Phone keys must be preserved, NOT cleared!
+            keys.LoadBackupKey().Should().Equal(backupKey, "backup key must remain intact");
+            keys.LoadIdentitySeed().Should().Equal(differentSeed, "existing seed must remain intact");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task SqliteBlindIdentityRecorder_GetRecordedAsync_WhenNonBlindNodeId_FailsClosed()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-nonblind-id-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            // Insert a row with a normal non-blind Guid
+            var normalNodeId = Guid.NewGuid();
+            while (BlindNodeId.IsBlind(normalNodeId)) normalNodeId = Guid.NewGuid();
+
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                await Dapper.SqlMapper.ExecuteAsync(conn,
+                    @"INSERT INTO tbl_node_identity (node_id, display_name, ed25519_public_key, ed25519_private_key, ed25519_private_key_v, created_at)
+                      VALUES (@normalNodeId, 'Normal Node', @pubKey, @privKey, 2, @now)",
+                    new { normalNodeId, pubKey = new byte[32], privKey = Array.Empty<byte>(), now = DateTime.UtcNow });
+            }
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+
+            // Act & Assert: Must fail closed!
+            var act = async () => await recorder.GetRecordedAsync();
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*not a blind node ID*");
+
+            // Row in DB must NOT be cleared!
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                var count = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, "SELECT COUNT(*) FROM tbl_node_identity");
+                count.Should().Be(1);
+            }
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task SqliteBlindIdentityRecorder_GetRecordedAsync_WhenV1PrivateKey_FailsClosed()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-v1-id-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var blindNodeId = BlindNodeId.NewId();
+
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                await Dapper.SqlMapper.ExecuteAsync(conn,
+                    @"INSERT INTO tbl_node_identity (node_id, display_name, ed25519_public_key, ed25519_private_key, ed25519_private_key_v, created_at)
+                      VALUES (@blindNodeId, 'V1 Node', @pubKey, @privKey, 1, @now)",
+                    new { blindNodeId, pubKey = new byte[32], privKey = Array.Empty<byte>(), now = DateTime.UtcNow });
+            }
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+
+            // Act & Assert: Must fail closed!
+            var act = async () => await recorder.GetRecordedAsync();
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*key version 1*");
+
+            // Row in DB must NOT be cleared!
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                var count = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, "SELECT COUNT(*) FROM tbl_node_identity");
+                count.Should().Be(1);
+            }
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task SqliteBlindIdentityRecorder_GetRecordedAsync_WhenNonEmptyPrivateKey_FailsClosed()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-nonempty-key-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var blindNodeId = BlindNodeId.NewId();
+
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                await Dapper.SqlMapper.ExecuteAsync(conn,
+                    @"INSERT INTO tbl_node_identity (node_id, display_name, ed25519_public_key, ed25519_private_key, ed25519_private_key_v, created_at)
+                      VALUES (@blindNodeId, 'Key In DB', @pubKey, @privKey, 2, @now)",
+                    new { blindNodeId, pubKey = new byte[32], privKey = new byte[] { 1, 2, 3 }, now = DateTime.UtcNow });
+            }
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+
+            // Act & Assert: Must fail closed!
+            var act = async () => await recorder.GetRecordedAsync();
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*private key material*");
+
+            // Row in DB must NOT be cleared!
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                var count = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, "SELECT COUNT(*) FROM tbl_node_identity");
+                count.Should().Be(1);
+            }
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task CreateIdentityAsync_DoesNotClearKeys_OnNewRegistration_PreservingOrdinaryIngestKey()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-ingest-preserve-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+            var mockKeys = new MockOrdinaryAppKeys();
+            var initialIngestKey = new byte[] { 10, 20, 30, 40 };
+            mockKeys.SetSimulatedIngestKey(initialIngestKey);
+
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+            var pairing = new BlindPhonePairing(state, mockKeys, recorder, log);
+
+            // Registration from scratch (empty DB)
+            await pairing.CreateIdentityAsync("Phone");
+
+            // Assert: Registration succeeded
+            pairing.HasIdentity.Should().BeTrue();
+            // Assert: mockKeys.Clear() was NEVER called, and the ingest store is intact!
+            mockKeys.ClearCalled.Should().BeFalse("Clear() must not be called as a side effect of creating identity");
+            mockKeys.IngestCleared.Should().BeFalse("ingest store must not be erased during registration");
+            mockKeys.SimulatedIngestKey.Should().NotBeNull();
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+}
+
+internal sealed class MockOrdinaryAppKeys : IBlindPhoneKeys
+{
+    public bool ClearCalled { get; private set; }
+    public bool IngestCleared { get; private set; }
+    public byte[]? SimulatedIngestKey { get; private set; }
+    private byte[]? _backup;
+    private byte[]? _pairing;
+
+    public void SetSimulatedIngestKey(byte[] key) => SimulatedIngestKey = key;
+
+    public void SaveIdentitySeed(byte[] seed)
+    {
+        SimulatedIngestKey = seed.ToArray();
+    }
+
+    public byte[]? LoadIdentitySeed() => SimulatedIngestKey;
+    public void SaveBackupKey(byte[] key) => _backup = key.ToArray();
+    public byte[]? LoadBackupKey() => _backup;
+    public void SavePairingSecret(byte[] secret) => _pairing = secret.ToArray();
+    public byte[]? LoadPairingSecret() => _pairing;
+    public void ClearPairingSecret() => _pairing = null;
+
+    public void Clear()
+    {
+        ClearCalled = true;
+        IngestCleared = true;
+        SimulatedIngestKey = null;
+        _backup = null;
+        _pairing = null;
     }
 }
 
