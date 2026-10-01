@@ -753,9 +753,9 @@ public class BlindMobileLogicTests
             freshPairing.HasIdentity.Should().BeTrue();
             state.NodeId.Should().Be(origNodeId);
             state.PublicKey.Should().Equal(origPubKey);
-            var phoneCode = freshPairing.PhoneCode();
-            phoneCode.Should().NotBeNull();
-            phoneCode!.NodeId.Should().Be(origNodeId);
+            freshPairing.PhoneCodeText().Should().NotBeNull();
+            var recoveredNodeId = freshPairing.WithPhoneCode(c => c.NodeId);
+            recoveredNodeId.Should().Be(origNodeId);
         }
         finally
         {
@@ -787,14 +787,14 @@ public class BlindMobileLogicTests
             var pairing = new BlindMobilePairing(state, keys, recorder, log);
 
             await pairing.CreateIdentityAsync("Phone");
-            var phoneCode = pairing.PhoneCode()!;
+            var phoneCodeStr = pairing.PhoneCodeText()!;
 
             // Prepare a valid call code from the listening node
             var listenerNodeId = BlindNodeId.NewId();
             var (listenerPubKey, _) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
             var validPin = System.Buffers.Text.Base64Url.EncodeToString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
             var enrollment = BlindPhoneEnrollment.Prepare(
-                phoneCode.ToString(),
+                phoneCodeStr,
                 "https://127.0.0.1:5301",
                 listenerNodeId,
                 validPin,
@@ -839,7 +839,7 @@ public class BlindMobileLogicTests
             recoveredPairing.IsPaired.Should().BeTrue();
             recoveredPairing.AwaitingAnswer.Should().BeFalse();
             keys.LoadPairingSecret().Should().BeNull("orphaned secret committed in previous session was spent on recovery");
-            recoveredPairing.PhoneCode().Should().BeNull();
+            recoveredPairing.PhoneCodeText().Should().BeNull();
         }
         finally
         {
@@ -947,7 +947,7 @@ public class BlindMobileLogicTests
             pairing.HasIdentity.Should().BeFalse();
             pairing.IsPaired.Should().BeFalse();
             pairing.AwaitingAnswer.Should().BeFalse();
-            pairing.PhoneCode().Should().BeNull();
+            pairing.PhoneCodeText().Should().BeNull();
 
             // 2. Create Identity
             await pairing.CreateIdentityAsync("Pixel Blind Phone");
@@ -955,10 +955,19 @@ public class BlindMobileLogicTests
             pairing.IsPaired.Should().BeFalse();
             pairing.AwaitingAnswer.Should().BeTrue();
 
-            var phoneCode = pairing.PhoneCode();
-            phoneCode.Should().NotBeNull();
-            phoneCode!.DisplayName.Should().Be("Pixel Blind Phone");
-            BlindNodeId.IsBlind(phoneCode.NodeId).Should().BeTrue();
+            var phoneCodeText = pairing.PhoneCodeText();
+            phoneCodeText.Should().NotBeNull();
+            Guid initialNodeId = default;
+            byte[] initialSecret = [];
+            byte[] initialBackupKey = [];
+            pairing.WithPhoneCode(c =>
+            {
+                c.DisplayName.Should().Be("Pixel Blind Phone");
+                BlindNodeId.IsBlind(c.NodeId).Should().BeTrue();
+                initialNodeId = c.NodeId;
+                initialSecret = (byte[])c.Secret.Clone();
+                initialBackupKey = (byte[])c.BackupKey.Clone();
+            });
 
             // Check DB identity row is v=2
             var dbIdentity = await nodeRepo.GetAsync();
@@ -970,7 +979,7 @@ public class BlindMobileLogicTests
             var listenerNodeId = BlindNodeId.NewId();
             var (listenerPubKey, _) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
             var enrollment = BlindPhoneEnrollment.Prepare(
-                phoneCode.ToString(),
+                phoneCodeText!,
                 $"https://127.0.0.1:{port1}",
                 listenerNodeId,
                 listenerSpkiPin,
@@ -980,9 +989,9 @@ public class BlindMobileLogicTests
 
             prepareError.Should().BeNull();
             enrollment.Should().NotBeNull();
-            enrollment!.Entry.NodeId.Should().Be(phoneCode.NodeId);
+            enrollment!.Entry.NodeId.Should().Be(initialNodeId);
             enrollment.Entry.IsSuperadmin.Should().BeFalse();
-            enrollment.SealedSecretName.Should().Be($"android-backup:{phoneCode.NodeId}");
+            enrollment.SealedSecretName.Should().Be($"android-backup:{initialNodeId}");
             enrollment.CallCode.SpkiPin.Should().Be(listenerSpkiPin);
 
             // 4. Verify state before accepting call code
@@ -1000,7 +1009,7 @@ public class BlindMobileLogicTests
 
             // Secret is spent immediately upon accepting call code
             keys.LoadPairingSecret().Should().BeNull();
-            pairing.PhoneCode().Should().BeNull();
+            pairing.PhoneCodeText().Should().BeNull();
 
             // 6. Connect to Fake Listener using BlindHttpClientProvider
             var services = new ServiceCollection();
@@ -1029,11 +1038,14 @@ public class BlindMobileLogicTests
             // 8. Re-pair flow generates a fresh one-time secret and new phone code
             pairing.StartRePair();
             pairing.AwaitingAnswer.Should().BeTrue();
-            var rePairCode = pairing.PhoneCode();
-            rePairCode.Should().NotBeNull();
-            rePairCode!.Secret.Should().NotEqual(phoneCode.Secret);
-            rePairCode.NodeId.Should().Be(phoneCode.NodeId, "NodeId remains stable across re-pairs");
-            rePairCode.BackupKey.Should().Equal(phoneCode.BackupKey, "Backup key remains stable across re-pairs");
+            var rePairCodeText = pairing.PhoneCodeText();
+            rePairCodeText.Should().NotBeNull();
+            pairing.WithPhoneCode(rePairCode =>
+            {
+                rePairCode.Secret.Should().NotEqual(initialSecret);
+                rePairCode.NodeId.Should().Be(initialNodeId, "NodeId remains stable across re-pairs");
+                rePairCode.BackupKey.Should().Equal(initialBackupKey, "Backup key remains stable across re-pairs");
+            });
         }
         finally
         {
@@ -1550,7 +1562,7 @@ public class BlindMobileLogicTests
                 Path.Combine(Path.GetTempPath(), "dummy-" + Guid.NewGuid().ToString("N") + ".db")));
         var pairing = new BlindMobilePairing(state, keys, recorder, log);
 
-        var result = pairing.PhoneCode();
+        var result = pairing.PhoneCodeText();
 
         // Must return null because backup key is missing
         result.Should().BeNull();
@@ -1659,6 +1671,96 @@ public class BlindMobileLogicTests
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         }
     }
+
+    /// <summary>
+    /// Stage 31 Item 1a: When the second Keystore decrypt throws, any previously loaded buffer
+    /// (the pairing secret) must still be cleared in finally.
+    /// </summary>
+    [Fact]
+    public async Task WithPhoneCode_WhenSecondLoadThrows_ClearsFirstBufferImmediately()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-load-throw-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            await new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory).RunMigrationsAsync();
+
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+            var keys = new SpyBlindNodeKeys();
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+            var pairing = new BlindMobilePairing(state, keys, recorder, log);
+
+            await pairing.CreateIdentityAsync("TestPhone");
+
+            keys.ClearLoadedBuffersTracking();
+
+            // Configure spy so that LoadPairingSecret succeeds, but LoadBackupKey throws
+            keys.ThrowOnLoadBackupKey = true;
+
+            var act = () => pairing.WithPhoneCode(code => code.ToString());
+            act.Should().Throw<System.Security.Cryptography.CryptographicException>()
+                .WithMessage("*Simulated Keystore decrypt failure*");
+
+            // LoadPairingSecret was called and handed out a buffer
+            keys.LoadPairingSecretCallCount.Should().Be(1);
+            keys.LoadBackupKeyCallCount.Should().Be(1);
+            keys.TotalLoadedBuffersCount.Should().Be(1, "pairing secret buffer was handed out");
+
+            // CRITICAL: The secret buffer that was handed out MUST be cleared despite LoadBackupKey throwing!
+            keys.SecretBuffersClearedCount.Should().Be(1, "first buffer must be cleared when second load throws");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    /// <summary>
+    /// Stage 31 Item 1b: Identity creation must reject control characters in displayName
+    /// the same way the shared parser does (BlindPhoneCode.TryParse: name.Any(char.IsControl)),
+    /// so the phone never shows a code the other side rejects.
+    /// </summary>
+    [Theory]
+    [InlineData("Phone\nName")]
+    [InlineData("Phone\rName")]
+    [InlineData("Phone\tName")]
+    [InlineData("Phone\0Name")]
+    public async Task CreateIdentityAsync_RejectsControlCharactersInDisplayName(string invalidName)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-ctrl-name-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            await new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory).RunMigrationsAsync();
+
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+            var keys = new SpyBlindNodeKeys();
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+            var pairing = new BlindMobilePairing(state, keys, recorder, log);
+
+            var act = async () => await pairing.CreateIdentityAsync(invalidName);
+            await act.Should().ThrowAsync<ArgumentException>()
+                .WithMessage("*control*");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
 }
 
 internal sealed class MockOrdinaryIngestKeyStore
@@ -1754,9 +1856,13 @@ internal sealed class SpyBlindNodeKeys : IBlindNodeKeys
         _backupKey = (byte[])key.Clone();
     }
 
+    public bool ThrowOnLoadBackupKey { get; set; }
+
     public byte[]? LoadBackupKey()
     {
         LoadBackupKeyCallCount++;
+        if (ThrowOnLoadBackupKey)
+            throw new System.Security.Cryptography.CryptographicException("Simulated Keystore decrypt failure on backup key");
         if (_backupKey is null) return null;
         var clone = (byte[])_backupKey.Clone();
         _loadedSecretBuffers.Add(clone);

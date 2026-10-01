@@ -58,8 +58,8 @@ public sealed class BlindMobilePairing(
         {
             if (HasIdentity) return;
             displayName = displayName.Trim();
-            if (displayName.Length is 0 or > BlindPhoneCode.MaxDisplayNameLength)
-                throw new ArgumentException($"A name of 1 to {BlindPhoneCode.MaxDisplayNameLength} characters is needed.", nameof(displayName));
+            if (displayName.Length is 0 or > BlindPhoneCode.MaxDisplayNameLength || displayName.Any(char.IsControl))
+                throw new ArgumentException($"A name of 1 to {BlindPhoneCode.MaxDisplayNameLength} characters without control characters is needed.", nameof(displayName));
 
             // Check if an identity is already recorded in the SQLite database
             var existing = await identity.GetRecordedAsync(ct);
@@ -180,34 +180,9 @@ public sealed class BlindMobilePairing(
     }
 
     /// <summary>
-    /// The code the phone shows so Windows can add it; null when there is nothing to answer — no
-    /// identity, or already paired and no re-pair started.
-    /// Caller is responsible for clearing <see cref="BlindPhoneCode.Secret"/> and
-    /// <see cref="BlindPhoneCode.BackupKey"/>. Prefer <see cref="WithPhoneCode{TResult}"/> or
-    /// <see cref="PhoneCodeText"/> which guarantee buffers are wiped after use.
-    /// </summary>
-    public BlindPhoneCode? PhoneCode()
-    {
-        lock (_pairGate)
-        {
-            CleanupOrphanedSecretIfCommitted();
-            if (state.NodeId is not { } nodeId || state.PublicKey is not { } key || state.DisplayName is not { } name) return null;
-            var secret = keys.LoadPairingSecret();
-            var backupKey = keys.LoadBackupKey();
-            if (secret is null || backupKey is null)
-            {
-                // Clear whichever buffer was loaded so decrypted material does not linger
-                if (secret is not null) CryptographicOperations.ZeroMemory(secret);
-                if (backupKey is not null) CryptographicOperations.ZeroMemory(backupKey);
-                return null;
-            }
-            return new BlindPhoneCode(nodeId, key, secret, backupKey, name);
-        }
-    }
-
-    /// <summary>
     /// Executes an action with the phone code and guarantees that the loaded secret and backupKey
-    /// buffers are wiped with CryptographicOperations.ZeroMemory as soon as the callback finishes.
+    /// buffers are wiped with CryptographicOperations.ZeroMemory as soon as the callback finishes,
+    /// or if an exception is thrown during key loading or execution.
     /// </summary>
     public TResult? WithPhoneCode<TResult>(Func<BlindPhoneCode, TResult> consume)
     {
@@ -215,10 +190,12 @@ public sealed class BlindMobilePairing(
         {
             CleanupOrphanedSecretIfCommitted();
             if (state.NodeId is not { } nodeId || state.PublicKey is not { } key || state.DisplayName is not { } name) return default;
-            var secret = keys.LoadPairingSecret();
-            var backupKey = keys.LoadBackupKey();
+            byte[]? secret = null;
+            byte[]? backupKey = null;
             try
             {
+                secret = keys.LoadPairingSecret();
+                backupKey = keys.LoadBackupKey();
                 if (secret is null || backupKey is null) return default;
                 var code = new BlindPhoneCode(nodeId, key, secret, backupKey, name);
                 return consume(code);
@@ -229,6 +206,20 @@ public sealed class BlindMobilePairing(
                 if (backupKey is not null) CryptographicOperations.ZeroMemory(backupKey);
             }
         }
+    }
+
+    /// <summary>
+    /// Executes an action with the phone code and guarantees that the loaded secret and backupKey
+    /// buffers are wiped with CryptographicOperations.ZeroMemory as soon as the callback finishes,
+    /// or if an exception is thrown during key loading or execution.
+    /// </summary>
+    public void WithPhoneCode(Action<BlindPhoneCode> consume)
+    {
+        WithPhoneCode(code =>
+        {
+            consume(code);
+            return 0;
+        });
     }
 
     /// <summary>
