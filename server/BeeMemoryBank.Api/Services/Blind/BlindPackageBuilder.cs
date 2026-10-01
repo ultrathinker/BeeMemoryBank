@@ -38,9 +38,11 @@ public sealed class BlindPackageBuilder(
     /// <param name="producerIsSuperadmin">How the producer's own row reads in the package. Only the
     /// caller knows: a PC seeding after its pre-flight (plan 4.2) is superadmin in the network's
     /// eyes, a blind node serving a replica never is.</param>
+    /// <param name="outputDirectory">Build the package here instead of in the snapshots directory, so
+    /// snapshot listing, retention and delete never see it (the replica cache's own directory).</param>
     public async Task<BlindPackage> BuildAsync(
         Guid seedId, long? includesUpTo, bool producerIsSuperadmin, CancellationToken ct = default,
-        string? fileNamePrefix = null)
+        string? outputDirectory = null)
     {
         var self = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -64,9 +66,11 @@ public sealed class BlindPackageBuilder(
             filterSecrets: true, sign: true, cpSequenceNum: cp, encryptDb: false,
             additions: new SnapshotAdditions(ExtraTables, NullEmbeddingProjections,
                 new Dictionary<string, byte[]> { [BlindManifest.FileName] = manifest.ToBytes() }),
-            fileNamePrefix: fileNamePrefix);
+            outputDirectory: outputDirectory);
 
-        var path = snapshots.GetSnapshotPath(info.FileName);
+        var path = outputDirectory is null
+            ? snapshots.GetSnapshotPath(info.FileName)
+            : Path.Combine(outputDirectory, info.FileName);
         string sha256;
         await using (var file = File.OpenRead(path))
             sha256 = Convert.ToHexStringLower(await SHA256.HashDataAsync(file, ct));

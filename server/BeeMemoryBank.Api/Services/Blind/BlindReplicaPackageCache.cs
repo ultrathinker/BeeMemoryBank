@@ -15,7 +15,9 @@ public sealed class BlindReplicaPackageCache(
     ILogger<BlindReplicaPackageCache>? logger = null) : IAsyncDisposable, IHostedService
 {
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(30);
-    private const string FileNamePrefix = "bmb-blind-replica";
+    // Its own directory next to snapshots/: listing, retention, delete and compaction only read the
+    // snapshots directory, so a leased replica package can never be counted, pruned or listed there.
+    private const string DirectoryName = "blind-replica";
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly List<Entry> _retired = [];
     private Entry? _entry;
@@ -136,7 +138,7 @@ public sealed class BlindReplicaPackageCache(
         using var scope = scopes.CreateScope();
         var package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
             .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin, ct,
-                fileNamePrefix: FileNamePrefix);
+                outputDirectory: PackageDirectory(scope.ServiceProvider.GetRequiredService<SnapshotService>()));
         var replacement = new Entry(package, producerIsSuperadmin, now);
         var superseded = _entry;
         _entry = replacement;
@@ -186,9 +188,9 @@ public sealed class BlindReplicaPackageCache(
         try
         {
             using var scope = scopes.CreateScope();
-            var snapshots = scope.ServiceProvider.GetRequiredService<SnapshotService>();
-            Directory.CreateDirectory(snapshots.SnapshotsDir);
-            foreach (var file in Directory.GetFiles(snapshots.SnapshotsDir, FileNamePrefix + "-*.tar.gz"))
+            var directory = PackageDirectory(scope.ServiceProvider.GetRequiredService<SnapshotService>());
+            if (!Directory.Exists(directory)) return;
+            foreach (var file in Directory.GetFiles(directory, "*.tar.gz"))
             {
                 File.Delete(file);
                 var signature = file + ".sig";
@@ -216,6 +218,9 @@ public sealed class BlindReplicaPackageCache(
             logger?.LogWarning(ex, "Could not retire an expired blind replica package");
         }
     }
+
+    private static string PackageDirectory(SnapshotService snapshots) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(snapshots.SnapshotsDir))!, DirectoryName);
 
     private static void DeletePackageFiles(BlindPackage package)
     {

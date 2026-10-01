@@ -133,13 +133,17 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task ReplicaCache_StartRemovesOnlyItsDedicatedOrphanFiles()
+    public async Task ReplicaCache_StartRemovesOnlyItsOwnDirectorysOrphanFiles()
     {
         var snapshots = _blind.Services.GetRequiredService<SnapshotService>();
-        Directory.CreateDirectory(snapshots.SnapshotsDir);
-        var orphan = Path.Combine(snapshots.SnapshotsDir, "bmb-blind-replica-orphan.tar.gz");
+        var directory = ReplicaDirectory(snapshots);
+        Directory.CreateDirectory(directory);
+        var orphan = Path.Combine(directory, "bmb-snapshot-orphan.tar.gz");
         await File.WriteAllBytesAsync(orphan, [1]);
         await File.WriteAllBytesAsync(orphan + ".sig", [2]);
+        Directory.CreateDirectory(snapshots.SnapshotsDir);
+        var realSnapshot = Path.Combine(snapshots.SnapshotsDir, "bmb-snapshot-keep-me.tar.gz");
+        await File.WriteAllBytesAsync(realSnapshot, [3]);
         await using var cache = new BlindReplicaPackageCache(
             _blind.Services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
 
@@ -147,17 +151,51 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
 
         File.Exists(orphan).Should().BeFalse();
         File.Exists(orphan + ".sig").Should().BeFalse();
+        File.Exists(realSnapshot).Should().BeTrue("the sweep must never touch the real snapshots directory");
     }
 
     [Fact]
-    public async Task ReplicaCache_UsesDedicatedReplicaPackageFileNames()
+    public async Task ReplicaCache_BuildsPackagesInItsOwnDirectoryNotInTheSnapshotsDirectory()
     {
         await using var cache = new BlindReplicaPackageCache(
             _blind.Services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
 
         var package = await cache.GetAsync(producerIsSuperadmin: false, CancellationToken.None);
 
-        Path.GetFileName(package.FilePath).Should().StartWith("bmb-blind-replica-");
+        var snapshots = _blind.Services.GetRequiredService<SnapshotService>();
+        Path.GetDirectoryName(package.FilePath).Should().Be(ReplicaDirectory(snapshots));
+        snapshots.List().Should().BeEmpty("nothing of the replica package may be written where the snapshot code looks");
+    }
+
+    private static string ReplicaDirectory(SnapshotService snapshots) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(snapshots.SnapshotsDir))!, "blind-replica");
+
+    [Fact]
+    public async Task ReplicaPackage_IsNeitherListedNorCountedNorDeletedByTheSnapshotRetention()
+    {
+        var snapshots = _blind.Services.GetRequiredService<SnapshotService>();
+        var oldest = (await snapshots.CreateAsync(encryptDb: false)).FileName;
+        var middle = (await snapshots.CreateAsync(encryptDb: false)).FileName;
+        var newest = (await snapshots.CreateAsync(encryptDb: false)).FileName;
+        File.SetLastWriteTimeUtc(snapshots.GetSnapshotPath(oldest), DateTime.UtcNow.AddHours(-3));
+        File.SetLastWriteTimeUtc(snapshots.GetSnapshotPath(middle), DateTime.UtcNow.AddHours(-2));
+        File.SetLastWriteTimeUtc(snapshots.GetSnapshotPath(newest), DateTime.UtcNow.AddHours(-1));
+        var cache = _blind.Services.GetRequiredService<BlindReplicaPackageCache>();
+        var package = await cache.GetAsync(producerIsSuperadmin: false, CancellationToken.None);
+        var packageName = Path.GetFileName(package.FilePath);
+
+        // Counted, not matched by name: the package and a snapshot made in the same second share a name shape.
+        snapshots.List().Should().HaveCount(3,
+            "the replica package is internal and must not show up in GET /api/snapshots");
+        snapshots.PruneOldSnapshots(keepCount: 2).Should().Be(1,
+            "only the three real snapshots are ranked, so exactly the oldest one goes");
+
+        File.Exists(package.FilePath).Should().BeTrue("retention must not delete a leased replica package");
+        File.Exists(package.FilePath + ".sig").Should().BeTrue();
+        File.Exists(snapshots.GetSnapshotPath(newest)).Should().BeTrue("the replica must not take a retention slot");
+        File.Exists(snapshots.GetSnapshotPath(middle)).Should().BeTrue();
+        snapshots.Delete(packageName).Should().BeFalse("the public delete route must not reach the replica package");
+        File.Exists(package.FilePath).Should().BeTrue();
     }
 
     private sealed class AdjustableTimeProvider(DateTimeOffset now) : TimeProvider

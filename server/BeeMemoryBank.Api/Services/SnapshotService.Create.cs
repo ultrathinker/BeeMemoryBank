@@ -26,15 +26,18 @@ public partial class SnapshotService
     /// <param name="cpSequenceNum">Lamport checkpoint sequence number — set by compaction/sync paths.</param>
     /// <param name="additions">Package-specific changes on top of a peer snapshot — the blind
     /// package (plan 4.2) is the one caller. See <see cref="SnapshotAdditions"/>.</param>
+    /// <param name="outputDirectory">Where the archive is written instead of <see cref="SnapshotsDir"/>.
+    /// A file there is invisible to listing, retention and delete, which only read the snapshots directory.</param>
     public async Task<SnapshotInfo> CreateAsync(
         bool filterSecrets = true,
         bool sign = true,
         long? cpSequenceNum = null,
         bool encryptDb = true,
         SnapshotAdditions? additions = null,
-        string? fileNamePrefix = null)
+        string? outputDirectory = null)
     {
-        Directory.CreateDirectory(SnapshotsDir);
+        var outputDir = outputDirectory ?? SnapshotsDir;
+        Directory.CreateDirectory(outputDir);
 
         try
         {
@@ -43,7 +46,7 @@ public partial class SnapshotService
             {
                 var dbSize = new FileInfo(dbPath).Length;
                 var tempDriveInfo = new DriveInfo(Path.GetPathRoot(Path.GetTempPath())!);
-                var snapshotsDriveInfo = new DriveInfo(Path.GetPathRoot(SnapshotsDir)!);
+                var snapshotsDriveInfo = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(outputDir))!);
                 var requiredBytes = dbSize * 2;
                 // Typed, not a message the caller has to recognise: the network-restore flow routes
                 // a disk-space refusal to a "continue without a backup?" admin prompt and every
@@ -217,16 +220,13 @@ public partial class SnapshotService
             // destroying the one copy that exists to be restored if the restore goes wrong.
             // Disambiguate with a counter rather than widening the timestamp, so file names keep
             // the shape operators and older snapshots already have.
-            var prefix = fileNamePrefix ?? "bmb-snapshot";
-            if (prefix.Length == 0 || prefix.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_'))
-                throw new ArgumentException("Snapshot file name prefix is invalid.", nameof(fileNamePrefix));
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-            var fileName = $"{prefix}-{timestamp}.tar.gz";
-            var filePath = Path.Combine(SnapshotsDir, fileName);
+            var fileName = $"bmb-snapshot-{timestamp}.tar.gz";
+            var filePath = Path.Combine(outputDir, fileName);
             for (var dedupe = 2; File.Exists(filePath); dedupe++)
             {
                 fileName = $"bmb-snapshot-{timestamp}-{dedupe}.tar.gz";
-                filePath = Path.Combine(SnapshotsDir, fileName);
+                filePath = Path.Combine(outputDir, fileName);
             }
 
             // Two complementary signatures over the manifest exist for historical reasons:
