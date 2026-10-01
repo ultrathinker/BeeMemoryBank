@@ -444,7 +444,9 @@ public sealed class BlindPhoneReplicaClient(
         return null;
     }
 
-    private static async Task ExtractAsync(string archive, string destination, CancellationToken ct)
+    internal static async Task ExtractAsync(
+        string archive, string destination, CancellationToken ct,
+        long maximumEntryBytes = MaximumExtractedEntryBytes, long maximumTotalBytes = MaximumExtractedBytes)
     {
         var root = Path.GetFullPath(destination) + Path.DirectorySeparatorChar;
         await using var file = File.OpenRead(archive);
@@ -461,11 +463,11 @@ public sealed class BlindPhoneReplicaClient(
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             await using var output = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None,
                 81_920, FileOptions.Asynchronous);
-            var remaining = MaximumExtractedBytes - extractedBytes;
+            var remaining = maximumTotalBytes - extractedBytes;
             if (remaining <= 0)
                 throw new InvalidDataException("Replica archive exceeds the maximum extracted size.");
             var copied = await CopyWithLimitAsync(entry.DataStream, output,
-                Math.Min(MaximumExtractedEntryBytes, remaining), ct);
+                Math.Min(maximumEntryBytes, remaining), ct);
             extractedBytes += copied;
         }
     }

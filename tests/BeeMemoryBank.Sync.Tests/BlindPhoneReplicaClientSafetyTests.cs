@@ -42,6 +42,82 @@ public sealed class BlindPhoneReplicaClientSafetyTests
         output.Length.Should().Be(1024);
     }
 
+    [Fact]
+    public async Task ExtractAsync_RejectsAnEntryOverThePerEntryLimit_WithoutWritingPastIt()
+    {
+        var destination = NewDestination();
+        var archive = ArchiveFile(("big.bin", new byte[1025]));
+
+        Func<Task> act = () => BlindPhoneReplicaClient.ExtractAsync(
+            archive, destination, CancellationToken.None, maximumEntryBytes: 1024, maximumTotalBytes: 100_000);
+
+        await act.Should().ThrowAsync<InvalidDataException>();
+        new FileInfo(Path.Combine(destination, "big.bin")).Length.Should().Be(1024);
+    }
+
+    [Fact]
+    public async Task ExtractAsync_RejectsEntriesThatTogetherPassTheCumulativeLimit()
+    {
+        var destination = NewDestination();
+        var archive = ArchiveFile(("a.bin", new byte[600]), ("b.bin", new byte[600]));
+
+        Func<Task> act = () => BlindPhoneReplicaClient.ExtractAsync(
+            archive, destination, CancellationToken.None, maximumEntryBytes: 1024, maximumTotalBytes: 1000);
+
+        await act.Should().ThrowAsync<InvalidDataException>();
+        new FileInfo(Path.Combine(destination, "b.bin")).Length.Should().Be(400, "the second entry gets only what is left of the total");
+    }
+
+    [Fact]
+    public async Task ExtractAsync_RejectsAnEntryOnceTheCumulativeLimitIsSpentExactly()
+    {
+        var destination = NewDestination();
+        var archive = ArchiveFile(("a.bin", new byte[500]), ("b.bin", new byte[500]), ("c.bin", new byte[1]));
+
+        Func<Task> act = () => BlindPhoneReplicaClient.ExtractAsync(
+            archive, destination, CancellationToken.None, maximumEntryBytes: 1024, maximumTotalBytes: 1000);
+
+        await act.Should().ThrowAsync<InvalidDataException>();
+        File.Exists(Path.Combine(destination, "b.bin")).Should().BeTrue("exactly the limit is allowed");
+    }
+
+    [Fact]
+    public async Task ExtractAsync_AcceptsEntriesWithinBothLimits()
+    {
+        var destination = NewDestination();
+        var archive = ArchiveFile(("a.bin", new byte[500]), ("b.bin", new byte[500]));
+
+        await BlindPhoneReplicaClient.ExtractAsync(
+            archive, destination, CancellationToken.None, maximumEntryBytes: 500, maximumTotalBytes: 1000);
+
+        new FileInfo(Path.Combine(destination, "a.bin")).Length.Should().Be(500);
+        new FileInfo(Path.Combine(destination, "b.bin")).Length.Should().Be(500);
+    }
+
+    private static string ArchiveFile(params (string Name, byte[] Contents)[] entries)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "bmb-extract-" + Guid.NewGuid().ToString("N") + ".tar.gz");
+        using var stream = CreateArchive(entries);
+        File.WriteAllBytes(path, stream.ToArray());
+        return path;
+    }
+
+    private static string NewDestination() =>
+        Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "bmb-extract-" + Guid.NewGuid().ToString("N"))).FullName;
+
+    private static MemoryStream CreateArchive(params (string Name, byte[] Contents)[] entries)
+    {
+        var archive = new MemoryStream();
+        using (var gzip = new GZipStream(archive, CompressionLevel.NoCompression, leaveOpen: true))
+        using (var tar = new TarWriter(gzip, leaveOpen: true))
+        {
+            foreach (var (name, contents) in entries)
+                tar.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, name) { DataStream = new MemoryStream(contents) });
+        }
+        archive.Position = 0;
+        return archive;
+    }
+
     private static MemoryStream CreateArchive(string name, byte[] contents)
     {
         var archive = new MemoryStream();
