@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -131,6 +132,121 @@ public sealed class BlindPhonePullClientTests : IDisposable
         (await _phone.Services.GetRequiredService<IEventLogRepository>().ExistsAsync(evt.EventId)).Should().BeFalse();
         (await _phone.Services.GetRequiredService<ISyncPositionRepository>().GetAsync(source.NodeId))!
             .LastSequenceNum.Should().Be(served.SequenceNum);
+    }
+
+    [Fact]
+    public async Task Pull_CancelledWhileAnEventIsApplied_StopsBeforeTheNextOneAndQuarantinesNothing()
+    {
+        var (source, _, _, target) = await PreparePullAsync();
+        var (authorPublic, authorSeed) = Ed25519Signer.GenerateKeyPair();
+        var author = Guid.NewGuid();
+        await _phone.Services.GetRequiredService<IWhitelistRepository>().CreateAsync(Whitelist(author, authorPublic));
+        var events = await AppendThreeEventsToTheSourceAsync(author, authorSeed);
+        using var stop = new CancellationTokenSource();
+        // The worker is told to stop while the first event is being finished (its quarantine row cleared).
+        var pull = new BlindPhonePullClient(
+            new SubstitutingScopeFactory(_phone.Services.GetRequiredService<IServiceScopeFactory>(), (inner, type) =>
+                type == typeof(ISyncQuarantineRepository)
+                    ? Intercept((inner.GetService(type) as ISyncQuarantineRepository)!,
+                        (method, _) => { if (method.Name == nameof(ISyncQuarantineRepository.ClearAsync)) stop.Cancel(); })
+                    : null),
+            _phone.Services.GetRequiredService<INodeAuthSigner>(), NullLogger<BlindPhonePullClient>.Instance);
+        using var http = new HttpClient(_source.Server.CreateHandler());
+
+        var act = () => pull.SyncOnceAsync(http, target, stop.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        var log = _phone.Services.GetRequiredService<IEventLogRepository>();
+        (await log.ExistsAsync(events[0].EventId)).Should().BeTrue("the event being applied when the stop came is finished");
+        (await log.ExistsAsync(events[1].EventId)).Should().BeFalse("a stopped worker must not keep applying the page");
+        (await _phone.Services.GetRequiredService<ISyncPositionRepository>().GetAsync(source.NodeId))!
+            .LastSequenceNum.Should().Be(events[0].SequenceNum, "what was applied is not lost");
+        await AssertNothingQuarantinedAsync();
+    }
+
+    [Fact]
+    public async Task Pull_AnApplyThatThrowsCancellation_IsNotRecordedAsAnEventFailure()
+    {
+        var (source, _, _, target) = await PreparePullAsync();
+        var (authorPublic, authorSeed) = Ed25519Signer.GenerateKeyPair();
+        var author = Guid.NewGuid();
+        await _phone.Services.GetRequiredService<IWhitelistRepository>().CreateAsync(Whitelist(author, authorPublic));
+        var events = await AppendThreeEventsToTheSourceAsync(author, authorSeed);
+        // An applier whose folder lookups report cancellation, as a stopped worker's database call would.
+        var pull = new BlindPhonePullClient(
+            new SubstitutingScopeFactory(_phone.Services.GetRequiredService<IServiceScopeFactory>(), (inner, type) =>
+                type == typeof(EventApplier)
+                    ? ActivatorUtilities.CreateInstance<EventApplier>(inner,
+                        Intercept<IFolderRepository>(null, (_, _) => throw new OperationCanceledException()))
+                    : null),
+            _phone.Services.GetRequiredService<INodeAuthSigner>(), NullLogger<BlindPhonePullClient>.Instance);
+        using var http = new HttpClient(_source.Server.CreateHandler());
+
+        var act = () => pull.SyncOnceAsync(http, target, CancellationToken.None);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        await AssertNothingQuarantinedAsync();
+        ((await _phone.Services.GetRequiredService<ISyncPositionRepository>().GetAsync(source.NodeId))?.LastSequenceNum ?? 0)
+            .Should().Be(0, "nothing was applied, so the cursor does not move");
+        (await _phone.Services.GetRequiredService<IEventLogRepository>().ExistsAsync(events[0].EventId)).Should().BeFalse();
+    }
+
+    private async Task<List<SyncEvent>> AppendThreeEventsToTheSourceAsync(Guid author, byte[] authorSeed)
+    {
+        var log = _source.Services.GetRequiredService<IEventLogRepository>();
+        var before = await log.GetMaxSequenceAsync();
+        foreach (var n in Enumerable.Range(1, 3))
+            await log.AppendAsync(SignedFolderCreate(author, authorSeed, $"/Page{n}", before + n));
+        return (await log.GetAfterSequenceAsync(before)).ToList();
+    }
+
+    private async Task AssertNothingQuarantinedAsync()
+    {
+        using var scope = _phone.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<ISyncQuarantineRepository>().GetAllAsync()).Should().BeEmpty(
+            "a stop is not a failure of the event that happened to be running");
+    }
+
+    /// <summary>Forwards every call to <paramref name="real"/> (when given) after running <paramref name="before"/>.</summary>
+    private static T Intercept<T>(T? real, Action<MethodInfo, object?[]?> before) where T : class
+    {
+        var proxy = DispatchProxy.Create<T, Interceptor>();
+        ((Interceptor)(object)proxy).Handler = (method, args) =>
+        {
+            before(method, args);
+            try { return real is null ? null : method.Invoke(real, args); }
+            catch (TargetInvocationException ex) when (ex.InnerException is not null) { throw ex.InnerException; }
+        };
+        return proxy;
+    }
+
+    public class Interceptor : DispatchProxy
+    {
+        public Func<MethodInfo, object?[]?, object?>? Handler { get; set; }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) => Handler!(targetMethod!, args);
+    }
+
+    /// <summary>A scope factory whose scopes answer some services from the substitute (null: ask the real scope).</summary>
+    private sealed class SubstitutingScopeFactory(IServiceScopeFactory inner, Func<IServiceProvider, Type, object?> substitute) : IServiceScopeFactory
+    {
+        public IServiceScope CreateScope()
+        {
+            var scope = inner.CreateScope();
+            return new Scope(scope, new Provider(scope.ServiceProvider, substitute));
+        }
+
+        private sealed class Scope(IServiceScope real, IServiceProvider provider) : IServiceScope
+        {
+            public IServiceProvider ServiceProvider { get; } = provider;
+
+            public void Dispose() => real.Dispose();
+        }
+
+        private sealed class Provider(IServiceProvider real, Func<IServiceProvider, Type, object?> substitute) : IServiceProvider
+        {
+            public object? GetService(Type serviceType) => substitute(real, serviceType) ?? real.GetService(serviceType);
+        }
     }
 
     private async Task<(NodeIdentity Source, NodeIdentity Phone, BlindPhonePullClient Pull, BlindCallCode Target)> PreparePullAsync()

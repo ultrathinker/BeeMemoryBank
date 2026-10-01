@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Runtime.ExceptionServices;
 using System.Net.Http.Json;
 using System.Net;
 using System.Text.Json;
@@ -40,8 +41,17 @@ public sealed class BlindPhonePullClient(
         var eventLog = services.GetRequiredService<IEventLogRepository>();
         var quarantine = services.GetRequiredService<ISyncQuarantineRepository>();
         var last = after;
+        OperationCanceledException? stopped = null;
         foreach (var evt in events)
         {
+            // The worker is told to stop (charger unplugged, Wi-Fi gone): leave between two events, with
+            // the cursor where the last applied one put it.
+            if (ct.IsCancellationRequested)
+            {
+                stopped = new OperationCanceledException(ct);
+                break;
+            }
+
             if (evt.NodeId == identity.NodeId && await IsProvenOwnAsync(eventLog, identity, evt))
             {
                 last = evt.SequenceNum;
@@ -53,6 +63,13 @@ public sealed class BlindPhonePullClient(
                 await applier.ApplyAsync(evt);
                 await SyncEventQuarantine.ClearFailureAsync(quarantine, evt.EventId);
                 last = evt.SequenceNum;
+            }
+            catch (OperationCanceledException ex)
+            {
+                // A stop says nothing about the event: counting it as a failure would walk a valid event
+                // towards quarantine, and the cursor would then skip it for good.
+                stopped = ex;
+                break;
             }
             catch (Exception ex)
             {
@@ -73,6 +90,7 @@ public sealed class BlindPhonePullClient(
             LastSequenceNum = last,
             UpdatedAt = DateTime.UtcNow
         });
+        if (stopped is not null) ExceptionDispatchInfo.Capture(stopped).Throw();
         await ReportPositionAsync(http, target.Address, token, last, ct);
     }
 
