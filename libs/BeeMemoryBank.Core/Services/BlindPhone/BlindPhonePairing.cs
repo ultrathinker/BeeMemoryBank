@@ -18,6 +18,9 @@ namespace BeeMemoryBank.Core.Services.BlindPhone;
 public sealed class BlindPhonePairing(
     BlindPhoneState state, IBlindPhoneKeys keys, IBlindIdentityRecorder identity, BlindPhoneLog log)
 {
+    private readonly SemaphoreSlim _identityGate = new(1, 1);
+    private readonly object _pairGate = new();
+
     public bool HasIdentity => state.NodeId != null;
     public bool IsPaired => state.CallCode != null;
 
@@ -26,44 +29,116 @@ public sealed class BlindPhonePairing(
     {
         get
         {
-            var secret = keys.LoadPairingSecret();
-            if (secret is null) return false;
-            CryptographicOperations.ZeroMemory(secret);
-            return true;
+            lock (_pairGate)
+            {
+                CleanupOrphanedSecretIfCommitted();
+                var secret = keys.LoadPairingSecret();
+                if (secret is null) return false;
+                CryptographicOperations.ZeroMemory(secret);
+                return true;
+            }
         }
     }
 
     /// <summary>Creates the identity (once). Calling it again keeps the identity already made.</summary>
     public async Task CreateIdentityAsync(string displayName, CancellationToken ct = default)
     {
-        if (HasIdentity) return;
-        displayName = displayName.Trim();
-        if (displayName.Length is 0 or > BlindPhoneCode.MaxDisplayNameLength)
-            throw new ArgumentException($"A name of 1 to {BlindPhoneCode.MaxDisplayNameLength} characters is needed.", nameof(displayName));
-
-        var nodeId = BlindNodeId.NewId();
-        var (publicKey, seed) = Ed25519Signer.GenerateKeyPair();
-        var backupKey = RandomNumberGenerator.GetBytes(32);
-        var secret = BlindPairingSecret.New();
+        await _identityGate.WaitAsync(ct);
         try
         {
-            keys.SaveIdentitySeed(seed);
-            keys.SaveBackupKey(backupKey);
-            keys.SavePairingSecret(secret);
+            if (HasIdentity) return;
+            displayName = displayName.Trim();
+            if (displayName.Length is 0 or > BlindPhoneCode.MaxDisplayNameLength)
+                throw new ArgumentException($"A name of 1 to {BlindPhoneCode.MaxDisplayNameLength} characters is needed.", nameof(displayName));
+
+            // Check if an identity is already recorded in the database (e.g. crash after database write before state write)
+            var existing = await identity.GetRecordedAsync(ct);
+            if (existing is not null)
+            {
+                var seed = keys.LoadIdentitySeed();
+                if (seed is not null)
+                {
+                    try
+                    {
+                        var derivedPubKey = Ed25519Signer.GetPublicKeyFromSeed(seed);
+                        if (CryptographicOperations.FixedTimeEquals(derivedPubKey, existing.PublicKey))
+                        {
+                            // Recover existing identity: Keystore seed matches the database row
+                            state.PublicKey = existing.PublicKey;
+                            state.DisplayName = string.IsNullOrWhiteSpace(existing.DisplayName) ? displayName : existing.DisplayName;
+                            state.NodeId = existing.NodeId;
+
+                            if (keys.LoadBackupKey() is null)
+                            {
+                                var bk = RandomNumberGenerator.GetBytes(32);
+                                try { keys.SaveBackupKey(bk); }
+                                finally { CryptographicOperations.ZeroMemory(bk); }
+                            }
+                            if (keys.LoadPairingSecret() is null && !IsPaired)
+                            {
+                                var sec = BlindPairingSecret.New();
+                                try { keys.SavePairingSecret(sec); }
+                                finally { CryptographicOperations.ZeroMemory(sec); }
+                            }
+
+                            log.Add("pairing", $"Recovered existing blind identity: {existing.NodeId}");
+                            return;
+                        }
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(seed);
+                    }
+                }
+
+                // Database row exists without matching Keystore key: roll back safely before creating new identity
+                await identity.ClearAsync(ct);
+                keys.Clear();
+                log.Add("pairing", $"Rolled back orphaned identity {existing.NodeId} without matching Keystore seed.");
+            }
+            else
+            {
+                // No database row: ensure any leftover uncommitted key material is cleared
+                keys.Clear();
+            }
+
+            var nodeId = BlindNodeId.NewId();
+            var (publicKey, newSeed) = Ed25519Signer.GenerateKeyPair();
+            var backupKey = RandomNumberGenerator.GetBytes(32);
+            var secret = BlindPairingSecret.New();
+            try
+            {
+                keys.SaveIdentitySeed(newSeed);
+                keys.SaveBackupKey(backupKey);
+                keys.SavePairingSecret(secret);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(newSeed);
+                CryptographicOperations.ZeroMemory(backupKey);
+                CryptographicOperations.ZeroMemory(secret);
+            }
+
+            try
+            {
+                await identity.RecordAsync(nodeId, publicKey, displayName, ct);
+            }
+            catch
+            {
+                keys.Clear();
+                throw;
+            }
+
+            state.PublicKey = publicKey;
+            state.DisplayName = displayName;
+            // Last: NodeId is what "has an identity" means, so a crash before this leaves no half-made one.
+            state.NodeId = nodeId;
+            log.Add("pairing", $"Blind identity created: {nodeId}");
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(seed);
-            CryptographicOperations.ZeroMemory(backupKey);
-            CryptographicOperations.ZeroMemory(secret);
+            _identityGate.Release();
         }
-
-        await identity.RecordAsync(nodeId, publicKey, displayName, ct);
-        state.PublicKey = publicKey;
-        state.DisplayName = displayName;
-        // Last: NodeId is what "has an identity" means, so a crash before this leaves no half-made one.
-        state.NodeId = nodeId;
-        log.Add("pairing", $"Blind identity created: {nodeId}");
     }
 
     /// <summary>
@@ -72,11 +147,15 @@ public sealed class BlindPhonePairing(
     /// </summary>
     public BlindPhoneCode? PhoneCode()
     {
-        if (state.NodeId is not { } nodeId || state.PublicKey is not { } key || state.DisplayName is not { } name) return null;
-        var secret = keys.LoadPairingSecret();
-        var backupKey = keys.LoadBackupKey();
-        if (secret is null || backupKey is null) return null;
-        return new BlindPhoneCode(nodeId, key, secret, backupKey, name);
+        lock (_pairGate)
+        {
+            CleanupOrphanedSecretIfCommitted();
+            if (state.NodeId is not { } nodeId || state.PublicKey is not { } key || state.DisplayName is not { } name) return null;
+            var secret = keys.LoadPairingSecret();
+            var backupKey = keys.LoadBackupKey();
+            if (secret is null || backupKey is null) return null;
+            return new BlindPhoneCode(nodeId, key, secret, backupKey, name);
+        }
     }
 
     /// <summary>
@@ -85,11 +164,14 @@ public sealed class BlindPhonePairing(
     /// </summary>
     public void StartRePair()
     {
-        if (!HasIdentity) throw new InvalidOperationException("This phone has no blind identity.");
-        var secret = BlindPairingSecret.New();
-        try { keys.SavePairingSecret(secret); }
-        finally { CryptographicOperations.ZeroMemory(secret); }
-        log.Add("pairing", "Re-pairing started: a new phone code was made.");
+        lock (_pairGate)
+        {
+            if (!HasIdentity) throw new InvalidOperationException("This phone has no blind identity.");
+            var secret = BlindPairingSecret.New();
+            try { keys.SavePairingSecret(secret); }
+            finally { CryptographicOperations.ZeroMemory(secret); }
+            log.Add("pairing", "Re-pairing started: a new phone code was made.");
+        }
     }
 
     /// <summary>
@@ -101,26 +183,57 @@ public sealed class BlindPhonePairing(
         if (!BlindCallCode.TryParse(text, out var code))
             return "This is not a connection code from the computer. Copy it again.";
 
+        lock (_pairGate)
+        {
+            CleanupOrphanedSecretIfCommitted();
+
+            var secret = keys.LoadPairingSecret();
+            if (secret is null)
+                return IsPaired
+                    ? "This phone is already paired. To connect it to another computer, choose Re-pair first."
+                    : "This phone has no pairing secret. Disconnect and set it up again.";
+
+            try
+            {
+                if (!code.IsAuthenticBy(secret))
+                    return "This code was not made for this phone. Add the phone on the computer with the code shown here, then use the code the computer shows back.";
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(secret);
+            }
+
+            // Durable commit protocol:
+            // 1. Commit the accepted call code to persistent state first.
+            //    If this fails (e.g. Preferences/IO error), the secret is NOT consumed and retry is possible.
+            state.CallCode = code;
+
+            // 2. Consume the secret atomically with the accepted state.
+            //    If process dies right here, on restart CleanupOrphanedSecretIfCommitted() will detect that
+            //    state.CallCode is authentic by this secret, and will spend it safely without losing the connection.
+            keys.ClearPairingSecret();
+
+            log.Add("pairing", $"Paired: calls {code.Address} (node {code.NodeId}).");
+            return null;
+        }
+    }
+
+    private void CleanupOrphanedSecretIfCommitted()
+    {
+        if (state.CallCode is not { } callCode) return;
         var secret = keys.LoadPairingSecret();
-        if (secret is null)
-            return IsPaired
-                ? "This phone is already paired. To connect it to another computer, choose Re-pair first."
-                : "This phone has no pairing secret. Disconnect and set it up again.";
+        if (secret is null) return;
         try
         {
-            if (!code.IsAuthenticBy(secret))
-                return "This code was not made for this phone. Add the phone on the computer with the code shown here, then use the code the computer shows back.";
+            if (callCode.IsAuthenticBy(secret))
+            {
+                keys.ClearPairingSecret();
+                log.Add("pairing", "Cleaned up pairing secret committed in previous session.");
+            }
         }
         finally
         {
             CryptographicOperations.ZeroMemory(secret);
         }
-
-        // Spend the secret before anything else: a second answer — replayed or freshly minted by
-        // someone who saw the phone code — must find nothing to check against.
-        keys.ClearPairingSecret();
-        state.CallCode = code;
-        log.Add("pairing", $"Paired: calls {code.Address} (node {code.NodeId}).");
-        return null;
     }
 }

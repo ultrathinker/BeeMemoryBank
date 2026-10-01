@@ -6,6 +6,7 @@ public interface INodeIdentityRepository
 {
     Task<NodeIdentity?> GetAsync();
     Task CreateAsync(NodeIdentity identity);
+    Task ClearAsync() => Task.CompletedTask;
     Task StoreSentinelAsync(byte[] sentinelValue);
     Task<byte[]?> GetSentinelAsync();
     Task MarkInitialSyncCompletedAsync();

@@ -173,6 +173,7 @@ public class BlindMobileLogicTests
         public byte[]? PairingSecret { get; private set; }
 
         public void SaveIdentitySeed(byte[] seed) => IdentitySeed = (byte[])seed.Clone();
+        public byte[]? LoadIdentitySeed() => IdentitySeed != null ? (byte[])IdentitySeed.Clone() : null;
         public void SaveBackupKey(byte[] key) => BackupKey = (byte[])key.Clone();
         public byte[]? LoadBackupKey() => BackupKey != null ? (byte[])BackupKey.Clone() : null;
         public void SavePairingSecret(byte[] secret) => PairingSecret = (byte[])secret.Clone();
@@ -517,6 +518,349 @@ public class BlindMobileLogicTests
             listener.Stop();
         }
     }
+
+    [Fact]
+    public async Task BlindHttpClientProvider_DisposingOneClient_AllowsSubsequentClientToSucceed()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var certReq = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+            "CN=127.0.0.1", rsa, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        using var ephemeralCert = certReq.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(5));
+        using var serverCert = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+            ephemeralCert.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx), null, System.Security.Cryptography.X509Certificates.X509KeyStorageFlags.Exportable);
+
+        var serverPin = BeeMemoryBank.Crypto.SpkiPin.Of(serverCert);
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        using var cts = new CancellationTokenSource();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    var client = await listener.AcceptTcpClientAsync(cts.Token);
+                    _ = Task.Run(async () =>
+                    {
+                        using (client)
+                        using (var ssl = new System.Net.Security.SslStream(client.GetStream(), false))
+                        {
+                            try
+                            {
+                                await ssl.AuthenticateAsServerAsync(serverCert);
+                                var buffer = new byte[4096];
+                                while (!cts.Token.IsCancellationRequested)
+                                {
+                                    var read = await ssl.ReadAsync(buffer, cts.Token);
+                                    if (read == 0) break;
+                                    var reqText = System.Text.Encoding.ASCII.GetString(buffer, 0, read);
+                                    if (reqText.Contains("\r\n\r\n"))
+                                    {
+                                        var response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nOK"u8.ToArray();
+                                        await ssl.WriteAsync(response, cts.Token);
+                                        await ssl.FlushAsync(cts.Token);
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                    }, cts.Token);
+                }
+            }
+            catch when (cts.IsCancellationRequested) { }
+            catch (Exception) { }
+        });
+
+        try
+        {
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            state.CallCode = new BlindCallCode($"https://127.0.0.1:{port}", Guid.NewGuid(), serverPin, new byte[32], new byte[32]);
+
+            var services = new ServiceCollection();
+            services.AddSingleton(state);
+            services.AddTransient<MaintenanceDetectingHandler>();
+            services.AddTransient<BlindHttpHandler>();
+            services.AddSingleton<BlindHttpClientProvider>();
+            services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
+
+            var sp = services.BuildServiceProvider();
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+
+            // Factory caller 1 disposes client
+            using (var client1 = factory.CreateClient())
+            {
+                var res1 = await client1.GetAsync($"https://127.0.0.1:{port}/");
+                res1.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+            }
+
+            // Factory caller 2 gets a client under same pin: must succeed, NOT fail with ObjectDisposedException
+            using (var client2 = factory.CreateClient())
+            {
+                var res2 = await client2.GetAsync($"https://127.0.0.1:{port}/");
+                res2.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+            }
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task SqliteBlindIdentityRecorder_ConcurrentInitialization_EnforcesSingleIdentity()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-concurrent-id-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+
+            var tasks = Enumerable.Range(0, 10).Select(async i =>
+            {
+                var nodeId = BlindNodeId.NewId();
+                var (publicKey, _) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+                try
+                {
+                    await recorder.RecordAsync(nodeId, publicKey, $"Phone {i}");
+                    return (Success: true, NodeId: nodeId, Exception: (Exception?)null);
+                }
+                catch (Exception ex)
+                {
+                    return (Success: false, NodeId: nodeId, Exception: (Exception?)ex);
+                }
+            }).ToList();
+
+            var results = await Task.WhenAll(tasks);
+
+            // Exactly ONE identity row must exist in the database!
+            using var conn = dbFactory.CreateConnection();
+            conn.Open();
+            var count = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, "SELECT COUNT(*) FROM tbl_node_identity");
+            count.Should().Be(1, "exactly one identity row may ever be created in tbl_node_identity");
+
+            // Successful callers must agree on the recorded node ID
+            var recordedIdentity = await nodeRepo.GetAsync();
+            recordedIdentity.Should().NotBeNull();
+            var successfulResults = results.Where(r => r.Success).ToList();
+            successfulResults.Should().HaveCount(1);
+            successfulResults[0].NodeId.Should().Be(recordedIdentity!.NodeId);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task NodeIdentityRepository_CreateAsync_EnforcesSingleIdentityInvariantAtomically()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-node-repo-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+
+            var id1 = new NodeIdentity
+            {
+                NodeId = BlindNodeId.NewId(),
+                DisplayName = "Node 1",
+                Ed25519PublicKey = new byte[32],
+                Ed25519PrivateKey = [],
+                Ed25519PrivateKeyV = 2,
+                CreatedAt = DateTime.UtcNow
+            };
+            await nodeRepo.CreateAsync(id1);
+
+            // Calling with same identity is idempotent:
+            await nodeRepo.CreateAsync(id1);
+
+            // Calling with a different identity must be rejected atomically:
+            var id2 = new NodeIdentity
+            {
+                NodeId = BlindNodeId.NewId(),
+                DisplayName = "Node 2",
+                Ed25519PublicKey = new byte[32],
+                Ed25519PrivateKey = [],
+                Ed25519PrivateKeyV = 2,
+                CreatedAt = DateTime.UtcNow
+            };
+            var act = async () => await nodeRepo.CreateAsync(id2);
+            await act.Should().ThrowAsync<InvalidOperationException>();
+
+            using var conn = dbFactory.CreateConnection();
+            conn.Open();
+            var count = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, "SELECT COUNT(*) FROM tbl_node_identity");
+            count.Should().Be(1);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task CreateIdentityAsync_WhenCrashBetweenDbAndState_RecoversMatchingIdentity()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-crash-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+            var keys = new InMemoryBlindPhoneKeys();
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+
+            // Simulate the crash:
+            // 1. Keystore saved seed and keys
+            var (origPubKey, origSeed) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            keys.SaveIdentitySeed(origSeed);
+            var origBackupKey = new byte[32];
+            keys.SaveBackupKey(origBackupKey);
+            var origSecret = BeeMemoryBank.Crypto.BlindPairingSecret.New();
+            keys.SavePairingSecret(origSecret);
+
+            // 2. SQLite wrote the v=2 identity row
+            var origNodeId = BlindNodeId.NewId();
+            await recorder.RecordAsync(origNodeId, origPubKey, "Original Name");
+
+            // 3. BUT process crashed before state.NodeId was saved!
+            state.NodeId.Should().BeNull();
+
+            // Next launch: pairing service is instantiated fresh
+            var freshPairing = new BlindPhonePairing(state, keys, recorder, log);
+            freshPairing.HasIdentity.Should().BeFalse();
+
+            // CreateIdentityAsync is invoked (as done in BlindHomePage.OnAppearing)
+            await freshPairing.CreateIdentityAsync("Recovered Name");
+
+            // Must NOT throw, must recover the existing identity and matching keys!
+            freshPairing.HasIdentity.Should().BeTrue();
+            state.NodeId.Should().Be(origNodeId);
+            state.PublicKey.Should().Equal(origPubKey);
+            var phoneCode = freshPairing.PhoneCode();
+            phoneCode.Should().NotBeNull();
+            phoneCode!.NodeId.Should().Be(origNodeId);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task AcceptCallCode_WhenInterruptedOrRetried_RecoversDurableConnectionAndSpendsSecretAtomically()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-accept-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+            var keys = new InMemoryBlindPhoneKeys();
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+            var pairing = new BlindPhonePairing(state, keys, recorder, log);
+
+            await pairing.CreateIdentityAsync("Phone");
+            var phoneCode = pairing.PhoneCode()!;
+
+            // Prepare a valid call code from the listening node
+            var listenerNodeId = BlindNodeId.NewId();
+            var (listenerPubKey, _) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            var validPin = System.Buffers.Text.Base64Url.EncodeToString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+            var enrollment = BlindPhoneEnrollment.Prepare(
+                phoneCode.ToString(),
+                "https://127.0.0.1:5301",
+                listenerNodeId,
+                validPin,
+                listenerPubKey,
+                DateTime.UtcNow,
+                out var prepareErr);
+            prepareErr.Should().BeNull();
+            var validCodeStr = enrollment!.CallCode.ToString();
+
+            // Test concurrent acceptance: multiple tasks try to accept codes
+            var otherPin = System.Buffers.Text.Base64Url.EncodeToString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+            var tasks = Enumerable.Range(0, 5).Select(async i =>
+            {
+                var codeToTry = (i == 0) ? validCodeStr : validCodeStr.Replace(validPin, otherPin);
+                return await Task.Run(() => pairing.AcceptCallCode(codeToTry));
+            }).ToList();
+
+            var results = await Task.WhenAll(tasks);
+
+            // Exactly ONE acceptance must succeed (null result)
+            results.Count(r => r == null).Should().Be(1);
+            pairing.IsPaired.Should().BeTrue();
+            state.CallCode!.SpkiPin.Should().Be(validPin);
+
+            // Secret is atomically spent
+            keys.LoadPairingSecret().Should().BeNull();
+
+            // Replay-safe: once paired and secret spent, replaying the code is rejected with already paired
+            var replayResult = pairing.AcceptCallCode(validCodeStr);
+            replayResult.Should().Contain("already paired");
+
+            // Test crash recovery: simulate process death after state.CallCode was saved but before keys.ClearPairingSecret()
+            var secret2 = BeeMemoryBank.Crypto.BlindPairingSecret.New();
+            keys.SavePairingSecret(secret2);
+            var (listenerPubKey2, _) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            var pin2 = System.Buffers.Text.Base64Url.EncodeToString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+            var code2 = BlindCallCode.Create("https://127.0.0.1:5302", BlindNodeId.NewId(), pin2, listenerPubKey2, secret2);
+            state.CallCode = code2; // CallCode is committed in state, but secret2 was not cleared due to crash
+
+            // On next start/access:
+            var recoveredPairing = new BlindPhonePairing(state, keys, recorder, log);
+            recoveredPairing.IsPaired.Should().BeTrue();
+            recoveredPairing.AwaitingAnswer.Should().BeFalse();
+            keys.LoadPairingSecret().Should().BeNull("orphaned secret committed in previous session was spent on recovery");
+            recoveredPairing.PhoneCode().Should().BeNull();
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
     [Fact]
     public async Task TwoCodePairing_WithFakeListener_ExecutesFullLifecycle_AndEnforcesMandatorySpkiPin()
     {

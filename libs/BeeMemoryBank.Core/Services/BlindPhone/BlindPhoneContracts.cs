@@ -21,6 +21,8 @@ public interface IBlindPhoneStore
 public interface IBlindPhoneKeys
 {
     void SaveIdentitySeed(byte[] seed);
+    /// <summary>The Ed25519 identity seed, or null if none. Caller clears it.</summary>
+    byte[]? LoadIdentitySeed() => null;
     void SaveBackupKey(byte[] key);
     /// <summary>The backup key, or null if none. Caller clears it.</summary>
     byte[]? LoadBackupKey();
@@ -33,6 +35,8 @@ public interface IBlindPhoneKeys
     void Clear();
 }
 
+public sealed record BlindIdentityRecord(Guid NodeId, byte[] PublicKey, string DisplayName);
+
 /// <summary>
 /// Records the phone's identity row. TODO(identity row v=2): write <c>tbl_node_identity</c> with
 /// <c>ed25519_private_key_v = 2</c> (key outside the DEK).
@@ -40,6 +44,8 @@ public interface IBlindPhoneKeys
 public interface IBlindIdentityRecorder
 {
     Task RecordAsync(Guid nodeId, byte[] publicKey, string displayName, CancellationToken ct);
+    Task<BlindIdentityRecord?> GetRecordedAsync(CancellationToken ct = default) => Task.FromResult<BlindIdentityRecord?>(null);
+    Task ClearAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
 /// <summary>

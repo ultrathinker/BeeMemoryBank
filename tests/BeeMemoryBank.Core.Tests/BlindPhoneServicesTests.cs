@@ -368,6 +368,7 @@ public sealed class BlindPhoneServicesTests : IDisposable
     {
         public byte[]? Seed, Secret, Backup;
         public void SaveIdentitySeed(byte[] seed) => Seed = seed.ToArray();
+        public byte[]? LoadIdentitySeed() => Seed?.ToArray();
         public void SaveBackupKey(byte[] key) => Backup = key.ToArray();
         public byte[]? LoadBackupKey() => Backup?.ToArray();
         public void SavePairingSecret(byte[] secret) => Secret = secret.ToArray();

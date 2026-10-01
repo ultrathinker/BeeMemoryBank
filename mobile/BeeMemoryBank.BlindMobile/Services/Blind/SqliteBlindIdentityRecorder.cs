@@ -15,28 +15,48 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 /// </summary>
 public sealed class SqliteBlindIdentityRecorder(INodeIdentityRepository nodeRepo) : IBlindIdentityRecorder
 {
-    public async Task RecordAsync(Guid nodeId, byte[] publicKey, string displayName, CancellationToken ct = default)
+    private static readonly SemaphoreSlim _gate = new(1, 1);
+
+    public async Task<BlindIdentityRecord?> GetRecordedAsync(CancellationToken ct = default)
     {
         var existing = await nodeRepo.GetAsync();
-        if (existing is not null)
-        {
-            if (existing.NodeId == nodeId) return;
-            throw new InvalidOperationException($"Node already has identity {existing.NodeId}, cannot overwrite with {nodeId}.");
-        }
+        return existing is null
+            ? null
+            : new BlindIdentityRecord(existing.NodeId, existing.Ed25519PublicKey, existing.DisplayName);
+    }
 
-        var identity = new NodeIdentity
+    public Task ClearAsync(CancellationToken ct = default) => nodeRepo.ClearAsync();
+
+    public async Task RecordAsync(Guid nodeId, byte[] publicKey, string displayName, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
         {
-            NodeId = nodeId,
-            DisplayName = displayName,
-            Ed25519PublicKey = publicKey,
-            Ed25519PrivateKey = [],
-            Ed25519PrivateKeyIV = null,
-            Ed25519PrivateKeyV = NodeIdentityCrypto.ExternalKeyVersion, // 2
-            CanGenerateEmbeddings = false,
-            InitialSyncCompleted = false,
-            DekEpoch = 1,
-            CreatedAt = DateTime.UtcNow
-        };
-        await nodeRepo.CreateAsync(identity);
+            var existing = await nodeRepo.GetAsync();
+            if (existing is not null)
+            {
+                if (existing.NodeId == nodeId) return;
+                throw new InvalidOperationException($"Node already has identity {existing.NodeId}, cannot overwrite with {nodeId}.");
+            }
+
+            var identity = new NodeIdentity
+            {
+                NodeId = nodeId,
+                DisplayName = displayName,
+                Ed25519PublicKey = publicKey,
+                Ed25519PrivateKey = [],
+                Ed25519PrivateKeyIV = null,
+                Ed25519PrivateKeyV = NodeIdentityCrypto.ExternalKeyVersion, // 2
+                CanGenerateEmbeddings = false,
+                InitialSyncCompleted = false,
+                DekEpoch = 1,
+                CreatedAt = DateTime.UtcNow
+            };
+            await nodeRepo.CreateAsync(identity);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 }
