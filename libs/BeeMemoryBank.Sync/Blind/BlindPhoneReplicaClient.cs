@@ -30,6 +30,10 @@ public sealed class BlindPhoneReplicaClient(
     TimeProvider? time = null)
 {
     private const string InstallFailureFileName = "replica.install-failed.json";
+    private const string BackupFailureFileName = "backup-package.failed.json";
+    private const string BackupPartName = "backup-package.part";
+    private const string BackupArchiveName = "backup-package.tar.gz";
+    private const int MaxAnchorIds = 200;
     // After a complete archive failed to verify or install, the next download waits 1 h, then 2 h, 4 h
     // ... up to a day: the same package would fail the same way, and each try costs the whole archive.
     private static readonly TimeSpan InstallBackOffBase = TimeSpan.FromHours(1);
@@ -96,17 +100,105 @@ public sealed class BlindPhoneReplicaClient(
         }
     }
 
-    private async Task ThrowIfBackingOffAsync(string workDirectory, Guid nodeId, CancellationToken ct)
+    /// <summary>
+    /// Downloads the listener's current package and verifies it exactly as an install does, but installs
+    /// nothing: the bytes and the detached signature are handed back for a backup body. A backup needs a
+    /// fresh package, not the first load's: a restore looks for the signed events of the package's state
+    /// anchors, and a phone holds those events only for anchors that reached it after its own first load.
+    /// It has its own partial (<c>backup-package.part</c>) and its own back-off record, so it neither resumes
+    /// nor blocks the first load. The caller owns <see cref="VerifiedReplicaPackage.ArchivePath"/>.
+    /// </summary>
+    /// <param name="beforeDownload">Told the package size once the response headers are in and before the
+    /// first byte is written; throwing stops the download with the partial left as it was.</param>
+    public async Task<VerifiedReplicaPackage> FetchVerifiedPackageAsync(
+        HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct,
+        Action<long>? beforeDownload = null)
     {
-        var failure = await ReadInstallFailureAsync(Path.Combine(workDirectory, InstallFailureFileName), ct);
+        var identity = await identityRepo.GetAsync()
+            ?? throw new InvalidOperationException("The blind phone identity has not been recorded.");
+        if (identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
+            throw new InvalidOperationException("The blind phone requires its v=2 external-key identity before a package download.");
+
+        Directory.CreateDirectory(workDirectory);
+        CleanupBackupExtractions(workDirectory);
+        await ThrowIfBackingOffAsync(workDirectory, target.NodeId, ct, BackupFailureFileName);
+        var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct);
+        var partPath = Path.Combine(workDirectory, BackupPartName);
+        var metadataPath = partPath + ".json";
+        PackageMetadata current;
+        try
+        {
+            current = await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct, beforeDownload);
+        }
+        catch (InvalidDataException ex)
+        {
+            // The whole archive came and did not match its signed headers: it is not resumable, and the same
+            // package would fail the same way.
+            ResetPartial(partPath, metadataPath);
+            await RecordInstallFailureAsync(workDirectory, target.NodeId, ex, BackupFailureFileName);
+            throw;
+        }
+
+        try
+        {
+            var extraction = Path.Combine(workDirectory, "backup-verified-" + current.Sha256.ToLowerInvariant());
+            await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
+            var anchors = await ReadAnchorIdsAsync(extraction, ct);
+            var archivePath = Path.Combine(workDirectory, BackupArchiveName);
+            File.Move(partPath, archivePath, overwrite: true);
+            if (File.Exists(metadataPath)) File.Delete(metadataPath);
+            ClearInstallFailure(workDirectory, BackupFailureFileName);
+            progress?.Report(1);
+            return new VerifiedReplicaPackage(archivePath, Convert.FromBase64String(current.SignatureB64),
+                current.Sha256.ToLowerInvariant(), current.Length, anchors);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A complete partial is never resumed: drop it, remember the failure and wait before the next try.
+            ResetPartial(partPath, metadataPath);
+            await RecordInstallFailureAsync(workDirectory, target.NodeId, ex, BackupFailureFileName);
+            if (ex is InvalidDataException or IOException) throw;
+            throw new InvalidDataException(
+                $"The downloaded package could not be verified ({ex.GetType().Name}: {ex.Message})", ex);
+        }
+        finally
+        {
+            CleanupBackupExtractions(workDirectory);
+        }
+    }
+
+    private static void CleanupBackupExtractions(string workDirectory)
+    {
+        foreach (var directory in Directory.GetDirectories(workDirectory, "backup-verified-*"))
+            Directory.Delete(directory, recursive: true);
+    }
+
+    /// <summary>The newest anchors of the extracted package (newest first); none when it has no such table.</summary>
+    private static async Task<IReadOnlyList<string>> ReadAnchorIdsAsync(string extraction, CancellationToken ct)
+    {
+        var db = Path.Combine(extraction, "beememorybank.db");
+        if (!File.Exists(db)) return [];
+        await using var conn = new SqliteConnection($"Data Source={db};Mode=ReadOnly;Pooling=False");
+        await conn.OpenAsync(ct);
+        if (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tbl_state_anchor'") == 0)
+            return [];
+        return (await conn.QueryAsync<string>(
+            "SELECT anchor_id FROM tbl_state_anchor ORDER BY created_at DESC, lamport_ts DESC LIMIT @Max", new { Max = MaxAnchorIds })).ToList();
+    }
+
+    private async Task ThrowIfBackingOffAsync(string workDirectory, Guid nodeId, CancellationToken ct,
+        string fileName = InstallFailureFileName)
+    {
+        var failure = await ReadInstallFailureAsync(Path.Combine(workDirectory, fileName), ct);
         if (failure is null || failure.NodeId != nodeId || failure.RetryAfter <= UtcNow()) return;
         throw new InvalidDataException(
             $"The last replica install failed {failure.Attempts} time(s) ({failure.Error}); next attempt after {failure.RetryAfter:u}.");
     }
 
-    private async Task RecordInstallFailureAsync(string workDirectory, Guid nodeId, Exception cause)
+    private async Task RecordInstallFailureAsync(string workDirectory, Guid nodeId, Exception cause,
+        string fileName = InstallFailureFileName)
     {
-        var path = Path.Combine(workDirectory, InstallFailureFileName);
+        var path = Path.Combine(workDirectory, fileName);
         try
         {
             var prior = await ReadInstallFailureAsync(path, CancellationToken.None);
@@ -124,9 +216,9 @@ public sealed class BlindPhoneReplicaClient(
         }
     }
 
-    private static void ClearInstallFailure(string workDirectory)
+    private static void ClearInstallFailure(string workDirectory, string fileName = InstallFailureFileName)
     {
-        var path = Path.Combine(workDirectory, InstallFailureFileName);
+        var path = Path.Combine(workDirectory, fileName);
         if (File.Exists(path)) File.Delete(path);
     }
 
@@ -147,7 +239,7 @@ public sealed class BlindPhoneReplicaClient(
 
     private static async Task<PackageMetadata> DownloadAsync(
         HttpClient http, BlindCallCode target, string token, string partPath, string metadataPath,
-        IProgress<double>? progress, CancellationToken ct)
+        IProgress<double>? progress, CancellationToken ct, Action<long>? beforeDownload = null)
     {
         // A restart is only needed when authenticated resume state cannot describe the response.
         // A transport failure remains resumable: it is intentionally not caught here.
@@ -201,6 +293,7 @@ public sealed class BlindPhoneReplicaClient(
                 ResetPartial(partPath, metadataPath);
                 continue;
             }
+            beforeDownload?.Invoke(current.Length);
             await WriteMetadataAsync(metadataPath, current, ct);
 
             await using (var input = await response.Content.ReadAsStreamAsync(ct))
@@ -604,3 +697,13 @@ public sealed class BlindPhoneReplicaClient(
             CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(SignatureB64), Convert.FromBase64String(other.SignatureB64));
     }
 }
+
+/// <summary>
+/// A replica package downloaded and verified like an install does it (signature under the call-code key,
+/// every file against the signed manifest, producer and key against the call code) but NOT installed.
+/// </summary>
+/// <param name="ArchivePath">The archive exactly as the listener served it; its detached signature covers these bytes.</param>
+/// <param name="Signature">The detached Ed25519 signature the listener sent with it.</param>
+/// <param name="AnchorIds">The package's newest state anchors (newest first): the rows a restore will look for signed events of.</param>
+public sealed record VerifiedReplicaPackage(
+    string ArchivePath, byte[] Signature, string Sha256, long Length, IReadOnlyList<string> AnchorIds);
