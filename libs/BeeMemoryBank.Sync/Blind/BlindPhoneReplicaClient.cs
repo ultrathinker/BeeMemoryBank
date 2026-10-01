@@ -26,8 +26,14 @@ public sealed class BlindPhoneReplicaClient(
     string dataDirectory,
     string databasePath,
     ILogger<BlindPhoneReplicaClient> logger,
-    Func<string, string, CancellationToken, Task>? copyMediaFile = null)
+    Func<string, string, CancellationToken, Task>? copyMediaFile = null,
+    TimeProvider? time = null)
 {
+    private const string InstallFailureFileName = "replica.install-failed.json";
+    // After a complete archive failed to verify or install, the next download waits 1 h, then 2 h, 4 h
+    // ... up to a day: the same package would fail the same way, and each try costs the whole archive.
+    private static readonly TimeSpan InstallBackOffBase = TimeSpan.FromHours(1);
+    private static readonly TimeSpan InstallBackOffCap = TimeSpan.FromHours(24);
     private const string PackageHashHeader = "X-BMB-Package-Sha256";
     private const string SignatureHeader = "X-BMB-Snapshot-Signature";
     private const long MaximumManifestBytes = 1L * 1024 * 1024;
@@ -46,16 +52,32 @@ public sealed class BlindPhoneReplicaClient(
 
         Directory.CreateDirectory(workDirectory);
         CleanupExtractionArtifacts(workDirectory);
+        await ThrowIfBackingOffAsync(workDirectory, target.NodeId, ct);
         var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct);
         var partPath = Path.Combine(workDirectory, "replica.part");
         var metadataPath = Path.Combine(workDirectory, "replica.part.json");
         try
         {
             var current = await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct);
-            var extraction = Path.Combine(workDirectory, "verified-" + current.Sha256.ToLowerInvariant());
-            await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
-            await BuildAndSwitchDatabaseAsync(extraction, target, ct);
+            try
+            {
+                var extraction = Path.Combine(workDirectory, "verified-" + current.Sha256.ToLowerInvariant());
+                await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
+                await BuildAndSwitchDatabaseAsync(extraction, target, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The archive is complete, and a complete partial is never resumed (the next attempt
+                // starts over), so keeping it only holds the disk. The same package would fail the
+                // same way: drop it, remember the failure and wait before downloading again.
+                CleanupDownloadArtifacts(workDirectory, partPath, metadataPath);
+                await RecordInstallFailureAsync(workDirectory, target.NodeId, ex);
+                if (ex is InvalidDataException or IOException) throw;
+                throw new InvalidDataException(
+                    $"The downloaded replica could not be installed ({ex.GetType().Name}: {ex.Message})", ex);
+            }
             CleanupDownloadArtifacts(workDirectory, partPath, metadataPath);
+            ClearInstallFailure(workDirectory);
             progress?.Report(1);
             logger.LogInformation("Installed verified blind replica {Hash} from {NodeId}", current.Sha256, target.NodeId);
         }
@@ -73,6 +95,55 @@ public sealed class BlindPhoneReplicaClient(
             CleanupExtractionArtifacts(workDirectory);
         }
     }
+
+    private async Task ThrowIfBackingOffAsync(string workDirectory, Guid nodeId, CancellationToken ct)
+    {
+        var failure = await ReadInstallFailureAsync(Path.Combine(workDirectory, InstallFailureFileName), ct);
+        if (failure is null || failure.NodeId != nodeId || failure.RetryAfter <= UtcNow()) return;
+        throw new InvalidDataException(
+            $"The last replica install failed {failure.Attempts} time(s) ({failure.Error}); next attempt after {failure.RetryAfter:u}.");
+    }
+
+    private async Task RecordInstallFailureAsync(string workDirectory, Guid nodeId, Exception cause)
+    {
+        var path = Path.Combine(workDirectory, InstallFailureFileName);
+        try
+        {
+            var prior = await ReadInstallFailureAsync(path, CancellationToken.None);
+            var attempts = prior is not null && prior.NodeId == nodeId ? prior.Attempts + 1 : 1;
+            var delay = TimeSpan.FromTicks(Math.Min(InstallBackOffCap.Ticks, InstallBackOffBase.Ticks << Math.Min(attempts - 1, 5)));
+            var record = new InstallFailure(nodeId, attempts, UtcNow() + delay, cause.GetType().Name);
+            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(record, Json));
+            logger.LogWarning(cause, "Blind replica install failed (attempt {Attempts}); next download after {RetryAfter:u}",
+                attempts, record.RetryAfter);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Not recording only costs the back-off; it must not hide the failure being reported.
+            logger.LogWarning(ex, "Could not record the blind replica install failure");
+        }
+    }
+
+    private static void ClearInstallFailure(string workDirectory)
+    {
+        var path = Path.Combine(workDirectory, InstallFailureFileName);
+        if (File.Exists(path)) File.Delete(path);
+    }
+
+    private static async Task<InstallFailure?> ReadInstallFailureAsync(string path, CancellationToken ct)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<InstallFailure>(await File.ReadAllTextAsync(path, ct), Json);
+        }
+        catch (JsonException)
+        {
+            return null; // An unreadable record is as good as none: the back-off only ever delays.
+        }
+    }
+
+    private DateTimeOffset UtcNow() => (time ?? TimeProvider.System).GetUtcNow();
 
     private static async Task<PackageMetadata> DownloadAsync(
         HttpClient http, BlindCallCode target, string token, string partPath, string metadataPath,
@@ -522,6 +593,8 @@ public sealed class BlindPhoneReplicaClient(
         while ((read = await stream.ReadAsync(buffer, ct)) > 0) hash.AppendData(buffer, 0, read);
         return hash.GetHashAndReset();
     }
+
+    private sealed record InstallFailure(Guid NodeId, int Attempts, DateTimeOffset RetryAfter, string Error);
 
     private sealed record PackageMetadata(string Sha256, string SignatureB64, long Length)
     {

@@ -125,6 +125,87 @@ public sealed class BlindPhoneReplicaVerificationTests : IDisposable
         await phone.ExpectRefusedAsync(package, "manifest file is missing");
     }
 
+    [Theory]
+    [InlineData("garbage-blind-manifest")]
+    [InlineData("key-that-is-not-base64")]
+    public async Task AFailureOfAnyTypeAfterTheArchiveVerified_ClearsThePartialAndReportsInvalidData(string defect)
+    {
+        var phone = await CreatePhoneAsync();
+        var package = await Craft(phone, defect == "garbage-blind-manifest"
+            ? new CraftOptions { BlindManifestBytes = "{ not json"u8.ToArray() }
+            : new CraftOptions { WhitelistedKeyB64 = "***not base64***" });
+
+        var act = () => phone.InstallAsync(package);
+
+        var thrown = (await act.Should().ThrowAsync<InvalidDataException>()).Which;
+        thrown.InnerException.Should().NotBeNull("the cause stays attached for the log");
+        File.Exists(Path.Combine(phone.WorkDirectory, "replica.part")).Should().BeFalse(
+            "a complete archive cannot be resumed, so keeping it only holds the disk");
+        File.Exists(Path.Combine(phone.WorkDirectory, "replica.part.json")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AnIoFailureWhileInstalling_KeepsItsType_ButAlsoClearsThePartial()
+    {
+        var phone = await CreatePhoneAsync(copyMediaFile: (_, _, _) => Task.FromException(new IOException("simulated full storage")));
+        var package = await Craft(phone, new CraftOptions { ExtraEntries = [("media/blob.enc", [1, 2, 3])] });
+
+        var act = () => phone.InstallAsync(package);
+
+        await act.Should().ThrowAsync<IOException>();
+        File.Exists(Path.Combine(phone.WorkDirectory, "replica.part")).Should().BeFalse();
+        File.Exists(Path.Combine(phone.WorkDirectory, "replica.part.json")).Should().BeFalse();
+        File.Exists(Path.Combine(phone.WorkDirectory, "replica.install-failed.json")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AFailureAfterTheArchiveVerified_BacksOffInsteadOfDownloadingTheSamePackageAgain()
+    {
+        var time = new AdjustableTime(DateTimeOffset.UtcNow);
+        var phone = await CreatePhoneAsync(time: time);
+        var bad = await Craft(phone, new CraftOptions { BlindManifestBytes = "{ not json"u8.ToArray() });
+        (await FluentActions.Awaiting(() => phone.InstallAsync(bad)).Should().ThrowAsync<InvalidDataException>())
+            .Which.Message.Should().NotContain("next attempt after", "the first failure is the real one");
+
+        // An hour later is the first moment another attempt may start, and a good package then installs.
+        var good = await Craft(phone);
+        (await FluentActions.Awaiting(() => phone.InstallAsync(good)).Should().ThrowAsync<InvalidDataException>())
+            .Which.Message.Should().Contain("next attempt after");
+        phone.RequestsOfLastInstall.Should().Be(0, "a backing-off phone must not even contact the node");
+        time.Advance(TimeSpan.FromMinutes(59));
+        await FluentActions.Awaiting(() => phone.InstallAsync(good)).Should().ThrowAsync<InvalidDataException>();
+        phone.RequestsOfLastInstall.Should().Be(0);
+
+        // A second failure doubles the wait.
+        time.Advance(TimeSpan.FromMinutes(2));
+        await FluentActions.Awaiting(() => phone.InstallAsync(bad)).Should().ThrowAsync<InvalidDataException>();
+        time.Advance(TimeSpan.FromMinutes(119));
+        await FluentActions.Awaiting(() => phone.InstallAsync(good)).Should().ThrowAsync<InvalidDataException>();
+        phone.RequestsOfLastInstall.Should().Be(0);
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        await phone.InstallAsync(good);
+        (await new SyncPositionRepository(phone.Factory).GetAsync(phone.Target.NodeId)).Should().NotBeNull();
+        File.Exists(Path.Combine(phone.WorkDirectory, "replica.install-failed.json")).Should().BeFalse(
+            "a successful install forgets the failures");
+    }
+
+    [Fact]
+    public async Task ABackOffRecordedForAnotherNode_DoesNotBlockThisOne()
+    {
+        var time = new AdjustableTime(DateTimeOffset.UtcNow);
+        var phone = await CreatePhoneAsync(time: time);
+        var bad = await Craft(phone, new CraftOptions { BlindManifestBytes = "{ not json"u8.ToArray() });
+        await FluentActions.Awaiting(() => phone.InstallAsync(bad)).Should().ThrowAsync<InvalidDataException>();
+        var recordPath = Path.Combine(phone.WorkDirectory, "replica.install-failed.json");
+        await File.WriteAllTextAsync(recordPath, (await File.ReadAllTextAsync(recordPath))
+            .Replace(phone.Target.NodeId.ToString(), Guid.NewGuid().ToString(), StringComparison.OrdinalIgnoreCase));
+
+        await phone.InstallAsync(await Craft(phone));
+
+        (await new SyncPositionRepository(phone.Factory).GetAsync(phone.Target.NodeId)).Should().NotBeNull();
+    }
+
     [Fact]
     public async Task Refuses_AnIdentityThatIsNotV2_WithoutAnyRequest()
     {
@@ -139,7 +220,9 @@ public sealed class BlindPhoneReplicaVerificationTests : IDisposable
         counting.Requests.Should().Be(0, "a non-v2 identity must be refused before the phone contacts anyone");
     }
 
-    private async Task<PhoneSetup> CreatePhoneAsync(int identityKeyVersion = -1)
+    private async Task<PhoneSetup> CreatePhoneAsync(
+        int identityKeyVersion = -1, TimeProvider? time = null,
+        Func<string, string, CancellationToken, Task>? copyMediaFile = null)
     {
         var phoneData = Path.Combine(_blind.DataPath, "phone");
         var phoneDb = Path.Combine(phoneData, "beememorybank.db");
@@ -174,7 +257,7 @@ public sealed class BlindPhoneReplicaVerificationTests : IDisposable
         var target = BlindCallCode.Create(BlindNodeFactory.PublicAddress, server.NodeId,
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", servingKey.publicKey, new byte[32]);
         var client = new BlindPhoneReplicaClient(factory, new NodeIdentityRepository(factory), new SeedSigner(phoneSeed),
-            phoneData, phoneDb, NullLogger<BlindPhoneReplicaClient>.Instance);
+            phoneData, phoneDb, NullLogger<BlindPhoneReplicaClient>.Instance, copyMediaFile, time);
         return new PhoneSetup(this, phoneData, factory, identity, target, servingKey.privateKey, client);
     }
 
@@ -182,10 +265,11 @@ public sealed class BlindPhoneReplicaVerificationTests : IDisposable
     {
         options ??= new CraftOptions();
         var database = await EmptyMigratedDatabaseAsync(phone.DataPath);
-        var blindManifest = new BlindManifest(BlindManifest.CurrentFormat, Guid.NewGuid(),
+        var blindManifest = options.BlindManifestBytes ?? new BlindManifest(BlindManifest.CurrentFormat, Guid.NewGuid(),
             options.ProducerNodeId ?? phone.Target.NodeId, CpSequence: 1, IncludesUpTo: null, DateTime.UtcNow,
             [new BlindManifestPeer(options.WhitelistedNodeId ?? phone.Target.NodeId, "serving node",
-                Convert.ToBase64String(options.WhitelistedKey ?? phone.Target.PublicKey), null, false, null, 0, null)],
+                options.WhitelistedKeyB64 ?? Convert.ToBase64String(options.WhitelistedKey ?? phone.Target.PublicKey),
+                null, false, null, 0, null)],
             [], null).ToBytes();
 
         var files = new Dictionary<string, string>
@@ -237,6 +321,8 @@ public sealed class BlindPhoneReplicaVerificationTests : IDisposable
         public Guid? ProducerNodeId { get; init; }
         public Guid? WhitelistedNodeId { get; init; }
         public byte[]? WhitelistedKey { get; init; }
+        public string? WhitelistedKeyB64 { get; init; }
+        public byte[]? BlindManifestBytes { get; init; }
         public IReadOnlyList<(string Name, byte[] Bytes)> ExtraEntries { get; init; } = [];
         public Dictionary<string, string> ListedHashOverrides { get; init; } = [];
     }
@@ -255,10 +341,20 @@ public sealed class BlindPhoneReplicaVerificationTests : IDisposable
         public byte[] ServingSeed { get; } = servingSeed;
         public BlindPhoneReplicaClient Client { get; } = client;
 
+        public int RequestsOfLastInstall { get; private set; }
+
         public async Task InstallAsync(CraftedPackage package)
         {
-            using var http = new HttpClient(new CraftedReplicaHandler(owner._blind.Server.CreateHandler(), package));
-            await Client.FetchAndInstallAsync(http, Target, WorkDirectory, progress: null, CancellationToken.None);
+            var handler = new CraftedReplicaHandler(owner._blind.Server.CreateHandler(), package);
+            using var http = new HttpClient(handler);
+            try
+            {
+                await Client.FetchAndInstallAsync(http, Target, WorkDirectory, progress: null, CancellationToken.None);
+            }
+            finally
+            {
+                RequestsOfLastInstall = handler.Requests;
+            }
         }
 
         /// <summary>The package is refused for the named reason and leaves nothing behind that could be reused.</summary>
@@ -291,6 +387,15 @@ public sealed class BlindPhoneReplicaVerificationTests : IDisposable
             response.Headers.TryAddWithoutValidation("X-BMB-Snapshot-Signature", package.SignatureB64);
             return Task.FromResult(response);
         }
+    }
+
+    private sealed class AdjustableTime(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan duration) => _now += duration;
     }
 
     private sealed class SeedSigner(byte[] seed) : INodeAuthSigner
