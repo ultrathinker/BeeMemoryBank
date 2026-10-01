@@ -48,4 +48,34 @@ public class SyncEmbeddingSplitTests
         hostedServices.Should().Contain(s => s.GetType().Name == "PendingEmbeddingProcessor",
             "PendingEmbeddingProcessor must be registered as an IHostedService for the host");
     }
+
+    [Fact]
+    public void LegacyPendingEmbeddingProcessor_IsPreservedAtOriginalPath_AndExcludedFromSyncCompilation()
+    {
+        var repoRoot = FindRepoRoot();
+        var legacyFilePath = Path.Combine(repoRoot, "libs", "BeeMemoryBank.Sync", "PendingEmbeddingProcessor.cs");
+
+        File.Exists(legacyFilePath).Should().BeTrue("Legacy file must be preserved at original path to avoid git rename/delete");
+
+        typeof(SyncClient).Assembly.GetType("BeeMemoryBank.Sync.PendingEmbeddingProcessor").Should().BeNull(
+            "Legacy PendingEmbeddingProcessor must be excluded from BeeMemoryBank.Sync compilation");
+
+        typeof(PendingEmbeddingProcessor).Assembly.GetName().Name.Should().Be("BeeMemoryBank.Embeddings");
+    }
+
+    private static string FindRepoRoot()
+    {
+        var current = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (File.Exists(Path.Combine(current, "BeeMemoryBank.slnx")) ||
+                File.Exists(Path.Combine(current, "BeeMemoryBank.sln")))
+            {
+                return current;
+            }
+            current = Path.GetDirectoryName(current);
+        }
+        throw new InvalidOperationException("Could not locate repository root from " + AppContext.BaseDirectory);
+    }
 }
+
