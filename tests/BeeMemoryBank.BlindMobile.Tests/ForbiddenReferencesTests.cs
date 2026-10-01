@@ -26,6 +26,22 @@ public class ForbiddenReferencesTests
         "SixLabors.ImageSharp"
     ];
 
+    // EventApplier needs these receive-only replicated-row collaborators, but no UI or Android
+    // platform type may acquire them. Keeping that boundary at the UI surface prevents a later
+    // page from turning the sync composition into a vault-data browsing path.
+    private static readonly string[] ReceiveOnlySyncTypeNames =
+    [
+        "IArticleRepository", "ArticleRepository", "IArticleBodyRepository", "ArticleBodyRepository",
+        "IBlobRepository", "BlobRepository", "ISyncPositionRepository", "SyncPositionRepository",
+        "ITombstoneRepository", "TombstoneRepository", "IConflictVersionRepository", "ConflictVersionRepository",
+        "ICommentRepository", "CommentRepository", "IFolderRepository", "FolderRepository",
+        "IMediaRepository", "MediaRepository", "IConceptTagRepository", "ConceptTagRepository",
+        "IRestoreReplayShieldRepository", "RestoreReplayShieldRepository", "IRestoreEventStateRepository",
+        "RestoreEventStateRepository", "IDekRotationStateRepository", "DekRotationStateRepository",
+        "ISyncQuarantineRepository", "SyncQuarantineRepository", "IEventLogger", "NullEventLogger",
+        "HardDeleteService", "ConceptTagService", "FolderAccessService", "EventApplier"
+    ];
+
     private static string FindRepoRoot()
     {
         var current = AppContext.BaseDirectory;
@@ -112,6 +128,27 @@ public class ForbiddenReferencesTests
             content.Should().NotContain(forbidden,
                 $"BeeMemoryBank.BlindMobile.csproj must not directly reference {forbidden}");
         }
+    }
+
+    [Fact]
+    public void BlindMobile_PagesAndPlatforms_DoNotReferenceReceiveOnlySyncTypes()
+    {
+        var repoRoot = FindRepoRoot();
+        var mobileRoot = Path.Combine(repoRoot, "mobile", "BeeMemoryBank.BlindMobile");
+        var sourceFiles = Directory.EnumerateFiles(Path.Combine(mobileRoot, "Pages"), "*.cs", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(mobileRoot, "Platforms"), "*.cs", SearchOption.AllDirectories));
+
+        var violations = sourceFiles.SelectMany(path =>
+        {
+            var source = File.ReadAllText(path);
+            return ReceiveOnlySyncTypeNames
+                .Where(typeName => source.Contains(typeName, StringComparison.Ordinal))
+                .Select(typeName => $"{Path.GetRelativePath(mobileRoot, path)} references {typeName}");
+        }).ToList();
+
+        violations.Should().BeEmpty(
+            "Pages and Platforms must only depend on the blind-phone facade, never EventApplier's replicated-row collaborators:\n" +
+            string.Join("\n", violations));
     }
 
     /// <summary>
