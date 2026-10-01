@@ -146,6 +146,9 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
         var orphan = Path.Combine(directory, "bmb-snapshot-orphan.tar.gz");
         await File.WriteAllBytesAsync(orphan, [1]);
         await File.WriteAllBytesAsync(orphan + ".sig", [2]);
+        // Older than a package's lease: nobody can still be streaming it.
+        File.SetLastWriteTimeUtc(orphan, DateTime.UtcNow.AddHours(-2));
+        File.SetLastWriteTimeUtc(orphan + ".sig", DateTime.UtcNow.AddHours(-2));
         Directory.CreateDirectory(snapshots.SnapshotsDir);
         var realSnapshot = Path.Combine(snapshots.SnapshotsDir, "bmb-snapshot-keep-me.tar.gz");
         await File.WriteAllBytesAsync(realSnapshot, [3]);
@@ -157,6 +160,33 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
         File.Exists(orphan).Should().BeFalse();
         File.Exists(orphan + ".sig").Should().BeFalse();
         File.Exists(realSnapshot).Should().BeTrue("the sweep must never touch the real snapshots directory");
+    }
+
+    [Fact]
+    public async Task ReplicaCache_StartKeepsAPackageAnotherProcessMayStillBeServing()
+    {
+        // Two API processes can share one data directory: a package the other one wrote a moment ago is
+        // inside its lease and may be mid-response, so a start-up sweep must not delete it.
+        var snapshots = _blind.Services.GetRequiredService<SnapshotService>();
+        var directory = ReplicaDirectory(snapshots);
+        Directory.CreateDirectory(directory);
+        var live = Path.Combine(directory, "bmb-snapshot-live-elsewhere.tar.gz");
+        var stale = Path.Combine(directory, "bmb-snapshot-stale.tar.gz");
+        await File.WriteAllBytesAsync(live, [1]);
+        await File.WriteAllBytesAsync(live + ".sig", [2]);
+        await File.WriteAllBytesAsync(stale, [3]);
+        await File.WriteAllBytesAsync(stale + ".sig", [4]);
+        File.SetLastWriteTimeUtc(live, DateTime.UtcNow.AddMinutes(-5));
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddMinutes(-31));
+        await using var cache = new BlindReplicaPackageCache(
+            _blind.Services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
+
+        await cache.StartAsync(CancellationToken.None);
+
+        File.Exists(live).Should().BeTrue("it was written within the lease time");
+        File.Exists(live + ".sig").Should().BeTrue("its signature belongs to the package that stays");
+        File.Exists(stale).Should().BeFalse("older than the lease, nobody can still be streaming it");
+        File.Exists(stale + ".sig").Should().BeFalse();
     }
 
     [Fact]

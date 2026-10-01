@@ -200,8 +200,12 @@ public sealed class BlindReplicaPackageCache(
             using var scope = scopes.CreateScope();
             var directory = PackageDirectory(scope.ServiceProvider.GetRequiredService<SnapshotService>());
             if (!Directory.Exists(directory)) return;
+            var now = time.GetUtcNow();
             foreach (var file in Directory.GetFiles(directory, "*.tar.gz"))
             {
+                // Another process on the same data directory may be serving this file right now: only a
+                // package older than a lease can be nobody's.
+                if (now - File.GetLastWriteTimeUtc(file) < Lifetime) continue;
                 File.Delete(file);
                 var signature = file + ".sig";
                 if (File.Exists(signature)) File.Delete(signature);
