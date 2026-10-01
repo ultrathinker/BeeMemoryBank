@@ -1401,6 +1401,168 @@ public class BlindMobileLogicTests
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         }
     }
+
+    /// <summary>
+    /// Finding 1 (CRITICAL): When identity row + Keystore seed are present but backup key is missing,
+    /// recovery must NOT generate a new backup key — the paired node still holds the old
+    /// android-backup:&lt;node&gt; key sealed under the DEK; a new key makes new backups unreadable.
+    /// Must fail closed with "disconnect and re-pair" instead.
+    /// </summary>
+    [Fact]
+    public async Task CreateIdentityAsync_WhenSeedPresentButBackupKeyMissing_FailsClosed_DoesNotGenerateNewBackupKey()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-backup-key-lost-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+            var keys = new SpyBlindNodeKeys();
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+
+            // First: create a valid identity (seed + backup key + pairing secret + DB row)
+            var (origPubKey, origSeed) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            keys.SaveIdentitySeed(origSeed);
+            var origBackupKey = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+            keys.SaveBackupKey(origBackupKey);
+            var origSecret = BeeMemoryBank.Crypto.BlindPairingSecret.New();
+            keys.SavePairingSecret(origSecret);
+
+            var origNodeId = BlindNodeId.NewId();
+            await recorder.RecordAsync(origNodeId, origPubKey, "Test Phone");
+
+            // Simulate backup key loss: seed is still present but backup key is gone
+            keys.SimulateLostBackupKey();
+            keys.LoadIdentitySeed().Should().NotBeNull("seed is still in Keystore");
+            keys.LoadBackupKey().Should().BeNull("backup key was lost");
+
+            var pairing = new BlindMobilePairing(state, keys, recorder, log);
+
+            // Act: must fail closed — no new backup key generated, throws
+            var act = async () => await pairing.CreateIdentityAsync("Recovered Phone");
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*backup*key*");
+
+            // Assert: no new backup key was silently created
+            keys.LoadBackupKey().Should().BeNull("must NOT generate a replacement backup key");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    /// <summary>
+    /// Finding 3 (IMPORTANT): The ordinary-ingest isolation test must actually inject the mock
+    /// into a DI container matching the blind app's composition, proving that BlindMobilePairing
+    /// cannot reach any key store other than the one explicitly provided as IBlindNodeKeys.
+    /// The mock must be provably reachable IF the implementation was wrong.
+    /// </summary>
+    [Fact]
+    public async Task CreateIdentityAsync_DIComposition_BlindPairingCannotReachOrdinaryIngestStore()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-di-isolation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+        var logPath = Path.Combine(tempDir, "blind.log");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+
+            // Build a DI container matching the blind app's composition (MauiProgram.cs lines 46-78)
+            var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+
+            var blindKeys = new SpyBlindNodeKeys();
+            var ordinarySpy = new SpyBlindNodeKeys();
+
+            services.AddSingleton<IBlindPhoneStore>(new InMemoryBlindPhoneStore());
+            services.AddSingleton<BlindPhoneState>();
+            services.AddSingleton(_ => new BlindPhoneLog(logPath, TimeProvider.System));
+            services.AddSingleton(recorder);
+
+            // Register blind keys as IBlindNodeKeys — the blind app's real registration
+            services.AddSingleton<IBlindNodeKeys>(blindKeys);
+            // Register the ordinary spy as IBlindPhoneKeys — if BlindMobilePairing resolved
+            // IBlindPhoneKeys instead of IBlindNodeKeys, it would reach this spy
+            services.AddSingleton<IBlindPhoneKeys>(ordinarySpy);
+
+            services.AddSingleton<BlindMobilePairing>();
+
+            var sp = services.BuildServiceProvider();
+
+            var pairing = sp.GetRequiredService<BlindMobilePairing>();
+
+            // Act
+            await pairing.CreateIdentityAsync("DI Test Phone");
+
+            // Assert: BlindMobilePairing only touched blindKeys (IBlindNodeKeys), never ordinarySpy (IBlindPhoneKeys)
+            blindKeys.SaveIdentitySeedCallCount.Should().BeGreaterThan(0, "blind keys must be used for identity seed");
+            ordinarySpy.SaveIdentitySeedCallCount.Should().Be(0, "ordinary ingest spy must NEVER be called");
+            ordinarySpy.SaveBackupKeyCallCount.Should().Be(0, "ordinary ingest spy must NEVER be called");
+            ordinarySpy.SavePairingSecretCallCount.Should().Be(0, "ordinary ingest spy must NEVER be called");
+
+            pairing.HasIdentity.Should().BeTrue();
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    /// <summary>
+    /// Finding 5 (MINOR): PhoneCode() loads pairing secret and backup key. If one is null,
+    /// the other (non-null) buffer must still be cleared before returning null.
+    /// </summary>
+    [Fact]
+    public void PhoneCode_WhenBackupKeyMissing_ClearsLoadedPairingSecretBeforeReturning()
+    {
+        var store = new InMemoryBlindPhoneStore();
+        var state = new BlindPhoneState(store);
+        state.NodeId = Guid.NewGuid();
+        state.PublicKey = new byte[32];
+        state.DisplayName = "Test";
+
+        var keys = new SpyBlindNodeKeys();
+        // secret present, backup key missing
+        keys.SavePairingSecret(BeeMemoryBank.Crypto.BlindPairingSecret.New());
+        // do NOT save a backup key
+
+        var log = new BlindPhoneLog(
+            Path.Combine(Path.GetTempPath(), "test-log-" + Guid.NewGuid().ToString("N") + ".jsonl"),
+            TimeProvider.System);
+        var recorder = new SqliteBlindIdentityRecorder(
+            new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(
+                Path.Combine(Path.GetTempPath(), "dummy-" + Guid.NewGuid().ToString("N") + ".db")));
+        var pairing = new BlindMobilePairing(state, keys, recorder, log);
+
+        var result = pairing.PhoneCode();
+
+        // Must return null because backup key is missing
+        result.Should().BeNull();
+
+        // The pairing secret buffer that was loaded must have been zeroed/cleared.
+        // SpyBlindNodeKeys tracks that LoadPairingSecret was called; verify it returns non-null
+        // (proving a buffer was loaded) and that the code cleared it.
+        // We verify this through the SecretBuffersCleared counter on the spy.
+        keys.LoadPairingSecretCallCount.Should().BeGreaterThan(0, "a pairing secret was loaded");
+        keys.SecretBuffersClearedCount.Should().BeGreaterThan(0,
+            "loaded secret buffer must be cleared even when returning null due to missing backup key");
+    }
 }
 
 internal sealed class MockOrdinaryIngestKeyStore
@@ -1431,4 +1593,103 @@ internal sealed class TestHttpMessageHandler(Func<HttpRequestMessage, Cancellati
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
         sendAsync(request, cancellationToken);
+}
+
+/// <summary>
+/// A spy implementation of <see cref="IBlindNodeKeys"/> that delegates to in-memory storage
+/// and counts every method call. Used to prove DI isolation (ordinary ingest vs. blind keys)
+/// and to verify that loaded secret buffers are cleared by the caller.
+/// </summary>
+internal sealed class SpyBlindNodeKeys : IBlindNodeKeys
+{
+    private byte[]? _identitySeed;
+    private byte[]? _backupKey;
+    private byte[]? _pairingSecret;
+    private readonly List<byte[]> _loadedSecretBuffers = new();
+
+    public int SaveIdentitySeedCallCount { get; private set; }
+    public int LoadIdentitySeedCallCount { get; private set; }
+    public int SaveBackupKeyCallCount { get; private set; }
+    public int LoadBackupKeyCallCount { get; private set; }
+    public int SavePairingSecretCallCount { get; private set; }
+    public int LoadPairingSecretCallCount { get; private set; }
+    public int ClearPairingSecretCallCount { get; private set; }
+    public int ClearCallCount { get; private set; }
+
+    /// <summary>Simulates Android Keystore losing the backup key blob.</summary>
+    public void SimulateLostBackupKey() => _backupKey = null;
+
+    /// <summary>
+    /// Number of loaded secret/key buffers that were subsequently zeroed by the caller.
+    /// Used to verify the PhoneCode() buffer-clearing fix.
+    /// </summary>
+    public int SecretBuffersClearedCount
+    {
+        get
+        {
+            int count = 0;
+            foreach (var buf in _loadedSecretBuffers)
+                if (buf.All(b => b == 0)) count++;
+            return count;
+        }
+    }
+
+    public void SaveIdentitySeed(byte[] seed)
+    {
+        SaveIdentitySeedCallCount++;
+        _identitySeed = (byte[])seed.Clone();
+    }
+
+    public byte[]? LoadIdentitySeed()
+    {
+        LoadIdentitySeedCallCount++;
+        if (_identitySeed is null) return null;
+        var clone = (byte[])_identitySeed.Clone();
+        _loadedSecretBuffers.Add(clone);
+        return clone;
+    }
+
+    public void SaveBackupKey(byte[] key)
+    {
+        SaveBackupKeyCallCount++;
+        _backupKey = (byte[])key.Clone();
+    }
+
+    public byte[]? LoadBackupKey()
+    {
+        LoadBackupKeyCallCount++;
+        if (_backupKey is null) return null;
+        var clone = (byte[])_backupKey.Clone();
+        _loadedSecretBuffers.Add(clone);
+        return clone;
+    }
+
+    public void SavePairingSecret(byte[] secret)
+    {
+        SavePairingSecretCallCount++;
+        _pairingSecret = (byte[])secret.Clone();
+    }
+
+    public byte[]? LoadPairingSecret()
+    {
+        LoadPairingSecretCallCount++;
+        if (_pairingSecret is null) return null;
+        var clone = (byte[])_pairingSecret.Clone();
+        _loadedSecretBuffers.Add(clone);
+        return clone;
+    }
+
+    public void ClearPairingSecret()
+    {
+        ClearPairingSecretCallCount++;
+        _pairingSecret = null;
+    }
+
+    public void Clear()
+    {
+        ClearCallCount++;
+        _identitySeed = null;
+        _backupKey = null;
+        _pairingSecret = null;
+    }
 }

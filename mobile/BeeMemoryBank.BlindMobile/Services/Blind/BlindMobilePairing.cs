@@ -85,17 +85,24 @@ public sealed class BlindMobilePairing(
                         var derivedPubKey = DerivePublicKeyFromSeed(seed);
                         if (CryptographicOperations.FixedTimeEquals(derivedPubKey, existing.PublicKey))
                         {
-                            // Recover existing identity: Keystore seed matches the database row
+                            // Seed matches: verify backup key is also present.
+                            // If the backup key is lost, a new one must NOT be generated:
+                            // the paired node still holds the old android-backup:<node> key
+                            // sealed under the DEK; new backups with a different key would be
+                            // unreadable by the Windows recovery path.
+                            if (keys.LoadBackupKey() is null)
+                            {
+                                throw new InvalidOperationException(
+                                    $"Existing identity {existing.NodeId}: Keystore seed matches but backup key is missing. " +
+                                    "The paired node holds the original backup key sealed under the DEK. " +
+                                    "Disconnect and re-pair to create a new backup key safely.");
+                            }
+
+                            // Recover existing identity: Keystore seed and backup key both present
                             state.PublicKey = existing.PublicKey;
                             state.DisplayName = string.IsNullOrWhiteSpace(existing.DisplayName) ? displayName : existing.DisplayName;
                             state.NodeId = existing.NodeId;
 
-                            if (keys.LoadBackupKey() is null)
-                            {
-                                var bk = RandomNumberGenerator.GetBytes(32);
-                                try { keys.SaveBackupKey(bk); }
-                                finally { CryptographicOperations.ZeroMemory(bk); }
-                            }
                             if (keys.LoadPairingSecret() is null && !IsPaired)
                             {
                                 var sec = BlindPairingSecret.New();
@@ -165,7 +172,13 @@ public sealed class BlindMobilePairing(
             if (state.NodeId is not { } nodeId || state.PublicKey is not { } key || state.DisplayName is not { } name) return null;
             var secret = keys.LoadPairingSecret();
             var backupKey = keys.LoadBackupKey();
-            if (secret is null || backupKey is null) return null;
+            if (secret is null || backupKey is null)
+            {
+                // Clear whichever buffer was loaded so decrypted material does not linger
+                if (secret is not null) CryptographicOperations.ZeroMemory(secret);
+                if (backupKey is not null) CryptographicOperations.ZeroMemory(backupKey);
+                return null;
+            }
             return new BlindPhoneCode(nodeId, key, secret, backupKey, name);
         }
     }

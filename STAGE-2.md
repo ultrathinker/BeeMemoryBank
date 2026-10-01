@@ -2,95 +2,42 @@
 
 ## 1. Done
 - **Restored shared library and test files to base `46e88776`** (`3982efef`):
-  - Addressed Review Findings 1, 2, 4 and Orchestrator guidance.
   - Reverted `libs/BeeMemoryBank.Core/Services/BlindPhone/BlindPhoneContracts.cs`, `libs/BeeMemoryBank.Core/Services/BlindPhone/BlindPhonePairing.cs`, `tests/BeeMemoryBank.Core.Tests/BlindPhoneServicesTests.cs`, and `tests/BeeMemoryBank.Integration.Tests/BlindPhonePairingTests.cs` byte-identical to base `46e88776`.
-  - Existing shared members preserved with original behavior; no shared API removed or altered.
 - **Isolated blind pairing and keys in BlindMobile** (`122a8e52`):
-  - [`IBlindNodeKeys.cs:1-12`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Services/Blind/IBlindNodeKeys.cs#L1-L12): Extends `IBlindPhoneKeys` with `LoadIdentitySeed()` for isolated seed retrieval.
-  - [`BlindIdentityRecord.cs:1-12`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindIdentityRecord.cs#L1-L12): Local immutable record for SQLite row snapshot with `CanGenerateEmbeddings` tracking.
-  - [`BlindMobilePairing.cs:1-255`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindMobilePairing.cs#L1-L255): Dedicated blind node pairing coordinator with two-code pairing, durable acceptance protocol, atomic one-time secret consumption, crash cleanup, and Keystore seed validation.
-  - [`KeystoreBlindPhoneKeys.cs:1-34`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Platforms/Android/KeystoreBlindPhoneKeys.cs#L1-L34): Hardware-backed Keystore storage implementing `IBlindNodeKeys` under alias `bmb_blind_seed_v1`. Completely isolated from ordinary app ingest store.
+  - [`BlindMobilePairing.cs:1-271`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindMobilePairing.cs#L1-L271): Dedicated blind node pairing coordinator with two-code pairing, durable acceptance protocol, atomic one-time secret consumption, crash cleanup, and Keystore seed validation.
+  - [`KeystoreBlindPhoneKeys.cs:1-34`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Platforms/Android/KeystoreBlindPhoneKeys.cs#L1-L34): Hardware-backed Keystore storage under alias `bmb_blind_seed_v1`, isolated from ordinary app.
 - **Enforced `can_generate_embeddings = 0` invariant & fail closed** (`122a8e52`):
-  - Addressed Review Finding 3 & Orchestrator note 4.
-  - [`SqliteBlindIdentityRecorder.cs:25-56`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Services/Blind/SqliteBlindIdentityRecorder.cs#L25-L56): Reads `can_generate_embeddings` column and throws `InvalidOperationException` unless it is 0.
-- **Isolated ingest key verification** (`122a8e52`):
-  - Addressed Review Finding 2 & Orchestrator note 3.
-  - Regression test `CreateIdentityAsync_UsesIsolatedBlindKeyStore_NeverCallsOrdinaryIngestStore_PreservesOrdinaryKeyByteIdentical` verifies 0 calls to ordinary app ingest store and byte-identical key preservation.
-- **Core Stage 2 Deliverables**:
-  - Real v=2 SQLite identity persistence (`SqliteBlindIdentityRecorder.cs`).
-  - SPKI pin HTTP connection pool isolation (`BlindHttpClientProvider.cs:33-85`).
-  - Two-code pairing with mandatory SPKI pin (`ec705ce4`).
+  - [`SqliteBlindIdentityRecorder.cs:25-56`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Services/Blind/SqliteBlindIdentityRecorder.cs#L25-L56): Reads column, throws unless 0.
+- **Core Stage 2 Deliverables**: Real v=2 SQLite identity, SPKI pin HTTP pool isolation, two-code pairing with mandatory SPKI pin.
+- **Fix round 4** (review `D:\review\bmb-agents\review\android-blind-s2-r1-54018\REVIEW.md`):
+  - **(CRITICAL) Backup key recovery fail-closed** — [`BlindMobilePairing.cs:88-97`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindMobilePairing.cs#L88-L97): When seed matches but backup key is missing, throws `InvalidOperationException` ("disconnect and re-pair") instead of silently generating a new key. Prevents creating backups unreadable by the Windows recovery path.
+  - **(IMPORTANT) Ordinary-ingest isolation test made real** — [`BlindMobileLogicTests.cs:1472-1527`](file:///D:/review/bmb-android-blind/repo/tests/BeeMemoryBank.BlindMobile.Tests/BlindMobileLogicTests.cs#L1472-L1527): New DI-composition test registers both `IBlindNodeKeys` (blind spy) and `IBlindPhoneKeys` (ordinary spy), builds `BlindMobilePairing` via DI, asserts blind spy receives all calls and ordinary spy receives zero. Proven RED by swapping registrations.
+  - **(MINOR) PhoneCode() buffer clearing** — [`BlindMobilePairing.cs:175-180`](file:///D:/review/bmb-android-blind/repo/mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindMobilePairing.cs#L175-L180): On incomplete-code path (one of secret/backupKey is null), both loaded buffers are now `ZeroMemory`-cleared before returning null.
 
 ## 2. Not done
-- None. All Stage 2 deliverables and review findings resolved.
+- None.
 
 ## 3. Deviations
-- **Review Findings 1, 2, and 4 (Shared files restored & isolated)**:
-  - Findings 1, 2, and 4 are resolved by restoring all four shared files (`libs/BeeMemoryBank.Core/Services/BlindPhone/BlindPhoneContracts.cs`, `libs/BeeMemoryBank.Core/Services/BlindPhone/BlindPhonePairing.cs`, `tests/BeeMemoryBank.Core.Tests/BlindPhoneServicesTests.cs`, `tests/BeeMemoryBank.Integration.Tests/BlindPhonePairingTests.cs`) to their original state in `46e88776`.
-  - No shared files in `libs/` or `server/` or `tests/` are modified. All blind-specific logic resides strictly in `mobile/BeeMemoryBank.BlindMobile/` and `tests/BeeMemoryBank.BlindMobile.Tests/`.
-  - Output of `git diff --name-status 46e88776 HEAD`:
-```
-M	.github/workflows/build-mobile.yml
-M	BeeMemoryBank.slnx
-A	PLAN.md
-A	STAGE-0.md
-A	STAGE-1.md
-A	STAGE-2.md
-A	mobile/BeeMemoryBank.BlindMobile/App.xaml
-A	mobile/BeeMemoryBank.BlindMobile/App.xaml.cs
-A	mobile/BeeMemoryBank.BlindMobile/BeeMemoryBank.BlindMobile.csproj
-A	mobile/BeeMemoryBank.BlindMobile/MauiProgram.cs
-A	mobile/BeeMemoryBank.BlindMobile/Pages/BlindHomePage.xaml
-A	mobile/BeeMemoryBank.BlindMobile/Pages/BlindHomePage.xaml.cs
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/AndroidDeviceState.cs
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/AndroidManifest.xml
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/BlindWork.cs
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/BootReceiver.cs
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/KeystoreBlindPhoneKeys.cs
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/MainActivity.cs
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/MainApplication.cs
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/Resources/drawable/ic_notification.xml
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/Resources/xml/data_extraction_rules.xml
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/Resources/xml/network_security_config.xml
-A	mobile/BeeMemoryBank.BlindMobile/Platforms/Android/SafExport.cs
-A	mobile/BeeMemoryBank.BlindMobile/Resources/AppIcon/appicon.svg
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindHttpClientProvider.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindHttpHandler.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindIdentityRecord.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindMobilePairing.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/BlindPhoneReset.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/IBlindNodeKeys.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/PendingBlindPieces.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/PreferencesBlindStore.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/Blind/SqliteBlindIdentityRecorder.cs
-A	mobile/BeeMemoryBank.BlindMobile/Services/MaintenanceDetectingHandler.cs
-A	tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj
-A	tests/BeeMemoryBank.BlindMobile.Tests/BlindMobileLogicTests.cs
-A	tests/BeeMemoryBank.BlindMobile.Tests/ForbiddenReferencesTests.cs
-```
+- **Review Findings 2 and 4 rejected (diff artifacts, not real):**
+  - Finding 2 says the candidate "reverts durable pairing hardening" in shared `BlindPhonePairing.cs`. Finding 4 says the candidate "removes the existing end-to-end test" in `BlindPhonePairingTests.cs`. Both are artifacts of Codex diffing only the last round against a mid-stage snapshot where those files were temporarily modified. The files are byte-identical to base `46e88776`:
+  ```
+  git diff --name-status 46e88776 HEAD -- libs/BeeMemoryBank.Core/Services/BlindPhone/BlindPhonePairing.cs tests/BeeMemoryBank.Integration.Tests/BlindPhonePairingTests.cs
+  ```
+  produces **empty output** — zero changes. The shared files were restored in `3982efef` and have not been touched since.
 
 ## 4. Tests
-- `dotnet test tests/BeeMemoryBank.BlindMobile.Tests`: **Passed: 37, Failed: 0, Skipped: 0** (Duration: 1 s)
-- `dotnet test tests/BeeMemoryBank.BlindMobile.Tests --filter "FullyQualifiedName~Forbidden"`: **Passed: 2, Failed: 0, Skipped: 0** (Duration: 32 ms)
-- `dotnet test tests/BeeMemoryBank.Core.Tests --filter "FullyQualifiedName~BlindPhone"`: **Passed: 68, Failed: 0, Skipped: 0** (Duration: 2 s)
-- `dotnet test tests/BeeMemoryBank.Integration.Tests --filter "FullyQualifiedName~BlindPhonePairing"`: **Passed: 15, Failed: 0, Skipped: 0** (Duration: 17 s)
-- **How new tests were seen RED first**:
-  - `SqliteBlindIdentityRecorder_GetRecordedAsync_WhenCanGenerateEmbeddingsTrue_FailsClosed`: Saw RED with `Expected a <System.InvalidOperationException> to be thrown, but no exception was thrown` (row with `can_generate_embeddings = 1` was previously accepted without check). Turned GREEN after reading column and failing closed in `SqliteBlindIdentityRecorder.cs`.
-  - `CreateIdentityAsync_UsesIsolatedBlindKeyStore_NeverCallsOrdinaryIngestStore_PreservesOrdinaryKeyByteIdentical`: Verified that blind app pairing uses isolated `IBlindNodeKeys` and never invokes ordinary app ingest store methods (`mockOrdinaryIngest.EnrollCallCount == 0`, `mockOrdinaryIngest.ClearCallCount == 0`, and key remains byte-identical).
+- `dotnet test tests/BeeMemoryBank.BlindMobile.Tests --blame-hang-timeout 30s`: **Passed: 40, Failed: 0, Skipped: 0** (Duration: 1 s)
+- **New tests (fix round 4):**
+  - `CreateIdentityAsync_WhenSeedPresentButBackupKeyMissing_FailsClosed_DoesNotGenerateNewBackupKey`: RED — `Expected a <System.InvalidOperationException> to be thrown, but no exception was thrown.` GREEN after adding fail-closed check at `BlindMobilePairing.cs:88-97`.
+  - `CreateIdentityAsync_DIComposition_BlindPairingCannotReachOrdinaryIngestStore`: RED when DI registrations swapped (`Expected blindKeys.SaveIdentitySeedCallCount to be greater than 0 ... but found 0`). GREEN when correctly registered. Replaces the disconnected `mockOrdinaryIngest` test.
+  - `PhoneCode_WhenBackupKeyMissing_ClearsLoadedPairingSecretBeforeReturning`: RED — `Expected keys.SecretBuffersClearedCount to be greater than 0 ... but found 0.` GREEN after adding `CryptographicOperations.ZeroMemory` on both buffers at `BlindMobilePairing.cs:175-180`.
 
 ## 5. Numbers
-- **BlindMobile build check**: `dotnet build mobile/BeeMemoryBank.BlindMobile/BeeMemoryBank.BlindMobile.csproj -f net10.0-android`: **0 errors**.
-- **Existing app byte-identity check**: `git diff 46e88776 --stat mobile/BeeMemoryBank.Mobile`: **0 files changed, 0 insertions, 0 deletions** (byte-identical).
-- **Existing app build check**: `dotnet build mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj -f net10.0-android`: **0 errors**.
-- **Shared libraries diffstat against 46e88776**:
-  - `libs/`: **0 files changed**.
-  - `server/`: **0 files changed**.
-  - `desktop/`: **0 files changed**.
-  - `tests/BeeMemoryBank.Core.Tests`: **0 files changed**.
-  - `tests/BeeMemoryBank.Integration.Tests`: **0 files changed**.
+- **Existing app byte-identity**: `git diff 46e88776 --stat mobile/BeeMemoryBank.Mobile`: **0 files changed**.
+- **Shared files**: `git diff --name-status 46e88776 HEAD -- libs/ server/ desktop/ tests/BeeMemoryBank.Core.Tests tests/BeeMemoryBank.Integration.Tests`: **empty** (zero changes).
 
 ## 6. Needs the orchestrator
-- None. No deletions, renames, cache clears, or device installs were executed.
+- None.
 
 ## 7. Open risks
 - Android 14+/15 background network timing for WorkManager sync in Stage 3.
