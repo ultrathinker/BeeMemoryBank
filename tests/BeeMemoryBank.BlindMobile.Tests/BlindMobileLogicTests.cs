@@ -1563,6 +1563,102 @@ public class BlindMobileLogicTests
         keys.SecretBuffersClearedCount.Should().BeGreaterThan(0,
             "loaded secret buffer must be cleared even when returning null due to missing backup key");
     }
+
+    /// <summary>
+    /// Finding 2 (IMPORTANT): During recovery of an existing identity, all loaded key buffers
+    /// (seed, backup key, pairing secret) must be cleared with CryptographicOperations.ZeroMemory
+    /// on every path, because IBlindPhoneKeys explicitly makes the caller responsible for clearing.
+    /// </summary>
+    [Fact]
+    public async Task EnsureIdentityAsync_OnRecovery_ClearsAllLoadedKeyBuffersOnEveryPath()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "test-bmb-recovery-wipe-" + Guid.NewGuid().ToString("N") + ".db");
+        var logPath = Path.Combine(Path.GetTempPath(), "test-bmb-recovery-wipe-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var factory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            await new BeeMemoryBank.Storage.Sqlite.MigrationRunner(factory).RunMigrationsAsync();
+
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var keys = new SpyBlindNodeKeys();
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+            var recorder = new SqliteBlindIdentityRecorder(factory);
+
+            // 1. Initial creation
+            var initialPairing = new BlindMobilePairing(state, keys, recorder, log);
+            await initialPairing.CreateIdentityAsync("OriginalPhone");
+
+            // Reset spy's tracking of buffers loaded during creation
+            keys.ClearLoadedBuffersTracking();
+
+            // 2. Simulate app launch with fresh Preferences store (state.NodeId is null),
+            // but existing SQLite database and Keystore keys
+            var restartedState = new BlindPhoneState(new InMemoryBlindPhoneStore());
+            var recoveryPairing = new BlindMobilePairing(restartedState, keys, recorder, log);
+
+            // Run recovery
+            await recoveryPairing.CreateIdentityAsync("OriginalPhone");
+
+            // Verify that recovery loaded the seed, backup key, and checked secret
+            keys.LoadIdentitySeedCallCount.Should().BeGreaterThan(0, "identity seed must be loaded to verify match");
+            keys.LoadBackupKeyCallCount.Should().BeGreaterThan(0, "backup key must be loaded to verify presence");
+            keys.TotalLoadedBuffersCount.Should().BeGreaterThanOrEqualTo(2, "at least seed and backup key were loaded");
+
+            // ALL loaded buffers must have been cleared with ZeroMemory!
+            keys.SecretBuffersClearedCount.Should().Be(
+                keys.TotalLoadedBuffersCount,
+                "every buffer loaded during recovery (seed, backup key, pairing secret) must be cleared with ZeroMemory");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    /// <summary>
+    /// Finding 2 (IMPORTANT): PhoneCode consumption API (WithPhoneCode / PhoneCodeText) must wipe
+    /// loaded secret and backup key buffers immediately on consume.
+    /// </summary>
+    [Fact]
+    public async Task WithPhoneCode_And_PhoneCodeText_ClearsLoadedSecretAndBackupKeyBuffersOnConsume()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "test-bmb-phonecode-wipe-" + Guid.NewGuid().ToString("N") + ".db");
+        var logPath = Path.Combine(Path.GetTempPath(), "test-bmb-phonecode-wipe-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var factory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            await new BeeMemoryBank.Storage.Sqlite.MigrationRunner(factory).RunMigrationsAsync();
+
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            var keys = new SpyBlindNodeKeys();
+            var log = new BlindPhoneLog(logPath, TimeProvider.System);
+            var recorder = new SqliteBlindIdentityRecorder(factory);
+
+            var pairing = new BlindMobilePairing(state, keys, recorder, log);
+            await pairing.CreateIdentityAsync("TestPhone");
+
+            keys.ClearLoadedBuffersTracking();
+
+            // Act: consume via PhoneCodeText
+            var codeText = pairing.PhoneCodeText();
+            codeText.Should().NotBeNull();
+            codeText.Should().StartWith("bmb-blind-phone:?");
+
+            // Verify both secret and backupKey were loaded and zeroed
+            keys.LoadPairingSecretCallCount.Should().BeGreaterThan(0);
+            keys.LoadBackupKeyCallCount.Should().BeGreaterThan(0);
+            keys.TotalLoadedBuffersCount.Should().Be(2, "secret and backup key were loaded");
+            keys.SecretBuffersClearedCount.Should().Be(2, "both secret and backup key must be zeroed immediately after formatting");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
 }
 
 internal sealed class MockOrdinaryIngestKeyStore
@@ -1618,6 +1714,9 @@ internal sealed class SpyBlindNodeKeys : IBlindNodeKeys
 
     /// <summary>Simulates Android Keystore losing the backup key blob.</summary>
     public void SimulateLostBackupKey() => _backupKey = null;
+
+    public int TotalLoadedBuffersCount => _loadedSecretBuffers.Count;
+    public void ClearLoadedBuffersTracking() => _loadedSecretBuffers.Clear();
 
     /// <summary>
     /// Number of loaded secret/key buffers that were subsequently zeroed by the caller.

@@ -100,7 +100,7 @@ public partial class BlindHomePage : ContentPage
 
     private void ShowPhoneCode()
     {
-        var code = _pairing.PhoneCode()?.ToString();
+        var code = _pairing.PhoneCodeText();
         PhoneCodeImage.IsVisible = code != null;
         RePairButton.IsVisible = code == null && _pairing.IsPaired;
         PhoneCodeLabel.Text = code
@@ -122,7 +122,7 @@ public partial class BlindHomePage : ContentPage
 
     private async void OnCopyPhoneCodeClicked(object? sender, EventArgs e)
     {
-        if (_pairing.PhoneCode()?.ToString() is { } code) await Clipboard.Default.SetTextAsync(code);
+        if (_pairing.PhoneCodeText() is { } code) await Clipboard.Default.SetTextAsync(code);
     }
 
     private void OnConnectClicked(object? sender, EventArgs e)

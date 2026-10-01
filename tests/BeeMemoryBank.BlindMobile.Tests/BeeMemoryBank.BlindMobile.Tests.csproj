@@ -20,6 +20,7 @@
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindHttpHandler.cs" Link="Shared\BlindHttpHandler.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindHttpClientProvider.cs" Link="Shared\BlindHttpClientProvider.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\SqliteBlindIdentityRecorder.cs" Link="Shared\SqliteBlindIdentityRecorder.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindMobileServices.cs" Link="Shared\BlindMobileServices.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\MaintenanceDetectingHandler.cs" Link="Shared\MaintenanceDetectingHandler.cs" />
   </ItemGroup>
 

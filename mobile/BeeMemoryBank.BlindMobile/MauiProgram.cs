@@ -1,9 +1,7 @@
 using BeeMemoryBank.BlindMobile.Pages;
 using BeeMemoryBank.BlindMobile.Services;
 using BeeMemoryBank.BlindMobile.Services.Blind;
-using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Services.BlindPhone;
-using BeeMemoryBank.Storage;
 using Microsoft.Extensions.Logging;
 #if ANDROID
 using BeeMemoryBank.BlindMobile.Platforms.Android;
@@ -32,43 +30,7 @@ public static class MauiProgram
         var dataDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var dbPath = Path.Combine(dataDir, "beememorybank.db");
 
-        builder.Services
-            .AddStorage(dbPath)
-            .AddCore()
-            .AddLogging();
-
-        builder.Services.AddTransient<MaintenanceDetectingHandler>();
-        builder.Services.AddTransient<BlindHttpHandler>();
-        builder.Services.AddSingleton<BlindHttpClientProvider>();
-        builder.Services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
-        builder.Services.AddTransient<HttpClient>(sp => sp.GetRequiredService<BlindHttpClientProvider>().GetClient());
-
-        builder.Services
-            .AddSingleton<IBlindPhoneStore, PreferencesBlindStore>()
-            .AddSingleton<BlindPhoneState>()
-            .AddSingleton(_ => new BlindPhoneLog(BlindPaths.Log(dataDir), TimeProvider.System))
-            .AddSingleton<SqliteBlindIdentityRecorder>()
-            .AddSingleton<IBlindIdentityRecorder>(sp => sp.GetRequiredService<SqliteBlindIdentityRecorder>())
-            .AddSingleton<IBlindReplicaSource, PendingBlindReplicaSource>()
-            .AddSingleton<IBlindPhoneSync, PendingBlindPhoneSync>()
-            .AddSingleton<IBlindPackageSource, PendingBlindPackageSource>()
-            .AddSingleton<IRecoverySetJsonSource, PendingRecoverySetSource>()
-            .AddSingleton<BlindMobilePairing>()
-            .AddSingleton(sp => new BlindPhoneBackupRunner(
-                sp.GetRequiredService<BlindPhoneState>(),
-                sp.GetRequiredService<IBlindPhoneKeys>(),
-                sp.GetRequiredService<IBlindPackageSource>(),
-                sp.GetRequiredService<IRecoverySetJsonSource>(),
-                sp.GetRequiredService<IDeviceStateProvider>(),
-                sp.GetRequiredService<BlindPhoneLog>(),
-                BlindPaths.Backups(dataDir), TimeProvider.System))
-            .AddSingleton(sp => new BlindHeavyWork(
-                sp.GetRequiredService<BlindPhoneState>(),
-                sp.GetRequiredService<IBlindReplicaSource>(),
-                sp.GetRequiredService<BlindPhoneBackupRunner>(),
-                sp.GetRequiredService<IDeviceStateProvider>(),
-                sp.GetRequiredService<BlindPhoneLog>(),
-                BlindPaths.Replica(dataDir), TimeProvider.System));
+        BlindMobileServices.ConfigureServices(builder.Services, dataDir, dbPath);
 
 #if ANDROID
         builder.Services
@@ -82,4 +44,7 @@ public static class MauiProgram
 
         return builder.Build();
     }
+
+    public static IServiceCollection ConfigureServices(IServiceCollection services, string dataDir, string dbPath) =>
+        BlindMobileServices.ConfigureServices(services, dataDir, dbPath);
 }

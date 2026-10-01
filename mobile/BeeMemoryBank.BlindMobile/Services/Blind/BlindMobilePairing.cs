@@ -90,7 +90,8 @@ public sealed class BlindMobilePairing(
                             // the paired node still holds the old android-backup:<node> key
                             // sealed under the DEK; new backups with a different key would be
                             // unreadable by the Windows recovery path.
-                            if (keys.LoadBackupKey() is null)
+                            var backupKey = keys.LoadBackupKey();
+                            if (backupKey is null)
                             {
                                 throw new InvalidOperationException(
                                     $"Existing identity {existing.NodeId}: Keystore seed matches but backup key is missing. " +
@@ -98,20 +99,38 @@ public sealed class BlindMobilePairing(
                                     "Disconnect and re-pair to create a new backup key safely.");
                             }
 
-                            // Recover existing identity: Keystore seed and backup key both present
-                            state.PublicKey = existing.PublicKey;
-                            state.DisplayName = string.IsNullOrWhiteSpace(existing.DisplayName) ? displayName : existing.DisplayName;
-                            state.NodeId = existing.NodeId;
-
-                            if (keys.LoadPairingSecret() is null && !IsPaired)
+                            try
                             {
-                                var sec = BlindPairingSecret.New();
-                                try { keys.SavePairingSecret(sec); }
-                                finally { CryptographicOperations.ZeroMemory(sec); }
-                            }
+                                // Recover existing identity: Keystore seed and backup key both present
+                                state.PublicKey = existing.PublicKey;
+                                state.DisplayName = string.IsNullOrWhiteSpace(existing.DisplayName) ? displayName : existing.DisplayName;
+                                state.NodeId = existing.NodeId;
 
-                            log.Add("pairing", $"Recovered existing blind identity: {existing.NodeId}");
-                            return;
+                                var existingSecret = keys.LoadPairingSecret();
+                                try
+                                {
+                                    if (existingSecret is null && !IsPaired)
+                                    {
+                                        var sec = BlindPairingSecret.New();
+                                        try { keys.SavePairingSecret(sec); }
+                                        finally { CryptographicOperations.ZeroMemory(sec); }
+                                    }
+                                }
+                                finally
+                                {
+                                    if (existingSecret is not null)
+                                    {
+                                        CryptographicOperations.ZeroMemory(existingSecret);
+                                    }
+                                }
+
+                                log.Add("pairing", $"Recovered existing blind identity: {existing.NodeId}");
+                                return;
+                            }
+                            finally
+                            {
+                                CryptographicOperations.ZeroMemory(backupKey);
+                            }
                         }
                     }
                     finally
@@ -131,18 +150,18 @@ public sealed class BlindMobilePairing(
             // No database row: create fresh identity.
             var nodeId = BlindNodeId.NewId();
             var (publicKey, newSeed) = Ed25519Signer.GenerateKeyPair();
-            var backupKey = RandomNumberGenerator.GetBytes(32);
+            var backupKeyInitial = RandomNumberGenerator.GetBytes(32);
             var secret = BlindPairingSecret.New();
             try
             {
                 keys.SaveIdentitySeed(newSeed);
-                keys.SaveBackupKey(backupKey);
+                keys.SaveBackupKey(backupKeyInitial);
                 keys.SavePairingSecret(secret);
             }
             finally
             {
                 CryptographicOperations.ZeroMemory(newSeed);
-                CryptographicOperations.ZeroMemory(backupKey);
+                CryptographicOperations.ZeroMemory(backupKeyInitial);
                 CryptographicOperations.ZeroMemory(secret);
             }
 
@@ -163,6 +182,9 @@ public sealed class BlindMobilePairing(
     /// <summary>
     /// The code the phone shows so Windows can add it; null when there is nothing to answer — no
     /// identity, or already paired and no re-pair started.
+    /// Caller is responsible for clearing <see cref="BlindPhoneCode.Secret"/> and
+    /// <see cref="BlindPhoneCode.BackupKey"/>. Prefer <see cref="WithPhoneCode{TResult}"/> or
+    /// <see cref="PhoneCodeText"/> which guarantee buffers are wiped after use.
     /// </summary>
     public BlindPhoneCode? PhoneCode()
     {
@@ -182,6 +204,38 @@ public sealed class BlindMobilePairing(
             return new BlindPhoneCode(nodeId, key, secret, backupKey, name);
         }
     }
+
+    /// <summary>
+    /// Executes an action with the phone code and guarantees that the loaded secret and backupKey
+    /// buffers are wiped with CryptographicOperations.ZeroMemory as soon as the callback finishes.
+    /// </summary>
+    public TResult? WithPhoneCode<TResult>(Func<BlindPhoneCode, TResult> consume)
+    {
+        lock (_pairGate)
+        {
+            CleanupOrphanedSecretIfCommitted();
+            if (state.NodeId is not { } nodeId || state.PublicKey is not { } key || state.DisplayName is not { } name) return default;
+            var secret = keys.LoadPairingSecret();
+            var backupKey = keys.LoadBackupKey();
+            try
+            {
+                if (secret is null || backupKey is null) return default;
+                var code = new BlindPhoneCode(nodeId, key, secret, backupKey, name);
+                return consume(code);
+            }
+            finally
+            {
+                if (secret is not null) CryptographicOperations.ZeroMemory(secret);
+                if (backupKey is not null) CryptographicOperations.ZeroMemory(backupKey);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Formats the phone code as text (for display, QR code, or clipboard) and ensures
+    /// all loaded key material is zeroed immediately.
+    /// </summary>
+    public string? PhoneCodeText() => WithPhoneCode(code => code.ToString());
 
     /// <summary>
     /// Starts pairing with another (or the same) computer: a fresh one-time secret, so the phone shows a
