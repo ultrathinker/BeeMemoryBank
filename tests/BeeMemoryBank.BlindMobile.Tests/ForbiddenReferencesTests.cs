@@ -26,22 +26,6 @@ public class ForbiddenReferencesTests
         "SixLabors.ImageSharp"
     ];
 
-    // EventApplier needs these receive-only replicated-row collaborators, but no UI or Android
-    // platform type may acquire them. Keeping that boundary at the UI surface prevents a later
-    // page from turning the sync composition into a vault-data browsing path.
-    private static readonly string[] ReceiveOnlySyncTypeNames =
-    [
-        "IArticleRepository", "ArticleRepository", "IArticleBodyRepository", "ArticleBodyRepository",
-        "IBlobRepository", "BlobRepository", "ISyncPositionRepository", "SyncPositionRepository",
-        "ITombstoneRepository", "TombstoneRepository", "IConflictVersionRepository", "ConflictVersionRepository",
-        "ICommentRepository", "CommentRepository", "IFolderRepository", "FolderRepository",
-        "IMediaRepository", "MediaRepository", "IConceptTagRepository", "ConceptTagRepository",
-        "IRestoreReplayShieldRepository", "RestoreReplayShieldRepository", "IRestoreEventStateRepository",
-        "RestoreEventStateRepository", "IDekRotationStateRepository", "DekRotationStateRepository",
-        "ISyncQuarantineRepository", "SyncQuarantineRepository", "IEventLogger", "NullEventLogger",
-        "HardDeleteService", "ConceptTagService", "FolderAccessService", "EventApplier"
-    ];
-
     private static string FindRepoRoot()
     {
         var current = AppContext.BaseDirectory;
@@ -130,25 +114,64 @@ public class ForbiddenReferencesTests
         }
     }
 
-    [Fact]
-    public void BlindMobile_PagesAndPlatforms_DoNotReferenceReceiveOnlySyncTypes()
+    private static string FindAppDll()
     {
         var repoRoot = FindRepoRoot();
-        var mobileRoot = Path.Combine(repoRoot, "mobile", "BeeMemoryBank.BlindMobile");
-        var sourceFiles = Directory.EnumerateFiles(Path.Combine(mobileRoot, "Pages"), "*.cs", SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateFiles(Path.Combine(mobileRoot, "Platforms"), "*.cs", SearchOption.AllDirectories));
+        var debugDll = Path.Combine(repoRoot, "mobile", "BeeMemoryBank.BlindMobile", "bin", "Debug", "net10.0-android", "BeeMemoryBank.BlindMobile.dll");
+        var releaseDll = Path.Combine(repoRoot, "mobile", "BeeMemoryBank.BlindMobile", "bin", "Release", "net10.0-android", "BeeMemoryBank.BlindMobile.dll");
 
-        var violations = sourceFiles.SelectMany(path =>
+        var dllPath = File.Exists(debugDll) ? debugDll : releaseDll;
+        File.Exists(dllPath).Should().BeTrue($"BeeMemoryBank.BlindMobile.dll must exist at {dllPath}. Build the mobile project first.");
+        return dllPath;
+    }
+
+    // BlindMobileServices is the one composition class: it registers the receive-only types and so
+    // has to name them. Every other type of the app is held to ReceiveOnlyTypes.RestrictedNames.
+    private static readonly string CompositionClass = typeof(BlindMobileServices).FullName!;
+
+    /// <summary>
+    /// The sources of Services/ are linked into this test assembly, so this scan always sees the
+    /// current text of those types (the built Android assembly below can be older than the sources).
+    /// </summary>
+    [Fact]
+    public void BlindMobileServices_OutsideTheCompositionClass_NeverMentionReceiveOnlyTypes()
+    {
+        var findings = BoundaryScanner.Scan(
+            typeof(ForbiddenReferencesTests).Assembly.Location,
+            owner => owner.StartsWith("BeeMemoryBank.BlindMobile.", StringComparison.Ordinal)
+                     && !owner.StartsWith("BeeMemoryBank.BlindMobile.Tests.", StringComparison.Ordinal)
+                     && owner != CompositionClass,
+            ReceiveOnlyTypes.RestrictedNames);
+
+        findings.Should().BeEmpty(
+            "only BlindMobileServices may name the receive-only repositories and services (BMB-91):\n" +
+            string.Join("\n", findings));
+    }
+
+    /// <summary>
+    /// The built app assembly: pages, Android platform classes, MauiProgram, App and Services. Read as
+    /// metadata, so Maui/Android types need no loading.
+    /// </summary>
+    [Fact]
+    public void BlindMobileAssembly_OutsideTheCompositionClass_NeverMentionsReceiveOnlyTypes()
+    {
+        var findings = BoundaryScanner.Scan(FindAppDll(), owner => owner != CompositionClass, ReceiveOnlyTypes.RestrictedNames);
+
+        findings.Should().BeEmpty(
+            "pages, platform classes and services must not take, hold, resolve or construct a repository " +
+            "or vault service; only BlindMobileServices composes them for EventApplier (BMB-91):\n" +
+            string.Join("\n", findings));
+    }
+
+    [Fact]
+    public void ReceiveOnlyTable_RowsAreRealConstructorParametersOfTheirConsumers()
+    {
+        foreach (var row in ReceiveOnlyTypes.Rows.Where(r => !r.ViaLocator))
         {
-            var source = File.ReadAllText(path);
-            return ReceiveOnlySyncTypeNames
-                .Where(typeName => source.Contains(typeName, StringComparison.Ordinal))
-                .Select(typeName => $"{Path.GetRelativePath(mobileRoot, path)} references {typeName}");
-        }).ToList();
-
-        violations.Should().BeEmpty(
-            "Pages and Platforms must only depend on the blind-phone facade, never EventApplier's replicated-row collaborators:\n" +
-            string.Join("\n", violations));
+            var parameterTypes = row.Consumer.GetConstructors().SelectMany(c => c.GetParameters()).Select(p => p.ParameterType);
+            parameterTypes.Should().Contain(row.Service,
+                $"{row.Service.Name} is justified by {row.Consumer.Name}'s constructor ({row.Why}); a type nobody takes does not belong in the table");
+        }
     }
 
     /// <summary>
@@ -221,6 +244,20 @@ public class ForbiddenReferencesTests
             }
         }
 
+        // 1b. A receive-only type may be registered only as its table row says (ReceiveOnlyTypes.Rows):
+        // anything else of that family is a new vault-shaped dependency nobody justified.
+        var rows = ReceiveOnlyTypes.Rows.ToDictionary(r => r.Service);
+        foreach (var desc in services.Where(d => ReceiveOnlyTypes.RestrictedNames.Contains(d.ServiceType.FullName!)
+                                                 && d.ServiceType != typeof(BeeMemoryBank.Sync.EventApplier)))
+        {
+            rows.Should().ContainKey(desc.ServiceType,
+                $"'{desc.ServiceType.FullName}' is receive-only: it needs a justified row in ReceiveOnlyTypes");
+            desc.ImplementationType.Should().Be(rows[desc.ServiceType].Implementation);
+        }
+        foreach (var row in rows.Values)
+            services.Should().Contain(d => d.ServiceType == row.Service,
+                $"'{row.Service.FullName}' has a table row but is not registered; drop the stale row");
+
         // 2. Build provider and assert none resolve
         var provider = services.BuildServiceProvider();
         foreach (var forbiddenType in forbiddenTypes)
@@ -252,14 +289,7 @@ public class ForbiddenReferencesTests
     [Fact]
     public void BlindMobileAssembly_ContainsNoForbiddenCoreStorageCryptoTypeReferences()
     {
-        var repoRoot = FindRepoRoot();
-        var debugDll = Path.Combine(repoRoot, "mobile", "BeeMemoryBank.BlindMobile", "bin", "Debug", "net10.0-android", "BeeMemoryBank.BlindMobile.dll");
-        var releaseDll = Path.Combine(repoRoot, "mobile", "BeeMemoryBank.BlindMobile", "bin", "Release", "net10.0-android", "BeeMemoryBank.BlindMobile.dll");
-
-        var dllPath = File.Exists(debugDll) ? debugDll : releaseDll;
-        File.Exists(dllPath).Should().BeTrue($"BeeMemoryBank.BlindMobile.dll must exist at {dllPath}. Build the mobile project first.");
-
-        using var stream = File.OpenRead(dllPath);
+        using var stream = File.OpenRead(FindAppDll());
         using var peReader = new PEReader(stream);
         var reader = peReader.GetMetadataReader();
 

@@ -129,13 +129,15 @@ jobs:
       - name: Restore blind mobile dependencies
         run: dotnet restore mobile/BeeMemoryBank.BlindMobile/BeeMemoryBank.BlindMobile.csproj
 
-      - name: Run unit & forbidden references tests
-        run: dotnet test tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj
-
       - name: Build Blind APK (Release, unsigned)
         run: |
           dotnet publish mobile/BeeMemoryBank.BlindMobile/BeeMemoryBank.BlindMobile.csproj \
             -f net10.0-android -c Release --no-restore
+
+      # After the build: the boundary tests read the built BeeMemoryBank.BlindMobile.dll (every page,
+      # platform class and service of the app), so the assembly has to exist when they run.
+      - name: Run unit & forbidden references tests
+        run: dotnet test tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj
 
       - name: Verify forbidden assets absent from Blind APK
         run: |
