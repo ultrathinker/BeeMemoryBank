@@ -67,19 +67,24 @@ public sealed class BlindHttpHandler : DelegatingHandler
         SslPolicyErrors errors,
         BlindPhoneState? state)
     {
+        if (certificate is null)
+        {
+            return false;
+        }
+
         // 1. Explicit pin on request options (e.g. for initial pairing or targeted requests)
         if (request.Options.TryGetValue(ExplicitPin, out var pin) && !string.IsNullOrWhiteSpace(pin))
         {
-            return certificate is not null && SpkiPin.Matches(certificate, pin);
+            return SpkiPin.Matches(certificate, pin);
         }
 
         // 2. State call-code pin
         if (state?.CallCode?.SpkiPin is { } statePin && !string.IsNullOrWhiteSpace(statePin))
         {
-            return certificate is not null && SpkiPin.Matches(certificate, statePin);
+            return SpkiPin.Matches(certificate, statePin);
         }
 
-        // 3. Fallback to standard CA validation if no pin is specified
-        return errors == SslPolicyErrors.None;
+        // Pinning is mandatory: reject when no non-empty pin is available (no CA fallback)
+        return false;
     }
 }

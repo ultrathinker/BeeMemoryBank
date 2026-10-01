@@ -300,6 +300,23 @@ public class BlindMobileLogicTests
     }
 
     [Fact]
+    public void BlindHttpHandler_ValidateServerCertificate_RejectsWhenNoPinAvailable()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var req = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+            "CN=test", rsa, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        using var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var state = new BlindPhoneState(new InMemoryBlindPhoneStore());
+        var httpReq = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+
+        // When neither request options nor state CallCode specifies a pin, validation must reject
+        // even if ordinary CA policy validation reports SslPolicyErrors.None
+        var result = BlindHttpHandler.ValidateServerCertificate(httpReq, cert, System.Net.Security.SslPolicyErrors.None, state);
+        result.Should().BeFalse();
+    }
+
+    [Fact]
     public void BlindHttpHandler_ValidateServerCertificate_ValidatesExpectedSpkiPin()
     {
         using var rsa = System.Security.Cryptography.RSA.Create(2048);
@@ -310,11 +327,7 @@ public class BlindMobileLogicTests
         var expectedPin = BeeMemoryBank.Crypto.SpkiPin.Of(cert);
         var state = new BlindPhoneState(new InMemoryBlindPhoneStore());
 
-        // Unpinned request with no errors -> true
-        var dummyHttpReq = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
-        BlindHttpHandler.ValidateServerCertificate(dummyHttpReq, cert, System.Net.Security.SslPolicyErrors.None, state).Should().BeTrue();
-
-        // Request with matching explicit pin -> true
+        // Request with matching explicit pin -> true (even with RemoteCertificateChainErrors)
         var pinnedReq = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
         pinnedReq.Options.Set(BlindHttpHandler.ExplicitPin, expectedPin);
         BlindHttpHandler.ValidateServerCertificate(pinnedReq, cert, System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors, state).Should().BeTrue();
@@ -323,6 +336,22 @@ public class BlindMobileLogicTests
         var badPinnedReq = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
         badPinnedReq.Options.Set(BlindHttpHandler.ExplicitPin, "mismatched-pin");
         BlindHttpHandler.ValidateServerCertificate(badPinnedReq, cert, System.Net.Security.SslPolicyErrors.None, state).Should().BeFalse();
+
+        // State with matching CallCode pin -> true
+        var store = new InMemoryBlindPhoneStore();
+        var pairedState = new BlindPhoneState(store);
+        pairedState.CallCode = new BeeMemoryBank.Core.Models.BlindCallCode(
+            "https://example.com", Guid.NewGuid(), expectedPin, new byte[32], new byte[32]);
+        var stateReq = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+        BlindHttpHandler.ValidateServerCertificate(stateReq, cert, System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors, pairedState).Should().BeTrue();
+
+        // State with mismatched CallCode pin -> false
+        var otherPin = System.Buffers.Text.Base64Url.EncodeToString(new byte[32]);
+        var badStore = new InMemoryBlindPhoneStore();
+        var badPairedState = new BlindPhoneState(badStore);
+        badPairedState.CallCode = new BeeMemoryBank.Core.Models.BlindCallCode(
+            "https://example.com", Guid.NewGuid(), otherPin, new byte[32], new byte[32]);
+        BlindHttpHandler.ValidateServerCertificate(stateReq, cert, System.Net.Security.SslPolicyErrors.None, badPairedState).Should().BeFalse();
     }
 }
 
