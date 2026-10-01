@@ -5,33 +5,72 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
 /// <summary>
 /// "Disconnect and wipe" of the blind copy (plan section 10): stops its background work, forgets its
-/// keys (AndroidKeyStore), state, backups and log, deletes the local database and restarts the app.
-/// The network learns of it by the node's silence and by revoking it on
+/// secrets (the AndroidKeyStore blobs: identity seed, pairing secret, backup key), its state, and deletes
+/// everything it keeps in the app's data folder — the replica database with its rollback copies and
+/// candidates, the media blobs, the backups, the replica work folder, the log — so that what starts next
+/// is a fresh blind app. The network learns of it by the node's silence and by revoking it on
 /// Windows — the phone has no way to tell anyone, it holds no authority.
+///
+/// <para>Order: secrets and state first, files after. A step that fails does not stop the others (a wipe
+/// that stops at the first locked file would leave the rest of the copy behind); the failures are reported
+/// together, naming what is left, and the app is not restarted over them.</para>
 /// </summary>
 public static class BlindPhoneReset
 {
-    public static void Wipe(IServiceProvider services, string? dataDir = null)
+    /// <param name="deletePath">How a file or folder is removed; tests inject a failing one.</param>
+    public static void Wipe(IServiceProvider services, string? dataDir = null, Action<string>? deletePath = null)
     {
         dataDir ??= System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);
-#if ANDROID
-        Platforms.Android.BlindWorkScheduler.Cancel(Platform.AppContext);
-        Platform.AppContext.StopService(new Android.Content.Intent(Platform.AppContext, typeof(Platforms.Android.BlindBackupService)));
-#endif
-        services.GetRequiredService<IBlindPhoneKeys>().Clear();
-        services.GetRequiredService<BlindPhoneState>().Clear();
-        services.GetService<BlindHttpClientProvider>()?.Invalidate();
-        foreach (var dir in new[] { BlindPaths.Backups(dataDir), BlindPaths.Replica(dataDir) })
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        // The WAL sidecars too: an orphaned -wal next to a fresh db is replayed on the next open.
-        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+        var failures = new List<Exception>();
+        void Step(string what, Action action)
         {
-            var f = Path.Combine(dataDir, "beememorybank.db" + suffix);
-            if (File.Exists(f)) File.Delete(f);
+            try { action(); }
+            catch (Exception ex) { failures.Add(new IOException($"{what}: {ex.Message}", ex)); }
         }
-        if (File.Exists(BlindPaths.Log(dataDir))) File.Delete(BlindPaths.Log(dataDir));
+
+#if ANDROID
+        Step("stopping the background work", () => Platforms.Android.BlindWorkScheduler.Cancel(Platform.AppContext));
+        Step("stopping the backup service", () =>
+            Platform.AppContext.StopService(new Android.Content.Intent(Platform.AppContext, typeof(Platforms.Android.BlindBackupService))));
+#endif
+        Step("forgetting the keys", () => services.GetRequiredService<IBlindPhoneKeys>().Clear());
+        Step("forgetting the state", () => services.GetRequiredService<BlindPhoneState>().Clear());
+        Step("closing the connections", () => services.GetService<BlindHttpClientProvider>()?.Invalidate());
+        // Pooled handles keep the database files open; release them before the files go.
+        Step("closing the database", Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools);
+
+        var delete = deletePath ?? DeletePath;
+        foreach (var path in OwnedPaths(dataDir))
+            Step($"removing {Path.GetRelativePath(dataDir, path)}", () => delete(path));
+
+        if (failures.Count > 0)
+            throw new AggregateException(
+                "The wipe is not complete: " + string.Join("; ", failures.Select(f => f.Message)), failures);
+    }
+
+    /// <summary>
+    /// What the blind copy keeps in <paramref name="dataDir"/>, and nothing else there: the data folder also
+    /// holds the app's Preferences and other things that are not ours to remove.
+    /// </summary>
+    private static IEnumerable<string> OwnedPaths(string dataDir)
+    {
+        yield return BlindPaths.Backups(dataDir);
+        yield return BlindPaths.Replica(dataDir);
+        yield return Path.Combine(dataDir, "media");
+        yield return BlindPaths.Log(dataDir);
+        if (!Directory.Exists(dataDir)) yield break;
+        // The live database with its sidecars (-wal, -shm, -journal), the rollback copies a replica switch leaves
+        // (.before-replica-*) and the candidates it builds (beememorybank.replica-*.db with theirs): an orphaned
+        // -wal next to a fresh database is replayed on the next open.
+        foreach (var pattern in new[] { "beememorybank.db*", "beememorybank.replica-*" })
+            foreach (var file in Directory.GetFiles(dataDir, pattern))
+                yield return file;
+    }
+
+    private static void DeletePath(string path)
+    {
+        if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        else if (File.Exists(path)) File.Delete(path);
     }
 
     public static void WipeAndRestart(IServiceProvider services, string? dataDir = null)

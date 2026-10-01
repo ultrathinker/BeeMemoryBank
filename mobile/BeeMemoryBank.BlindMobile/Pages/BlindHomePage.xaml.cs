@@ -189,7 +189,18 @@ public partial class BlindHomePage : ContentPage
             await DisplayAlertAsync("Disconnect and wipe", "The name does not match. Nothing was deleted.", "OK");
             return;
         }
-        BlindPhoneReset.WipeAndRestart(_services);
+        try
+        {
+            BlindPhoneReset.WipeAndRestart(_services);
+        }
+        catch (AggregateException ex)
+        {
+            // Not restarted over a half-wiped copy: say what is left and let the user press it again.
+            await DisplayAlertAsync("Disconnect and wipe", $"{ex.Message}
+
+Press Disconnect and wipe again to finish.", "OK");
+            Refresh();
+        }
     }
 
     private static string When(DateTimeOffset? at) => at is { } t ? t.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "never";
