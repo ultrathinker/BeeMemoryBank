@@ -15,7 +15,7 @@ public partial class BlindHomePage : ContentPage
     private static readonly BlindBackupSchedule[] Schedules = [BlindBackupSchedule.Off, BlindBackupSchedule.Daily, BlindBackupSchedule.Weekly];
 
     private readonly BlindPhoneState _state;
-    private readonly BlindPhonePairing _pairing;
+    private readonly BlindMobilePairing _pairing;
     private readonly BlindPhoneBackupRunner _backups;
     private readonly BlindHeavyWork _work;
     private readonly BlindPhoneLog _log;
@@ -23,7 +23,7 @@ public partial class BlindHomePage : ContentPage
     private readonly IServiceProvider _services;
     private IDispatcherTimer? _timer;
 
-    public BlindHomePage(BlindPhoneState state, BlindPhonePairing pairing, BlindPhoneBackupRunner backups,
+    public BlindHomePage(BlindPhoneState state, BlindMobilePairing pairing, BlindPhoneBackupRunner backups,
         BlindHeavyWork work, BlindPhoneLog log, IDeviceStateProvider device, IServiceProvider services)
     {
         InitializeComponent();

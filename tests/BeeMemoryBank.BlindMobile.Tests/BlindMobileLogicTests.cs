@@ -166,7 +166,7 @@ public class BlindMobileLogicTests
         }
     }
 
-    private sealed class InMemoryBlindPhoneKeys : IBlindPhoneKeys
+    private sealed class InMemoryBlindPhoneKeys : IBlindNodeKeys
     {
         public byte[]? IdentitySeed { get; private set; }
         public byte[]? BackupKey { get; private set; }
@@ -743,7 +743,7 @@ public class BlindMobileLogicTests
             state.NodeId.Should().BeNull();
 
             // Next launch: pairing service is instantiated fresh
-            var freshPairing = new BlindPhonePairing(state, keys, recorder, log);
+            var freshPairing = new BlindMobilePairing(state, keys, recorder, log);
             freshPairing.HasIdentity.Should().BeFalse();
 
             // CreateIdentityAsync is invoked (as done in BlindHomePage.OnAppearing)
@@ -784,7 +784,7 @@ public class BlindMobileLogicTests
             var store = new InMemoryBlindPhoneStore();
             var state = new BlindPhoneState(store);
             var log = new BlindPhoneLog(logPath, TimeProvider.System);
-            var pairing = new BlindPhonePairing(state, keys, recorder, log);
+            var pairing = new BlindMobilePairing(state, keys, recorder, log);
 
             await pairing.CreateIdentityAsync("Phone");
             var phoneCode = pairing.PhoneCode()!;
@@ -835,7 +835,7 @@ public class BlindMobileLogicTests
             state.CallCode = code2; // CallCode is committed in state, but secret2 was not cleared due to crash
 
             // On next start/access:
-            var recoveredPairing = new BlindPhonePairing(state, keys, recorder, log);
+            var recoveredPairing = new BlindMobilePairing(state, keys, recorder, log);
             recoveredPairing.IsPaired.Should().BeTrue();
             recoveredPairing.AwaitingAnswer.Should().BeFalse();
             keys.LoadPairingSecret().Should().BeNull("orphaned secret committed in previous session was spent on recovery");
@@ -941,7 +941,7 @@ public class BlindMobileLogicTests
             var store = new InMemoryBlindPhoneStore();
             var state = new BlindPhoneState(store);
             var log = new BlindPhoneLog(logPath, TimeProvider.System);
-            var pairing = new BlindPhonePairing(state, keys, recorder, log);
+            var pairing = new BlindMobilePairing(state, keys, recorder, log);
 
             // 1. Initial State: no identity, not paired, not awaiting answer
             pairing.HasIdentity.Should().BeFalse();
@@ -1077,7 +1077,7 @@ public class BlindMobileLogicTests
             keys.SaveBackupKey(backupKey);
             keys.LoadIdentitySeed().Should().BeNull();
 
-            var pairing = new BlindPhonePairing(state, keys, recorder, log);
+            var pairing = new BlindMobilePairing(state, keys, recorder, log);
 
             // Act: Must fail closed!
             var act = async () => await pairing.CreateIdentityAsync("Attempted Overwrite");
@@ -1136,7 +1136,7 @@ public class BlindMobileLogicTests
             var (_, differentSeed) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
             keys.SaveIdentitySeed(differentSeed);
 
-            var pairing = new BlindPhonePairing(state, keys, recorder, log);
+            var pairing = new BlindMobilePairing(state, keys, recorder, log);
 
             // Act: Must fail closed!
             var act = async () => await pairing.CreateIdentityAsync("Attempted Overwrite");
@@ -1306,7 +1306,7 @@ public class BlindMobileLogicTests
     }
 
     [Fact]
-    public async Task CreateIdentityAsync_DoesNotClearKeys_OnNewRegistration_PreservingOrdinaryIngestKey()
+    public async Task CreateIdentityAsync_UsesIsolatedBlindKeyStore_NeverCallsOrdinaryIngestStore_PreservesOrdinaryKeyByteIdentical()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "bmb-ingest-preserve-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -1320,26 +1320,81 @@ public class BlindMobileLogicTests
             var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
             await runner.RunMigrationsAsync();
 
-            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
             var recorder = new SqliteBlindIdentityRecorder(dbFactory);
-            var mockKeys = new MockOrdinaryAppKeys();
-            var initialIngestKey = new byte[] { 10, 20, 30, 40 };
-            mockKeys.SetSimulatedIngestKey(initialIngestKey);
+            
+            // Ordinary app's simulated ingest key store holding pre-existing signing key
+            var initialIngestKey = new byte[] { 0xCA, 0xFE, 0xBA, 0xBE, 0x11, 0x22, 0x33, 0x44 };
+            var mockOrdinaryIngest = new MockOrdinaryIngestKeyStore(initialIngestKey);
+
+            // Blind app uses its own isolated keys
+            var blindKeys = new InMemoryBlindPhoneKeys();
 
             var store = new InMemoryBlindPhoneStore();
             var state = new BlindPhoneState(store);
             var log = new BlindPhoneLog(logPath, TimeProvider.System);
-            var pairing = new BlindPhonePairing(state, mockKeys, recorder, log);
+            var pairing = new BlindMobilePairing(state, blindKeys, recorder, log);
 
             // Registration from scratch (empty DB)
             await pairing.CreateIdentityAsync("Phone");
 
-            // Assert: Registration succeeded
+            // Assert: Blind registration succeeded with its own keys
             pairing.HasIdentity.Should().BeTrue();
-            // Assert: mockKeys.Clear() was NEVER called, and the ingest store is intact!
-            mockKeys.ClearCalled.Should().BeFalse("Clear() must not be called as a side effect of creating identity");
-            mockKeys.IngestCleared.Should().BeFalse("ingest store must not be erased during registration");
-            mockKeys.SimulatedIngestKey.Should().NotBeNull();
+            blindKeys.LoadIdentitySeed().Should().NotBeNull();
+            blindKeys.LoadIdentitySeed().Should().NotEqual(initialIngestKey);
+
+            // Assert: Ordinary app ingest store was NEVER called (0 calls)!
+            mockOrdinaryIngest.EnrollCallCount.Should().Be(0, "blind pairing must never call ordinary app's ingest Enroll");
+            mockOrdinaryIngest.ClearCallCount.Should().Be(0, "blind pairing must never call ordinary app's ingest Clear");
+
+            // Assert: Pre-existing ordinary ingest key remains 100% byte-identical
+            mockOrdinaryIngest.IngestKey.Should().Equal(initialIngestKey, "ordinary ingest key must remain byte-identical");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public async Task SqliteBlindIdentityRecorder_GetRecordedAsync_WhenCanGenerateEmbeddingsTrue_FailsClosed()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-embeddings-flag-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var blindNodeId = BlindNodeId.NewId();
+
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                await Dapper.SqlMapper.ExecuteAsync(conn,
+                    @"INSERT INTO tbl_node_identity
+                      (node_id, display_name, ed25519_public_key, ed25519_private_key, ed25519_private_key_iv, ed25519_private_key_v, can_generate_embeddings, created_at)
+                      VALUES (@blindNodeId, 'Crafted Node', @pubKey, @privKey, null, 2, 1, @now)",
+                    new { blindNodeId, pubKey = new byte[32], privKey = Array.Empty<byte>(), now = DateTime.UtcNow });
+            }
+
+            var recorder = new SqliteBlindIdentityRecorder(dbFactory);
+
+            // Act & Assert: Must fail closed!
+            var act = async () => await recorder.GetRecordedAsync();
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*embeddings*");
+
+            // Row in DB must NOT be deleted!
+            using (var conn = dbFactory.CreateConnection())
+            {
+                conn.Open();
+                var count = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, "SELECT COUNT(*) FROM tbl_node_identity");
+                count.Should().Be(1);
+            }
         }
         finally
         {
@@ -1348,35 +1403,27 @@ public class BlindMobileLogicTests
     }
 }
 
-internal sealed class MockOrdinaryAppKeys : IBlindPhoneKeys
+internal sealed class MockOrdinaryIngestKeyStore
 {
-    public bool ClearCalled { get; private set; }
-    public bool IngestCleared { get; private set; }
-    public byte[]? SimulatedIngestKey { get; private set; }
-    private byte[]? _backup;
-    private byte[]? _pairing;
+    public int EnrollCallCount { get; private set; }
+    public int ClearCallCount { get; private set; }
+    public byte[]? IngestKey { get; private set; }
 
-    public void SetSimulatedIngestKey(byte[] key) => SimulatedIngestKey = key;
-
-    public void SaveIdentitySeed(byte[] seed)
+    public MockOrdinaryIngestKeyStore(byte[] initialKey)
     {
-        SimulatedIngestKey = seed.ToArray();
+        IngestKey = (byte[])initialKey.Clone();
     }
 
-    public byte[]? LoadIdentitySeed() => SimulatedIngestKey;
-    public void SaveBackupKey(byte[] key) => _backup = key.ToArray();
-    public byte[]? LoadBackupKey() => _backup;
-    public void SavePairingSecret(byte[] secret) => _pairing = secret.ToArray();
-    public byte[]? LoadPairingSecret() => _pairing;
-    public void ClearPairingSecret() => _pairing = null;
+    public void Enroll(byte[] seed)
+    {
+        EnrollCallCount++;
+        IngestKey = (byte[])seed.Clone();
+    }
 
     public void Clear()
     {
-        ClearCalled = true;
-        IngestCleared = true;
-        SimulatedIngestKey = null;
-        _backup = null;
-        _pairing = null;
+        ClearCallCount++;
+        IngestKey = null;
     }
 }
 

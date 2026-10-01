@@ -28,16 +28,18 @@ public sealed class SqliteBlindIdentityRecorder(DbConnectionFactory factory) : I
                 ed25519_public_key       AS Ed25519PublicKey,
                 ed25519_private_key      AS Ed25519PrivateKey,
                 ed25519_private_key_iv   AS Ed25519PrivateKeyIV,
-                ed25519_private_key_v    AS Ed25519PrivateKeyV
+                ed25519_private_key_v    AS Ed25519PrivateKeyV,
+                can_generate_embeddings  AS CanGenerateEmbeddings
               FROM tbl_node_identity LIMIT 1");
 
         if (row is null) return null;
 
-        // Invariant checks (Finding 2):
+        // Invariant checks (Finding 2 & Finding 3):
         // Blind nodes must have:
         // 1. A blind UUIDv8 NodeId (BlindNodeId.IsBlind(node_id))
         // 2. ed25519_private_key_v = 2 (NodeIdentityCrypto.ExternalKeyVersion)
         // 3. empty private key and null/empty IV (key material is never stored in DB for blind nodes)
+        // 4. can_generate_embeddings = 0 (blind nodes cannot generate embeddings)
         if (!BlindNodeId.IsBlind(row.NodeId))
         {
             throw new InvalidOperationException($"Existing node identity {row.NodeId} in database is not a blind node ID. Refusing to adopt non-blind node as blind node.");
@@ -53,13 +55,19 @@ public sealed class SqliteBlindIdentityRecorder(DbConnectionFactory factory) : I
             throw new InvalidOperationException("Existing node identity contains private key material in database; blind node identities must have external keys only.");
         }
 
+        if (row.CanGenerateEmbeddings != 0)
+        {
+            throw new InvalidOperationException("Existing node identity has can_generate_embeddings enabled; blind node identities must have can_generate_embeddings = 0.");
+        }
+
         return new BlindIdentityRecord(
             row.NodeId,
             row.Ed25519PublicKey,
             row.DisplayName,
             row.Ed25519PrivateKeyV,
             row.Ed25519PrivateKey,
-            row.Ed25519PrivateKeyIV);
+            row.Ed25519PrivateKeyIV,
+            row.CanGenerateEmbeddings != 0);
     }
 
     public async Task ClearAsync(CancellationToken ct = default)
@@ -131,5 +139,6 @@ public sealed class SqliteBlindIdentityRecorder(DbConnectionFactory factory) : I
         public byte[]? Ed25519PrivateKey { get; set; }
         public byte[]? Ed25519PrivateKeyIV { get; set; }
         public int Ed25519PrivateKeyV { get; set; }
+        public int CanGenerateEmbeddings { get; set; }
     }
 }

@@ -47,12 +47,13 @@ public static class MauiProgram
             .AddSingleton<IBlindPhoneStore, PreferencesBlindStore>()
             .AddSingleton<BlindPhoneState>()
             .AddSingleton(_ => new BlindPhoneLog(BlindPaths.Log(dataDir), TimeProvider.System))
-            .AddSingleton<IBlindIdentityRecorder, SqliteBlindIdentityRecorder>()
+            .AddSingleton<SqliteBlindIdentityRecorder>()
+            .AddSingleton<IBlindIdentityRecorder>(sp => sp.GetRequiredService<SqliteBlindIdentityRecorder>())
             .AddSingleton<IBlindReplicaSource, PendingBlindReplicaSource>()
             .AddSingleton<IBlindPhoneSync, PendingBlindPhoneSync>()
             .AddSingleton<IBlindPackageSource, PendingBlindPackageSource>()
             .AddSingleton<IRecoverySetJsonSource, PendingRecoverySetSource>()
-            .AddSingleton<BlindPhonePairing>()
+            .AddSingleton<BlindMobilePairing>()
             .AddSingleton(sp => new BlindPhoneBackupRunner(
                 sp.GetRequiredService<BlindPhoneState>(),
                 sp.GetRequiredService<IBlindPhoneKeys>(),
@@ -71,7 +72,9 @@ public static class MauiProgram
 
 #if ANDROID
         builder.Services
-            .AddSingleton<IBlindPhoneKeys, KeystoreBlindPhoneKeys>()
+            .AddSingleton<KeystoreBlindPhoneKeys>()
+            .AddSingleton<IBlindNodeKeys>(sp => sp.GetRequiredService<KeystoreBlindPhoneKeys>())
+            .AddSingleton<IBlindPhoneKeys>(sp => sp.GetRequiredService<KeystoreBlindPhoneKeys>())
             .AddSingleton<IDeviceStateProvider, AndroidDeviceState>();
 #endif
 

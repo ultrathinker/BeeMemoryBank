@@ -4,13 +4,15 @@ using Java.Security;
 using Javax.Crypto;
 using Javax.Crypto.Spec;
 
+using BeeMemoryBank.BlindMobile.Services.Blind;
+
 namespace BeeMemoryBank.BlindMobile.Platforms.Android;
 
 /// <summary>
 /// The Android blind node's secrets in the AndroidKeyStore (plan 3.5 "key outside the DEK").
 /// The identity seed, backup key and pairing secret each have their own non-exportable Keystore key.
 /// </summary>
-public sealed class KeystoreBlindPhoneKeys : IBlindPhoneKeys
+public sealed class KeystoreBlindPhoneKeys : IBlindNodeKeys
 {
     private readonly KeystoreBlob _seed = new("bmb_blind_seed_v1", "bmb_blind_seed.bin", "bmb-blind-identity-seed-v1"u8.ToArray());
     private readonly KeystoreBlob _pairing = new("bmb_blind_pairing_v1", "bmb_blind_pairing.bin", "bmb-blind-pairing-v1"u8.ToArray());

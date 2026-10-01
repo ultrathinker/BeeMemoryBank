@@ -11,6 +11,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindIdentityRecord.cs" Link="Shared\BlindIdentityRecord.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\IBlindNodeKeys.cs" Link="Shared\IBlindNodeKeys.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindMobilePairing.cs" Link="Shared\BlindMobilePairing.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\PendingBlindPieces.cs" Link="Shared\PendingBlindPieces.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPhoneReset.cs" Link="Shared\BlindPhoneReset.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\PreferencesBlindStore.cs" Link="Shared\PreferencesBlindStore.cs" />
