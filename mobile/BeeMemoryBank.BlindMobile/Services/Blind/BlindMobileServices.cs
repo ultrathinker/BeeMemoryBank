@@ -14,9 +14,15 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
 /// <summary>
 /// Composes the minimal service collection for the Android blind node.
-/// Invariant: Vault services (SessionService, ArticleService, KeyManagementService,
-/// TreeService, SearchService, MediaService, RestoreService) and vault repositories
-/// (article, blob, key slot, search index segments, retired DEK) are NOT registered.
+/// Invariant: the vault SERVICES (SessionService, ArticleService, KeyManagementService, TreeService,
+/// SearchService, MediaService, RestoreService) and the key-slot, retired-DEK and search-index
+/// repositories are NOT registered.
+/// Exception, and the only one: the receive-only block below registers the replicated-row repositories
+/// (article, article body, blob, tombstone, conflict version, comment, folder, media, concept tag, ...)
+/// because <c>EventApplier</c> cannot be constructed without them. Each one is listed, with why and who
+/// consumes it, in <c>ReceiveOnlyTypes</c> (tests/BeeMemoryBank.BlindMobile.Tests), and the boundary
+/// tests fail on any other type of the app that mentions one. It goes away with BMB-91 (a receive-only
+/// applier in its own project).
 /// </summary>
 public static class BlindMobileServices
 {
