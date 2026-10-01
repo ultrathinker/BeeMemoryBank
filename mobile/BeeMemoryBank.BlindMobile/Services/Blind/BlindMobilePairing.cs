@@ -31,6 +31,23 @@ public sealed class BlindMobilePairing(
     public bool HasIdentity => state.NodeId != null;
     public bool IsPaired => state.CallCode != null;
 
+    /// <summary>
+    /// True when this phone has an identity but the Keystore no longer holds its backup key. The computer keeps the
+    /// key's sealed copy, so a new one is never made silently (backups under it could not be opened): the screen
+    /// says to disconnect and pair again. A phone with no identity yet has nothing to lose.
+    /// </summary>
+    public bool BackupKeyLost
+    {
+        get
+        {
+            if (!HasIdentity) return false;
+            var key = keys.LoadBackupKey();
+            if (key is null) return true;
+            CryptographicOperations.ZeroMemory(key);
+            return false;
+        }
+    }
+
     /// <summary>True while a phone code can be answered: before pairing, or after <see cref="StartRePair"/>.</summary>
     public bool AwaitingAnswer
     {

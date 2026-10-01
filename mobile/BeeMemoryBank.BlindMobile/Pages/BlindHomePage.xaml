@@ -49,6 +49,8 @@
                     <Label Text="Backups" FontAttributes="Bold" />
                     <Label Text="Encrypted with this phone's backup key; the computer can open them with the master password. Made only on Wi-Fi, on the charger, at 20 % battery or more."
                            FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Label x:Name="KeyLostLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap"
+                           Text="This phone's backup key is lost, so it cannot make backups the computer could open. Use Disconnect and wipe below, then pair the phone again." />
                     <Button x:Name="BackupNowButton" Text="Back up now" Style="{StaticResource PrimaryButton}" Clicked="OnBackupNowClicked" />
                     <Button x:Name="SaveToButton" Text="Save the latest backup to…" Clicked="OnSaveToClicked" />
                     <HorizontalStackLayout Spacing="8">

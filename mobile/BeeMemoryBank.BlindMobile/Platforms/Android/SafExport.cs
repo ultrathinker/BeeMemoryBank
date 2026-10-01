@@ -1,5 +1,6 @@
 using Android.App;
 using Android.Content;
+using BeeMemoryBank.BlindMobile.Services.Blind;
 
 namespace BeeMemoryBank.BlindMobile.Platforms.Android;
 
@@ -27,11 +28,26 @@ public static class SafExport
         var uri = await _pending.Task;
         if (uri == null) return false;
 
-        await using var source = File.OpenRead(path);
-        await using var target = activity.ContentResolver!.OpenOutputStream(uri, "w")
-            ?? throw new IOException("The chosen place cannot be written to.");
-        await source.CopyToAsync(target);
-        return true;
+        var resolver = activity.ContentResolver!;
+        var saved = false;
+        try
+        {
+            // "wt": truncate. Plain "w" may leave the tail of a longer file that was there before.
+            await using (var target = resolver.OpenOutputStream(uri, "wt")
+                ?? throw new IOException("The chosen place cannot be written to."))
+                await BlindBackupExport.CopyAsync(path, target, progress: null, CancellationToken.None);
+            saved = true;
+            return true;
+        }
+        finally
+        {
+            // A cut-off file in the chosen place must not pass for a backup.
+            if (!saved)
+            {
+                try { global::Android.Provider.DocumentsContract.DeleteDocument(resolver, uri); }
+                catch { /* the provider may not allow it; the error being thrown is the one that matters */ }
+            }
+        }
     }
 
     /// <summary>Called from <see cref="MainActivity"/>'s OnActivityResult.</summary>

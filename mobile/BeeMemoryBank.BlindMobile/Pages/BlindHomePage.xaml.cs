@@ -93,7 +93,9 @@ public partial class BlindHomePage : ContentPage
             ? "No backups on the phone yet."
             : string.Join("\n", files.Select(f => $"{f.Name}  ({f.Length / 1024} KiB)"));
         SaveToButton.IsEnabled = files.Count > 0;
-        BackupNowButton.IsEnabled = _state.CallCode != null;
+        var keyLost = _pairing.BackupKeyLost;
+        KeyLostLabel.IsVisible = keyLost;
+        BackupNowButton.IsEnabled = _state.CallCode != null && !keyLost;
 
         LogLabel.Text = string.Join("\n", _log.Latest(30).Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}"));
     }
@@ -130,7 +132,14 @@ public partial class BlindHomePage : ContentPage
         var error = _pairing.AcceptCallCode(CallCodeEntry.Text ?? "");
         CallErrorLabel.Text = error;
         CallErrorLabel.IsVisible = error != null;
-        if (error == null) CallCodeEntry.Text = "";
+        if (error == null)
+        {
+            CallCodeEntry.Text = "";
+#if ANDROID
+            // Paired: the first load starts as soon as Wi-Fi and the charger allow, not at the next hourly slot.
+            Platforms.Android.BlindWorkScheduler.RunHeavyNow(Platform.AppContext);
+#endif
+        }
         ShowPhoneCode();
         Refresh();
     }
@@ -196,9 +205,7 @@ public partial class BlindHomePage : ContentPage
         catch (AggregateException ex)
         {
             // Not restarted over a half-wiped copy: say what is left and let the user press it again.
-            await DisplayAlertAsync("Disconnect and wipe", $"{ex.Message}
-
-Press Disconnect and wipe again to finish.", "OK");
+            await DisplayAlertAsync("Disconnect and wipe", $"{ex.Message}{System.Environment.NewLine}{System.Environment.NewLine}Press Disconnect and wipe again to finish.", "OK");
             Refresh();
         }
     }

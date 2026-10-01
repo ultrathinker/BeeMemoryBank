@@ -20,6 +20,7 @@ public static class BlindWorkScheduler
 {
     private const string SyncWork = "bmb_blind_sync";
     private const string HeavyWork = "bmb_blind_heavy";
+    private const string HeavyNowWork = "bmb_blind_heavy_now";
 
     public static void Ensure(Context context)
     {
@@ -34,20 +35,36 @@ public static class BlindWorkScheduler
         // WorkManager's constraints are a first filter; BlindPhoneWork (>= 20 %, checked after every
         // chunk) is the rule. WorkManager stops the job when a constraint goes away; it resumes later.
         var heavy = new PeriodicWorkRequest.Builder(Java.Lang.Class.FromType(typeof(BlindHeavyWorker)), 1, TimeUnit.Hours!)
-            .SetConstraints(new Constraints.Builder()
-                .SetRequiredNetworkType(NetworkType.Unmetered!)
-                .SetRequiresCharging(true)
-                .SetRequiresBatteryNotLow(true)
-                .Build())
+            .SetConstraints(HeavyConstraints())
             .Build();
         wm.EnqueueUniquePeriodicWork(HeavyWork, ExistingPeriodicWorkPolicy.Keep!, heavy);
     }
+
+    /// <summary>
+    /// Runs the heavy job as soon as Wi-Fi and the charger allow, instead of at the next hourly slot: right after
+    /// pairing the first load should not wait up to an hour. Same constraints; one at a time (a second request
+    /// while one is queued or running is dropped).
+    /// </summary>
+    public static void RunHeavyNow(Context context)
+    {
+        var once = new OneTimeWorkRequest.Builder(Java.Lang.Class.FromType(typeof(BlindHeavyWorker)))
+            .SetConstraints(HeavyConstraints())
+            .Build();
+        WorkManager.GetInstance(context).EnqueueUniqueWork(HeavyNowWork, ExistingWorkPolicy.Keep!, once);
+    }
+
+    private static Constraints HeavyConstraints() => new Constraints.Builder()
+        .SetRequiredNetworkType(NetworkType.Unmetered!)
+        .SetRequiresCharging(true)
+        .SetRequiresBatteryNotLow(true)
+        .Build();
 
     public static void Cancel(Context context)
     {
         var wm = WorkManager.GetInstance(context);
         wm.CancelUniqueWork(SyncWork);
         wm.CancelUniqueWork(HeavyWork);
+        wm.CancelUniqueWork(HeavyNowWork);
     }
 }
 
@@ -100,7 +117,8 @@ public class BlindHeavyWorker(Context context, WorkerParameters parameters) : Wo
         try
         {
             SetForegroundAsync(notifications.ForegroundInfo("Blind copy", 0))!.Get();
-            Task.Run(() => work.RunAsync(forceBackup: false, _stop.Token)).GetAwaiter().GetResult();
+            var result = Task.Run(() => work.RunAsync(forceBackup: false, _stop.Token)).GetAwaiter().GetResult();
+            BlindRunReport.Record(services.GetRequiredService<BlindPhoneLog>(), "run", result);
             return Result.InvokeSuccess()!;
         }
         finally
@@ -147,7 +165,7 @@ public class BlindBackupService : Service
             try
             {
                 var result = await work.RunAsync(forceBackup: true, token);
-                services.GetRequiredService<BlindPhoneLog>().Add("backup", result);
+                BlindRunReport.Record(services.GetRequiredService<BlindPhoneLog>(), "backup", result);
             }
             finally
             {
