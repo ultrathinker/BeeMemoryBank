@@ -83,7 +83,7 @@ public static class BlindEndpoints
     public static void MapBlindReplicaEndpoint(this WebApplication app)
     {
         app.MapGet("/api/blind/replica", async (
-            HttpContext ctx, SyncTokenStore store, BlindPackageBuilder builder, INodeRole role,
+            HttpContext ctx, SyncTokenStore store, BlindReplicaPackageCache packages, INodeRole role,
             IHttpClientFactory httpClients, CancellationToken ct) =>
         {
             if (await SyncEndpoints.AuthenticatePeerAsync(ctx, store) is not { } peer) return Results.Unauthorized();
@@ -101,16 +101,15 @@ public static class BlindEndpoints
                 producerIsSuperadmin = await ctx.RequestServices.GetRequiredService<BlindPreflight>()
                     .IsSuperadminInNetworkAsync(http, ct);
             }
-            var package = await builder.BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin, ct);
+            var package = await packages.GetAsync(producerIsSuperadmin, ct);
             ctx.Response.Headers["X-BMB-Package-Sha256"] = package.Sha256;
             // The detached signature, as the restore route sends it: an Android blind node keeps it with the
             // package in its backups, so a restore from a backup checks the same two signatures.
             ctx.Response.Headers["X-BMB-Snapshot-Signature"] = Convert.ToBase64String(await File.ReadAllBytesAsync(package.FilePath + ".sig", ct));
             ctx.Response.Headers["X-BMB-Blind-Seed-Id"] = package.Manifest.SeedId.ToString();
-            // The package is built per request; it goes away when the response is done with it.
             var stream = new FileStream(package.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                bufferSize: 81920, FileOptions.DeleteOnClose | FileOptions.Asynchronous);
-            return Results.File(stream, "application/gzip", "bmb-blind-package.tar.gz");
+                bufferSize: 81920, FileOptions.Asynchronous);
+            return Results.File(stream, "application/gzip", "bmb-blind-package.tar.gz", enableRangeProcessing: true);
         }).WithTags("Blind");
     }
 

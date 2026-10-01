@@ -1,8 +1,12 @@
 using BeeMemoryBank.BlindMobile.Services;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Embeddings;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -29,6 +33,39 @@ public static class BlindMobileServices
         services.AddSingleton<IWhitelistRepository, WhitelistRepository>();
         services.AddScoped<IEventLogRepository, EventLogRepository>();
 
+        // Narrow receive-only sync composition. This deliberately does not call AddStorage() or
+        // AddSync(): those wire vault/session, search-index, scheduler and cleanup subsystems that
+        // cannot exist on a blind phone. These are only EventApplier's replicated-row dependencies.
+        services.AddScoped<ICallerScopeStore, InstanceCallerScopeStore>();
+        services.AddScoped<CallerScopeHolder>();
+        services.AddScoped<IArticleRepository, ArticleRepository>();
+        services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
+        services.AddScoped<IBlobRepository, BlobRepository>();
+        services.AddScoped<ISyncPositionRepository, SyncPositionRepository>();
+        services.AddScoped<ITombstoneRepository, TombstoneRepository>();
+        services.AddScoped<IConflictVersionRepository, ConflictVersionRepository>();
+        services.AddScoped<ICommentRepository, CommentRepository>();
+        services.AddScoped<IFolderRepository, FolderRepository>();
+        services.AddScoped<IMediaRepository, MediaRepository>();
+        services.AddScoped<IConceptTagRepository, ConceptTagRepository>();
+        services.AddSingleton<IRestoreReplayShieldRepository, RestoreReplayShieldRepository>();
+        services.AddScoped<IRestoreEventStateRepository, RestoreEventStateRepository>();
+        services.AddScoped<IDekRotationStateRepository, DekRotationStateRepository>();
+        services.AddScoped<ISyncQuarantineRepository, SyncQuarantineRepository>();
+        services.AddSingleton(new MediaStorageOptions(Path.Combine(dataDir, "media")));
+        services.AddSingleton<LamportClock>();
+        services.AddSingleton<ILamportClock>(sp => sp.GetRequiredService<LamportClock>());
+        services.AddScoped<IEventLogger, NullEventLogger>();
+        services.AddScoped<HardDeleteService>();
+        services.AddScoped<ConceptTagService>();
+        services.AddScoped<FolderAccessService>();
+        services.AddSingleton<BlindState>();
+        services.AddSingleton<BlindRestoreInitiator>();
+        services.AddSingleton<IRestoreInitiator>(sp => sp.GetRequiredService<BlindRestoreInitiator>());
+        services.AddScoped<IDekRotationApplier, BlindDekRotationApplier>();
+        services.AddSingleton<IEmbeddingGenerator, BlindEmbeddingGenerator>();
+        services.AddScoped<EventApplier>();
+
         services.AddLogging();
 
         // Pinned HTTP client and maintenance detection
@@ -45,8 +82,15 @@ public static class BlindMobileServices
             .AddSingleton(_ => new BlindPhoneLog(BlindPaths.Log(dataDir), TimeProvider.System))
             .AddSingleton<SqliteBlindIdentityRecorder>()
             .AddSingleton<IBlindIdentityRecorder>(sp => sp.GetRequiredService<SqliteBlindIdentityRecorder>())
-            .AddSingleton<IBlindReplicaSource, PendingBlindReplicaSource>()
-            .AddSingleton<IBlindPhoneSync, PendingBlindPhoneSync>()
+            .AddSingleton<INodeAuthSigner, BlindKeystoreNodeAuthSigner>()
+            .AddSingleton(sp => new BlindPhoneReplicaClient(
+                sp.GetRequiredService<DbConnectionFactory>(),
+                sp.GetRequiredService<INodeIdentityRepository>(),
+                sp.GetRequiredService<INodeAuthSigner>(), dataDir, dbPath,
+                sp.GetRequiredService<ILogger<BlindPhoneReplicaClient>>()))
+            .AddSingleton<IBlindReplicaSource, BlindReplicaSource>()
+            .AddSingleton<BlindPhonePullClient>()
+            .AddSingleton<IBlindPhoneSync, BlindPhoneSync>()
             .AddSingleton<IBlindPackageSource, PendingBlindPackageSource>()
             .AddSingleton<IRecoverySetJsonSource, PendingRecoverySetSource>()
             .AddSingleton<BlindMobilePairing>()

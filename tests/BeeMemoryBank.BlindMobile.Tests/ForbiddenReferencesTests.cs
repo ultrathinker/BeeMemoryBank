@@ -23,8 +23,7 @@ public class ForbiddenReferencesTests
         "Microsoft.ML.Tokenizers",
         "Markdig",
         "Indiko.Maui.Controls.Markdown",
-        "SixLabors.ImageSharp",
-        "BeeMemoryBank.Sync"
+        "SixLabors.ImageSharp"
     ];
 
     private static string FindRepoRoot()
@@ -158,14 +157,8 @@ public class ForbiddenReferencesTests
             typeof(KeySlotRepository),
             typeof(IRetiredMasterDekStore),
             typeof(RetiredMasterDekStore),
-            typeof(IArticleRepository),
-            typeof(ArticleRepository),
-            typeof(IArticleBodyRepository),
-            typeof(ArticleBodyRepository),
             typeof(IArticleChunkEmbeddingRepository),
             typeof(ArticleChunkEmbeddingRepository),
-            typeof(IBlobRepository),
-            typeof(BlobRepository),
             typeof(SegmentManifestRepository),
             typeof(SegmentTombstoneRepository),
             typeof(EncryptedSegmentStore),
@@ -174,7 +167,9 @@ public class ForbiddenReferencesTests
             typeof(SearchQueryCache),
             typeof(SearchMetrics),
             typeof(IProjectionMatrixRepository),
-            typeof(ProjectionMatrixRepository)
+            typeof(ProjectionMatrixRepository),
+            typeof(ISyncPushPositionRepository),
+            typeof(SyncPushPositionRepository)
         };
 
         // 1. None of the forbidden types should appear as ServiceType or ImplementationType
@@ -207,6 +202,9 @@ public class ForbiddenReferencesTests
         provider.GetRequiredService<INodeIdentityRepository>().Should().NotBeNull();
         provider.GetRequiredService<IWhitelistRepository>().Should().NotBeNull();
         provider.GetRequiredService<IEventLogRepository>().Should().NotBeNull();
+        provider.GetRequiredService<IArticleRepository>().Should().BeOfType<ArticleRepository>();
+        provider.GetRequiredService<IBlobRepository>().Should().BeOfType<BlobRepository>();
+        provider.GetRequiredService<BeeMemoryBank.Sync.EventApplier>().Should().NotBeNull();
     }
 
     /// <summary>
@@ -259,11 +257,10 @@ public class ForbiddenReferencesTests
             if (!assemblyName.StartsWith("BeeMemoryBank.", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            // Disallow Search, Embeddings, Media, Sync entirely
+            // Disallow Search, Embeddings and Media entirely. Sync is limited to receive-only types.
             if (assemblyName.Equals("BeeMemoryBank.Search", StringComparison.OrdinalIgnoreCase) ||
                 assemblyName.Equals("BeeMemoryBank.Embeddings", StringComparison.OrdinalIgnoreCase) ||
-                assemblyName.Equals("BeeMemoryBank.Media", StringComparison.OrdinalIgnoreCase) ||
-                assemblyName.Equals("BeeMemoryBank.Sync", StringComparison.OrdinalIgnoreCase))
+                assemblyName.Equals("BeeMemoryBank.Media", StringComparison.OrdinalIgnoreCase))
             {
                 violations.Add($"Forbidden assembly reference '{assemblyName}': {typeNs}.{typeName}");
                 continue;
@@ -292,13 +289,18 @@ public class ForbiddenReferencesTests
             // Models allowed for blind node operation
             if (typeNs.Equals("BeeMemoryBank.Core.Models", StringComparison.Ordinal))
             {
-                return typeName is "BlindCallCode" or "BlindNodeId" or "BlindPairingSecret" or "BlindPhoneCode" or "BlindPhoneDeviceState" or "BlindPhoneWork" or "BlindPhoneJob";
+                return typeName is "BlindCallCode" or "BlindNodeId" or "BlindPairingSecret" or "BlindPhoneCode" or "BlindPhoneDeviceState" or "BlindPhoneWork" or "BlindPhoneJob" or "NodeIdentity" or "SyncPosition";
             }
 
             // Minimal repository and factory interfaces
             if (typeNs.Equals("BeeMemoryBank.Core.Interfaces", StringComparison.Ordinal))
             {
-                return typeName is "IDbConnectionFactory" or "INodeIdentityRepository" or "IWhitelistRepository" or "IEventLogRepository";
+                return typeName is "IDbConnectionFactory" or "INodeIdentityRepository" or "IWhitelistRepository" or "IEventLogRepository" or "INodeAuthSigner" or "IArticleRepository" or "IArticleBodyRepository" or "IBlobRepository" or "ISyncPositionRepository" or "ITombstoneRepository" or "IConflictVersionRepository" or "ICommentRepository" or "IFolderRepository" or "IMediaRepository" or "IConceptTagRepository" or "IRestoreReplayShieldRepository" or "IRestoreEventStateRepository" or "IDekRotationStateRepository" or "ISyncQuarantineRepository" or "IEventLogger" or "ILamportClock" or "IRestoreInitiator" or "IDekRotationApplier" or "IEmbeddingGenerator" or "ICallerScopeStore";
+            }
+
+            if (typeNs.Equals("BeeMemoryBank.Core.Services", StringComparison.Ordinal))
+            {
+                return typeName is "ICallerScopeStore" or "InstanceCallerScopeStore" or "CallerScopeHolder" or "MediaStorageOptions" or "NullEventLogger" or "ConceptTagService" or "FolderAccessService";
             }
 
             return false;
@@ -309,7 +311,7 @@ public class ForbiddenReferencesTests
             // SQLite connection, migrations, blind repositories, dapper config
             if (typeNs.Equals("BeeMemoryBank.Storage.Sqlite", StringComparison.Ordinal))
             {
-                return typeName is "DbConnectionFactory" or "MigrationRunner" or "NodeIdentityRepository" or "WhitelistRepository" or "EventLogRepository" or "DapperConfig";
+                return typeName is "DbConnectionFactory" or "MigrationRunner" or "NodeIdentityRepository" or "WhitelistRepository" or "EventLogRepository" or "DapperConfig" or "ArticleRepository" or "ArticleBodyRepository" or "BlobRepository" or "SyncPositionRepository" or "TombstoneRepository" or "ConflictVersionRepository" or "CommentRepository" or "FolderRepository" or "MediaRepository" or "ConceptTagRepository" or "RestoreReplayShieldRepository" or "RestoreEventStateRepository" or "DekRotationStateRepository" or "SyncQuarantineRepository";
             }
 
             if (typeNs.Equals("BeeMemoryBank.Core.Interfaces", StringComparison.Ordinal))
@@ -328,6 +330,15 @@ public class ForbiddenReferencesTests
                 return typeName is "Ed25519Signer" or "NodeIdentityCrypto" or "SpkiPin" or "BlindPairingSecret";
             }
 
+            return false;
+        }
+
+        if (assemblyName.Equals("BeeMemoryBank.Sync", StringComparison.OrdinalIgnoreCase))
+        {
+            if (typeNs.Equals("BeeMemoryBank.Sync.Blind", StringComparison.Ordinal))
+                return typeName is "BlindPhoneReplicaClient" or "BlindPhonePullClient" or "BlindEmbeddingGenerator" or "BlindState" or "BlindRestoreInitiator" or "BlindDekRotationApplier";
+            if (typeNs.Equals("BeeMemoryBank.Sync", StringComparison.Ordinal))
+                return typeName is "IRestoreInitiator" or "LamportClock" or "HardDeleteService" or "EventApplier";
             return false;
         }
 

@@ -256,6 +256,7 @@ builder.Services.AddOpenApi();
 // The blind package (CONTRACTS §2): a full node builds it to seed, reseed and hand out replicas; a
 // blind node builds it for an Android blind node.
 builder.Services.AddScoped<BlindPackageBuilder>();
+builder.Services.AddSingleton<BlindReplicaPackageCache>();
 builder.Services.TryAddSingleton(TimeProvider.System);
 if (role.IsBlind)
 {
