@@ -222,8 +222,6 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
         File.SetLastWriteTimeUtc(snapshots.GetSnapshotPath(newest), DateTime.UtcNow.AddHours(-1));
         var cache = _blind.Services.GetRequiredService<BlindReplicaPackageCache>();
         var package = await cache.GetAsync(producerIsSuperadmin: false, CancellationToken.None);
-        var packageName = Path.GetFileName(package.FilePath);
-
         // Counted, not matched by name: the package and a snapshot made in the same second share a name shape.
         snapshots.List().Should().HaveCount(3,
             "the replica package is internal and must not show up in GET /api/snapshots");
@@ -234,8 +232,10 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
         File.Exists(package.FilePath + ".sig").Should().BeTrue();
         File.Exists(snapshots.GetSnapshotPath(newest)).Should().BeTrue("the replica must not take a retention slot");
         File.Exists(snapshots.GetSnapshotPath(middle)).Should().BeTrue();
-        snapshots.Delete(packageName).Should().BeFalse("the public delete route must not reach the replica package");
-        File.Exists(package.FilePath).Should().BeTrue();
+        // Delete reads names from the snapshots directory only; names are not compared across the two
+        // directories because a package and a snapshot made in the same second share one.
+        foreach (var info in snapshots.List()) snapshots.Delete(info.FileName);
+        File.Exists(package.FilePath).Should().BeTrue("the public delete route must not reach the replica package");
     }
 
     private sealed class AdjustableTimeProvider(DateTimeOffset now) : TimeProvider
