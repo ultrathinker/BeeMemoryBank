@@ -6,6 +6,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Sync;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -106,5 +107,65 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
 
         File.Exists(retired.FilePath).Should().BeFalse("process shutdown must not leave an abandoned retired package");
         await lease.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ReplicaCache_ExpirySweepKeepsAnActiveLeaseUntilTheResponseCompletes()
+    {
+        var time = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        var cache = new BlindReplicaPackageCache(_blind.Services.GetRequiredService<IServiceScopeFactory>(), time);
+        var lease = await cache.AcquireAsync(producerIsSuperadmin: false, CancellationToken.None);
+        var expired = lease.Package;
+        time.Advance(TimeSpan.FromMinutes(30));
+
+        await cache.SweepExpiredAsync(CancellationToken.None);
+
+        File.Exists(expired.FilePath).Should().BeTrue("an in-flight HTTP response still owns the package file");
+        await lease.DisposeAsync();
+        File.Exists(expired.FilePath).Should().BeFalse("the expired package is reclaimed after its final response completes");
+        await cache.DisposeAsync();
+    }
+
+    [Fact]
+    public void ReplicaCache_IsRegisteredAsAHostedExpiryService()
+    {
+        _blind.Services.GetServices<IHostedService>().OfType<BlindReplicaPackageCache>().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ReplicaCache_StartRemovesOnlyItsDedicatedOrphanFiles()
+    {
+        var snapshots = _blind.Services.GetRequiredService<SnapshotService>();
+        Directory.CreateDirectory(snapshots.SnapshotsDir);
+        var orphan = Path.Combine(snapshots.SnapshotsDir, "bmb-blind-replica-orphan.tar.gz");
+        await File.WriteAllBytesAsync(orphan, [1]);
+        await File.WriteAllBytesAsync(orphan + ".sig", [2]);
+        await using var cache = new BlindReplicaPackageCache(
+            _blind.Services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
+
+        await cache.StartAsync(CancellationToken.None);
+
+        File.Exists(orphan).Should().BeFalse();
+        File.Exists(orphan + ".sig").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ReplicaCache_UsesDedicatedReplicaPackageFileNames()
+    {
+        await using var cache = new BlindReplicaPackageCache(
+            _blind.Services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
+
+        var package = await cache.GetAsync(producerIsSuperadmin: false, CancellationToken.None);
+
+        Path.GetFileName(package.FilePath).Should().StartWith("bmb-blind-replica-");
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan duration) => _now += duration;
     }
 }

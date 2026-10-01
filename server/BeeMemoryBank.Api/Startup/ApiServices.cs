@@ -257,6 +257,7 @@ builder.Services.AddOpenApi();
 // blind node builds it for an Android blind node.
 builder.Services.AddScoped<BlindPackageBuilder>();
 builder.Services.AddSingleton<BlindReplicaPackageCache>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<BlindReplicaPackageCache>());
 builder.Services.TryAddSingleton(TimeProvider.System);
 if (role.IsBlind)
 {

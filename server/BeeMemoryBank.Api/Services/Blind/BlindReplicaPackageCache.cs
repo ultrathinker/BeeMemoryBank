@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -7,12 +9,39 @@ namespace BeeMemoryBank.Api.Services;
 /// A range retry has to refer to the exact same bytes and detached signature as its first request;
 /// rebuilding on every request makes a correct Range client append a different archive.
 /// </summary>
-public sealed class BlindReplicaPackageCache(IServiceScopeFactory scopes, TimeProvider time) : IAsyncDisposable
+public sealed class BlindReplicaPackageCache(
+    IServiceScopeFactory scopes,
+    TimeProvider time,
+    ILogger<BlindReplicaPackageCache>? logger = null) : IAsyncDisposable, IHostedService
 {
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(30);
+    private const string FileNamePrefix = "bmb-blind-replica";
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly List<Entry> _retired = [];
     private Entry? _entry;
+    private ITimer? _expiryTimer;
+    private int _disposed;
+
+    public async Task StartAsync(CancellationToken ct)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        CleanupAbandonedPackages();
+        var timer = time.CreateTimer(static state => ((BlindReplicaPackageCache)state!).OnExpiryTimer(), this,
+            Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        if (Interlocked.CompareExchange(ref _expiryTimer, timer, null) is not null)
+            timer.Dispose();
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_entry is { } entry) ScheduleExpiryLocked(entry);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task StopAsync(CancellationToken ct) => await DisposeAsync();
 
     public async Task<BlindPackage> GetAsync(bool producerIsSuperadmin, CancellationToken ct)
     {
@@ -48,17 +77,43 @@ public sealed class BlindReplicaPackageCache(IServiceScopeFactory scopes, TimePr
 
     public async ValueTask DisposeAsync()
     {
+        Interlocked.Exchange(ref _expiryTimer, null)?.Dispose();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         await _gate.WaitAsync();
         try
         {
             if (_entry is { } entry)
             {
                 _entry = null;
-                DeletePackageFiles(entry.Package);
+                RetireLocked(entry);
             }
             foreach (var retiredEntry in _retired)
                 DeletePackageFiles(retiredEntry.Package);
             _retired.Clear();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Retires an expired package without interrupting an HTTP response that still leases it.</summary>
+    public async Task SweepExpiredAsync(CancellationToken ct)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_entry is not { } entry) return;
+            if (time.GetUtcNow() - entry.CreatedAt >= Lifetime)
+            {
+                _entry = null;
+                RetireLocked(entry);
+            }
+            else
+            {
+                ScheduleExpiryLocked(entry);
+            }
         }
         finally
         {
@@ -80,16 +135,14 @@ public sealed class BlindReplicaPackageCache(IServiceScopeFactory scopes, TimePr
 
         using var scope = scopes.CreateScope();
         var package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
-            .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin, ct);
+            .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin, ct,
+                fileNamePrefix: FileNamePrefix);
         var replacement = new Entry(package, producerIsSuperadmin, now);
         var superseded = _entry;
         _entry = replacement;
         if (superseded is not null)
-        {
-            superseded.Retired = true;
-            if (superseded.Readers == 0) DeletePackageFiles(superseded.Package);
-            else _retired.Add(superseded);
-        }
+            RetireLocked(superseded);
+        ScheduleExpiryLocked(replacement);
         return replacement;
     }
 
@@ -108,6 +161,59 @@ public sealed class BlindReplicaPackageCache(IServiceScopeFactory scopes, TimePr
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private void RetireLocked(Entry entry)
+    {
+        entry.Retired = true;
+        if (entry.Readers == 0) DeletePackageFiles(entry.Package);
+        else _retired.Add(entry);
+    }
+
+    private void ScheduleExpiryLocked(Entry entry)
+    {
+        var timer = Volatile.Read(ref _expiryTimer);
+        if (timer is null) return;
+        var due = entry.CreatedAt + Lifetime - time.GetUtcNow();
+        timer.Change(due <= TimeSpan.Zero ? TimeSpan.Zero : due, Timeout.InfiniteTimeSpan);
+    }
+
+    private void OnExpiryTimer() => _ = SweepFromTimerAsync();
+
+    private void CleanupAbandonedPackages()
+    {
+        try
+        {
+            using var scope = scopes.CreateScope();
+            var snapshots = scope.ServiceProvider.GetRequiredService<SnapshotService>();
+            Directory.CreateDirectory(snapshots.SnapshotsDir);
+            foreach (var file in Directory.GetFiles(snapshots.SnapshotsDir, FileNamePrefix + "-*.tar.gz"))
+            {
+                File.Delete(file);
+                var signature = file + ".sig";
+                if (File.Exists(signature)) File.Delete(signature);
+            }
+        }
+        catch (IOException ex)
+        {
+            logger?.LogWarning(ex, "Could not remove abandoned blind replica package files");
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            logger?.LogWarning(ex, "Could not remove abandoned blind replica package files");
+        }
+    }
+
+    private async Task SweepFromTimerAsync()
+    {
+        try
+        {
+            await SweepExpiredAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Could not retire an expired blind replica package");
         }
     }
 

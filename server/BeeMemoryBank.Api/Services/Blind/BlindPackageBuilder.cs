@@ -39,7 +39,8 @@ public sealed class BlindPackageBuilder(
     /// caller knows: a PC seeding after its pre-flight (plan 4.2) is superadmin in the network's
     /// eyes, a blind node serving a replica never is.</param>
     public async Task<BlindPackage> BuildAsync(
-        Guid seedId, long? includesUpTo, bool producerIsSuperadmin, CancellationToken ct = default)
+        Guid seedId, long? includesUpTo, bool producerIsSuperadmin, CancellationToken ct = default,
+        string? fileNamePrefix = null)
     {
         var self = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -62,7 +63,8 @@ public sealed class BlindPackageBuilder(
         var info = await snapshots.CreateAsync(
             filterSecrets: true, sign: true, cpSequenceNum: cp, encryptDb: false,
             additions: new SnapshotAdditions(ExtraTables, NullEmbeddingProjections,
-                new Dictionary<string, byte[]> { [BlindManifest.FileName] = manifest.ToBytes() }));
+                new Dictionary<string, byte[]> { [BlindManifest.FileName] = manifest.ToBytes() }),
+            fileNamePrefix: fileNamePrefix);
 
         var path = snapshots.GetSnapshotPath(info.FileName);
         string sha256;

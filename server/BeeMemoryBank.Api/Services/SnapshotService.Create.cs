@@ -31,7 +31,8 @@ public partial class SnapshotService
         bool sign = true,
         long? cpSequenceNum = null,
         bool encryptDb = true,
-        SnapshotAdditions? additions = null)
+        SnapshotAdditions? additions = null,
+        string? fileNamePrefix = null)
     {
         Directory.CreateDirectory(SnapshotsDir);
 
@@ -216,8 +217,11 @@ public partial class SnapshotService
             // destroying the one copy that exists to be restored if the restore goes wrong.
             // Disambiguate with a counter rather than widening the timestamp, so file names keep
             // the shape operators and older snapshots already have.
+            var prefix = fileNamePrefix ?? "bmb-snapshot";
+            if (prefix.Length == 0 || prefix.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_'))
+                throw new ArgumentException("Snapshot file name prefix is invalid.", nameof(fileNamePrefix));
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-            var fileName = $"bmb-snapshot-{timestamp}.tar.gz";
+            var fileName = $"{prefix}-{timestamp}.tar.gz";
             var filePath = Path.Combine(SnapshotsDir, fileName);
             for (var dedupe = 2; File.Exists(filePath); dedupe++)
             {
