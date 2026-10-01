@@ -93,15 +93,16 @@ public static class BlindEndpoints
 
             // The producer's row in the package is what makes it a reseed authority on the receiving
             // blind node, so it says superadmin only where the network verifiably does: a blind node
-            // never is, and a full node asks its full peers (review L-merge #2).
-            var producerIsSuperadmin = false;
-            if (!role.IsBlind)
+            // never is, and a full node asks its full peers (review L-merge #2). The cache asks only
+            // when it builds a package, never for a request the cached one answers, so a Range resume
+            // costs no peer calls and cannot swap the signed bytes under the client.
+            var lease = await packages.AcquireAsync(async buildCt =>
             {
+                if (role.IsBlind) return false;
                 using var http = httpClients.CreateClient("SyncScheduler");
-                producerIsSuperadmin = await ctx.RequestServices.GetRequiredService<BlindPreflight>()
-                    .IsSuperadminInNetworkAsync(http, ct);
-            }
-            var lease = await packages.AcquireAsync(producerIsSuperadmin, ct);
+                return await ctx.RequestServices.GetRequiredService<BlindPreflight>()
+                    .IsSuperadminInNetworkAsync(http, buildCt);
+            }, ct);
             try
             {
                 var package = lease.Package;

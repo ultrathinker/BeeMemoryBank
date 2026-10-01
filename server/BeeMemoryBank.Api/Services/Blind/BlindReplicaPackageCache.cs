@@ -45,7 +45,13 @@ public sealed class BlindReplicaPackageCache(
 
     public async Task StopAsync(CancellationToken ct) => await DisposeAsync();
 
-    public async Task<BlindPackage> GetAsync(bool producerIsSuperadmin, CancellationToken ct)
+    public Task<BlindPackage> GetAsync(bool producerIsSuperadmin, CancellationToken ct) =>
+        GetAsync(_ => Task.FromResult(producerIsSuperadmin), ct);
+
+    /// <param name="producerIsSuperadmin">Asked only when a package is built. A cached package is served
+    /// for its whole life without asking: the answer can flip between a download and its Range resume
+    /// (a peer briefly unreachable), and the resume must continue the same signed bytes.</param>
+    public async Task<BlindPackage> GetAsync(Func<CancellationToken, Task<bool>> producerIsSuperadmin, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -62,7 +68,11 @@ public sealed class BlindReplicaPackageCache(
     /// Acquires a package for an HTTP response. The lease remains live until the response completes,
     /// so replacing the cache never removes a file while Kestrel is still streaming it.
     /// </summary>
-    public async Task<Lease> AcquireAsync(bool producerIsSuperadmin, CancellationToken ct)
+    public Task<Lease> AcquireAsync(bool producerIsSuperadmin, CancellationToken ct) =>
+        AcquireAsync(_ => Task.FromResult(producerIsSuperadmin), ct);
+
+    /// <inheritdoc cref="GetAsync(Func{CancellationToken, Task{bool}}, CancellationToken)"/>
+    public async Task<Lease> AcquireAsync(Func<CancellationToken, Task<bool>> producerIsSuperadmin, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -123,11 +133,10 @@ public sealed class BlindReplicaPackageCache(
         }
     }
 
-    private async Task<Entry> GetCurrentLockedAsync(bool producerIsSuperadmin, CancellationToken ct)
+    private async Task<Entry> GetCurrentLockedAsync(Func<CancellationToken, Task<bool>> producerIsSuperadmin, CancellationToken ct)
     {
         var now = time.GetUtcNow();
         if (_entry is { } cached
-            && cached.ProducerIsSuperadmin == producerIsSuperadmin
             && now - cached.CreatedAt < Lifetime
             && File.Exists(cached.Package.FilePath)
             && File.Exists(cached.Package.FilePath + ".sig"))
@@ -135,11 +144,12 @@ public sealed class BlindReplicaPackageCache(
             return cached;
         }
 
+        var isSuperadmin = await producerIsSuperadmin(ct);
         using var scope = scopes.CreateScope();
         var package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
-            .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin, ct,
+            .BuildAsync(Guid.NewGuid(), includesUpTo: null, isSuperadmin, ct,
                 outputDirectory: PackageDirectory(scope.ServiceProvider.GetRequiredService<SnapshotService>()));
-        var replacement = new Entry(package, producerIsSuperadmin, now);
+        var replacement = new Entry(package, now);
         var superseded = _entry;
         _entry = replacement;
         if (superseded is not null)
@@ -249,10 +259,9 @@ public sealed class BlindReplicaPackageCache(
         }
     }
 
-    internal sealed class Entry(BlindPackage package, bool producerIsSuperadmin, DateTimeOffset createdAt)
+    internal sealed class Entry(BlindPackage package, DateTimeOffset createdAt)
     {
         public BlindPackage Package { get; } = package;
-        public bool ProducerIsSuperadmin { get; } = producerIsSuperadmin;
         public DateTimeOffset CreatedAt { get; } = createdAt;
         public int Readers { get; set; }
         public bool Retired { get; set; }

@@ -57,30 +57,34 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
     [Fact]
     public async Task ReplicaCache_DeletesAnUnusedSupersededPackage()
     {
-        var cache = _blind.Services.GetRequiredService<BlindReplicaPackageCache>();
+        var (cache, time) = NewCache();
         var first = await cache.GetAsync(producerIsSuperadmin: false, CancellationToken.None);
         File.Exists(first.FilePath).Should().BeTrue();
         File.Exists(first.FilePath + ".sig").Should().BeTrue();
+        time.Advance(TimeSpan.FromMinutes(30));
 
-        var replacement = await cache.GetAsync(producerIsSuperadmin: true, CancellationToken.None);
+        var replacement = await cache.GetAsync(producerIsSuperadmin: false, CancellationToken.None);
 
         replacement.FilePath.Should().NotBe(first.FilePath);
         File.Exists(first.FilePath).Should().BeFalse("the cache must not leave an obsolete package in the snapshot directory");
         File.Exists(first.FilePath + ".sig").Should().BeFalse("the obsolete detached signature must be removed with its package");
+        await cache.DisposeAsync();
     }
 
     [Fact]
     public async Task ReplicaCache_KeepsASupersededPackageUntilItsResponseLeaseCompletes()
     {
-        var cache = _blind.Services.GetRequiredService<BlindReplicaPackageCache>();
+        var (cache, time) = NewCache();
         var lease = await cache.AcquireAsync(producerIsSuperadmin: false, CancellationToken.None);
         var first = lease.Package;
+        time.Advance(TimeSpan.FromMinutes(30));
 
-        _ = await cache.GetAsync(producerIsSuperadmin: true, CancellationToken.None);
+        _ = await cache.GetAsync(producerIsSuperadmin: false, CancellationToken.None);
 
         File.Exists(first.FilePath).Should().BeTrue("the active response still needs to stream this package");
         await lease.DisposeAsync();
         File.Exists(first.FilePath).Should().BeFalse("the package becomes reclaimable as soon as its last response completes");
+        await cache.DisposeAsync();
     }
 
     [Fact]
@@ -98,10 +102,11 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
     [Fact]
     public async Task ReplicaCache_DisposeAlsoDeletesARetiredPackageWithAnActiveLease()
     {
-        var cache = _blind.Services.GetRequiredService<BlindReplicaPackageCache>();
+        var (cache, time) = NewCache();
         var lease = await cache.AcquireAsync(producerIsSuperadmin: false, CancellationToken.None);
         var retired = lease.Package;
-        _ = await cache.GetAsync(producerIsSuperadmin: true, CancellationToken.None);
+        time.Advance(TimeSpan.FromMinutes(30));
+        _ = await cache.GetAsync(producerIsSuperadmin: false, CancellationToken.None);
 
         await cache.DisposeAsync();
 
@@ -165,6 +170,41 @@ public sealed class BlindReplicaResumeEndpointTests : IDisposable
         var snapshots = _blind.Services.GetRequiredService<SnapshotService>();
         Path.GetDirectoryName(package.FilePath).Should().Be(ReplicaDirectory(snapshots));
         snapshots.List().Should().BeEmpty("nothing of the replica package may be written where the snapshot code looks");
+    }
+
+    [Fact]
+    public async Task ReplicaCache_AsksTheSuperadminQuestionOnlyWhenItBuilds_AndServesTheCachedPackageAfterAFlip()
+    {
+        var (cache, time) = NewCache();
+        var asked = 0;
+        Func<bool, Func<CancellationToken, Task<bool>>> answer = value => _ =>
+        {
+            asked++;
+            return Task.FromResult(value);
+        };
+
+        var first = await cache.GetAsync(answer(true), CancellationToken.None);
+        var retry = await cache.GetAsync(answer(false), CancellationToken.None);
+
+        asked.Should().Be(1, "the second request is answered from the cache without the peer round");
+        retry.FilePath.Should().Be(first.FilePath, "a flaky pre-flight answer must not swap the bytes a resume continues");
+        retry.Sha256.Should().Be(first.Sha256);
+        retry.Manifest.Whitelist.Single(p => p.NodeId == retry.Manifest.ProducerNodeId).IsSuperadmin
+            .Should().BeTrue("the producer row keeps what the build was told");
+
+        time.Advance(TimeSpan.FromMinutes(30));
+        var rebuilt = await cache.GetAsync(answer(false), CancellationToken.None);
+
+        asked.Should().Be(2, "an expired package is rebuilt, and only then is the question asked again");
+        rebuilt.FilePath.Should().NotBe(first.FilePath);
+        rebuilt.Manifest.Whitelist.Single(p => p.NodeId == rebuilt.Manifest.ProducerNodeId).IsSuperadmin.Should().BeFalse();
+        await cache.DisposeAsync();
+    }
+
+    private (BlindReplicaPackageCache Cache, AdjustableTimeProvider Time) NewCache()
+    {
+        var time = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        return (new BlindReplicaPackageCache(_blind.Services.GetRequiredService<IServiceScopeFactory>(), time), time);
     }
 
     private static string ReplicaDirectory(SnapshotService snapshots) =>
