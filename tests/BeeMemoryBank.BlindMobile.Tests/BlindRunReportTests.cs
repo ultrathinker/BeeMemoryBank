@@ -49,6 +49,19 @@ public sealed class BlindRunReportTests
         log.Latest(10).Should().HaveCount(3);
     }
 
+    [Fact]
+    public void AnUnexpectedError_IsLoggedWithItsTypeAndMessage_OnceWhileItRepeats()
+    {
+        var log = NewLog();
+
+        BlindRunReport.RecordFailure(log, "run", new InvalidOperationException("The blind phone identity has not been recorded."));
+        BlindRunReport.RecordFailure(log, "run", new InvalidOperationException("The blind phone identity has not been recorded."));
+
+        var line = log.Latest(10).Should().ContainSingle().Which;
+        line.Kind.Should().Be("run");
+        line.Message.Should().Contain("InvalidOperationException").And.Contain("identity has not been recorded");
+    }
+
     private static BlindPhoneLog NewLog() =>
         new(Path.Combine(Path.GetTempPath(), "bmb-s4-runlog-" + Guid.NewGuid().ToString("N") + ".jsonl"), TimeProvider.System);
 }

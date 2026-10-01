@@ -19,4 +19,11 @@ public static class BlindRunReport
         if (log.Latest(1) is [{ } last] && last.Kind == kind && last.Message == message) return;
         log.Add(kind, message);
     }
+
+    /// <summary>
+    /// A run that ended in an error nobody planned for (a damaged database, a missing identity row): the worker must
+    /// not die silently in WorkManager's logcat, the screen's log is where the user can read it.
+    /// </summary>
+    public static void RecordFailure(BlindPhoneLog log, string kind, Exception error) =>
+        Record(log, kind, $"Stopped by an unexpected error ({error.GetType().Name}): {error.Message}");
 }

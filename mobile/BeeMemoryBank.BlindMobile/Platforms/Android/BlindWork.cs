@@ -117,8 +117,17 @@ public class BlindHeavyWorker(Context context, WorkerParameters parameters) : Wo
         try
         {
             SetForegroundAsync(notifications.ForegroundInfo("Blind copy", 0))!.Get();
-            var result = Task.Run(() => work.RunAsync(forceBackup: false, _stop.Token)).GetAwaiter().GetResult();
-            BlindRunReport.Record(services.GetRequiredService<BlindPhoneLog>(), "run", result);
+            var log = services.GetRequiredService<BlindPhoneLog>();
+            try
+            {
+                var result = Task.Run(() => work.RunAsync(forceBackup: false, _stop.Token)).GetAwaiter().GetResult();
+                BlindRunReport.Record(log, "run", result);
+            }
+            catch (Exception ex) when (ex is not System.OperationCanceledException)
+            {
+                // An unplanned error: the log tells it, the next hourly slot tries again.
+                BlindRunReport.RecordFailure(log, "run", ex);
+            }
             return Result.InvokeSuccess()!;
         }
         finally
@@ -166,6 +175,10 @@ public class BlindBackupService : Service
             {
                 var result = await work.RunAsync(forceBackup: true, token);
                 BlindRunReport.Record(services.GetRequiredService<BlindPhoneLog>(), "backup", result);
+            }
+            catch (Exception ex) when (ex is not System.OperationCanceledException)
+            {
+                BlindRunReport.RecordFailure(services.GetRequiredService<BlindPhoneLog>(), "backup", ex);
             }
             finally
             {
