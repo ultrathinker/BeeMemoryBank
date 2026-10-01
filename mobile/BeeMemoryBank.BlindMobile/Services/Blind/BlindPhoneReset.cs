@@ -11,9 +11,9 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 /// </summary>
 public static class BlindPhoneReset
 {
-    public static void WipeAndRestart(IServiceProvider services)
+    public static void Wipe(IServiceProvider services, string? dataDir = null)
     {
-        var dataDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);
+        dataDir ??= System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);
 #if ANDROID
         Platforms.Android.BlindWorkScheduler.Cancel(Platform.AppContext);
         Platform.AppContext.StopService(new Android.Content.Intent(Platform.AppContext, typeof(Platforms.Android.BlindBackupService)));
@@ -31,7 +31,11 @@ public static class BlindPhoneReset
             if (File.Exists(f)) File.Delete(f);
         }
         if (File.Exists(BlindPaths.Log(dataDir))) File.Delete(BlindPaths.Log(dataDir));
+    }
 
+    public static void WipeAndRestart(IServiceProvider services, string? dataDir = null)
+    {
+        Wipe(services, dataDir);
 #if ANDROID
         // Restart the process: the only reliable way to reset every singleton and migrate a fresh db.
         var intent = Android.App.Application.Context.PackageManager!

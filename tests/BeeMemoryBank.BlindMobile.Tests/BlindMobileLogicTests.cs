@@ -1,3 +1,4 @@
+using BeeMemoryBank.BlindMobile.Services;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
@@ -18,8 +19,11 @@ public class BlindMobileLogicTests
     }
 
     [Fact]
-    public async Task PendingBlindIdentityRecorder_RecordAsync_CompletesSuccessfully()
+    public async Task PendingBlindIdentityRecorder_DocumentsSkeletonBehavior_CompletesWithoutDatabaseWrites()
     {
+        // In Stage 1 skeleton, PendingBlindIdentityRecorder is a deliberate in-memory placeholder
+        // that completes successfully so BlindPhonePairing.CreateIdentityAsync can initialize
+        // ephemeral pairing state and generate codes before the v=2 SQLite row is implemented in Stage 2.
         var recorder = new PendingBlindIdentityRecorder();
         var nodeId = Guid.NewGuid();
         var pubKey = new byte[32];
@@ -28,6 +32,18 @@ public class BlindMobileLogicTests
         await task;
 
         task.IsCompletedSuccessfully.Should().BeTrue();
+
+        // Pair with in-memory state using this stand-in:
+        var store = new InMemoryBlindPhoneStore();
+        var state = new BlindPhoneState(store);
+        var keys = new InMemoryBlindPhoneKeys();
+        var log = new BlindPhoneLog(Path.Combine(Path.GetTempPath(), "test-log-" + Guid.NewGuid().ToString("N") + ".jsonl"), TimeProvider.System);
+        var pairing = new BlindPhonePairing(state, keys, recorder, log);
+
+        await pairing.CreateIdentityAsync("TestPhone");
+        state.NodeId.Should().NotBeNull();
+        state.DisplayName.Should().Be("TestPhone");
+        // Document: In Stage 2, this must be replaced by a real SQLite test asserting the v=2 row in tbl_node_identity.
     }
 
     [Fact]
@@ -108,8 +124,22 @@ public class BlindMobileLogicTests
     }
 
     [Fact]
-    public void BlindPhoneReset_WipeAndRestart_ClearsStateAndKeys()
+    public void BlindPhoneReset_Wipe_CleansTestOwnedDirectoryAndClearsKeys()
     {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-wipe-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbFile = Path.Combine(tempDir, "beememorybank.db");
+        var walFile = Path.Combine(tempDir, "beememorybank.db-wal");
+        var logFile = BlindPaths.Log(tempDir);
+        var backupsDir = BlindPaths.Backups(tempDir);
+        var replicaDir = BlindPaths.Replica(tempDir);
+
+        File.WriteAllText(dbFile, "dummy-db");
+        File.WriteAllText(walFile, "dummy-wal");
+        File.WriteAllText(logFile, "dummy-log");
+        Directory.CreateDirectory(backupsDir);
+        Directory.CreateDirectory(replicaDir);
+
         var services = new ServiceCollection();
         var keys = new InMemoryBlindPhoneKeys();
         var store = new InMemoryBlindPhoneStore();
@@ -125,12 +155,179 @@ public class BlindMobileLogicTests
 
         var provider = services.BuildServiceProvider();
 
-        // Calling WipeAndRestart on non-Android platform executes the cleanup logic
-        BlindPhoneReset.WipeAndRestart(provider);
+        // Wipe must use the passed test directory rather than process LocalApplicationData
+        BlindPhoneReset.Wipe(provider, tempDir);
 
         keys.LoadBackupKey().Should().BeNull();
         keys.LoadPairingSecret().Should().BeNull();
         state.NodeId.Should().BeNull();
         state.DisplayName.Should().BeNull();
+
+        File.Exists(dbFile).Should().BeFalse();
+        File.Exists(walFile).Should().BeFalse();
+        File.Exists(logFile).Should().BeFalse();
+        Directory.Exists(backupsDir).Should().BeFalse();
+        Directory.Exists(replicaDir).Should().BeFalse();
     }
+
+    [Fact]
+    public void PreferencesBlindStore_RoundTripsAndRemovesValues()
+    {
+        var dict = new Dictionary<string, string>();
+        var store = new PreferencesBlindStore(
+            dict.GetValueOrDefault,
+            (k, v) => dict[k] = v,
+            k => dict.Remove(k));
+
+        store.Get("foo").Should().BeNull();
+
+        store.Set("foo", "bar");
+        store.Get("foo").Should().Be("bar");
+
+        store.Set("foo", null);
+        store.Get("foo").Should().BeNull();
+        dict.ContainsKey("foo").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MaintenanceDetectingHandler_PassesThroughNon503Responses()
+    {
+        var inner = new TestHttpMessageHandler((req, ct) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"status\":\"ok\"}")
+            }));
+
+        var client = new HttpClient(new MaintenanceDetectingHandler { InnerHandler = inner });
+        var res = await client.GetAsync("https://example.com/api/test");
+
+        res.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        var body = await res.Content.ReadAsStringAsync();
+        body.Should().Be("{\"status\":\"ok\"}");
+    }
+
+    [Fact]
+    public async Task MaintenanceDetectingHandler_Rewrites503WithReasonJson()
+    {
+        var inner = new TestHttpMessageHandler((req, ct) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable)
+            {
+                Content = new StringContent("{\"reason\":\"snapshot restore in progress\"}")
+            }));
+
+        var client = new HttpClient(new MaintenanceDetectingHandler { InnerHandler = inner });
+        var res = await client.GetAsync("https://example.com/api/test");
+
+        res.StatusCode.Should().Be(System.Net.HttpStatusCode.ServiceUnavailable);
+        res.ReasonPhrase.Should().Be("Node maintenance: snapshot restore in progress");
+        var body = await res.Content.ReadAsStringAsync();
+        body.Should().Contain("Node maintenance: snapshot restore in progress");
+    }
+
+    [Fact]
+    public async Task MaintenanceDetectingHandler_Rewrites503WithDefaultWhenMalformed()
+    {
+        var inner = new TestHttpMessageHandler((req, ct) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable)
+            {
+                Content = new StringContent("not-a-json-string")
+            }));
+
+        var client = new HttpClient(new MaintenanceDetectingHandler { InnerHandler = inner });
+        var res = await client.GetAsync("https://example.com/api/test");
+
+        res.StatusCode.Should().Be(System.Net.HttpStatusCode.ServiceUnavailable);
+        res.ReasonPhrase.Should().Be("Node is being maintained. Try again in a minute.");
+        var body = await res.Content.ReadAsStringAsync();
+        body.Should().Contain("Node is being maintained. Try again in a minute.");
+    }
+
+    [Fact]
+    public async Task BlindHttpHandler_RejectsCleartextHttp()
+    {
+        var inner = new TestHttpMessageHandler((req, ct) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)));
+
+        var client = new HttpClient(new BlindHttpHandler(inner));
+        var act = () => client.GetAsync("http://example.com/api/test");
+
+        var ex = await act.Should().ThrowAsync<HttpRequestException>();
+        ex.Which.Message.Should().Contain("Cleartext HTTP is forbidden");
+    }
+
+    [Theory]
+    [InlineData(301)]
+    [InlineData(302)]
+    [InlineData(307)]
+    [InlineData(308)]
+    public async Task BlindHttpHandler_RejectsRedirects(int statusCode)
+    {
+        var inner = new TestHttpMessageHandler((req, ct) =>
+        {
+            var resp = new HttpResponseMessage((System.Net.HttpStatusCode)statusCode);
+            resp.Headers.Location = new Uri("https://redirected.example.com/target");
+            return Task.FromResult(resp);
+        });
+
+        var client = new HttpClient(new BlindHttpHandler(inner));
+        var act = () => client.GetAsync("https://example.com/api/test");
+
+        var ex = await act.Should().ThrowAsync<HttpRequestException>();
+        ex.Which.Message.Should().Contain("redirects are not followed");
+    }
+
+    [Fact]
+    public async Task BlindHttpHandler_AllowsHttpsSuccess()
+    {
+        var inner = new TestHttpMessageHandler((req, ct) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("success")
+            }));
+
+        var client = new HttpClient(new BlindHttpHandler(inner));
+        var res = await client.GetAsync("https://example.com/api/test");
+
+        res.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        (await res.Content.ReadAsStringAsync()).Should().Be("success");
+    }
+
+    [Fact]
+    public void BlindHttpHandler_CreatePrimaryHandler_DisablesAutoRedirect()
+    {
+        var handler = BlindHttpHandler.CreatePrimaryHandler();
+        handler.AllowAutoRedirect.Should().BeFalse();
+    }
+
+    [Fact]
+    public void BlindHttpHandler_ValidateServerCertificate_ValidatesExpectedSpkiPin()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var req = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+            "CN=test", rsa, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        using var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var expectedPin = BeeMemoryBank.Crypto.SpkiPin.Of(cert);
+        var state = new BlindPhoneState(new InMemoryBlindPhoneStore());
+
+        // Unpinned request with no errors -> true
+        var dummyHttpReq = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+        BlindHttpHandler.ValidateServerCertificate(dummyHttpReq, cert, System.Net.Security.SslPolicyErrors.None, state).Should().BeTrue();
+
+        // Request with matching explicit pin -> true
+        var pinnedReq = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+        pinnedReq.Options.Set(BlindHttpHandler.ExplicitPin, expectedPin);
+        BlindHttpHandler.ValidateServerCertificate(pinnedReq, cert, System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors, state).Should().BeTrue();
+
+        // Request with mismatched explicit pin -> false
+        var badPinnedReq = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+        badPinnedReq.Options.Set(BlindHttpHandler.ExplicitPin, "mismatched-pin");
+        BlindHttpHandler.ValidateServerCertificate(badPinnedReq, cert, System.Net.Security.SslPolicyErrors.None, state).Should().BeFalse();
+    }
+}
+
+internal sealed class TestHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> sendAsync) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        sendAsync(request, cancellationToken);
 }

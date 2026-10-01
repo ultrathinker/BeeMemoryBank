@@ -13,6 +13,9 @@
   <ItemGroup>
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\PendingBlindPieces.cs" Link="Shared\PendingBlindPieces.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPhoneReset.cs" Link="Shared\BlindPhoneReset.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\PreferencesBlindStore.cs" Link="Shared\PreferencesBlindStore.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindHttpHandler.cs" Link="Shared\BlindHttpHandler.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\MaintenanceDetectingHandler.cs" Link="Shared\MaintenanceDetectingHandler.cs" />
   </ItemGroup>
 
   <ItemGroup>
