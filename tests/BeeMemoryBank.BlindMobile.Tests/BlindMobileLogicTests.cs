@@ -149,28 +149,6 @@ public class BlindMobileLogicTests
         state.InitialLoadDone.Should().BeFalse("the next Wi-Fi-and-charger heavy pass must fetch a new replica");
     }
 
-    [Fact]
-    public async Task PendingBlindPackageSource_ThrowsBlindFeaturePendingException()
-    {
-        var pkg = new PendingBlindPackageSource();
-
-        var act = () => pkg.CreateAsync("dest.tar.gz", CancellationToken.None);
-
-        var ex = await act.Should().ThrowAsync<BlindFeaturePendingException>();
-        ex.Which.ContractItem.Should().Contain("building the blind package");
-    }
-
-    [Fact]
-    public async Task PendingRecoverySetSource_ThrowsBlindFeaturePendingException()
-    {
-        var recovery = new PendingRecoverySetSource();
-
-        var act = () => recovery.BuildJsonAsync(CancellationToken.None);
-
-        var ex = await act.Should().ThrowAsync<BlindFeaturePendingException>();
-        ex.Which.ContractItem.Should().Contain("the recovery set of the phone's data");
-    }
-
     private sealed class InMemoryBlindPhoneStore : IBlindPhoneStore
     {
         private readonly Dictionary<string, string> _store = new();

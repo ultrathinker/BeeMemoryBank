@@ -98,8 +98,19 @@ public static class BlindMobileServices
             .AddSingleton<BlindPhonePullClient>()
             .AddSingleton<IBlindPhonePullClient>(sp => sp.GetRequiredService<BlindPhonePullClient>())
             .AddSingleton<IBlindPhoneSync, BlindPhoneSync>()
-            .AddSingleton<IBlindPackageSource, PendingBlindPackageSource>()
-            .AddSingleton<IRecoverySetJsonSource, PendingRecoverySetSource>()
+            // A backup's body: the listening node's current signed package (fetched pinned and verified, not
+            // installed), its signature and the phone's own logged events. Its header: the recovery set of
+            // the phone's database. Both are the libraries' code; nothing of the format is rebuilt here.
+            .AddSingleton<IBlindVerifiedPackageFetcher>(sp => new BlindPackageFetcher(
+                sp.GetRequiredService<BlindPhoneReplicaClient>(),
+                sp.GetRequiredService<BlindHttpClientProvider>(),
+                sp.GetRequiredService<BlindPhoneState>(),
+                BlindPaths.Replica(dataDir)))
+            .AddSingleton<IBlindPackageSource>(sp => new BlindPhonePackageSource(
+                sp.GetRequiredService<IBlindVerifiedPackageFetcher>(),
+                sp.GetRequiredService<IServiceScopeFactory>()))
+            .AddSingleton<IRecoverySetJsonSource>(sp => new BlindPhoneRecoverySetSource(
+                sp.GetRequiredService<IDbConnectionFactory>()))
             .AddSingleton<BlindMobilePairing>()
             .AddSingleton(sp => new BlindPhoneBackupRunner(
                 sp.GetRequiredService<BlindPhoneState>(),

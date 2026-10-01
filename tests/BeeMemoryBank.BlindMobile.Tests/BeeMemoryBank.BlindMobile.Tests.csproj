@@ -18,6 +18,7 @@
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindKeystoreNodeAuthSigner.cs" Link="Shared\BlindKeystoreNodeAuthSigner.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindReplicaSource.cs" Link="Shared\BlindReplicaSource.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPhoneSync.cs" Link="Shared\BlindPhoneSync.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPackageFetcher.cs" Link="Shared\BlindPackageFetcher.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\PendingBlindPieces.cs" Link="Shared\PendingBlindPieces.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPhoneReset.cs" Link="Shared\BlindPhoneReset.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\PreferencesBlindStore.cs" Link="Shared\PreferencesBlindStore.cs" />

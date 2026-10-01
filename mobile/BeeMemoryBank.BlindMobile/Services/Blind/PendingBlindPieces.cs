@@ -27,17 +27,3 @@ public sealed class PendingBlindPhoneSync : IBlindPhoneSync
     public Task SyncOnceAsync(BlindCallCode target, CancellationToken ct) =>
         throw new BlindFeaturePendingException("blind sync with the v=2 identity signer");
 }
-
-/// <summary>TODO(BlindPackageBuilder on the phone).</summary>
-public sealed class PendingBlindPackageSource : IBlindPackageSource
-{
-    public Task CreateAsync(string destinationPath, CancellationToken ct) =>
-        throw new BlindFeaturePendingException("building the blind package on the phone");
-}
-
-/// <summary>TODO(RecoverySetBuilder over the phone's database).</summary>
-public sealed class PendingRecoverySetSource : IRecoverySetJsonSource
-{
-    public Task<string> BuildJsonAsync(CancellationToken ct) =>
-        throw new BlindFeaturePendingException("the recovery set of the phone's data");
-}
