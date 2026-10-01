@@ -2,6 +2,8 @@ using BeeMemoryBank.BlindMobile.Services;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
+using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.BlindMobile.Tests;
@@ -134,6 +136,20 @@ public class BlindMobileLogicTests
     }
 
     [Fact]
+    public async Task BlindPhoneSync_SnapshotRequired_ClearsInitialLoadStateForTheGatedReseed()
+    {
+        var state = new BlindPhoneState(new InMemoryBlindPhoneStore()) { InitialLoadDone = true };
+        using var http = new BlindHttpClientProvider(state);
+        var sync = new BlindPhoneSync(new SnapshotRequiredPullClient(), http, state);
+        var target = new BlindCallCode("https://blind.test", Guid.NewGuid(), "test-pin", new byte[32], new byte[32]);
+
+        var act = () => sync.SyncOnceAsync(target, CancellationToken.None);
+
+        await act.Should().ThrowAsync<SnapshotRequiredException>();
+        state.InitialLoadDone.Should().BeFalse("the next Wi-Fi-and-charger heavy pass must fetch a new replica");
+    }
+
+    [Fact]
     public async Task PendingBlindPackageSource_ThrowsBlindFeaturePendingException()
     {
         var pkg = new PendingBlindPackageSource();
@@ -164,6 +180,12 @@ public class BlindMobileLogicTests
             if (value is null) _store.Remove(key);
             else _store[key] = value;
         }
+    }
+
+    private sealed class SnapshotRequiredPullClient : IBlindPhonePullClient
+    {
+        public Task SyncOnceAsync(HttpClient http, BlindCallCode target, CancellationToken ct) =>
+            throw new SnapshotRequiredException(target.Address, 1, 1, "test", SnapshotRequiredException.SequenceTooOldCode);
     }
 
     private sealed class InMemoryBlindPhoneKeys : IBlindNodeKeys

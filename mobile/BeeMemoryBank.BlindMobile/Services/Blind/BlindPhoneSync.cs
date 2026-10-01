@@ -7,7 +7,7 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
 /// <summary>Runs the phone's pull-only protocol-3 sync through the call-code pinned client.</summary>
 public sealed class BlindPhoneSync(
-    BlindPhonePullClient client, BlindHttpClientProvider http, BlindPhoneState state) : IBlindPhoneSync
+    IBlindPhonePullClient client, BlindHttpClientProvider http, BlindPhoneState state) : IBlindPhoneSync
 {
     public async Task SyncOnceAsync(BlindCallCode target, CancellationToken ct)
     {

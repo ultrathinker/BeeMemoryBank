@@ -101,15 +101,25 @@ public static class BlindEndpoints
                 producerIsSuperadmin = await ctx.RequestServices.GetRequiredService<BlindPreflight>()
                     .IsSuperadminInNetworkAsync(http, ct);
             }
-            var package = await packages.GetAsync(producerIsSuperadmin, ct);
-            ctx.Response.Headers["X-BMB-Package-Sha256"] = package.Sha256;
-            // The detached signature, as the restore route sends it: an Android blind node keeps it with the
-            // package in its backups, so a restore from a backup checks the same two signatures.
-            ctx.Response.Headers["X-BMB-Snapshot-Signature"] = Convert.ToBase64String(await File.ReadAllBytesAsync(package.FilePath + ".sig", ct));
-            ctx.Response.Headers["X-BMB-Blind-Seed-Id"] = package.Manifest.SeedId.ToString();
-            var stream = new FileStream(package.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                bufferSize: 81920, FileOptions.Asynchronous);
-            return Results.File(stream, "application/gzip", "bmb-blind-package.tar.gz", enableRangeProcessing: true);
+            var lease = await packages.AcquireAsync(producerIsSuperadmin, ct);
+            try
+            {
+                var package = lease.Package;
+                ctx.Response.Headers["X-BMB-Package-Sha256"] = package.Sha256;
+                // The detached signature, as the restore route sends it: an Android blind node keeps it with the
+                // package in its backups, so a restore from a backup checks the same two signatures.
+                ctx.Response.Headers["X-BMB-Snapshot-Signature"] = Convert.ToBase64String(await File.ReadAllBytesAsync(package.FilePath + ".sig", ct));
+                ctx.Response.Headers["X-BMB-Blind-Seed-Id"] = package.Manifest.SeedId.ToString();
+                var stream = new FileStream(package.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
+                    bufferSize: 81920, FileOptions.Asynchronous);
+                ctx.Response.OnCompleted(() => lease.DisposeAsync().AsTask());
+                return Results.File(stream, "application/gzip", "bmb-blind-package.tar.gz", enableRangeProcessing: true);
+            }
+            catch
+            {
+                await lease.DisposeAsync();
+                throw;
+            }
         }).WithTags("Blind");
     }
 

@@ -90,6 +90,7 @@ public static class BlindMobileServices
                 sp.GetRequiredService<ILogger<BlindPhoneReplicaClient>>()))
             .AddSingleton<IBlindReplicaSource, BlindReplicaSource>()
             .AddSingleton<BlindPhonePullClient>()
+            .AddSingleton<IBlindPhonePullClient>(sp => sp.GetRequiredService<BlindPhonePullClient>())
             .AddSingleton<IBlindPhoneSync, BlindPhoneSync>()
             .AddSingleton<IBlindPackageSource, PendingBlindPackageSource>()
             .AddSingleton<IRecoverySetJsonSource, PendingRecoverySetSource>()

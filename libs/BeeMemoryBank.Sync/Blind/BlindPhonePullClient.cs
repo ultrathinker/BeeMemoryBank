@@ -15,7 +15,7 @@ namespace BeeMemoryBank.Sync.Blind;
 /// authoring services and only advances its receive cursor after EventApplier accepts an event.
 /// </summary>
 public sealed class BlindPhonePullClient(
-    IServiceScopeFactory scopes, INodeAuthSigner signer, ILogger<BlindPhonePullClient> logger)
+    IServiceScopeFactory scopes, INodeAuthSigner signer, ILogger<BlindPhonePullClient> logger) : IBlindPhonePullClient
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 

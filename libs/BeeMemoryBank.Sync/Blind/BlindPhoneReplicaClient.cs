@@ -44,61 +44,116 @@ public sealed class BlindPhoneReplicaClient(
         var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct);
         var partPath = Path.Combine(workDirectory, "replica.part");
         var metadataPath = Path.Combine(workDirectory, "replica.part.json");
-        var offset = File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
-        var prior = await ReadMetadataAsync(metadataPath, ct);
-        if (offset > 0 && prior is null)
-            throw new InvalidDataException("A partial blind replica has no authenticated metadata; it will not be resumed.");
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{target.Address.TrimEnd('/')}/api/blind/replica");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
-        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (offset > 0 && response.StatusCode != HttpStatusCode.PartialContent)
-            throw new InvalidDataException("The replica server did not honour the resume range.");
-        response.EnsureSuccessStatusCode();
-
-        var current = ReadMetadata(response, offset);
-        if (prior is not null && !prior.Matches(current))
-            throw new InvalidDataException("The resumed replica does not match the signed package that was started.");
-        if (offset > 0 && response.Content.Headers.ContentRange?.From != offset)
-            throw new InvalidDataException("The replica server returned a different resume offset.");
-        await WriteMetadataAsync(metadataPath, current, ct);
-
-        await using (var input = await response.Content.ReadAsStreamAsync(ct))
-        await using (var output = new FileStream(partPath, offset == 0 ? FileMode.CreateNew : FileMode.Open,
-                         FileAccess.Write, FileShare.None, 81_920, FileOptions.Asynchronous))
+        try
         {
-            if (offset > 0) output.Position = offset;
-            var buffer = new byte[81_920];
-            var copied = offset;
-            while (true)
+            var current = await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct);
+            var extraction = Path.Combine(workDirectory, "verified-" + current.Sha256.ToLowerInvariant());
+            await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
+            await BuildAndSwitchDatabaseAsync(extraction, target, ct);
+            CleanupDownloadArtifacts(workDirectory, partPath, metadataPath);
+            progress?.Report(1);
+            logger.LogInformation("Installed verified blind replica {Hash} from {NodeId}", current.Sha256, target.NodeId);
+        }
+        catch (InvalidDataException)
+        {
+            // A complete archive that did not verify must not turn the next attempt into an invalid
+            // range request. Network and cancellation errors deliberately retain their partial bytes.
+            CleanupDownloadArtifacts(workDirectory, partPath, metadataPath);
+            throw;
+        }
+    }
+
+    private static async Task<PackageMetadata> DownloadAsync(
+        HttpClient http, BlindCallCode target, string token, string partPath, string metadataPath,
+        IProgress<double>? progress, CancellationToken ct)
+    {
+        // A restart is only needed when authenticated resume state cannot describe the response.
+        // A transport failure remains resumable: it is intentionally not caught here.
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var partExists = File.Exists(partPath);
+            var offset = partExists ? new FileInfo(partPath).Length : 0;
+            PackageMetadata? prior;
+            try
             {
-                var count = await input.ReadAsync(buffer, ct);
-                if (count == 0) break;
-                await output.WriteAsync(buffer.AsMemory(0, count), ct);
-                copied += count;
-                progress?.Report((double)copied / current.Length);
+                prior = await ReadMetadataAsync(metadataPath, ct);
             }
-            await output.FlushAsync(ct);
+            catch (InvalidDataException)
+            {
+                ResetPartial(partPath, metadataPath);
+                continue;
+            }
+
+            if ((partExists && offset == 0) ||
+                (offset > 0 && (prior is null || offset >= prior.Length)))
+            {
+                ResetPartial(partPath, metadataPath);
+                continue;
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{target.Address.TrimEnd('/')}/api/blind/replica");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (offset > 0 && response.StatusCode != HttpStatusCode.PartialContent)
+            {
+                ResetPartial(partPath, metadataPath);
+                continue;
+            }
+            response.EnsureSuccessStatusCode();
+
+            PackageMetadata current;
+            try
+            {
+                current = ReadMetadata(response, offset);
+            }
+            catch (InvalidDataException) when (offset > 0)
+            {
+                ResetPartial(partPath, metadataPath);
+                continue;
+            }
+
+            if ((prior is not null && !prior.Matches(current)) ||
+                (offset > 0 && response.Content.Headers.ContentRange?.From != offset))
+            {
+                ResetPartial(partPath, metadataPath);
+                continue;
+            }
+            await WriteMetadataAsync(metadataPath, current, ct);
+
+            await using (var input = await response.Content.ReadAsStreamAsync(ct))
+            await using (var output = new FileStream(partPath, offset == 0 ? FileMode.Create : FileMode.Open,
+                             FileAccess.Write, FileShare.None, 81_920, FileOptions.Asynchronous))
+            {
+                if (offset > 0) output.Position = offset;
+                var buffer = new byte[81_920];
+                var copied = offset;
+                while (true)
+                {
+                    var count = await input.ReadAsync(buffer, ct);
+                    if (count == 0) break;
+                    await output.WriteAsync(buffer.AsMemory(0, count), ct);
+                    copied += count;
+                    progress?.Report(Math.Min(1, (double)copied / current.Length));
+                }
+                await output.FlushAsync(ct);
+            }
+
+            if (new FileInfo(partPath).Length != current.Length)
+                throw new InvalidDataException("The replica download ended before its signed content length.");
+            var hash = await HashFileAsync(partPath, ct);
+            if (!CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(current.Sha256)))
+                throw new InvalidDataException("The replica package SHA-256 does not match its signed response header.");
+            return current;
         }
 
-        if (new FileInfo(partPath).Length != current.Length)
-            throw new InvalidDataException("The replica download ended before its signed content length.");
-        var hash = await HashFileAsync(partPath, ct);
-        if (!CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(current.Sha256)))
-            throw new InvalidDataException("The replica package SHA-256 does not match its signed response header.");
-
-        var extraction = Path.Combine(workDirectory, "verified-" + current.Sha256.ToLowerInvariant());
-        await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
-        await BuildAndSwitchDatabaseAsync(extraction, target, ct);
-        progress?.Report(1);
-        logger.LogInformation("Installed verified blind replica {Hash} from {NodeId}", current.Sha256, target.NodeId);
+        throw new InvalidDataException("The replica could not be resumed from its authenticated partial state.");
     }
 
     private static PackageMetadata ReadMetadata(HttpResponseMessage response, long offset)
     {
-        var sha = response.Headers.GetValues(PackageHashHeader).SingleOrDefault();
-        var signature = response.Headers.GetValues(SignatureHeader).SingleOrDefault();
+        var sha = ReadSingleHeader(response, PackageHashHeader);
+        var signature = ReadSingleHeader(response, SignatureHeader);
         if (sha is null || sha.Length != 64 || !sha.All(Uri.IsHexDigit))
             throw new InvalidDataException($"Replica response has no valid {PackageHashHeader} header.");
         if (signature is null) throw new InvalidDataException($"Replica response has no {SignatureHeader} header.");
@@ -109,6 +164,13 @@ public sealed class BlindPhoneReplicaClient(
         if (length is not > 0 || (offset > 0 && length <= offset))
             throw new InvalidDataException("Replica response has no valid complete content length.");
         return new PackageMetadata(sha.ToUpperInvariant(), signature, length.Value);
+    }
+
+    private static string? ReadSingleHeader(HttpResponseMessage response, string name)
+    {
+        if (!response.Headers.TryGetValues(name, out var values)) return null;
+        var firstTwo = values.Take(2).ToArray();
+        return firstTwo.Length == 1 ? firstTwo[0] : null;
     }
 
     private static async Task<PackageMetadata?> ReadMetadataAsync(string path, CancellationToken ct)
@@ -131,6 +193,19 @@ public sealed class BlindPhoneReplicaClient(
     {
         await using var stream = File.OpenRead(path);
         return await SHA256.HashDataAsync(stream, ct);
+    }
+
+    private static void ResetPartial(string partPath, string metadataPath)
+    {
+        if (File.Exists(partPath)) File.Delete(partPath);
+        if (File.Exists(metadataPath)) File.Delete(metadataPath);
+    }
+
+    private static void CleanupDownloadArtifacts(string workDirectory, string partPath, string metadataPath)
+    {
+        ResetPartial(partPath, metadataPath);
+        foreach (var directory in Directory.GetDirectories(workDirectory, "verified-*"))
+            Directory.Delete(directory, recursive: true);
     }
 
     private static async Task VerifyAndExtractAsync(
@@ -164,59 +239,80 @@ public sealed class BlindPhoneReplicaClient(
             $"beememorybank.replica-{blindManifest.SeedId:N}.db");
 
         var self = await identityRepo.GetAsync() ?? throw new InvalidOperationException("Blind phone identity disappeared during install.");
-        using (var candidateFactory = new DbConnectionFactory(candidatePath))
+        DeleteCandidateIfPresent(candidatePath);
+        try
         {
-            await new MigrationRunner(candidateFactory).RunMigrationsAsync();
-            await new NodeIdentityRepository(candidateFactory).CreateAsync(self);
-            ImportReplicaTables(candidateFactory, sourceDb);
-            var whitelist = new WhitelistRepository(candidateFactory);
-            foreach (var peer in blindManifest.Whitelist.Where(p => p.NodeId != self.NodeId))
+            using (var candidateFactory = new DbConnectionFactory(candidatePath))
             {
-                await whitelist.CreateAsync(new WhitelistEntry
+                await new MigrationRunner(candidateFactory).RunMigrationsAsync();
+                await new NodeIdentityRepository(candidateFactory).CreateAsync(self);
+                ImportReplicaTables(candidateFactory, sourceDb);
+                var whitelist = new WhitelistRepository(candidateFactory);
+                foreach (var peer in blindManifest.Whitelist.Where(p => p.NodeId != self.NodeId))
                 {
-                    NodeId = peer.NodeId,
-                    DisplayName = peer.DisplayName,
-                    Ed25519PublicKey = Convert.FromBase64String(peer.PublicKeyB64),
-                    ApiAddress = peer.ApiAddress,
-                    IsSuperadmin = peer.IsSuperadmin,
-                    TlsSpki = peer.TlsSpki,
-                    Status = WhitelistStatuses.Active,
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow,
-                    LamportTs = peer.LamportTs,
-                    SourceNodeId = peer.SourceNodeId
+                    await whitelist.CreateAsync(new WhitelistEntry
+                    {
+                        NodeId = peer.NodeId,
+                        DisplayName = peer.DisplayName,
+                        Ed25519PublicKey = Convert.FromBase64String(peer.PublicKeyB64),
+                        ApiAddress = peer.ApiAddress,
+                        IsSuperadmin = peer.IsSuperadmin,
+                        TlsSpki = peer.TlsSpki,
+                        Status = WhitelistStatuses.Active,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                        LamportTs = peer.LamportTs,
+                        SourceNodeId = peer.SourceNodeId
+                    });
+                }
+                await new SyncPositionRepository(candidateFactory).UpsertAsync(new SyncPosition
+                {
+                    RemoteNodeId = target.NodeId,
+                    LastSequenceNum = blindManifest.CpSequence,
+                    UpdatedAt = DateTime.UtcNow
                 });
             }
-            await new SyncPositionRepository(candidateFactory).UpsertAsync(new SyncPosition
+
+            using var writeGate = await EventWriteGate.Instance.QuiesceAsync(ct);
+            using var ownerFlow = EventWriteGate.EnterOwnerFlow();
+            using var quiesced = liveFactory.BeginQuiesce();
+            await liveFactory.WaitDrainedAsync(TimeSpan.FromSeconds(30), ct);
+
+            // A media copy failure must leave the old database live. Encrypted blobs are content-addressed,
+            // so copying the new blobs before the database switch cannot invalidate the old replica.
+            var mediaSource = Path.Combine(extraction, "media");
+            var mediaTarget = Path.Combine(dataDirectory, "media");
+            if (Directory.Exists(mediaSource))
             {
-                RemoteNodeId = target.NodeId,
-                LastSequenceNum = blindManifest.CpSequence,
-                UpdatedAt = DateTime.UtcNow
-            });
-        }
+                Directory.CreateDirectory(mediaTarget);
+                foreach (var file in Directory.GetFiles(mediaSource, "*.enc"))
+                    File.Copy(file, Path.Combine(mediaTarget, Path.GetFileName(file)), overwrite: true);
+            }
 
-        using var writeGate = await EventWriteGate.Instance.QuiesceAsync(ct);
-        using var ownerFlow = EventWriteGate.EnterOwnerFlow();
-        using var quiesced = liveFactory.BeginQuiesce();
-        await liveFactory.WaitDrainedAsync(TimeSpan.FromSeconds(30), ct);
-        if (File.Exists(databasePath))
-        {
-            var backup = databasePath + $".before-replica-{blindManifest.SeedId:N}";
-            File.Replace(candidatePath, databasePath, backup, ignoreMetadataErrors: true);
+            if (File.Exists(databasePath))
+            {
+                var backup = databasePath + $".before-replica-{blindManifest.SeedId:N}";
+                File.Replace(candidatePath, databasePath, backup, ignoreMetadataErrors: true);
+            }
+            else
+            {
+                File.Move(candidatePath, databasePath);
+            }
         }
-        else
+        finally
         {
-            File.Move(candidatePath, databasePath);
+            DeleteCandidateIfPresent(candidatePath);
         }
+    }
 
-        var mediaSource = Path.Combine(extraction, "media");
-        var mediaTarget = Path.Combine(dataDirectory, "media");
-        if (Directory.Exists(mediaSource))
-        {
-            Directory.CreateDirectory(mediaTarget);
-            foreach (var file in Directory.GetFiles(mediaSource, "*.enc"))
-                File.Copy(file, Path.Combine(mediaTarget, Path.GetFileName(file)), overwrite: true);
-        }
+    private static void DeleteCandidateIfPresent(string candidatePath)
+    {
+        if (!File.Exists(candidatePath)) return;
+        // A failed migration/import has disposed its connections, but Microsoft.Data.Sqlite may still
+        // retain one in this candidate database's pool. Clear only that path's pool before replacing it.
+        using var candidate = new SqliteConnection($"Data Source={candidatePath}");
+        SqliteConnection.ClearPool(candidate);
+        File.Delete(candidatePath);
     }
 
     private static void ImportReplicaTables(DbConnectionFactory factory, string sourceDb)

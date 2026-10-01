@@ -336,9 +336,9 @@ public class ForbiddenReferencesTests
         if (assemblyName.Equals("BeeMemoryBank.Sync", StringComparison.OrdinalIgnoreCase))
         {
             if (typeNs.Equals("BeeMemoryBank.Sync.Blind", StringComparison.Ordinal))
-                return typeName is "BlindPhoneReplicaClient" or "BlindPhonePullClient" or "BlindEmbeddingGenerator" or "BlindState" or "BlindRestoreInitiator" or "BlindDekRotationApplier";
+                return typeName is "BlindPhoneReplicaClient" or "BlindPhonePullClient" or "IBlindPhonePullClient" or "BlindEmbeddingGenerator" or "BlindState" or "BlindRestoreInitiator" or "BlindDekRotationApplier";
             if (typeNs.Equals("BeeMemoryBank.Sync", StringComparison.Ordinal))
-                return typeName is "IRestoreInitiator" or "LamportClock" or "HardDeleteService" or "EventApplier";
+                return typeName is "IRestoreInitiator" or "LamportClock" or "HardDeleteService" or "EventApplier" or "SnapshotRequiredException";
             return false;
         }
 
