@@ -54,17 +54,18 @@ public sealed class BlindPhonePackageSourceTests
     }
 
     [Fact]
-    public async Task APackageThatHoldsNoAnchorThePhoneReceived_IsRefused_AndNothingStays()
+    public async Task APackageThatHoldsNoAnchorThePhoneReceived_IsOneToWaitOutNotAFailure_AndNothingStays()
     {
+        // The listening node serves a package it built up to half an hour ago, so right after an anchor reached
+        // the phone the package can still be the older one. The next try, an hour on, gets a newer package.
         var t = await NewAsync();
         await t.AddEventsAsync(10, anchorAt: 3, "mine");
         var package = t.Fetcher.Next(anchors: ["someone-elses"]);
 
         var act = () => t.Source().CreateAsync(t.Destination, CancellationToken.None);
 
-        (await act.Should().ThrowAsync<InvalidDataException>()).Which.Message.Should().Contain("anchor");
-        File.Exists(t.Destination).Should().BeFalse();
-        File.Exists(package.ArchivePath).Should().BeFalse("a refused package is not left on the phone");
+        (await act.Should().ThrowAsync<BlindFeaturePendingException>()).Which.Message.Should().Contain("anchor");
+        t.NothingLeft(package);
     }
 
     [Fact]

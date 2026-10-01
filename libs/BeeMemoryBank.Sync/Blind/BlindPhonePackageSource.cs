@@ -21,7 +21,8 @@ public interface IBlindVerifiedPackageFetcher
 /// paired it, and it finds each anchor row's signed <c>state_anchor</c> event among the phone's events. The
 /// phone logs events only from its own first load on, so the anchors inside the first package never have an
 /// event on the phone; an anchor that reached the phone later is in a package cut after it. So: wait until the
-/// phone has received an anchor, fetch a package, and check it holds one of those anchors.</para>
+/// phone has received an anchor, fetch a package, and check it holds one of those anchors (else wait for the next
+/// one: the listener serves a package it built up to half an hour ago).</para>
 ///
 /// <para>Written only when a restore can use it, and fail closed otherwise: waiting for the first anchor
 /// (<see cref="BlindFeaturePendingException"/>), no room, a package or event list a restore would refuse
@@ -59,8 +60,10 @@ public sealed class BlindPhonePackageSource(
 
             package = await fetcher.FetchAsync(length => EnsureRoom(folder, ExtractionFactor * length + Slack), progress: null, ct);
             if (!package.AnchorIds.Any(received.Contains))
-                throw new InvalidDataException(
-                    "The listening node's package holds none of the integrity anchors this phone received, so a restore could not vouch for it.");
+                // The listener serves a package it built up to half an hour ago, so right after an anchor reached
+                // the phone it can still be an older one: wait for the next, not a failure.
+                throw new BlindFeaturePendingException(
+                    "a package that includes the integrity anchor this phone received (the listening node renews its package every half hour)");
             if (package.Length > _limits.MaxPackageBytes)
                 throw new InvalidDataException("The listening node's package is larger than a restore takes.");
 
