@@ -20,6 +20,7 @@ public static class BlindPhoneReset
 #endif
         services.GetRequiredService<IBlindPhoneKeys>().Clear();
         services.GetRequiredService<BlindPhoneState>().Clear();
+        services.GetService<BlindHttpClientProvider>()?.Invalidate();
         foreach (var dir in new[] { BlindPaths.Backups(dataDir), BlindPaths.Replica(dataDir) })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
 

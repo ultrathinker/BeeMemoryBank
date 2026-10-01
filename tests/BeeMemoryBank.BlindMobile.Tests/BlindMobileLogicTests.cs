@@ -353,6 +353,107 @@ public class BlindMobileLogicTests
             "https://example.com", Guid.NewGuid(), otherPin, new byte[32], new byte[32]);
         BlindHttpHandler.ValidateServerCertificate(stateReq, cert, System.Net.Security.SslPolicyErrors.None, badPairedState).Should().BeFalse();
     }
+
+    [Fact]
+    public async Task RePair_WithNewPinToSameHost_DoesNotReuseOldPooledConnection()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var certReq = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+            "CN=127.0.0.1", rsa, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        using var ephemeralCert = certReq.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(5));
+        using var serverCert = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+            ephemeralCert.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx), null, System.Security.Cryptography.X509Certificates.X509KeyStorageFlags.Exportable);
+
+        var serverPin = BeeMemoryBank.Crypto.SpkiPin.Of(serverCert);
+        var wrongPin = System.Buffers.Text.Base64Url.EncodeToString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        using var cts = new CancellationTokenSource();
+
+        var serverTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    var client = await listener.AcceptTcpClientAsync(cts.Token);
+                    _ = Task.Run(async () =>
+                    {
+                        using (client)
+                        using (var ssl = new System.Net.Security.SslStream(client.GetStream(), false))
+                        {
+                            try
+                            {
+                                await ssl.AuthenticateAsServerAsync(serverCert);
+                                var buffer = new byte[4096];
+                                while (!cts.Token.IsCancellationRequested)
+                                {
+                                    var read = await ssl.ReadAsync(buffer, cts.Token);
+                                    if (read == 0) break;
+                                    var reqText = System.Text.Encoding.ASCII.GetString(buffer, 0, read);
+                                    if (reqText.Contains("\r\n\r\n"))
+                                    {
+                                        var response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nOK"u8.ToArray();
+                                        await ssl.WriteAsync(response, cts.Token);
+                                        await ssl.FlushAsync(cts.Token);
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                            }
+                        }
+                    }, cts.Token);
+                }
+            }
+            catch when (cts.IsCancellationRequested)
+            {
+            }
+            catch (Exception)
+            {
+            }
+        });
+
+        try
+        {
+            var store = new InMemoryBlindPhoneStore();
+            var state = new BlindPhoneState(store);
+            state.CallCode = new BlindCallCode($"https://127.0.0.1:{port}", Guid.NewGuid(), serverPin, new byte[32], new byte[32]);
+
+            var services = new ServiceCollection();
+            services.AddSingleton(state);
+            services.AddTransient<MaintenanceDetectingHandler>();
+            services.AddTransient<BlindHttpHandler>();
+            services.AddSingleton<BlindHttpClientProvider>();
+            services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
+            services.AddTransient<HttpClient>(sp => sp.GetRequiredService<BlindHttpClientProvider>().GetClient());
+
+            var sp = services.BuildServiceProvider();
+            var factory = sp.GetRequiredService<IHttpClientFactory>();
+            var httpClient1 = factory.CreateClient();
+
+            // Request 1: uses serverPin -> succeeds! Connection is established under serverPin.
+            var res1 = await httpClient1.GetAsync($"https://127.0.0.1:{port}/");
+            res1.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+
+            // Re-pair to the same origin with a new/different pin (wrongPin)
+            state.CallCode = new BlindCallCode($"https://127.0.0.1:{port}", Guid.NewGuid(), wrongPin, new byte[32], new byte[32]);
+
+            // Request 2: with BlindHttpClientProvider, changing pin disposes the old handler and its pooled connections.
+            // A new TLS handshake takes place, checking wrongPin against the server cert and throwing HttpRequestException.
+            var httpClient2 = factory.CreateClient();
+            var act2 = async () => await httpClient2.GetAsync($"https://127.0.0.1:{port}/");
+            await act2.Should().ThrowAsync<HttpRequestException>();
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+        }
+    }
 }
 
 internal sealed class TestHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> sendAsync) : HttpMessageHandler

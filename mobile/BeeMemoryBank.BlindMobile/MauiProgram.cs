@@ -39,14 +39,9 @@ public static class MauiProgram
 
         builder.Services.AddTransient<MaintenanceDetectingHandler>();
         builder.Services.AddTransient<BlindHttpHandler>();
-        builder.Services.AddHttpClient(string.Empty)
-            .ConfigurePrimaryHttpMessageHandler(sp =>
-            {
-                var state = sp.GetRequiredService<BlindPhoneState>();
-                return BlindHttpHandler.CreatePrimaryHandler(state);
-            })
-            .AddHttpMessageHandler<BlindHttpHandler>()
-            .AddHttpMessageHandler<MaintenanceDetectingHandler>();
+        builder.Services.AddSingleton<BlindHttpClientProvider>();
+        builder.Services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
+        builder.Services.AddTransient<HttpClient>(sp => sp.GetRequiredService<BlindHttpClientProvider>().GetClient());
 
         builder.Services
             .AddSingleton<IBlindPhoneStore, PreferencesBlindStore>()

@@ -54,18 +54,28 @@ public sealed class BlindHttpHandler : DelegatingHandler
     /// <summary>
     /// Creates the primary HttpClientHandler with AllowAutoRedirect = false and SPKI pinning.
     /// </summary>
-    public static HttpClientHandler CreatePrimaryHandler(BlindPhoneState? state = null) => new()
+    public static HttpClientHandler CreatePrimaryHandler(string? expectedPin) => new()
     {
         AllowAutoRedirect = false,
         ServerCertificateCustomValidationCallback = (request, certificate, _, errors) =>
-            ValidateServerCertificate(request, certificate, errors, state)
+            ValidateServerCertificate(request, certificate, errors, expectedPin)
     };
+
+    public static HttpClientHandler CreatePrimaryHandler(BlindPhoneState? state = null) =>
+        CreatePrimaryHandler(state?.CallCode?.SpkiPin);
 
     public static bool ValidateServerCertificate(
         HttpRequestMessage request,
         X509Certificate2? certificate,
         SslPolicyErrors errors,
-        BlindPhoneState? state)
+        BlindPhoneState? state) =>
+        ValidateServerCertificate(request, certificate, errors, state?.CallCode?.SpkiPin);
+
+    public static bool ValidateServerCertificate(
+        HttpRequestMessage request,
+        X509Certificate2? certificate,
+        SslPolicyErrors errors,
+        string? expectedPin)
     {
         if (certificate is null)
         {
@@ -78,10 +88,10 @@ public sealed class BlindHttpHandler : DelegatingHandler
             return SpkiPin.Matches(certificate, pin);
         }
 
-        // 2. State call-code pin
-        if (state?.CallCode?.SpkiPin is { } statePin && !string.IsNullOrWhiteSpace(statePin))
+        // 2. Expected pin bound to this handler
+        if (!string.IsNullOrWhiteSpace(expectedPin))
         {
-            return SpkiPin.Matches(certificate, statePin);
+            return SpkiPin.Matches(certificate, expectedPin);
         }
 
         // Pinning is mandatory: reject when no non-empty pin is available (no CA fallback)
