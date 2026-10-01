@@ -47,7 +47,7 @@ public static class MauiProgram
             .AddSingleton<IBlindPhoneStore, PreferencesBlindStore>()
             .AddSingleton<BlindPhoneState>()
             .AddSingleton(_ => new BlindPhoneLog(BlindPaths.Log(dataDir), TimeProvider.System))
-            .AddSingleton<IBlindIdentityRecorder, PendingBlindIdentityRecorder>()
+            .AddSingleton<IBlindIdentityRecorder, SqliteBlindIdentityRecorder>()
             .AddSingleton<IBlindReplicaSource, PendingBlindReplicaSource>()
             .AddSingleton<IBlindPhoneSync, PendingBlindPhoneSync>()
             .AddSingleton<IBlindPackageSource, PendingBlindPackageSource>()

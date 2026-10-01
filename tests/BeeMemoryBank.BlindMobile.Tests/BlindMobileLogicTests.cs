@@ -43,7 +43,70 @@ public class BlindMobileLogicTests
         await pairing.CreateIdentityAsync("TestPhone");
         state.NodeId.Should().NotBeNull();
         state.DisplayName.Should().Be("TestPhone");
-        // Document: In Stage 2, this must be replaced by a real SQLite test asserting the v=2 row in tbl_node_identity.
+    }
+
+    [Fact]
+    public async Task SqliteBlindIdentityRecorder_WritesV2IdentityRow_ToDatabase()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "bmb-identity-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var dbPath = Path.Combine(tempDir, "beememorybank.db");
+
+        try
+        {
+            BeeMemoryBank.Storage.Sqlite.DapperConfig.Configure();
+            var dbFactory = new BeeMemoryBank.Storage.Sqlite.DbConnectionFactory(dbPath);
+            var runner = new BeeMemoryBank.Storage.Sqlite.MigrationRunner(dbFactory);
+            await runner.RunMigrationsAsync();
+
+            var nodeRepo = new BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository(dbFactory);
+            var recorder = new SqliteBlindIdentityRecorder(nodeRepo);
+
+            var nodeId = BlindNodeId.NewId();
+            var (pubKey, seed) = BeeMemoryBank.Crypto.Ed25519Signer.GenerateKeyPair();
+            var displayName = "Test Blind Phone";
+
+            await recorder.RecordAsync(nodeId, pubKey, displayName, CancellationToken.None);
+
+            var identity = await nodeRepo.GetAsync();
+            identity.Should().NotBeNull();
+            identity!.NodeId.Should().Be(nodeId);
+            identity.DisplayName.Should().Be(displayName);
+            identity.Ed25519PublicKey.Should().Equal(pubKey);
+            identity.Ed25519PrivateKeyV.Should().Be(BeeMemoryBank.Crypto.NodeIdentityCrypto.ExternalKeyVersion); // 2
+            identity.Ed25519PrivateKey.Should().BeEmpty();
+            identity.Ed25519PrivateKeyIV.Should().BeNull();
+            identity.CanGenerateEmbeddings.Should().BeFalse();
+            identity.InitialSyncCompleted.Should().BeFalse();
+
+            // Calling RecordAsync again with same nodeId is idempotent
+            await recorder.RecordAsync(nodeId, pubKey, displayName, CancellationToken.None);
+
+            // Calling RecordAsync with different nodeId throws
+            var diffAct = async () => await recorder.RecordAsync(BlindNodeId.NewId(), pubKey, "Another Phone", CancellationToken.None);
+            await diffAct.Should().ThrowAsync<InvalidOperationException>();
+
+            // Attempting to decrypt the private key using NodeIdentityCrypto throws with external key notice
+            var decryptAct = () => BeeMemoryBank.Crypto.NodeIdentityCrypto.GetDecryptedPrivateKey(
+                identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV, identity.NodeId, new byte[32]);
+            var ex = decryptAct.Should().Throw<InvalidOperationException>();
+            ex.Which.Message.Should().Contain("outside the database (v=2)");
+
+            // Signing using NodeIdentityCrypto with external seed callback succeeds
+            var payload = "test-payload"u8.ToArray();
+            var signature = BeeMemoryBank.Crypto.NodeIdentityCrypto.SignWithIdentityOrGetDek(
+                identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV, identity.NodeId,
+                getMasterDek: () => throw new Exception("DEK should never be requested"),
+                getExternalSeed: () => seed,
+                payload);
+
+            BeeMemoryBank.Crypto.Ed25519Signer.Verify(identity.Ed25519PublicKey, payload, signature).Should().BeTrue();
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     [Fact]
