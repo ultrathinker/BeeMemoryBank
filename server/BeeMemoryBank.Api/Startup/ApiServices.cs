@@ -78,7 +78,7 @@ TimeSpan? embeddingInterval = int.TryParse(Environment.GetEnvironmentVariable("B
 int? embeddingBatchSize = int.TryParse(Environment.GetEnvironmentVariable("BMB_EMBEDDING_BATCH_SIZE"), out var ebs) && ebs >= 1
     ? ebs : null;
 if (!role.IsBlind)
-    builder.Services.AddEmbeddingProcessor(interval: embeddingInterval, batchSize: embeddingBatchSize);
+    builder.Services.AddPendingEmbeddingProcessor(interval: embeddingInterval, batchSize: embeddingBatchSize);
 
 TimeSpan? indexInterval = int.TryParse(Environment.GetEnvironmentVariable("BMB_INDEX_INTERVAL_SECONDS"), out var iis) && iis >= 1
     ? TimeSpan.FromSeconds(iis) : null;

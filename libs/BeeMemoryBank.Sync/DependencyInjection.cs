@@ -1,7 +1,6 @@
 using BeeMemoryBank.Sync.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
-using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -26,10 +25,6 @@ public static class DependencyInjection
         services.AddScoped<EventApplier>();
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
-        // EmbeddingProjectionService + ArticleChunker live in BeeMemoryBank.Embeddings, not Core,
-        // so Core does not register them. Sync itself scopes EmbeddingProjectionService through here because
-        // PendingEmbeddingProcessor / EventApplier resolve it per cycle.
-        services.AddEmbeddingServices();
 
         // Registered here (Sync's own DI) rather than Storage's AddStorage(), unlike the other
         // repositories this project consumes — this one is Sync-specific (only ever consumed by
@@ -131,23 +126,6 @@ public static class DependencyInjection
                 sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CleanupService>>(),
                 interval));
-        return services;
-    }
-
-    /// <summary>
-    /// Adds the background pending embeddings processor. Also registered as itself (not just as
-    /// IHostedService) so the admin one-shot backfill endpoint can inject the same singleton
-    /// instance and call <see cref="PendingEmbeddingProcessor.DrainAllPendingAsync"/> directly.
-    /// </summary>
-    public static IServiceCollection AddEmbeddingProcessor(this IServiceCollection services, TimeSpan? interval = null, int? batchSize = null)
-    {
-        services.AddSingleton(sp =>
-            new PendingEmbeddingProcessor(
-                sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PendingEmbeddingProcessor>>(),
-                interval,
-                batchSize));
-        services.AddHostedService(sp => sp.GetRequiredService<PendingEmbeddingProcessor>());
         return services;
     }
 

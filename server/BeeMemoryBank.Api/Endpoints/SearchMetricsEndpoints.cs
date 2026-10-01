@@ -2,6 +2,7 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Search.Indexing;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Search;

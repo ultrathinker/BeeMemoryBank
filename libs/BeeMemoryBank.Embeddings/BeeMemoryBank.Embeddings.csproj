@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <!-- ONNX runtime + Microsoft.ML.Tokenizers (SentencePieceTokenizer, used by XlmRobertaTokenizer)
          live here, not in Core: Core is the kernel, and only this project actually embeds

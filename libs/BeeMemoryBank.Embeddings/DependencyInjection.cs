@@ -1,5 +1,7 @@
 using BeeMemoryBank.Core.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Embeddings;
 
@@ -63,4 +65,28 @@ public static class DependencyInjection
         services.AddScoped<HybridSearchService>();
         return services;
     }
+
+    /// <summary>
+    /// Adds the background pending embeddings processor. Also registered as itself (not just as
+    /// IHostedService) so the admin one-shot backfill endpoint can inject the same singleton
+    /// instance and call <see cref="PendingEmbeddingProcessor.DrainAllPendingAsync"/> directly.
+    /// </summary>
+    public static IServiceCollection AddPendingEmbeddingProcessor(this IServiceCollection services, TimeSpan? interval = null, int? batchSize = null)
+    {
+        services.AddEmbeddingServices();
+        services.AddSingleton(sp =>
+            new PendingEmbeddingProcessor(
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<ILogger<PendingEmbeddingProcessor>>(),
+                interval,
+                batchSize));
+        services.AddHostedService(sp => sp.GetRequiredService<PendingEmbeddingProcessor>());
+        return services;
+    }
+
+    /// <summary>
+    /// Alias for <see cref="AddPendingEmbeddingProcessor"/> for backwards compatibility.
+    /// </summary>
+    public static IServiceCollection AddEmbeddingProcessor(this IServiceCollection services, TimeSpan? interval = null, int? batchSize = null)
+        => services.AddPendingEmbeddingProcessor(interval, batchSize);
 }

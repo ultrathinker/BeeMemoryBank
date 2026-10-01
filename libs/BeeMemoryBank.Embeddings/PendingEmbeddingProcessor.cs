@@ -1,12 +1,11 @@
 using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
-using BeeMemoryBank.Embeddings;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace BeeMemoryBank.Sync;
+namespace BeeMemoryBank.Embeddings;
 
 /// <summary>
 /// Background service for processing articles with pending embeddings.
