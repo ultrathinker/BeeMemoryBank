@@ -166,6 +166,26 @@ public sealed class BlindPhoneReplicaClientTests : IDisposable
     }
 
     [Fact]
+    public async Task Download_InterruptedResponseRetainsAuthenticatedPartialForTheNextAttempt()
+    {
+        var phone = await CreatePhoneAsync();
+        var package = await _blind.Services.GetRequiredService<BlindReplicaPackageCache>()
+            .GetAsync(producerIsSuperadmin: false, CancellationToken.None);
+        var archive = await File.ReadAllBytesAsync(package.FilePath);
+        var signature = Convert.ToBase64String(await File.ReadAllBytesAsync(package.FilePath + ".sig"));
+        var workDirectory = Path.Combine(phone.DataPath, "replica");
+        using var http = new HttpClient(new InterruptedReplicaResponseHandler(_blind.Server.CreateHandler(), archive,
+            package.Sha256, signature));
+
+        var act = () => phone.Client.FetchAndInstallAsync(http, phone.Target, workDirectory, progress: null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<IOException>();
+        new FileInfo(Path.Combine(workDirectory, "replica.part")).Length.Should().BeGreaterThan(0);
+        File.Exists(Path.Combine(workDirectory, "replica.part.json")).Should().BeTrue(
+            "the interrupted bytes can resume only when their authenticated metadata remains beside them");
+    }
+
+    [Fact]
     public async Task Download_MissingPackageHashHeader_ThrowsInvalidDataException()
     {
         var phone = await CreatePhoneAsync();
@@ -283,6 +303,73 @@ public sealed class BlindPhoneReplicaClientTests : IDisposable
                 response.Headers.TryAddWithoutValidation(header, value);
             }
             return response;
+        }
+    }
+
+    private sealed class InterruptedReplicaResponseHandler(
+        HttpMessageHandler inner, byte[] archive, string sha256, string signatureB64) : DelegatingHandler(inner)
+    {
+        private bool _interrupted;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            if (_interrupted || request.RequestUri?.AbsolutePath != "/api/blind/replica")
+                return base.SendAsync(request, ct);
+
+            _interrupted = true;
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new ThrowAfterBytesStream(new MemoryStream(archive, writable: false), 1024))
+            };
+            response.Headers.TryAddWithoutValidation("X-BMB-Package-Sha256", sha256);
+            response.Headers.TryAddWithoutValidation("X-BMB-Snapshot-Signature", signatureB64);
+            response.Content.Headers.ContentLength = archive.LongLength;
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class ThrowAfterBytesStream(Stream inner, long beforeFailure) : Stream
+    {
+        private long _remaining = beforeFailure;
+
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count) => ReadCore(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer) => ReadCore(buffer);
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            await ReadAsync(buffer.AsMemory(offset, count), ct);
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (_remaining <= 0) throw new IOException("simulated killed response body");
+            var count = await inner.ReadAsync(buffer[..(int)Math.Min(buffer.Length, _remaining)], ct);
+            _remaining -= count;
+            return count;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
+
+        private int ReadCore(Span<byte> buffer)
+        {
+            if (_remaining <= 0) throw new IOException("simulated killed response body");
+            var count = inner.Read(buffer[..(int)Math.Min(buffer.Length, _remaining)]);
+            _remaining -= count;
+            return count;
         }
     }
 
