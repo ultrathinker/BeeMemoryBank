@@ -56,7 +56,7 @@ public sealed class BlindPhonePackageSource(
             var received = await ReceivedAnchorIdsAsync(ct);
             if (received.Count == 0)
                 throw new BlindFeaturePendingException(
-                    "the network's next integrity anchor to reach this phone by sync (the computer publishes one after the data changes)");
+                    "the network's next integrity anchor to reach this phone by sync (a computer with the master key publishes one after the data changes, at most once an hour; it has to be on and connected)");
 
             package = await fetcher.FetchAsync(length => EnsureRoom(folder, ExtractionFactor * length + Slack), progress: null, ct);
             if (!package.AnchorIds.Any(received.Contains))

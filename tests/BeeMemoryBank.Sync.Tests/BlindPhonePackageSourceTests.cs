@@ -48,7 +48,11 @@ public sealed class BlindPhonePackageSourceTests
 
         var act = () => t.Source().CreateAsync(t.Destination, CancellationToken.None);
 
-        (await act.Should().ThrowAsync<BlindFeaturePendingException>()).Which.Message.Should().Contain("anchor");
+        var message = (await act.Should().ThrowAsync<BlindFeaturePendingException>()).Which.Message;
+        message.Should().Contain("anchor");
+        // Stage 5: with no computer that holds the master key switched on, nothing ever publishes an anchor, and the line on the
+        // phone is all the user sees: it has to name what is missing, not only that something is awaited.
+        message.Should().Contain("has to be on", "the wait ends only when a computer with the master key is on and connected");
         t.Fetcher.Calls.Should().Be(0, "a package is worth fetching only when a restore could use it");
         File.Exists(t.Destination).Should().BeFalse();
     }
