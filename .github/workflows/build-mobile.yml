@@ -94,6 +94,14 @@ jobs:
           dotnet publish mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj \
             -f net10.0-android -c Release --no-restore
 
+      # The blind node is its own app (build-blind below); its sources are still in mobile/BeeMemoryBank.Mobile
+      # but the project leaves them out of the build. This reads the compiled assembly, the merged manifest and
+      # the APK just built and fails if any blind-mode code is back in them.
+      - name: Verify the ordinary app carries no blind-mode code
+        run: |
+          dotnet test tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj \
+            --filter "FullyQualifiedName~OrdinaryAppHasNoBlindCodeTests"
+
   build-blind:
     runs-on: ubuntu-latest
     env:
