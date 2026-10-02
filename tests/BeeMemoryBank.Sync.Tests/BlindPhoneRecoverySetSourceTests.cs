@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync.Blind;
 using BeeMemoryBank.Sync.Recovery;
@@ -13,6 +14,36 @@ namespace BeeMemoryBank.Sync.Tests;
 /// </summary>
 public sealed class BlindPhoneRecoverySetSourceTests
 {
+    /// <summary>
+    /// Found on a real phone (stage 5): the first backup was "made" while the network had published no recovery box
+    /// yet (boxes are built when a superadmin signs in on a computer), and the Windows restore then said "The master
+    /// password opens none of the recovery boxes." A file nobody can open is not a backup: the header refuses to be
+    /// built until a box has arrived by sync.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WithoutAnActiveBox_TheHeaderIsNotBuilt_ItWaits(bool onlyARetiredBox)
+    {
+        DapperConfig.Configure();
+        var dir = Path.Combine(Path.GetTempPath(), "bmb-s5-recset-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var factory = new DbConnectionFactory(Path.Combine(dir, "beememorybank.db"));
+        await new MigrationRunner(factory).RunMigrationsAsync();
+        if (onlyARetiredBox)
+        {
+            using var conn = factory.CreateConnection();
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_recovery_box (box_id, kind, author_node_id, dek_fingerprint, epoch_hint, kdf_preset, salt, wrapped, iv, created_at, status, lamport_ts)
+                  VALUES ('box-retired', 'strong', 'a1', 'fp', 1, 's512t6', x'01', x'02', x'03', '2026-09-01T00:00:00Z', 'R', 1)");
+        }
+
+        var build = async () => await new BlindPhoneRecoverySetSource(factory).BuildJsonAsync(CancellationToken.None);
+
+        (await build.Should().ThrowAsync<BlindFeaturePendingException>())
+            .Which.Message.Should().Contain("recovery box");
+    }
+
     [Fact]
     public async Task TheSet_IsBuiltFromThePhonesDatabase_ActiveRowsOnly_InTheFormatTheRestoreParses()
     {
