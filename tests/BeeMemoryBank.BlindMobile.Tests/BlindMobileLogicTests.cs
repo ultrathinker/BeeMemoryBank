@@ -21,33 +21,6 @@ public class BlindMobileLogicTests
     }
 
     [Fact]
-    public async Task PendingBlindIdentityRecorder_DocumentsSkeletonBehavior_CompletesWithoutDatabaseWrites()
-    {
-        // In Stage 1 skeleton, PendingBlindIdentityRecorder is a deliberate in-memory placeholder
-        // that completes successfully so BlindPhonePairing.CreateIdentityAsync can initialize
-        // ephemeral pairing state and generate codes before the v=2 SQLite row is implemented in Stage 2.
-        var recorder = new PendingBlindIdentityRecorder();
-        var nodeId = Guid.NewGuid();
-        var pubKey = new byte[32];
-
-        var task = recorder.RecordAsync(nodeId, pubKey, "TestPhone", CancellationToken.None);
-        await task;
-
-        task.IsCompletedSuccessfully.Should().BeTrue();
-
-        // Pair with in-memory state using this stand-in:
-        var store = new InMemoryBlindPhoneStore();
-        var state = new BlindPhoneState(store);
-        var keys = new InMemoryBlindPhoneKeys();
-        var log = new BlindPhoneLog(Path.Combine(Path.GetTempPath(), "test-log-" + Guid.NewGuid().ToString("N") + ".jsonl"), TimeProvider.System);
-        var pairing = new BlindPhonePairing(state, keys, recorder, log);
-
-        await pairing.CreateIdentityAsync("TestPhone");
-        state.NodeId.Should().NotBeNull();
-        state.DisplayName.Should().Be("TestPhone");
-    }
-
-    [Fact]
     public async Task SqliteBlindIdentityRecorder_WritesV2IdentityRow_ToDatabase()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "bmb-identity-test-" + Guid.NewGuid().ToString("N"));
@@ -109,30 +82,6 @@ public class BlindMobileLogicTests
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
         }
-    }
-
-    [Fact]
-    public async Task PendingBlindReplicaSource_ThrowsBlindFeaturePendingException()
-    {
-        var source = new PendingBlindReplicaSource();
-        var callCode = new BlindCallCode("https://127.0.0.1:5300", Guid.NewGuid(), "test_pin", new byte[32], new byte[32]);
-
-        var act = () => source.FetchAndInstallAsync(callCode, "workDir", null, CancellationToken.None);
-
-        var ex = await act.Should().ThrowAsync<BlindFeaturePendingException>();
-        ex.Which.ContractItem.Should().Contain("GET /api/blind/replica");
-    }
-
-    [Fact]
-    public async Task PendingBlindPhoneSync_ThrowsBlindFeaturePendingException()
-    {
-        var sync = new PendingBlindPhoneSync();
-        var callCode = new BlindCallCode("https://127.0.0.1:5300", Guid.NewGuid(), "test_pin", new byte[32], new byte[32]);
-
-        var act = () => sync.SyncOnceAsync(callCode, CancellationToken.None);
-
-        var ex = await act.Should().ThrowAsync<BlindFeaturePendingException>();
-        ex.Which.ContractItem.Should().Contain("v=2 identity signer");
     }
 
     [Fact]
