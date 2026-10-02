@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace BeeMemoryBank.BlindMobile.Tests;
@@ -142,13 +143,76 @@ public sealed class OrdinaryAppHasNoBlindCodeTests
         dead.Should().BeEmpty("the project must not exclude files that are not there any more");
     }
 
-    private static bool PatternMatchesSomething(string directory, string pattern)
+    // What the project holds today (see StillThere): a pattern that names a folder that exists but no file in it must not count.
+    [Theory]
+    [InlineData(@"Pages\ArticlesPage.xaml", true)]
+    [InlineData(@"Pages\ModeChoicePage.xaml", false)]
+    [InlineData(@"Pages\*.xaml.cs", true)]
+    [InlineData(@"Pages\*.nothing", false)]
+    [InlineData(@"Pages\Mode*.cs", false)]
+    [InlineData(@"Pages\Un?ockPage.xaml", true)]
+    [InlineData(@"Pages\Blind?ome*.xaml", false)]
+    [InlineData(@"Platforms\Android\Blind*.cs", false)]
+    [InlineData(@"Platforms\Android\*Blind*.cs", false)]
+    [InlineData(@"Pages\*Mode*.xaml", false)]
+    [InlineData(@"Platforms\Android\**", true)]
+    [InlineData(@"Platforms\**\*.xml", true)]
+    [InlineData(@"Services\Blind\**", false)]
+    [InlineData(@"Services\*.cs", true)]
+    [InlineData(@"Gone\**", false)]
+    public void APatternMatchesOnlyWhenAFileOfTheProjectMatchesIt(string pattern, bool expected)
     {
-        var path = pattern.Replace('\\', Path.DirectorySeparatorChar);
-        var wildcard = path.IndexOf('*');
+        PatternMatchesSomething(OrdinaryAppDirectory(), pattern).Should().Be(expected, pattern);
+    }
+
+    [Theory]
+    [InlineData(@"Pages\*.cs", "Pages/TreePage.xaml.cs", true)]
+    [InlineData(@"Pages\*.cs", "Pages/Sub/TreePage.xaml.cs", false)]
+    [InlineData(@"Pages\*.cs", "Other/TreePage.xaml.cs", false)]
+    [InlineData(@"Pages\*.cs", "Pages/TreePage.xaml", false)]
+    [InlineData(@"Pages\**", "Pages/Sub/TreePage.xaml.cs", true)]
+    [InlineData(@"Pages\**\*.cs", "Pages/TreePage.xaml.cs", true)]
+    [InlineData(@"Pages\**\*.cs", "Pages/Sub/Deeper/TreePage.xaml.cs", true)]
+    [InlineData(@"Pages\Tree?age.xaml", "Pages/TreePage.xaml", true)]
+    [InlineData(@"Pages\Tree?age.xaml", "Pages/Tree/age.xaml", false)]
+    [InlineData(@"Pages\a.b+c(d).cs", "Pages/aXb+c(d).cs", false)]
+    [InlineData(@"Pages\a.b+c(d).cs", "Pages/a.b+c(d).cs", true)]
+    public void AGlobMatchesLikeMsBuildDoes(string pattern, string relativePath, bool expected)
+    {
+        GlobMatches(pattern, relativePath).Should().Be(expected, $"{pattern} against {relativePath}");
+    }
+
+    /// <summary>MSBuild's file globs: <c>*</c> and <c>?</c> stay inside one folder, <c>**</c> crosses folders.</summary>
+    internal static bool GlobMatches(string pattern, string relativePath)
+    {
+        var glob = pattern.Replace('\\', '/');
+        var regex = new StringBuilder("^");
+        for (var i = 0; i < glob.Length; i++)
+        {
+            if (glob[i] == '*' && i + 1 < glob.Length && glob[i + 1] == '*')
+            {
+                i++;
+                if (i + 1 < glob.Length && glob[i + 1] == '/') { i++; regex.Append("(?:.*/)?"); }
+                else regex.Append(".*");
+            }
+            else if (glob[i] == '*') regex.Append("[^/]*");
+            else if (glob[i] == '?') regex.Append("[^/]");
+            else regex.Append(Regex.Escape(glob[i].ToString()));
+        }
+        return Regex.IsMatch(relativePath.Replace('\\', '/'), regex.Append(@"\z").ToString(), RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>True when a file of the project matches the pattern (a plain path: when that file exists).</summary>
+    internal static bool PatternMatchesSomething(string directory, string pattern)
+    {
+        var path = pattern.Replace('\\', '/');
+        var wildcard = path.IndexOfAny(['*', '?']);
         if (wildcard < 0) return File.Exists(Path.Combine(directory, path));
-        var folder = Path.Combine(directory, path[..wildcard].TrimEnd(Path.DirectorySeparatorChar));
-        return Directory.Exists(folder);
+        // Only the folder that holds the fixed start of the pattern is searched, so "Pages/*.cs" never walks bin/ or obj/.
+        var folder = Path.Combine(directory, path[..(path.LastIndexOf('/', wildcard) + 1)]);
+        return Directory.Exists(folder)
+            && Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+                .Any(file => GlobMatches(path, Path.GetRelativePath(directory, file)));
     }
 
     private static bool IsBlindModeType(string fullName)
