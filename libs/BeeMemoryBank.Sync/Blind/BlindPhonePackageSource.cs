@@ -64,6 +64,11 @@ public sealed class BlindPhonePackageSource(
                 // the phone it can still be an older one: wait for the next, not a failure.
                 throw new BlindFeaturePendingException(
                     "a package that includes the integrity anchor this phone received (the listening node renews its package every half hour)");
+            if (package.RecoveryBoxes == 0)
+                // A restore takes its keys from the boxes of the PACKAGE's database: one the listener built before the first
+                // superadmin signed in holds none, and a backup made from it could never be opened.
+                throw new BlindFeaturePendingException(
+                    "a package that includes a recovery box (the listening node renews its package every half hour)");
             if (package.Length > _limits.MaxPackageBytes)
                 throw new InvalidDataException("The listening node's package is larger than a restore takes.");
 

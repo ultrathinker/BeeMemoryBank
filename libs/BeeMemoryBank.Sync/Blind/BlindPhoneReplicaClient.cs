@@ -144,13 +144,14 @@ public sealed class BlindPhoneReplicaClient(
             var extraction = Path.Combine(workDirectory, "backup-verified-" + current.Sha256.ToLowerInvariant());
             await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
             var anchors = await ReadAnchorIdsAsync(extraction, ct);
+            var boxes = await CountRecoveryBoxesAsync(extraction, ct);
             var archivePath = Path.Combine(workDirectory, BackupArchiveName);
             File.Move(partPath, archivePath, overwrite: true);
             if (File.Exists(metadataPath)) File.Delete(metadataPath);
             ClearInstallFailure(workDirectory, BackupFailureFileName);
             progress?.Report(1);
             return new VerifiedReplicaPackage(archivePath, Convert.FromBase64String(current.SignatureB64),
-                current.Sha256.ToLowerInvariant(), current.Length, anchors);
+                current.Sha256.ToLowerInvariant(), current.Length, anchors, boxes);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -171,6 +172,18 @@ public sealed class BlindPhoneReplicaClient(
     {
         foreach (var directory in Directory.GetDirectories(workDirectory, "backup-verified-*"))
             Directory.Delete(directory, recursive: true);
+    }
+
+    /// <summary>The active recovery boxes of the extracted package's database; none when it has no such table.</summary>
+    private static async Task<int> CountRecoveryBoxesAsync(string extraction, CancellationToken ct)
+    {
+        var db = Path.Combine(extraction, "beememorybank.db");
+        if (!File.Exists(db)) return 0;
+        await using var conn = new SqliteConnection($"Data Source={db};Mode=ReadOnly;Pooling=False");
+        await conn.OpenAsync(ct);
+        if (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tbl_recovery_box'") == 0)
+            return 0;
+        return (int)await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_recovery_box WHERE status = 'A'");
     }
 
     /// <summary>The newest anchors of the extracted package (newest first); none when it has no such table.</summary>
@@ -705,5 +718,6 @@ public sealed class BlindPhoneReplicaClient(
 /// <param name="ArchivePath">The archive exactly as the listener served it; its detached signature covers these bytes.</param>
 /// <param name="Signature">The detached Ed25519 signature the listener sent with it.</param>
 /// <param name="AnchorIds">The package's newest state anchors (newest first): the rows a restore will look for signed events of.</param>
+/// <param name="RecoveryBoxes">How many active recovery boxes the package's database holds: a restore takes its keys from them.</param>
 public sealed record VerifiedReplicaPackage(
-    string ArchivePath, byte[] Signature, string Sha256, long Length, IReadOnlyList<string> AnchorIds);
+    string ArchivePath, byte[] Signature, string Sha256, long Length, IReadOnlyList<string> AnchorIds, int RecoveryBoxes = 1);

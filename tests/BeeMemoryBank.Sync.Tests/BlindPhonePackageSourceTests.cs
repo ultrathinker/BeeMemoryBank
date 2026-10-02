@@ -68,6 +68,24 @@ public sealed class BlindPhonePackageSourceTests
         t.NothingLeft(package);
     }
 
+    /// <summary>
+    /// Stage 5, read back through the real restore: the Windows restore takes the keys from the boxes of the PACKAGE's
+    /// database, not only from the header. A package the listener built before the first superadmin signed in holds none,
+    /// and the backup was "made" but ended in "The master password opens none of the recovery boxes.".
+    /// </summary>
+    [Fact]
+    public async Task APackageWithoutARecoveryBox_IsOneToWaitOutNotAFailure_AndNothingStays()
+    {
+        var t = await NewAsync();
+        await t.AddEventsAsync(10, anchorAt: 3, "mine");
+        var package = t.Fetcher.Next(anchors: ["mine"], recoveryBoxes: 0);
+
+        var act = () => t.Source().CreateAsync(t.Destination, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<BlindFeaturePendingException>()).Which.Message.Should().Contain("recovery box");
+        t.NothingLeft(package);
+    }
+
     [Fact]
     public async Task MoreEventsThanARestoreTakes_AreRefused_AndNothingStays()
     {
@@ -261,11 +279,11 @@ public sealed class BlindPhonePackageSourceTests
         public byte[] PackageBytes { get; private set; } = [];
         public bool LoseTheArchive { get; set; }
 
-        public VerifiedReplicaPackage Next(string[] anchors, int length = 3000)
+        public VerifiedReplicaPackage Next(string[] anchors, int length = 3000, int recoveryBoxes = 1)
         {
             PackageBytes = RandomNumberGenerator.GetBytes(length);
             var path = Path.Combine(dir, "backup-package.tar.gz");
-            _next = new VerifiedReplicaPackage(path, RandomNumberGenerator.GetBytes(64), "sha", length, anchors);
+            _next = new VerifiedReplicaPackage(path, RandomNumberGenerator.GetBytes(64), "sha", length, anchors, recoveryBoxes);
             return _next;
         }
 

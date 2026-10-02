@@ -48,6 +48,23 @@ public sealed class BlindPhoneVerifiedPackageTests : IDisposable
         File.Exists(Path.Combine(work, "backup-package.part.json")).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(2, 2)]
+    public async Task FetchVerified_CountsTheActiveRecoveryBoxesOfThePackage(int active, int expected)
+    {
+        await AddAnchorAsync("2026-09-01T00:00:00.0000000Z");
+        for (var i = 0; i < active; i++) await AddBoxAsync($"box-{i}", "A");
+        await AddBoxAsync("box-retired", "R");
+        var phone = await CreatePhoneAsync();
+        var work = Path.Combine(phone.DataPath, "replica");
+        using var http = new HttpClient(_blind.Server.CreateHandler());
+
+        var fetched = await phone.Client.FetchVerifiedPackageAsync(http, phone.Target, work, progress: null, CancellationToken.None);
+
+        fetched.RecoveryBoxes.Should().Be(expected, "a restore opens the package's boxes with the master password; a retired one does not count");
+    }
+
     [Fact]
     public async Task FetchVerified_DoesNotTouchTheInstallPartialOrItsBackOff()
     {
@@ -138,6 +155,15 @@ public sealed class BlindPhoneVerifiedPackageTests : IDisposable
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    private async Task AddBoxAsync(string id, string status)
+    {
+        using var conn = _blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        await conn.ExecuteAsync(
+            @"INSERT INTO tbl_recovery_box (box_id, kind, author_node_id, dek_fingerprint, epoch_hint, kdf_preset, salt, wrapped, iv, created_at, status, lamport_ts)
+              VALUES (@Id, 'strong', 'a1', 'fp', 1, 's512t6', x'01', x'02', x'03', '2026-09-01T00:00:00Z', @Status, 1)",
+            new { Id = id, Status = status });
+    }
 
     private async Task<string> AddAnchorAsync(string createdAt)
     {
