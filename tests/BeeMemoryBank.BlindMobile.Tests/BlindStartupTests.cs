@@ -1,4 +1,5 @@
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 
 namespace BeeMemoryBank.BlindMobile.Tests;
 
@@ -50,6 +51,96 @@ public sealed class BlindStartupTests
         var mentions = BoundaryScanner.Scan(FindAppDll(), owner => owner == entryPoint, startup);
 
         mentions.Should().NotBeEmpty($"{entryPoint} must await BlindStartup.EnsureReadyAsync() before it uses the database");
+    }
+
+    /// <summary>
+    /// Stage 5, "Disconnect and wipe" on the phone: the wipe cleared the state through MAUI Preferences, which on Android
+    /// writes with <c>apply()</c> (asynchronously), and the process was killed at once - the app came back still "paired",
+    /// "first load done", with the old node id, over an empty database. The blind app's own state must be written with
+    /// <c>commit()</c>, which returns after the file is written.
+    /// </summary>
+    [Fact]
+    public void TheBlindStateStore_WritesWithCommit_NeverWithMauiPreferencesOrApply()
+    {
+        var calls = MemberCalls(FindAppDll(), "BeeMemoryBank.BlindMobile.Services.Blind.PreferencesBlindStore");
+
+        calls.Should().NotContain(c => c.StartsWith("Microsoft.Maui.Storage.", StringComparison.Ordinal),
+            "MAUI Preferences writes asynchronously on Android and a kill right after loses the write");
+        calls.Should().Contain("Android.Content.ISharedPreferencesEditor.Commit");
+        calls.Should().NotContain("Android.Content.ISharedPreferencesEditor.Apply");
+    }
+
+    /// <summary>
+    /// The same wipe then started the launcher activity and killed its own process, which also hosted the new activity: the
+    /// app simply vanished. The restart goes through a helper activity in another process, which kills the old process and
+    /// starts the app again.
+    /// </summary>
+    [Fact]
+    public void TheWipe_RestartsThroughAHelperActivity_NotByStartingTheLauncherItselfAndKillingTheProcess()
+    {
+        var calls = MemberCalls(FindAppDll(), "BeeMemoryBank.BlindMobile.Services.Blind.BlindPhoneReset");
+
+        calls.Should().Contain(c => c.StartsWith("BeeMemoryBank.BlindMobile.Platforms.Android.ProcessRestart.", StringComparison.Ordinal));
+        calls.Should().NotContain(c => c.EndsWith(".GetLaunchIntentForPackage", StringComparison.Ordinal),
+            "starting the launcher from the process that is about to be killed loses the new activity with it");
+    }
+
+    /// <summary>"Namespace.Type.Member" of every member reference in the method bodies of a type (nested types included).</summary>
+    private static HashSet<string> MemberCalls(string assemblyPath, string typeName)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+        var md = pe.GetMetadataReader();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        string TypeOf(EntityHandle h) => h.Kind switch
+        {
+            HandleKind.TypeReference => Qualified(md, (TypeReferenceHandle)h),
+            HandleKind.TypeDefinition => Qualified(md, (TypeDefinitionHandle)h),
+            _ => "?",
+        };
+        foreach (var handle in md.TypeDefinitions)
+        {
+            var qualified = Qualified(md, handle);
+            if (qualified != typeName && !qualified.StartsWith(typeName + "+", StringComparison.Ordinal)) continue;
+            foreach (var methodHandle in md.GetTypeDefinition(handle).GetMethods())
+            {
+                var method = md.GetMethodDefinition(methodHandle);
+                if (method.RelativeVirtualAddress == 0) continue;
+                var il = pe.GetMethodBody(method.RelativeVirtualAddress).GetILBytes() ?? [];
+                for (var i = 0; i + 4 < il.Length; i++)
+                {
+                    // call (0x28) / callvirt (0x6F) / newobj (0x73) followed by a method token; a false positive only adds a name.
+                    if (il[i] is not (0x28 or 0x6F or 0x73)) continue;
+                    var token = BitConverter.ToInt32(il, i + 1);
+                    switch (token >> 24)
+                    {
+                        case 0x0A: // member reference (another assembly)
+                            var reference = md.GetMemberReference(MetadataTokens.MemberReferenceHandle(token & 0xFFFFFF));
+                            names.Add(TypeOf(reference.Parent) + "." + md.GetString(reference.Name));
+                            break;
+                        case 0x06: // method definition (this assembly)
+                            var target = md.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(token & 0xFFFFFF));
+                            names.Add(Qualified(md, target.GetDeclaringType()) + "." + md.GetString(target.Name));
+                            break;
+                    }
+                }
+            }
+        }
+        return names;
+    }
+
+    private static string Qualified(MetadataReader md, TypeReferenceHandle h)
+    {
+        var t = md.GetTypeReference(h);
+        return md.GetString(t.Namespace) is { Length: > 0 } ns ? ns + "." + md.GetString(t.Name) : md.GetString(t.Name);
+    }
+
+    private static string Qualified(MetadataReader md, TypeDefinitionHandle h)
+    {
+        var t = md.GetTypeDefinition(h);
+        var name = md.GetString(t.Name);
+        if (!t.GetDeclaringType().IsNil) return Qualified(md, t.GetDeclaringType()) + "+" + name;
+        return md.GetString(t.Namespace) is { Length: > 0 } ns ? ns + "." + name : name;
     }
 
     private static IEnumerable<string> PageTypeNames()

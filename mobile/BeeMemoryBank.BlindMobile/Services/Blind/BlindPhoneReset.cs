@@ -77,12 +77,10 @@ public static class BlindPhoneReset
     {
         Wipe(services, dataDir);
 #if ANDROID
-        // Restart the process: the only reliable way to reset every singleton and migrate a fresh db.
-        var intent = Android.App.Application.Context.PackageManager!
-            .GetLaunchIntentForPackage(Android.App.Application.Context.PackageName!)!;
-        intent.AddFlags(Android.Content.ActivityFlags.ClearTop | Android.Content.ActivityFlags.NewTask);
-        Android.App.Application.Context.StartActivity(intent);
-        Android.OS.Process.KillProcess(Android.OS.Process.MyPid());
+        // A fresh process is the only reliable way to reset every singleton and migrate a fresh database. It cannot be done by the
+        // process itself: the activity it starts lives in it and dies with it (the app simply vanished). A helper activity in
+        // another process kills this one and starts the app again.
+        Platforms.Android.ProcessRestart.Now();
 #endif
     }
 }

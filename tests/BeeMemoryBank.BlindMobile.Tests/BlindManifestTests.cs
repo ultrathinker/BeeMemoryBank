@@ -82,6 +82,25 @@ public sealed class BlindManifestTests
         invented.Should().BeEmpty($"{path} declares classes under the application id that the managed build does not generate");
     }
 
+    /// <summary>
+    /// "Disconnect and wipe" restarts the app through a helper activity in its own process (the old process hosts the new
+    /// activity, so it cannot be the one that kills itself and relaunches). It shows nothing and keeps no history.
+    /// </summary>
+    [Fact]
+    public void TheBuiltManifest_HasAHelperActivityInItsOwnProcess_ThatIsNotExported()
+    {
+        var (manifest, path) = LastBuiltManifest();
+
+        var helper = manifest.Root!.Element("application")!.Elements("activity")
+            .Where(a => (string?)a.Attribute(Android + "process") == ":restart")
+            .ToList();
+
+        helper.Should().ContainSingle($"{path} must declare the restart helper");
+        ((string?)helper[0].Attribute(Android + "exported")).Should().Be("false");
+        ((string?)helper[0].Attribute(Android + "noHistory")).Should().Be("true");
+        helper[0].Elements("intent-filter").Should().BeEmpty("nobody else may start it");
+    }
+
     [Fact]
     public void TheBuiltManifest_HasExactlyOneLauncherActivity()
     {
