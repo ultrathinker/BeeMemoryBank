@@ -33,6 +33,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <TrimmerRootDescriptor Include="Linker.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" />
     <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Xamarin.AndroidX.Core" />

@@ -1,0 +1,20 @@
+<linker>
+  <!--
+    Dapper builds the rows of every query that returns a tuple, e.g. QueryAsync<(string Id, ..., long Lamport)>, by finding
+    ValueTuple<...>'s constructor through reflection (SqlMapper.GenerateValueTupleDeserializer). Nothing in the code names
+    those constructors for every arity, so the Release build's trimmer removed them: the first backup on a phone stopped with
+    a NullReferenceException (ILGenerator.Emit got null) for ValueTuple`8, and every other tuple query would have gone the
+    same way. BlindTrimmingTests reads the trimmed runtime and fails when a ValueTuple lost its constructor.
+  -->
+  <assembly fullname="System.Private.CoreLib">
+    <type fullname="System.ValueTuple" preserve="all" />
+    <type fullname="System.ValueTuple`1" preserve="all" />
+    <type fullname="System.ValueTuple`2" preserve="all" />
+    <type fullname="System.ValueTuple`3" preserve="all" />
+    <type fullname="System.ValueTuple`4" preserve="all" />
+    <type fullname="System.ValueTuple`5" preserve="all" />
+    <type fullname="System.ValueTuple`6" preserve="all" />
+    <type fullname="System.ValueTuple`7" preserve="all" />
+    <type fullname="System.ValueTuple`8" preserve="all" />
+  </assembly>
+</linker>
