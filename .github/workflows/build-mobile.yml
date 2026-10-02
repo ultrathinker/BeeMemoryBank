@@ -8,13 +8,16 @@ name: Build Mobile (Android)
 # Search and Crypto, and gets its services from their DI extensions. Without this filter a change
 # that alters what mobile resolves at startup ships with Android CI never having run: the DEK
 # rotation applier that mobile now activates was added in exactly such a commit.
+#
+# tests/BeeMemoryBank.BlindMobile.Tests/** is there because the boundary guards that keep the blind app and the ordinary
+# app apart live in that project and run only here: a commit that weakens them must start the workflow that runs them.
 on:
   push:
     branches: [main, master, develop]
-    paths: ['mobile/**', 'libs/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
+    paths: ['mobile/**', 'libs/**', 'tests/BeeMemoryBank.BlindMobile.Tests/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
   pull_request:
     branches: [main, master, develop]
-    paths: ['mobile/**', 'libs/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
+    paths: ['mobile/**', 'libs/**', 'tests/BeeMemoryBank.BlindMobile.Tests/**', 'Directory.Packages.props', '.github/workflows/build-mobile.yml']
   workflow_dispatch: {}
 
 permissions:
@@ -144,8 +147,12 @@ jobs:
 
       # After the build: the boundary tests read the built BeeMemoryBank.BlindMobile.dll (every page,
       # platform class and service of the app), so the assembly has to exist when they run.
+      # OrdinaryAppHasNoBlindCodeTests read the ORDINARY app's Release output, which this job never builds: they run in
+      # the `build` job, after the ordinary APK exists (BuildMobileWorkflowTests keeps that split true).
       - name: Run unit & forbidden references tests
-        run: dotnet test tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj
+        run: |
+          dotnet test tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj \
+            --filter "FullyQualifiedName!~OrdinaryAppHasNoBlindCodeTests"
 
       - name: Verify forbidden assets absent from Blind APK
         run: |
