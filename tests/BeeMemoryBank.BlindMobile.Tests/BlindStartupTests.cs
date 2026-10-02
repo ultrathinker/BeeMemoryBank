@@ -32,6 +32,26 @@ public sealed class BlindStartupTests
             string.Join("\n", findings));
     }
 
+    /// <summary>
+    /// Every entry point that reads or writes the database waits for it to be open: the page (creates the identity),
+    /// the app's start-up, and the three background entry points (a worker can be the first thing to run after a
+    /// reboot or an update). Read from the built assembly; a type that names <c>BlindStartup</c> is one that awaits it.
+    /// </summary>
+    [Theory]
+    [InlineData("BeeMemoryBank.BlindMobile.App")]
+    [InlineData("BeeMemoryBank.BlindMobile.Pages.BlindHomePage")]
+    [InlineData("BeeMemoryBank.BlindMobile.Platforms.Android.BlindSyncWorker")]
+    [InlineData("BeeMemoryBank.BlindMobile.Platforms.Android.BlindHeavyWorker")]
+    [InlineData("BeeMemoryBank.BlindMobile.Platforms.Android.BlindBackupService")]
+    public void EveryEntryPointThatTouchesTheDatabase_WaitsForItToBeOpen(string entryPoint)
+    {
+        var startup = new HashSet<string>(StringComparer.Ordinal) { "BeeMemoryBank.BlindMobile.Services.Blind.BlindStartup" };
+
+        var mentions = BoundaryScanner.Scan(FindAppDll(), owner => owner == entryPoint, startup);
+
+        mentions.Should().NotBeEmpty($"{entryPoint} must await BlindStartup.EnsureReadyAsync() before it uses the database");
+    }
+
     private static IEnumerable<string> PageTypeNames()
     {
         using var stream = File.OpenRead(FindAppDll());

@@ -7,6 +7,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -34,6 +35,15 @@ public static class BlindMobileServices
         services.AddSingleton(_ => new DbConnectionFactory(dbPath));
         services.AddSingleton<IDbConnectionFactory>(sp => sp.GetRequiredService<DbConnectionFactory>());
         services.AddSingleton<MigrationRunner>();
+        // The one place that opens the database: migrations, then the journal pragmas. The app's start-up, the
+        // page and the background workers all wait on it (BlindStartupGateTests).
+        services.AddSingleton(sp => new BlindStartup(async ct =>
+        {
+            await sp.GetRequiredService<MigrationRunner>().RunMigrationsAsync();
+            using var conn = sp.GetRequiredService<DbConnectionFactory>().CreateConnection();
+            await conn.ExecuteAsync("PRAGMA journal_mode=WAL;");
+            await conn.ExecuteAsync("PRAGMA synchronous=NORMAL;");
+        }));
 
         services.AddSingleton<INodeIdentityRepository, NodeIdentityRepository>();
         services.AddSingleton<IWhitelistRepository, WhitelistRepository>();

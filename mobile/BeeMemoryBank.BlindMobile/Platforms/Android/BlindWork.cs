@@ -80,6 +80,8 @@ public class BlindSyncWorker(Context context, WorkerParameters parameters) : Wor
 
         try
         {
+            // A worker can be the first thing to run after a reboot or an update: open (migrate) the database first.
+            services.GetRequiredService<BlindStartup>().EnsureReadyAsync().GetAwaiter().GetResult();
             Task.Run(() => services.GetRequiredService<IBlindPhoneSync>().SyncOnceAsync(target, CancellationToken.None))
                 .GetAwaiter().GetResult();
             state.LastSyncAt = DateTimeOffset.UtcNow;
@@ -120,6 +122,7 @@ public class BlindHeavyWorker(Context context, WorkerParameters parameters) : Wo
             var log = services.GetRequiredService<BlindPhoneLog>();
             try
             {
+                services.GetRequiredService<BlindStartup>().EnsureReadyAsync().GetAwaiter().GetResult();
                 var result = Task.Run(() => work.RunAsync(forceBackup: false, _stop.Token)).GetAwaiter().GetResult();
                 BlindRunReport.Record(log, "run", result);
             }
@@ -173,6 +176,7 @@ public class BlindBackupService : Service
             work.Progress += OnProgress;
             try
             {
+                await services.GetRequiredService<BlindStartup>().EnsureReadyAsync();
                 var result = await work.RunAsync(forceBackup: true, token);
                 BlindRunReport.Record(services.GetRequiredService<BlindPhoneLog>(), "backup", result);
             }

@@ -1,19 +1,19 @@
 using BeeMemoryBank.BlindMobile.Pages;
-using BeeMemoryBank.Storage.Sqlite;
-using Dapper;
+using BeeMemoryBank.BlindMobile.Services.Blind;
+using BeeMemoryBank.Core.Services.BlindPhone;
 
 namespace BeeMemoryBank.BlindMobile;
 
 public partial class App : Application
 {
-    private readonly DbConnectionFactory _dbFactory;
-    private readonly MigrationRunner _migrationRunner;
+    private readonly BlindStartup _startup;
+    private readonly IServiceProvider _services;
 
-    public App(DbConnectionFactory dbFactory, MigrationRunner migrationRunner, IServiceProvider services)
+    public App(BlindStartup startup, IServiceProvider services)
     {
         InitializeComponent();
-        _dbFactory = dbFactory;
-        _migrationRunner = migrationRunner;
+        _startup = startup;
+        _services = services;
         // Resolved only now: a page taken as a constructor parameter is built by the container before this
         // body runs, i.e. before InitializeComponent() has loaded App.xaml's resources, and its XAML dies on
         // the first {StaticResource ...} (BlindStartupTests).
@@ -26,15 +26,12 @@ public partial class App : Application
 
         try
         {
-            await _migrationRunner.RunMigrationsAsync();
-
-            using var conn = _dbFactory.CreateConnection();
-            await conn.ExecuteAsync("PRAGMA journal_mode=WAL;");
-            await conn.ExecuteAsync("PRAGMA synchronous=NORMAL;");
+            await _startup.EnsureReadyAsync();
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Migration error: {ex}");
+            // Release builds drop Debug output: the screen's log is where the owner can read it.
+            _services.GetRequiredService<BlindPhoneLog>().Add("start", $"Opening the database failed: {ex.Message}");
         }
 
         StartBlindWork();

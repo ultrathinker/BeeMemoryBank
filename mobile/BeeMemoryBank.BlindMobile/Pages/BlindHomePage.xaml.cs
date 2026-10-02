@@ -21,12 +21,14 @@ public partial class BlindHomePage : ContentPage
     private readonly BlindPhoneLog _log;
     private readonly IDeviceStateProvider _device;
     private readonly IServiceProvider _services;
+    private readonly BlindStartup _startup;
     private IDispatcherTimer? _timer;
 
     public BlindHomePage(BlindPhoneState state, BlindMobilePairing pairing, BlindPhoneBackupRunner backups,
-        BlindHeavyWork work, BlindPhoneLog log, IDeviceStateProvider device, IServiceProvider services)
+        BlindHeavyWork work, BlindPhoneLog log, IDeviceStateProvider device, IServiceProvider services, BlindStartup startup)
     {
         InitializeComponent();
+        _startup = startup;
         _state = state;
         _pairing = pairing;
         _backups = backups;
@@ -42,21 +44,26 @@ public partial class BlindHomePage : ContentPage
         base.OnAppearing();
         _work.Progress += OnJobProgress;
 
-        if (!_pairing.HasIdentity)
+        // The database must be open before the identity is read or written: on the first start the migrations are
+        // still running here, and the insert used to fail into a swallowed catch ("No identity" until the next start).
+        string? startError = null;
+        try
         {
-            var deviceName = DeviceInfo.Current.Name;
-            var name = string.IsNullOrWhiteSpace(deviceName) ? "Blind copy" : deviceName;
-            try
+            await _startup.EnsureReadyAsync();
+            if (!_pairing.HasIdentity)
             {
+                var deviceName = DeviceInfo.Current.Name;
+                var name = string.IsNullOrWhiteSpace(deviceName) ? "Blind copy" : deviceName;
                 await _pairing.CreateIdentityAsync(name);
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"CreateIdentityAsync failed: {ex}");
-            }
+        }
+        catch (Exception ex)
+        {
+            startError = ex.Message;
+            _log.Add("start", $"Could not set the phone up: {ex.Message}");
         }
 
-        ShowPhoneCode();
+        ShowPhoneCode(startError);
         Refresh();
         _timer = Dispatcher.CreateTimer();
         _timer.Interval = TimeSpan.FromSeconds(5);
@@ -100,7 +107,7 @@ public partial class BlindHomePage : ContentPage
         LogLabel.Text = string.Join("\n", _log.Latest(30).Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}"));
     }
 
-    private void ShowPhoneCode()
+    private void ShowPhoneCode(string? startError = null)
     {
         var code = _pairing.PhoneCodeText();
         PhoneCodeImage.IsVisible = code != null;
@@ -108,7 +115,9 @@ public partial class BlindHomePage : ContentPage
         PhoneCodeLabel.Text = code
             ?? (_pairing.IsPaired
                 ? "Paired. The code was used up; to connect this phone to another computer, choose Re-pair."
-                : "No identity. Wipe and set the phone up again.");
+                : startError != null
+                    ? $"Could not set the phone up: {startError}. Close the app and open it again."
+                    : "No identity. Wipe and set the phone up again.");
         if (code == null) return;
         using var generator = new QRCodeGenerator();
         var png = new PngByteQRCode(generator.CreateQrCode(code, QRCodeGenerator.ECCLevel.Q)).GetGraphic(10);
