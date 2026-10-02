@@ -9,12 +9,15 @@ public partial class App : Application
     private readonly DbConnectionFactory _dbFactory;
     private readonly MigrationRunner _migrationRunner;
 
-    public App(DbConnectionFactory dbFactory, MigrationRunner migrationRunner, BlindHomePage homePage)
+    public App(DbConnectionFactory dbFactory, MigrationRunner migrationRunner, IServiceProvider services)
     {
         InitializeComponent();
         _dbFactory = dbFactory;
         _migrationRunner = migrationRunner;
-        MainPage = homePage;
+        // Resolved only now: a page taken as a constructor parameter is built by the container before this
+        // body runs, i.e. before InitializeComponent() has loaded App.xaml's resources, and its XAML dies on
+        // the first {StaticResource ...} (BlindStartupTests).
+        MainPage = services.GetRequiredService<BlindHomePage>();
     }
 
     protected override async void OnStart()

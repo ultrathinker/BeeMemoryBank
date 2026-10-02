@@ -47,6 +47,41 @@ public sealed class BlindManifestTests
         ((string?)service.Attribute(Android + "foregroundServiceType")).Should().Be("dataSync", $"in {path}");
     }
 
+    /// <summary>
+    /// The managed types declare their own manifest entries ([Activity], [BroadcastReceiver], [Service]) under a
+    /// generated Java name (<c>crc64…</c>). A hand-written entry named after the app's package ("<c>.MainActivity</c>")
+    /// is a class that does not exist: the launcher offered a second, dead start icon and the boot receiver never ran.
+    /// </summary>
+    [Fact]
+    public void TheBuiltManifest_NamesNoComponentClassTheAppDoesNotHave()
+    {
+        var (manifest, path) = LastBuiltManifest();
+        var application = manifest.Root!.Element("application")!;
+        var package = (string)manifest.Root.Attribute("package")!;
+
+        var invented = application.Elements()
+            .Where(e => e.Name.LocalName is "activity" or "service" or "receiver")
+            .Select(e => (string?)e.Attribute(Android + "name"))
+            .Where(n => n != null && n.StartsWith(package + ".", StringComparison.Ordinal))
+            .ToList();
+
+        invented.Should().BeEmpty($"{path} declares classes under the application id that the managed build does not generate");
+    }
+
+    [Fact]
+    public void TheBuiltManifest_HasExactlyOneLauncherActivity()
+    {
+        var (manifest, path) = LastBuiltManifest();
+
+        var launchers = manifest.Root!.Element("application")!.Elements("activity")
+            .Where(a => a.Elements("intent-filter").Any(f =>
+                f.Elements("category").Any(c => (string?)c.Attribute(Android + "name") == "android.intent.category.LAUNCHER")))
+            .Select(a => (string?)a.Attribute(Android + "name"))
+            .ToList();
+
+        launchers.Should().HaveCount(1, $"{path} must offer one way to start the app, found: {string.Join(", ", launchers)}");
+    }
+
     private static (XDocument Manifest, string Path) LastBuiltManifest()
     {
         var dir = AppContext.BaseDirectory;

@@ -16,29 +16,15 @@
                  android:supportsRtl="true"
                  android:networkSecurityConfig="@xml/network_security_config">
 
-        <activity android:name=".MainActivity"
-                  android:exported="true"
-                  android:launchMode="singleTop"
-                  android:theme="@style/Maui.SplashTheme">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+        <!-- MainActivity, BootReceiver and BlindBackupService are NOT listed here: their C# attributes ([Activity],
+             [BroadcastReceiver], [Service]) generate the entries under the names the managed build really has
+             (crc64...). A hand-written ".MainActivity" is a class that does not exist: it gave the app a second,
+             dead launcher entry and a boot receiver that never ran (BlindManifestTests). -->
 
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
-
-        <receiver
-            android:name=".BootReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-            </intent-filter>
-        </receiver>
 
     </application>
 </manifest>
