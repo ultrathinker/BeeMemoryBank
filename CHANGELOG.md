@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 1.0.15: a separate Android blind-node app and the server part for it (2026-10-02)
+
+No sync protocol (still 3) or database change; devices on 1.0.12-1.0.14 keep syncing.
+
+- **A separate Android app for a blind node: `com.beememorybank.blind`.** It holds only encrypted data, never the data
+  key or the master password, and never authors events. It pairs with the full node by two codes and pins the
+  server's certificate, downloads the blind package from `GET /api/blind/replica` (signature checked before install,
+  resumable, atomic), syncs by protocol 3 with a key kept in the Android Keystore, writes an encrypted backup file
+  through the system file picker, and runs on a schedule (Wi-Fi, charger, battery at least 20%) in a foreground
+  service. "Disconnect and wipe" removes everything. The app is about 44 MB and carries no search model, media or
+  Markdown code. A backup needs the superadmin's integrity anchor; each backup downloads the package again and needs
+  about four times its size free; the phone's event log is not trimmed yet.
+- **The server prepares the blind package for the phone once and caches it** in its own directory (not the snapshots
+  one) in `BlindReplicaPackageCache`; the package now includes the recovery box, so a cached package never lacks it.
+- **The ordinary Android app no longer contains any blind-node code** (the unfinished blind mode, its pages and
+  key store are removed; the 242 MB app is otherwise unchanged). A test guards that it stays so.
+- **The sync library no longer depends on the embeddings library** (`PendingEmbeddingProcessor` moved to
+  `BeeMemoryBank.Embeddings`), which is what lets the blind app stay small.
+
 #### 1.0.14: agents can get the files of an article; the upload script stops creating clients (2026-09-30)
 
 No sync protocol or database change; devices on 1.0.12 and 1.0.13 keep syncing. Server and desktop only; the Android app is unchanged.
