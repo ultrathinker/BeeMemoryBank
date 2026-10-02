@@ -1,0 +1,183 @@
+using System.IO.Compression;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using System.Text;
+using System.Xml.Linq;
+
+namespace BeeMemoryBank.BlindMobile.Tests;
+
+/// <summary>
+/// The blind node is its own app now, so the ORDINARY Android app (<c>mobile/BeeMemoryBank.Mobile</c>) must not carry
+/// the blind-mode code any more: its sources stay in the tree (nothing is deleted) but the project leaves them out of
+/// the build. These tests read what the last Release build of the ordinary app produced — the compiled assembly, the
+/// trimmed one that goes into the APK, the merged manifest and the APK itself — so CI runs them after it has built the
+/// ordinary APK. They never load or run the app.
+/// </summary>
+public sealed class OrdinaryAppHasNoBlindCodeTests
+{
+    private const string AppNamespace = "BeeMemoryBank.Mobile";
+
+    // The blind-mode types of the ordinary app besides the ones that have "Blind" in the name.
+    private static readonly string[] BlindOnlyByName =
+    [
+        "BeeMemoryBank.Mobile.Pages.ModeChoicePage",       // the first-start choice between an ordinary and a blind copy
+        "BeeMemoryBank.Mobile.Platforms.Android.SafExport", // "Save to..." of a blind backup
+        "BeeMemoryBank.Mobile.Platforms.Android.AndroidDeviceState", // Wi-Fi/charger/battery gate of the blind jobs
+    ];
+
+    // Types the ordinary app must still have: without them an empty or wrong file would pass the tests below.
+    private static readonly string[] StillThere =
+    [
+        "BeeMemoryBank.Mobile.Pages.ArticlesPage",
+        "BeeMemoryBank.Mobile.Pages.UnlockPage",
+        "BeeMemoryBank.Mobile.Services.SyncStatusService",
+        "BeeMemoryBank.Mobile.Platforms.Android.SyncForegroundService",
+        "BeeMemoryBank.Mobile.Platforms.Android.BootReceiver",
+    ];
+
+    public static TheoryData<string> BuiltAssemblies => new()
+    {
+        "obj/Release/net10.0-android/BeeMemoryBank.Mobile.dll",
+        "obj/Release/net10.0-android/android-arm64/linked/BeeMemoryBank.Mobile.dll",
+    };
+
+    [Theory]
+    [MemberData(nameof(BuiltAssemblies))]
+    public void TheOrdinaryAppAssembly_DefinesNoTypeOfTheBlindMode(string relativePath)
+    {
+        var path = OrdinaryAppFile(relativePath);
+
+        var blind = TypesDefinedBy(path).Where(IsBlindModeType).ToList();
+
+        blind.Should().BeEmpty($"{path} is what the last Release build of the ordinary app compiled; the blind node is a separate app");
+    }
+
+    [Theory]
+    [MemberData(nameof(BuiltAssemblies))]
+    public void TheOrdinaryAppAssembly_StillHasItsOwnPagesAndServices(string relativePath)
+    {
+        var path = OrdinaryAppFile(relativePath);
+
+        TypesDefinedBy(path).Should().Contain(StillThere, $"{path} must still be the ordinary app");
+    }
+
+    /// <summary>
+    /// The shared blind-phone code lives in Core (<c>BlindPhone</c> namespace) and is used by the blind app and the server;
+    /// the ordinary app must not name any of it. (The pinned TLS handler in <c>BeeMemoryBank.Sync.Blind</c> is the sync
+    /// library's own and serves every sync call of the ordinary app, so that namespace is not checked.)
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(BuiltAssemblies))]
+    public void TheOrdinaryAppAssembly_ReferencesNoBlindPhoneType(string relativePath)
+    {
+        var path = OrdinaryAppFile(relativePath);
+
+        using var stream = File.OpenRead(path);
+        using var pe = new PEReader(stream);
+        var md = pe.GetMetadataReader();
+        var referenced = md.TypeReferences
+            .Select(h => md.GetTypeReference(h))
+            .Where(t => md.GetString(t.Namespace) == "BeeMemoryBank.Core.Services.BlindPhone")
+            .Select(t => md.GetString(t.Name))
+            .Distinct()
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        referenced.Should().BeEmpty($"{path} must not use the blind phone services of Core");
+    }
+
+    [Fact]
+    public void TheMergedManifest_DeclaresNoBlindComponent()
+    {
+        var path = OrdinaryAppFile("obj/Release/net10.0-android/android/AndroidManifest.xml");
+        var manifest = XDocument.Load(path);
+        var android = (XNamespace)"http://schemas.android.com/apk/res/android";
+
+        var named = manifest.Root!.Element("application")!.Elements()
+            .Select(e => (string?)e.Attribute(android + "name") ?? "")
+            .Where(n => n.Contains("Blind", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        named.Should().BeEmpty($"{path} is the manifest the build merged for the ordinary app");
+    }
+
+    [Fact]
+    public void TheOrdinaryApk_ContainsNoBlindEntry_AndItsManifestNamesNoBlindComponent()
+    {
+        var apk = OrdinaryApk();
+
+        using var zip = ZipFile.OpenRead(apk);
+        zip.Entries.Select(e => e.FullName).Where(n => n.Contains("blind", StringComparison.OrdinalIgnoreCase))
+            .Should().BeEmpty($"{apk} is the ordinary app");
+
+        // The binary manifest keeps its names in a string pool: UTF-16 (the usual form) or UTF-8.
+        var entry = zip.GetEntry("AndroidManifest.xml");
+        entry.Should().NotBeNull();
+        using var raw = entry!.Open();
+        using var buffer = new MemoryStream();
+        raw.CopyTo(buffer);
+        var bytes = buffer.ToArray();
+        ContainsBytes(bytes, Encoding.Unicode.GetBytes("Blind")).Should().BeFalse($"{apk}: AndroidManifest.xml (UTF-16 strings)");
+        ContainsBytes(bytes, Encoding.UTF8.GetBytes("Blind")).Should().BeFalse($"{apk}: AndroidManifest.xml (UTF-8 strings)");
+    }
+
+    private static bool IsBlindModeType(string fullName)
+    {
+        // A nested or compiler-generated type (a lambda's closure class, an async state machine) follows its owner.
+        var owner = fullName.Split('+')[0];
+        if (BlindOnlyByName.Contains(owner, StringComparer.Ordinal)) return true;
+        if (!owner.StartsWith(AppNamespace + ".", StringComparison.Ordinal)) return false;
+        return owner.Contains("Blind", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<string> TypesDefinedBy(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var pe = new PEReader(stream);
+        var md = pe.GetMetadataReader();
+        return md.TypeDefinitions.Select(h => FullName(md, h)).ToList();
+    }
+
+    private static string FullName(MetadataReader md, TypeDefinitionHandle handle)
+    {
+        var type = md.GetTypeDefinition(handle);
+        var name = md.GetString(type.Name);
+        var declaring = type.GetDeclaringType();
+        if (!declaring.IsNil) return FullName(md, declaring) + "+" + name;
+        var ns = md.GetString(type.Namespace);
+        return ns.Length == 0 ? name : ns + "." + name;
+    }
+
+    private static bool ContainsBytes(byte[] haystack, byte[] needle)
+    {
+        for (var i = 0; i + needle.Length <= haystack.Length; i++)
+            if (haystack.AsSpan(i, needle.Length).SequenceEqual(needle)) return true;
+        return false;
+    }
+
+    private static string OrdinaryAppFile(string relativePath)
+    {
+        var path = Path.Combine(OrdinaryAppDirectory(), relativePath.Replace('/', Path.DirectorySeparatorChar));
+        File.Exists(path).Should().BeTrue($"build the ordinary app in Release first (dotnet publish mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj -f net10.0-android -c Release): {path}");
+        return path;
+    }
+
+    private static string OrdinaryApk()
+    {
+        var dir = Path.Combine(OrdinaryAppDirectory(), "bin", "Release", "net10.0-android");
+        Directory.Exists(dir).Should().BeTrue($"build the ordinary app in Release first: {dir}");
+        var apk = Directory.EnumerateFiles(dir, "*-Signed.apk", SearchOption.AllDirectories)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+        apk.Should().NotBeNull($"the Release publish leaves a signed APK under {dir}");
+        return apk!;
+    }
+
+    private static string OrdinaryAppDirectory()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir != null && !File.Exists(Path.Combine(dir, "BeeMemoryBank.slnx"))) dir = Path.GetDirectoryName(dir);
+        dir.Should().NotBeNull("the repository root holds BeeMemoryBank.slnx");
+        return Path.Combine(dir!, "mobile", "BeeMemoryBank.Mobile");
+    }
+}

@@ -37,6 +37,18 @@
     <AndroidResource Include="Platforms\Android\Resources\xml\data_extraction_rules.xml" LogicalName="res\xml\data_extraction_rules.xml" />
   </ItemGroup>
 
+  <!-- The blind node is its own app now (mobile/BeeMemoryBank.BlindMobile). Its first version lived in this one and was
+       never offered to users (DeviceModeStore.BlindModeOffered = false). The sources stay in the tree, but they are not
+       part of this app's build: nothing that is compiled here can reach them. Do not add them back here; the tests in
+       tests/BeeMemoryBank.BlindMobile.Tests/OrdinaryAppHasNoBlindCodeTests.cs read the built app and fail if they are. -->
+  <ItemGroup>
+    <Compile Remove="Services\Blind\**" />
+    <Compile Remove="Pages\BlindHomePage.xaml.cs;Pages\ModeChoicePage.xaml.cs" />
+    <MauiXaml Remove="Pages\BlindHomePage.xaml;Pages\ModeChoicePage.xaml" />
+    <Compile Remove="Platforms\Android\BlindWork.cs;Platforms\Android\KeystoreBlindPhoneKeys.cs" />
+    <Compile Remove="Platforms\Android\SafExport.cs;Platforms\Android\AndroidDeviceState.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Indiko.Maui.Controls.Markdown" />
     <PackageReference Include="Microsoft.Maui.Controls" />
@@ -50,8 +62,6 @@
     <PackageReference Include="Xamarin.AndroidX.Biometric" />
     <PackageReference Include="Xamarin.AndroidX.Work.Runtime" />
     <PackageReference Include="Markdig" />
-    <!-- The blind copy shows its pairing code as a QR (PngByteQRCode: no System.Drawing). -->
-    <PackageReference Include="QRCoder" />
     <!-- BeeMemoryBank.Storage references SQLitePCLRaw.lib.e_sqlite3 directly, to force the native
          SQLite above the vulnerable 2.1.11 (CVE-2025-6965). That package ships desktop RIDs only
          — the Android build lives in the separate SQLitePCLRaw.lib.e_sqlite3.android AAR — but

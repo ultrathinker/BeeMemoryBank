@@ -80,18 +80,8 @@ public partial class App : Application
         _session.Locked -= OnSessionLocked;
         _session.Locked += OnSessionLocked;
 
-        if (Services.Blind.DeviceModeStore.IsBlind)
+        if (!await _initSvc.IsInitializedAsync())
         {
-            // A blind copy: no unlock, no vault; its work runs in the background.
-            StartBlindWork();
-            Shell.Current.GoToAsync("//blind").FireAndForget();
-        }
-        else if (!await _initSvc.IsInitializedAsync())
-        {
-            // Straight to setup. The first-start mode choice (plan §10) is not offered in this
-            // release — the blind copy's phone side is unfinished (DeviceModeStore.BlindModeOffered)
-            // — so nobody is sent to //mode, and an install that somehow still carries the stamp has
-            // already been brought back to Full by the IsBlind check above.
             Shell.Current.GoToAsync("//setup").FireAndForget();
         }
         else
@@ -123,7 +113,7 @@ public partial class App : Application
         // After OnSleep locked the session, route the user to the unlock
         // page. Skip if the app is in setup or already on /unlock to avoid
         // loops during first-run.
-        if (!_session.IsUnlocked && !Services.Blind.DeviceModeStore.IsBlind) RouteToUnlock();
+        if (!_session.IsUnlocked) RouteToUnlock();
     }
 
     // Leave the content pages the moment the vault locks, not only on the next OnResume: when
@@ -133,7 +123,6 @@ public partial class App : Application
     // //unlock, every way back into the app lands on the unlock page.
     private void OnSessionLocked()
     {
-        if (Services.Blind.DeviceModeStore.IsBlind) return;
         MainThread.BeginInvokeOnMainThread(RouteToUnlock);
     }
 
@@ -146,8 +135,7 @@ public partial class App : Application
 
             var route = shell.CurrentState?.Location?.OriginalString ?? "";
             if (!route.Contains("unlock", StringComparison.OrdinalIgnoreCase) &&
-                !route.Contains("setup", StringComparison.OrdinalIgnoreCase) &&
-                !route.Contains("mode", StringComparison.OrdinalIgnoreCase))
+                !route.Contains("setup", StringComparison.OrdinalIgnoreCase))
             {
                 shell.GoToAsync("//unlock").FireAndForget();
             }
@@ -172,14 +160,6 @@ public partial class App : Application
     {
 #if ANDROID
         Platforms.Android.SyncWorkScheduler.Ensure(Platform.AppContext);
-#endif
-    }
-
-    /// <summary>Schedules the blind copy's sync and long jobs (WorkManager).</summary>
-    public static void StartBlindWork()
-    {
-#if ANDROID
-        Platforms.Android.BlindWorkScheduler.Ensure(Platform.AppContext);
 #endif
     }
 

@@ -38,20 +38,8 @@ public partial class AppShell : Shell
         // Everything else is blocked — the user must wait for sync to finish.
         var target = args.Target?.Location?.OriginalString ?? "";
 
-        // A blind copy has one screen and no vault to open: everything else (articles, unlock) is
-        // closed to it, whatever route asks.
-        if (Services.Blind.DeviceModeStore.IsBlind)
-        {
-            if (!target.StartsWith("//blind"))
-            {
-                args.Cancel();
-                Dispatcher.Dispatch(() => GoToAsync("//blind"));
-            }
-            return;
-        }
-
         if (target.StartsWith("//initialSync") || target.StartsWith("//setup") ||
-            target.StartsWith("//unlock") || target.StartsWith("//mode"))
+            target.StartsWith("//unlock"))
             return;
 
         // Read the cached flag only — never touch SQLite on the UI thread.
