@@ -25,5 +25,25 @@ public static class BlindRunReport
     /// not die silently in WorkManager's logcat, the screen's log is where the user can read it.
     /// </summary>
     public static void RecordFailure(BlindPhoneLog log, string kind, Exception error) =>
-        Record(log, kind, $"Stopped by an unexpected error ({error.GetType().Name}): {error.Message}");
+        Record(log, kind, $"Stopped by an unexpected error ({error.GetType().Name}): {error.Message}{Where(error)}");
+
+    /// <summary>
+    /// " [at A.B.M &lt; C.D.N &lt; ...]": the first few methods of the stack, names only (no arguments, no file paths). A Release
+    /// build on a phone has no debugger and nothing prints a caught exception, so without this a NullReferenceException
+    /// from deep in a backup says nothing about where.
+    /// </summary>
+    private static string Where(Exception error)
+    {
+        var frames = (error.StackTrace ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.StartsWith("at ", StringComparison.Ordinal))
+            .Select(l => l[3..])
+            .Select(l => l.Split(['(', ' '], 2)[0])
+            .Where(l => l.Length > 0)
+            .Take(MaxFrames)
+            .ToList();
+        return frames.Count == 0 ? "" : $" [at {string.Join(" < ", frames)}]";
+    }
+
+    private const int MaxFrames = 4;
 }

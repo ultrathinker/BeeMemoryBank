@@ -54,11 +54,17 @@ public sealed class BlindHttpHandler : DelegatingHandler
     /// <summary>
     /// Creates the primary HttpClientHandler with AllowAutoRedirect = false and SPKI pinning.
     /// </summary>
-    public static HttpClientHandler CreatePrimaryHandler(string? expectedPin) => new()
+    public static HttpClientHandler CreatePrimaryHandler(string? expectedPin, Action<string>? onPinRefused = null) => new()
     {
         AllowAutoRedirect = false,
         ServerCertificateCustomValidationCallback = (request, certificate, _, errors) =>
-            ValidateServerCertificate(request, certificate, errors, expectedPin)
+        {
+            var accepted = ValidateServerCertificate(request, certificate, errors, expectedPin);
+            // The stack only reports "Connection failure" for a refused handshake - the same words as for a node that
+            // is off. A node that answers with another key than the pinned one is worth its own line.
+            if (!accepted && request.RequestUri is { } uri) onPinRefused?.Invoke(uri.Authority);
+            return accepted;
+        }
     };
 
     public static HttpClientHandler CreatePrimaryHandler(BlindPhoneState? state = null) =>

@@ -87,7 +87,10 @@ public static class BlindMobileServices
         // Pinned HTTP client and maintenance detection
         services.AddTransient<MaintenanceDetectingHandler>();
         services.AddTransient<BlindHttpHandler>();
-        services.AddSingleton<BlindHttpClientProvider>();
+        services.AddSingleton(sp => new BlindHttpClientProvider(
+            sp.GetRequiredService<BlindPhoneState>(),
+            host => BlindRunReport.Record(sp.GetRequiredService<BlindPhoneLog>(), "pin",
+                $"Refused {host}: it answered with another key than the one pinned when this phone was paired. Nothing was sent.")));
         services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
         services.AddTransient<HttpClient>(sp => sp.GetRequiredService<BlindHttpClientProvider>().GetClient());
 

@@ -19,9 +19,13 @@ public sealed class BlindHttpClientProvider : IHttpClientFactory, IDisposable
     private string? _currentPin;
     private HttpClientHandler? _currentHandler;
 
-    public BlindHttpClientProvider(BlindPhoneState state)
+    private readonly Action<string>? _onPinRefused;
+
+    /// <param name="onPinRefused">Told the host:port of a node that presented another key than the pinned one.</param>
+    public BlindHttpClientProvider(BlindPhoneState state, Action<string>? onPinRefused = null)
     {
         _state = state;
+        _onPinRefused = onPinRefused;
     }
 
     /// <summary>
@@ -39,7 +43,7 @@ public sealed class BlindHttpClientProvider : IHttpClientFactory, IDisposable
             {
                 DisposeCurrent();
                 _currentPin = targetPin;
-                _currentHandler = BlindHttpHandler.CreatePrimaryHandler(targetPin);
+                _currentHandler = BlindHttpHandler.CreatePrimaryHandler(targetPin, _onPinRefused);
             }
 
             var nonDisposing = new NonDisposingDelegatingHandler(_currentHandler);

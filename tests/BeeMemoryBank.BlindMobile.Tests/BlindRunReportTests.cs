@@ -49,6 +49,28 @@ public sealed class BlindRunReportTests
         log.Latest(10).Should().HaveCount(3);
     }
 
+    /// <summary>
+    /// A Release build on a phone has no debugger and no logcat of caught exceptions: the first real backup stopped with
+    /// "NullReferenceException: Object reference not set" and nothing said where. The log line names the calling methods.
+    /// </summary>
+    [Fact]
+    public void AnUnexpectedError_NamesTheMethodsItWasThrownFrom()
+    {
+        var log = NewLog();
+        Exception error;
+        try { ThrowFromTheDeepestMethod(); throw new InvalidOperationException("unreachable"); }
+        catch (NullReferenceException e) { error = e; }
+
+        BlindRunReport.RecordFailure(log, "backup", error);
+
+        var message = log.Latest(10).Should().ContainSingle().Which.Message;
+        message.Should().Contain(nameof(ThrowFromTheDeepestMethod), "the line must say where it happened");
+        message.Should().Contain(nameof(AnUnexpectedError_NamesTheMethodsItWasThrownFrom), "and who called it");
+        message.Should().NotContain(@"D:\", "no build-machine paths in a user's log");
+    }
+
+    private static void ThrowFromTheDeepestMethod() => throw new NullReferenceException();
+
     [Fact]
     public void AnUnexpectedError_IsLoggedWithItsTypeAndMessage_OnceWhileItRepeats()
     {

@@ -28,6 +28,20 @@ public sealed class BlindManifestTests
             .Should().Contain(permission, $"the app needs it and {path} is what the last build produced");
     }
 
+    /// <summary>
+    /// Nothing in the blind app asks the user to exempt it from battery optimisation (searched: no use of
+    /// ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS), so the permission is dead weight copied from the ordinary app.
+    /// WorkManager's constraints (Wi-Fi, charger) are what lets the jobs run.
+    /// </summary>
+    [Fact]
+    public void TheBuiltManifest_AsksForNothingTheAppNeverUses()
+    {
+        var (manifest, path) = LastBuiltManifest();
+
+        manifest.Root!.Elements("uses-permission").Select(e => (string?)e.Attribute(Android + "name"))
+            .Should().NotContain("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", $"it is declared in {path} but never requested");
+    }
+
     [Fact]
     public void TheBuiltManifest_KeepsTheDataOutOfAutomaticBackups()
     {
