@@ -8,8 +8,8 @@ namespace BeeMemoryBank.BlindMobile.Tests;
 
 /// <summary>
 /// The blind node is its own app now, so the ORDINARY Android app (<c>mobile/BeeMemoryBank.Mobile</c>) must not carry
-/// the blind-mode code any more: its sources stay in the tree (nothing is deleted) but the project leaves them out of
-/// the build. These tests read what the last Release build of the ordinary app produced — the compiled assembly, the
+/// the blind-mode code any more: its files were removed from the project and nothing may bring them back. These tests
+/// read what the last Release build of the ordinary app produced — the compiled assembly, the
 /// trimmed one that goes into the APK, the merged manifest and the APK itself — so CI runs them after it has built the
 /// ordinary APK. They never load or run the app.
 /// </summary>
@@ -119,6 +119,36 @@ public sealed class OrdinaryAppHasNoBlindCodeTests
         var bytes = buffer.ToArray();
         ContainsBytes(bytes, Encoding.Unicode.GetBytes("Blind")).Should().BeFalse($"{apk}: AndroidManifest.xml (UTF-16 strings)");
         ContainsBytes(bytes, Encoding.UTF8.GetBytes("Blind")).Should().BeFalse($"{apk}: AndroidManifest.xml (UTF-8 strings)");
+    }
+
+    /// <summary>
+    /// The blind-mode files are gone from the ordinary app, so its project needs no <c>Remove</c> item for them. A leftover
+    /// one would suggest the files are still in the tree and would silently hide them if they came back — the build
+    /// guards above are what catches that, not an exclusion. Every <c>Remove</c> item must still point at something.
+    /// </summary>
+    [Fact]
+    public void TheOrdinaryAppProject_HasNoRemoveItemThatPointsAtNothing()
+    {
+        var directory = OrdinaryAppDirectory();
+        var project = XDocument.Load(Path.Combine(directory, "BeeMemoryBank.Mobile.csproj"));
+
+        var dead = project.Descendants()
+            .Select(item => (string?)item.Attribute("Remove"))
+            .Where(remove => remove != null)
+            .SelectMany(remove => remove!.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(pattern => !PatternMatchesSomething(directory, pattern))
+            .ToList();
+
+        dead.Should().BeEmpty("the project must not exclude files that are not there any more");
+    }
+
+    private static bool PatternMatchesSomething(string directory, string pattern)
+    {
+        var path = pattern.Replace('\\', Path.DirectorySeparatorChar);
+        var wildcard = path.IndexOf('*');
+        if (wildcard < 0) return File.Exists(Path.Combine(directory, path));
+        var folder = Path.Combine(directory, path[..wildcard].TrimEnd(Path.DirectorySeparatorChar));
+        return Directory.Exists(folder);
     }
 
     private static bool IsBlindModeType(string fullName)
