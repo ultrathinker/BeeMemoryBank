@@ -165,6 +165,7 @@ public class BlindRestoreEndpointsTests : IAsyncLifetime
         (await ClaimAsync(code, Guid.NewGuid(), NewKey())).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
+#if !BLIND_NODE_HOST // needs a full node next to the blind one; the BlindNode.Tests project links this file without it
     [Fact]
     public async Task OnAFullNode_TheRoutesDoNotExist()
     {
@@ -177,4 +178,5 @@ public class BlindRestoreEndpointsTests : IAsyncLifetime
         req.Headers.Add("X-Restore-Code", "AAAA-BBBB-CCCC-DDDD");
         (await full.Server.CreateClient().SendAsync(req)).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
+#endif
 }

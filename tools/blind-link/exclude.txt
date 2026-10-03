@@ -1,0 +1,48 @@
+# Api files that must NEVER end up in the blind node. Anything the closure would need from here is an error to fix in
+# the BlindNode host (a replacement), not a file to link. Paths relative to server/BeeMemoryBank.Api.
+
+# MCP: a blind node has no MCP server and no tools
+McpTools
+Helpers/McpToolRegistry.cs
+Middleware/Mcp*
+# identity of people and agents: a blind node has neither users nor agents (and agent auth would unlock a session)
+Middleware/AgentAuthMiddleware.cs
+Middleware/CallerScopeMiddleware.cs
+Services/HttpContextCallerScopeStore.cs
+Services/HttpActorProvider.cs
+
+# AI chat
+Services/Chat*
+Endpoints/Chat*
+Models/ChatModels.cs
+Helpers/ChatAccessEndpointFilter.cs
+
+# the full node's own flows
+Services/RestoreInitiatorService.cs
+Services/DekRotationService*
+Services/UpdateService.cs
+Services/UpdateModels.cs
+Services/IUpdateArtifactSource.cs
+Services/IUpdateHealthCheck.cs
+Services/ZipExportService.cs
+Services/CompactionService.cs
+Services/OpenRouterClient.cs
+Services/DownloadTokenService.cs
+Services/DownloadCleanupHostedService.cs
+Services/ProtectedUnlockCache.cs
+Services/RemoteAccountSyncScheduler.cs
+Services/ApiStateResetHook.cs
+Services/BlindPhone/BlindPhonePairingService.cs
+
+# the full node's startup files
+Startup/ApiServices.cs
+Startup/ApiPipeline.cs
+Startup/ApiStartupTasks.cs
+
+# the new device's side of a restore - a full node being restored, never the blind node that serves the package
+Services/Recovery/RecoveryApiServices.cs
+Services/Recovery/RecoveryRestoreService.cs
+Services/Recovery/BlindRestoreClient.cs
+Services/Recovery/IBackupFileRestoreSource.cs
+Services/BlindPhone
+Endpoints/RestoreEndpoints.cs

@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Runs the blind-only integration tests of BeeMemoryBank.Integration.Tests, unchanged, against the BlindNode host
+    (BlindNodeFactory hosts `Program`, which here is BeeMemoryBank.BlindNode's). The tests that need a full node next
+    to the blind one stay in Integration.Tests, where both hosts can exist. Source of truth is that project: this
+    one only links the files, so a test is written once.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <DefineConstants>$(DefineConstants);BLIND_NODE_HOST</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\server\BeeMemoryBank.BlindNode\BeeMemoryBank.BlindNode.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BmbWebApplicationFactory.cs" Link="Linked\BmbWebApplicationFactory.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindNodeFactory.cs" Link="Linked\BlindNodeFactory.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\RecoveryTestFactory.cs" Link="Linked\RecoveryTestFactory.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\HeavyOperationCollection.cs" Link="Linked\HeavyOperationCollection.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\FakeEmbeddingGenerator.cs" Link="Linked\FakeEmbeddingGenerator.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindBackupEndpointsTests.cs" Link="Linked\BlindBackupEndpointsTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindInlineApplyTests.cs" Link="Linked\BlindInlineApplyTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPairingStatusTests.cs" Link="Linked\BlindPairingStatusTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPasswordChangeSettingsFailureTests.cs" Link="Linked\BlindPasswordChangeSettingsFailureTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhonePullClientTests.cs" Link="Linked\BlindPhonePullClientTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneReplicaClientTests.cs" Link="Linked\BlindPhoneReplicaClientTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneReplicaVerificationTests.cs" Link="Linked\BlindPhoneReplicaVerificationTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneVerifiedPackageTests.cs" Link="Linked\BlindPhoneVerifiedPackageTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindProtocolBoundaryTests.cs" Link="Linked\BlindProtocolBoundaryTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindReplicaResumeEndpointTests.cs" Link="Linked\BlindReplicaResumeEndpointTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindReplicaSignatureTests.cs" Link="Linked\BlindReplicaSignatureTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindResticDefaultPasswordTests.cs" Link="Linked\BlindResticDefaultPasswordTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindResticPasswordGuardTests.cs" Link="Linked\BlindResticPasswordGuardTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindRestoreEndpointsTests.cs" Link="Linked\BlindRestoreEndpointsTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindServingTests.cs" Link="Linked\BlindServingTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindStartupTests.cs" Link="Linked\BlindStartupTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindWipeAndConsoleTests.cs" Link="Linked\BlindWipeAndConsoleTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindBackupScheduleTests.cs" Link="Linked\BlindBackupScheduleTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindConsoleLockoutTests.cs" Link="Linked\BlindConsoleLockoutTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindCpuModeTests.cs" Link="Linked\BlindCpuModeTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindDockerPackagingTests.cs" Link="Linked\BlindDockerPackagingTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPathsTests.cs" Link="Linked\BlindPathsTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindSeedCutoverFileTests.cs" Link="Linked\BlindSeedCutoverFileTests.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    `bmb` for a blind node's container: only `bmb blind ...` (init, status, pair-code, restore-code, backup, jobs,
+    wipe) - the break-glass twin of the console page. The commands are the full CLI's own files, linked: they talk to
+    the local node over HTTP and need no BeeMemoryBank library, so nothing of the vault, the embedding model or the
+    rekey tool is in this binary.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>bmb</AssemblyName>
+    <RootNamespace>BeeMemoryBank.BlindCli</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\BeeMemoryBank.Cli\Commands\BlindCommand.cs" Link="Cli\BlindCommand.cs" />
+    <Compile Include="..\BeeMemoryBank.Cli\Commands\BlindApi.cs" Link="Cli\BlindApi.cs" />
+    <Compile Include="..\BeeMemoryBank.Cli\Commands\BlindSecrets.cs" Link="Cli\BlindSecrets.cs" />
+  </ItemGroup>
+
+</Project>
