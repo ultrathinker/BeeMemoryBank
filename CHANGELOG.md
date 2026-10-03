@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### Unreleased: agents can delete a file of an article
+#### 1.0.16: agents can delete a file of an article (2026-10-03)
 
 Server only; no sync protocol or database change.
 
