@@ -1,23 +1,27 @@
-"""Upgrade rehearsal on a COPY of a real blind node's data volume.
+"""Upgrade and rollback rehearsal on a COPY of a real blind node's data volume.
 
   python tools/blind-e2e/fixture_rehearsal.py --data <extracted copy of the node's /app/data> --old <old image> --new <new image> --work <scratch dir>
 
 The copy is taken from the live node (a read-only mount of its volume streamed out with tar); this script only ever
-works on a private docker volume made from that copy. Both images are started on it in turn - on a network of
-`none`, so a copy of a REAL node (same identity, same peers, same backup targets) cannot dial anyone, push anywhere
-or write to the real backup repository - and the results are compared:
+works on a private docker volume made from that copy. The images are started on that ONE volume in turn:
+
+    old  ->  new  ->  old again
+
+(the old image as the node runs today, the upgrade, and the ROLLBACK - the old image on a volume the new one has touched),
+on a network of `none`, so a copy of a REAL node (same identity, same peers, same backup targets) cannot dial anyone,
+push anywhere or write to the real backup repository. After each step the node is stopped cleanly and its data directory
+is read back:
 
   * the node starts and becomes healthy, keeps its NodeId and the TLS pin;
   * the migration ledger is unchanged (the migration runner deletes ledger rows it has no SQL for: a build that lost
     a migration would show here);
   * the database passes `PRAGMA integrity_check` and keeps its event and article counts;
-  * no file of the data directory disappears.
+  * no file of the data directory disappears; the identity key, TLS material and settings stay byte-identical.
 
 Objects it creates are named bmb-fixture-<run id>; it removes only those, and only when its own run is over.
 """
 import argparse
 import hashlib
-import json
 import os
 import re
 import sqlite3
@@ -57,19 +61,33 @@ def facts(db_path):
         c.close()
 
 
-def rehearse(image, label, pristine, work):
-    # Names unique to this run: only objects this run created are ever removed, never an earlier run's or anyone else's.
-    suffix = uuid.uuid4().hex[:8]
-    vol, name = 'bmb-fixture-data-' + suffix, 'bmb-fixture-node-' + suffix
-    run(['docker', 'volume', 'create', vol])
-    # populate the private volume from a COPY of the pristine data (the image has cp)
+def manifest(root):
+    """Every file of the data directory (recursively, relative paths) minus what a running node rewrites by itself, and
+    a digest of the files that ARE the node's identity and configuration."""
+    files, digests = [], {}
+    for r, _d, fs in os.walk(root):
+        for f in fs:
+            rel = os.path.relpath(os.path.join(r, f), root).replace(os.sep, '/')
+            if rel.startswith(('blind-tmp/', 'temp/')) or rel.endswith(('-wal', '-shm')):
+                continue
+            files.append(rel)
+            if rel in ('node-identity.key', '.internal-key') or rel.startswith('tls/') or (rel.startswith('blind/') and 'settings' in rel):
+                with open(os.path.join(r, f), 'rb') as fh:
+                    digests[rel] = hashlib.sha256(fh.read()).hexdigest()
+    return sorted(files), digests
+
+
+def populate(vol, pristine, image):
     # A copy extracted on Windows arrives with every file world-accessible; the node refuses a key file like that
     # (and so it should), so the permissions a real volume has are put back on the private copy.
     r = run(['docker', 'run', '--rm', '--entrypoint', 'sh', '-v', vol + ':/d', '-v', pristine + ':/src:ro', image,
              '-c', 'cp -a /src/. /d/ && chmod 600 /d/node-identity.key /d/.internal-key && chmod -R go-rwx /d/tls'])
-    if r.returncode != 0:
-        say('populate failed: ' + r.stderr[:300])
-        return None
+    return r.returncode == 0, r.stderr[:300]
+
+
+def step(image, label, vol, suffix, work):
+    """Run `image` on the volume, stop it cleanly, read the data directory back."""
+    name = 'bmb-fixture-node-%s-%s' % (suffix, label)
     r = run(['docker', 'run', '-d', '--name', name, '--hostname', 'bmb-blind', '--network', 'none',
              '-v', vol + ':/app/data', '-e', 'ASPNETCORE_ENVIRONMENT=Production',
              '-e', 'BMB_PUBLIC_ADDRESS=https://fixture.invalid:5610', image])
@@ -93,24 +111,23 @@ def rehearse(image, label, pristine, work):
     files, digests = manifest(out)
     f = facts(os.path.join(out, 'beememorybank.db'))
     run(['docker', 'rm', '-f', name])
-    run(['docker', 'volume', 'rm', vol])
     return dict(health=health, status=status, files=files, digests=digests, facts=f, log=logs.stdout + logs.stderr)
 
 
-def manifest(root):
-    """Every file of the data directory (recursively, relative paths) minus what a running node rewrites by itself, and
-    a digest of the files that ARE the node's identity and configuration."""
-    files, digests = [], {}
-    for r, _d, fs in os.walk(root):
-        for f in fs:
-            rel = os.path.relpath(os.path.join(r, f), root).replace(os.sep, '/')
-            if rel.startswith(('blind-tmp/', 'temp/')) or rel.endswith(('-wal', '-shm')):
-                continue
-            files.append(rel)
-            if rel in ('node-identity.key', '.internal-key') or rel.startswith('tls/') or (rel.startswith('blind/') and 'settings' in rel):
-                with open(os.path.join(r, f), 'rb') as fh:
-                    digests[rel] = hashlib.sha256(fh.read()).hexdigest()
-    return sorted(files), digests
+def compare(a, b, what):
+    check('%s: migration ledger identical' % what, a['facts']['ledger'] == b['facts']['ledger'],
+          '%d vs %d rows' % (len(a['facts']['ledger']), len(b['facts']['ledger'])))
+    check('%s: same node identity' % what, a['facts']['node'] == b['facts']['node'], '%s vs %s' % (a['facts']['node'], b['facts']['node']))
+    check('%s: same events and articles' % what,
+          (a['facts']['events'], a['facts']['articles']) == (b['facts']['events'], b['facts']['articles']),
+          '%s vs %s' % ((a['facts']['events'], a['facts']['articles']), (b['facts']['events'], b['facts']['articles'])))
+    lost = sorted(set(a['files']) - set(b['files']))
+    check('%s: no file of the data directory lost (recursive)' % what, not lost, 'lost: %s' % lost)
+    check('%s: identity key, TLS material and settings byte-identical' % what,
+          a['digests'] == b['digests'] and len(a['digests']) > 0, '%d vs %d digests' % (len(a['digests']), len(b['digests'])))
+    na = re.search(r'[0-9a-f]{8}-[0-9a-f-]{27}', a['status'])
+    nb = re.search(r'[0-9a-f]{8}-[0-9a-f-]{27}', b['status'])
+    check('%s: status shows the same node id' % what, bool(na and nb and na.group(0) == nb.group(0)))
 
 
 def main():
@@ -122,37 +139,36 @@ def main():
     a = ap.parse_args()
     os.makedirs(a.work, exist_ok=True)
 
-    before = facts(os.path.join(a.data, 'beememorybank.db')) if False else None  # never open the pristine copy
-    res = {}
-    for label, image in (('old', a.old), ('new', a.new)):
-        say('--- %s image: %s' % (label, image))
-        res[label] = rehearse(image, label, a.data, a.work)
-        if res[label] is None:
-            check(label + ' image runs on the copy', False)
-            continue
-        check(label + ' image becomes healthy on a copy of the real data', res[label]['health'] == 'healthy', res[label]['health'])
-        check(label + ' database passes integrity_check', res[label]['facts']['integrity'] == [('ok',)])
-        say(label + ' status: ' + ' | '.join(l.strip() for l in res[label]['status'].splitlines()[:6]))
-        say(label + ' ledger rows: %d (max %s), events %d, articles %d' % (
-            len(res[label]['facts']['ledger']), max(res[label]['facts']['ledger'] or [0]),
-            res[label]['facts']['events'], res[label]['facts']['articles']))
-    if res.get('old') and res.get('new'):
-        o, n = res['old'], res['new']
-        check('migration ledger identical after the new image', o['facts']['ledger'] == n['facts']['ledger'],
-              'old=%s new=%s' % (o['facts']['ledger'], n['facts']['ledger']))
-        check('same node identity', o['facts']['node'] == n['facts']['node'], '%s vs %s' % (o['facts']['node'], n['facts']['node']))
-        check('same events and articles', (o['facts']['events'], o['facts']['articles']) == (n['facts']['events'], n['facts']['articles']),
-              '%s vs %s' % ((o['facts']['events'], o['facts']['articles']), (n['facts']['events'], n['facts']['articles'])))
-        lost = sorted(set(o['files']) - set(n['files']))
-        check('no file of the data directory lost by the new image (recursive)', not lost, 'lost: %s' % lost)
-        check('identity key, TLS material and settings byte-identical after the new image',
-              o['digests'] == n['digests'] and len(o['digests']) > 0, '%d vs %d digests' % (len(o['digests']), len(n['digests'])))
-        say('data files: %d with the old image, %d with the new' % (len(o['files']), len(n['files'])))
-        node_o = re.search(r'[0-9a-f]{8}-[0-9a-f-]{27}', o['status'])
-        node_n = re.search(r'[0-9a-f]{8}-[0-9a-f-]{27}', n['status'])
-        check('status shows the same node id', bool(node_o and node_n and node_o.group(0) == node_n.group(0)))
-        bad = [l for l in n['log'].splitlines() if re.search(r'\b(fail|crit|unhandled|exception)\b', l, re.I)]
-        check('no failure lines in the new image log', not bad, ' | '.join(bad[:3])[:300])
+    # Names unique to this run: only objects this run created are ever removed, never an earlier run's or anyone else's.
+    suffix = uuid.uuid4().hex[:8]
+    vol = 'bmb-fixture-data-' + suffix
+    run(['docker', 'volume', 'create', vol])
+    results = {}
+    try:
+        ok, err = populate(vol, a.data, a.old)
+        check('private volume made from the copy', ok, err)
+        if not ok:
+            return 1
+        for label, image in (('old', a.old), ('new', a.new), ('rollback', a.old)):
+            say('--- %s: %s' % (label, image))
+            res = step(image, label, vol, suffix, a.work)
+            results[label] = res
+            if res is None:
+                check(label + ' image runs on the volume', False)
+                break
+            check(label + ': healthy on a copy of the real data', res['health'] == 'healthy', res['health'])
+            check(label + ': database passes integrity_check', res['facts']['integrity'] == [('ok',)])
+            say(label + ' status: ' + ' | '.join(l.strip() for l in res['status'].splitlines()[:6]))
+            say(label + ' ledger rows: %d (max %s), events %d, articles %d, %d data files' % (
+                len(res['facts']['ledger']), max(res['facts']['ledger'] or [0]), res['facts']['events'], res['facts']['articles'], len(res['files'])))
+            bad = [l for l in res['log'].splitlines() if re.search(r'\b(fail|crit|unhandled|exception)\b', l, re.I)]
+            check(label + ': no failure lines in the log', not bad, ' | '.join(bad[:3])[:300])
+        if results.get('old') and results.get('new'):
+            compare(results['old'], results['new'], 'upgrade (old -> new)')
+        if results.get('new') and results.get('rollback'):
+            compare(results['new'], results['rollback'], 'rollback (new -> old again)')
+    finally:
+        run(['docker', 'volume', 'rm', vol])
     say('RESULT: %s' % ('ALL PASS' if not FAILS else 'FAILED: ' + '; '.join(FAILS)))
     return 1 if FAILS else 0
 

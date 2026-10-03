@@ -75,6 +75,31 @@ def wait_for(fn, what, seconds=120, every=2):
 class Phone:
     def __init__(self, serial):
         self.s = serial
+        self.w, self.h = 720, 1600
+        m = re.search(r'(\d+)x(\d+)', self.adb('shell', 'wm', 'size').stdout)
+        if m:
+            self.w, self.h = int(m.group(1)), int(m.group(2))
+
+    def install(self, apk, seconds=300):
+        """adb install, answering Google Play Protect's 'send this app for a security check?' with 'Don't send' (the test build is
+        ours; nothing is sent to Google)."""
+        proc = subprocess.Popen(['adb', '-s', self.s, 'install', '-r', apk], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding='utf-8', errors='replace')
+        end = time.time() + seconds
+        while proc.poll() is None and time.time() < end:
+            time.sleep(4)
+            if proc.poll() is not None:
+                break
+            node = self.find(lambda n: n.get('text') in ("Don't send", 'Don’t send'))
+            if node is not None:
+                self.tap(node)
+        if proc.poll() is None:
+            proc.kill()
+        return proc.communicate()[0] or ''
+
+    def swipe_up(self):
+        x = self.w // 2
+        self.sh('input swipe %d %d %d %d 300' % (x, int(self.h * 0.8), x, int(self.h * 0.3)))
 
     def adb(self, *args, timeout=60):
         return run(['adb', '-s', self.s, *args], timeout=timeout)
@@ -110,33 +135,57 @@ class Phone:
                 return n
         return None
 
+    def scroll_to(self, pred, tries=8):
+        """The node matching `pred`, scrolling the page up (finger swipe) until it shows; None if it never does."""
+        for _ in range(tries):
+            n = self.find(pred)
+            if n is not None:
+                return n
+            self.swipe_up()
+            time.sleep(1)
+        return self.find(pred)
+
+    def to_top(self):
+        """Scroll the page back to its top (finger swipes downwards) so the status header is on the screen."""
+        for _ in range(6):
+            self.sh('input swipe %d %d %d %d 200' % (self.w // 2, int(self.h * 0.3), self.w // 2, int(self.h * 0.8)))
+
     def tap(self, node):
         x, y = self.center(node)
         self.sh('input tap %d %d' % (x, y))
 
+    def launch(self, package):
+        """Start the app's launcher activity (`monkey` blocks adb's pipes on some phones; `am start` returns at once)."""
+        out = self.sh('cmd package resolve-activity --brief -c android.intent.category.LAUNCHER ' + package).stdout.split()
+        component = next((t for t in reversed(out) if '/' in t), package)
+        self.sh('am start -n ' + component)
+
     def wake(self):
         self.sh('input keyevent 224')
         self.sh('wm dismiss-keyguard')
-        self.sh('input swipe 540 1800 540 600 300')
+        self.swipe_up()
 
     def type_text(self, text):
-        """`input text` drops every u / U on some phones, and needs escaping: type runs of safe characters in one call and
-        the awkward ones by key event."""
+        """Type into the focused field with the soft keyboard open. This phone's `input text` and key events lose every u and U, so
+        runs of other characters go through `input text` and each u / U is a TAP on the Gboard key (position relative to the screen:
+        u at 64.6 % x / 70.9 % y, shift at 7.9 % x / 83.8 % y), which is how a person would type it."""
         run_chars = []
 
         def flush():
             if run_chars:
                 chunk = ''.join(run_chars)
-                self.sh("input text '%s'" % chunk.replace("'", "'\\''").replace(' ', '%s'))
+                self.sh("input text '%s'" % chunk.replace("'", "'\''").replace(' ', '%s'))
                 run_chars.clear()
 
+        def tap_rel(fx, fy):
+            self.sh('input tap %d %d' % (int(self.w * fx), int(self.h * fy)))
+
         for ch in text:
-            if ch == 'u':
+            if ch in 'uU':
                 flush()
-                self.sh('input keyevent 49')
-            elif ch == 'U':
-                flush()
-                self.sh('input keycombination 59 49')
+                if ch == 'U':
+                    tap_rel(0.079, 0.838)
+                tap_rel(0.646, 0.709)
             else:
                 run_chars.append(ch)
                 if len(run_chars) >= 120:
@@ -194,14 +243,19 @@ def main():
 
         # 2. the phone
         run(['adb', 'start-server'])
-        r = phone.adb('install', '-r', a.apk, timeout=300)
-        check('APK installs', 'Success' in r.stdout, (r.stdout + r.stderr).strip()[-200:])
+        r = phone.install(a.apk)
+        check('APK installs', 'Success' in r, r.strip()[-200:])
         phone.adb('reverse', 'tcp:%d' % a.blind_port, 'tcp:%d' % a.blind_port)
         phone.sh('pm clear com.beememorybank.blind')
         phone.adb('logcat', '-c')
         phone.wake()
-        phone.sh('monkey -p com.beememorybank.blind -c android.intent.category.LAUNCHER 1')
-        time.sleep(6)
+        for _ in range(4):
+            phone.launch('com.beememorybank.blind')
+            time.sleep(6)
+            focus = phone.sh('dumpsys window').stdout
+            if re.search(r'mCurrentFocus=.*(com\.beememorybank\.blind|permissioncontroller)', focus):
+                break
+            phone.sh('input keyevent 3')   # home, then try again: another app (or an installer dialog) was in front
         allow = phone.find(lambda n: n.get('text') == 'Allow')
         if allow is not None:
             phone.tap(allow)
@@ -224,21 +278,28 @@ def main():
         call = json.loads(b).get('callCode') if s == 200 else None
         if not call:
             return 1
-        edit = phone.find(lambda n: n.get('class') == 'android.widget.EditText')
+        edit = phone.scroll_to(lambda n: n.get('class') == 'android.widget.EditText')
         check('the phone has a field for the call code', edit is not None)
+        if edit is None:
+            return 1
         phone.tap(edit)
         time.sleep(1)
         phone.type_text(call)
         phone.sh('input keyevent 4')   # hide the keyboard
         time.sleep(1)
-        connect = phone.find(lambda n: n.get('text') == 'Connect')
+        connect = phone.scroll_to(lambda n: n.get('text') == 'Connect')
+        check('the phone has a Connect button', connect is not None)
+        if connect is None:
+            return 1
         phone.tap(connect)
         time.sleep(4)
+        phone.to_top()
         screen = phone.texts()
         check('the phone accepts the call code', any(t.startswith('Paired') for t in screen), ' | '.join(t[:70] for t in screen[:8]))
 
         # 4. the first load: the package of the blind node, verified and applied on the phone
         def first_load_done():
+            phone.to_top()
             t = ' | '.join(phone.texts())
             return 'First load: done' in t
         done = wait_for(first_load_done, 'first load', 360, 10)
