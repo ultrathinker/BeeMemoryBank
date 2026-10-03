@@ -44,6 +44,19 @@ SEEDS_FILE = os.path.join(os.path.dirname(__file__), 'seeds.txt')
 EXCLUDE_FILE = os.path.join(os.path.dirname(__file__), 'exclude.txt')
 WIRING = re.compile(r'(^|/)DependencyInjection\.cs$')
 
+# --phone: the second assembly, libs/BeeMemoryBank.Blind.PhoneClient. It holds the library files the Android blind app
+# needs and the Linux node does not (the phone's replica/pull client, backup seal ...), and references Blind. The
+# root of the closure is a plain net10.0 proxy that compiles the app's own service files (the same files
+# BeeMemoryBank.BlindMobile.Tests links), so no Android build is needed to compute it.
+PHONE = '--phone' in sys.argv
+if PHONE:
+    HOST_PROJ = os.path.join(REPO, 'tools', 'blind-link', 'BlindPhoneProxy', 'BlindPhoneProxy.csproj')
+    HOST_DIR = None
+    HOST_PROPS = None
+    BLIND_DIR = os.path.join(REPO, 'libs', 'BeeMemoryBank.Blind.PhoneClient')
+    BLIND_PROPS = os.path.join(BLIND_DIR, 'linked-lib-files.props')
+    SEEDS_FILE = os.path.join(os.path.dirname(__file__), 'seeds-phone.txt')
+
 TYPE_RE = re.compile(r'\b(?:class|record|struct|interface|enum|delegate)\s+(?:class\s+|struct\s+)?([A-Z][A-Za-z0-9_]*)')
 EXT_RE = re.compile(r'static\s+[\w<>\[\],\s\?\.]+?\s+([A-Z][A-Za-z0-9_]*)\s*(?:<[^>]*>)?\s*\(\s*this\s')
 PART_RE = re.compile(r'partial\s+(?:class|record|struct|interface)\s+([A-Z][A-Za-z0-9_]*)')
@@ -105,10 +118,29 @@ def write(path, text):
     io.open(path, 'w', encoding='utf-8', newline='').write(text)
 
 
+def props_by_path(links):
+    out = {BLIND_PROPS: props_text([f for f in links if f.startswith('libs/')], BLIND_DIR)}
+    if HOST_PROPS:
+        out[HOST_PROPS] = props_text([f for f in links if f.startswith('server/')], HOST_DIR)
+    return out
+
+
+def write_props(links):
+    for path, text in props_by_path(links).items():
+        write(path, text)
+
+
 def main():
     check = '--check' in sys.argv
-    before = {p: io.open(p, encoding='utf-8', newline='').read() for p in (HOST_PROPS, BLIND_PROPS) if os.path.exists(p)}
+    before = {p: io.open(p, encoding='utf-8', newline='').read() for p in (HOST_PROPS, BLIND_PROPS) if p and os.path.exists(p)}
     files = source_files()
+    # In phone mode what the Blind assembly already links is provided by it: never linked a second time.
+    provided = set()
+    if PHONE:
+        blind_props = os.path.join(REPO, 'libs', 'BeeMemoryBank.Blind', 'linked-lib-files.props')
+        for m in re.finditer(r'Include="([^"]+)"', io.open(blind_props, encoding='utf-8').read()):
+            full = os.path.normpath(os.path.join(os.path.dirname(blind_props), m.group(1).replace(chr(92), os.sep)))
+            provided.add(os.path.relpath(full, REPO).replace(os.sep, '/'))
     seeds = [to_repo_path(s) for s in read_list(SEEDS_FILE)]
     exclude = [to_repo_path(s) for s in read_list(EXCLUDE_FILE)]
     text, declared, partial = {}, collections.defaultdict(set), collections.defaultdict(set)
@@ -126,15 +158,14 @@ def main():
         for _cname, bases in IMPL_RE.findall(s):
             for b in re.findall(r'\bI[A-Z][A-Za-z0-9_]*\b', bases):
                 implements[b].add(f)
-    ok = lambda f: not matches(f, exclude) and not WIRING.search(f)
+    ok = lambda f: not matches(f, exclude) and not WIRING.search(f) and f not in provided
     links = {f for f in files if matches(f, seeds) and ok(f)}
     # Sync.csproj removes PendingEmbeddingProcessor from its compile list; never link it
     links.discard('libs/BeeMemoryBank.Sync/PendingEmbeddingProcessor.cs')
     unresolved = collections.Counter()
     errs = []
     for it in range(1, 80):
-        write(HOST_PROPS, props_text([f for f in links if f.startswith('server/')], HOST_DIR))
-        write(BLIND_PROPS, props_text([f for f in links if f.startswith('libs/')], BLIND_DIR))
+        write_props(links)
         p = subprocess.run(['dotnet', 'build', HOST_PROJ, '-c', 'Release', '--no-incremental', '-nologo', '-v', 'q', '-clp:NoSummary'],
                            capture_output=True, text=True, encoding='utf-8', errors='replace')
         errs = sorted(set(l.strip() for l in (p.stdout + p.stderr).splitlines() if ' error ' in l))
@@ -198,8 +229,7 @@ def main():
                         added += 1
         if added == 0:
             break
-    write(HOST_PROPS, props_text([f for f in links if f.startswith('server/')], HOST_DIR))
-    write(BLIND_PROPS, props_text([f for f in links if f.startswith('libs/')], BLIND_DIR))
+    write_props(links)
     n_api = sum(1 for f in links if f.startswith('server/'))
     n_lib = sum(1 for f in links if f.startswith('libs/'))
     print('DONE: %d Api files and %d library files linked; remaining errors: %d' % (n_api, n_lib, len(errs)))
@@ -207,8 +237,7 @@ def main():
         print('  ' + e[:260])
     if unresolved:
         print('unresolved names: %s' % dict(unresolved))
-    after = {HOST_PROPS: props_text([f for f in links if f.startswith('server/')], HOST_DIR),
-             BLIND_PROPS: props_text([f for f in links if f.startswith('libs/')], BLIND_DIR)}
+    after = props_by_path(links)
     if check:
         same = all(before.get(p) == t for p, t in after.items())
         print('props match the checked-in files' if same else 'props DIFFER from the checked-in files')

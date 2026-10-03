@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    What the Android blind app needs from the libraries and a Linux blind node does not: the phone's own client of a blind
+    node (replica download, pull of the blind node's log, the package source of its backups, the backup seal ...). Like
+    BeeMemoryBank.Blind it holds no code of its own - the files are LINKED from Core / Sync / Storage under their original
+    names (tools/blind-link in phone mode computes the set by compiling the app's service files; linked-lib-files.props) - and it
+    references Blind for everything the two share, so no type exists twice.
+  -->
+  <PropertyGroup>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BeeMemoryBank.Blind\BeeMemoryBank.Blind.csproj" />
+  </ItemGroup>
+
+  <Import Project="linked-lib-files.props" Condition="Exists('linked-lib-files.props')" />
+
+</Project>

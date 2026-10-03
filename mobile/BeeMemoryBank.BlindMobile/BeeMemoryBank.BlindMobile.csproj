@@ -47,10 +47,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
-    <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
-    <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
-    <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
+    <!-- Only the blind assemblies: the shared blind core and the phone's client. The original Core/Storage/Sync/Crypto
+         libraries must NOT be referenced next to them (same types twice), and the trimmed APK then contains only what a
+         blind node uses. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind\BeeMemoryBank.Blind.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
   </ItemGroup>
 
 </Project>

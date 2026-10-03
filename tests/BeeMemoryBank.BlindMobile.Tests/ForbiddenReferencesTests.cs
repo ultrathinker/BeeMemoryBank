@@ -7,7 +7,6 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Core.Services.BlindPhone;
-using BeeMemoryBank.Storage.Search;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -95,6 +94,29 @@ public class ForbiddenReferencesTests
         violations.Should().BeEmpty(
             "BeeMemoryBank.BlindMobile resolved graph must not contain any forbidden references: " +
             string.Join("; ", violations));
+    }
+
+    /// <summary>
+    /// The structural claim of BMB-91 for the phone: of the application's own libraries the blind app carries exactly the
+    /// shared blind core and the phone's client - not Core, Storage, Sync, Crypto or Search. (Every type of those libraries
+    /// the app uses is in BeeMemoryBank.Blind under its original name; the rest of them is not in the app at all.)
+    /// </summary>
+    [Fact]
+    public void BlindMobile_Output_HoldsOnlyTheBlindAssembliesOfTheApplicationLibraries()
+    {
+        var dir = Path.GetDirectoryName(FindAppDll())!;
+        var own = Directory.GetFiles(dir, "BeeMemoryBank.*.dll").Select(Path.GetFileNameWithoutExtension).ToList();
+        own.Should().BeEquivalentTo(new[] { "BeeMemoryBank.Blind", "BeeMemoryBank.Blind.PhoneClient", "BeeMemoryBank.BlindMobile" },
+            "the app may carry its own assembly and the two blind assemblies, and no other BeeMemoryBank library");
+    }
+
+    [Fact]
+    public void BlindMobile_Csproj_ReferencesOnlyTheTwoBlindAssemblies()
+    {
+        var csproj = File.ReadAllText(Path.Combine(FindRepoRoot(), "mobile", "BeeMemoryBank.BlindMobile", "BeeMemoryBank.BlindMobile.csproj"));
+        var references = System.Text.RegularExpressions.Regex.Matches(csproj, "<ProjectReference Include=\"([^\"]+)\"")
+            .Select(m => Path.GetFileNameWithoutExtension(m.Groups[1].Value.Replace('\\', '/'))).ToList();
+        references.Should().BeEquivalentTo(new[] { "BeeMemoryBank.Blind", "BeeMemoryBank.Blind.PhoneClient" });
     }
 
     [Fact]
@@ -197,49 +219,56 @@ public class ForbiddenReferencesTests
         services.AddSingleton<IBlindPhoneKeys>(dummyKeys);
         services.AddSingleton<IDeviceStateProvider>(new DummyDeviceState());
 
-        var forbiddenTypes = new[]
+        // Full names, not typeof(): most of these types are no longer IN the blind assemblies at all (the libraries are
+        // linked into BeeMemoryBank.Blind only as far as a blind node uses them), and a type that does not exist can
+        // neither be registered nor resolved. Those that do exist (the session, for instance, is a dependency of the
+        // sync code) must still never be registered or resolve.
+        var forbiddenNames = new[]
         {
-            typeof(SessionService),
-            typeof(ArticleService),
-            typeof(ArticleDiffService),
-            typeof(KeyManagementService),
-            typeof(TreeService),
-            typeof(SearchService),
-            typeof(FolderService),
-            typeof(CopyService),
-            typeof(CommentService),
-            typeof(MediaService),
-            typeof(MediaBlobBackfillService),
-            typeof(RestoreService),
-            typeof(LegacyPasswordSlotMigrationService),
+            "BeeMemoryBank.Core.Services.SessionService",
+            "BeeMemoryBank.Core.Services.ArticleService",
+            "BeeMemoryBank.Core.Services.ArticleDiffService",
+            "BeeMemoryBank.Core.Services.KeyManagementService",
+            "BeeMemoryBank.Core.Services.TreeService",
+            "BeeMemoryBank.Core.Services.SearchService",
+            "BeeMemoryBank.Core.Services.FolderService",
+            "BeeMemoryBank.Core.Services.CopyService",
+            "BeeMemoryBank.Core.Services.CommentService",
+            "BeeMemoryBank.Core.Services.MediaService",
+            "BeeMemoryBank.Core.Services.MediaBlobBackfillService",
+            "BeeMemoryBank.Core.Services.RestoreService",
+            "BeeMemoryBank.Core.Services.LegacyPasswordSlotMigrationService",
             // Vault Repositories & Caches
-            typeof(IKeySlotRepository),
-            typeof(KeySlotRepository),
-            typeof(IRetiredMasterDekStore),
-            typeof(RetiredMasterDekStore),
-            typeof(IArticleChunkEmbeddingRepository),
-            typeof(ArticleChunkEmbeddingRepository),
-            typeof(SegmentManifestRepository),
-            typeof(SegmentTombstoneRepository),
-            typeof(EncryptedSegmentStore),
-            typeof(EmbeddingVectorCache),
-            typeof(ChunkEmbeddingVectorCache),
-            typeof(SearchQueryCache),
-            typeof(SearchMetrics),
-            typeof(IProjectionMatrixRepository),
-            typeof(ProjectionMatrixRepository),
-            typeof(ISyncPushPositionRepository),
-            typeof(SyncPushPositionRepository)
+            "BeeMemoryBank.Core.Interfaces.IKeySlotRepository",
+            "BeeMemoryBank.Storage.Sqlite.KeySlotRepository",
+            "BeeMemoryBank.Core.Interfaces.IRetiredMasterDekStore",
+            "BeeMemoryBank.Storage.Sqlite.RetiredMasterDekStore",
+            "BeeMemoryBank.Core.Interfaces.IArticleChunkEmbeddingRepository",
+            "BeeMemoryBank.Storage.Sqlite.ArticleChunkEmbeddingRepository",
+            "BeeMemoryBank.Storage.Search.SegmentManifestRepository",
+            "BeeMemoryBank.Storage.Search.SegmentTombstoneRepository",
+            "BeeMemoryBank.Storage.Search.EncryptedSegmentStore",
+            "BeeMemoryBank.Storage.Sqlite.EmbeddingVectorCache",
+            "BeeMemoryBank.Storage.Sqlite.ChunkEmbeddingVectorCache",
+            "BeeMemoryBank.Core.Services.SearchQueryCache",
+            "BeeMemoryBank.Core.Services.SearchMetrics",
+            "BeeMemoryBank.Core.Interfaces.IProjectionMatrixRepository",
+            "BeeMemoryBank.Storage.Sqlite.ProjectionMatrixRepository",
+            "BeeMemoryBank.Core.Interfaces.ISyncPushPositionRepository",
+            "BeeMemoryBank.Storage.Sqlite.SyncPushPositionRepository"
         };
+        var blindAssemblies = new[] { typeof(DbConnectionFactory).Assembly, typeof(BeeMemoryBank.Sync.Blind.BlindPhoneReplicaClient).Assembly };
+        Type? Find(string fullName) => blindAssemblies.Select(a => a.GetType(fullName, throwOnError: false)).FirstOrDefault(t => t is not null);
+        var forbiddenTypes = forbiddenNames.Select(Find).Where(t => t is not null).Select(t => t!).ToArray();
 
         // 1. None of the forbidden types should appear as ServiceType or ImplementationType
         foreach (var desc in services)
         {
-            forbiddenTypes.Should().NotContain(desc.ServiceType,
+            forbiddenNames.Should().NotContain(desc.ServiceType.FullName!,
                 $"ServiceType '{desc.ServiceType.FullName}' must not be registered in the blind app DI container");
             if (desc.ImplementationType is not null)
             {
-                forbiddenTypes.Should().NotContain(desc.ImplementationType,
+                forbiddenNames.Should().NotContain(desc.ImplementationType.FullName!,
                     $"ImplementationType '{desc.ImplementationType.FullName}' must not be registered in the blind app DI container");
             }
         }
@@ -344,9 +373,19 @@ public class ForbiddenReferencesTests
             string.Join("\n", violations));
     }
 
+    /// <summary>
+    /// The blind app reaches the libraries only through BeeMemoryBank.Blind (shared with the Linux node) and
+    /// BeeMemoryBank.Blind.PhoneClient (the phone's own client). Those assemblies hold the original Core / Storage / Crypto /
+    /// Sync sources under their original namespaces, so the allow-list is keyed by NAMESPACE: the same rule whichever of the
+    /// two assemblies holds the type. A reference into any other BeeMemoryBank assembly is refused.
+    /// </summary>
     private static bool IsAllowedTypeReference(string assemblyName, string typeNs, string typeName)
     {
-        if (assemblyName.Equals("BeeMemoryBank.Core", StringComparison.OrdinalIgnoreCase))
+        if (!assemblyName.Equals("BeeMemoryBank.Blind", StringComparison.OrdinalIgnoreCase) &&
+            !assemblyName.Equals("BeeMemoryBank.Blind.PhoneClient", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (typeNs.StartsWith("BeeMemoryBank.Core", StringComparison.Ordinal))
         {
             // All types in BlindPhone seam are allowed (including nested types like BlindPhoneLog.Entry)
             if (typeNs.Equals("BeeMemoryBank.Core.Services.BlindPhone", StringComparison.Ordinal) ||
@@ -373,7 +412,7 @@ public class ForbiddenReferencesTests
             return false;
         }
 
-        if (assemblyName.Equals("BeeMemoryBank.Storage", StringComparison.OrdinalIgnoreCase))
+        if (typeNs.StartsWith("BeeMemoryBank.Storage", StringComparison.Ordinal))
         {
             // SQLite connection, migrations, blind repositories, dapper config
             if (typeNs.Equals("BeeMemoryBank.Storage.Sqlite", StringComparison.Ordinal))
@@ -389,7 +428,7 @@ public class ForbiddenReferencesTests
             return false;
         }
 
-        if (assemblyName.Equals("BeeMemoryBank.Crypto", StringComparison.OrdinalIgnoreCase))
+        if (typeNs.StartsWith("BeeMemoryBank.Crypto", StringComparison.Ordinal))
         {
             // Ed25519 signer, node identity crypto, SPKI pinning, and blind pairing secret
             if (typeNs.Equals("BeeMemoryBank.Crypto", StringComparison.Ordinal))
@@ -400,7 +439,7 @@ public class ForbiddenReferencesTests
             return false;
         }
 
-        if (assemblyName.Equals("BeeMemoryBank.Sync", StringComparison.OrdinalIgnoreCase))
+        if (typeNs.StartsWith("BeeMemoryBank.Sync", StringComparison.Ordinal))
         {
             if (typeNs.Equals("BeeMemoryBank.Sync.Blind", StringComparison.Ordinal))
                 // Stage 4 adds the four of the backup: its package source and fetcher contract, the package it fetches, the recovery-set source.

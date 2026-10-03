@@ -17,6 +17,8 @@
          same types and must not be referenced next to it. A test that needs a type the blind assembly does not
          contain does not belong in this project. -->
     <ProjectReference Include="..\..\server\BeeMemoryBank.BlindNode\BeeMemoryBank.BlindNode.csproj" />
+    <!-- The phone's client of a blind node: BlindPhone*ClientTests drive it against this host. It references Blind, so no type is twice. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,9 +30,6 @@
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
 
-  <!-- BlindPhoneReplicaClientTests, BlindPhoneReplicaVerificationTests and BlindPhoneVerifiedPackageTests drive the PHONE's client
-       (BlindPhoneReplicaClient) against a blind node. They move in here when the Blind.PhoneClient assembly exists; until then
-       they run in BeeMemoryBank.Integration.Tests. -->
   <ItemGroup>
     <Compile Include="*.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BmbWebApplicationFactory.cs" Link="Linked\BmbWebApplicationFactory.cs" />
@@ -38,6 +37,9 @@
     <Compile Include="..\BeeMemoryBank.Integration.Tests\RecoveryTestFactory.cs" Link="Linked\RecoveryTestFactory.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\HeavyOperationCollection.cs" Link="Linked\HeavyOperationCollection.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindRouteGateTests.cs" Link="Linked\BlindRouteGateTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneReplicaClientTests.cs" Link="Linked\BlindPhoneReplicaClientTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneReplicaVerificationTests.cs" Link="Linked\BlindPhoneReplicaVerificationTests.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneVerifiedPackageTests.cs" Link="Linked\BlindPhoneVerifiedPackageTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindRouteMatrixTests.cs" Link="Linked\BlindRouteMatrixTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\FakeEmbeddingGenerator.cs" Link="Linked\FakeEmbeddingGenerator.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindBackupEndpointsTests.cs" Link="Linked\BlindBackupEndpointsTests.cs" />

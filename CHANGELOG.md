@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 1.0.17: blind nodes are programs of their own (2026-10-03)
+
+No sync protocol (still 3) or database change. A blind node of 1.0.12-1.0.16 is replaced by the new image on its own volume:
+identity, TLS pin, data, backup settings and paired peers stay as they were.
+
+- **The Linux/Docker blind node is no longer the full server in a "blind" role.** It is `BeeMemoryBank.BlindNode`, a program
+  with its own startup, container registrations and 47 routes (pinned in `docs/blind-node/ROUTES.golden.txt`). The MCP server,
+  agent login, caller scopes, AI chat, the embedding model, image and Markdown libraries, update and key-rotation machinery and
+  the "restore into this machine" side of recovery are not part of it, so no request and no startup step can reach them. The
+  image is 402 MB instead of 1.35 GB (the programs 12 MB instead of ~870 MB, because they no longer carry every platform's
+  native files); `bmb` inside it has only `bmb blind ...`.
+- **A shared core of all blind nodes: `BeeMemoryBank.Blind`.** The library code a blind node uses (250 of 347 files of Core,
+  Storage, Sync, Crypto and Search; 64 % of their lines) is linked into one assembly under its original names and namespaces,
+  so it cannot drift from the full application's. The Linux node and the Android blind app both use it; the Android app adds
+  only `BeeMemoryBank.Blind.PhoneClient` (13 files: the phone's own client of a blind node) and its APK holds no Core, Storage,
+  Sync, Crypto or Search assembly. `tools/blind-link` computes what is linked by compiling and tests hold it to an exclusion list.
+- **Every database migration is embedded, byte for byte, under its original name** (the migration runner deletes ledger rows it
+  cannot match, so a smaller set would be unsafe); tests pin the names and the bytes.
+- **Fixed: an arm64 image used the amd64 programs and the amd64 restic.** A default on `ARG TARGETARCH` overrode the platform
+  Docker passes in. Found by running the arm64 image; a test now refuses the default.
+- Checked end to end: the image against a real full node (pair, seed, sync, restore package, restart); the old image swapped for
+  the new one on the same volumes; both images on a copy of a live node's data volume (same identity, ledger, counts and key
+  files); the Android app on a real phone. Notes for contributors: `docs/blind-node/`.
+
 #### 1.0.16: agents can delete a file of an article (2026-10-03)
 
 Server only; no sync protocol or database change.
