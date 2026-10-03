@@ -82,6 +82,21 @@ public class BlindDockerPackagingTests
     }
 
     /// <summary>
+    /// TARGETARCH must come from the build. A default on the ARG ("ARG TARGETARCH=amd64") WINS over the platform BuildKit
+    /// passes in, so an arm64 build published x64 programs and installed the amd64 restic - an image that cannot start on the
+    /// Raspberry Pi-class box it is built for (found by running the arm64 image; it only worked under emulation by accident).
+    /// </summary>
+    [Fact]
+    public void TargetArch_ComesFromTheBuild_NotFromADefault()
+    {
+        var dockerfile = RepoFile("docker", "blind", "Dockerfile");
+        Regex.Matches(dockerfile, @"^ARG TARGETARCH\s*=", RegexOptions.Multiline).Should().BeEmpty(
+            "a default value overrides the platform BuildKit passes in");
+        Regex.Matches(dockerfile, @"^ARG TARGETARCH\s*$", RegexOptions.Multiline).Count.Should().BeGreaterThanOrEqualTo(2,
+            "both the build stage (runtime identifier) and the runtime stage (restic) select by it");
+    }
+
+    /// <summary>
     /// The healthcheck has to survive the switch to TLS — a container whose health probe can no
     /// longer talk to its own Api is reported unhealthy while the node is fine, and Docker restarts it.
     /// </summary>

@@ -7,7 +7,7 @@
 # (the .NET SDK cross-publishes), so an arm64 image is not compiled under emulation.
 
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 WORKDIR /src
 
 COPY BeeMemoryBank.slnx .
@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # release's SHA256SUMS — a build that cannot prove the binary is the released one must fail,
 # not continue with whatever the CDN handed over. Bump version AND both checksums together.
 # TARGETARCH comes from BuildKit (amd64 on a PC/NAS, arm64 on a Raspberry Pi-class box).
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 ARG RESTIC_VERSION=0.17.3
 ARG RESTIC_SHA256_AMD64=5097faeda6aa13167aae6e36efdba636637f8741fed89bbf015678334632d4d3
 ARG RESTIC_SHA256_ARM64=db27b803534d301cef30577468cf61cb2e242165b8cd6d8cd6efd7001be2e557
