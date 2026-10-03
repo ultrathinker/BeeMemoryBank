@@ -85,12 +85,19 @@ def populate(vol, pristine, image):
     return r.returncode == 0, r.stderr[:300]
 
 
+# What /opt/bmb-blind/compose.yaml of the Aeza node sets besides the image (--aeza-compose): the node's environment and its limits.
+AEZA_COMPOSE = ['--memory', '700m', '--memory-swap', '700m', '--cpus', '0.6',
+                '-e', 'BMB_ROLE=blind', '-e', 'BMB_DATA_PATH=/app/data', '-e', 'BMB_BLIND_HTTPS_PORT=5610', '-e', 'BMB_BLIND_LOCAL_PORT=5612',
+                '-e', 'BMB_PUBLIC_ADDRESS=https://178.20.208.34:5610', '-e', 'BMB_API_URL=http://127.0.0.1:5612']
+EXTRA = []
+
+
 def step(image, label, vol, suffix, work):
     """Run `image` on the volume, stop it cleanly, read the data directory back."""
     name = 'bmb-fixture-node-%s-%s' % (suffix, label)
     r = run(['docker', 'run', '-d', '--name', name, '--hostname', 'bmb-blind', '--network', 'none',
              '-v', vol + ':/app/data', '-e', 'ASPNETCORE_ENVIRONMENT=Production',
-             '-e', 'BMB_PUBLIC_ADDRESS=https://fixture.invalid:5610', image])
+             *(EXTRA or ['-e', 'BMB_PUBLIC_ADDRESS=https://fixture.invalid:5610']), image])
     if r.returncode != 0:
         say('start failed: ' + r.stderr[:300])
         return None
@@ -136,7 +143,10 @@ def main():
     ap.add_argument('--old', required=True)
     ap.add_argument('--new', required=True)
     ap.add_argument('--work', required=True)
+    ap.add_argument('--aeza-compose', action='store_true', help='run with the environment and the memory/cpu limits of the Aeza compose file')
     a = ap.parse_args()
+    if a.aeza_compose:
+        EXTRA.extend(AEZA_COMPOSE)
     os.makedirs(a.work, exist_ok=True)
 
     # Names unique to this run: only objects this run created are ever removed, never an earlier run's or anyone else's.
