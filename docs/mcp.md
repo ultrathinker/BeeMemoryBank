@@ -43,9 +43,10 @@ Search by title, folder names, and optionally full article body content. Does no
 - `bee_set_max_tokens` — set your own default token limit for MCP responses (min 1,000, default 10,000, max 100,000). A value outside that range is rejected with an error, never silently clamped. The limit is per-caller (keyed off the agent's bearer token), so raising it never affects other agents.
 - `bee_continue` — read the continuation of a truncated response (`guid`, `offset`). Pass `ignoreLimit: true` to fetch all remaining content in one call instead of the next chunk, bypassing your own limit for that call only (still capped at the same hard 100,000-token ceiling). Responses are stored for 24 hours.
 
-### bee_get_upload_script, bee_save_media (BeeUploadTools.cs)
+### bee_get_upload_script, bee_save_media, bee_delete_file (BeeUploadTools.cs)
 - `bee_get_upload_script` — returns a self-contained Python script for uploading files from disk to BeeMemoryBank **without** passing content through the LLM context. Supports `create`, `update`, and `upload-media` subcommands. Uses only stdlib (no pip install required). `--client-name` is required: the name of the agent's main MCP client, reported as `clientInfo.name` (a gateway creates a new client for every new name, so never invent one). `--bearer` is optional (through a gateway the gateway supplies the credentials); `--tool-prefix` puts a gateway's server prefix in front of the tool names (e.g. `bee-memory-bank__`).
 - `bee_save_media` — save a media file directly from a base64 payload (`fileName`, `contentBase64`, `articleId?`), for cases where the agent already has the content in-context (small files) rather than on disk. Capped at 20MB.
+- `bee_delete_file` — delete a file of an article, an inline image or a file attachment (`id: Guid`, or `articleId: Guid` + `fileName: string`, never both forms; an error lists the ids when several files share the name; an unlinked upload is deleted by `id`). Two steps like `bee_delete_article`: without `confirm: true` it only describes the file and returns a warning. A soft delete, the same as the delete button of the web UI, and it reaches the other devices by sync. Refuses the files of a password-protected article and a folder that is read-only for the caller. When the article text still embeds the image (`![](/api/media/{id})`) the answer says the reference becomes a broken image.
 
 ### Tag tools (BeeConceptTools.cs)
 - `bee_get_related` — find articles related to a given article via shared tags. Returns: `[{id, title, treePath, strength, sharedTags}]`
@@ -84,7 +85,7 @@ server/BeeMemoryBank.Api/McpTools/
 │                          bee_delete_folder, bee_append_to_article, bee_prepend_to_article,
 │                          bee_move_folder, bee_rename_folder, bee_copy_to, bee_replace_in_article
 ├── BeeSessionTools.cs   — bee_set_max_tokens, bee_continue
-├── BeeUploadTools.cs    — bee_get_upload_script, bee_save_media
+├── BeeUploadTools.cs    — bee_get_upload_script, bee_save_media, bee_delete_file
 ├── BeeAuditTools.cs     — bee_get_log
 ├── BeeConceptTools.cs   — bee_get_related, bee_search_by_tag, bee_list_tags,
 │                          bee_add_tags, bee_remove_tag, bee_rename_tag,
@@ -102,7 +103,7 @@ server/BeeMemoryBank.Api/McpTools/
 | **Write** (10) | `bee_save_article`, `bee_update_article`, `bee_delete_article`, `bee_append_to_article`, `bee_prepend_to_article`, `bee_move_folder`, `bee_delete_folder`, `bee_copy_to`, `bee_rename_folder`, `bee_replace_in_article` |
 | **Tags** (8) | `bee_get_related`, `bee_search_by_tag`, `bee_list_tags`, `bee_add_tags`, `bee_remove_tag`, `bee_rename_tag`, `bee_merge_tags`, `bee_delete_tag` |
 | **Session** (2) | `bee_set_max_tokens`, `bee_continue` |
-| **Upload** (2) | `bee_get_upload_script`, `bee_save_media` |
+| **Upload** (3) | `bee_get_upload_script`, `bee_save_media`, `bee_delete_file` |
 | **Audit** (1) | `bee_get_log` |
 
 ## Configuration Examples

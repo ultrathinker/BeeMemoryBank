@@ -894,6 +894,168 @@ public class McpToolsTests : IAsyncLifetime
         result.Should().Contain("password-protected");
     }
 
+    // ───── bee_delete_file ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task BeeDeleteFile_DryRun_DescribesTheFileAndDeletesNothing()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+
+        var result = await _uploadTools.DeleteFile(id: pdf.Id);
+
+        result.Should().StartWith("Warning:").And.Contain("report.pdf").And.Contain("application/pdf")
+            .And.Contain("File Host").And.Contain("confirm=true");
+        (await _mediaService.GetByArticleIdAsync(articleId)).Should().ContainSingle(m => m.Id == pdf.Id);
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_ThroughTheMcpParameterBinding_DeletesByIdAndByName()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+        var second = await _mediaService.CreateAsync("second.pdf", "application/pdf", PdfBytes, articleId, isAttachment: true);
+
+        var byId = await McpToolInvoker.CallTextAsync(_uploadTools, "bee_delete_file", ("id", pdf.Id), ("confirm", true));
+        var byName = await McpToolInvoker.CallTextAsync(_uploadTools, "bee_delete_file",
+            ("articleId", articleId), ("fileName", "second.pdf"), ("confirm", true));
+
+        byId.Should().StartWith("Deleted").And.Contain("report.pdf");
+        byName.Should().StartWith("Deleted").And.Contain("second.pdf");
+        (await _mediaService.GetByArticleIdAsync(articleId)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_Confirmed_DeletesTheAttachment_AndNoToolServesItAnyMore()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+
+        var result = await _uploadTools.DeleteFile(id: pdf.Id, confirm: true);
+
+        result.Should().StartWith("Deleted").And.Contain("report.pdf");
+        (await _mediaService.GetByArticleIdAsync(articleId)).Should().BeEmpty();
+        (await _mediaService.GetByIdAsync(pdf.Id)).Should().BeNull();
+        ErrorOf(await GetFile(("id", pdf.Id))).Should().Contain("not found");
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_ByArticleIdAndFileName_DeletesOnlyThatFile()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+        var keep = await _mediaService.CreateAsync("keep.pdf", "application/pdf", PdfBytes, articleId, isAttachment: true);
+
+        var result = await _uploadTools.DeleteFile(articleId: articleId, fileName: "report.pdf", confirm: true);
+
+        result.Should().StartWith("Deleted");
+        (await _mediaService.GetByArticleIdAsync(articleId)).Select(m => m.Id).Should().Equal(keep.Id);
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_ByArticleIdAndFileName_NoSuchName_IsAnError()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+
+        var result = await _uploadTools.DeleteFile(articleId: articleId, fileName: "nope.pdf", confirm: true);
+
+        result.Should().StartWith("Error:").And.Contain("nope.pdf");
+        (await _mediaService.GetByArticleIdAsync(articleId)).Should().ContainSingle(m => m.Id == pdf.Id);
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_ByArticleIdAndFileName_TwoFilesWithThatName_ErrorListsTheIds_AndDeletesNothing()
+    {
+        var (articleId, first) = await ArticleWithPdfAsync();
+        var second = await _mediaService.CreateAsync("report.pdf", "application/pdf", PdfBytes, articleId, isAttachment: true);
+
+        var result = await _uploadTools.DeleteFile(articleId: articleId, fileName: "report.pdf", confirm: true);
+
+        result.Should().StartWith("Error:").And.Contain(first.Id.ToString()).And.Contain(second.Id.ToString());
+        (await _mediaService.GetByArticleIdAsync(articleId)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_WrongSelectors_AreErrorsNamingTheAllowedForms()
+    {
+        var (articleId, pdf) = await ArticleWithPdfAsync();
+
+        foreach (var result in new[]
+        {
+            await _uploadTools.DeleteFile(confirm: true),
+            await _uploadTools.DeleteFile(id: pdf.Id, articleId: articleId, fileName: "report.pdf", confirm: true),
+            await _uploadTools.DeleteFile(id: pdf.Id, articleId: articleId, confirm: true),
+            await _uploadTools.DeleteFile(id: pdf.Id, fileName: "report.pdf", confirm: true),
+            await _uploadTools.DeleteFile(articleId: articleId, confirm: true),
+        })
+            result.Should().StartWith("Error:").And.Contain("'id' alone").And.Contain("'articleId' together with 'fileName'");
+
+        (await _mediaService.GetByArticleIdAsync(articleId)).Should().ContainSingle(m => m.Id == pdf.Id);
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_UnknownMedia_AndASecondDelete_AreNotFound()
+    {
+        var (_, pdf) = await ArticleWithPdfAsync();
+        (await _uploadTools.DeleteFile(id: pdf.Id, confirm: true)).Should().StartWith("Deleted");
+
+        var again = await _uploadTools.DeleteFile(id: pdf.Id, confirm: true);
+        var unknown = await _uploadTools.DeleteFile(id: Guid.NewGuid(), confirm: true);
+
+        again.Should().StartWith("Error:").And.Contain("not found");
+        unknown.Should().StartWith("Error:").And.Contain("not found");
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_Image_NotEmbeddedInTheText_IsDeletedWithoutAWarning()
+    {
+        var article = await _articleService.CreateAsync("Image Host", "/Files", [], "no picture here");
+        var image = await _mediaService.CreateAsync("pic.png", "image/png", Convert.FromBase64String(MinimalPngBase64), article.Id);
+
+        var result = await _uploadTools.DeleteFile(id: image.Id, confirm: true);
+
+        result.Should().StartWith("Deleted").And.NotContain("broken image");
+        (await _mediaService.GetByArticleIdAsync(article.Id)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_Image_StillEmbeddedInTheText_SaysTheReferenceBecomesABrokenImage()
+    {
+        var article = await _articleService.CreateAsync("Embed Host", "/Files", [], "body");
+        var image = await _mediaService.CreateAsync("pic.png", "image/png", Convert.FromBase64String(MinimalPngBase64), article.Id);
+        await _articleService.UpdateAsync(article.Id, plaintext: $"before ![](/api/media/{image.Id}) after");
+
+        var dryRun = await _uploadTools.DeleteFile(id: image.Id);
+        var deleted = await _uploadTools.DeleteFile(id: image.Id, confirm: true);
+
+        dryRun.Should().StartWith("Warning:").And.Contain("broken image").And.Contain(image.Id.ToString());
+        deleted.Should().StartWith("Deleted").And.Contain("broken image").And.Contain("bee_replace_in_article");
+        (await _mediaService.GetByIdAsync(image.Id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_UnlinkedUpload_IsDeletedById()
+    {
+        var loose = await _mediaService.CreateAsync("loose.pdf", "application/pdf", PdfBytes, null, isAttachment: true);
+
+        var result = await _uploadTools.DeleteFile(id: loose.Id, confirm: true);
+
+        result.Should().StartWith("Deleted").And.Contain("unlinked upload");
+        (await _mediaService.GetByIdAsync(loose.Id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BeeDeleteFile_FileOfAProtectedArticle_IsRefused_ByIdAndByName_AndStays()
+    {
+        var (articleId, pdf) = await ProtectedArticleWithPdfAsync();
+
+        foreach (var result in new[]
+        {
+            await _uploadTools.DeleteFile(id: pdf.Id, confirm: true),
+            await _uploadTools.DeleteFile(articleId: articleId, fileName: "report.pdf", confirm: true),
+            await _uploadTools.DeleteFile(id: pdf.Id),
+        })
+            result.Should().StartWith("Error:").And.Contain("password-protected").And.Contain("web or mobile UI");
+
+        (await _mediaService.GetByIdAsync(pdf.Id)).Should().NotBeNull();
+    }
+
     // ───── bee_get_file ──────────────────────────────────────────────────────
 
     private const long TenMb = 10 * 1024 * 1024;

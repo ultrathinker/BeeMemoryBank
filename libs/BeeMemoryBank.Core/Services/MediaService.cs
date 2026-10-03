@@ -337,6 +337,9 @@ public class MediaService(
 
     public Task<List<Media>> GetByArticleIdAsync(Guid articleId) => mediaRepo.GetByArticleIdAsync(articleId);
 
+    /// <summary>One live media row by id, under the caller's folder scope; null when it does not exist, is deleted or is not visible.</summary>
+    public Task<Media?> GetByIdAsync(Guid id) => mediaRepo.GetByIdAsync(id);
+
     private static bool IsAnimatedGif(byte[] data, string contentType)
     {
         if (contentType != "image/gif" || data.Length < 13) return false;

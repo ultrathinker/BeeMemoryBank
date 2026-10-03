@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Unreleased: agents can delete a file of an article
+
+Server only; no sync protocol or database change.
+
+- **New MCP tool `bee_delete_file`.** An agent could read (`bee_get_file`, `bee_get_image`) and add (`bee_save_media`) the
+  files of an article but not remove them. The new tool deletes an inline image or a file attachment, by the media `id` or by
+  `articleId` + `fileName`, and an unlinked upload by `id`. Two steps like `bee_delete_article`: without `confirm=true` it only
+  describes the file and warns. It is the web UI's soft delete, so the deletion reaches the other devices by sync. It refuses the
+  files of a password-protected article and a folder that is read-only for the agent, and it tells the agent when the article
+  text still embeds the deleted image, so the reference can be removed.
+
 #### 1.0.15: a separate Android blind-node app and the server part for it (2026-10-02)
 
 No sync protocol (still 3) or database change; devices on 1.0.12-1.0.14 keep syncing.

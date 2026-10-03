@@ -135,6 +135,122 @@ public class BeeUploadTools(
         }
     }
 
+    // Media is wrapped by the master key, not by an article's passphrase, so a file linked to a protected
+    // article can only be handled by a person in the web or mobile UI (same answer as bee_get_file).
+    private const string ProtectedArticleFileError =
+        "Error: this file belongs to a password-protected article and can only be handled by a person in the web or mobile UI.";
+
+    [McpServerTool(Name = "bee_delete_file")]
+    [Description(
+        "Delete a file of an article: an inline image or a file attachment. Two-step for safety: the first call " +
+        "describes the file and returns a warning, pass confirm=true to execute.\n" +
+        "Find the files of an article in the 'files' list of bee_get_article and pass the entry's mediaId as 'id'. " +
+        "Or pass 'articleId' + 'fileName' instead, never both forms (an error listing the ids comes back when several " +
+        "files of the article share that name). An unlinked upload (bee_save_media without articleId) is deleted by 'id'.\n" +
+        "A soft delete, the same as the delete button of the web UI: the file disappears from the article's 'files', " +
+        "bee_get_file and bee_get_image answer \"not found\", and the deletion reaches the other devices by sync. " +
+        "An image that the article text still embeds (\"![](/api/media/{id})\") leaves a broken image behind; the answer " +
+        "says so, then remove the reference with bee_replace_in_article.\n" +
+        "Files of a password-protected article are refused, and so is a folder that is read-only for your user.\n" +
+        "Returns plain-text confirmation.")]
+    [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
+    public async Task<string> DeleteFile(
+        [Description("Media ID (GUID): the mediaId of an entry in bee_get_article's 'files' list. Omit when passing articleId + fileName.")] Guid? id = null,
+        [Description("Article ID (GUID). Pass together with fileName instead of id.")] Guid? articleId = null,
+        [Description("File name exactly as listed in the article's 'files'. Pass together with articleId instead of id.")] string? fileName = null,
+        [Description("Must be true to actually delete. Default false = dry-run that describes the file and returns a warning.")] bool confirm = false)
+    {
+        if (!session.IsUnlocked)
+            return "Error: session is locked. Unlock first.";
+
+        // Exactly one selector form: 'id' alone, or 'articleId' together with 'fileName'. A mix is refused
+        // rather than resolved, so a stray second selector can never pick a different file (as bee_get_file).
+        var hasName = !string.IsNullOrEmpty(fileName);
+        var byId = id != null && articleId == null && !hasName;
+        var byName = id == null && articleId != null && hasName;
+        if (!byId && !byName)
+            return "Error: pass either the media 'id' alone, or 'articleId' together with 'fileName'; not a mix of them.";
+
+        Core.Models.Media? media;
+        if (byName)
+        {
+            var named = await articleService.GetMetadataAsync(articleId!.Value);
+            if (named == null)
+                return $"Error: article {articleId} not found";
+            if (named.Protected)
+                return ProtectedArticleFileError;
+
+            var matches = (await mediaService.GetByArticleIdAsync(articleId.Value))
+                .Where(m => m.FileName == fileName).ToList();
+            if (matches.Count == 0)
+                return $"Error: article {articleId} has no file named '{fileName}'. List its files with bee_get_article.";
+            if (matches.Count > 1)
+                return $"Error: article {articleId} has {matches.Count} files named '{fileName}'. " +
+                       $"Pass the id of the one you want: {string.Join(", ", matches.Select(m => m.Id))}.";
+            media = matches[0];
+        }
+        else
+        {
+            media = await mediaService.GetByIdAsync(id!.Value);
+            if (media == null)
+                return $"Error: media {id} not found";
+        }
+
+        Core.Models.Article? article = null;
+        if (media.ArticleId != null)
+        {
+            article = await articleService.GetMetadataAsync(media.ArticleId.Value);
+            if (article == null)
+                return "Error: access denied";
+            if (article.Protected)
+                return ProtectedArticleFileError;
+        }
+
+        var what = $"{media.Kind} '{media.FileName}' ({media.ContentType}, {media.FileSize} bytes)";
+        var where = article == null ? "an unlinked upload" : $"article '{article.Title}' ({article.Id})";
+        var embedded = await IsStillEmbeddedAsync(media, article);
+        var embeddedNote = embedded
+            ? $" The article text still embeds this image as \"![](/api/media/{media.Id})\": after the delete that is a broken image, so remove the reference (bee_replace_in_article)."
+            : "";
+
+        if (!confirm)
+            return $"Warning: This will delete the {what} of {where}. Set confirm=true to proceed.{embeddedNote}";
+
+        try
+        {
+            await mediaService.DeleteAsync(media.Id);
+            return $"Deleted the {what} of {where}.{embeddedNote}";
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            BeeMemoryBank.Api.Helpers.WriteAclDenial.TryClassify(ex, out var kind, out var path);
+            return kind == BeeMemoryBank.Api.Helpers.WriteAclDenialKind.ReadOnly
+                ? $"Access denied: folder '{path}' is read-only for your user."
+                : "Access denied: the file's article is in a restricted folder for this agent.";
+        }
+        catch (KeyNotFoundException)
+        {
+            return $"Error: media {media.Id} not found";
+        }
+    }
+
+    // Whether the article body still points at this image. Only images are embedded; a failure to read
+    // the body (locked, no access) just means "unknown", which is reported as "not embedded".
+    private async Task<bool> IsStillEmbeddedAsync(Core.Models.Media media, Core.Models.Article? article)
+    {
+        if (article == null || media.Kind != "image")
+            return false;
+        try
+        {
+            var body = await articleService.GetContentAsync(article.Id);
+            return body.Contains($"/api/media/{media.Id}", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     private const string UploadScript = """"
 # BeeMemoryBank File Upload — uploads files directly from disk, bypassing LLM context.
 # Uses the MCP protocol directly (JSON-RPC over HTTP). No REST API access required.

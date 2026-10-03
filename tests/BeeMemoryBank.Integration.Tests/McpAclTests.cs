@@ -38,6 +38,7 @@ public class McpAclTests : IAsyncLifetime
     private BeeSearchTools _searchTools = null!;
     private BeeReadTools _readTools = null!;
     private BeeWriteTools _writeTools = null!;
+    private BeeUploadTools _uploadTools = null!;
     private BeeConceptTools _conceptTools = null!;
     private BeeAuditTools _auditTools = null!;
     private IndexBuilder _indexBuilder = null!;
@@ -129,6 +130,7 @@ public class McpAclTests : IAsyncLifetime
         _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo), _folderAccessService, _httpContextAccessor);
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _scopeHolder, NullLogger<BeeWriteTools>.Instance, responseManager);
+        _uploadTools = new BeeUploadTools(_articleService, mediaService, _session, responseManager);
         _conceptTools = new BeeConceptTools(_conceptTagService, _articleService, _httpContextAccessor, responseManager);
         _auditTools = new BeeAuditTools(eventLogRepo, articleRepo, whitelistRepo, nodeRepo, _httpContextAccessor, _scopeHolder, responseManager);
 
@@ -348,6 +350,36 @@ public class McpAclTests : IAsyncLifetime
 
         blocks.OfType<EmbeddedResourceBlock>().Should().ContainSingle();
         ClearCaller();
+    }
+
+    [Fact]
+    public async Task Acl_BeeDeleteFile_DeniesSecretFolder_ByIdAndByName_AndKeepsTheFile()
+    {
+        var secret = await _articleService.CreateAsync("Secret Delete Host", "/Secret", [], "top secret");
+        var file = await _mediaService.CreateAsync("plans.pdf", "application/pdf", "%PDF-1.4 tiny"u8.ToArray(), secret.Id, isAttachment: true);
+
+        await SetRestrictedCaller();
+        var byId = await _uploadTools.DeleteFile(id: file.Id, confirm: true);
+        var byName = await _uploadTools.DeleteFile(articleId: secret.Id, fileName: "plans.pdf", confirm: true);
+        ClearCaller();
+
+        byId.Should().StartWith("Error:");
+        byName.Should().StartWith("Error:");
+        (await _mediaService.GetByArticleIdAsync(secret.Id)).Should().ContainSingle(m => m.Id == file.Id);
+    }
+
+    [Fact]
+    public async Task Acl_BeeDeleteFile_DeletesAFileOfAnAllowedFolder()
+    {
+        var open = await _articleService.CreateAsync("Public Delete Host", "/Public", [], "text");
+        var file = await _mediaService.CreateAsync("notes.pdf", "application/pdf", "%PDF-1.4 tiny"u8.ToArray(), open.Id, isAttachment: true);
+
+        await SetRestrictedCaller();
+        var result = await _uploadTools.DeleteFile(id: file.Id, confirm: true);
+        ClearCaller();
+
+        result.Should().StartWith("Deleted");
+        (await _mediaService.GetByArticleIdAsync(open.Id)).Should().BeEmpty();
     }
 
     [Fact]
