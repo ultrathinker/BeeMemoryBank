@@ -171,10 +171,18 @@ def main():
                 return json.loads(base64.urlsafe_b64decode(raw + '=' * (-len(raw) % 4))).get('tls_spki')
 
             def data_listing():
-                return run(['docker', 'exec', name, 'sh', '-c', 'cd /app/data && ls -A | sort']).stdout.split()
+                """Every file of the data volume (recursively), minus what a running node rewrites on its own, and a digest
+                of the files that ARE the node's identity and configuration."""
+                script = (r"cd /app/data && find . -type f ! -path './blind-tmp/*' ! -path './temp/*' ! -name '*-wal' ! -name '*-shm' "
+                          r"| sort; echo '---'; find . -type f \( -name node-identity.key -o -name .internal-key -o -path './tls/*' "
+                          r"-o -path './blind/*settings*' \) -exec sha256sum {} + | sort -k2")
+                out = run(['docker', 'exec', name, 'sh', '-c', script]).stdout
+                paths, _, digests = out.partition('---')
+                return ([p for p in paths.splitlines() if p.strip()],
+                        [d for d in digests.splitlines() if d.strip()])
 
             spki_before = renewed_spki()
-            files_before = data_listing()
+            files_before, digests_before = data_listing()
             say('upgrade rehearsal: swapping image %s -> %s on the same volumes' % (a.first_image, a.image))
             run(['docker', 'rm', '-f', name])          # the CONTAINER only; the volumes stay
             r2 = start_container(a.image)
@@ -189,11 +197,12 @@ def main():
             check('TLS pin unchanged by the image swap (paired peers keep trusting it)',
                   bool(spki_before) and spki_before == spki_after, '%s -> %s' % (spki_before, spki_after))
             check('stored articles kept across the swap', stored() >= 4, 'stored=%s' % stored())
-            files_after = data_listing()
-            check('no file of the data directory is lost by the swap',
+            files_after, digests_after = data_listing()
+            check('no file of the data volume is lost by the swap (recursive)',
                   set(files_before) <= set(files_after), 'lost: %s' % sorted(set(files_before) - set(files_after)))
-            say('data dir before: %s' % ' '.join(files_before))
-            say('data dir after : %s' % ' '.join(files_after))
+            check('identity key, TLS material and settings are byte-identical after the swap',
+                  digests_before == digests_after and len(digests_before) > 0, 'before %d, after %d digests' % (len(digests_before), len(digests_after)))
+            say('data volume: %d files before, %d after' % (len(files_before), len(files_after)))
             http('POST', full_url + '/api/articles', fh,
                  {'title': 'e2e after the swap', 'treePath': '/e2e', 'content': 'swap ' + 'z' * 1000})
             got = wait_for(lambda: stored() >= 5, 'sync after the swap', 90, 3)
@@ -208,8 +217,10 @@ def main():
         check('no article API on a blind node', s == 404, str(s))
         s, b = http('GET', 'https://127.0.0.1:%d/api/blind/status' % a.blind_https_port, insecure=True)
         check('keyless caller gets no blind status', s in (401, 403, 404), str(s))
+        s, b = http('GET', 'https://127.0.0.1:%d/mcp' % a.blind_https_port, insecure=True)
+        check('no MCP on the node host', s == 404, str(s))
         s, b = http('GET', 'http://127.0.0.1:%d/mcp' % a.blind_console_port)
-        check('no MCP', s == 404, str(s))
+        check('no MCP on the console', s == 404, str(s))
 
         rc = bmb('restore-code')
         m = re.search(r'BMBRESTORE1\.[A-Za-z0-9_=.\-]+', rc.stdout)

@@ -13,17 +13,18 @@ or write to the real backup repository - and the results are compared:
   * the database passes `PRAGMA integrity_check` and keeps its event and article counts;
   * no file of the data directory disappears.
 
-Objects it creates are named bmb-fixture-*; it removes only those (--cleanup).
+Objects it creates are named bmb-fixture-<run id>; it removes only those, and only when its own run is over.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
-import shutil
 import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 
 FAILS = []
 
@@ -57,9 +58,9 @@ def facts(db_path):
 
 
 def rehearse(image, label, pristine, work):
-    vol, name = 'bmb-fixture-data', 'bmb-fixture-node'
-    run(['docker', 'rm', '-f', name])
-    run(['docker', 'volume', 'rm', vol])
+    # Names unique to this run: only objects this run created are ever removed, never an earlier run's or anyone else's.
+    suffix = uuid.uuid4().hex[:8]
+    vol, name = 'bmb-fixture-data-' + suffix, 'bmb-fixture-node-' + suffix
     run(['docker', 'volume', 'create', vol])
     # populate the private volume from a COPY of the pristine data (the image has cp)
     # A copy extracted on Windows arrives with every file world-accessible; the node refuses a key file like that
@@ -86,15 +87,30 @@ def rehearse(image, label, pristine, work):
     logs = run(['docker', 'logs', name])
     run(['docker', 'stop', '-t', '30', name])
     # the stopped container's volume is still readable with docker cp; the WAL is checkpointed by the clean stop
-    out = os.path.join(work, label)
-    shutil.rmtree(out, ignore_errors=True)
-    os.makedirs(out)
+    out = os.path.join(work, '%s-%s' % (label, suffix))
+    os.makedirs(out)          # fresh by construction; raises if it somehow exists, never clears one
     run(['docker', 'cp', name + ':/app/data/.', out])
-    files = sorted(os.listdir(out))
+    files, digests = manifest(out)
     f = facts(os.path.join(out, 'beememorybank.db'))
     run(['docker', 'rm', '-f', name])
     run(['docker', 'volume', 'rm', vol])
-    return dict(health=health, status=status, files=files, facts=f, log=logs.stdout + logs.stderr)
+    return dict(health=health, status=status, files=files, digests=digests, facts=f, log=logs.stdout + logs.stderr)
+
+
+def manifest(root):
+    """Every file of the data directory (recursively, relative paths) minus what a running node rewrites by itself, and
+    a digest of the files that ARE the node's identity and configuration."""
+    files, digests = [], {}
+    for r, _d, fs in os.walk(root):
+        for f in fs:
+            rel = os.path.relpath(os.path.join(r, f), root).replace(os.sep, '/')
+            if rel.startswith(('blind-tmp/', 'temp/')) or rel.endswith(('-wal', '-shm')):
+                continue
+            files.append(rel)
+            if rel in ('node-identity.key', '.internal-key') or rel.startswith('tls/') or (rel.startswith('blind/') and 'settings' in rel):
+                with open(os.path.join(r, f), 'rb') as fh:
+                    digests[rel] = hashlib.sha256(fh.read()).hexdigest()
+    return sorted(files), digests
 
 
 def main():
@@ -128,9 +144,10 @@ def main():
         check('same events and articles', (o['facts']['events'], o['facts']['articles']) == (n['facts']['events'], n['facts']['articles']),
               '%s vs %s' % ((o['facts']['events'], o['facts']['articles']), (n['facts']['events'], n['facts']['articles'])))
         lost = sorted(set(o['files']) - set(n['files']))
-        check('no file of the data directory lost by the new image', not lost, 'lost: %s' % lost)
-        say('files old: %s' % ' '.join(o['files']))
-        say('files new: %s' % ' '.join(n['files']))
+        check('no file of the data directory lost by the new image (recursive)', not lost, 'lost: %s' % lost)
+        check('identity key, TLS material and settings byte-identical after the new image',
+              o['digests'] == n['digests'] and len(o['digests']) > 0, '%d vs %d digests' % (len(o['digests']), len(n['digests'])))
+        say('data files: %d with the old image, %d with the new' % (len(o['files']), len(n['files'])))
         node_o = re.search(r'[0-9a-f]{8}-[0-9a-f-]{27}', o['status'])
         node_n = re.search(r'[0-9a-f]{8}-[0-9a-f-]{27}', n['status'])
         check('status shows the same node id', bool(node_o and node_n and node_o.group(0) == node_n.group(0)))
