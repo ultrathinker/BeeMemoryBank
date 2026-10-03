@@ -21,6 +21,8 @@
   <Folder Name="/server/">
     <Project Path="server/BeeMemoryBank.Api/BeeMemoryBank.Api.csproj" />
     <Project Path="server/BeeMemoryBank.BlindConsole/BeeMemoryBank.BlindConsole.csproj" />
+    <Project Path="server/BeeMemoryBank.BlindNode/BeeMemoryBank.BlindNode.csproj" />
+    <Project Path="server/BeeMemoryBank.BlindCli/BeeMemoryBank.BlindCli.csproj" />
     <Project Path="server/BeeMemoryBank.Web/BeeMemoryBank.Web.csproj" />
     <Project Path="server/BeeMemoryBank.Cli/BeeMemoryBank.Cli.csproj" />
   </Folder>
@@ -30,6 +32,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.BlindNode.Tests/BeeMemoryBank.BlindNode.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.AppPaths.Tests/BeeMemoryBank.AppPaths.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Rekey.Tests/BeeMemoryBank.Rekey.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.BlindConsole.Tests/BeeMemoryBank.BlindConsole.Tests.csproj" />
