@@ -3,7 +3,7 @@ using BeeMemoryBank.Api.Endpoints;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Api.Services.Recovery;
-using BeeMemoryBank.Core;
+using BeeMemoryBank.Blind;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Hosting.AspNetCore;
@@ -28,15 +28,10 @@ public static class BlindNodeServices
         // The role is a fact about this process; libraries ask for it (a blind node never authors events).
         services.AddSingleton<INodeRole>(new EnvironmentNodeRole("blind"));
 
-        services.AddStorage(dataPath);
-        services.AddCore();
+        // The library half: storage, the services of the replicated data model, the sync machinery - only what a
+        // blind node uses (libs/BeeMemoryBank.Blind/BlindComposition.cs).
+        services.AddBlindComposition(dataPath);
         services.AddMemoryCache();
-        // A blind node stores the ciphertext of vectors and never computes one; nothing here can hold a model.
-        services.AddSingleton<IEmbeddingGenerator, BeeMemoryBank.Sync.Blind.BlindEmbeddingGenerator>();
-        // MediaService needs a transcoder to be constructed, and a blind node never transcodes: it relays
-        // ciphertext, which it cannot decode. Handing it bytes to convert is a bug, so this one refuses.
-        services.AddSingleton<IImageTranscoder, NoImageTranscoder>();
-        services.AddSync();
         AddBlindRecovery(services);
         services.AddSingleton<SyncTokenStore>();
         // Per-node, not per-process: see SyncChallengeRateLimiter.
@@ -46,9 +41,9 @@ public static class BlindNodeServices
         // BMB_SYNC_INTERVAL_SECONDS: override of the scheduler tick (default 60 s); tests set it low.
         TimeSpan? syncInterval = int.TryParse(Environment.GetEnvironmentVariable("BMB_SYNC_INTERVAL_SECONDS"), out var s) && s >= 1
             ? TimeSpan.FromSeconds(s) : null;
-        services.AddSyncScheduler(interval: syncInterval, periodicCleanupFactory: sp =>
+        services.AddBlindSyncScheduler(interval: syncInterval, periodicCleanupFactory: sp =>
             sp.GetRequiredService<SyncTokenStore>().CleanupExpired);
-        services.AddCleanupService();
+        services.AddBlindCleanupService();
 
         services.AddHttpClient();
         services.AddTransient<HttpClient>(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient());
@@ -179,14 +174,4 @@ public static class BlindNodeServices
             kestrel.ListenLocalhost(localPort);
         });
     }
-}
-
-/// <summary>See the registration: a blind node holds no readable image, so any request to transcode is a bug.</summary>
-internal sealed class NoImageTranscoder : IImageTranscoder
-{
-    public (byte[] data, bool converted) ConvertToJpeg(byte[] input, string contentType) =>
-        throw new NotSupportedException("A blind node cannot transcode images: it never holds one in the clear.");
-
-    public byte[] DownscaleJpeg(byte[] input, int maxDimension) =>
-        throw new NotSupportedException("A blind node cannot transcode images: it never holds one in the clear.");
 }

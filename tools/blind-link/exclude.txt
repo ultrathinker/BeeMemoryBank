@@ -2,47 +2,47 @@
 # the BlindNode host (a replacement), not a file to link. Paths relative to server/BeeMemoryBank.Api.
 
 # MCP: a blind node has no MCP server and no tools
-McpTools
-Helpers/McpToolRegistry.cs
-Middleware/Mcp*
+api:McpTools
+api:Helpers/McpToolRegistry.cs
+api:Middleware/Mcp*
 # identity of people and agents: a blind node has neither users nor agents (and agent auth would unlock a session)
-Middleware/AgentAuthMiddleware.cs
-Middleware/CallerScopeMiddleware.cs
-Services/HttpContextCallerScopeStore.cs
-Services/HttpActorProvider.cs
+api:Middleware/AgentAuthMiddleware.cs
+api:Middleware/CallerScopeMiddleware.cs
+api:Services/HttpContextCallerScopeStore.cs
+api:Services/HttpActorProvider.cs
 
 # AI chat
-Services/Chat*
-Endpoints/Chat*
-Models/ChatModels.cs
-Helpers/ChatAccessEndpointFilter.cs
+api:Services/Chat*
+api:Endpoints/Chat*
+api:Models/ChatModels.cs
+api:Helpers/ChatAccessEndpointFilter.cs
 
 # the full node's own flows
-Services/RestoreInitiatorService.cs
-Services/DekRotationService*
-Services/UpdateService.cs
-Services/UpdateModels.cs
-Services/IUpdateArtifactSource.cs
-Services/IUpdateHealthCheck.cs
-Services/ZipExportService.cs
-Services/CompactionService.cs
-Services/OpenRouterClient.cs
-Services/DownloadTokenService.cs
-Services/DownloadCleanupHostedService.cs
-Services/ProtectedUnlockCache.cs
-Services/RemoteAccountSyncScheduler.cs
-Services/ApiStateResetHook.cs
-Services/BlindPhone/BlindPhonePairingService.cs
+api:Services/RestoreInitiatorService.cs
+api:Services/DekRotationService*
+api:Services/UpdateService.cs
+api:Services/UpdateModels.cs
+api:Services/IUpdateArtifactSource.cs
+api:Services/IUpdateHealthCheck.cs
+api:Services/ZipExportService.cs
+api:Services/CompactionService.cs
+api:Services/OpenRouterClient.cs
+api:Services/DownloadTokenService.cs
+api:Services/DownloadCleanupHostedService.cs
+api:Services/ProtectedUnlockCache.cs
+api:Services/RemoteAccountSyncScheduler.cs
+api:Services/ApiStateResetHook.cs
+api:Services/BlindPhone/BlindPhonePairingService.cs
 
 # the full node's startup files
-Startup/ApiServices.cs
-Startup/ApiPipeline.cs
-Startup/ApiStartupTasks.cs
+api:Startup/ApiServices.cs
+api:Startup/ApiPipeline.cs
+api:Startup/ApiStartupTasks.cs
 
 # the new device's side of a restore - a full node being restored, never the blind node that serves the package
-Services/Recovery/RecoveryApiServices.cs
-Services/Recovery/RecoveryRestoreService.cs
-Services/Recovery/BlindRestoreClient.cs
-Services/Recovery/IBackupFileRestoreSource.cs
-Services/BlindPhone
-Endpoints/RestoreEndpoints.cs
+api:Services/Recovery/RecoveryApiServices.cs
+api:Services/Recovery/RecoveryRestoreService.cs
+api:Services/Recovery/BlindRestoreClient.cs
+api:Services/Recovery/IBackupFileRestoreSource.cs
+api:Services/BlindPhone
+api:Endpoints/RestoreEndpoints.cs

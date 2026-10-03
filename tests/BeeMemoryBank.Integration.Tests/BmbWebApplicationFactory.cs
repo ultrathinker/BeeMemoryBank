@@ -113,6 +113,7 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
         }
     }
 
+#if !BLIND_NODE_HOST // full-node setup and join: the blind node initializes itself (BlindNodeFactory); the BlindNode.Tests project links this file without them
     /// <summary>Initializes the node and returns the password.</summary>
     public async Task InitializeNodeAsync(string displayName = "TestNode", string password = "testPassword")
     {
@@ -228,4 +229,5 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
             IsSuperadmin = true
         });
     }
+#endif
 }

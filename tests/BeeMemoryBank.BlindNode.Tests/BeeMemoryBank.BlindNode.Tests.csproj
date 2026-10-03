@@ -13,10 +13,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Only the host (and through it the Blind assembly): the original Core/Storage/Sync/Crypto libraries define the
+         same types and must not be referenced next to it. A test that needs a type the blind assembly does not
+         contain does not belong in this project. -->
     <ProjectReference Include="..\..\server\BeeMemoryBank.BlindNode\BeeMemoryBank.BlindNode.csproj" />
-    <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
-    <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
-    <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,6 +28,9 @@
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
 
+  <!-- BlindPhoneReplicaClientTests, BlindPhoneReplicaVerificationTests and BlindPhoneVerifiedPackageTests drive the PHONE's client
+       (BlindPhoneReplicaClient) against a blind node. They move in here when the Blind.PhoneClient assembly exists; until then
+       they run in BeeMemoryBank.Integration.Tests. -->
   <ItemGroup>
     <Compile Include="*.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BmbWebApplicationFactory.cs" Link="Linked\BmbWebApplicationFactory.cs" />
@@ -41,9 +44,6 @@
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPairingStatusTests.cs" Link="Linked\BlindPairingStatusTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPasswordChangeSettingsFailureTests.cs" Link="Linked\BlindPasswordChangeSettingsFailureTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhonePullClientTests.cs" Link="Linked\BlindPhonePullClientTests.cs" />
-    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneReplicaClientTests.cs" Link="Linked\BlindPhoneReplicaClientTests.cs" />
-    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneReplicaVerificationTests.cs" Link="Linked\BlindPhoneReplicaVerificationTests.cs" />
-    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindPhoneVerifiedPackageTests.cs" Link="Linked\BlindPhoneVerifiedPackageTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindProtocolBoundaryTests.cs" Link="Linked\BlindProtocolBoundaryTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindReplicaResumeEndpointTests.cs" Link="Linked\BlindReplicaResumeEndpointTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindReplicaSignatureTests.cs" Link="Linked\BlindReplicaSignatureTests.cs" />

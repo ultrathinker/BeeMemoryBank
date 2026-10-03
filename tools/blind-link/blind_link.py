@@ -1,17 +1,29 @@
-"""blind-link: keeps server/BeeMemoryBank.BlindNode/linked-api-files.props in step with the Api sources.
+"""blind-link: keeps the linked-source lists of the blind projects in step with the sources they link.
 
-The BlindNode host does not copy Api code: it LINKS the Api source files a blind node needs (same types, same
-namespaces, one definition). This tool finds that set by compiling: starting from the seed list it builds the
-project, reads the "type or name not found" errors, links the Api file that declares each missing name and builds
-again, until the build is clean. The result is written to linked-api-files.props, which is checked in, so a normal
-build never needs this tool - it is for (re)computing the set when a seed or an Api file changes.
+The blind node does not copy code. Two projects LINK the original source files a blind node needs (same types, same
+namespaces, one definition):
+
+  libs/BeeMemoryBank.Blind        links files of libs/BeeMemoryBank.{Core,Storage,Sync,Crypto,Search}   -> linked-lib-files.props
+  server/BeeMemoryBank.BlindNode  links files of server/BeeMemoryBank.Api                               -> linked-api-files.props
+
+This tool finds both sets by compiling: start from the seed list, build the host, read the "type or name not found"
+errors, link the file that declares each missing name (a library file for an error in the library project, an Api file or
+else a library file for an error in the host), build again, until the build is clean. The result is written to the
+two .props files, which are checked in, so a normal build never needs this tool - it is for recomputing the sets when a
+seed or a source file changes.
 
 Usage:  python tools/blind-link/blind_link.py [--check]
-  (no flag)  recompute and rewrite linked-api-files.props
-  --check    recompute into memory and fail (exit 1) when the checked-in props differ
+  (no flag)  recompute and rewrite the props files
+  --check    recompute and fail (exit 1) when the checked-in props differ (the props are restored afterwards)
 
-Nothing here modifies Api sources. Excluded names (EXCLUDE) are never linked: they are the full-node features a
-blind node must not contain (MCP, agent auth, caller scope, chat, embeddings, media, update, DEK rotation...).
+Lists (paths relative to the repo root):
+  seeds.txt    one path or prefix per line; `api:` before a path means relative to server/BeeMemoryBank.Api
+  exclude.txt  same syntax; a file on it is never linked - if the closure needs one, the build fails and the host gets
+               a replacement instead (that is the point: what is not linked cannot be in the container)
+A trailing `*` is a prefix match, a path without it matches the file or a directory.
+
+Nothing here modifies a source file. DependencyInjection.cs files of the libraries are never linked (they register the
+whole application); the blind composition is written out in libs/BeeMemoryBank.Blind/BlindComposition.cs.
 """
 import collections
 import io
@@ -22,11 +34,25 @@ import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 API = os.path.join(REPO, 'server', 'BeeMemoryBank.Api')
-PROJ_DIR = os.path.join(REPO, 'server', 'BeeMemoryBank.BlindNode')
-PROJ = os.path.join(PROJ_DIR, 'BeeMemoryBank.BlindNode.csproj')
-PROPS = os.path.join(PROJ_DIR, 'linked-api-files.props')
+LIB_NAMES = ['Core', 'Storage', 'Sync', 'Crypto', 'Search']
+HOST_DIR = os.path.join(REPO, 'server', 'BeeMemoryBank.BlindNode')
+HOST_PROJ = os.path.join(HOST_DIR, 'BeeMemoryBank.BlindNode.csproj')
+HOST_PROPS = os.path.join(HOST_DIR, 'linked-api-files.props')
+BLIND_DIR = os.path.join(REPO, 'libs', 'BeeMemoryBank.Blind')
+BLIND_PROPS = os.path.join(BLIND_DIR, 'linked-lib-files.props')
 SEEDS_FILE = os.path.join(os.path.dirname(__file__), 'seeds.txt')
 EXCLUDE_FILE = os.path.join(os.path.dirname(__file__), 'exclude.txt')
+WIRING = re.compile(r'(^|/)DependencyInjection\.cs$')
+
+TYPE_RE = re.compile(r'\b(?:class|record|struct|interface|enum|delegate)\s+(?:class\s+|struct\s+)?([A-Z][A-Za-z0-9_]*)')
+EXT_RE = re.compile(r'static\s+[\w<>\[\],\s\?\.]+?\s+([A-Z][A-Za-z0-9_]*)\s*(?:<[^>]*>)?\s*\(\s*this\s')
+PART_RE = re.compile(r'partial\s+(?:class|record|struct|interface)\s+([A-Z][A-Za-z0-9_]*)')
+NAME_RES = [re.compile(r"type or namespace name '([A-Za-z0-9_]+)'"), re.compile(r"The name '([A-Za-z0-9_]+)' does not exist"),
+            re.compile(r"does not contain a definition for '([A-Za-z0-9_]+)'"),
+            re.compile(r"'([A-Za-z0-9_]+)' does not exist in the namespace")]
+NS_RE = re.compile(r'^\s*namespace\s+([\w.]+)', re.M)
+IMPL_RE = re.compile(r'\bclass\s+([A-Z][A-Za-z0-9_]*)\b[^{;]*?:\s*([^{;]*)')
+ERR_FILE_RE = re.compile(r'^(.*?)\((\d+),\d+\): error')
 
 
 def read_list(path):
@@ -38,101 +64,156 @@ def read_list(path):
     return out
 
 
-def api_files():
-    out = []
-    for r, d, fs in os.walk(API):
-        d[:] = [x for x in d if x not in ('bin', 'obj', 'data', 'Properties')]
-        for f in fs:
-            if f.endswith('.cs') and not f.endswith('.g.cs') and f != 'Program.cs':
-                out.append(os.path.relpath(os.path.join(r, f), API).replace('\\', '/'))
-    return sorted(out)
-
-
-TYPE_RE = re.compile(r'\b(?:class|record|struct|interface|enum|delegate)\s+(?:class\s+|struct\s+)?([A-Z][A-Za-z0-9_]*)')
-EXT_RE = re.compile(r'static\s+[\w<>\[\],\s\?\.]+?\s+([A-Z][A-Za-z0-9_]*)\s*(?:<[^>]*>)?\s*\(\s*this\s')
-PART_RE = re.compile(r'partial\s+(?:class|record|struct|interface)\s+([A-Z][A-Za-z0-9_]*)')
-NAME_RES = [re.compile(r"type or namespace name '([A-Za-z0-9_]+)'"), re.compile(r"The name '([A-Za-z0-9_]+)' does not exist"),
-            re.compile(r"does not contain a definition for '([A-Za-z0-9_]+)'"), re.compile(r"'([A-Za-z0-9_]+)' does not exist in the namespace")]
+def to_repo_path(entry):
+    return ('server/BeeMemoryBank.Api/' + entry[4:]) if entry.startswith('api:') else entry
 
 
 def matches(rel, patterns):
     for p in patterns:
-        if rel == p or rel.startswith(p.rstrip('/') + '/') or (p.endswith('*') and rel.startswith(p[:-1])):
+        if p.endswith('*'):
+            if rel.startswith(p[:-1]):
+                return True
+        elif rel == p or rel.startswith(p.rstrip('/') + '/'):
             return True
     return False
 
 
-def write_props(links):
+def source_files():
+    out = []
+    roots = [(API, 'server/BeeMemoryBank.Api')] + [(os.path.join(REPO, 'libs', 'BeeMemoryBank.' + n), 'libs/BeeMemoryBank.' + n) for n in LIB_NAMES]
+    for root, prefix in roots:
+        for r, d, fs in os.walk(root):
+            d[:] = [x for x in d if x not in ('bin', 'obj', 'data', 'Properties')]
+            for f in fs:
+                if f.endswith('.cs') and not f.endswith('.g.cs') and f not in ('Program.cs', 'AssemblyInfo.cs'):
+                    out.append(prefix + '/' + os.path.relpath(os.path.join(r, f), root).replace('\\', '/'))
+    return sorted(out)
+
+
+def props_text(files, project_dir):
     lines = ['<Project>', '  <!-- GENERATED by tools/blind-link/blind_link.py - do not edit by hand. -->', '  <ItemGroup>']
-    for f in sorted(links):
-        w = f.replace('/', '\\')
-        lines.append('    <Compile Include="..\\BeeMemoryBank.Api\\%s" Link="Api\\%s" />' % (w, w))
+    for f in sorted(files):
+        full = os.path.join(REPO, f.replace('/', os.sep))
+        rel = os.path.relpath(full, project_dir).replace('/', '\\')
+        link = f.replace('server/BeeMemoryBank.Api/', 'Api/').replace('libs/BeeMemoryBank.', 'Lib/').replace('/', '\\')
+        lines.append('    <Compile Include="%s" Link="%s" />' % (rel, link))
     lines += ['  </ItemGroup>', '</Project>', '']
     return '\r\n'.join(lines)
 
 
+def write(path, text):
+    io.open(path, 'w', encoding='utf-8', newline='').write(text)
+
+
 def main():
     check = '--check' in sys.argv
-    before = io.open(PROPS, encoding='utf-8', newline='').read() if os.path.exists(PROPS) else None
-    files = api_files()
-    seeds = read_list(SEEDS_FILE)
-    exclude = read_list(EXCLUDE_FILE)
+    before = {p: io.open(p, encoding='utf-8', newline='').read() for p in (HOST_PROPS, BLIND_PROPS) if os.path.exists(p)}
+    files = source_files()
+    seeds = [to_repo_path(s) for s in read_list(SEEDS_FILE)]
+    exclude = [to_repo_path(s) for s in read_list(EXCLUDE_FILE)]
     text, declared, partial = {}, collections.defaultdict(set), collections.defaultdict(set)
+    implements = collections.defaultdict(set)   # interface name -> files with a class implementing it
+    ns_files = collections.defaultdict(set)     # namespace -> files that declare it
     for f in files:
-        s = re.sub(r'//[^\n]*', '', io.open(os.path.join(API, f), encoding='utf-8', errors='replace').read())
+        s = re.sub(r'//[^\n]*', '', io.open(os.path.join(REPO, f.replace('/', os.sep)), encoding='utf-8', errors='replace').read())
         text[f] = s
         for n in set(TYPE_RE.findall(s)) | set(EXT_RE.findall(s)):
             declared[n].add(f)
         for n in PART_RE.findall(s):
             partial[n].add(f)
-    links = {f for f in files if matches(f, seeds) and not matches(f, exclude)}
+        for ns in NS_RE.findall(s):
+            ns_files[ns].add(f)
+        for _cname, bases in IMPL_RE.findall(s):
+            for b in re.findall(r'\bI[A-Z][A-Za-z0-9_]*\b', bases):
+                implements[b].add(f)
+    ok = lambda f: not matches(f, exclude) and not WIRING.search(f)
+    links = {f for f in files if matches(f, seeds) and ok(f)}
+    # Sync.csproj removes PendingEmbeddingProcessor from its compile list; never link it
+    links.discard('libs/BeeMemoryBank.Sync/PendingEmbeddingProcessor.cs')
     unresolved = collections.Counter()
-    for it in range(1, 60):
-        io.open(PROPS, 'w', encoding='utf-8', newline='').write(write_props(links))
-        p = subprocess.run(['dotnet', 'build', PROJ, '-c', 'Release', '--no-incremental', '-nologo', '-v', 'q', '-clp:NoSummary'],
+    errs = []
+    for it in range(1, 80):
+        write(HOST_PROPS, props_text([f for f in links if f.startswith('server/')], HOST_DIR))
+        write(BLIND_PROPS, props_text([f for f in links if f.startswith('libs/')], BLIND_DIR))
+        p = subprocess.run(['dotnet', 'build', HOST_PROJ, '-c', 'Release', '--no-incremental', '-nologo', '-v', 'q', '-clp:NoSummary'],
                            capture_output=True, text=True, encoding='utf-8', errors='replace')
         errs = sorted(set(l.strip() for l in (p.stdout + p.stderr).splitlines() if ' error ' in l))
-        print('iteration %d: %d linked files, %d distinct errors' % (it, len(links), len(errs)), flush=True)
-        names = collections.Counter()
+        print('iteration %d: %d api + %d lib files linked, %d distinct errors' % (
+            it, sum(1 for f in links if f.startswith('server/')), sum(1 for f in links if f.startswith('libs/')), len(errs)), flush=True)
+        wanted = collections.Counter()   # (name, from_lib_project)
         for l in errs:
+            m = ERR_FILE_RE.match(l)
+            from_lib = bool(m and ('\\libs\\' in m.group(1) or '/libs/' in m.group(1)))
             for rx in NAME_RES:
-                m = rx.search(l)
-                if m:
-                    names[m.group(1)] += 1
+                mm = rx.search(l)
+                if mm:
+                    wanted[(mm.group(1), from_lib)] += 1
                     break
         added = 0
-        for name in names:
-            cands = {c for c in declared.get(name, set()) if not matches(c, exclude)}
+        for (name, from_lib), _ in wanted.items():
+            cands = {c for c in declared.get(name, set()) if ok(c)}
+            if not cands:   # not a type: a namespace the code names in a using (Core.Exceptions, Core.Embeddings ...)
+                # One file is enough for the namespace to exist; the types in it are linked one by one, as they are used.
+                for ns, nfs in ns_files.items():
+                    if ns.endswith('.' + name):
+                        usable = sorted((c for c in nfs if ok(c)), key=lambda c: len(text[c]))
+                        if usable and not any(c in links for c in usable):
+                            cands.add(usable[0])
+                if cands:
+                    for c in cands:
+                        if c not in links:
+                            links.add(c)
+                            added += 1
+                    continue
+            if from_lib:
+                cands = {c for c in cands if c.startswith('libs/')} or cands
+            else:
+                api_c = {c for c in cands if c.startswith('server/')}
+                cands = api_c or cands
             if not cands:
                 unresolved[name] += 1
                 continue
             if len(cands) > 1 and not all(name in PART_RE.findall(text[c]) for c in cands):
-                unresolved[name + ' (ambiguous: ' + ', '.join(sorted(cands)) + ')'] += 1
+                unresolved['%s (ambiguous: %s)' % (name, ', '.join(sorted(cands)))] += 1
                 continue
             for c in cands:
                 if c not in links:
                     links.add(c)
                     added += 1
-        # a partial class is linked whole or not at all
-        for f in list(links):
+        # An interface that linked code mentions needs an implementation at runtime, and the compiler cannot see that
+        # (the container resolves it): link the library classes that implement it.
+        mentioned = set()
+        for f in links:
+            mentioned |= set(re.findall(r'\bI[A-Z][A-Za-z0-9_]*\b', text[f]))
+        for itf in mentioned:
+            for impl in implements.get(itf, ()):
+                if impl.startswith('libs/') and impl not in links and ok(impl):
+                    links.add(impl)
+                    added += 1
+        for f in list(links):   # a partial class is linked whole or not at all
             for n in PART_RE.findall(text[f]):
                 for other in partial[n]:
-                    if other not in links and not matches(other, exclude):
+                    if other not in links and ok(other):
                         links.add(other)
                         added += 1
         if added == 0:
             break
-    result = write_props(links)
-    print('DONE: %d Api files linked; remaining errors: %d' % (len(links), len(errs)))
+    write(HOST_PROPS, props_text([f for f in links if f.startswith('server/')], HOST_DIR))
+    write(BLIND_PROPS, props_text([f for f in links if f.startswith('libs/')], BLIND_DIR))
+    n_api = sum(1 for f in links if f.startswith('server/'))
+    n_lib = sum(1 for f in links if f.startswith('libs/'))
+    print('DONE: %d Api files and %d library files linked; remaining errors: %d' % (n_api, n_lib, len(errs)))
     for e in errs[:40]:
         print('  ' + e[:260])
     if unresolved:
         print('unresolved names: %s' % dict(unresolved))
+    after = {HOST_PROPS: props_text([f for f in links if f.startswith('server/')], HOST_DIR),
+             BLIND_PROPS: props_text([f for f in links if f.startswith('libs/')], BLIND_DIR)}
     if check:
-        same = before == result
-        print('props match the checked-in file' if same else 'props DIFFER from the checked-in file')
-        if before is not None:
-            io.open(PROPS, 'w', encoding='utf-8', newline='').write(before)
+        same = all(before.get(p) == t for p, t in after.items())
+        print('props match the checked-in files' if same else 'props DIFFER from the checked-in files')
+        for p, t in before.items():
+            write(p, t)
         return 0 if (same and not errs) else 1
     return 1 if errs else 0
 

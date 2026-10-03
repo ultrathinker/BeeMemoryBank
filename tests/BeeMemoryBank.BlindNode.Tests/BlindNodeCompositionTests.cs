@@ -14,6 +14,11 @@ namespace BeeMemoryBank.BlindNode.Tests;
 public class BlindNodeCompositionTests
 {
     private static readonly Assembly Host = typeof(Program).Assembly;
+    private static readonly Assembly BlindLib = typeof(BeeMemoryBank.Blind.BlindComposition).Assembly;
+
+    /// <summary>A type by full name in the host or the blind library - the two assemblies a blind node is made of.</summary>
+    private static Type? FindType(string fullName) =>
+        Host.GetType(fullName, throwOnError: false) ?? BlindLib.GetType(fullName, throwOnError: false);
 
     /// <summary>Every assembly reachable from the host through references (names only; nothing is loaded).</summary>
     private static HashSet<string> ReferenceClosure()
@@ -48,12 +53,26 @@ public class BlindNodeCompositionTests
     public void TheScansSeeWhatTheHostDoesContainAndReference()
     {
         var closure = ReferenceClosure();
-        closure.Should().Contain(["BeeMemoryBank.Sync", "BeeMemoryBank.Storage", "BeeMemoryBank.Core", "BeeMemoryBank.Crypto"],
-            "the host's own libraries are reached directly");
+        closure.Should().Contain(["BeeMemoryBank.Blind", "BeeMemoryBank.AppPaths"], "the host's own libraries are reached directly");
         closure.Should().Contain(["Dapper", "Microsoft.Data.Sqlite", "BouncyCastle.Cryptography"],
-            "and third-party code two hops down is reached too");
+            "and third-party code one hop down (the Blind assembly's packages) is reached too");
         Host.GetType("BeeMemoryBank.Api.Services.SnapshotService", throwOnError: false).Should().NotBeNull(
             "linked Api sources are inside the host assembly, which is what the type checks rely on");
+        BlindLib.GetType("BeeMemoryBank.Sync.EventApplier", throwOnError: false).Should().NotBeNull(
+            "linked library sources are inside the Blind assembly, under their original names");
+    }
+
+    [Theory]
+    // The originals the Blind assembly is linked from. A host that references one of them next to Blind would carry
+    // every type twice and could reach code the Blind assembly deliberately left out.
+    [InlineData("BeeMemoryBank.Core")]
+    [InlineData("BeeMemoryBank.Storage")]
+    [InlineData("BeeMemoryBank.Sync")]
+    [InlineData("BeeMemoryBank.Crypto")]
+    [InlineData("BeeMemoryBank.Search")]
+    public void TheHostReachesTheLibrariesOnlyThroughTheBlindAssembly(string original)
+    {
+        ReferenceClosure().Should().NotContain(original);
     }
 
     [Theory]
@@ -95,15 +114,34 @@ public class BlindNodeCompositionTests
     [InlineData("BeeMemoryBank.Api.Services.ZipExportService", "an export would be of ciphertext it cannot open")]
     [InlineData("BeeMemoryBank.Api.Services.CompactionService", "compaction needs the content key")]
     [InlineData("BeeMemoryBank.Api.Helpers.McpToolRegistry", "no MCP")]
-    public void TheHostAssemblyDoesNotContain(string fullTypeName, string why)
+    // And these are types of the libraries: management of articles, folders, keys, users and roles, search, import and
+    // export, restoring a vault, the semantic index, the favourites/agents/versions data - what a store that cannot read
+    // has no use for.
+    [InlineData("BeeMemoryBank.Core.Services.ArticleService", "a blind node does not edit notes")]
+    [InlineData("BeeMemoryBank.Core.Services.SearchService", "it has no index to search")]
+    [InlineData("BeeMemoryBank.Core.Services.InitializationService", "it initializes itself from its key, never from a password")]
+    [InlineData("BeeMemoryBank.Core.Services.KeyManagementService", "it manages no keys")]
+    [InlineData("BeeMemoryBank.Core.Services.UserService", "it has no users")]
+    [InlineData("BeeMemoryBank.Core.Services.RoleService", "it has no roles")]
+    [InlineData("BeeMemoryBank.Core.Services.TreeService", "it shows no tree")]
+    [InlineData("BeeMemoryBank.Core.Services.RestoreService", "it does not restore a vault")]
+    [InlineData("BeeMemoryBank.Core.Services.ObsidianImportService", "no import")]
+    [InlineData("BeeMemoryBank.Core.Services.BeeImportService", "no import")]
+    [InlineData("BeeMemoryBank.Search.Indexing.IndexBuilder", "no search index")]
+    [InlineData("BeeMemoryBank.Storage.Search.EncryptedSegmentStore", "no search index segments")]
+    [InlineData("BeeMemoryBank.Storage.Sqlite.AgentRepository", "no agents")]
+    [InlineData("BeeMemoryBank.Storage.Sqlite.FavoriteRepository", "no favourites")]
+    [InlineData("BeeMemoryBank.Storage.Sqlite.ArticleVersionRepository", "no article versions to show")]
+    [InlineData("BeeMemoryBank.Sync.PendingEmbeddingProcessor", "no model, so nothing to embed")]
+    public void TheBlindCodeDoesNotContain(string fullTypeName, string why)
     {
-        Host.GetType(fullTypeName, throwOnError: false).Should().BeNull(why);
+        FindType(fullTypeName).Should().BeNull(why);
     }
 
     [Fact]
-    public void NoTypeOfTheHostIsInAnMcpOrChatNamespace()
+    public void NoTypeOfTheBlindCodeIsInAnMcpOrChatNamespace()
     {
-        var offenders = Host.GetTypes()
+        var offenders = Host.GetTypes().Concat(BlindLib.GetTypes())
             .Where(t => t.Namespace is { } ns &&
                         (ns.Contains(".McpTools", StringComparison.Ordinal) || ns.Contains(".Chat", StringComparison.Ordinal)))
             .Select(t => t.FullName)

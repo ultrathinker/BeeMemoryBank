@@ -40,7 +40,11 @@ public sealed class RecoveryTestFactory(
     /// </summary>
     public new Task InitializeNodeAsync(string displayName = "TestNode", string password = "testPassword")
     {
+#if BLIND_NODE_HOST // the BlindNode.Tests project has no full node to initialize
+        if (!blind) throw new NotSupportedException("A full node is not part of the blind host.");
+#else
         if (!blind) return base.InitializeNodeAsync(displayName, password);
+#endif
         _ = Services;
         return Task.CompletedTask;
     }

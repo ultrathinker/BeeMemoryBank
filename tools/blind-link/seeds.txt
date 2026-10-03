@@ -2,48 +2,52 @@
 # by compiling; anything they need is linked automatically unless exclude.txt forbids it.
 
 # the blind surface
-Endpoints/SyncEndpoints.cs
-Endpoints/BlindEndpoints.cs
-Endpoints/BlindNodeEndpoints.cs
-Endpoints/BlindStatusEndpoints.cs
-Endpoints/BlindBackupEndpoints.cs
-Endpoints/BlindConsoleEndpoints.cs
-Endpoints/BlindRestoreEndpoints.cs
+api:Endpoints/SyncEndpoints.cs
+api:Endpoints/BlindEndpoints.cs
+api:Endpoints/BlindNodeEndpoints.cs
+api:Endpoints/BlindStatusEndpoints.cs
+api:Endpoints/BlindBackupEndpoints.cs
+api:Endpoints/BlindConsoleEndpoints.cs
+api:Endpoints/BlindRestoreEndpoints.cs
 
 # the three middlewares of the blind pipeline
-Middleware/PublicSurfaceMiddleware.cs
-Middleware/RateLimitMiddleware.cs
-Middleware/MaintenanceMiddleware.cs
+api:Middleware/PublicSurfaceMiddleware.cs
+api:Middleware/RateLimitMiddleware.cs
+api:Middleware/MaintenanceMiddleware.cs
 
 # services of the blind role
-Services/Blind
-Services/BlindBackup
-Services/BlindConsole
-Services/BlindStatus
+api:Services/Blind
+api:Services/BlindBackup
+api:Services/BlindConsole
+api:Services/BlindStatus
 # the blind side of recovery (codes, anchors, boxes status); the NEW DEVICE's side (RecoveryRestoreService,
 # BlindRestoreClient, Android backup file source, RestoreProgress) belongs to a full node being restored
-Services/Recovery/BlindRestoreCode.cs
-Services/Recovery/BlindRestoreCodeService.cs
-Services/Recovery/RecoveryBlindStatusContributors.cs
-Services/Recovery/RecoveryBoxQueries.cs
-Services/Recovery/RecoveryCleanupService.cs
-Services/Recovery/RecoveryReconcileWatcher.cs
-Services/Recovery/RecoveryStatusService.cs
-Services/Recovery/RecoveryTriggers.cs
-Services/Recovery/StateAnchorScheduler.cs
-Services/Recovery/StrongBoxService.cs
-Services/Recovery/StrongBoxPolicy.cs
-Services/Recovery/PeerOwnStanding.cs
-Services/SnapshotService*
-Services/SnapshotJoinCache.cs
-Services/SyncTokenStore.cs
-Services/PublicHostValidator.cs
-Services/AuditLogPruningHostedService.cs
+api:Services/Recovery/BlindRestoreCode.cs
+api:Services/Recovery/BlindRestoreCodeService.cs
+api:Services/Recovery/RecoveryBlindStatusContributors.cs
+api:Services/Recovery/RecoveryBoxQueries.cs
+api:Services/Recovery/RecoveryCleanupService.cs
+api:Services/Recovery/RecoveryReconcileWatcher.cs
+api:Services/Recovery/RecoveryStatusService.cs
+api:Services/Recovery/RecoveryTriggers.cs
+api:Services/Recovery/StateAnchorScheduler.cs
+api:Services/Recovery/StrongBoxService.cs
+api:Services/Recovery/StrongBoxPolicy.cs
+api:Services/Recovery/PeerOwnStanding.cs
+api:Services/SnapshotService*
+api:Services/SnapshotJoinCache.cs
+api:Services/SyncTokenStore.cs
+api:Services/PublicHostValidator.cs
+api:Services/AuditLogPruningHostedService.cs
 
 # startup + shared helpers
-Startup/BlindRoleStartup.cs
-Helpers/ExceptionStatusMap.cs
-Helpers/AppVersion.cs
-Models/SyncModels.cs
-Models/Requests.cs
-Models/Responses.cs
+api:Startup/BlindRoleStartup.cs
+api:Helpers/ExceptionStatusMap.cs
+api:Helpers/AppVersion.cs
+api:Models/SyncModels.cs
+api:Models/Requests.cs
+api:Models/Responses.cs
+
+# the sync machinery that only the container starts (hosted services; nothing references them from code)
+libs/BeeMemoryBank.Sync/SyncScheduler.cs
+libs/BeeMemoryBank.Sync/CleanupService.cs
