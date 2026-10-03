@@ -20,10 +20,10 @@ identity, TLS pin, data, backup settings and paired peers stay as they were.
   the "restore into this machine" side of recovery are not part of it, so no request and no startup step can reach them. The
   image is 402 MB instead of 1.35 GB (the programs 12 MB instead of ~870 MB, because they no longer carry every platform's
   native files); `bmb` inside it has only `bmb blind ...`.
-- **A shared core of all blind nodes: `BeeMemoryBank.Blind`.** The library code a blind node uses (250 of 347 files of Core,
-  Storage, Sync, Crypto and Search; 64 % of their lines) is linked into one assembly under its original names and namespaces,
+- **A shared core of all blind nodes: `BeeMemoryBank.Blind`.** The library code a blind node uses (234 of 347 files of Core,
+  Storage, Sync, Crypto and Search; 60 % of their lines) is linked into one assembly under its original names and namespaces,
   so it cannot drift from the full application's. The Linux node and the Android blind app both use it; the Android app adds
-  only `BeeMemoryBank.Blind.PhoneClient` (13 files: the phone's own client of a blind node) and its APK holds no Core, Storage,
+  only `BeeMemoryBank.Blind.PhoneClient` (16 files: the phone's own client of a blind node) and its APK holds no Core, Storage,
   Sync, Crypto or Search assembly. `tools/blind-link` computes what is linked by compiling and tests hold it to an exclusion list.
 - **Every database migration is embedded, byte for byte, under its original name** (the migration runner deletes ledger rows it
   cannot match, so a smaller set would be unsafe); tests pin the names and the bytes.

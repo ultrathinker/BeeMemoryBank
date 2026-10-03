@@ -9,8 +9,8 @@ Android blind app is one small assembly.
 | Piece | Project | What it is |
 |-------|---------|-----------|
 | host | `server/BeeMemoryBank.BlindNode` | own `Program`, container registrations, pipeline, startup tasks; **links** the 76 Api source files a blind node needs (`linked-api-files.props`) |
-| shared core | `libs/BeeMemoryBank.Blind` | **links** 250 of the 347 source files of Core / Storage / Sync / Crypto / Search (64 % of their lines) under their original names, plus `BlindComposition.cs` (the registrations); embeds every database migration, byte for byte |
-| phone client | `libs/BeeMemoryBank.Blind.PhoneClient` | the 13 more library files only the Android blind app needs (replica/pull client, backup seal ...); references `Blind` |
+| shared core | `libs/BeeMemoryBank.Blind` | **links** 234 of the 347 source files of Core / Storage / Sync / Crypto / Search (60 % of their lines) under their original names, plus `BlindComposition.cs` (the registrations); embeds every database migration, byte for byte |
+| phone client | `libs/BeeMemoryBank.Blind.PhoneClient` | the 16 more library files only the Android blind app needs (replica and pull clients, backup seal ...); references `Blind` |
 | CLI | `server/BeeMemoryBank.BlindCli` | `bmb`, only `bmb blind ...`; links the full CLI's three blind command files; no library reference |
 | console | `server/BeeMemoryBank.BlindConsole` | unchanged: one embedded page and a proxy to the local node |
 | Android app | `mobile/BeeMemoryBank.BlindMobile` | references `Blind` + `Blind.PhoneClient` only |

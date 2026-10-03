@@ -4,7 +4,6 @@
     <Compile Include="..\BeeMemoryBank.Core\Embeddings\Int8Quantizer.cs" Link="Lib\Core\Embeddings\Int8Quantizer.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Embeddings\ModelUnavailableException.cs" Link="Lib\Core\Embeddings\ModelUnavailableException.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Exceptions\ConflictException.cs" Link="Lib\Core\Exceptions\ConflictException.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Exceptions\DekRotationPreconditionException.cs" Link="Lib\Core\Exceptions\DekRotationPreconditionException.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Exceptions\InsufficientDiskSpaceException.cs" Link="Lib\Core\Exceptions\InsufficientDiskSpaceException.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Exceptions\SessionLockedException.cs" Link="Lib\Core\Exceptions\SessionLockedException.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Exceptions\UsernameConflictException.cs" Link="Lib\Core\Exceptions\UsernameConflictException.cs" />
@@ -91,7 +90,6 @@
     <Compile Include="..\BeeMemoryBank.Core\Services\FolderAccessService.cs" Link="Lib\Core\Services\FolderAccessService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\HeavyOperationLock.cs" Link="Lib\Core\Services\HeavyOperationLock.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\ICallerScopeStore.cs" Link="Lib\Core\Services\ICallerScopeStore.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\IDekRotationHook.cs" Link="Lib\Core\Services\IDekRotationHook.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\InstanceCallerScopeStore.cs" Link="Lib\Core\Services\InstanceCallerScopeStore.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\InvisibleModeService.cs" Link="Lib\Core\Services\InvisibleModeService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\LegacyPasswordSlotMigrationService.cs" Link="Lib\Core\Services\LegacyPasswordSlotMigrationService.cs" />
@@ -100,8 +98,6 @@
     <Compile Include="..\BeeMemoryBank.Core\Services\MediaService.cs" Link="Lib\Core\Services\MediaService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\NodeDataKeyEnvelope.cs" Link="Lib\Core\Services\NodeDataKeyEnvelope.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\NullActorProvider.cs" Link="Lib\Core\Services\NullActorProvider.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\NullEventLogger.cs" Link="Lib\Core\Services\NullEventLogger.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\NullLamportClock.cs" Link="Lib\Core\Services\NullLamportClock.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\ReadOnlyAccessException.cs" Link="Lib\Core\Services\ReadOnlyAccessException.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\RemoteAccountService.cs" Link="Lib\Core\Services\RemoteAccountService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\SearchMetrics.cs" Link="Lib\Core\Services\SearchMetrics.cs" />
@@ -109,12 +105,10 @@
     <Compile Include="..\BeeMemoryBank.Core\Services\TreePathCanonicalizer.cs" Link="Lib\Core\Services\TreePathCanonicalizer.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\TreePathSql.cs" Link="Lib\Core\Services\TreePathSql.cs" />
     <Compile Include="..\BeeMemoryBank.Core\SystemFolders.cs" Link="Lib\Core\SystemFolders.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\UnderscoreFirstComparer.cs" Link="Lib\Core\UnderscoreFirstComparer.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\AesGcmHelper.cs" Link="Lib\Crypto\AesGcmHelper.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\ArticleEncryptor.cs" Link="Lib\Crypto\ArticleEncryptor.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\BlindPairingSecret.cs" Link="Lib\Crypto\BlindPairingSecret.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\CryptoConstants.cs" Link="Lib\Crypto\CryptoConstants.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\DekEnvelope.cs" Link="Lib\Crypto\DekEnvelope.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\DekFingerprint.cs" Link="Lib\Crypto\DekFingerprint.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\DekManager.cs" Link="Lib\Crypto\DekManager.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\Ed25519Signer.cs" Link="Lib\Crypto\Ed25519Signer.cs" />
@@ -126,7 +120,6 @@
     <Compile Include="..\BeeMemoryBank.Crypto\MediaEncryptor.cs" Link="Lib\Crypto\MediaEncryptor.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\NodeIdentityCrypto.cs" Link="Lib\Crypto\NodeIdentityCrypto.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\ProtectedContentCodec.cs" Link="Lib\Crypto\ProtectedContentCodec.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\RecoveryAttemptBudget.cs" Link="Lib\Crypto\RecoveryAttemptBudget.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\RecoveryBoxCrypto.cs" Link="Lib\Crypto\RecoveryBoxCrypto.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\RecoveryBoxKdf.cs" Link="Lib\Crypto\RecoveryBoxKdf.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\SealedSecretCrypto.cs" Link="Lib\Crypto\SealedSecretCrypto.cs" />
@@ -183,12 +176,10 @@
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindEmbeddingGenerator.cs" Link="Lib\Sync\Blind\BlindEmbeddingGenerator.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindManifest.cs" Link="Lib\Sync\Blind\BlindManifest.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindPairCode.cs" Link="Lib\Sync\Blind\BlindPairCode.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindPhonePullClient.cs" Link="Lib\Sync\Blind\BlindPhonePullClient.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindRestoreInitiator.cs" Link="Lib\Sync\Blind\BlindRestoreInitiator.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindSeederProof.cs" Link="Lib\Sync\Blind\BlindSeederProof.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindState.cs" Link="Lib\Sync\Blind\BlindState.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\IBlindPeerReseeder.cs" Link="Lib\Sync\Blind\IBlindPeerReseeder.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Blind\IBlindPhonePullClient.cs" Link="Lib\Sync\Blind\IBlindPhonePullClient.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\MyStanding.cs" Link="Lib\Sync\Blind\MyStanding.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\PinnedSyncHttpClient.cs" Link="Lib\Sync\Blind\PinnedSyncHttpClient.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\Spki.cs" Link="Lib\Sync\Blind\Spki.cs" />
@@ -199,10 +190,6 @@
     <Compile Include="..\BeeMemoryBank.Sync\BlobTransport.cs" Link="Lib\Sync\BlobTransport.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\CleanupService.cs" Link="Lib\Sync\CleanupService.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\ConflictResolver.cs" Link="Lib\Sync\ConflictResolver.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\DekRotation\DeferredRotationRetry.cs" Link="Lib\Sync\DekRotation\DeferredRotationRetry.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\DekRotation\DekRewrapper.cs" Link="Lib\Sync\DekRotation\DekRewrapper.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\DekRotation\DekRotationMaterial.cs" Link="Lib\Sync\DekRotation\DekRotationMaterial.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\DekRotation\PeerDekRotationApplier.cs" Link="Lib\Sync\DekRotation\PeerDekRotationApplier.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\DekRotationPredecessorMissingException.cs" Link="Lib\Sync\DekRotationPredecessorMissingException.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\EventApplier.Article.cs" Link="Lib\Sync\EventApplier.Article.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\EventApplier.ConceptTags.cs" Link="Lib\Sync\EventApplier.ConceptTags.cs" />
@@ -232,11 +219,8 @@
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\DeviceBoxPublisher.cs" Link="Lib\Sync\Recovery\DeviceBoxPublisher.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoveryBoxMaterialPurge.cs" Link="Lib\Sync\Recovery\RecoveryBoxMaterialPurge.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoveryEventPublisher.cs" Link="Lib\Sync\Recovery\RecoveryEventPublisher.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoveryKeyResolver.cs" Link="Lib\Sync\Recovery\RecoveryKeyResolver.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoveryReconciler.cs" Link="Lib\Sync\Recovery\RecoveryReconciler.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoveryServiceCollectionExtensions.cs" Link="Lib\Sync\Recovery\RecoveryServiceCollectionExtensions.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoverySet.cs" Link="Lib\Sync\Recovery\RecoverySet.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Recovery\SealedSecretService.cs" Link="Lib\Sync\Recovery\SealedSecretService.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\StateAnchorService.cs" Link="Lib\Sync\Recovery\StateAnchorService.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\StateDigest.cs" Link="Lib\Sync\Recovery\StateDigest.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\RecoveryPayloads.cs" Link="Lib\Sync\RecoveryPayloads.cs" />

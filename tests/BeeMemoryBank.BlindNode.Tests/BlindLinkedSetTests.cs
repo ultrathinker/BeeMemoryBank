@@ -46,6 +46,7 @@ public class BlindLinkedSetTests
     [Theory]
     [InlineData("server/BeeMemoryBank.BlindNode/linked-api-files.props")]
     [InlineData("libs/BeeMemoryBank.Blind/linked-lib-files.props")]
+    [InlineData("libs/BeeMemoryBank.Blind.PhoneClient/linked-lib-files.props")]
     public void NothingOnTheExcludeListIsLinked(string props)
     {
         var linked = Linked(props);
@@ -59,6 +60,7 @@ public class BlindLinkedSetTests
     [Theory]
     [InlineData("server/BeeMemoryBank.BlindNode/linked-api-files.props")]
     [InlineData("libs/BeeMemoryBank.Blind/linked-lib-files.props")]
+    [InlineData("libs/BeeMemoryBank.Blind.PhoneClient/linked-lib-files.props")]
     public void EveryLinkedFileExists_AndIsNotALibraryWiringFile(string props)
     {
         var root = RepoRoot();
@@ -75,7 +77,15 @@ public class BlindLinkedSetTests
     {
         Linked("server/BeeMemoryBank.BlindNode/linked-api-files.props")
             .Should().OnlyContain(f => f.StartsWith("server/BeeMemoryBank.Api/", StringComparison.Ordinal));
-        Linked("libs/BeeMemoryBank.Blind/linked-lib-files.props")
-            .Should().OnlyContain(f => Regex.IsMatch(f, "^libs/BeeMemoryBank\\.(Core|Storage|Sync|Crypto|Search)/"));
+        foreach (var props in new[] { "libs/BeeMemoryBank.Blind/linked-lib-files.props", "libs/BeeMemoryBank.Blind.PhoneClient/linked-lib-files.props" })
+            Linked(props).Should().OnlyContain(f => Regex.IsMatch(f, "^libs/BeeMemoryBank\\.(Core|Storage|Sync|Crypto|Search)/"));
+    }
+
+    [Fact]
+    public void TheAndroidClientFilesAreNotAlsoLinkedIntoTheSharedAssembly()
+    {
+        var shared = Linked("libs/BeeMemoryBank.Blind/linked-lib-files.props").ToHashSet();
+        Linked("libs/BeeMemoryBank.Blind.PhoneClient/linked-lib-files.props").Where(shared.Contains).Should().BeEmpty(
+            "a file belongs to one assembly; the phone-only code must not ride along in the Linux container");
     }
 }

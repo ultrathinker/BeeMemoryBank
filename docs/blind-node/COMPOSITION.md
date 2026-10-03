@@ -25,7 +25,9 @@ Management of content and people: `ArticleService`, `ArticleDiffService`, `TreeS
 `KeyManagementService`, `InitializationService`, `UserService`, `RoleService`, `ObsidianImportService`, `BeeImportService`,
 `RestoreService`, `RestoreBootstrapMarker`, `RemoteEventApplier`, `AgentRepository`, `FavoriteRepository`,
 `ArticleVersionRepository`, `SealedSecretService`.
-Sync defaults a full host falls back to: `NoOpRestoreInitiator`, `PeerDekRotationApplier` (a blind node registers its own).
+Sync defaults a full host falls back to: `NoOpRestoreInitiator`, `PeerDekRotationApplier` with `DekRewrapper` and `DekRotationMaterial` (a blind
+node registers its own `BlindDekRotationApplier`), the full node's `AddRecovery` registration (`RecoveryServiceCollectionExtensions`;
+the blind composition registers the recovery services it needs itself). Android-only: `BlindPhonePullClient` lives in `Blind.PhoneClient`.
 
 Host (`ApiServices.cs`) registrations with no counterpart: MCP, agent bearer auth, caller-scope middleware and its HttpContext store,
 the HTTP actor provider, OpenRouter and the chat stack, the embedding model and image transcoder, mDNS, update, DEK rotation, zip export,
@@ -42,8 +44,22 @@ compaction, download tokens, the unlock cache, OS auto-unlock, the remote-accoun
 
 ## Known limits (stated plainly)
 
-The blind assembly still contains `SessionService`, the `Crypto` primitives and the replication code that applies rows: they are
-dependencies of the sync code the originals share, and the originals are not changed by this work. What the blind node does NOT contain
-is every path that could open a session or read content for a person or an agent - no route, no middleware, no service that offers it.
-Removing the session and decryption code from the assembly altogether would need the library code itself to be split, which is a
-separate piece of work on the original libraries.
+The blind assembly still contains `SessionService`, `MasterKeyManager`, the `Crypto` primitives and the replication code that applies
+rows: they are dependencies of the sync code the originals share, and the originals are not changed by this work. What the blind node
+does NOT contain is every path that could open a session or read content for a person or an agent - no route, no middleware, no service
+that offers it - and, since review B, the master-key re-wrap machinery of a peer (`PeerDekRotationApplier`, `DekRewrapper`,
+`DekRotationMaterial`), `SealedSecretService` and the full node's `AddRecovery`.
+
+Two more things stay compiled in because taking them out means editing an original file (tried: the host stops compiling):
+
+* **`SnapshotService`** (a partial class of the Api). The parts a blind node uses - building and serving a ciphertext package,
+  swapping the database file - sit in the same class as snapshot creation, encryption and restore, which call
+  `SessionService.GetMasterDek()`. On a blind volume the master DEK is refused at that call, so the paths cannot run; they are
+  present, not absent.
+* **`BlindNodeManager` and `BlindPreflight`** (the full node's side of adding a blind node). `BlindEndpoints.cs` is one file that maps both
+  the routes of the blind node and the routes of the PC that manages it, so the host links the file and with it the management types.
+  The host does not map the management routes (`ROUTES.golden.txt` is exact).
+
+Splitting those two originals is a separate piece of work on the original code (BMB-91 follow-up). Until then the honest statement is:
+*not reachable and not activatable on a blind volume*, not *not compiled in*.
+

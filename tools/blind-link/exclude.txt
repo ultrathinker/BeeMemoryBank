@@ -46,3 +46,17 @@ api:Services/Recovery/BlindRestoreClient.cs
 api:Services/Recovery/IBackupFileRestoreSource.cs
 api:Services/BlindPhone
 api:Endpoints/RestoreEndpoints.cs
+
+# Codex review B (BMB-91): code that reads or re-wraps the master DEK, or that only the PC side of a blind node uses.
+# Peer DEK rotation (full node / phone re-wrap of retained keys); the blind node has its own BlindDekRotationApplier
+libs/BeeMemoryBank.Sync/DekRotation/PeerDekRotationApplier.cs
+libs/BeeMemoryBank.Sync/DekRotation/DekRewrapper.cs
+libs/BeeMemoryBank.Sync/DekRotation/DekRotationMaterial.cs
+# sealing a secret for a peer (the full node's phone pairing); a blind node never seals
+libs/BeeMemoryBank.Sync/Recovery/SealedSecretService.cs
+# the full-node AddRecovery registration (SealedSecretService, RecoverySetBuilder ...); the blind composition registers its own
+libs/BeeMemoryBank.Sync/Recovery/RecoveryServiceCollectionExtensions.cs
+# NOT excludable without editing the originals (tried, the host does not compile): Services/Blind/BlindNodeManager.cs and
+# BlindPreflight.cs (BlindEndpoints.cs, one shared file, maps the PC-side routes too) and the SnapshotService.* parts
+# (BlindPackageBuilder / BlindSeedService call CreateAsync, SwapDbFileWithRetryAsync, the Crypto helpers). See
+# docs/blind-node/COMPOSITION.md, known limits.

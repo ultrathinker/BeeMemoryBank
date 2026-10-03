@@ -64,7 +64,6 @@ NAME_RES = [re.compile(r"type or namespace name '([A-Za-z0-9_]+)'"), re.compile(
             re.compile(r"does not contain a definition for '([A-Za-z0-9_]+)'"),
             re.compile(r"'([A-Za-z0-9_]+)' does not exist in the namespace")]
 NS_RE = re.compile(r'^\s*namespace\s+([\w.]+)', re.M)
-IMPL_RE = re.compile(r'\bclass\s+([A-Z][A-Za-z0-9_]*)\b[^{;]*?:\s*([^{;]*)')
 ERR_FILE_RE = re.compile(r'^(.*?)\((\d+),\d+\): error')
 
 
@@ -144,7 +143,6 @@ def main():
     seeds = [to_repo_path(s) for s in read_list(SEEDS_FILE)]
     exclude = [to_repo_path(s) for s in read_list(EXCLUDE_FILE)]
     text, declared, partial = {}, collections.defaultdict(set), collections.defaultdict(set)
-    implements = collections.defaultdict(set)   # interface name -> files with a class implementing it
     ns_files = collections.defaultdict(set)     # namespace -> files that declare it
     for f in files:
         s = re.sub(r'//[^\n]*', '', io.open(os.path.join(REPO, f.replace('/', os.sep)), encoding='utf-8', errors='replace').read())
@@ -155,20 +153,22 @@ def main():
             partial[n].add(f)
         for ns in NS_RE.findall(s):
             ns_files[ns].add(f)
-        for _cname, bases in IMPL_RE.findall(s):
-            for b in re.findall(r'\bI[A-Z][A-Za-z0-9_]*\b', bases):
-                implements[b].add(f)
     ok = lambda f: not matches(f, exclude) and not WIRING.search(f) and f not in provided
     links = {f for f in files if matches(f, seeds) and ok(f)}
     # Sync.csproj removes PendingEmbeddingProcessor from its compile list; never link it
     links.discard('libs/BeeMemoryBank.Sync/PendingEmbeddingProcessor.cs')
     unresolved = collections.Counter()
+    ns_added = set()   # files linked only so that a namespace exists
     errs = []
-    for it in range(1, 80):
+
+    def build():
         write_props(links)
         p = subprocess.run(['dotnet', 'build', HOST_PROJ, '-c', 'Release', '--no-incremental', '-nologo', '-v', 'q', '-clp:NoSummary'],
                            capture_output=True, text=True, encoding='utf-8', errors='replace')
-        errs = sorted(set(l.strip() for l in (p.stdout + p.stderr).splitlines() if ' error ' in l))
+        return sorted(set(l.strip() for l in (p.stdout + p.stderr).splitlines() if ' error ' in l))
+
+    for it in range(1, 80):
+        errs = build()
         print('iteration %d: %d api + %d lib files linked, %d distinct errors' % (
             it, sum(1 for f in links if f.startswith('server/')), sum(1 for f in links if f.startswith('libs/')), len(errs)), flush=True)
         wanted = collections.Counter()   # (name, from_lib_project)
@@ -194,6 +194,7 @@ def main():
                     for c in cands:
                         if c not in links:
                             links.add(c)
+                            ns_added.add(c)
                             added += 1
                     continue
             if from_lib:
@@ -211,16 +212,9 @@ def main():
                 if c not in links:
                     links.add(c)
                     added += 1
-        # An interface that linked code mentions needs an implementation at runtime, and the compiler cannot see that
-        # (the container resolves it): link the library classes that implement it.
-        mentioned = set()
-        for f in links:
-            mentioned |= set(re.findall(r'\bI[A-Z][A-Za-z0-9_]*\b', text[f]))
-        for itf in mentioned:
-            for impl in implements.get(itf, ()):
-                if impl.startswith('libs/') and impl not in links and ok(impl):
-                    links.add(impl)
-                    added += 1
+        # Deliberately NO 'interface -> every implementing class' rule: the compiler cannot tell which implementation a container
+        # picks, so such a rule linked classes nothing names (Codex review B). The compositions (BlindComposition, BlindNodeServices,
+        # BlindMobileServices) name every implementation they register; hosted services nothing names are listed in seeds.txt.
         for f in list(links):   # a partial class is linked whole or not at all
             for n in PART_RE.findall(text[f]):
                 for other in partial[n]:
@@ -229,7 +223,15 @@ def main():
                         added += 1
         if added == 0:
             break
-    write_props(links)
+    # A namespace stand-in is the first file found for it, before the real users of that namespace were linked, so it can be an
+    # orphan nothing names. Try each one out: keep it only if the build breaks without it.
+    for c in sorted(ns_added & links):
+        links.discard(c)
+        if build():
+            links.add(c)
+        else:
+            print('pruned (nothing needs it): %s' % c, flush=True)
+    errs = build()
     n_api = sum(1 for f in links if f.startswith('server/'))
     n_lib = sum(1 for f in links if f.startswith('libs/'))
     print('DONE: %d Api files and %d library files linked; remaining errors: %d' % (n_api, n_lib, len(errs)))

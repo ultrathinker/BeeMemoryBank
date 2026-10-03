@@ -20,6 +20,11 @@ namespace BeeMemoryBank.Blind;
 /// management, import and export, restore of a vault, the projection matrix, favourites, agents, article versions,
 /// the embedding processors. The same lifetimes as the originals, for the same reasons (the comments of the full
 /// application's registrations apply here as well).</para>
+///
+/// <para>What is NOT left out, stated plainly: the originals are not changed, so the assembly still contains the services the shared sync
+/// code takes as constructor dependencies (<c>SessionService</c>, the key-slot, user and role repositories, <c>CommentService</c>,
+/// <c>RemoteAccountService</c>, the Crypto primitives). They are registered so the container can build the sync code; nothing in the
+/// blind host opens a session for them to read with. docs/blind-node/COMPOSITION.md lists what stays and why.</para>
 /// </summary>
 public static class BlindComposition
 {

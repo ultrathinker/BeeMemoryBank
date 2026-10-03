@@ -8,11 +8,14 @@
     <Compile Include="..\BeeMemoryBank.Core\Services\BlindPhone\BlindPhoneBackupRunner.cs" Link="Lib\Core\Services\BlindPhone\BlindPhoneBackupRunner.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\BlindPhone\BlindPhoneContracts.cs" Link="Lib\Core\Services\BlindPhone\BlindPhoneContracts.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\BlindPhone\BlindPhoneState.cs" Link="Lib\Core\Services\BlindPhone\BlindPhoneState.cs" />
+    <Compile Include="..\BeeMemoryBank.Core\Services\NullEventLogger.cs" Link="Lib\Core\Services\NullEventLogger.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\AndroidBackupFile.cs" Link="Lib\Crypto\AndroidBackupFile.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\JoinHttp.cs" Link="Lib\Crypto\JoinHttp.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\SpkiPin.cs" Link="Lib\Crypto\SpkiPin.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindPhonePackageSource.cs" Link="Lib\Sync\Blind\BlindPhonePackageSource.cs" />
+    <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindPhonePullClient.cs" Link="Lib\Sync\Blind\BlindPhonePullClient.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindPhoneRecoverySetSource.cs" Link="Lib\Sync\Blind\BlindPhoneRecoverySetSource.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\BlindPhoneReplicaClient.cs" Link="Lib\Sync\Blind\BlindPhoneReplicaClient.cs" />
+    <Compile Include="..\BeeMemoryBank.Sync\Blind\IBlindPhonePullClient.cs" Link="Lib\Sync\Blind\IBlindPhonePullClient.cs" />
   </ItemGroup>
 </Project>
