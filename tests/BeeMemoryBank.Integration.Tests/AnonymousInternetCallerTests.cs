@@ -41,6 +41,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// parallel test classes would share the same IP+path bucket and flake when one of them had
 /// already burnt the 5-attempt budget.</para>
 /// </summary>
+[Collection(ProcessWideRateLimiterCollection.Name)]
 public class AnonymousInternetCallerTests : IAsyncLifetime
 {
     private readonly BmbWebApplicationFactory _factory = new();
@@ -60,6 +61,8 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
     {
         _raw.Dispose();
         _factory.Dispose();
+        // The 429 tests below burn the process-wide bucket on purpose; never leave it burnt for the next class.
+        RateLimitMiddleware.ResetForTests();
         return Task.CompletedTask;
     }
 
