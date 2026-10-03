@@ -1,8 +1,13 @@
-# Blind node image (BMB-54, plan §2/§9): the Api in blind role + the local console + the CLI,
-# plus the restic binary backups run through. Build context is the REPO ROOT:
+# Blind node image (BMB-54, plan §2/§9; BMB-91): the blind node host + the local console + the blind CLI, plus the
+# restic binary backups run through. The host is BeeMemoryBank.BlindNode - its own program, not the full Api in a
+# role - so no MCP server, agent auth, chat, embedding model, image library or update machinery is in the image.
+# Build context is the REPO ROOT:
 #   docker build -f docker/blind/Dockerfile -t bmb-blind:dev .
+# Multi-arch: BuildKit's TARGETARCH picks the runtime identifier, and the build stage runs on the BUILD platform
+# (the .NET SDK cross-publishes), so an arm64 image is not compiled under emulation.
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG TARGETARCH=amd64
 WORKDIR /src
 
 COPY BeeMemoryBank.slnx .
@@ -14,13 +19,20 @@ COPY VERSION .
 COPY libs/ libs/
 COPY server/ server/
 
-RUN dotnet publish server/BeeMemoryBank.Api/BeeMemoryBank.Api.csproj \
-    -c Release -o /app/api
-RUN dotnet publish server/BeeMemoryBank.BlindConsole/BeeMemoryBank.BlindConsole.csproj \
-    -c Release -o /app/console
-# The CLI is the break-glass path for a node whose console password is lost (bmb blind init).
-RUN dotnet publish server/BeeMemoryBank.Cli/BeeMemoryBank.Cli.csproj \
-    -c Release -o /app/cli
+# A RID-specific, framework-dependent publish: only the native assets of the target platform are copied (a plain
+# publish copies every platform's, ~260 MB per program), and no apphost, since the entrypoint runs `dotnet x.dll`.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) rid=linux-x64 ;; \
+        arm64) rid=linux-arm64 ;; \
+        *) echo "no runtime identifier for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    dotnet publish server/BeeMemoryBank.BlindNode/BeeMemoryBank.BlindNode.csproj \
+        -c Release -r "${rid}" --no-self-contained -p:UseAppHost=false -o /app/api; \
+    dotnet publish server/BeeMemoryBank.BlindConsole/BeeMemoryBank.BlindConsole.csproj \
+        -c Release -r "${rid}" --no-self-contained -p:UseAppHost=false -o /app/console; \
+    dotnet publish server/BeeMemoryBank.BlindCli/BeeMemoryBank.BlindCli.csproj \
+        -c Release -r "${rid}" --no-self-contained -p:UseAppHost=false -o /app/cli
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
@@ -61,7 +73,7 @@ RUN chmod +x entrypoint.sh \
 
 # Defaults for every process in the container, `docker exec … bmb blind …` included: the data
 # volume, the two ports the Api listens on (TLS on the published sync port, plain HTTP on a
-# loopback port for local tools — see ApiServices.UseBlindHttps), and where the CLI and the console
+# loopback port for local tools — see BlindNodeServices.UseBlindHttps), and where the CLI and the console
 # find it (the local one; the CLI's own default is a full node's 5300).
 ENV BMB_DATA_PATH=/app/data \
     BMB_BLIND_HTTPS_PORT=5610 \

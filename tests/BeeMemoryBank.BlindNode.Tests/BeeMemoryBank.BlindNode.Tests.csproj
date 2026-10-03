@@ -29,10 +29,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="*.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BmbWebApplicationFactory.cs" Link="Linked\BmbWebApplicationFactory.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindNodeFactory.cs" Link="Linked\BlindNodeFactory.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\RecoveryTestFactory.cs" Link="Linked\RecoveryTestFactory.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\HeavyOperationCollection.cs" Link="Linked\HeavyOperationCollection.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindRouteMatrixTests.cs" Link="Linked\BlindRouteMatrixTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\FakeEmbeddingGenerator.cs" Link="Linked\FakeEmbeddingGenerator.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindBackupEndpointsTests.cs" Link="Linked\BlindBackupEndpointsTests.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindInlineApplyTests.cs" Link="Linked\BlindInlineApplyTests.cs" />

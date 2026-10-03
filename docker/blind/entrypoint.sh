@@ -1,5 +1,5 @@
 #!/bin/bash
-# Blind node entrypoint (BMB-54): Api in blind role on 5610, console on 5611. Both run as
+# Blind node entrypoint (BMB-54): the blind node host on 5610, console on 5611. Both run as
 # children of this script, and whichever exits first takes the container down with it, so the
 # restart policy brings back BOTH — a live console in front of a dead sync listener (or the
 # reverse) must never look like a running node.
@@ -18,7 +18,7 @@ if [ -z "$BMB_INTERNAL_KEY" ]; then
     export BMB_INTERNAL_KEY=$(cat "$KEY_FILE")
 fi
 
-# The Api's two listeners are decided by the blind role itself (ApiServices.UseBlindHttps) and not
+# The host's two listeners are decided by the host itself (BlindNodeServices.UseBlindHttps) and not
 # by ASPNETCORE_URLS: the sync port speaks HTTPS with the node's self-signed certificate, and a
 # plain loopback port sits beside it for local tools. Both default here as well, so the image is
 # consistent however it is started — a bare `docker run` gets the same surfaces compose does.
@@ -40,8 +40,7 @@ fi
 # that certificate's pin). Inherited by the console below and by `docker exec … bmb`.
 export BMB_API_URL="${BMB_API_URL:-http://127.0.0.1:${BMB_BLIND_LOCAL_PORT}}"
 
-BMB_ROLE=blind \
-    dotnet /app/api/BeeMemoryBank.Api.dll &
+dotnet /app/api/BeeMemoryBank.BlindNode.dll &
 api=$!
 
 # The console talks to the Api over the container's own loopback.
