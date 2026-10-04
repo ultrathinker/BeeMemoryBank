@@ -13,11 +13,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Only the host (and through it the Blind assembly): the original Core/Storage/Sync/Crypto libraries define the
-         same types and must not be referenced next to it. A test that needs a type the blind assembly does not
-         contain does not belong in this project. -->
+    <!-- The host (and through it the shared libraries). The Vault is deliberately not referenced: a test that needs a type
+         only the Vault defines does not belong in this project (BlindBoundaryTests proves the host does not contain it). -->
     <ProjectReference Include="..\..\server\BeeMemoryBank.BlindNode\BeeMemoryBank.BlindNode.csproj" />
-    <!-- The phone's client of a blind node: BlindPhone*ClientTests drive it against this host. It references Blind, so no type is twice. -->
+    <!-- The phone's client of a blind node: BlindPhone*ClientTests drive it against this host. It sits on the same shared libraries, so no type is twice. -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
   </ItemGroup>
 
