@@ -145,7 +145,15 @@ public class FolderDeleteAclTests : TestFixture
 
         grantedTo.Should().Contain("BeeMemoryBank.Storage");
         grantedTo.Should().Contain("BeeMemoryBank.Sync");
+        grantedTo.Should().Contain("BeeMemoryBank.Vault", "FolderService (folder delete) moved to the Vault with the full-node services; it is a library with no route of its own");
         grantedTo.Should().NotContain("BeeMemoryBank.Api");
         grantedTo.Should().NotContain("BeeMemoryBank.Web");
+        // Exactly these production assemblies, plus the two test projects: a grant to a THIRD production assembly would put the unscoped
+        // members within reach of another host and must be a conscious decision that updates this list.
+        grantedTo.Should().BeEquivalentTo(new[]
+        {
+            "BeeMemoryBank.Storage", "BeeMemoryBank.Sync", "BeeMemoryBank.Vault",
+            "BeeMemoryBank.Core.Tests", "BeeMemoryBank.Integration.Tests"
+        });
     }
 }

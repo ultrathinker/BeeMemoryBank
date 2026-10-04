@@ -1,8 +1,8 @@
 # Capability inventory (S1): what leaves the shared layer, what must be split
 
-Release 2.0.1. Companion of `D:\review\bmb-vault-split\PLAN-v2.md`. Method: a **removal probe** (`probe_cut.py`, kept in the work folder): take the sets the
+Release 2.0.1. Companion of the release plan (kept outside the repository). Method: a **removal probe** (a throw-away script, not part of the repository; the files it removed are the 35-file table below): take the sets the
 blind host and the phone are compiled from today, remove the files the capability test classifies as vault, stand in empty shells for the removed types,
-build, and read what breaks. What breaks in a file that stays is exactly the seam work. The probe ran in 5 rounds; logs in `logs/probe_*.txt`.
+build, and read what breaks. What breaks in a file that stays is exactly the seam work. The probe ran in 5 rounds.
 
 ## The capability test
 
@@ -51,7 +51,7 @@ blind-owned `BlindComposition.cs` / `BlindNodeServices.cs` / `BlindNodeStartupTa
 * **Allowed shared capabilities** (documented, guarded by a positive list, candidates for a later phase): non-decrypting replay helpers with local-authoring corners that cannot run
   on a blind node - `ConceptTagService`, `FolderAccessService` (cache invalidation / ACL rows used by `EventApplier`), `HardDeleteService` (remote executor + local preview),
   `ArticleRepository` search methods and the `Search` stemmers/tokenizer (plaintext text utilities pulled in by the repository), `InvisibleModeService`.
-  They hold no key and open no content; splitting them is not needed for the claim "the blind node contains no vault code" as defined in PLAN-v2 section 2 (D5).
+  They hold no key and open no content; splitting them is not needed for the claim "the blind node contains no vault code" as defined in the release plan, section 2 (D5).
 * **The full Api keeps its `BMB_ROLE=blind` branch** (`ApiServices.cs`, `ApiPipeline.cs`) for 2.0.1; documented in COMPOSITION.md. It is a full binary in a restricted role, not the blind image.
 * `Sync/PendingEmbeddingProcessor.cs` is a dead excluded file (`Sync.csproj` removes it; the live one is in Embeddings): not moved, not classified.
 
@@ -82,16 +82,16 @@ Layout now (counts are `.cs` files):
 
 | Assembly | Files | Who references it |
 |---|---|---|
-| Core 101, Crypto 13, Search 11, Storage 37, Sync 61 (**shared**) | 223 | every node, the blind host and the Android blind app included |
+| Core 101, Crypto 12, Search 11, Storage 37, Sync 61 (**shared**) | 222 | every node, the blind host and the Android blind app included |
 | `Blind.PhoneClient` (the phone's client of a blind node) | 14 | Android blind app, Api, Web and the tests that exercise it; **not** the Linux blind host, the Vault or the ordinary Android app |
-| `Vault` (full-node layer) | 118 | Api, Cli, Web, Node, Mobile, Embeddings, Infrastructure, Media, Rekey, Migrator, SeedGen and their tests; never the shared libraries |
+| `Vault` (full-node layer) | 120 | Api, Cli, Web, Node, Mobile, Embeddings, Infrastructure, Media, Rekey, Migrator, SeedGen and their tests; never the shared libraries |
 
 Rule used for the move: a library file goes to Vault iff no blind host or phone compiled it (the S1 link sets; 115 files) - the 35 candidates of S1 are among them, together with
 the full-node-only services, repositories, the search index and segment store; the three `DependencyInjection.cs` (AddCore/AddStorage/AddSync compat names) follow. Folders in Vault mirror the
 project each file came from; namespaces are unchanged, so no `using` changed anywhere. The shared libraries build on their own (no reference to Vault or PhoneClient), which is what
 proves they need nothing of it.
 
-Deviations from PLAN-v2, with the reason:
+Deviations from the release plan, with the reason:
 1. `Blind.PhoneClient` is **kept** as a real library (15 `git mv`ed files) instead of being retired: the old test "phone-only code must not ride along in the Linux container" is a property worth keeping,
    and a graph in which PhoneClient and Vault both sit on the shared libraries and never reference each other keeps it true (a first attempt had Vault reference PhoneClient for one class, `BlindPhonePairing`, which only a test used; that dragged the phone client into the ordinary Android app's APK, which the ordinary-app test refuses. The class moved to PhoneClient; `JoinHttp` and `SpkiPin`, used by the CLI and the desktop node too, moved back to Crypto). `NullEventLogger` stays in shared Core (the full node registers it as the default, the phone as its logger; it is two lines).
 2. No warning NoOp default for `IDekRotationApplier` in `AddNodeSync`: the event applier cannot be built without one, so a host that forgets it fails when the container resolves it, which is louder than a log line.
@@ -105,3 +105,16 @@ Sync -> PhoneClient (`BlobTransport`). Vault -> test projects (`SearchService.Ma
 Api and Web remain unlisted in Core's grants, as before.
 
 Goldens after the cut: full-node routes and container identical to the S0 baseline; blind-host container identical to the S2 golden.
+
+## Review round (independent reviews of the finished cut)
+
+Findings that led to changes after S4, and the two decisions that were not changes:
+
+* `StateAnchorCrypto`, `SealedSecretCrypto` and `AesGcmHelper` (DEK-keyed seal / MAC / AES-GCM helpers) moved to the Vault: nothing shared called them any more. The `Crypto -> Vault` friend grant stays for `HeavyDerivationQueue.IsOnWorker`.
+* `docs/vault-split/shared-types.txt` (every type of the shared assemblies and the phone client) is the second half of the contract next to `vault-types.txt`; a type that moves from the Vault to a shared assembly now
+  shows up in both files. `VaultBoundary.ExplicitTypes` was widened (and a test checks that every name in it, and in the blind composition guards, is a real type: two names had the wrong namespace and guarded nothing).
+* `RepositoryWriteGuardrailTests` discovers the repository interfaces in the Vault assembly as well, and fails on allow-list entries that match nothing. `BlindEventLogger` returns faulted tasks with the original wording and has a test per member.
+  The published-folder and trimmed-package scans fail (instead of passing quietly) when `BMB_REQUIRE_SCAN` is set without `BMB_SCAN_DIRS`; CI sets both.
+* `/api/blind/replica` resolves `IReplicaProducerAuthority` when a package is built, as the code it replaced resolved `BlindPreflight`. `SnapshotService` without key operations signs a v=0 identity again.
+* Not changed on purpose: `Models/Requests.cs` and `Models/Responses.cs` are still linked whole into the blind host (data-only records, no behaviour; splitting the management DTOs from the shared ones is a follow-up);
+  the interfaces `ILazySlotRewrapService` and `IRecoveryBoxPublisher` (parameters are DEKs, no logic) stay in Core.

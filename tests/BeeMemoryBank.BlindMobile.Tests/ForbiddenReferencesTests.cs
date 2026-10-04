@@ -265,7 +265,14 @@ public class ForbiddenReferencesTests
             "BeeMemoryBank.Core.Interfaces.ISyncPushPositionRepository",
             "BeeMemoryBank.Storage.Sqlite.SyncPushPositionRepository"
         };
-        var blindAssemblies = new[] { typeof(DbConnectionFactory).Assembly, typeof(BeeMemoryBank.Sync.Blind.BlindPhoneReplicaClient).Assembly };
+        // Every assembly the product has that this project can see: the shared libraries, the phone client and the vault (the tests reference it to play the PC).
+        var blindAssemblies = new[]
+        {
+            typeof(DbConnectionFactory).Assembly, typeof(BeeMemoryBank.Sync.Blind.BlindPhoneReplicaClient).Assembly,
+            typeof(BeeMemoryBank.Core.Models.NodeIdentity).Assembly, typeof(BeeMemoryBank.Crypto.Ed25519Signer).Assembly,
+            typeof(BeeMemoryBank.Sync.EventApplier).Assembly, typeof(BeeMemoryBank.Search.DefaultTokenizer).Assembly,
+            typeof(BeeMemoryBank.Core.Services.SessionService).Assembly
+        };
         Type? Find(string fullName) => blindAssemblies.Select(a => a.GetType(fullName, throwOnError: false)).FirstOrDefault(t => t is not null);
         var forbiddenTypes = forbiddenNames.Select(Find).Where(t => t is not null).Select(t => t!).ToArray();
 

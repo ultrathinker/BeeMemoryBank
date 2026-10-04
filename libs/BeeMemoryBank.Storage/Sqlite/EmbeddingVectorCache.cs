@@ -47,7 +47,7 @@ namespace BeeMemoryBank.Storage.Sqlite;
 ///
 /// <para>
 /// <b>Concurrency.</b> Mirrors the copy-on-write snapshot publish pattern used by
-/// <c>IndexBuilder._sealedSegments</c> (<c>libs/BeeMemoryBank.Search/Indexing/IndexBuilder.cs</c>):
+/// <c>IndexBuilder._sealedSegments</c> (<c>libs/BeeMemoryBank.Vault/Search/Indexing/IndexBuilder.cs</c>):
 /// the cache is published as a single volatile reference (<see cref="_current"/>) to an immutable
 /// <see cref="Snapshot"/>. A rebuild always builds a brand-new snapshot and swaps the reference
 /// wholesale under <see cref="_buildLock"/>; it never mutates a previously-published snapshot in

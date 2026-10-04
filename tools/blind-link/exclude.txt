@@ -53,6 +53,7 @@ api:Endpoints/RestoreEndpoints.cs
 # the master-key operations behind it are ISnapshotKeyOperations.)
 api:Services/SnapshotService.Crypto.cs
 api:Services/SnapshotService.Restore.cs
+api:Services/SnapshotService.FilteredVariant.cs
 api:Services/SnapshotService.NetworkRestore.cs
 api:Services/SnapshotService.Upload.cs
 api:Services/SessionSnapshotKeyOperations.cs

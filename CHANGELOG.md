@@ -17,7 +17,7 @@ No sync protocol (still 3), database format, migration or ciphertext change; not
 - **The libraries are split by what a node needs.** `Core`, `Crypto`, `Search`, `Storage` and `Sync` keep what every node uses (store, relay and
   apply ciphertext, the sync protocol, the external-key identity, pairing and TLS pinning, backups, recovery sets a node receives and serves). The code that
   holds the master key, opens a session, encrypts or decrypts content, creates or opens recovery boxes, restores snapshots with the master key or
-  manages the node is the new `BeeMemoryBank.Vault` (118 files, moved with their history, namespaces unchanged). The shared libraries cannot reference it.
+  manages the node is the new `BeeMemoryBank.Vault` (120 files, moved with their history, namespaces unchanged). The shared libraries cannot reference it.
 - **A blind node does not contain the vault.** The Linux blind host, its console and CLI and the Android blind app reference the shared libraries only.
   Release 1.0.17 had the same code compiled in behind closed doors (no route reached it); an assembly-level scan of that host finds 41 vault types in it, the
   same scan of 2.0.1 finds none. The scan reads the metadata of every application assembly (types defined, types and members referenced, assemblies referenced) and runs
@@ -25,7 +25,7 @@ No sync protocol (still 3), database format, migration or ciphertext change; not
 - **Mixed code was split by operation, not by passing the key around**: snapshot key operations, the master-key sentinel check, the current-key
   fingerprint, who may sign a replica, the external-key node-auth signer and an event logger that refuses to author. The library DI is split the same way
   (`AddNodeStorage` / `AddNodeCore` / `AddNodeSync` are shared; `AddStorage` / `AddCore` / `AddSync` are in the Vault and call them), so no full-node host changed.
-  The route and service lists of the full node and the container of the blind node are pinned by golden files, which are unchanged.
+  The route list and the service container of the full node and the container of the blind node are pinned by golden files taken before the split; the only differences from them are the intended ones (the vault services are gone from the blind container, the full node gained three seam registrations).
 - The old `BeeMemoryBank.Blind` link assembly is gone; `BeeMemoryBank.Blind.PhoneClient` is a real library (14 files: the phone's own client; the Linux node, the Vault and the ordinary Android app do not contain it).
   Notes for contributors: `docs/blind-node/ADR-0002-vault-split.md`, `docs/vault-split/SEAM.md`.
 

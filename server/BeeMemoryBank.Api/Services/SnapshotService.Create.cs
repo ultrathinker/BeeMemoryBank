@@ -17,13 +17,17 @@ namespace BeeMemoryBank.Api.Services;
 public partial class SnapshotService
 {
     /// <summary>
-    /// Signs with the node identity through the key operations this instance was given. Without any (test scaffolding)
-    /// there is no key to sign with.
+    /// Signs with the node identity through the key operations this instance was given. Without any (test scaffolding) only an
+    /// identity that needs no key signs - a legacy plaintext seed (v=0), or a v=2 one whose seed is not there and says so - exactly as
+    /// the code this replaced did without a session.
     /// </summary>
-    private byte[] SignWithIdentity(NodeIdentity nodeIdentity, byte[] payload) =>
-        _keys is null
-            ? throw new InvalidOperationException("Session must be unlocked to sign with v=1 (encrypted) node identity.")
-            : _keys.SignWithIdentity(nodeIdentity, payload);
+    private byte[] SignWithIdentity(NodeIdentity nodeIdentity, byte[] payload)
+    {
+        if (_keys is not null) return _keys.SignWithIdentity(nodeIdentity, payload);
+        if (nodeIdentity.Ed25519PrivateKeyV == 0) return Ed25519Signer.Sign(nodeIdentity.Ed25519PrivateKey, payload);
+        if (nodeIdentity.Ed25519PrivateKeyV == NodeIdentityCrypto.ExternalKeyVersion) return NodeIdentityCrypto.SignWithExternalSeed(null, payload);
+        throw new InvalidOperationException("Session must be unlocked to sign with v=1 (encrypted) node identity.");
+    }
 
     /// <summary>
     /// Create a snapshot of the current node's database (and media).

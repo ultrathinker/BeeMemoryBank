@@ -150,7 +150,7 @@ public class BlindNodeCompositionTests
     [InlineData("BeeMemoryBank.Storage.Sqlite.AgentRepository", "no agents")]
     [InlineData("BeeMemoryBank.Storage.Sqlite.FavoriteRepository", "no favourites")]
     [InlineData("BeeMemoryBank.Storage.Sqlite.ArticleVersionRepository", "no article versions to show")]
-    [InlineData("BeeMemoryBank.Sync.PendingEmbeddingProcessor", "no model, so nothing to embed")]
+    [InlineData("BeeMemoryBank.Embeddings.PendingEmbeddingProcessor", "no model, so nothing to embed")]
     // The master-DEK and full-node machinery of the shared sync code, named exactly (Codex review B): not curated by feel.
     [InlineData("BeeMemoryBank.Sync.DekRotation.PeerDekRotationApplier", "a peer re-wraps retained master DEKs; the blind node has BlindDekRotationApplier")]
     [InlineData("BeeMemoryBank.Sync.DekRotation.DekRewrapper", "re-wrapping a master DEK")]
@@ -184,8 +184,8 @@ public class BlindNodeCompositionTests
     [InlineData("BeeMemoryBank.Sync.Recovery.RecoveryKeyResolver", "it opens no recovery box")]
     [InlineData("BeeMemoryBank.Storage.Sqlite.RetiredMasterDekStore", "it keeps no retired master key")]
     [InlineData("BeeMemoryBank.Api.Services.SessionSnapshotKeyOperations", "full snapshot encryption with the session key")]
-    [InlineData("BeeMemoryBank.Api.Services.Blind.BlindPreflight", "the PC-side pre-flight of a blind node")]
-    [InlineData("BeeMemoryBank.Api.Services.Blind.BlindNodeManager", "the PC-side management of blind nodes")]
+    [InlineData("BeeMemoryBank.Api.Services.BlindPreflight", "the PC-side pre-flight of a blind node")]
+    [InlineData("BeeMemoryBank.Api.Services.BlindNodeManager", "the PC-side management of blind nodes")]
     public void TheBlindCodeDoesNotContain(string fullTypeName, string why)
     {
         FindType(fullTypeName).Should().BeNull(why);

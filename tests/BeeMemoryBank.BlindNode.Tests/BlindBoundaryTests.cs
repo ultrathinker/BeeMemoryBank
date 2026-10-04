@@ -108,7 +108,12 @@ public class BlindBoundaryTests
     {
         var dirs = (Environment.GetEnvironmentVariable("BMB_SCAN_DIRS") ?? "")
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (dirs.Length == 0) return;
+        if (dirs.Length == 0)
+        {
+            // Opt-in locally; the CI job and the release process set BMB_REQUIRE_SCAN so that a missing variable fails instead of passing quietly.
+            Environment.GetEnvironmentVariable("BMB_REQUIRE_SCAN").Should().BeNullOrEmpty("BMB_REQUIRE_SCAN is set, so BMB_SCAN_DIRS must name the published folders");
+            return;
+        }
         foreach (var dir in dirs)
         {
             Directory.Exists(dir).Should().BeTrue(dir + " must exist");

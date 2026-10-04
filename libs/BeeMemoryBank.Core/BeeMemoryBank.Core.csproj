@@ -2,15 +2,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
-    <!-- SearchService.SearchIndexedContentAsync calls IndexBuilder.SearchRanked directly and re-runs
-         the same DefaultTokenizer/DefaultStemmer pipeline IndexBuilder uses at ingestion, so Core
-         needs Search's public API. Search has no project references of its own, so this creates no
-         dependency cycle. -->
-    <ProjectReference Include="..\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="DiffPlex" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <!-- Hosting + Logging abstractions stay in Core: NodeResetService, MediaBlobBackfillService
          and MediaService all use ILogger<T>, and HardDeleteService / others take IServiceScopeFactory

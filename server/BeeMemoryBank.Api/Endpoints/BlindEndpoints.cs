@@ -83,8 +83,7 @@ public static class BlindEndpoints
     public static void MapBlindReplicaEndpoint(this WebApplication app)
     {
         app.MapGet("/api/blind/replica", async (
-            HttpContext ctx, SyncTokenStore store, BlindReplicaPackageCache packages, INodeRole role,
-            [Microsoft.AspNetCore.Mvc.FromServices] IReplicaProducerAuthority? producerAuthority, CancellationToken ct) =>
+            HttpContext ctx, SyncTokenStore store, BlindReplicaPackageCache packages, INodeRole role, CancellationToken ct) =>
         {
             if (await SyncEndpoints.AuthenticatePeerAsync(ctx, store) is not { } peer) return Results.Unauthorized();
             // Only for a blind peer: a full node joins through /api/join and gets the join snapshot,
@@ -98,8 +97,10 @@ public static class BlindEndpoints
             // costs no peer calls and cannot swap the signed bytes under the client.
             var lease = await packages.AcquireAsync(async buildCt =>
             {
-                // Only a full node can know it (IReplicaProducerAuthority asks its full peers); a blind node registers none.
-                if (role.IsBlind || producerAuthority is null) return false;
+                // Only a full node can know it (IReplicaProducerAuthority asks its full peers); a blind node registers none. Resolved here,
+                // when a package is really built, as the code this replaced resolved BlindPreflight: not for a request that is answered 401/403
+                // or served from the cache.
+                if (role.IsBlind || ctx.RequestServices.GetService<IReplicaProducerAuthority>() is not { } producerAuthority) return false;
                 return await producerAuthority.IsSuperadminAsync(buildCt);
             }, ct);
             try

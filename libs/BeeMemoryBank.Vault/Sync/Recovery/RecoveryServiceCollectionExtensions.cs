@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Sync.Recovery;
 /// Recovery services every full host needs — server, desktop node, phone and CLI all go
 /// through <see cref="DependencyInjection.AddSync"/>, and every one of them writes key slots. They create and open recovery
 /// boxes with the master key. The part every node takes (the recovery set builder, the default "my standing") is
-/// <c>AddNodeSync</c> in the shared Sync.
+/// <c>AddNodeSync</c> in the shared Sync, so call this through <c>AddSync</c> (which calls both); alone it registers only the vault half.
 /// </summary>
 public static class RecoveryServiceCollectionExtensions
 {

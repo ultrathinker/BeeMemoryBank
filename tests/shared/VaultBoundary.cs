@@ -42,7 +42,27 @@ internal static class VaultBoundary
         "BeeMemoryBank.Storage.Sqlite.RetiredMasterDekStore",
         "BeeMemoryBank.Api.Services.SessionSnapshotKeyOperations",
         "BeeMemoryBank.Api.Services.Recovery.StrongBoxService",
-        "BeeMemoryBank.Api.Services.Blind.BlindNodeManager"
+        "BeeMemoryBank.Api.Services.BlindNodeManager",
+        "BeeMemoryBank.Api.Services.BlindPreflight",
+        // The contract, not the generated list: these must stay out of every blind binary even if someone moves them out of the Vault
+        // and regenerates docs/vault-split/vault-types.txt (a name that does not resolve to a real type fails VaultBoundaryNamesTests).
+        "BeeMemoryBank.Crypto.AesGcmHelper",
+        "BeeMemoryBank.Crypto.StateAnchorCrypto",
+        "BeeMemoryBank.Crypto.SealedSecretCrypto",
+        "BeeMemoryBank.Crypto.DekEnvelope",
+        "BeeMemoryBank.Core.Services.RestoreService",
+        "BeeMemoryBank.Core.Services.SearchService",
+        "BeeMemoryBank.Core.Services.FolderService",
+        "BeeMemoryBank.Core.Services.UserService",
+        "BeeMemoryBank.Core.Services.RoleService",
+        "BeeMemoryBank.Core.Services.RemoteEventApplier",
+        "BeeMemoryBank.Sync.SnapshotJoinClient",
+        "BeeMemoryBank.Sync.Recovery.RecoveryKeyResolver",
+        "BeeMemoryBank.Sync.Recovery.RecoveryEventPublisher",
+        "BeeMemoryBank.Sync.DekRotation.DekRewrapper",
+        "BeeMemoryBank.Sync.DekRotation.DekRotationMaterial",
+        "BeeMemoryBank.Search.Indexing.IndexBuilder",
+        "BeeMemoryBank.Storage.Search.EncryptedSegmentStore"
     ];
 
     /// <summary>Member names that mean "hand out or try the master data key": no shared type may define or call one.</summary>

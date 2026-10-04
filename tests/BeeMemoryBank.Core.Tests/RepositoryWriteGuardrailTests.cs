@@ -245,6 +245,23 @@ public class RepositoryWriteGuardrailTests
             "Blind node trusting a restored device locally: a blind node cannot publish whitelist_update, by design."),
     ];
 
+    /// <summary>
+    /// The allow-list must not rot: an entry that names an interface or a write method the discovery no longer finds protects nothing and hides
+    /// that the discovery lost sight of something (this is how five interfaces fell out of the scan when they moved to the Vault assembly).
+    /// </summary>
+    [Fact]
+    public void EveryAllowListEntry_NamesAnInterfaceAndAWriteMethodTheDiscoveryFinds()
+    {
+        var discovered = DiscoverWriteMethodsByInterface();
+        discovered.Keys.Should().Contain(["IArticleRepository", "IAgentRepository", "IFavoriteRepository", "IArticleVersionRepository", "IProjectionMatrixRepository"],
+            "the discovery must see the interfaces of both assemblies");
+        var stale = AllowList
+            .Where(a => !discovered.TryGetValue(a.Interface, out var methods) || !methods.Contains(a.Method))
+            .Select(a => $"{a.File}: {a.Interface}.{a.Method}")
+            .ToList();
+        stale.Should().BeEmpty("every allow-list entry must match an interface and write method that exist");
+    }
+
     [Fact]
     public void RepositoryWriteMethods_AreOnlyCalledFromCoreOrTheAllowList()
     {
@@ -355,7 +372,10 @@ public class RepositoryWriteGuardrailTests
     /// </summary>
     private static Dictionary<string, HashSet<string>> DiscoverWriteMethodsByInterface()
     {
+        // The repository interfaces live in two assemblies since the vault split (BMB-99), under the same namespace: the shared Core
+        // and the full-node layer (agents, favourites, article versions, the projection matrix, chunk embeddings).
         var repositoryInterfaces = typeof(IArticleRepository).Assembly.GetTypes()
+            .Concat(typeof(BeeMemoryBank.Core.Services.SessionService).Assembly.GetTypes())
             .Where(t => t.IsInterface
                      && t.Namespace == "BeeMemoryBank.Core.Interfaces"
                      && t.Name.StartsWith('I')

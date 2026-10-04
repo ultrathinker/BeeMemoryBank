@@ -84,3 +84,16 @@ jobs:
             case "$proj" in tests/BeeMemoryBank.BlindMobile.Tests/*) continue ;; esac
             dotnet test "$proj" --no-build -c Release --verbosity normal
           done
+
+      # The proof that a blind node does not contain the vault, on what is actually shipped: the three blind programs are published the way
+      # docker/blind/Dockerfile publishes them and every application assembly in the output is read at the metadata level.
+      # BMB_REQUIRE_SCAN makes the scan fail instead of passing quietly if the variable is not set.
+      - name: Publish the blind programs and scan them for vault code
+        run: |
+          set -e
+          out="$RUNNER_TEMP/blind-publish"
+          for p in BlindNode BlindConsole BlindCli; do
+            dotnet publish "server/BeeMemoryBank.$p/BeeMemoryBank.$p.csproj" -c Release -r linux-x64 --no-self-contained -p:UseAppHost=false -o "$out/$p"
+          done
+          BMB_REQUIRE_SCAN=1 BMB_SCAN_DIRS="$out/BlindNode;$out/BlindConsole;$out/BlindCli" \
+            dotnet test tests/BeeMemoryBank.BlindNode.Tests/BeeMemoryBank.BlindNode.Tests.csproj --no-build -c Release --filter "FullyQualifiedName~PublishedFolders"

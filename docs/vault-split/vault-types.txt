@@ -85,6 +85,7 @@ BeeMemoryBank.Core.Services.ZipEntryReader
 BeeMemoryBank.Core.Services.ZipEntryReader+BoundedReadStream
 BeeMemoryBank.Core.Services.ZipExtractionLimitException
 BeeMemoryBank.Core.UnderscoreFirstComparer
+BeeMemoryBank.Crypto.AesGcmHelper
 BeeMemoryBank.Crypto.AgentKeyHelper
 BeeMemoryBank.Crypto.ArticleEncryptor
 BeeMemoryBank.Crypto.DekEnvelope
@@ -101,6 +102,8 @@ BeeMemoryBank.Crypto.RecoveryAttemptBudget
 BeeMemoryBank.Crypto.RecoveryBoxCrypto
 BeeMemoryBank.Crypto.RecoveryBoxSeal
 BeeMemoryBank.Crypto.SealedEnvelope
+BeeMemoryBank.Crypto.SealedSecretCrypto
+BeeMemoryBank.Crypto.StateAnchorCrypto
 BeeMemoryBank.Search.Indexing.HotBufferEntry
 BeeMemoryBank.Search.Indexing.IndexBuilder
 BeeMemoryBank.Search.Indexing.IndexBuilder+HotCandidate

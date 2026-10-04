@@ -51,6 +51,8 @@ public class AppBoundaryTests
         // The trimmed Release package: the release process extracts the APK's assemblies (or points at the linker output) and names the folder.
         var dirs = (Environment.GetEnvironmentVariable("BMB_SCAN_DIRS") ?? "")
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (dirs.Length == 0)
+            Environment.GetEnvironmentVariable("BMB_REQUIRE_SCAN").Should().BeNullOrEmpty("BMB_REQUIRE_SCAN is set, so BMB_SCAN_DIRS must name the trimmed package folder");
         foreach (var dir in dirs)
         {
             Directory.Exists(dir).Should().BeTrue(dir);

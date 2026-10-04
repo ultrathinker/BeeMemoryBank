@@ -151,6 +151,9 @@ jobs:
       # the `build` job, after the ordinary APK exists (BuildMobileWorkflowTests keeps that split true).
       - name: Run unit & forbidden references tests
         run: |
+          # BMB_SCAN_DIRS: the trimmed package (the linker output) is scanned for vault code as well as the build output;
+          # BMB_REQUIRE_SCAN makes the scan fail instead of passing quietly if the folder is missing.
+          BMB_REQUIRE_SCAN=1 BMB_SCAN_DIRS="$PWD/mobile/BeeMemoryBank.BlindMobile/obj/Release/net10.0-android/android-arm64/linked" \
           dotnet test tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj \
             --filter "FullyQualifiedName!~OrdinaryAppHasNoBlindCodeTests"
 
@@ -159,7 +162,7 @@ jobs:
           APK_PATH=$(find mobile/BeeMemoryBank.BlindMobile/bin/Release/net10.0-android -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then echo "APK not found!"; exit 1; fi
           echo "Found APK: $APK_PATH"
-          if unzip -l "$APK_PATH" | grep -Ei "model\.onnx|Microsoft\.ML\.OnnxRuntime|Microsoft\.ML\.Tokenizers|BeeMemoryBank\.Embeddings|BeeMemoryBank\.Media|SixLabors\.ImageSharp|Indiko\.Maui|Markdig"; then
+          if unzip -l "$APK_PATH" | grep -Ei "model\.onnx|Microsoft\.ML\.OnnxRuntime|Microsoft\.ML\.Tokenizers|BeeMemoryBank\.Embeddings|BeeMemoryBank\.Media|BeeMemoryBank\.Vault|SixLabors\.ImageSharp|Indiko\.Maui|Markdig"; then
             echo "ERROR: Forbidden asset found in Blind APK!"
             exit 1
           fi
