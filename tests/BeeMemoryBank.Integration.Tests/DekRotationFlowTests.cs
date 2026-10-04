@@ -508,7 +508,7 @@ public class DekRotationFlowTests : IAsyncLifetime
             {
                 // Throws CryptographicException if the seed is not sealed under the current DEK —
                 // that is exactly the C1 brick, surfaced as a test failure instead of a wedged node.
-                var seed = NodeIdentityCrypto.GetDecryptedPrivateKey(pk, iv, v, nodeId, dek);
+                var seed = NodeIdentityVault.GetDecryptedPrivateKey(pk, iv, v, nodeId, dek);
                 seed.Length.Should().Be(32, $"the identity seed must open under the current DEK {when}");
                 Array.Clear(seed);
             }

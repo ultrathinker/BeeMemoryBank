@@ -280,7 +280,7 @@ public static class SnapshotEndpoints
             var masterDek = session.GetMasterDek();
             try
             {
-                evt.Signature = NodeIdentityCrypto.SignWithIdentity(
+                evt.Signature = NodeIdentityVault.SignWithIdentity(
                     identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                     identity.NodeId, masterDek, sigPayload);
             }

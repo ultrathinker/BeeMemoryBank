@@ -48,7 +48,7 @@ public sealed class IngestKeyEnroller(IServiceProvider sp, ILogger<IngestKeyEnro
             byte[]? seed = null;
             try
             {
-                seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+                seed = NodeIdentityVault.GetDecryptedPrivateKey(
                     identity.Ed25519PrivateKey,
                     identity.Ed25519PrivateKeyIV,
                     identity.Ed25519PrivateKeyV,

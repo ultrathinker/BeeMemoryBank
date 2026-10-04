@@ -21,17 +21,15 @@
     <Compile Include="..\BeeMemoryBank.Api\Models\Requests.cs" Link="Api\Models\Requests.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Models\Responses.cs" Link="Api\Models\Responses.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Models\SyncModels.cs" Link="Api\Models\SyncModels.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\AuditLogPruningHostedService.cs" Link="Api\Services\AuditLogPruningHostedService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindLogTrimmer.cs" Link="Api\Services\Blind\BlindLogTrimmer.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindNodeManager.cs" Link="Api\Services\Blind\BlindNodeManager.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindPackageBuilder.cs" Link="Api\Services\Blind\BlindPackageBuilder.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindPairing.cs" Link="Api\Services\Blind\BlindPairing.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindPreflight.cs" Link="Api\Services\Blind\BlindPreflight.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindReplicaPackageCache.cs" Link="Api\Services\Blind\BlindReplicaPackageCache.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindSeedCutover.cs" Link="Api\Services\Blind\BlindSeedCutover.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindSeedService.cs" Link="Api\Services\Blind\BlindSeedService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindTlsCertificate.cs" Link="Api\Services\Blind\BlindTlsCertificate.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindTlsIdentity.cs" Link="Api\Services\Blind\BlindTlsIdentity.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\Blind\IReplicaProducerAuthority.cs" Link="Api\Services\Blind\IReplicaProducerAuthority.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\PairingBlindStatusContributor.cs" Link="Api\Services\Blind\PairingBlindStatusContributor.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\SnapshotAdditions.cs" Link="Api\Services\Blind\SnapshotAdditions.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindBackup\BlindBackupScheduleService.cs" Link="Api\Services\BlindBackup\BlindBackupScheduleService.cs" />
@@ -52,28 +50,23 @@
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindStatus\BlindStatusBuilder.cs" Link="Api\Services\BlindStatus\BlindStatusBuilder.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindStatus\CoreBlindStatusContributor.cs" Link="Api\Services\BlindStatus\CoreBlindStatusContributor.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindStatus\IBlindStatusContributor.cs" Link="Api\Services\BlindStatus\IBlindStatusContributor.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\ISnapshotKeyOperations.cs" Link="Api\Services\ISnapshotKeyOperations.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\PublicHostValidator.cs" Link="Api\Services\PublicHostValidator.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\BlindRestoreCode.cs" Link="Api\Services\Recovery\BlindRestoreCode.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\BlindRestoreCodeService.cs" Link="Api\Services\Recovery\BlindRestoreCodeService.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\ICurrentKeyFingerprintSource.cs" Link="Api\Services\Recovery\ICurrentKeyFingerprintSource.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\PeerOwnStanding.cs" Link="Api\Services\Recovery\PeerOwnStanding.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RecoveryBlindStatusContributors.cs" Link="Api\Services\Recovery\RecoveryBlindStatusContributors.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RecoveryBoxQueries.cs" Link="Api\Services\Recovery\RecoveryBoxQueries.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RecoveryCleanupService.cs" Link="Api\Services\Recovery\RecoveryCleanupService.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RecoveryReconcileWatcher.cs" Link="Api\Services\Recovery\RecoveryReconcileWatcher.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RecoveryStatusService.cs" Link="Api\Services\Recovery\RecoveryStatusService.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RecoveryTriggers.cs" Link="Api\Services\Recovery\RecoveryTriggers.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RestoreTlsPin.cs" Link="Api\Services\Recovery\RestoreTlsPin.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\StateAnchorScheduler.cs" Link="Api\Services\Recovery\StateAnchorScheduler.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\StrongBoxPolicy.cs" Link="Api\Services\Recovery\StrongBoxPolicy.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\StrongBoxService.cs" Link="Api\Services\Recovery\StrongBoxService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotJoinCache.cs" Link="Api\Services\SnapshotJoinCache.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Blind.cs" Link="Api\Services\SnapshotService.Blind.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Create.cs" Link="Api\Services\SnapshotService.Create.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Crypto.cs" Link="Api\Services\SnapshotService.Crypto.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Maintenance.cs" Link="Api\Services\SnapshotService.Maintenance.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.NetworkRestore.cs" Link="Api\Services\SnapshotService.NetworkRestore.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Restore.cs" Link="Api\Services\SnapshotService.Restore.cs" />
-    <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Upload.cs" Link="Api\Services\SnapshotService.Upload.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Signature.cs" Link="Api\Services\SnapshotService.Signature.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Swap.cs" Link="Api\Services\SnapshotService.Swap.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.cs" Link="Api\Services\SnapshotService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SyncTokenStore.cs" Link="Api\Services\SyncTokenStore.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Startup\BlindRoleStartup.cs" Link="Api\Startup\BlindRoleStartup.cs" />

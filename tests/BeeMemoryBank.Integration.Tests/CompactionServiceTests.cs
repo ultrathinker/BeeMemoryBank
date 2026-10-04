@@ -39,7 +39,7 @@ public class CompactionServiceTests : IAsyncLifetime
         _nodeRepo = new NodeIdentityRepository(_factory);
 
         Directory.CreateDirectory(_tempDir);
-        _snapshotService = new SnapshotService(_tempDir, _factory, _nodeRepo, new NullLamportClock());
+        _snapshotService = new SnapshotService(_tempDir, _factory, _nodeRepo, new NullLamportClock(), keys: new SessionSnapshotKeyOperations(null));
 
         var (pubKey, privKey) = Ed25519Signer.GenerateKeyPair();
         _localNodeId = Guid.NewGuid();

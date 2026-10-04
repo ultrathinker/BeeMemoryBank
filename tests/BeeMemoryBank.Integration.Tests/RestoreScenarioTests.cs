@@ -762,7 +762,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             var identity = (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
             var session = scope.ServiceProvider.GetRequiredService<SessionService>();
             await session.UnlockAsync(RestoreSourceFixture.Password);
-            var seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+            var seed = NodeIdentityVault.GetDecryptedPrivateKey(
                 identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                 identity.NodeId, session.GetMasterDek());
             try

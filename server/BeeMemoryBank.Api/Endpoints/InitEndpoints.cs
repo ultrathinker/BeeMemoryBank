@@ -242,7 +242,7 @@ public static class InitEndpoints
                 // Encrypt the Ed25519 seed with master DEK before persisting (v=1).
                 // Note: the raw privateKey is kept on the stack until the challenge-response
                 // handshake below is done; cleared at the end of the unlock try/finally.
-                var (wrappedPk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, masterDek, nodeId);
+                var (wrappedPk, pkIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
 
                 var identity = new NodeIdentity
                 {

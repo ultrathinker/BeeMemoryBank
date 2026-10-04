@@ -518,7 +518,7 @@ public static class DekRewrapper
         byte[]? seed = null;
         try
         {
-            seed = NodeIdentityCrypto.GetDecryptedPrivateKey(storedPk, storedIv, 1, nodeId, oldDek);
+            seed = NodeIdentityVault.GetDecryptedPrivateKey(storedPk, storedIv, 1, nodeId, oldDek);
         }
         catch (System.Security.Cryptography.CryptographicException)
         {
@@ -526,7 +526,7 @@ public static class DekRewrapper
             // (idempotent, fine), or it opens under neither (genuinely unrecoverable).
             try
             {
-                Array.Clear(NodeIdentityCrypto.GetDecryptedPrivateKey(storedPk, storedIv, 1, nodeId, newDek));
+                Array.Clear(NodeIdentityVault.GetDecryptedPrivateKey(storedPk, storedIv, 1, nodeId, newDek));
                 return; // already on the new key.
             }
             catch (System.Security.Cryptography.CryptographicException)
@@ -538,7 +538,7 @@ public static class DekRewrapper
 
         try
         {
-            var (rewrapped, iv) = NodeIdentityCrypto.EncryptPrivateKey(seed, newDek, nodeId);
+            var (rewrapped, iv) = NodeIdentityVault.EncryptPrivateKey(seed, newDek, nodeId);
             conn.Execute(
                 @"UPDATE tbl_node_identity
                      SET ed25519_private_key = @pk, ed25519_private_key_iv = @iv, ed25519_private_key_v = 1

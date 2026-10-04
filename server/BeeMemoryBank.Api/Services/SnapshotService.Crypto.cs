@@ -13,23 +13,15 @@ using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Services;
 
+// Full node only: the snapshot database encryption under the master DEK (v1 and v2 layouts). The signature framing every node
+// shares is in SnapshotService.Signature.cs; the key-dependent steps are reached through ISnapshotKeyOperations.
 public partial class SnapshotService
 {
-    // Domain separation tags. These prepend the signed bytes so a signature produced for
-    // one purpose can NEVER verify against a different purpose, even if the underlying
-    // hashes happen to collide. Forms a "fail-closed" structural defense against verifier
-    // confusion bugs in future code.
-    //
-    // EMBEDDED tag — for `manifest.json.sig` inside tar.gz. Signs the manifest bytes only;
-    // file integrity follows transitively from manifest's per-file SHA256 entries.
-    //
-    // SIDECAR tag — for `<file>.tar.gz.sig` next to the archive. Signs SHA256(manifest||file).
-    // Used by sync-export RestoreForJoinAsync.
-    //
-    // Format: ASCII tag + single 0x00 separator + payload. The 0x00 prevents any
-    // collision via prefix-extension since 0x00 cannot appear in our ASCII tag alphabet.
-    private static readonly byte[] DomainTagEmbedded = "BMB-MANIFEST-V1\0"u8.ToArray();
-    private static readonly byte[] DomainTagSidecar  = "BMB-MANIFEST-FILE-V1\0"u8.ToArray();
+    private const string DbEncryptionMagicV1 = "BMBDB1";
+    private const string DbEncryptionMagicV2 = "BMBDB2";
+    private const int DbEncryptionOverheadV1 = 6 + 12 + 16;
+    private const int DbEncryptionOverheadV2 = 6 + 16 + 12 + 16;
+    private const long MaxEncryptableDbSize = 2L * 1024 * 1024 * 1024;
 
     private static readonly byte[] DbEncryptionAad = "bmb-snap-db-v1"u8.ToArray();
     private static readonly byte[] DbEncryptionAadV2 = "bmb-snap-db-v2"u8.ToArray();
@@ -46,58 +38,11 @@ public partial class SnapshotService
         if (!IsDbEncrypted(probe))
             return;
 
-        if (_sessionService is not { IsUnlocked: true })
+        // No key operations at all (test scaffolding) is the same as a locked vault: the file stays unreadable.
+        if (_keys is null)
             throw new InvalidOperationException(
                 "Snapshot database is encrypted but the session is locked. Unlock the vault before restoring.");
-
-        var masterDek = _sessionService.GetMasterDek();
-        try
-        {
-            await DecryptDbFileAsync(extractedDbPath, masterDek);
-        }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
-    }
-
-    /// <summary>
-    /// Sign payload with the node's Ed25519 private key. For legacy v=0 rows (plaintext seed)
-    /// works without a session. For v=1 rows requires an unlocked SessionService to decrypt
-    /// the wrapped seed. Throws InvalidOperationException with a clear message if the version
-    /// is v=1 and no unlocked session is available.
-    /// </summary>
-    private byte[] SignWithIdentityAuto(NodeIdentity nodeIdentity, byte[] payload)
-    {
-        // A blind node signs with the key it keeps outside the database; it has no DEK to wait for.
-        if (nodeIdentity.Ed25519PrivateKeyV == NodeIdentityCrypto.ExternalKeyVersion)
-            return NodeIdentityCrypto.SignWithIdentityOrGetDek(
-                nodeIdentity.Ed25519PrivateKey, nodeIdentity.Ed25519PrivateKeyIV, nodeIdentity.Ed25519PrivateKeyV,
-                nodeIdentity.NodeId, () => throw new InvalidOperationException("A v=2 identity is never signed under the DEK."),
-                _externalKey is null ? null : _externalKey.ReadSeed, payload);
-
-        if (nodeIdentity.Ed25519PrivateKeyV == 0)
-        {
-            // Legacy plaintext: no session needed; pass an empty masterDek (helper does not use
-            // it on the v=0 branch).
-            return NodeIdentityCrypto.SignWithIdentity(
-                nodeIdentity.Ed25519PrivateKey, nodeIdentity.Ed25519PrivateKeyIV, nodeIdentity.Ed25519PrivateKeyV,
-                nodeIdentity.NodeId, Array.Empty<byte>(), payload);
-        }
-
-        if (_sessionService is not { IsUnlocked: true })
-            throw new InvalidOperationException("Session must be unlocked to sign with v=1 (encrypted) node identity.");
-        var masterDek = _sessionService.GetMasterDek();
-        try
-        {
-            return NodeIdentityCrypto.SignWithIdentity(
-                nodeIdentity.Ed25519PrivateKey, nodeIdentity.Ed25519PrivateKeyIV, nodeIdentity.Ed25519PrivateKeyV,
-                nodeIdentity.NodeId, masterDek, payload);
-        }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
+        await _keys.DecryptDatabaseIfNeededAsync(extractedDbPath);
     }
 
     internal static bool IsDbEncrypted(byte[] blob)
@@ -194,27 +139,4 @@ public partial class SnapshotService
         Array.Clear(blob);
     }
 
-    public static byte[] BuildSigPayloadEmbedded(byte[] manifestBytes)
-    {
-        var buf = new byte[DomainTagEmbedded.Length + manifestBytes.Length];
-        Buffer.BlockCopy(DomainTagEmbedded, 0, buf, 0, DomainTagEmbedded.Length);
-        Buffer.BlockCopy(manifestBytes, 0, buf, DomainTagEmbedded.Length, manifestBytes.Length);
-        return buf;
-    }
-
-    // Internal: the blind-package restore checks the whole archive against the sidecar before anything else.
-    internal static async Task<byte[]> ComputeSignaturePayloadAsync(byte[] manifestBytes, string tarGzPath, CancellationToken ct = default)
-    {
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hasher.AppendData(DomainTagSidecar);
-        hasher.AppendData(manifestBytes);
-        await using var fs = File.OpenRead(tarGzPath);
-        var buffer = new byte[81920];
-        int read;
-        while ((read = await fs.ReadAsync(buffer, ct)) > 0)
-        {
-            hasher.AppendData(buffer, 0, read);
-        }
-        return hasher.GetHashAndReset();
-    }
 }

@@ -26,9 +26,9 @@ public sealed record AnchorStatus(string AnchorId, string CreatedAt, string DekF
 /// </summary>
 public class RecoveryStatusService(
     RecoveryBoxQueries queries,
-    SessionService session,
     IWhitelistRepository whitelist,
-    IDbConnectionFactory connFactory)
+    IDbConnectionFactory connFactory,
+    ICurrentKeyFingerprintSource? keySource = null)
 {
     /// <param name="slotId">The signed-in superadmin's key slot: whose password the cleanup tried.</param>
     public async Task<RecoveryStatus> GetAsync(int? slotId)
@@ -86,12 +86,7 @@ public class RecoveryStatusService(
 
     private async Task<string?> CurrentFingerprintAsync()
     {
-        if (session.IsUnlocked)
-        {
-            var dek = session.GetMasterDek();
-            try { return DekFingerprint.Of(dek); }
-            finally { Array.Clear(dek); }
-        }
+        if (keySource?.Current() is { } own) return own;
         return (await NewestAnchorAsync())?.DekFingerprint;
     }
 

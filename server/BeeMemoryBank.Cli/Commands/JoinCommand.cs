@@ -150,7 +150,7 @@ public static class JoinCommand
 
         var now = DateTime.UtcNow;
 
-        var (wrappedPk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, masterDek, nodeId);
+        var (wrappedPk, pkIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
         Array.Clear(privateKey);
 
         var identity = new NodeIdentity

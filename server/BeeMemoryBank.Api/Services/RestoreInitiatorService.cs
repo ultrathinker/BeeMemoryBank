@@ -614,7 +614,7 @@ public class RestoreInitiatorService : IRestoreInitiator
                     .Concat(seederPeer.NodeId.ToByteArray())
                     .Concat(challengeBytes)
                     .ToArray();
-                var signature = NodeIdentityCrypto.SignWithIdentityOrGetDek(
+                var signature = NodeIdentityVault.SignWithIdentityOrGetDek(
                     identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                     identity.NodeId, () => _sessionService.GetMasterDek(), challengePayload);
 

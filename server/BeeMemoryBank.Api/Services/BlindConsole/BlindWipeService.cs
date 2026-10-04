@@ -38,7 +38,6 @@ public sealed class BlindWipeService(
     // exactly what makes the wipe race a reader.
     DbConnectionFactory connFactory,
     INodeIdentityRepository nodeRepo,
-    SessionService session,
     MaintenanceModeService maintenance,
     SyncTokenStore tokens,
     BlindJobManager jobs,
@@ -79,7 +78,7 @@ public sealed class BlindWipeService(
         tokens.Clear();
 
         // One barrier for every OTHER writer, taken in one documented order (review release-a2
-        // agy#4, sec#6, spec#3). Maintenance and the session lock below stop HTTP callers only:
+        // agy#4, sec#6, spec#3). Maintenance below stops HTTP callers only:
         //
         //   1. the event-write gate — holds new event writes off (EventApplier, the log trimmer)
         //      and waits for the ones already running; this flow is the owner, so its own writes
@@ -96,7 +95,7 @@ public sealed class BlindWipeService(
         {
             EventWriteGate.EnterOwnerFlow();
             maintenance.Enter("Wiping the blind node…");
-            session.Lock();
+            // (No session to lock: a blind node never holds a master key, so there is no session to clear.)
             await HeavyOperationLock.Instance.WaitAsync(ct);
             try
             {

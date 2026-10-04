@@ -84,7 +84,7 @@ public static class BlindEndpoints
     {
         app.MapGet("/api/blind/replica", async (
             HttpContext ctx, SyncTokenStore store, BlindReplicaPackageCache packages, INodeRole role,
-            IHttpClientFactory httpClients, CancellationToken ct) =>
+            [Microsoft.AspNetCore.Mvc.FromServices] IReplicaProducerAuthority? producerAuthority, CancellationToken ct) =>
         {
             if (await SyncEndpoints.AuthenticatePeerAsync(ctx, store) is not { } peer) return Results.Unauthorized();
             // Only for a blind peer: a full node joins through /api/join and gets the join snapshot,
@@ -98,10 +98,9 @@ public static class BlindEndpoints
             // costs no peer calls and cannot swap the signed bytes under the client.
             var lease = await packages.AcquireAsync(async buildCt =>
             {
-                if (role.IsBlind) return false;
-                using var http = httpClients.CreateClient("SyncScheduler");
-                return await ctx.RequestServices.GetRequiredService<BlindPreflight>()
-                    .IsSuperadminInNetworkAsync(http, buildCt);
+                // Only a full node can know it (IReplicaProducerAuthority asks its full peers); a blind node registers none.
+                if (role.IsBlind || producerAuthority is null) return false;
+                return await producerAuthority.IsSuperadminAsync(buildCt);
             }, ct);
             try
             {
@@ -122,51 +121,6 @@ public static class BlindEndpoints
                 throw;
             }
         }).WithTags("Blind");
-    }
-
-    /// <summary>Mapped on a full node: the PC side of "Blind nodes" (plan 4.2, 5.2, 9).</summary>
-    public static void MapBlindNodeManagementEndpoints(this WebApplication app)
-    {
-        var group = app.MapGroup("/api/blind-nodes").WithTags("Blind").RequireInternalKey().RequireSuperadmin();
-
-        group.MapGet("/", async (BlindNodeManager manager) => Results.Ok(await manager.ListAsync()));
-
-        group.MapPost("/", async (AddBlindNodeRequest req, BlindNodeManager manager, CancellationToken ct) =>
-        {
-            try
-            {
-                return Results.Ok(await manager.AddAsync(req.Code, ct));
-            }
-            catch (FormatException ex)
-            {
-                return Results.Json(new ErrorResponse(ex.Message), statusCode: 400);
-            }
-            catch (BlindPreflightFailedException ex)
-            {
-                return Results.Json(new { error = ex.Message, problems = ex.Problems, details = ex.Details }, statusCode: 409);
-            }
-            catch (BlindNodeUnreachableException ex)
-            {
-                return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
-            }
-        });
-
-        group.MapPost("/{nodeId:guid}/reseed", async (Guid nodeId, BlindNodeManager manager, CancellationToken ct) =>
-        {
-            try
-            {
-                await manager.ReseedAsync(nodeId, ct);
-                return Results.Ok();
-            }
-            catch (KeyNotFoundException)
-            {
-                return Results.NotFound();
-            }
-            catch (BlindNodeUnreachableException ex)
-            {
-                return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
-            }
-        });
     }
 
     /// <summary>
@@ -199,5 +153,3 @@ public static class BlindEndpoints
             notice = BlindPairing.AuthorityNotice
         };
 }
-
-public sealed record AddBlindNodeRequest(string Code);

@@ -53,7 +53,7 @@ public class RecoveryEventPublisher(
             ActorType = "system",
             ActorName = identity.DisplayName,
         };
-        evt.Signature = NodeIdentityCrypto.SignWithIdentityOrGetDek(
+        evt.Signature = NodeIdentityVault.SignWithIdentityOrGetDek(
             identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
             identity.NodeId, () => dek != null ? (byte[])dek.Clone() : session.GetMasterDek(),
             EventSignature.BuildPayload(evt));

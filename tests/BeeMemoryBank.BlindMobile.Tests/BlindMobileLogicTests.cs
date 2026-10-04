@@ -61,19 +61,10 @@ public class BlindMobileLogicTests
             var diffAct = async () => await recorder.RecordAsync(BlindNodeId.NewId(), pubKey, "Another Phone", CancellationToken.None);
             await diffAct.Should().ThrowAsync<InvalidOperationException>();
 
-            // Attempting to decrypt the private key using NodeIdentityCrypto throws with external key notice
-            var decryptAct = () => BeeMemoryBank.Crypto.NodeIdentityCrypto.GetDecryptedPrivateKey(
-                identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV, identity.NodeId, new byte[32]);
-            var ex = decryptAct.Should().Throw<InvalidOperationException>();
-            ex.Which.Message.Should().Contain("outside the database (v=2)");
-
-            // Signing using NodeIdentityCrypto with external seed callback succeeds
+            // The phone holds the seed outside the database (v=2): the shared NodeIdentityCrypto signs with it and
+            // never asks for a master DEK (the DEK-wrapped identity code is full-node code and is not in this build).
             var payload = "test-payload"u8.ToArray();
-            var signature = BeeMemoryBank.Crypto.NodeIdentityCrypto.SignWithIdentityOrGetDek(
-                identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV, identity.NodeId,
-                getMasterDek: () => throw new Exception("DEK should never be requested"),
-                getExternalSeed: () => seed,
-                payload);
+            var signature = BeeMemoryBank.Crypto.NodeIdentityCrypto.SignWithExternalSeed(() => seed, payload);
 
             BeeMemoryBank.Crypto.Ed25519Signer.Verify(identity.Ed25519PublicKey, payload, signature).Should().BeTrue();
         }

@@ -226,7 +226,7 @@ public partial class DekRotationService
                 };
 
                 var sigPayload = EventSignature.BuildPayload(proposedEvent);
-                proposedEvent.Signature = NodeIdentityCrypto.SignWithIdentityOrGetDek(
+                proposedEvent.Signature = NodeIdentityVault.SignWithIdentityOrGetDek(
                     identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                     identity.NodeId, () => _sessionService.GetMasterDek(), sigPayload);
                 await eventLogRepo.AppendAsync(proposedEvent);
@@ -282,7 +282,7 @@ public partial class DekRotationService
                 };
 
                 var commitSigPayload = EventSignature.BuildPayload(commitEvent);
-                commitEvent.Signature = NodeIdentityCrypto.SignWithIdentityOrGetDek(
+                commitEvent.Signature = NodeIdentityVault.SignWithIdentityOrGetDek(
                     identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                     identity.NodeId, () => _sessionService.GetMasterDek(), commitSigPayload);
                 await eventLogRepo.AppendAsync(commitEvent);

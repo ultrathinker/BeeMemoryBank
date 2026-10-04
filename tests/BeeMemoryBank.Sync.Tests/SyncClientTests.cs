@@ -43,12 +43,13 @@ public class SyncClientTests : IAsyncLifetime
             syncPositionRepo,
             pushPositionRepo,
             _node.EventApplier,
-            _node.Session,
             authSigner,
             logger,
             _peerNewerProtocolState,
             _node.QuarantineRepo,
-            new BlobRepository(_node.Factory));
+            new BlobRepository(_node.Factory),
+            sentinelVerifier: new RemoteSentinelVerifier(_node.Session,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteSentinelVerifier>.Instance));
 
         _remoteNodeId = Guid.NewGuid();
         _mockHandler = new MockHandler();

@@ -24,6 +24,8 @@ public static class DependencyInjection
         services.AddScoped<IEventLogger, EventLogger>();
         services.AddScoped<EventApplier>();
         services.AddScoped<SyncClient>();
+        // The master-DEK sentinel check of SyncClient (vault code; a blind node registers none and skips the check).
+        services.TryAddScoped<IRemoteSentinelVerifier, RemoteSentinelVerifier>();
         services.AddScoped<HardDeleteService>();
 
         // Registered here (Sync's own DI) rather than Storage's AddStorage(), unlike the other

@@ -14,6 +14,8 @@ public static class RecoveryApiServices
         services.RemoveAll<IOwnStandingProvider>();
         services.AddSingleton<IOwnStandingProvider, PeerOwnStanding>();
         services.AddScoped<RecoveryBoxQueries>();
+        // "The current key" of the status is the session DEK's fingerprint on a node that holds the DEK (a blind node registers none).
+        services.AddScoped<ICurrentKeyFingerprintSource, SessionKeyFingerprintSource>();
         services.AddScoped<RecoveryStatusService>();
         services.AddSingleton<StrongBoxService>();
         services.AddSingleton<RecoveryCleanupService>();

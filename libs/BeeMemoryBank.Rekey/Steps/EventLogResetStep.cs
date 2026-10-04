@@ -70,7 +70,7 @@ public sealed class EventLogResetStep : IRekeyStep
             ActorType = "system",
             ActorName = id.Name,
         };
-        evt.Signature = NodeIdentityCrypto.SignWithIdentity(id.Pk, id.Iv, (int)id.V, evt.NodeId, ctx.Keys.CampaignDek,
+        evt.Signature = NodeIdentityVault.SignWithIdentity(id.Pk, id.Iv, (int)id.V, evt.NodeId, ctx.Keys.CampaignDek,
             EventSignature.BuildPayload(evt));
         // Bound exactly as EventLogRepository.AppendAsync binds an event, so the row reads back the same way.
         await db.ExecuteAsync(

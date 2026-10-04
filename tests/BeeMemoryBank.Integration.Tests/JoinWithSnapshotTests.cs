@@ -49,7 +49,7 @@ public class JoinWithSnapshotTests : IAsyncLifetime
         await new MigrationRunner(_producerFactory).RunMigrationsAsync();
         _producerNodeRepo = new NodeIdentityRepository(_producerFactory);
         _producerClock = new NullLamportClock();
-        _producerSnapshot = new SnapshotService(_producerDir, _producerFactory, _producerNodeRepo, _producerClock);
+        _producerSnapshot = new SnapshotService(_producerDir, _producerFactory, _producerNodeRepo, _producerClock, keys: new SessionSnapshotKeyOperations(null));
 
         await _producerNodeRepo.CreateAsync(new NodeIdentity
         {
@@ -66,7 +66,7 @@ public class JoinWithSnapshotTests : IAsyncLifetime
         await new MigrationRunner(_joinerFactory).RunMigrationsAsync();
         _joinerNodeRepo = new NodeIdentityRepository(_joinerFactory);
         _joinerClock = new NullLamportClock();
-        _joinerSnapshot = new SnapshotService(_joinerDir, _joinerFactory, _joinerNodeRepo, _joinerClock);
+        _joinerSnapshot = new SnapshotService(_joinerDir, _joinerFactory, _joinerNodeRepo, _joinerClock, keys: new SessionSnapshotKeyOperations(null));
 
         await _joinerNodeRepo.CreateAsync(new NodeIdentity
         {

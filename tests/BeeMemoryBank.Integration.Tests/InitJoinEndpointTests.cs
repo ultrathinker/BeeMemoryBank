@@ -144,7 +144,7 @@ public class InitJoinEndpointTests : IAsyncLifetime
         byte[] signature;
         try
         {
-            signature = BeeMemoryBank.Crypto.NodeIdentityCrypto.SignWithIdentity(
+            signature = BeeMemoryBank.Crypto.NodeIdentityVault.SignWithIdentity(
                 identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                 identity.NodeId, masterDek, challengePayload);
         }

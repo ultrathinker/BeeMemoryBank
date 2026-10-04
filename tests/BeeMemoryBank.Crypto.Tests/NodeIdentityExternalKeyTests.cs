@@ -15,7 +15,7 @@ public class NodeIdentityExternalKeyTests
         var (pub, seed) = Ed25519Signer.GenerateKeyPair();
 
         byte[]? sig = null;
-        var act = () => sig = NodeIdentityCrypto.SignWithIdentityOrGetDek(
+        var act = () => sig = NodeIdentityVault.SignWithIdentityOrGetDek(
             [], null, NodeIdentityCrypto.ExternalKeyVersion, NodeId,
             getMasterDek: () => throw new InvalidOperationException("DEK requested"),
             getExternalSeed: () => (byte[])seed.Clone(),
@@ -28,7 +28,7 @@ public class NodeIdentityExternalKeyTests
     [Fact]
     public void V2_WithoutAnExternalSource_FailsSayingWhy()
     {
-        var act = () => NodeIdentityCrypto.SignWithIdentityOrGetDek(
+        var act = () => NodeIdentityVault.SignWithIdentityOrGetDek(
             [], null, NodeIdentityCrypto.ExternalKeyVersion, NodeId, () => new byte[32], Payload);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*outside the database*");
@@ -41,7 +41,7 @@ public class NodeIdentityExternalKeyTests
     [Fact]
     public void V2_HasNothingToDecrypt()
     {
-        var act = () => NodeIdentityCrypto.GetDecryptedPrivateKey(
+        var act = () => NodeIdentityVault.GetDecryptedPrivateKey(
             [], null, NodeIdentityCrypto.ExternalKeyVersion, NodeId, new byte[32]);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*outside the database*");
@@ -52,9 +52,9 @@ public class NodeIdentityExternalKeyTests
     {
         var (pub, seed) = Ed25519Signer.GenerateKeyPair();
         var dek = new byte[32];
-        var (wrapped, iv) = NodeIdentityCrypto.EncryptPrivateKey(seed, dek, NodeId);
+        var (wrapped, iv) = NodeIdentityVault.EncryptPrivateKey(seed, dek, NodeId);
 
-        var sig = NodeIdentityCrypto.SignWithIdentityOrGetDek(
+        var sig = NodeIdentityVault.SignWithIdentityOrGetDek(
             wrapped, iv, 1, NodeId, () => (byte[])dek.Clone(),
             getExternalSeed: () => throw new InvalidOperationException("external key requested"),
             Payload);

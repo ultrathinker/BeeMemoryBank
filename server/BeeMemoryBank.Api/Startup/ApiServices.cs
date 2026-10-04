@@ -139,9 +139,9 @@ builder.Services.AddSingleton(sp =>
         // GetRequiredService, not GetService: a SnapshotService without a session has no way to
         // encrypt, and CreateAsync then writes the vault out in the clear. That must not be
         // reachable by silently resolving null at the composition root.
-        sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
-        // Only in the blind role: the key a blind node signs its packages with.
-        sp.GetService<IExternalNodeKey>()));
+        new SessionSnapshotKeyOperations(sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
+            // Only in the blind role: the key a blind node signs its packages with.
+            sp.GetService<IExternalNodeKey>())));
 // Singleton: RestoreInitiatorService holds in-memory progress state for /restore/progress polling.
 // Task.Run flows in EventApplier and SnapshotEndpoints fire-and-forget, so the service must outlive
 // the request scope. Scoped dependencies (repositories) are resolved via IServiceScopeFactory per
@@ -269,6 +269,8 @@ else
     // The PC's side of blind nodes (plan 4.2, 5.2): pairing, pre-flight, reseed — and reseeding a
     // blind peer from the sync scheduler when it needs it.
     builder.Services.AddScoped<BlindPreflight>();
+    // GET /api/blind/replica asks this when it builds a package: is this node a superadmin in the network?
+    builder.Services.AddScoped<IReplicaProducerAuthority, BlindPreflightReplicaAuthority>();
     // The local flags table exists on every node; here it only holds the note of an adopted blind checkpoint (the
     // Blind nodes page, SyncClient.SyncWithPeerAsync). A blind node registers it with its own services.
     builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.BlindState>();

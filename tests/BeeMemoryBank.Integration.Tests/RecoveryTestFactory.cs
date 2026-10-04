@@ -27,7 +27,9 @@ public sealed class RecoveryTestFactory(
         }
         builder.ConfigureTestServices(s =>
         {
+#if !BLIND_NODE_HOST // the blind host has no recovery host (the strong box is built by a node that holds the master key)
             s.AddSingleton<IRecoveryHost>(new FixedHost(kind, availableBytes));
+#endif
             s.AddSingleton<IOwnStandingProvider>(new FixedStanding(superadmin));
             if (blind) s.AddSingleton<INodeRole>(new EnvironmentNodeRole("blind"));
             services?.Invoke(s);
@@ -54,9 +56,11 @@ public sealed class RecoveryTestFactory(
         public Task<bool> IsSuperadminAsync(CancellationToken ct = default) => Task.FromResult(superadmin);
     }
 
+#if !BLIND_NODE_HOST
     private sealed class FixedHost(RecoveryHostKind kind, long available) : IRecoveryHost
     {
         public RecoveryHostKind Kind => kind;
         public long AvailableMemoryBytes() => available;
     }
+#endif
 }

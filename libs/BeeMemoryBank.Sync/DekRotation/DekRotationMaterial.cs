@@ -55,7 +55,7 @@ public static class DekRotationMaterial
 
             // v1 identity seeds are wrapped under the CURRENT master DEK, which is oldDek here (the
             // swap has not happened yet).
-            var seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+            var seed = NodeIdentityVault.GetDecryptedPrivateKey(
                 identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                 identity.NodeId, oldDek);
 

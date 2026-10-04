@@ -160,7 +160,7 @@ public class NodeSetupService
         // access (rooted device, lost-phone scenario) reads the seed straight
         // out of beememorybank.db and can sign arbitrary sync events as this
         // node — effectively destroying the user's network state.
-        var (wrappedPrivKey, privKeyIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, masterDek, nodeId);
+        var (wrappedPrivKey, privKeyIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
         // Do NOT zero `privateKey` here — the snapshot-join handshake below still
         // signs the /api/sync/challenge response with it. Cleared in the finally
         // after the handshake. Forgetting this made every join fail with HTTP 401.

@@ -44,7 +44,7 @@ public class SnapshotCheckpointTests : IAsyncLifetime
 
         Directory.CreateDirectory(_tempDir);
         var clock = new NullLamportClock();
-        _snapshotService = new SnapshotService(_tempDir, _factory, _nodeRepo, clock);
+        _snapshotService = new SnapshotService(_tempDir, _factory, _nodeRepo, clock, keys: new SessionSnapshotKeyOperations(null));
 
         var (pubKey, privKey) = Ed25519Signer.GenerateKeyPair();
         _localNodeId = Guid.NewGuid();

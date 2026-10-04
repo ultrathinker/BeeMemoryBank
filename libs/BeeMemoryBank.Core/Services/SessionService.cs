@@ -446,7 +446,7 @@ public class SessionService(
                 var current = await nodeRepo.GetAsync();
                 if (current == null || current.Ed25519PrivateKeyV != 0) return;
 
-                var (wrapped, iv) = NodeIdentityCrypto.EncryptPrivateKey(
+                var (wrapped, iv) = NodeIdentityVault.EncryptPrivateKey(
                     current.Ed25519PrivateKey, migrationDek, current.NodeId);
                 await nodeRepo.UpgradePrivateKeyToV1Async(current.NodeId, wrapped, iv);
             }

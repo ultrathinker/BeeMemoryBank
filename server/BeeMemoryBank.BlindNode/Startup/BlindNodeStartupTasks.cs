@@ -153,13 +153,7 @@ public static class BlindNodeStartupTasks
             }
         });
 
-        // Session cleanup: wipe the (never populated) master DEK slot on shutdown, as every node does.
-        app.Lifetime.ApplicationStopping.Register(() =>
-        {
-            var session = app.Services.GetRequiredService<SessionService>();
-            session.ClearPendingDek();
-            session.Lock();
-            logger.LogInformation("Session locked on application shutdown");
-        });
+        // (No session cleanup on shutdown: a blind node has no session and never holds a master DEK, so there is
+        // no key slot to wipe. The full node locks its session here.)
     }
 }

@@ -18,12 +18,6 @@ public partial class SnapshotService
     private const string DbFileName = "beememorybank.db";
     private const string ManifestFileName = "manifest.json";
 
-    private const string DbEncryptionMagicV1 = "BMBDB1";
-    private const string DbEncryptionMagicV2 = "BMBDB2";
-    private const int DbEncryptionOverheadV1 = 6 + 12 + 16;
-    private const int DbEncryptionOverheadV2 = 6 + 16 + 12 + 16;
-    private const long MaxEncryptableDbSize = 2L * 1024 * 1024 * 1024;
-
     private readonly string _dataPath;
     private readonly DbConnectionFactory _connFactory;
     private readonly INodeIdentityRepository? _nodeRepo;
@@ -31,9 +25,10 @@ public partial class SnapshotService
     private readonly ILogger<SnapshotService>? _logger;
     private readonly IRestoreReplayShieldRepository? _replayShieldRepo;
     private readonly IWhitelistRepository? _whitelistRepo;
-    private readonly BeeMemoryBank.Core.Services.SessionService? _sessionService;
-    // A blind node's identity key (row v=2, plan 3.5): it signs the packages it serves with it.
-    private readonly IExternalNodeKey? _externalKey;
+    // The key-dependent steps (signing with the identity key, encrypting / decrypting the snapshot database). A full node passes
+    // SessionSnapshotKeyOperations (master DEK); a blind node passes a signer that only has its external v=2 key (plan 3.5) and
+    // refuses the rest. Null = no key capability at all (test scaffolding): nothing is encrypted and only a key-free identity signs.
+    private readonly ISnapshotKeyOperations? _keys;
 
     public string SnapshotsDir => Path.Combine(_dataPath, "snapshots");
 
@@ -42,8 +37,7 @@ public partial class SnapshotService
         ILogger<SnapshotService>? logger = null,
         IRestoreReplayShieldRepository? replayShieldRepo = null,
         IWhitelistRepository? whitelistRepo = null,
-        BeeMemoryBank.Core.Services.SessionService? sessionService = null,
-        IExternalNodeKey? externalKey = null)
+        ISnapshotKeyOperations? keys = null)
     {
         _dataPath = dataPath;
         _connFactory = connFactory;
@@ -52,8 +46,7 @@ public partial class SnapshotService
         _logger = logger;
         _replayShieldRepo = replayShieldRepo;
         _whitelistRepo = whitelistRepo;
-        _sessionService = sessionService;
-        _externalKey = externalKey;
+        _keys = keys;
     }
 
     public List<SnapshotInfo> List()

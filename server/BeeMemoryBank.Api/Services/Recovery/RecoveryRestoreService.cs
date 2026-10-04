@@ -285,7 +285,7 @@ public class RecoveryRestoreService(
             {
                 nodeId = Guid.NewGuid();
                 (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
-                (wrappedPk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, keys.Current, nodeId);
+                (wrappedPk, pkIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, keys.Current, nodeId);
                 Array.Clear(privateKey);
             }
 
@@ -473,7 +473,7 @@ public class RecoveryRestoreService(
         byte[]? seed = null;
         try
         {
-            seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+            seed = NodeIdentityVault.GetDecryptedPrivateKey(
                 identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                 identity.NodeId, dek);
             return true;
@@ -517,7 +517,7 @@ public class RecoveryRestoreService(
         byte[]? seed = null;
         try
         {
-            seed = NodeIdentityCrypto.GetDecryptedPrivateKey(
+            seed = NodeIdentityVault.GetDecryptedPrivateKey(
                 persisted.Ed25519PrivateKey, persisted.Ed25519PrivateKeyIV, persisted.Ed25519PrivateKeyV,
                 persisted.NodeId, dek);
             if (!Ed25519Signer.Verify(persisted.Ed25519PublicKey, probe, Ed25519Signer.Sign(seed, probe)))

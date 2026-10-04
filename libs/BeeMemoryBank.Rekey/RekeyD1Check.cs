@@ -132,7 +132,7 @@ public static class RekeyD1Check
         var identity = await db.QuerySingleOrDefaultAsync<(string NodeId, byte[] Pk, byte[]? Iv, long V)>(
             "SELECT node_id, ed25519_private_key, ed25519_private_key_iv, ed25519_private_key_v FROM tbl_node_identity LIMIT 1");
         if (identity.V == 1 && Guid.TryParse(identity.NodeId, out var nodeId)
-            && old.Masters.Any(k => Opens(() => NodeIdentityCrypto.GetDecryptedPrivateKey(identity.Pk, identity.Iv, 1, nodeId, k))))
+            && old.Masters.Any(k => Opens(() => NodeIdentityVault.GetDecryptedPrivateKey(identity.Pk, identity.Iv, 1, nodeId, k))))
             Opened("tbl_node_identity", "ed25519_private_key", "master key");
         var sentinel = await db.ExecuteScalarAsync<byte[]?>("SELECT sentinel_value FROM tbl_node_identity LIMIT 1");
         if (sentinel == null || !MasterKeyManager.VerifySentinel(sentinel, ctx.Keys.CampaignDek))

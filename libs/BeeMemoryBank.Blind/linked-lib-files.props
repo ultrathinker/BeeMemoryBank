@@ -41,7 +41,6 @@
     <Compile Include="..\BeeMemoryBank.Core\Interfaces\IRestoreEventStateRepository.cs" Link="Lib\Core\Interfaces\IRestoreEventStateRepository.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Interfaces\IRestoreReplayShieldRepository.cs" Link="Lib\Core\Interfaces\IRestoreReplayShieldRepository.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Interfaces\IRestoreRetrier.cs" Link="Lib\Core\Interfaces\IRestoreRetrier.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Interfaces\IRetiredMasterDekStore.cs" Link="Lib\Core\Interfaces\IRetiredMasterDekStore.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Interfaces\IRoleAclRepository.cs" Link="Lib\Core\Interfaces\IRoleAclRepository.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Interfaces\IRoleRepository.cs" Link="Lib\Core\Interfaces\IRoleRepository.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Interfaces\ISyncPositionRepository.cs" Link="Lib\Core\Interfaces\ISyncPositionRepository.cs" />
@@ -85,42 +84,30 @@
     <Compile Include="..\BeeMemoryBank.Core\Services\BlobHash.cs" Link="Lib\Core\Services\BlobHash.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\CallerScope.cs" Link="Lib\Core\Services\CallerScope.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\CallerScopeHolder.cs" Link="Lib\Core\Services\CallerScopeHolder.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\CommentService.cs" Link="Lib\Core\Services\CommentService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\ConceptTagService.cs" Link="Lib\Core\Services\ConceptTagService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\FolderAccessService.cs" Link="Lib\Core\Services\FolderAccessService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\HeavyOperationLock.cs" Link="Lib\Core\Services\HeavyOperationLock.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\ICallerScopeStore.cs" Link="Lib\Core\Services\ICallerScopeStore.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\InstanceCallerScopeStore.cs" Link="Lib\Core\Services\InstanceCallerScopeStore.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\InvisibleModeService.cs" Link="Lib\Core\Services\InvisibleModeService.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\LegacyPasswordSlotMigrationService.cs" Link="Lib\Core\Services\LegacyPasswordSlotMigrationService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\MaintenanceModeService.cs" Link="Lib\Core\Services\MaintenanceModeService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\MediaBlobBackfillService.cs" Link="Lib\Core\Services\MediaBlobBackfillService.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\MediaService.cs" Link="Lib\Core\Services\MediaService.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\NodeDataKeyEnvelope.cs" Link="Lib\Core\Services\NodeDataKeyEnvelope.cs" />
+    <Compile Include="..\BeeMemoryBank.Core\Services\MediaStorageOptions.cs" Link="Lib\Core\Services\MediaStorageOptions.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\NullActorProvider.cs" Link="Lib\Core\Services\NullActorProvider.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\ReadOnlyAccessException.cs" Link="Lib\Core\Services\ReadOnlyAccessException.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\RemoteAccountService.cs" Link="Lib\Core\Services\RemoteAccountService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\SearchMetrics.cs" Link="Lib\Core\Services\SearchMetrics.cs" />
-    <Compile Include="..\BeeMemoryBank.Core\Services\SessionService.cs" Link="Lib\Core\Services\SessionService.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\TreePathCanonicalizer.cs" Link="Lib\Core\Services\TreePathCanonicalizer.cs" />
     <Compile Include="..\BeeMemoryBank.Core\Services\TreePathSql.cs" Link="Lib\Core\Services\TreePathSql.cs" />
     <Compile Include="..\BeeMemoryBank.Core\SystemFolders.cs" Link="Lib\Core\SystemFolders.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\AesGcmHelper.cs" Link="Lib\Crypto\AesGcmHelper.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\ArticleEncryptor.cs" Link="Lib\Crypto\ArticleEncryptor.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\BlindPairingSecret.cs" Link="Lib\Crypto\BlindPairingSecret.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\CryptoConstants.cs" Link="Lib\Crypto\CryptoConstants.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\DekFingerprint.cs" Link="Lib\Crypto\DekFingerprint.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\DekManager.cs" Link="Lib\Crypto\DekManager.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\Ed25519Signer.cs" Link="Lib\Crypto\Ed25519Signer.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\EnvelopeFraming.cs" Link="Lib\Crypto\EnvelopeFraming.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\HeavyDerivationQueue.cs" Link="Lib\Crypto\HeavyDerivationQueue.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\KdfBusyException.cs" Link="Lib\Crypto\KdfBusyException.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\KeyDerivation.cs" Link="Lib\Crypto\KeyDerivation.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\MasterKeyManager.cs" Link="Lib\Crypto\MasterKeyManager.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\MediaEncryptor.cs" Link="Lib\Crypto\MediaEncryptor.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\NodeIdentityCrypto.cs" Link="Lib\Crypto\NodeIdentityCrypto.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\ProtectedContentCodec.cs" Link="Lib\Crypto\ProtectedContentCodec.cs" />
-    <Compile Include="..\BeeMemoryBank.Crypto\RecoveryBoxCrypto.cs" Link="Lib\Crypto\RecoveryBoxCrypto.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\RecoveryBoxKdf.cs" Link="Lib\Crypto\RecoveryBoxKdf.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\SealedSecretCrypto.cs" Link="Lib\Crypto\SealedSecretCrypto.cs" />
     <Compile Include="..\BeeMemoryBank.Crypto\SecureRandom.cs" Link="Lib\Crypto\SecureRandom.cs" />
@@ -161,7 +148,6 @@
     <Compile Include="..\BeeMemoryBank.Storage\Sqlite\RemoteAccountRepository.cs" Link="Lib\Storage\Sqlite\RemoteAccountRepository.cs" />
     <Compile Include="..\BeeMemoryBank.Storage\Sqlite\RestoreEventStateRepository.cs" Link="Lib\Storage\Sqlite\RestoreEventStateRepository.cs" />
     <Compile Include="..\BeeMemoryBank.Storage\Sqlite\RestoreReplayShieldRepository.cs" Link="Lib\Storage\Sqlite\RestoreReplayShieldRepository.cs" />
-    <Compile Include="..\BeeMemoryBank.Storage\Sqlite\RetiredMasterDekStore.cs" Link="Lib\Storage\Sqlite\RetiredMasterDekStore.cs" />
     <Compile Include="..\BeeMemoryBank.Storage\Sqlite\RoleAclRepository.cs" Link="Lib\Storage\Sqlite\RoleAclRepository.cs" />
     <Compile Include="..\BeeMemoryBank.Storage\Sqlite\RoleRepository.cs" Link="Lib\Storage\Sqlite\RoleRepository.cs" />
     <Compile Include="..\BeeMemoryBank.Storage\Sqlite\SnapshotTableImport.cs" Link="Lib\Storage\Sqlite\SnapshotTableImport.cs" />
@@ -185,6 +171,7 @@
     <Compile Include="..\BeeMemoryBank.Sync\Blind\Spki.cs" Link="Lib\Sync\Blind\Spki.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\SpkiPinGuardHandler.cs" Link="Lib\Sync\Blind\SpkiPinGuardHandler.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Blind\SpkiPinRegistry.cs" Link="Lib\Sync\Blind\SpkiPinRegistry.cs" />
+    <Compile Include="..\BeeMemoryBank.Sync\BlindEventLogger.cs" Link="Lib\Sync\BlindEventLogger.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\BlobMissingException.cs" Link="Lib\Sync\BlobMissingException.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\BlobReferences.cs" Link="Lib\Sync\BlobReferences.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\BlobTransport.cs" Link="Lib\Sync\BlobTransport.cs" />
@@ -200,31 +187,26 @@
     <Compile Include="..\BeeMemoryBank.Sync\EventApplier.cs" Link="Lib\Sync\EventApplier.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\EventEntityId.cs" Link="Lib\Sync\EventEntityId.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\EventInvariants.cs" Link="Lib\Sync\EventInvariants.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\EventLogger.cs" Link="Lib\Sync\EventLogger.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\EventPayloads.cs" Link="Lib\Sync\EventPayloads.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\EventSignature.cs" Link="Lib\Sync\EventSignature.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\EventWriteGate.cs" Link="Lib\Sync\EventWriteGate.cs" />
+    <Compile Include="..\BeeMemoryBank.Sync\ExternalKeyNodeAuthSigner.cs" Link="Lib\Sync\ExternalKeyNodeAuthSigner.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\FileNodeKey.cs" Link="Lib\Sync\FileNodeKey.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\HardDeleteService.cs" Link="Lib\Sync\HardDeleteService.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\IDeferrableSyncFailure.cs" Link="Lib\Sync\IDeferrableSyncFailure.cs" />
+    <Compile Include="..\BeeMemoryBank.Sync\IRemoteSentinelVerifier.cs" Link="Lib\Sync\IRemoteSentinelVerifier.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\IRestoreInitiator.cs" Link="Lib\Sync\IRestoreInitiator.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\LamportClock.cs" Link="Lib\Sync\LamportClock.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\LazySlotRewrapService.cs" Link="Lib\Sync\LazySlotRewrapService.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\OriginatorNotSuperadminException.cs" Link="Lib\Sync\OriginatorNotSuperadminException.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\OriginatorNotWhitelistedException.cs" Link="Lib\Sync\OriginatorNotWhitelistedException.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\OriginatorUnconfirmedException.cs" Link="Lib\Sync\OriginatorUnconfirmedException.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\PeerAuthenticator.cs" Link="Lib\Sync\PeerAuthenticator.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\PeerNewerProtocolState.cs" Link="Lib\Sync\PeerNewerProtocolState.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\PushGapException.cs" Link="Lib\Sync\PushGapException.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Recovery\DeviceBoxPublisher.cs" Link="Lib\Sync\Recovery\DeviceBoxPublisher.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoveryBoxMaterialPurge.cs" Link="Lib\Sync\Recovery\RecoveryBoxMaterialPurge.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoveryEventPublisher.cs" Link="Lib\Sync\Recovery\RecoveryEventPublisher.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoveryReconciler.cs" Link="Lib\Sync\Recovery\RecoveryReconciler.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\RecoverySet.cs" Link="Lib\Sync\Recovery\RecoverySet.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\Recovery\StateAnchorService.cs" Link="Lib\Sync\Recovery\StateAnchorService.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\Recovery\StateDigest.cs" Link="Lib\Sync\Recovery\StateDigest.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\RecoveryPayloads.cs" Link="Lib\Sync\RecoveryPayloads.cs" />
-    <Compile Include="..\BeeMemoryBank.Sync\SessionNodeAuthSigner.cs" Link="Lib\Sync\SessionNodeAuthSigner.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\SnapshotRequiredException.cs" Link="Lib\Sync\SnapshotRequiredException.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\SnapshotRequiredState.cs" Link="Lib\Sync\SnapshotRequiredState.cs" />
     <Compile Include="..\BeeMemoryBank.Sync\StoredEventRepair.cs" Link="Lib\Sync\StoredEventRepair.cs" />

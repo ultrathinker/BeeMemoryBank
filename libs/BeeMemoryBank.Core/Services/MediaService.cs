@@ -6,8 +6,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BeeMemoryBank.Core.Services;
 
-public record MediaStorageOptions(string MediaDir);
-
 public class MediaService(
     IMediaRepository mediaRepo,
     IArticleRepository articleRepo,

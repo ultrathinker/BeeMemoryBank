@@ -322,7 +322,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             var dekRow = await conn.QuerySingleAsync<(byte[] W, byte[] Iv, byte[] Salt, long Mem, long It, long Par)>(
                 "SELECT encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot WHERE slot_type = 'user' ORDER BY slot_id LIMIT 1");
             var dek = MasterKeyManager.UnwrapMasterDek(dekRow.W, dekRow.Iv, KeyDerivation.DeriveKek(Password, dekRow.Salt, (int)dekRow.Mem, (int)dekRow.It, (int)dekRow.Par));
-            var seed = NodeIdentityCrypto.GetDecryptedPrivateKey(row.Pk, row.Iv, 1, _nodeId, dek);
+            var seed = NodeIdentityVault.GetDecryptedPrivateKey(row.Pk, row.Iv, 1, _nodeId, dek);
             await conn.ExecuteAsync("UPDATE tbl_node_identity SET ed25519_private_key = @seed, ed25519_private_key_iv = NULL, ed25519_private_key_v = 0", new { seed });
         });
 
@@ -336,7 +336,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         var slot = conn2.QuerySingle<(byte[] W, byte[] Iv, byte[] Salt, long Mem, long It, long Par)>(
             "SELECT encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot");
         var dc = MasterKeyManager.UnwrapMasterDek(slot.W, slot.Iv, KeyDerivation.DeriveKek(Password, slot.Salt, (int)slot.Mem, (int)slot.It, (int)slot.Par));
-        NodeIdentityCrypto.PublicKeyOf(NodeIdentityCrypto.GetDecryptedPrivateKey(id.Pk, id.Iv, 1, _nodeId, dc)).Should().Equal(_publicKey);
+        NodeIdentityCrypto.PublicKeyOf(NodeIdentityVault.GetDecryptedPrivateKey(id.Pk, id.Iv, 1, _nodeId, dc)).Should().Equal(_publicKey);
     }
 
     [Fact]

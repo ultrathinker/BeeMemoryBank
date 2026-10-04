@@ -60,3 +60,18 @@ blind-owned `BlindComposition.cs` / `BlindNodeServices.cs` / `BlindNodeStartupTa
 Internal members crossing the new line (InternalsVisibleTo: `SessionService.PostUnlockCatchUp`, `AesGcmHelper` (internal in Crypto, used by `ArticleEncryptor`/`MediaEncryptor`
 that move to Vault), `IArticleRepository` bypass members), the `Storage/DependencyInjection.cs` search-index block (resolves `SessionService`), test projects using vault types
 (`Sync.Tests/SyncTestFixture.cs` and others), Infrastructure / Embeddings / Rekey (`SessionService`, `GetMasterDek`) which get a Vault reference.
+
+## S2 status (BMB-102, operation-level seams)
+
+Done in S2, all behind the same wire bytes, DB format and ciphertext:
+`MediaStorageOptions` extracted; `NodeIdentityCrypto` split (constants, public-key helper, v=2 `SignWithExternalSeed` stay shared; master-DEK members moved to `NodeIdentityVault`);
+`ExternalKeyNodeAuthSigner` (shared) beside `SessionNodeAuthSigner`; `IRemoteSentinelVerifier` + `RemoteSentinelVerifier` (SyncClient no longer takes `SessionService`);
+`BlindEventLogger` (shared, refuses authoring) vs `EventLogger`; `ICurrentKeyFingerprintSource` (`RecoveryStatusService`); `IReplicaProducerAuthority` (`/api/blind/replica`);
+`ISnapshotKeyOperations` (`SnapshotService` takes it instead of `SessionService`; the blind host passes `ExternalKeySnapshotKeyOperations`); `BlindWipeService` without the session;
+`BlindComposition` and the lib link props shrunk to what the seams leave.
+
+Not a code change: `KeyDerivation` stays shared whole (Argon2id + the memory budget are a neutral primitive; the master-key derivation call sites are in Vault classes, not in this file).
+
+Folded into S3 because they only make sense together with the physical move (doing them earlier would mean writing them twice):
+the three `DependencyInjection.cs` + `RecoveryServiceCollectionExtensions` (D3: `AddNodeStorage/AddNodeCore/AddNodeSync` stay, the old `AddStorage/AddCore/AddSync/AddRecovery` move to Vault),
+the `Storage/DependencyInjection.cs` search-index block, `Api/Models` DTO split, the phone `AndroidBackupRestore` recognizer, the `SessionService` internals.

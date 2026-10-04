@@ -419,7 +419,7 @@ public class EventLogger(
         if (identity.Ed25519PrivateKeyV == 0)
         {
             // Legacy v=0 row (plaintext seed) — sign without needing master DEK.
-            evt.Signature = NodeIdentityCrypto.SignWithIdentity(
+            evt.Signature = NodeIdentityVault.SignWithIdentity(
                 identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                 identity.NodeId, Array.Empty<byte>(), sigPayload);
         }
@@ -428,7 +428,7 @@ public class EventLogger(
             var masterDek = session.GetMasterDek();
             try
             {
-                evt.Signature = NodeIdentityCrypto.SignWithIdentity(
+                evt.Signature = NodeIdentityVault.SignWithIdentity(
                     identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                     identity.NodeId, masterDek, sigPayload);
             }

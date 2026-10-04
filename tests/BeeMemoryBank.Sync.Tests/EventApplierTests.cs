@@ -579,7 +579,7 @@ public class EventApplierTests : IAsyncLifetime
         var dek = _nodeA.Session.GetMasterDek();
         try
         {
-            evt.Signature = BeeMemoryBank.Crypto.NodeIdentityCrypto.SignWithIdentity(
+            evt.Signature = BeeMemoryBank.Crypto.NodeIdentityVault.SignWithIdentity(
                 identity.Ed25519PrivateKey,
                 identity.Ed25519PrivateKeyIV,
                 identity.Ed25519PrivateKeyV,

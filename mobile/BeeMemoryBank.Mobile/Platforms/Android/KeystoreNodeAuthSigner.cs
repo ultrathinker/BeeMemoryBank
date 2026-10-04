@@ -47,7 +47,7 @@ public sealed class KeystoreNodeAuthSigner(
         }
 
         if (session.IsUnlocked)
-            return NodeIdentityCrypto.SignWithIdentityOrGetDek(
+            return NodeIdentityVault.SignWithIdentityOrGetDek(
                 identity.Ed25519PrivateKey,
                 identity.Ed25519PrivateKeyIV,
                 identity.Ed25519PrivateKeyV,

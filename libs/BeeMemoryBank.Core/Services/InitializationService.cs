@@ -96,7 +96,7 @@ public class InitializationService(
             // Encrypt the Ed25519 private key with the master DEK before persisting,
             // so a stolen DB file alone cannot be used to impersonate the node. AAD binds to
             // nodeId.
-            var (wrappedPk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(privateKey, masterDek, nodeId);
+            var (wrappedPk, pkIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
             Array.Clear(privateKey);
 
             var identity = new NodeIdentity

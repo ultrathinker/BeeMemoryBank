@@ -60,10 +60,8 @@ public static class BlindNodeServices
                 sp.GetRequiredService<ILogger<SnapshotService>>(),
                 sp.GetRequiredService<IRestoreReplayShieldRepository>(),
                 sp.GetRequiredService<IWhitelistRepository>(),
-                sp.GetRequiredService<SessionService>(),
-                // The key a blind node signs its packages with.
-                sp.GetService<IExternalNodeKey>()));
-        services.AddHostedService<AuditLogPruningHostedService>();
+                // The key a blind node signs its packages with; it holds no master DEK and encrypts nothing.
+                new ExternalKeySnapshotKeyOperations(sp.GetRequiredService<IExternalNodeKey>())));
 
         // Blind node (BMB-54): /api/blind/status base fields, backups, jobs/CPU modes, console login, wipe.
         services.AddBlindNodeServices(dataPath);
@@ -107,24 +105,21 @@ public static class BlindNodeServices
     /// </summary>
     private static void AddBlindRecovery(IServiceCollection services)
     {
-        services.AddSingleton<IRecoveryHost, CurrentRecoveryHost>();
         // The peers' my-standing, over the default "not known to be a superadmin" of AddRecovery.
         services.RemoveAll<IOwnStandingProvider>();
         services.AddSingleton<IOwnStandingProvider, PeerOwnStanding>();
         services.AddScoped<RecoveryBoxQueries>();
+        // No current-key source: a blind node holds no DEK, so "the current key" is the one the newest anchor vouches for.
         services.AddScoped<RecoveryStatusService>();
-        services.AddSingleton<StrongBoxService>();
-        services.AddSingleton<RecoveryCleanupService>();
-        services.AddSingleton<RecoveryTriggers>();
-        services.AddHostedService<RecoveryReconcileWatcher>();
-        services.AddSingleton<StateAnchorScheduler>();
+        // Not registered here since the vault split (BMB-99): the strong-box service, the recovery cleanup / triggers / reconcile
+        // watcher and the state-anchor scheduler. Each of them returned at once behind "the session is unlocked", which a blind
+        // node never is; they create and open recovery boxes with the master key and are full-node code.
 
         // The recovery sections of /api/blind/status, and the recovery set the blind node's backups write.
         services.AddSingleton<RecoveryAnchorStatusCache>();
         services.AddScoped<BeeMemoryBank.Api.Services.BlindStatus.IBlindStatusContributor, RecoveryAnchorStatusContributor>();
         services.AddScoped<BeeMemoryBank.Api.Services.BlindStatus.IBlindStatusContributor, RecoveryBoxesStatusContributor>();
         services.AddSingleton<IRecoverySetSource, RecoverySetSource>();
-        services.AddHostedService(sp => sp.GetRequiredService<StateAnchorScheduler>());
 
         // Restore codes: the blind side of a restore.
         services.AddScoped<BlindRestoreCodeService>();

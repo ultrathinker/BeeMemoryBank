@@ -124,8 +124,8 @@ public sealed class RekeyVerbTests : IAsyncLifetime
             if (id.V == 1)
             {
                 var nodeId = Guid.Parse(id.NodeId);
-                var seed = NodeIdentityCrypto.GetDecryptedPrivateKey(id.Pk, id.Iv, 1, nodeId, ctx.Keys.Predecessor);
-                var (pk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(seed, dc, nodeId);
+                var seed = NodeIdentityVault.GetDecryptedPrivateKey(id.Pk, id.Iv, 1, nodeId, ctx.Keys.Predecessor);
+                var (pk, pkIv) = NodeIdentityVault.EncryptPrivateKey(seed, dc, nodeId);
                 await db.ExecuteAsync("UPDATE tbl_node_identity SET ed25519_private_key = @pk, ed25519_private_key_iv = @pkIv", new { pk, pkIv });
             }
             await db.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = @s", new { s = MasterKeyManager.ComputeSentinel(dc) });

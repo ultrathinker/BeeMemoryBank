@@ -59,7 +59,9 @@ internal static class DiSnapshot
         var rows = source.Endpoints.OfType<RouteEndpoint>().Select(e =>
         {
             var methods = e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["*"];
-            var meta = e.Metadata.Select(m => m.GetType()).Where(t => !t.Name.Contains('<') && !t.Name.Contains('>'))
+            // Compiler-emitted attributes (Nullable*, ...) come and go with the declaring type; they say nothing about the route.
+            var meta = e.Metadata.Select(m => m.GetType())
+                .Where(t => !t.Name.Contains('<') && !t.Name.Contains('>') && t.Namespace != "System.Runtime.CompilerServices")
                 .Select(Fmt).Distinct().OrderBy(n => n, StringComparer.Ordinal);
             return $"{string.Join(",", methods.OrderBy(m => m, StringComparer.Ordinal))} {e.RoutePattern.RawText} | {string.Join(" ", meta)}";
         }).Distinct().OrderBy(r => r, StringComparer.Ordinal);

@@ -17,6 +17,15 @@ namespace BeeMemoryBank.Api.Services;
 public partial class SnapshotService
 {
     /// <summary>
+    /// Signs with the node identity through the key operations this instance was given. Without any (test scaffolding)
+    /// there is no key to sign with.
+    /// </summary>
+    private byte[] SignWithIdentity(NodeIdentity nodeIdentity, byte[] payload) =>
+        _keys is null
+            ? throw new InvalidOperationException("Session must be unlocked to sign with v=1 (encrypted) node identity.")
+            : _keys.SignWithIdentity(nodeIdentity, payload);
+
+    /// <summary>
     /// Create a snapshot of the current node's database (and media).
     /// </summary>
     /// <param name="filterSecrets">Strip identity/keys/secrets — for distribution to peers. Local backups keep them.</param>
@@ -97,28 +106,13 @@ public partial class SnapshotService
                 // the join snapshot does, because the joining node has no master DEK yet and the
                 // bytes travel over an authenticated TLS channel instead.
                 //
-                // A NULL session service is a different thing from a locked one: it means this
+                // NULL key operations are a different thing from a locked vault: it means this
                 // instance was constructed without any encryption capability at all, which only
-                // test scaffolding does — the composition root resolves it with GetRequiredService
-                // so a running node cannot end up in that state.
-                if (_sessionService is { IsUnlocked: false })
-                    throw new InvalidOperationException(
-                        "Cannot create an encrypted snapshot while the vault is locked. Unlock it first, " +
-                        "or request an unencrypted snapshot explicitly.");
-
-                if (_sessionService != null)
-                {
-                    var masterDek = _sessionService.GetMasterDek();
-                    try
-                    {
-                        await EncryptDbFileAsync(tempDb, masterDek);
-                        dbEncrypted = true;
-                    }
-                    finally
-                    {
-                        Array.Clear(masterDek);
-                    }
-                }
+                // test scaffolding does — the composition roots always pass ISnapshotKeyOperations
+                // so a running node cannot end up in that state. A locked vault (and a blind node,
+                // which never holds a master DEK) makes EncryptDatabaseAsync throw.
+                if (_keys != null)
+                    dbEncrypted = await _keys.EncryptDatabaseAsync(tempDb);
             }
 
             var allFiles = new Dictionary<string, string>();
@@ -252,7 +246,7 @@ public partial class SnapshotService
                 // and silently fail-open. Different tags make cross-format substitution
                 // impossible by construction.
                 var manifestPayload = BuildSigPayloadEmbedded(manifestBytes);
-                manifestSignature = SignWithIdentityAuto(nodeIdentity, manifestPayload);
+                manifestSignature = SignWithIdentity(nodeIdentity, manifestPayload);
             }
 
             await using (var fs = File.Create(filePath))
@@ -305,7 +299,7 @@ public partial class SnapshotService
                 var nodeIdentity = await _nodeRepo!.GetAsync()
                     ?? throw new InvalidOperationException("Node identity not found");
                 var sidecarPayload = await ComputeSignaturePayloadAsync(manifestBytes, filePath);
-                var sidecarSig = SignWithIdentityAuto(nodeIdentity, sidecarPayload);
+                var sidecarSig = SignWithIdentity(nodeIdentity, sidecarPayload);
                 await File.WriteAllBytesAsync($"{filePath}.sig", sidecarSig);
             }
 

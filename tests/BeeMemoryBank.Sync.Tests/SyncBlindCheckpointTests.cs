@@ -43,9 +43,11 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
         _positions = new SyncPositionRepository(_node.Factory);
         _blindState = new BlindState(_node.Factory);
         _client = new SyncClient(_node.NodeRepo, _node.EventLogRepo, _positions, new SyncPushPositionRepository(_node.Factory),
-            _node.EventApplier, _node.Session, new SessionNodeAuthSigner(_node.Session),
+            _node.EventApplier, new SessionNodeAuthSigner(_node.Session),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SyncClient>.Instance, new PeerNewerProtocolState(),
-            _node.QuarantineRepo, new BlobRepository(_node.Factory), blindState: _blindState);
+            _node.QuarantineRepo, new BlobRepository(_node.Factory), blindState: _blindState,
+            sentinelVerifier: new RemoteSentinelVerifier(_node.Session,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteSentinelVerifier>.Instance));
 
         _peerId = BlindNodeId.NewId();
         _handler = new MockHandler();

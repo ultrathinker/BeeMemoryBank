@@ -32,7 +32,7 @@ public class SnapshotServiceTests : IAsyncLifetime
 
         _nodeRepo = new NodeIdentityRepository(_factory);
         _clock = new NullLamportClock();
-        _service = new SnapshotService(_tempDir, _factory, _nodeRepo, _clock);
+        _service = new SnapshotService(_tempDir, _factory, _nodeRepo, _clock, keys: new SessionSnapshotKeyOperations(null));
 
         (_testPublicKey, _testPrivateKey) = Ed25519Signer.GenerateKeyPair();
         _testNodeId = Guid.NewGuid();

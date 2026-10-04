@@ -15,7 +15,7 @@ namespace BeeMemoryBank.Sync;
 public sealed class SessionNodeAuthSigner(SessionService session, IExternalNodeKey? externalKey = null) : INodeAuthSigner
 {
     public byte[] SignChallenge(NodeIdentity identity, byte[] challengePayload) =>
-        NodeIdentityCrypto.SignWithIdentityOrGetDek(
+        NodeIdentityVault.SignWithIdentityOrGetDek(
             identity.Ed25519PrivateKey,
             identity.Ed25519PrivateKeyIV,
             identity.Ed25519PrivateKeyV,

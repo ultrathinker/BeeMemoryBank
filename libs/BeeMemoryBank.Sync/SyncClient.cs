@@ -20,14 +20,14 @@ public class SyncClient(
     ISyncPositionRepository syncPositionRepo,
     ISyncPushPositionRepository pushPositionRepo,
     EventApplier eventApplier,
-    SessionService sessionService,
     INodeAuthSigner authSigner,
     ILogger<SyncClient> logger,
     PeerNewerProtocolState peerNewerProtocolState,
     ISyncQuarantineRepository quarantineRepo,
     IBlobRepository blobRepo,
     IRestoreRetrier? restoreRetrier = null,
-    BlindState? blindState = null)
+    BlindState? blindState = null,
+    IRemoteSentinelVerifier? sentinelVerifier = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
@@ -146,8 +146,10 @@ public class SyncClient(
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Local node is not initialized.");
 
-        // 0. Verify DEK compatibility via sentinel
-        await VerifyRemoteSentinelAsync(http, remoteApiBase, identity, ct);
+        // 0. Verify DEK compatibility via sentinel - a check only a node that holds the master DEK can make
+        //    (IRemoteSentinelVerifier is registered by such nodes; a blind node has none and skips it)
+        if (sentinelVerifier is not null)
+            await sentinelVerifier.VerifyAsync(http, remoteApiBase, ct);
 
         // 1. Get remote node identity
         var remoteIdentity = await GetRemoteIdentityAsync(http, remoteApiBase, ct);
@@ -434,49 +436,6 @@ public class SyncClient(
         return appliedCount;
     }
 
-    private async Task VerifyRemoteSentinelAsync(
-        HttpClient http, string baseUrl, NodeIdentity identity, CancellationToken ct)
-    {
-        // Sentinel verification needs the master DEK. On the locked background backup path
-        // (mobile ingest signs via Keystore, vault stays locked) the DEK isn't available —
-        // skip this best-effort sanity check. The pull/apply path stores ciphertext and
-        // never needs the DEK, so backup-sync proceeds safely without it.
-        if (!sessionService.IsUnlocked) return;
-        try
-        {
-            var resp = await http.GetAsync($"{baseUrl}/api/sync/sentinel", ct);
-            if (!resp.IsSuccessStatusCode) return; // server without sentinel — skip check
-
-            var dto = await resp.Content.ReadFromJsonAsync<SentinelDto>(JsonOpts, ct);
-            if (dto?.SentinelB64 == null) return;
-
-            var remoteSentinel = Convert.FromBase64String(dto.SentinelB64);
-            var localDek = sessionService.GetMasterDek();
-            try
-            {
-                if (!MasterKeyManager.VerifySentinel(remoteSentinel, localDek))
-                {
-                    // Do not throw on a sentinel mismatch: that would block pulling the
-                    // DEK_ROTATION_COMMIT events that catch us up (a peer that joined before a
-                    // rotation could never receive it). Under the peer-acceptance model an honest
-                    // peer that rotated its DEK looks like a sentinel mismatch UNTIL we apply its
-                    // COMMIT. So log a warning and proceed; the pull delivers the rotation event,
-                    // which is auto-accepted (per whitelist flag) or queued for manual accept. If
-                    // we still mismatch after the pull, the next cycle repeats the warning.
-                    logger.LogWarning(
-                        "DEK sentinel mismatch with {BaseUrl}; proceeding with event pull anyway — peer may have a pending DEK rotation we need to apply.",
-                        baseUrl);
-                }
-            }
-            finally { Array.Clear(localDek); }
-        }
-        catch (InvalidOperationException) { throw; }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Sentinel check failed for {Base} — skipping", baseUrl);
-        }
-    }
-
     private static async Task<RemoteIdentityDto> GetRemoteIdentityAsync(
         HttpClient http, string baseUrl, CancellationToken ct)
     {
@@ -660,7 +619,6 @@ public class SyncClient(
     }
 
     // Local DTOs for remote API responses
-    private sealed record SentinelDto(string? SentinelB64);
     private sealed record RemoteIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
     // LastAppliedSequence is nullable for backward compat with older servers — fall back to
     // advancing to the batch end (batch[^1]) if absent. Current servers always populate it (see

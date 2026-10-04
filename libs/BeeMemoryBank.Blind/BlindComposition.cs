@@ -21,10 +21,10 @@ namespace BeeMemoryBank.Blind;
 /// the embedding processors. The same lifetimes as the originals, for the same reasons (the comments of the full
 /// application's registrations apply here as well).</para>
 ///
-/// <para>What is NOT left out, stated plainly: the originals are not changed, so the assembly still contains the services the shared sync
-/// code takes as constructor dependencies (<c>SessionService</c>, the key-slot, user and role repositories, <c>CommentService</c>,
-/// <c>RemoteAccountService</c>, the Crypto primitives). They are registered so the container can build the sync code; nothing in the
-/// blind host opens a session for them to read with. docs/blind-node/COMPOSITION.md lists what stays and why.</para>
+/// <para>Also left out since the vault split (BMB-99, 2.0.1): everything that holds or uses a master key - <c>SessionService</c>,
+/// <c>CommentService</c>, <c>MediaService</c>, <c>RemoteAccountService</c>, the master-key and content crypto, the event logger that signs
+/// with the DEK (a refusing <c>BlindEventLogger</c> stands in), the recovery publisher / reconciler / state-anchor service. That code is
+/// <c>BeeMemoryBank.Vault</c>, which a blind node does not contain. docs/blind-node/COMPOSITION.md lists what stays shared and why.</para>
 /// </summary>
 public static class BlindComposition
 {
@@ -44,7 +44,6 @@ public static class BlindComposition
         services.AddScoped<IArticleBodyRepository, ArticleBodyRepository>();
         services.AddScoped<IBlobRepository, BlobRepository>();
         services.AddSingleton<IKeySlotRepository, KeySlotRepository>();
-        services.AddSingleton<IRetiredMasterDekStore, RetiredMasterDekStore>();
         // Singletons because the singleton SnapshotService consumes them; stateless (see AddStorage).
         services.AddSingleton<INodeIdentityRepository, NodeIdentityRepository>();
         services.AddSingleton<IWhitelistRepository, WhitelistRepository>();
@@ -72,24 +71,17 @@ public static class BlindComposition
         services.TryAddScoped<ICallerScopeStore, InstanceCallerScopeStore>();
         services.AddScoped<CallerScopeHolder>();
 
-        // Core.
-        services.AddSingleton<SessionService>();
+        // Core. No SessionService, CommentService, MediaService, RemoteAccountService: they hold or use the master key
+        // and are vault code (BeeMemoryBank.Vault), which a blind node does not contain.
         services.AddSingleton<InvisibleModeService>();
         services.AddSingleton<MaintenanceModeService>();
         services.AddSingleton<SearchMetrics>();
         services.TryAddSingleton<IActorProvider>(new NullActorProvider());
-        services.AddScoped<CommentService>();
-        services.AddScoped<MediaService>();
         services.AddScoped<MediaBlobBackfillService>();
         services.AddScoped<FolderAccessService>();
         // A blind node stores the ciphertext of vectors and never computes one; nothing here can hold a model.
         services.AddSingleton<IEmbeddingGenerator, BlindEmbeddingGenerator>();
         services.AddScoped<ConceptTagService>();
-        services.AddScoped<LegacyPasswordSlotMigrationService>();
-        services.AddScoped<RemoteAccountService>();
-        // MediaService needs a transcoder to be constructed, and a blind node never transcodes: it relays ciphertext,
-        // which it cannot decode. Handing it bytes to convert is a bug, so this one refuses.
-        services.AddSingleton<IImageTranscoder, NoImageTranscoder>();
 
         // Sync.
         services.AddSingleton<SnapshotRequiredState>();
@@ -98,24 +90,23 @@ public static class BlindComposition
         services.AddSingleton<ILamportClock>(sp => sp.GetRequiredService<LamportClock>());
         services.AddSingleton<SyncTrigger>();
         services.AddSingleton<ISyncTrigger>(sp => sp.GetRequiredService<SyncTrigger>());
-        services.AddScoped<IEventLogger, EventLogger>();
+        // A blind node authors nothing: its event logger refuses (the full EventLogger signs with the master DEK and is vault code).
+        services.AddScoped<IEventLogger, BlindEventLogger>();
         services.AddScoped<EventApplier>();
+        // No IRemoteSentinelVerifier: the master-DEK sentinel check is made only by a node that holds the DEK.
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
         services.AddScoped<ISyncQuarantineRepository, SyncQuarantineRepository>();
-        services.TryAddScoped<INodeAuthSigner, SessionNodeAuthSigner>();
+        // Signs with the external (v=2) identity key from IExternalNodeKey; never derives a key through the master DEK.
+        services.TryAddScoped<INodeAuthSigner, ExternalKeyNodeAuthSigner>();
         // Which peers present a pinned, self-signed TLS key (plan 4.4): every client that dials a sync peer builds its
         // handler from this.
         services.AddSingleton<SpkiPinRegistry>();
         services.AddHttpClient(SyncScheduler.HttpClientName).UsePinnedSyncHandler();
-        services.AddSingleton<ILazySlotRewrapService, LazySlotRewrapService>();
 
-        // Recovery (what AddSync's AddRecovery registers).
+        // Recovery: the part a blind node takes part in (receiving, validating and serving recovery sets). Creating and
+        // opening recovery boxes (publisher, reconciler, state anchors, lazy slot re-wrap) handles the master key: vault code.
         services.TryAddSingleton<IOwnStandingProvider, UnknownOwnStanding>();
-        services.AddScoped<RecoveryEventPublisher>();
-        services.AddScoped<IRecoveryBoxPublisher, DeviceBoxPublisher>();
-        services.AddScoped<IRecoveryReconciler, RecoveryReconciler>();
-        services.AddScoped<StateAnchorService>();
         services.AddScoped<RecoverySetBuilder>();
         return services;
     }
@@ -146,14 +137,4 @@ public static class BlindComposition
             interval));
         return services;
     }
-}
-
-/// <summary>See the registration: a blind node holds no readable image, so any request to transcode is a bug.</summary>
-internal sealed class NoImageTranscoder : IImageTranscoder
-{
-    public (byte[] data, bool converted) ConvertToJpeg(byte[] input, string contentType) =>
-        throw new NotSupportedException("A blind node cannot transcode images: it never holds one in the clear.");
-
-    public byte[] DownscaleJpeg(byte[] input, int maxDimension) =>
-        throw new NotSupportedException("A blind node cannot transcode images: it never holds one in the clear.");
 }

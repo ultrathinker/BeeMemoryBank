@@ -82,7 +82,7 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         {
             if (!NodeIdentityCrypto.PublicKeyOf(seed).AsSpan().SequenceEqual(id.Pub))
                 throw new InvalidOperationException("The node's identity seed does not match its public key.");
-            var (pk, pkIv) = NodeIdentityCrypto.EncryptPrivateKey(seed, dc, nodeId);
+            var (pk, pkIv) = NodeIdentityVault.EncryptPrivateKey(seed, dc, nodeId);
             await db.ExecuteAsync(
                 @"UPDATE tbl_node_identity
                   SET ed25519_private_key = @pk, ed25519_private_key_iv = @pkIv, ed25519_private_key_v = 1,
@@ -181,7 +181,7 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
             byte[]? seed = null;
             try
             {
-                seed = NodeIdentityCrypto.GetDecryptedPrivateKey(id.Pk, id.Iv, 1, Guid.Parse(id.NodeId), dc);
+                seed = NodeIdentityVault.GetDecryptedPrivateKey(id.Pk, id.Iv, 1, Guid.Parse(id.NodeId), dc);
                 if (!NodeIdentityCrypto.PublicKeyOf(seed).AsSpan().SequenceEqual(id.Pub))
                     problems.Add(new("tbl_node_identity", "ed25519_private_key", "the seed under D_c does not match the public key"));
             }
@@ -272,13 +272,13 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
     /// <summary>The seed in the clear: a v=1 row under whichever old key seals it, a legacy v=0 row as it is.</summary>
     private static byte[] OpenSeed(byte[] stored, byte[]? iv, int version, Guid nodeId, IReadOnlyList<byte[]> oldKeys)
     {
-        if (version == 0) return NodeIdentityCrypto.GetDecryptedPrivateKey(stored, iv, 0, nodeId, []);
+        if (version == 0) return NodeIdentityVault.GetDecryptedPrivateKey(stored, iv, 0, nodeId, []);
         if (version != 1)
             throw new InvalidOperationException(
                 $"The node's identity key is at v={version}: it is kept outside the database (a blind node), and this vault cannot be re-keyed.");
         foreach (var key in oldKeys)
         {
-            try { return NodeIdentityCrypto.GetDecryptedPrivateKey(stored, iv, 1, nodeId, key); }
+            try { return NodeIdentityVault.GetDecryptedPrivateKey(stored, iv, 1, nodeId, key); }
             catch (CryptographicException) { }
         }
         throw new InvalidOperationException("The node's identity seed opens under none of the vault's keys.");
