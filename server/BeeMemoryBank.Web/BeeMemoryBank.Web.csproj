@@ -18,6 +18,7 @@
     <!-- LegacyMigrationService uses Storage.Sqlite for the legacy-data rescue path. -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
   </ItemGroup>
 
   <ItemGroup>

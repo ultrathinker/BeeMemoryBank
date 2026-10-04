@@ -42,7 +42,6 @@ BeeMemoryBank.Core.Services.BlindPhone.BlindListener
 BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneBackupSeal
 BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneBackupSeal+Wire
 BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneEnrollment
-BeeMemoryBank.Core.Services.BlindPhone.BlindPhonePairing
 BeeMemoryBank.Core.Services.ChatDataKeyEnvelope
 BeeMemoryBank.Core.Services.CommentService
 BeeMemoryBank.Core.Services.CopyService

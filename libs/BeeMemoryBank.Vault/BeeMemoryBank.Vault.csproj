@@ -12,7 +12,6 @@
     the project each file came from, the assembly is the only thing that changed. docs/vault-split/SEAM.md explains what is where and why.
   -->
   <ItemGroup>
-    <ProjectReference Include="..\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />

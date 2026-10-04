@@ -3,8 +3,8 @@
   <!--
     The phone's own client of a blind node: replica download, pull of the blind node's log, the package source of its backups, the
     backup seal and the phone's backup file. What the Android blind app needs from the libraries and a Linux blind node does not. It
-    sits on the shared libraries, holds no master-key code, and BeeMemoryBank.Vault references it (a full node pairs and restores
-    blind phones too). The files keep their original namespaces (BeeMemoryBank.Core.Services.BlindPhone, BeeMemoryBank.Crypto,
+    sits on the shared libraries and holds no master-key code. The Android blind app references it, and so do the Api and Web (a full node
+    restores from a phone's backup file); the Vault does not, and neither does the ordinary Android app. The files keep their original namespaces (BeeMemoryBank.Core.Services.BlindPhone, BeeMemoryBank.Crypto,
     BeeMemoryBank.Sync.Blind); the folders mirror the library each came from.
   -->
   <ItemGroup>

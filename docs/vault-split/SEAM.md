@@ -83,7 +83,7 @@ Layout now (counts are `.cs` files):
 | Assembly | Files | Who references it |
 |---|---|---|
 | Core 101, Crypto 13, Search 11, Storage 37, Sync 61 (**shared**) | 223 | every node, the blind host and the Android blind app included |
-| `Blind.PhoneClient` (the phone's client of a blind node) | 15 | Android blind app, Vault; **not** the Linux blind host |
+| `Blind.PhoneClient` (the phone's client of a blind node) | 14 | Android blind app, Api, Web and the tests that exercise it; **not** the Linux blind host, the Vault or the ordinary Android app |
 | `Vault` (full-node layer) | 118 | Api, Cli, Web, Node, Mobile, Embeddings, Infrastructure, Media, Rekey, Migrator, SeedGen and their tests; never the shared libraries |
 
 Rule used for the move: a library file goes to Vault iff no blind host or phone compiled it (the S1 link sets; 115 files) - the 35 candidates of S1 are among them, together with
@@ -93,7 +93,7 @@ proves they need nothing of it.
 
 Deviations from PLAN-v2, with the reason:
 1. `Blind.PhoneClient` is **kept** as a real library (15 `git mv`ed files) instead of being retired: the old test "phone-only code must not ride along in the Linux container" is a property worth keeping,
-   and a three-layer graph (shared <- PhoneClient <- Vault) keeps it true. `NullEventLogger` stays in shared Core (the full node registers it as the default, the phone as its logger; it is two lines).
+   and a graph in which PhoneClient and Vault both sit on the shared libraries and never reference each other keeps it true (a first attempt had Vault reference PhoneClient for one class, `BlindPhonePairing`, which only a test used; that dragged the phone client into the ordinary Android app's APK, which the ordinary-app test refuses. The class moved to PhoneClient; `JoinHttp` and `SpkiPin`, used by the CLI and the desktop node too, moved back to Crypto). `NullEventLogger` stays in shared Core (the full node registers it as the default, the phone as its logger; it is two lines).
 2. No warning NoOp default for `IDekRotationApplier` in `AddNodeSync`: the event applier cannot be built without one, so a host that forgets it fails when the container resolves it, which is louder than a log line.
    The same holds for `IRestoreInitiator`, `IEventLogger` and `INodeAuthSigner`: the full node takes them from `AddSync` (Vault), the blind host registers its own.
 3. The search index (`IndexBuilder`, segments, `EncryptedSegmentStore`, index lifecycle/processor) moved whole to Vault; `Search` keeps the stemmers/tokenizer the shared `ArticleRepository` uses.

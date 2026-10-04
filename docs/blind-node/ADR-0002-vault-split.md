@@ -19,7 +19,7 @@ Split the libraries by what a node needs, not by who calls what:
   sealed secrets, snapshot encrypt and restore with the master key, the search index of the content, article / user / role / tree / import services, the full-node repositories.
 * **Phone client** (`libs/BeeMemoryBank.Blind.PhoneClient`): what the Android blind app needs and a Linux node does not.
 
-Dependencies point one way: shared <- PhoneClient <- Vault. The shared libraries cannot reference the Vault, so a program that references only them cannot contain it.
+Dependencies point one way: the PhoneClient and the Vault sit on the shared libraries and do not reference each other. The shared libraries cannot reference either, so a program that references only them cannot contain it.
 Every vault file was moved with `git mv` (history kept) and keeps its namespace, so no `using` changed anywhere. The mixed files were split by an operation-level seam
 (not a key-passing interface): `ISnapshotKeyOperations`, `IRemoteSentinelVerifier`, `IReplicaProducerAuthority`, `ICurrentKeyFingerprintSource`, the external-key
 `INodeAuthSigner`, a refusing `BlindEventLogger`. DI is split the same way: `AddNodeStorage` / `AddNodeCore` / `AddNodeSync` are shared, the old `AddStorage` / `AddCore` / `AddSync`

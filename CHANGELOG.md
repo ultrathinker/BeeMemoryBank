@@ -26,7 +26,7 @@ No sync protocol (still 3), database format, migration or ciphertext change; not
   fingerprint, who may sign a replica, the external-key node-auth signer and an event logger that refuses to author. The library DI is split the same way
   (`AddNodeStorage` / `AddNodeCore` / `AddNodeSync` are shared; `AddStorage` / `AddCore` / `AddSync` are in the Vault and call them), so no full-node host changed.
   The route and service lists of the full node and the container of the blind node are pinned by golden files, which are unchanged.
-- The old `BeeMemoryBank.Blind` link assembly is gone; `BeeMemoryBank.Blind.PhoneClient` is a real library (the phone's own client; the Linux node does not contain it).
+- The old `BeeMemoryBank.Blind` link assembly is gone; `BeeMemoryBank.Blind.PhoneClient` is a real library (14 files: the phone's own client; the Linux node, the Vault and the ordinary Android app do not contain it).
   Notes for contributors: `docs/blind-node/ADR-0002-vault-split.md`, `docs/vault-split/SEAM.md`.
 
 #### 1.0.17: blind nodes are programs of their own (2026-10-03)

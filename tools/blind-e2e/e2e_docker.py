@@ -84,11 +84,12 @@ def main():
     ap.add_argument('--first-image', help='start the node from this (older) image, pair and seed it, then swap the '
                     'container to --image on the SAME volumes: the upgrade rehearsal')
     ap.add_argument('--cleanup', action='store_true')
+    ap.add_argument('--name-prefix', default='bmb-e2e', help='prefix of the container and volume names; a different one per run keeps runs apart')
     a = ap.parse_args()
 
     os.makedirs(a.work, exist_ok=True)
-    name = 'bmb-e2e-blind'
-    vols = ['bmb-e2e-data', 'bmb-e2e-backups']
+    name = a.name_prefix + '-blind'
+    vols = [a.name_prefix + '-data', a.name_prefix + '-backups']
     full_key = 'e2e-full-internal-key'
     full_url = 'http://127.0.0.1:%d' % a.full_port
     fh = {'X-Internal-Key': full_key, 'X-User-Role': 'superadmin'}

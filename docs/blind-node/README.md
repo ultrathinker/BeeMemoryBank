@@ -11,7 +11,7 @@ content is a different assembly, `BeeMemoryBank.Vault`, which no blind program r
 |-------|---------|-----------|
 | host | `server/BeeMemoryBank.BlindNode` | own `Program`, container registrations, pipeline, startup tasks; **links** the 76 Api source files a blind node needs (`linked-api-files.props`) |
 | shared libraries | `libs/BeeMemoryBank.{Core,Crypto,Search,Storage,Sync}` | what every node needs: store, relay and apply ciphertext, the sync protocol, the external-key identity, pairing and TLS pinning, backups, the recovery set a node receives and serves; `NodeDependencyInjection` in each (`AddNodeStorage` / `AddNodeCore` / `AddNodeSync`); every database migration is embedded in Storage |
-| phone client | `libs/BeeMemoryBank.Blind.PhoneClient` | the 15 library files only the Android blind app needs (replica and pull clients, backup seal ...); on the shared libraries; the Linux host does not contain it |
+| phone client | `libs/BeeMemoryBank.Blind.PhoneClient` | the 14 library files only the Android blind app (and the full node's restore of a phone backup) need (replica and pull clients, backup seal ...); on the shared libraries; the Linux host does not contain it |
 | vault (full node only) | `libs/BeeMemoryBank.Vault` | sessions, master-key handling, content crypto, recovery creation and opening, the search index, article/user/role/tree/import services, full-node repositories, `AddCore`/`AddStorage`/`AddSync`; **no blind program references it** |
 | CLI | `server/BeeMemoryBank.BlindCli` | `bmb`, only `bmb blind ...`; links the full CLI's three blind command files; no library reference |
 | console | `server/BeeMemoryBank.BlindConsole` | unchanged: one embedded page and a proxy to the local node |

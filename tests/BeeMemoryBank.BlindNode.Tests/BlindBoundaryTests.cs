@@ -112,7 +112,10 @@ public class BlindBoundaryTests
         foreach (var dir in dirs)
         {
             Directory.Exists(dir).Should().BeTrue(dir + " must exist");
-            var files = Directory.GetFiles(dir, "BeeMemoryBank.*.dll", SearchOption.AllDirectories);
+            // The application's own assemblies: BeeMemoryBank.*.dll, and the blind CLI's `bmb.dll`.
+            var files = Directory.GetFiles(dir, "*.dll", SearchOption.AllDirectories)
+                .Where(f => Path.GetFileName(f).StartsWith("BeeMemoryBank.", StringComparison.OrdinalIgnoreCase) ||
+                            Path.GetFileName(f).Equals("bmb.dll", StringComparison.OrdinalIgnoreCase)).ToArray();
             files.Should().NotBeEmpty(dir + " must contain application assemblies, or the scan proves nothing");
             var found = AssemblyBoundaryScanner.Scan(files, VaultBoundary.Forbidden());
             // Evidence for the release report: BMB_SCAN_REPORT names a file that receives one line per folder and one per finding.

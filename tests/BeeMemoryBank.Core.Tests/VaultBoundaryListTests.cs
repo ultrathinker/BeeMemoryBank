@@ -69,6 +69,18 @@ public class VaultBoundaryListTests
         findings.Should().BeEmpty("the shared libraries are what a blind node contains");
     }
 
+    [Fact]
+    public void ThePhoneClient_ContainsNoVaultCode_AndSharesNoTypeWithTheOthers()
+    {
+        // The phone's client is what the Android blind app adds to the shared libraries: it must not hold or reach the vault either,
+        // and none of its types may also be defined by a shared assembly or the vault.
+        var phone = typeof(BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneState).Assembly;
+        phone.GetName().Name.Should().Be("BeeMemoryBank.Blind.PhoneClient");
+        AssemblyBoundaryScanner.Scan([Location(phone)], VaultBoundary.Forbidden()).Should().BeEmpty();
+        AssemblyBoundaryScanner.DuplicatedTypes(Shared.Append(phone).Append(Vault).Select(Location)).Should().BeEmpty();
+        AssemblyBoundaryScanner.DefinedTypes(Location(phone)).Should().NotBeEmpty();
+    }
+
     // ---- controls: the scanner must find what is there -------------------------------------------------------------------
 
     [Fact]

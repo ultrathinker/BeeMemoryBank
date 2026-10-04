@@ -47,12 +47,31 @@ def run(args, **kw):
     return subprocess.run(args, capture_output=True, text=True, encoding='utf-8', errors='replace', **kw)
 
 
+def table_digests(c):
+    """Per table: row count and a SHA-256 over every column of every row (the digests of the rows, sorted; blobs as hex). A start of the
+    node must not change what it stores; a change shows here whichever table it is in (the encrypted columns and the blobs included)."""
+    out = {}
+    for (name,) in c.execute("select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name").fetchall():
+        # Rows in an order of their own (a WITHOUT ROWID or virtual table has no rowid): the digest of each row, sorted.
+        digests = []
+        for row in c.execute('select * from "%s"' % name):
+            digests.append(hashlib.sha256(b'|'.join((v.hex().encode() if isinstance(v, (bytes, bytearray)) else repr(v).encode()) for v in row)).hexdigest())
+        digests.sort()
+        h = hashlib.sha256(','.join(digests).encode())
+        n = len(digests)
+        out[name] = (n, h.hexdigest())
+    return out
+
+
 def facts(db_path):
     c = sqlite3.connect(db_path)
     try:
         return {
             'integrity': c.execute('pragma integrity_check').fetchall(),
             'ledger': [r[0] for r in c.execute('select version from tbl_migration order by version')],
+            # the whole ledger row (file name, timestamps ...), not only the version
+            'ledger_rows': [repr(r) for r in c.execute('select * from tbl_migration order by version')],
+            'tables': table_digests(c),
             'events': c.execute('select count(*) from tbl_event').fetchone()[0],
             'articles': c.execute('select count(*) from tbl_article').fetchone()[0],
             'node': [str(r[0]) for r in c.execute('select node_id from tbl_node_identity')],
@@ -90,6 +109,8 @@ AEZA_COMPOSE = ['--memory', '700m', '--memory-swap', '700m', '--cpus', '0.6',
                 '-e', 'BMB_ROLE=blind', '-e', 'BMB_DATA_PATH=/app/data', '-e', 'BMB_BLIND_HTTPS_PORT=5610', '-e', 'BMB_BLIND_LOCAL_PORT=5612',
                 '-e', 'BMB_PUBLIC_ADDRESS=https://178.20.208.34:5610', '-e', 'BMB_API_URL=http://127.0.0.1:5612']
 EXTRA = []
+# Tables a node that is merely started is allowed to rewrite (none yet; add a table here only with the reason).
+TABLES_A_RUNNING_NODE_REWRITES = set()
 
 
 def step(image, label, vol, suffix, work):
@@ -128,6 +149,12 @@ def compare(a, b, what):
     check('%s: same events and articles' % what,
           (a['facts']['events'], a['facts']['articles']) == (b['facts']['events'], b['facts']['articles']),
           '%s vs %s' % ((a['facts']['events'], a['facts']['articles']), (b['facts']['events'], b['facts']['articles'])))
+    check('%s: whole ledger rows identical (names and timestamps)' % what, a['facts']['ledger_rows'] == b['facts']['ledger_rows'])
+    ta, tb = a['facts']['tables'], b['facts']['tables']
+    changed = sorted(n for n in set(ta) | set(tb) if ta.get(n) != tb.get(n))
+    say('%s: %d tables compared, %d changed%s' % (what, len(ta), len(changed), (': ' + ', '.join(changed)) if changed else ''))
+    unexpected = [n for n in changed if n not in TABLES_A_RUNNING_NODE_REWRITES]
+    check('%s: no table content changed (encrypted columns and blobs hashed)' % what, not unexpected, 'changed: %s' % unexpected)
     lost = sorted(set(a['files']) - set(b['files']))
     check('%s: no file of the data directory lost (recursive)' % what, not lost, 'lost: %s' % lost)
     check('%s: identity key, TLS material and settings byte-identical' % what,

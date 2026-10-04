@@ -19,6 +19,7 @@
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Rekey\BeeMemoryBank.Rekey.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
   </ItemGroup>
 
   <ItemGroup>
