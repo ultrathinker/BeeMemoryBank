@@ -44,9 +44,9 @@ public class UpdateServiceTests : IAsyncLifetime
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    // AppVersion.Current is "1.0.1" (repo VERSION file). Pick versions strictly above/below.
-    private const string NewerVersion = "2.0.0";
-    private const string OlderVersion = "1.0.0";
+    // AppVersion.Current is the repo VERSION file (2.0.1 now, and it only grows). Pick versions strictly above/below it: far above, far below.
+    private const string NewerVersion = "99.0.0";
+    private const string OlderVersion = "0.0.1";
 
     public async Task InitializeAsync()
     {

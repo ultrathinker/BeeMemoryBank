@@ -35,7 +35,8 @@ internal static class DiSnapshot
         {
             var impl = x.d.IsKeyedService ? x.d.KeyedImplementationType : x.d.ImplementationType;
             var inst = x.d.IsKeyedService ? x.d.KeyedImplementationInstance : x.d.ImplementationInstance;
-            return Ours(x.d.ServiceType) || Ours(impl) || Ours(inst?.GetType()) || x.d.ServiceType.Name == "IHostedService";
+            return (Ours(x.d.ServiceType) || Ours(impl) || Ours(inst?.GetType()) || x.d.ServiceType.Name == "IHostedService")
+                   && !IsOperatingSystemSpecific(x.d.ServiceType);
         }).Select(x =>
         {
             var d = x.d;
@@ -48,6 +49,13 @@ internal static class DiSnapshot
         }).OrderBy(r => r.Service, StringComparer.Ordinal).ThenBy(r => r.i).Select(r => r.Line);
         return string.Join("\n", rows) + "\n";
     }
+
+    /// <summary>
+    /// Registrations that exist only on some operating systems (the OS auto-unlock is Windows-only): left out, so the golden file is the same
+    /// on the Windows machine it was written on and on the Linux test boxes. Everything else is compared exactly.
+    /// </summary>
+    private static bool IsOperatingSystemSpecific(Type service) =>
+        service.Namespace == "BeeMemoryBank.Infrastructure.OsAutoUnlock";
 
     /// <summary>The hosted services the host really runs (factory registrations hide their type in the container list).</summary>
     public static string Hosted(IEnumerable<Microsoft.Extensions.Hosting.IHostedService> services) =>
