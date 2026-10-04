@@ -34,6 +34,7 @@
     <Compile Include="*.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BmbWebApplicationFactory.cs" Link="Linked\BmbWebApplicationFactory.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindNodeFactory.cs" Link="Linked\BlindNodeFactory.cs" />
+    <Compile Include="..\BeeMemoryBank.Integration.Tests\DiSnapshot.cs" Link="Linked\DiSnapshot.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\RecoveryTestFactory.cs" Link="Linked\RecoveryTestFactory.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\HeavyOperationCollection.cs" Link="Linked\HeavyOperationCollection.cs" />
     <Compile Include="..\BeeMemoryBank.Integration.Tests\BlindRouteGateTests.cs" Link="Linked\BlindRouteGateTests.cs" />
