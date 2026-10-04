@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 2.0.1: the code that can read is not in a blind node (2026-10-04)
+
+No sync protocol (still 3), database format, migration or ciphertext change; nothing on the wire depends on the application version, so
+1.0.17 and 2.0.1 nodes keep syncing with each other in both directions. A blind node of 1.0.17 is replaced by the new image on its own volume.
+
+- **The libraries are split by what a node needs.** `Core`, `Crypto`, `Search`, `Storage` and `Sync` keep what every node uses (store, relay and
+  apply ciphertext, the sync protocol, the external-key identity, pairing and TLS pinning, backups, recovery sets a node receives and serves). The code that
+  holds the master key, opens a session, encrypts or decrypts content, creates or opens recovery boxes, restores snapshots with the master key or
+  manages the node is the new `BeeMemoryBank.Vault` (118 files, moved with their history, namespaces unchanged). The shared libraries cannot reference it.
+- **A blind node does not contain the vault.** The Linux blind host, its console and CLI and the Android blind app reference the shared libraries only.
+  Release 1.0.17 had the same code compiled in behind closed doors (no route reached it); an assembly-level scan of that host finds 41 vault types in it, the
+  same scan of 2.0.1 finds none. The scan reads the metadata of every application assembly (types defined, types and members referenced, assemblies referenced) and runs
+  in the tests, over publish folders and over the image file system.
+- **Mixed code was split by operation, not by passing the key around**: snapshot key operations, the master-key sentinel check, the current-key
+  fingerprint, who may sign a replica, the external-key node-auth signer and an event logger that refuses to author. The library DI is split the same way
+  (`AddNodeStorage` / `AddNodeCore` / `AddNodeSync` are shared; `AddStorage` / `AddCore` / `AddSync` are in the Vault and call them), so no full-node host changed.
+  The route and service lists of the full node and the container of the blind node are pinned by golden files, which are unchanged.
+- The old `BeeMemoryBank.Blind` link assembly is gone; `BeeMemoryBank.Blind.PhoneClient` is a real library (the phone's own client; the Linux node does not contain it).
+  Notes for contributors: `docs/blind-node/ADR-0002-vault-split.md`, `docs/vault-split/SEAM.md`.
+
 #### 1.0.17: blind nodes are programs of their own (2026-10-03)
 
 No sync protocol (still 3) or database change. A blind node of 1.0.12-1.0.16 is replaced by the new image on its own volume:
