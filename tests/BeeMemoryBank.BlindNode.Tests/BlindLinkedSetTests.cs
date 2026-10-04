@@ -3,9 +3,10 @@ using System.Text.RegularExpressions;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The blind projects LINK original source files (tools/blind-link). The list of what must never be linked is
-/// tools/blind-link/exclude.txt; these tests hold the checked-in linked sets to it, so a file added by hand to a .props
-/// file - or kept after the exclude list grew - fails here instead of shipping in the container.
+/// The blind host LINKS Api source files (tools/blind-link; the library half is gone since the vault split - the host references
+/// the shared libraries directly). The list of what must never be linked is tools/blind-link/exclude.txt; these tests hold the
+/// checked-in linked set to it, so a file added by hand to the .props file - or kept after the exclude list grew - fails here
+/// instead of shipping in the container.
 /// </summary>
 public class BlindLinkedSetTests
 {
@@ -43,13 +44,12 @@ public class BlindLinkedSetTests
             ? path.StartsWith(pattern[..^1], StringComparison.Ordinal)
             : path == pattern || path.StartsWith(pattern.TrimEnd('/') + "/", StringComparison.Ordinal);
 
-    [Theory]
-    [InlineData("server/BeeMemoryBank.BlindNode/linked-api-files.props")]
-    [InlineData("libs/BeeMemoryBank.Blind/linked-lib-files.props")]
-    [InlineData("libs/BeeMemoryBank.Blind.PhoneClient/linked-lib-files.props")]
-    public void NothingOnTheExcludeListIsLinked(string props)
+    private const string ApiProps = "server/BeeMemoryBank.BlindNode/linked-api-files.props";
+
+    [Fact]
+    public void NothingOnTheExcludeListIsLinked()
     {
-        var linked = Linked(props);
+        var linked = Linked(ApiProps);
         linked.Should().NotBeEmpty("the scan must see what is linked");
         var excluded = Excluded();
         excluded.Should().NotBeEmpty();
@@ -57,35 +57,40 @@ public class BlindLinkedSetTests
             "tools/blind-link/exclude.txt lists code a blind node must never contain");
     }
 
-    [Theory]
-    [InlineData("server/BeeMemoryBank.BlindNode/linked-api-files.props")]
-    [InlineData("libs/BeeMemoryBank.Blind/linked-lib-files.props")]
-    [InlineData("libs/BeeMemoryBank.Blind.PhoneClient/linked-lib-files.props")]
-    public void EveryLinkedFileExists_AndIsNotALibraryWiringFile(string props)
+    [Fact]
+    public void EveryLinkedFileExists_AndIsNotAWiringFile()
     {
         var root = RepoRoot();
-        var linked = Linked(props);
+        var linked = Linked(ApiProps);
         linked.Where(f => !File.Exists(Path.Combine(root, f))).Should().BeEmpty();
-        linked.Where(f => f.EndsWith("/DependencyInjection.cs", StringComparison.Ordinal)).Should().BeEmpty(
-            "the libraries' DependencyInjection.cs files register the whole application; the blind composition is BlindComposition.cs");
-        linked.Where(f => f.EndsWith("/PendingEmbeddingProcessor.cs", StringComparison.Ordinal)).Should().BeEmpty(
-            "Sync.csproj itself removes it from its compile list");
+        linked.Where(f => f.EndsWith("/ApiServices.cs", StringComparison.Ordinal) || f.EndsWith("/ApiStartupTasks.cs", StringComparison.Ordinal))
+            .Should().BeEmpty("the Api's composition root registers the whole application; the blind host has its own (BlindNodeServices)");
     }
 
     [Fact]
-    public void TheHostLinksOnlyApiFiles_AndTheBlindAssemblyOnlyLibraryFiles()
+    public void TheHostLinksOnlyApiFiles()
     {
-        Linked("server/BeeMemoryBank.BlindNode/linked-api-files.props")
-            .Should().OnlyContain(f => f.StartsWith("server/BeeMemoryBank.Api/", StringComparison.Ordinal));
-        foreach (var props in new[] { "libs/BeeMemoryBank.Blind/linked-lib-files.props", "libs/BeeMemoryBank.Blind.PhoneClient/linked-lib-files.props" })
-            Linked(props).Should().OnlyContain(f => Regex.IsMatch(f, "^libs/BeeMemoryBank\\.(Core|Storage|Sync|Crypto|Search)/"));
+        Linked(ApiProps).Should().OnlyContain(f => f.StartsWith("server/BeeMemoryBank.Api/", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void TheAndroidClientFilesAreNotAlsoLinkedIntoTheSharedAssembly()
+    public void NoVaultFileIsLinkedIntoAnotherProject()
     {
-        var shared = Linked("libs/BeeMemoryBank.Blind/linked-lib-files.props").ToHashSet();
-        Linked("libs/BeeMemoryBank.Blind.PhoneClient/linked-lib-files.props").Where(shared.Contains).Should().BeEmpty(
-            "a file belongs to one assembly; the phone-only code must not ride along in the Linux container");
+        // The vault split (BMB-99): the library code of the full node lives in libs/BeeMemoryBank.Vault. No other project may compile one of its files.
+        var root = RepoRoot();
+        var offenders = new List<string>();
+        var scanned = 0;
+        foreach (var file in Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories)
+                     .Where(f => (f.EndsWith(".csproj", StringComparison.Ordinal) || f.EndsWith(".props", StringComparison.Ordinal))
+                                 && !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar)
+                                 && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar)))
+        {
+            scanned++;
+            foreach (Match m in Regex.Matches(File.ReadAllText(file), "Compile Include=\"([^\"]+)\""))
+                if (m.Groups[1].Value.Replace('\\', '/').Contains("BeeMemoryBank.Vault/", StringComparison.Ordinal))
+                    offenders.Add(Path.GetRelativePath(root, file) + " -> " + m.Groups[1].Value);
+        }
+        scanned.Should().BeGreaterThan(10, "the scan must see the projects");
+        offenders.Should().BeEmpty("a source file of BeeMemoryBank.Vault must not be linked into another project");
     }
 }

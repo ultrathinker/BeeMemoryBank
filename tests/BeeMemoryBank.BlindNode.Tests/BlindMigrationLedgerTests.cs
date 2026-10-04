@@ -6,16 +6,17 @@ using Dapper;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The blind assembly carries EVERY migration of the full application, byte for byte, under the logical names the
-/// Storage project gives them. The migration runner deletes the ledger rows of any migration whose embedded resource
-/// it cannot match by name ("ghost hunter"), so a binary that lost a migration - or named it differently - would make a
-/// node re-run it. These tests pin the embedded set to the SQL files in libs/BeeMemoryBank.Storage/Migrations.
+/// The Storage assembly a blind node runs carries EVERY migration of the full application, byte for byte, under the
+/// logical names the Storage project gives them (the migrations stay in Storage; the full-node layer is a different assembly).
+/// The migration runner deletes the ledger rows of any migration whose embedded resource it cannot match by name ("ghost
+/// hunter"), so a binary that lost a migration - or named it differently - would make a node re-run it. These tests pin
+/// the embedded set to the SQL files in libs/BeeMemoryBank.Storage/Migrations.
 /// </summary>
 public class BlindMigrationLedgerTests
 {
     private const string Prefix = "BeeMemoryBank.Storage.Migrations.";
 
-    private static readonly Assembly BlindLib = typeof(BeeMemoryBank.Blind.BlindComposition).Assembly;
+    private static readonly Assembly BlindLib = typeof(MigrationRunner).Assembly;
 
     private static string MigrationsDir()
     {

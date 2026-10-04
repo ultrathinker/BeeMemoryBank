@@ -5,7 +5,6 @@
   </Folder>
   <Folder Name="/libs/">
     <Project Path="libs/BeeMemoryBank.AppPaths/BeeMemoryBank.AppPaths.csproj" />
-    <Project Path="libs/BeeMemoryBank.Blind/BeeMemoryBank.Blind.csproj" />
     <Project Path="libs/BeeMemoryBank.Blind.PhoneClient/BeeMemoryBank.Blind.PhoneClient.csproj" />
     <Project Path="libs/BeeMemoryBank.Core/BeeMemoryBank.Core.csproj" />
     <Project Path="libs/BeeMemoryBank.Crypto/BeeMemoryBank.Crypto.csproj" />

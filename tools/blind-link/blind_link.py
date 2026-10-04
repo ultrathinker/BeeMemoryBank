@@ -1,15 +1,17 @@
 """blind-link: keeps the linked-source lists of the blind projects in step with the sources they link.
 
-The blind node does not copy code. Two projects LINK the original source files a blind node needs (same types, same
+The blind node does not copy code. The blind host LINKS the original Api source files a blind node needs (same types, same
 namespaces, one definition):
 
-  libs/BeeMemoryBank.Blind        links files of libs/BeeMemoryBank.{Core,Storage,Sync,Crypto,Search}   -> linked-lib-files.props
   server/BeeMemoryBank.BlindNode  links files of server/BeeMemoryBank.Api                               -> linked-api-files.props
 
-This tool finds both sets by compiling: start from the seed list, build the host, read the "type or name not found"
-errors, link the file that declares each missing name (a library file for an error in the library project, an Api file or
-else a library file for an error in the host), build again, until the build is clean. The result is written to the
-two .props files, which are checked in, so a normal build never needs this tool - it is for recomputing the sets when a
+Since the vault split (BMB-99, 2.0.1) the host references the shared libraries (Core, Storage, Sync, Crypto, Search) directly, so
+there is no library half any more: the former libs/BeeMemoryBank.Blind link assembly and the phone proxy are gone, and the library
+code a blind node must not contain is not in those libraries at all (it is libs/BeeMemoryBank.Vault).
+
+This tool finds the Api set by compiling: start from the seed list, build the host, read the "type or name not found"
+errors, link the Api file that declares each missing name, build again, until the build is clean. The result is written to the
+.props file, which is checked in, so a normal build never needs this tool - it is for recomputing the set when a
 seed or a source file changes.
 
 Usage:  python tools/blind-link/blind_link.py [--check]
@@ -22,8 +24,7 @@ Lists (paths relative to the repo root):
                a replacement instead (that is the point: what is not linked cannot be in the container)
 A trailing `*` is a prefix match, a path without it matches the file or a directory.
 
-Nothing here modifies a source file. DependencyInjection.cs files of the libraries are never linked (they register the
-whole application); the blind composition is written out in libs/BeeMemoryBank.Blind/BlindComposition.cs.
+Nothing here modifies a source file. The blind composition is BlindNodeServices (host) over the shared AddNode* modules.
 """
 import collections
 import io
@@ -34,28 +35,12 @@ import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 API = os.path.join(REPO, 'server', 'BeeMemoryBank.Api')
-LIB_NAMES = ['Core', 'Storage', 'Sync', 'Crypto', 'Search']
 HOST_DIR = os.path.join(REPO, 'server', 'BeeMemoryBank.BlindNode')
 HOST_PROJ = os.path.join(HOST_DIR, 'BeeMemoryBank.BlindNode.csproj')
 HOST_PROPS = os.path.join(HOST_DIR, 'linked-api-files.props')
-BLIND_DIR = os.path.join(REPO, 'libs', 'BeeMemoryBank.Blind')
-BLIND_PROPS = os.path.join(BLIND_DIR, 'linked-lib-files.props')
 SEEDS_FILE = os.path.join(os.path.dirname(__file__), 'seeds.txt')
 EXCLUDE_FILE = os.path.join(os.path.dirname(__file__), 'exclude.txt')
-WIRING = re.compile(r'(^|/)DependencyInjection\.cs$')
-
-# --phone: the second assembly, libs/BeeMemoryBank.Blind.PhoneClient. It holds the library files the Android blind app
-# needs and the Linux node does not (the phone's replica/pull client, backup seal ...), and references Blind. The
-# root of the closure is a plain net10.0 proxy that compiles the app's own service files (the same files
-# BeeMemoryBank.BlindMobile.Tests links), so no Android build is needed to compute it.
-PHONE = '--phone' in sys.argv
-if PHONE:
-    HOST_PROJ = os.path.join(REPO, 'tools', 'blind-link', 'BlindPhoneProxy', 'BlindPhoneProxy.csproj')
-    HOST_DIR = None
-    HOST_PROPS = None
-    BLIND_DIR = os.path.join(REPO, 'libs', 'BeeMemoryBank.Blind.PhoneClient')
-    BLIND_PROPS = os.path.join(BLIND_DIR, 'linked-lib-files.props')
-    SEEDS_FILE = os.path.join(os.path.dirname(__file__), 'seeds-phone.txt')
+WIRING = re.compile(r'(^|/)(ApiServices|ApiStartupTasks)\.cs$')   # the Api's composition roots register the whole application
 
 TYPE_RE = re.compile(r'\b(?:class|record|struct|interface|enum|delegate)\s+(?:class\s+|struct\s+)?([A-Z][A-Za-z0-9_]*)')
 EXT_RE = re.compile(r'static\s+[\w<>\[\],\s\?\.]+?\s+([A-Z][A-Za-z0-9_]*)\s*(?:<[^>]*>)?\s*\(\s*this\s')
@@ -92,7 +77,7 @@ def matches(rel, patterns):
 
 def source_files():
     out = []
-    roots = [(API, 'server/BeeMemoryBank.Api')] + [(os.path.join(REPO, 'libs', 'BeeMemoryBank.' + n), 'libs/BeeMemoryBank.' + n) for n in LIB_NAMES]
+    roots = [(API, 'server/BeeMemoryBank.Api')]
     for root, prefix in roots:
         for r, d, fs in os.walk(root):
             d[:] = [x for x in d if x not in ('bin', 'obj', 'data', 'Properties')]
@@ -107,7 +92,7 @@ def props_text(files, project_dir):
     for f in sorted(files):
         full = os.path.join(REPO, f.replace('/', os.sep))
         rel = os.path.relpath(full, project_dir).replace('/', '\\')
-        link = f.replace('server/BeeMemoryBank.Api/', 'Api/').replace('libs/BeeMemoryBank.', 'Lib/').replace('/', '\\')
+        link = f.replace('server/BeeMemoryBank.Api/', 'Api/').replace('/', '\\')
         lines.append('    <Compile Include="%s" Link="%s" />' % (rel, link))
     lines += ['  </ItemGroup>', '</Project>', '']
     return '\r\n'.join(lines)
@@ -118,10 +103,7 @@ def write(path, text):
 
 
 def props_by_path(links):
-    out = {BLIND_PROPS: props_text([f for f in links if f.startswith('libs/')], BLIND_DIR)}
-    if HOST_PROPS:
-        out[HOST_PROPS] = props_text([f for f in links if f.startswith('server/')], HOST_DIR)
-    return out
+    return {HOST_PROPS: props_text([f for f in links if f.startswith('server/')], HOST_DIR)}
 
 
 def write_props(links):
@@ -131,15 +113,9 @@ def write_props(links):
 
 def main():
     check = '--check' in sys.argv
-    before = {p: io.open(p, encoding='utf-8', newline='').read() for p in (HOST_PROPS, BLIND_PROPS) if p and os.path.exists(p)}
+    before = {p: io.open(p, encoding='utf-8', newline='').read() for p in (HOST_PROPS,) if os.path.exists(p)}
     files = source_files()
-    # In phone mode what the Blind assembly already links is provided by it: never linked a second time.
     provided = set()
-    if PHONE:
-        blind_props = os.path.join(REPO, 'libs', 'BeeMemoryBank.Blind', 'linked-lib-files.props')
-        for m in re.finditer(r'Include="([^"]+)"', io.open(blind_props, encoding='utf-8').read()):
-            full = os.path.normpath(os.path.join(os.path.dirname(blind_props), m.group(1).replace(chr(92), os.sep)))
-            provided.add(os.path.relpath(full, REPO).replace(os.sep, '/'))
     seeds = [to_repo_path(s) for s in read_list(SEEDS_FILE)]
     exclude = [to_repo_path(s) for s in read_list(EXCLUDE_FILE)]
     text, declared, partial = {}, collections.defaultdict(set), collections.defaultdict(set)
@@ -155,8 +131,6 @@ def main():
             ns_files[ns].add(f)
     ok = lambda f: not matches(f, exclude) and not WIRING.search(f) and f not in provided
     links = {f for f in files if matches(f, seeds) and ok(f)}
-    # Sync.csproj removes PendingEmbeddingProcessor from its compile list; never link it
-    links.discard('libs/BeeMemoryBank.Sync/PendingEmbeddingProcessor.cs')
     unresolved = collections.Counter()
     ns_added = set()   # files linked only so that a namespace exists
     errs = []
@@ -169,12 +143,12 @@ def main():
 
     for it in range(1, 80):
         errs = build()
-        print('iteration %d: %d api + %d lib files linked, %d distinct errors' % (
-            it, sum(1 for f in links if f.startswith('server/')), sum(1 for f in links if f.startswith('libs/')), len(errs)), flush=True)
-        wanted = collections.Counter()   # (name, from_lib_project)
+        print('iteration %d: %d api files linked, %d distinct errors' % (
+            it, sum(1 for f in links if f.startswith('server/')), len(errs)), flush=True)
+        wanted = collections.Counter()   # (name, from_lib_project: always False now, kept for the shape of the loop)
         for l in errs:
             m = ERR_FILE_RE.match(l)
-            from_lib = bool(m and ('\\libs\\' in m.group(1) or '/libs/' in m.group(1)))
+            from_lib = False
             for rx in NAME_RES:
                 mm = rx.search(l)
                 if mm:
@@ -233,8 +207,7 @@ def main():
             print('pruned (nothing needs it): %s' % c, flush=True)
     errs = build()
     n_api = sum(1 for f in links if f.startswith('server/'))
-    n_lib = sum(1 for f in links if f.startswith('libs/'))
-    print('DONE: %d Api files and %d library files linked; remaining errors: %d' % (n_api, n_lib, len(errs)))
+    print('DONE: %d Api files linked; remaining errors: %d' % (n_api, len(errs)))
     for e in errs[:40]:
         print('  ' + e[:260])
     if unresolved:

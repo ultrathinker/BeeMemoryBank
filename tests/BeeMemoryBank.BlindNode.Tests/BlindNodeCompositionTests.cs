@@ -14,13 +14,21 @@ namespace BeeMemoryBank.BlindNode.Tests;
 public class BlindNodeCompositionTests
 {
     private static readonly Assembly Host = typeof(Program).Assembly;
-    private static readonly Assembly BlindLib = typeof(BeeMemoryBank.Blind.BlindComposition).Assembly;
 
-    /// <summary>A type by full name in the host or the blind library - the two assemblies a blind node is made of.</summary>
+    /// <summary>The application assemblies a blind node is made of: the host and every BeeMemoryBank.* assembly it reaches.</summary>
+    private static readonly Lazy<List<Assembly>> AppAssemblies = new(() =>
+    {
+        ReferenceClosure();
+        return [Host, .. LoadedApp.Values];
+    });
+
+    private static readonly Dictionary<string, Assembly> LoadedApp = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A type by full name in any application assembly of the blind node.</summary>
     private static Type? FindType(string fullName) =>
-        Host.GetType(fullName, throwOnError: false) ?? BlindLib.GetType(fullName, throwOnError: false);
+        AppAssemblies.Value.Select(a => a.GetType(fullName, throwOnError: false)).FirstOrDefault(x => x is not null);
 
-    /// <summary>Every assembly reachable from the host through references (names only; nothing is loaded).</summary>
+    /// <summary>Every assembly reachable from the host through references (nothing outside the host's own closure is loaded).</summary>
     private static HashSet<string> ReferenceClosure()
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -37,7 +45,12 @@ public class BlindNodeCompositionTests
                       reference.Name.StartsWith("Microsoft.", StringComparison.Ordinal) ||
                       reference.Name is "netstandard" or "mscorlib" or "WindowsBase"))
                 {
-                    try { queue.Enqueue(Assembly.Load(reference)); }
+                    try
+                    {
+                        var loaded = Assembly.Load(reference);
+                        if (reference.Name.StartsWith("BeeMemoryBank.", StringComparison.Ordinal)) LoadedApp[reference.Name] = loaded;
+                        queue.Enqueue(loaded);
+                    }
                     catch (IOException) { /* not shipped with the test host: nothing to follow */ }
                 }
             }
@@ -53,26 +66,27 @@ public class BlindNodeCompositionTests
     public void TheScansSeeWhatTheHostDoesContainAndReference()
     {
         var closure = ReferenceClosure();
-        closure.Should().Contain(["BeeMemoryBank.Blind", "BeeMemoryBank.AppPaths"], "the host's own libraries are reached directly");
+        closure.Should().Contain(
+            ["BeeMemoryBank.Core", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync", "BeeMemoryBank.Crypto", "BeeMemoryBank.Search", "BeeMemoryBank.AppPaths"],
+            "the host's own libraries are reached directly: the shared libraries");
         closure.Should().Contain(["Dapper", "Microsoft.Data.Sqlite", "BouncyCastle.Cryptography"],
-            "and third-party code one hop down (the Blind assembly's packages) is reached too");
+            "and third-party code one hop down (the shared libraries' packages) is reached too");
         Host.GetType("BeeMemoryBank.Api.Services.SnapshotService", throwOnError: false).Should().NotBeNull(
             "linked Api sources are inside the host assembly, which is what the type checks rely on");
-        BlindLib.GetType("BeeMemoryBank.Sync.EventApplier", throwOnError: false).Should().NotBeNull(
-            "linked library sources are inside the Blind assembly, under their original names");
+        FindType("BeeMemoryBank.Sync.EventApplier").Should().NotBeNull(
+            "the shared libraries are among the assemblies the type checks scan");
+        AppAssemblies.Value.Select(a => a.GetName().Name).Should().Contain(
+            ["BeeMemoryBank.Core", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync", "BeeMemoryBank.Crypto", "BeeMemoryBank.Search"]);
     }
 
     [Theory]
-    // The originals the Blind assembly is linked from. A host that references one of them next to Blind would carry
-    // every type twice and could reach code the Blind assembly deliberately left out.
-    [InlineData("BeeMemoryBank.Core")]
-    [InlineData("BeeMemoryBank.Storage")]
-    [InlineData("BeeMemoryBank.Sync")]
-    [InlineData("BeeMemoryBank.Crypto")]
-    [InlineData("BeeMemoryBank.Search")]
-    public void TheHostReachesTheLibrariesOnlyThroughTheBlindAssembly(string original)
+    // The full-node layer and the phone's client. The shared libraries cannot reference them; a host that did would carry the code that
+    // holds the master key, opens content and manages the node.
+    [InlineData("BeeMemoryBank.Vault")]
+    [InlineData("BeeMemoryBank.Blind.PhoneClient")]
+    public void TheHostDoesNotReachTheFullNodeLayer(string forbidden)
     {
-        ReferenceClosure().Should().NotContain(original);
+        ReferenceClosure().Should().NotContain(forbidden);
     }
 
     [Theory]
@@ -84,6 +98,7 @@ public class BlindNodeCompositionTests
     [InlineData("BeeMemoryBank.Media")]
     [InlineData("BeeMemoryBank.Infrastructure")]
     [InlineData("BeeMemoryBank.Rekey")]
+    [InlineData("BeeMemoryBank.Node")]
     // third-party code behind them
     [InlineData("ModelContextProtocol")]
     [InlineData("ModelContextProtocol.AspNetCore")]
@@ -141,6 +156,33 @@ public class BlindNodeCompositionTests
     [InlineData("BeeMemoryBank.Sync.Recovery.RecoveryServiceCollectionExtensions", "the full-node AddRecovery registration; the blind composition registers its own")]
     [InlineData("BeeMemoryBank.Sync.Blind.BlindPhonePullClient", "the Android pull client lives in Blind.PhoneClient")]
     [InlineData("BeeMemoryBank.Sync.Blind.IBlindPhonePullClient", "the Android pull client lives in Blind.PhoneClient")]
+    // The master-key, session and content-crypto code (the vault split, BMB-99): BeeMemoryBank.Vault, which this host does not reference.
+    [InlineData("BeeMemoryBank.Core.Services.SessionService", "a blind node has no session")]
+    [InlineData("BeeMemoryBank.Core.Services.CommentService", "it opens and writes no comment")]
+    [InlineData("BeeMemoryBank.Core.Services.MediaService", "it opens and writes no media")]
+    [InlineData("BeeMemoryBank.Core.Services.RemoteAccountService", "it has no remote accounts")]
+    [InlineData("BeeMemoryBank.Core.Services.NodeDataKeyEnvelope", "it wraps no master key")]
+    [InlineData("BeeMemoryBank.Crypto.MasterKeyManager", "it handles no master key")]
+    [InlineData("BeeMemoryBank.Crypto.DekManager", "it handles no data key")]
+    [InlineData("BeeMemoryBank.Crypto.ArticleEncryptor", "it encrypts no article")]
+    [InlineData("BeeMemoryBank.Crypto.MediaEncryptor", "it encrypts no media")]
+    [InlineData("BeeMemoryBank.Crypto.ProtectedContentCodec", "it opens no protected content")]
+    [InlineData("BeeMemoryBank.Crypto.EnvelopeFraming", "the framing of content ciphertext it cannot open")]
+    [InlineData("BeeMemoryBank.Crypto.RecoveryBoxCrypto", "it creates and opens no recovery box")]
+    [InlineData("BeeMemoryBank.Crypto.NodeIdentityVault", "the identity key of a blind node is in a file, never under a master key")]
+    [InlineData("BeeMemoryBank.Sync.EventLogger", "a blind node authors no event (BlindEventLogger refuses)")]
+    [InlineData("BeeMemoryBank.Sync.SessionNodeAuthSigner", "it signs with its external key (ExternalKeyNodeAuthSigner)")]
+    [InlineData("BeeMemoryBank.Sync.RemoteSentinelVerifier", "the master-key sentinel check needs the key")]
+    [InlineData("BeeMemoryBank.Sync.LazySlotRewrapService", "it has no key slots to re-wrap")]
+    [InlineData("BeeMemoryBank.Sync.Recovery.RecoveryEventPublisher", "it creates no recovery box")]
+    [InlineData("BeeMemoryBank.Sync.Recovery.DeviceBoxPublisher", "it creates no recovery box")]
+    [InlineData("BeeMemoryBank.Sync.Recovery.RecoveryReconciler", "it reconciles no recovery box")]
+    [InlineData("BeeMemoryBank.Sync.Recovery.StateAnchorService", "it writes no state anchor")]
+    [InlineData("BeeMemoryBank.Sync.Recovery.RecoveryKeyResolver", "it opens no recovery box")]
+    [InlineData("BeeMemoryBank.Storage.Sqlite.RetiredMasterDekStore", "it keeps no retired master key")]
+    [InlineData("BeeMemoryBank.Api.Services.SessionSnapshotKeyOperations", "full snapshot encryption with the session key")]
+    [InlineData("BeeMemoryBank.Api.Services.Blind.BlindPreflight", "the PC-side pre-flight of a blind node")]
+    [InlineData("BeeMemoryBank.Api.Services.Blind.BlindNodeManager", "the PC-side management of blind nodes")]
     public void TheBlindCodeDoesNotContain(string fullTypeName, string why)
     {
         FindType(fullTypeName).Should().BeNull(why);
@@ -149,7 +191,7 @@ public class BlindNodeCompositionTests
     [Fact]
     public void NoTypeOfTheBlindCodeIsInAnMcpOrChatNamespace()
     {
-        var offenders = Host.GetTypes().Concat(BlindLib.GetTypes())
+        var offenders = AppAssemblies.Value.SelectMany(a => a.GetTypes())
             .Where(t => t.Namespace is { } ns &&
                         (ns.Contains(".McpTools", StringComparison.Ordinal) || ns.Contains(".Chat", StringComparison.Ordinal)))
             .Select(t => t.FullName)

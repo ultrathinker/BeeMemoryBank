@@ -1,21 +1,31 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    What the Android blind app needs from the libraries and a Linux blind node does not: the phone's own client of a blind
-    node (replica download, pull of the blind node's log, the package source of its backups, the backup seal ...). Like
-    BeeMemoryBank.Blind it holds no code of its own - the files are LINKED from Core / Sync / Storage under their original
-    names (tools/blind-link in phone mode computes the set by compiling the app's service files; linked-lib-files.props) - and it
-    references Blind for everything the two share, so no type exists twice.
+    The phone's own client of a blind node: replica download, pull of the blind node's log, the package source of its backups, the
+    backup seal and the phone's backup file. What the Android blind app needs from the libraries and a Linux blind node does not. It
+    sits on the shared libraries, holds no master-key code, and BeeMemoryBank.Vault references it (a full node pairs and restores
+    blind phones too). The files keep their original namespaces (BeeMemoryBank.Core.Services.BlindPhone, BeeMemoryBank.Crypto,
+    BeeMemoryBank.Sync.Blind); the folders mirror the library each came from.
   -->
-  <PropertyGroup>
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <GenerateDocumentationFile>false</GenerateDocumentationFile>
-  </PropertyGroup>
-
   <ItemGroup>
-    <ProjectReference Include="..\BeeMemoryBank.Blind\BeeMemoryBank.Blind.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
   </ItemGroup>
 
-  <Import Project="linked-lib-files.props" Condition="Exists('linked-lib-files.props')" />
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BeeMemoryBank.BlindMobile.Tests" />
+    <InternalsVisibleTo Include="BeeMemoryBank.Sync.Tests" />
+    <InternalsVisibleTo Include="BeeMemoryBank.Core.Tests" />
+    <InternalsVisibleTo Include="BeeMemoryBank.Crypto.Tests" />
+    <InternalsVisibleTo Include="BeeMemoryBank.Integration.Tests" />
+    <InternalsVisibleTo Include="BeeMemoryBank.BlindNode.Tests" />
+  </ItemGroup>
 
 </Project>

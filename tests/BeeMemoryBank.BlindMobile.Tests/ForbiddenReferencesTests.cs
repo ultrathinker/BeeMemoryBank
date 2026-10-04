@@ -97,26 +97,34 @@ public class ForbiddenReferencesTests
     }
 
     /// <summary>
-    /// The structural claim of BMB-91 for the phone: of the application's own libraries the blind app carries exactly the
-    /// shared blind core and the phone's client - not Core, Storage, Sync, Crypto or Search. (Every type of those libraries
-    /// the app uses is in BeeMemoryBank.Blind under its original name; the rest of them is not in the app at all.)
+    /// The structural claim for the phone (BMB-91, kept by the vault split BMB-99): of the application's own libraries the blind app
+    /// carries the shared libraries (Core, Crypto, Search, Storage, Sync) and the phone's client - and not BeeMemoryBank.Vault, which
+    /// holds the master-key, session and content-crypto code of a full node, nor the full node's other libraries.
     /// </summary>
     [Fact]
-    public void BlindMobile_Output_HoldsOnlyTheBlindAssembliesOfTheApplicationLibraries()
+    public void BlindMobile_Output_HoldsOnlyTheSharedAssembliesOfTheApplicationLibraries()
     {
         var dir = Path.GetDirectoryName(FindAppDll())!;
         var own = Directory.GetFiles(dir, "BeeMemoryBank.*.dll").Select(Path.GetFileNameWithoutExtension).ToList();
-        own.Should().BeEquivalentTo(new[] { "BeeMemoryBank.Blind", "BeeMemoryBank.Blind.PhoneClient", "BeeMemoryBank.BlindMobile" },
-            "the app may carry its own assembly and the two blind assemblies, and no other BeeMemoryBank library");
+        own.Should().BeEquivalentTo(new[]
+            {
+                "BeeMemoryBank.Core", "BeeMemoryBank.Crypto", "BeeMemoryBank.Search", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync",
+                "BeeMemoryBank.Blind.PhoneClient", "BeeMemoryBank.BlindMobile"
+            },
+            "the app may carry its own assembly, the shared libraries and the phone's client, and no other BeeMemoryBank library (Vault least of all)");
     }
 
     [Fact]
-    public void BlindMobile_Csproj_ReferencesOnlyTheTwoBlindAssemblies()
+    public void BlindMobile_Csproj_ReferencesOnlyTheSharedLibrariesAndThePhoneClient()
     {
         var csproj = File.ReadAllText(Path.Combine(FindRepoRoot(), "mobile", "BeeMemoryBank.BlindMobile", "BeeMemoryBank.BlindMobile.csproj"));
         var references = System.Text.RegularExpressions.Regex.Matches(csproj, "<ProjectReference Include=\"([^\"]+)\"")
             .Select(m => Path.GetFileNameWithoutExtension(m.Groups[1].Value.Replace('\\', '/'))).ToList();
-        references.Should().BeEquivalentTo(new[] { "BeeMemoryBank.Blind", "BeeMemoryBank.Blind.PhoneClient" });
+        references.Should().BeEquivalentTo(new[]
+        {
+            "BeeMemoryBank.Core", "BeeMemoryBank.Crypto", "BeeMemoryBank.Search", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync",
+            "BeeMemoryBank.Blind.PhoneClient"
+        });
     }
 
     [Fact]
@@ -373,16 +381,20 @@ public class ForbiddenReferencesTests
             string.Join("\n", violations));
     }
 
+    private static readonly string[] AllowedLibraryAssemblies =
+    [
+        "BeeMemoryBank.Core", "BeeMemoryBank.Crypto", "BeeMemoryBank.Search", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync",
+        "BeeMemoryBank.Blind.PhoneClient"
+    ];
+
     /// <summary>
-    /// The blind app reaches the libraries only through BeeMemoryBank.Blind (shared with the Linux node) and
-    /// BeeMemoryBank.Blind.PhoneClient (the phone's own client). Those assemblies hold the original Core / Storage / Crypto /
-    /// Sync sources under their original namespaces, so the allow-list is keyed by NAMESPACE: the same rule whichever of the
-    /// two assemblies holds the type. A reference into any other BeeMemoryBank assembly is refused.
+    /// The blind app reaches the libraries only through the shared ones (Core, Crypto, Search, Storage, Sync - shared with the Linux
+    /// node) and BeeMemoryBank.Blind.PhoneClient (the phone's own client). The allow-list is keyed by NAMESPACE: the same rule whichever
+    /// of those assemblies holds the type. A reference into any other BeeMemoryBank assembly (BeeMemoryBank.Vault above all) is refused.
     /// </summary>
     private static bool IsAllowedTypeReference(string assemblyName, string typeNs, string typeName)
     {
-        if (!assemblyName.Equals("BeeMemoryBank.Blind", StringComparison.OrdinalIgnoreCase) &&
-            !assemblyName.Equals("BeeMemoryBank.Blind.PhoneClient", StringComparison.OrdinalIgnoreCase))
+        if (!AllowedLibraryAssemblies.Contains(assemblyName, StringComparer.OrdinalIgnoreCase))
             return false;
 
         if (typeNs.StartsWith("BeeMemoryBank.Core", StringComparison.Ordinal))

@@ -26,19 +26,13 @@ api:Services/Recovery/BlindRestoreCode.cs
 api:Services/Recovery/BlindRestoreCodeService.cs
 api:Services/Recovery/RecoveryBlindStatusContributors.cs
 api:Services/Recovery/RecoveryBoxQueries.cs
-api:Services/Recovery/RecoveryCleanupService.cs
-api:Services/Recovery/RecoveryReconcileWatcher.cs
 api:Services/Recovery/RecoveryStatusService.cs
-api:Services/Recovery/RecoveryTriggers.cs
-api:Services/Recovery/StateAnchorScheduler.cs
-api:Services/Recovery/StrongBoxService.cs
 api:Services/Recovery/StrongBoxPolicy.cs
 api:Services/Recovery/PeerOwnStanding.cs
 api:Services/SnapshotService*
 api:Services/SnapshotJoinCache.cs
 api:Services/SyncTokenStore.cs
 api:Services/PublicHostValidator.cs
-api:Services/AuditLogPruningHostedService.cs
 
 # startup + shared helpers
 api:Startup/BlindRoleStartup.cs
@@ -47,7 +41,3 @@ api:Helpers/AppVersion.cs
 api:Models/SyncModels.cs
 api:Models/Requests.cs
 api:Models/Responses.cs
-
-# the sync machinery that only the container starts (hosted services; nothing references them from code)
-libs/BeeMemoryBank.Sync/SyncScheduler.cs
-libs/BeeMemoryBank.Sync/CleanupService.cs

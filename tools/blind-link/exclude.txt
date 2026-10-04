@@ -47,16 +47,23 @@ api:Services/Recovery/IBackupFileRestoreSource.cs
 api:Services/BlindPhone
 api:Endpoints/RestoreEndpoints.cs
 
-# Codex review B (BMB-91): code that reads or re-wraps the master DEK, or that only the PC side of a blind node uses.
-# Peer DEK rotation (full node / phone re-wrap of retained keys); the blind node has its own BlindDekRotationApplier
-libs/BeeMemoryBank.Sync/DekRotation/PeerDekRotationApplier.cs
-libs/BeeMemoryBank.Sync/DekRotation/DekRewrapper.cs
-libs/BeeMemoryBank.Sync/DekRotation/DekRotationMaterial.cs
-# sealing a secret for a peer (the full node's phone pairing); a blind node never seals
-libs/BeeMemoryBank.Sync/Recovery/SealedSecretService.cs
-# the full-node AddRecovery registration (SealedSecretService, RecoverySetBuilder ...); the blind composition registers its own
-libs/BeeMemoryBank.Sync/Recovery/RecoveryServiceCollectionExtensions.cs
-# NOT excludable without editing the originals (tried, the host does not compile): Services/Blind/BlindNodeManager.cs and
-# BlindPreflight.cs (BlindEndpoints.cs, one shared file, maps the PC-side routes too) and the SnapshotService.* parts
-# (BlindPackageBuilder / BlindSeedService call CreateAsync, SwapDbFileWithRetryAsync, the Crypto helpers). See
-# docs/blind-node/COMPOSITION.md, known limits.
+# The vault split (BMB-99, 2.0.1): Api code that holds or uses the master key, opens or creates recovery boxes, encrypts or restores a
+# snapshot with the master key, or manages blind nodes from the PC. (The library half of this list is gone: those files moved to
+# libs/BeeMemoryBank.Vault, which the blind host does not reference. SnapshotService.Create.cs stays linked: building a package is shared,
+# the master-key operations behind it are ISnapshotKeyOperations.)
+api:Services/SnapshotService.Crypto.cs
+api:Services/SnapshotService.Restore.cs
+api:Services/SnapshotService.NetworkRestore.cs
+api:Services/SnapshotService.Upload.cs
+api:Services/SessionSnapshotKeyOperations.cs
+api:Services/Blind/BlindNodeManager.cs
+api:Services/Blind/BlindPreflight.cs
+api:Services/Blind/BlindPreflightReplicaAuthority.cs
+api:Endpoints/BlindNodeManagementEndpoints.cs
+api:Services/Recovery/RecoveryCleanupService.cs
+api:Services/Recovery/RecoveryTriggers.cs
+api:Services/Recovery/RecoveryReconcileWatcher.cs
+api:Services/Recovery/StateAnchorScheduler.cs
+api:Services/Recovery/StrongBoxService.cs
+api:Services/Recovery/SessionKeyFingerprintSource.cs
+api:Services/AuditLogPruningHostedService.cs

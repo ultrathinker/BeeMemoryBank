@@ -5,11 +5,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Only the blind assemblies: the shared blind core and the phone's client. The original Core/Storage/Sync/Crypto
-         libraries must NOT be referenced next to them (same types twice), and the trimmed APK then contains only what a
-         blind node uses. -->
-    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind\BeeMemoryBank.Blind.csproj" />
+    <!-- The assemblies the blind app carries: the shared libraries and the phone's client. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
+    <!-- The PC's side of pairing a phone (BlindPhoneBackupSeal, BlindPhoneEnrollment) is a full node's code and lives in the Vault; the tests
+         play the PC, the app never does, so Vault is referenced by the TESTS only and is not in the app. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,10 +34,6 @@
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\SqliteBlindIdentityRecorder.cs" Link="Shared\SqliteBlindIdentityRecorder.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindStartup.cs" Link="Shared\BlindStartup.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindMobileServices.cs" Link="Shared\BlindMobileServices.cs" />
-    <!-- The PC's side of pairing a phone (a full node does this); the tests play the PC, the app never does, so the
-         file is compiled into the tests only and is in neither blind assembly. -->
-    <Compile Include="..\..\libs\BeeMemoryBank.Core\Services\BlindPhone\BlindPhoneBackupSeal.cs" Link="Shared\BlindPhoneBackupSeal.cs" />
-    <Compile Include="..\..\libs\BeeMemoryBank.Core\Services\BlindPhone\BlindPhoneEnrollment.cs" Link="Shared\BlindPhoneEnrollment.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\MaintenanceDetectingHandler.cs" Link="Shared\MaintenanceDetectingHandler.cs" />
   </ItemGroup>
 

@@ -1,3 +1,0 @@
-# Seeds of the phone closure (tools/blind-link --phone). Empty on purpose: everything the app needs is found by compiling its
-# service files (tools/blind-link/BlindPhoneProxy) against Blind. Add a path here only for code the container resolves
-# at run time and the compiler cannot see.

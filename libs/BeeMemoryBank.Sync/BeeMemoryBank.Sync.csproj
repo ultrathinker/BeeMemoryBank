@@ -13,6 +13,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="BeeMemoryBank.Sync.Tests" />
+    <!-- BlobTransport: the phone client downloads blobs the way the sync client does. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Blind.PhoneClient" />
   </ItemGroup>
 
   <ItemGroup>
