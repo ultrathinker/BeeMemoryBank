@@ -3,12 +3,13 @@ using BeeMemoryBank.Api.Endpoints;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Api.Services.Recovery;
-using BeeMemoryBank.Blind;
+using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Hosting.AspNetCore;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace BeeMemoryBank.BlindNode.Startup;
@@ -28,9 +29,18 @@ public static class BlindNodeServices
         // The role is a fact about this process; libraries ask for it (a blind node never authors events).
         services.AddSingleton<INodeRole>(new EnvironmentNodeRole("blind"));
 
-        // The library half: storage, the services of the replicated data model, the sync machinery - only what a
-        // blind node uses (libs/BeeMemoryBank.Blind/BlindComposition.cs).
-        services.AddBlindComposition(dataPath);
+        // The library half: the shared modules every node registers - storage, the services of the replicated data model, the
+        // sync machinery - and the pieces that only a blind node has. The libraries it references are the shared ones: nothing of the
+        // vault (BeeMemoryBank.Vault) is in this host's closure, so nothing of it can be registered by accident.
+        services.AddNodeStorage(dataPath);
+        services.AddNodeCore();
+        services.AddNodeSync();
+        // A blind node stores the ciphertext of vectors and never computes one; nothing here can hold a model.
+        services.AddSingleton<IEmbeddingGenerator, BlindEmbeddingGenerator>();
+        // A blind node authors nothing: its event logger refuses (the full EventLogger signs with the master DEK and is vault code).
+        services.AddScoped<IEventLogger, BlindEventLogger>();
+        // Signs with the external (v=2) identity key from IExternalNodeKey; never derives a key through the master DEK.
+        services.TryAddScoped<INodeAuthSigner, ExternalKeyNodeAuthSigner>();
         services.AddMemoryCache();
         AddBlindRecovery(services);
         services.AddSingleton<SyncTokenStore>();
@@ -41,9 +51,9 @@ public static class BlindNodeServices
         // BMB_SYNC_INTERVAL_SECONDS: override of the scheduler tick (default 60 s); tests set it low.
         TimeSpan? syncInterval = int.TryParse(Environment.GetEnvironmentVariable("BMB_SYNC_INTERVAL_SECONDS"), out var s) && s >= 1
             ? TimeSpan.FromSeconds(s) : null;
-        services.AddBlindSyncScheduler(interval: syncInterval, periodicCleanupFactory: sp =>
+        services.AddNodeSyncScheduler(interval: syncInterval, periodicCleanupFactory: sp =>
             sp.GetRequiredService<SyncTokenStore>().CleanupExpired);
-        services.AddBlindCleanupService();
+        services.AddNodeCleanupService();
 
         services.AddHttpClient();
         services.AddTransient<HttpClient>(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient());
