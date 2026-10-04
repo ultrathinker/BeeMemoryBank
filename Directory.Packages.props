@@ -62,7 +62,7 @@
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageVersion Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
-    <PackageVersion Include="System.IO.Hashing" Version="10.0.11" />
+    <PackageVersion Include="System.IO.Hashing" Version="10.0.12" />
     <!-- Same version Microsoft.ML.Tokenizers resolves, so Storage and Embeddings agree. -->
     <PackageVersion Include="System.Numerics.Tensors" Version="9.0.0" />
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
