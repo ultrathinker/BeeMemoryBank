@@ -75,3 +75,33 @@ Not a code change: `KeyDerivation` stays shared whole (Argon2id + the memory bud
 Folded into S3 because they only make sense together with the physical move (doing them earlier would mean writing them twice):
 the three `DependencyInjection.cs` + `RecoveryServiceCollectionExtensions` (D3: `AddNodeStorage/AddNodeCore/AddNodeSync` stay, the old `AddStorage/AddCore/AddSync/AddRecovery` move to Vault),
 the `Storage/DependencyInjection.cs` search-index block, `Api/Models` DTO split, the phone `AndroidBackupRestore` recognizer, the `SessionService` internals.
+
+## S3 status (BMB-103, the graph cut)
+
+Layout now (counts are `.cs` files):
+
+| Assembly | Files | Who references it |
+|---|---|---|
+| Core 101, Crypto 13, Search 11, Storage 37, Sync 61 (**shared**) | 223 | every node, the blind host and the Android blind app included |
+| `Blind.PhoneClient` (the phone's client of a blind node) | 15 | Android blind app, Vault; **not** the Linux blind host |
+| `Vault` (full-node layer) | 118 | Api, Cli, Web, Node, Mobile, Embeddings, Infrastructure, Media, Rekey, Migrator, SeedGen and their tests; never the shared libraries |
+
+Rule used for the move: a library file goes to Vault iff no blind host or phone compiled it (the S1 link sets; 115 files) - the 35 candidates of S1 are among them, together with
+the full-node-only services, repositories, the search index and segment store; the three `DependencyInjection.cs` (AddCore/AddStorage/AddSync compat names) follow. Folders in Vault mirror the
+project each file came from; namespaces are unchanged, so no `using` changed anywhere. The shared libraries build on their own (no reference to Vault or PhoneClient), which is what
+proves they need nothing of it.
+
+Deviations from PLAN-v2, with the reason:
+1. `Blind.PhoneClient` is **kept** as a real library (15 `git mv`ed files) instead of being retired: the old test "phone-only code must not ride along in the Linux container" is a property worth keeping,
+   and a three-layer graph (shared <- PhoneClient <- Vault) keeps it true. `NullEventLogger` stays in shared Core (the full node registers it as the default, the phone as its logger; it is two lines).
+2. No warning NoOp default for `IDekRotationApplier` in `AddNodeSync`: the event applier cannot be built without one, so a host that forgets it fails when the container resolves it, which is louder than a log line.
+   The same holds for `IRestoreInitiator`, `IEventLogger` and `INodeAuthSigner`: the full node takes them from `AddSync` (Vault), the blind host registers its own.
+3. The search index (`IndexBuilder`, segments, `EncryptedSegmentStore`, index lifecycle/processor) moved whole to Vault; `Search` keeps the stemmers/tokenizer the shared `ArticleRepository` uses.
+4. `libs/BeeMemoryBank.Blind` (link assembly), its props, `BlindPhoneProxy`, `seeds-phone.txt`, `registrations.py`, `stats.py` are removed from the clone (own BMB-91 scaffolding, replaced and proven by `BlindNode.Tests`
+   and the Android builds). `tools/blind-link/blind_link.py` recomputes the Api set only; `exclude.txt` lists the Api files that left the blind set.
+
+`InternalsVisibleTo` for Vault (each reason is in the csproj): Core -> `ClearFolderIdUnscopedAsync`, `CodeText`; Crypto -> `AesGcmHelper`, `HeavyDerivationQueue.IsOnWorker`; Storage -> `BlobRepository.StoreOnAsync`.
+Sync -> PhoneClient (`BlobTransport`). Vault -> test projects (`SearchService.MaxContentResults`, `SessionService.PostUnlockCatchUp`, `RecoveryKeyResolver.KeyOpened`, `IndexBuilder.SearchRankedReference`).
+Api and Web remain unlisted in Core's grants, as before.
+
+Goldens after the cut: full-node routes and container identical to the S0 baseline; blind-host container identical to the S2 golden.

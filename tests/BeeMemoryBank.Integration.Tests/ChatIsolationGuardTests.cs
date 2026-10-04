@@ -37,9 +37,15 @@ public class ChatIsolationGuardTests
 
     private static IEnumerable<string> RelevantSourceFiles()
     {
-        var syncDir = Path.Combine(RepoRoot, "libs", "BeeMemoryBank.Sync");
-        if (Directory.Exists(syncDir))
+        // Sync's code is in two places since the vault split (BMB-99): the shared libs/BeeMemoryBank.Sync and the full-node layer's
+        // libs/BeeMemoryBank.Vault/Sync. Both are scanned, so a move cannot silently take a file out of the guard.
+        foreach (var syncDir in new[]
+                 {
+                     Path.Combine(RepoRoot, "libs", "BeeMemoryBank.Sync"),
+                     Path.Combine(RepoRoot, "libs", "BeeMemoryBank.Vault", "Sync")
+                 })
         {
+            Assert.True(Directory.Exists(syncDir), syncDir + " must exist: the guard would otherwise scan nothing there");
             foreach (var f in Directory.EnumerateFiles(syncDir, "*.cs", SearchOption.AllDirectories))
             {
                 var full = Path.GetFullPath(f);

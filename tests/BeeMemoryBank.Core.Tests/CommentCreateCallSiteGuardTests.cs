@@ -29,7 +29,7 @@ public class CommentCreateCallSiteGuardTests
         @"\.\s*LogCommentCreateAsync\s*\(|[cC]ommentRepo\w*\s*\.\s*CreateAsync\s*\(",
         RegexOptions.Compiled);
 
-    private const string CommentService = "libs/BeeMemoryBank.Core/Services/CommentService.cs";
+    private const string CommentService = "libs/BeeMemoryBank.Vault/Core/Services/CommentService.cs";
 
     [Fact]
     public void Comments_are_created_only_through_CommentService()
