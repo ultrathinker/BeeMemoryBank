@@ -36,9 +36,8 @@ generation, the internal key never reaching the browser, loopback binding) stay 
 ## Startup, pipeline, routes, services
 
 See [STARTUP-CONTRACT.md](STARTUP-CONTRACT.md). Routes: the 47 in [ROUTES.golden.txt](ROUTES.golden.txt), the same list for
-the Api in the blind role and for this host. Registrations: `BlindNodeServices` (host) and `BlindComposition` (the
-`Blind` library) - each full-node-only registration of `ApiServices.cs` / `AddStorage` / `AddCore` / `AddSync` is
-absent, not skipped.
+the Api in the blind role and for this host. Registrations: `BlindNodeServices` (host) over the shared `AddNodeStorage` / `AddNodeCore` / `AddNodeSync` modules - each full-node-only
+registration of `ApiServices.cs` / `AddStorage` / `AddCore` / `AddSync` (the last three live in `BeeMemoryBank.Vault`) is absent, not skipped.
 
 ## Things kept on purpose that a stricter node might drop (decide later, separately)
 

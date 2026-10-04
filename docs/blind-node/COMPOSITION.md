@@ -1,19 +1,20 @@
 # Blind node: what the container holds
 
 The full application registers its services with three library methods (`AddStorage`, `AddCore`, `AddSync`, plus `AddRecovery`
-inside it) and a long `ApiServices.cs`. A blind node registers the blind half of them in `libs/BeeMemoryBank.Blind/BlindComposition.cs`
-(library services) and `server/BeeMemoryBank.BlindNode/Startup/BlindNodeServices.cs` (host services). A registration that is not
-there is not "switched off": its implementation is not in the assembly, so nothing can resolve it.
-`python tools/blind-link/registrations.py` prints, for every registration of the originals, whether the types it names are
-linked into the blind assembly.
+inside it; since the vault split they live in `BeeMemoryBank.Vault`) and a long `ApiServices.cs`. Each of them calls a **shared module** that a
+blind node uses too: `AddNodeStorage`, `AddNodeCore`, `AddNodeSync` (+ `AddNodeSyncScheduler`, `AddNodeCleanupService`) in the `NodeDependencyInjection`
+class of Storage, Core and Sync. A blind node calls the same modules from `server/BeeMemoryBank.BlindNode/Startup/BlindNodeServices.cs`, which adds
+the host's own services. A registration that is not there is not "switched off": its implementation is not in any assembly the blind program references,
+so nothing can resolve it. The shared modules deliberately register no event logger, node-auth signer, restore initiator or DEK rotation applier:
+the full node takes them from `AddSync` (Vault), the blind host registers its own, and a host that registers none fails when the container resolves it.
 
 ## Kept (library half)
 
 | Group | Registrations | Why a blind node needs them |
 |-------|---------------|-----------------------------|
 | storage | `DbConnectionFactory` (+ `IDbConnectionFactory`), `MigrationRunner`, `DapperConfig.Configure()`, `EmbeddingVectorCache`, `ChunkEmbeddingVectorCache`, the repositories of the replicated data model (article, article body, blob, comment, folder + ACL, media, concept tag, tombstone, conflict version, role + ACL, user), the node's own (`NodeIdentity`, `Whitelist`, `KeySlot`, `RetiredMasterDek`), the sync's (`EventLog`, `SyncPosition`, `SyncPushPosition`, `SyncQuarantine`, `RestoreEventState`, `DekRotationState`, `RestoreReplayShield`, `AuditLog`, remote account/subscription/token), `FolderBootstrapper`, `CallerScopeHolder` | `EventApplier` applies replicated rows into these tables so a joining peer can be seeded from this node; the event log is the node's reason to exist |
-| core | `SessionService`, `InvisibleModeService`, `MaintenanceModeService`, `SearchMetrics`, `CommentService`, `MediaService` (+ a transcoder that refuses), `MediaBlobBackfillService`, `FolderAccessService`, `ConceptTagService`, `LegacyPasswordSlotMigrationService`, `RemoteAccountService`, the null actor provider | constructor dependencies of the linked sync code. They exist in the assembly; they are never unlocked (no route can open a session) |
-| sync | `LamportClock`, `SyncTrigger`, `EventLogger`, `EventApplier`, `SyncClient`, `HardDeleteService`, the pin registry and the pinned `HttpClient`, `SyncScheduler`, `CleanupService`, `LazySlotRewrapService`, the recovery services (`RecoverySetBuilder`, `StateAnchorService`, device box publisher, reconciler) | the mesh protocol, anchors and recovery sets a blind node takes part in |
+| core | `InvisibleModeService`, `MaintenanceModeService`, `SearchMetrics`, `MediaBlobBackfillService`, `FolderAccessService`, `ConceptTagService`, the null actor provider | non-decrypting helpers the sync code uses. No `SessionService`, `CommentService`, `MediaService`, `RemoteAccountService` and no content crypto: they are vault code |
+| sync | `LamportClock`, `SyncTrigger`, `BlindEventLogger` (refuses to author), `ExternalKeyNodeAuthSigner` (signs with the external key), `EventApplier`, `SyncClient` (no master-key sentinel check), `HardDeleteService`, the pin registry and the pinned `HttpClient`, `SyncScheduler`, `CleanupService`, `RecoverySetBuilder` | the mesh protocol, and the recovery sets a blind node receives and serves. No `EventLogger`, `LazySlotRewrapService`, `StateAnchorService`, device box publisher or reconciler: they create or open recovery boxes with the master key |
 | blind role (host) | `FileNodeKey` as `IExternalNodeKey`, `BlindState`, `BlindRestoreInitiator`, `BlindDekRotationApplier`, `BlindEmbeddingGenerator`, `BlindTlsIdentity`, `BlindPairing`, `BlindSeedService`, `BlindLogTrimmer`, `BlindPackageBuilder` + `BlindReplicaPackageCache`, backups, console login, wipe, the blind side of recovery (`BlindRestoreCodeService`, anchors, boxes status) | what makes the node blind: its identity key lives in a file, it cannot rotate or restore a vault, it computes no vector |
 
 ## Dropped (not linked, so not registered)
@@ -26,8 +27,8 @@ Management of content and people: `ArticleService`, `ArticleDiffService`, `TreeS
 `RestoreService`, `RestoreBootstrapMarker`, `RemoteEventApplier`, `AgentRepository`, `FavoriteRepository`,
 `ArticleVersionRepository`, `SealedSecretService`.
 Sync defaults a full host falls back to: `NoOpRestoreInitiator`, `PeerDekRotationApplier` with `DekRewrapper` and `DekRotationMaterial` (a blind
-node registers its own `BlindDekRotationApplier`), the full node's `AddRecovery` registration (`RecoveryServiceCollectionExtensions`;
-the blind composition registers the recovery services it needs itself). Android-only: `BlindPhonePullClient` lives in `Blind.PhoneClient`.
+node registers its own `BlindDekRotationApplier`), the full node's `AddRecovery` registration (`RecoveryServiceCollectionExtensions`).
+Android-only: `BlindPhonePullClient` lives in `Blind.PhoneClient`. All of these are in `BeeMemoryBank.Vault` (or `Blind.PhoneClient`), assemblies the blind host does not reference.
 
 Host (`ApiServices.cs`) registrations with no counterpart: MCP, agent bearer auth, caller-scope middleware and its HttpContext store,
 the HTTP actor provider, OpenRouter and the chat stack, the embedding model and image transcoder, mDNS, update, DEK rotation, zip export,
@@ -37,29 +38,25 @@ compaction, download tokens, the unlock cache, OS auto-unlock, the remote-accoun
 
 * `BlindNodeCompositionTests.EveryRegisteredServiceCanBeConstructed_...`: the container is built with `ValidateOnBuild`; the hosted services
   are listed and the forbidden ones must be absent.
-* `BlindNodeCompositionTests.TheBlindCodeDoesNotContain` / `TheHostDoesNotReferenceAnythingOfAFullNode` / `TheHostReachesTheLibrariesOnlyThroughTheBlindAssembly`.
-* `BlindLinkedSetTests`: nothing on `tools/blind-link/exclude.txt` is linked.
+* `BlindNodeCompositionTests.TheBlindCodeDoesNotContain` / `TheHostDoesNotReferenceAnythingOfAFullNode` / `TheHostDoesNotReachTheFullNodeLayer`.
+* `BlindBoundaryTests` / `AppBoundaryTests`: assembly-level scan (TypeDefs, TypeRefs, MemberRefs, AssemblyRefs) for the vault, with controls; also run over publish folders
+  and the extracted image (`BMB_SCAN_DIRS`) by the release process.
+* `BlindLinkedSetTests`: nothing on `tools/blind-link/exclude.txt` is linked, and no Vault file is linked anywhere.
 * The blind-only integration tests of `BeeMemoryBank.Integration.Tests` run unchanged against this host (`BeeMemoryBank.BlindNode.Tests`):
   they found the one registration the first draft forgot (`IEmbeddingGenerator`) within a minute.
 
 ## Known limits (stated plainly)
 
-The blind assembly still contains `SessionService`, `MasterKeyManager`, the `Crypto` primitives and the replication code that applies
-rows: they are dependencies of the sync code the originals share, and the originals are not changed by this work. What the blind node
-does NOT contain is every path that could open a session or read content for a person or an agent - no route, no middleware, no service
-that offers it - and, since review B, the master-key re-wrap machinery of a peer (`PeerDekRotationApplier`, `DekRewrapper`,
-`DekRotationMaterial`), `SealedSecretService` and the full node's `AddRecovery`.
+Since the vault split the blind program contains **no** session, master-key manager, content encryptor, event logger that signs with the DEK,
+recovery-box creation or opening, full snapshot encrypt/restore, or PC-side node management; the assembly-level guards above hold that.
+What it still contains, on purpose, and why:
 
-Two more things stay compiled in because taking them out means editing an original file (tried: the host stops compiling):
-
-* **`SnapshotService`** (a partial class of the Api). The parts a blind node uses - building and serving a ciphertext package,
-  swapping the database file - sit in the same class as snapshot creation, encryption and restore, which call
-  `SessionService.GetMasterDek()`. On a blind volume the master DEK is refused at that call, so the paths cannot run; they are
-  present, not absent.
-* **`BlindNodeManager` and `BlindPreflight`** (the full node's side of adding a blind node). `BlindEndpoints.cs` is one file that maps both
-  the routes of the blind node and the routes of the PC that manages it, so the host links the file and with it the management types.
-  The host does not map the management routes (`ROUTES.golden.txt` is exact).
-
-Splitting those two originals is a separate piece of work on the original code (BMB-91 follow-up). Until then the honest statement is:
-*not reachable and not activatable on a blind volume*, not *not compiled in*.
+* **Shared, non-decrypting helpers with local-authoring corners**: `ConceptTagService`, `FolderAccessService` (cache invalidation and ACL rows the event
+  applier uses), `HardDeleteService` (the remote executor), `InvisibleModeService`, the `ArticleRepository` search methods and the `Search` stemmers/tokenizer.
+  They hold no key and open no content; splitting them is a candidate for a later release.
+* **`SnapshotService`** (a partial class of the Api, linked): the package engine - building and serving a ciphertext package, swapping the database
+  file, signing with the node identity through `ISnapshotKeyOperations` (the blind host passes the external-key implementation; there is no session-backed one in it).
+  The encrypt/restore/management partials are Api-only and are not linked.
+* **The Api's own `BMB_ROLE=blind` branch** is kept for 2.0.1: it is the full Api (with the Vault) in a restricted role, not the blind image.
+* **Phone-only code** (`Blind.PhoneClient`) is not in the Linux container.
 

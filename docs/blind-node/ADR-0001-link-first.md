@@ -1,5 +1,7 @@
 # ADR 0001: link the Api sources a blind node needs instead of copying them or keeping the role switch
 
+> **Superseded in part by [ADR-0002](ADR-0002-vault-split.md) (2.0.1).** The library half of the link-first design (the `BeeMemoryBank.Blind` link assembly and its props) is gone: the blind projects reference the shared libraries directly and the vault code is its own assembly. The host still links the Api files this ADR describes.
+
 Status: accepted (BMB-91, 2026-10-03); the `Blind` assembly (stage 2) has landed on the same decision. Revisit if the library code is ever
 split at its source (see "Known limits" in COMPOSITION.md).
 

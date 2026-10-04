@@ -24,6 +24,9 @@ public class BlindNodeCompositionTests
 
     private static readonly Dictionary<string, Assembly> LoadedApp = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The application assemblies of the blind host's closure (for the assembly-level scans in BlindBoundaryTests).</summary>
+    internal static IReadOnlyList<Assembly> ClosureApplicationAssemblies() => AppAssemblies.Value;
+
     /// <summary>A type by full name in any application assembly of the blind node.</summary>
     private static Type? FindType(string fullName) =>
         AppAssemblies.Value.Select(a => a.GetType(fullName, throwOnError: false)).FirstOrDefault(x => x is not null);

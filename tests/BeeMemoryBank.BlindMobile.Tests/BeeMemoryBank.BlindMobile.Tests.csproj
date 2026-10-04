@@ -51,4 +51,11 @@
     <Using Include="FluentAssertions" />
   </ItemGroup>
 
+
+  <ItemGroup>
+    <!-- The assembly-boundary scanner and the vault boundary (BMB-99): one source in tests/shared, linked into every project that proves the boundary. -->
+    <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
+    <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+  </ItemGroup>
+
 </Project>
