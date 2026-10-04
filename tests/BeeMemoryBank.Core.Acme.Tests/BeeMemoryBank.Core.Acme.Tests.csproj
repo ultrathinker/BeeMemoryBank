@@ -11,6 +11,7 @@
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Infrastructure\BeeMemoryBank.Infrastructure.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
   </ItemGroup>
 
   <ItemGroup>

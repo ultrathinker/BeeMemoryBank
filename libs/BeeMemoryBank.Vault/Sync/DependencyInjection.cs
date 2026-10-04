@@ -1,39 +1,26 @@
-using BeeMemoryBank.Sync.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
-using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Recovery;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Sync;
 
+/// <summary>
+/// The full node's sync registrations: everything every node needs (<see cref="NodeDependencyInjection.AddNodeSync"/>, in the shared
+/// Sync) plus the event logger that signs with the master key, the session-backed node-auth signer, the search-index lifecycle, the
+/// master-DEK sentinel check, lazy slot re-wrap, the DEK rotation applier and the recovery services that create and open boxes.
+/// </summary>
 public static class DependencyInjection
 {
     public static IServiceCollection AddSync(this IServiceCollection services)
     {
-        services.AddSingleton<SnapshotRequiredState>();
-        services.AddSingleton<PeerNewerProtocolState>();
-
-        services.AddSingleton<LamportClock>();
-        services.AddSingleton<ILamportClock>(sp => sp.GetRequiredService<LamportClock>());
-
-        services.AddSingleton<SyncTrigger>();
-        services.AddSingleton<ISyncTrigger>(sp => sp.GetRequiredService<SyncTrigger>());
+        services.AddNodeSync();
 
         services.AddScoped<IEventLogger, EventLogger>();
-        services.AddScoped<EventApplier>();
-        services.AddScoped<SyncClient>();
-        // The master-DEK sentinel check of SyncClient (vault code; a blind node registers none and skips the check).
+        // The master-DEK sentinel check of SyncClient (a blind node registers none and skips the check).
         services.TryAddScoped<IRemoteSentinelVerifier, RemoteSentinelVerifier>();
-        services.AddScoped<HardDeleteService>();
-
-        // Registered here (Sync's own DI) rather than Storage's AddStorage(), unlike the other
-        // repositories this project consumes — this one is Sync-specific (only ever consumed by
-        // SyncEventQuarantine/SyncClient and the GET+DELETE /api/sync/quarantine endpoints), so it
-        // stays colocated with its only consumer, the same way EventLogger/EventApplier/SyncClient
-        // themselves are registered here rather than in Storage.
-        services.AddScoped<Core.Interfaces.ISyncQuarantineRepository, BeeMemoryBank.Storage.Sqlite.SyncQuarantineRepository>();
 
         // The search index lifecycle. IndexBuilder and SearchIndexRuntimeState are process-
         // lifetime singletons (the in-memory index itself, and the internal-segment-id -> persisted
@@ -46,14 +33,6 @@ public static class DependencyInjection
         // Default sync-auth signer derives the node key via the master DEK. Mobile overrides
         // this with a Keystore-backed signer so background backup-sync works while locked.
         services.TryAddScoped<INodeAuthSigner, SessionNodeAuthSigner>();
-
-        // Which peers present a pinned, self-signed TLS key (plan 4.4). Every client that dials a
-        // sync peer builds its handler from this, so the pins apply on every node alike.
-        services.AddSingleton<Blind.SpkiPinRegistry>();
-        // Pinned TLS keys (plan 4.4) for the scheduler's client on every host that syncs — server,
-        // CLI and the phone's foreground service alike: a peer whose whitelist row carries tls_spki
-        // (a blind node with its self-signed certificate) is accepted on that key and nothing else.
-        services.AddHttpClient(SyncScheduler.HttpClientName).UsePinnedSyncHandler();
 
         // ILazySlotRewrapService is needed by SessionService.UnlockAsync to handle
         // post-DEK-rotation slot rewrap (when a node didn't auto-accept eagerly).
@@ -102,47 +81,25 @@ public static class DependencyInjection
     /// Called from API/CLI where IHostedService is available.
     /// </summary>
     public static IServiceCollection AddSyncScheduler(this IServiceCollection services, TimeSpan? interval = null, Func<IServiceProvider, Action?>? periodicCleanupFactory = null)
-    {
-        // Registered as itself as well as a hosted service: a flow that is about to delete this
-        // node's tables asks the loop to stand down first (SyncScheduler.PauseAsync — the wipe and
-        // the reseed cutover both do), and it cannot ask a type the container does not hand out.
-        services.AddSingleton(sp => new SyncScheduler(
-            sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SyncScheduler>>(),
-            sp.GetRequiredService<ISyncTrigger>(),
-            sp.GetRequiredService<System.Net.Http.IHttpClientFactory>(),
-            interval,
-            periodicCleanupFactory?.Invoke(sp),
-            sp.GetRequiredService<SnapshotRequiredState>()));
-        services.AddHostedService(sp => sp.GetRequiredService<SyncScheduler>());
-        return services;
-    }
+        => services.AddNodeSyncScheduler(interval, periodicCleanupFactory);
 
     /// <summary>
     /// Adds the background periodic cleanup service.
     /// </summary>
     public static IServiceCollection AddCleanupService(this IServiceCollection services, TimeSpan? interval = null)
-    {
-        services.AddHostedService(sp =>
-            new CleanupService(
-                sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CleanupService>>(),
-                interval));
-        return services;
-    }
+        => services.AddNodeCleanupService(interval);
 
     /// <summary>
     /// Adds the background pending search-index processor. Requires AddStorage() (for
     /// EncryptedSegmentStore/SegmentManifestRepository/SegmentTombstoneRepository) and AddSync()
     /// (for the IndexBuilder/SearchIndexLifecycleService registrations above) to have already run.
-    /// Also registered as itself, same reason as <see cref="AddEmbeddingProcessor"/> above.
     /// </summary>
     public static IServiceCollection AddIndexProcessor(this IServiceCollection services, TimeSpan? interval = null, int? batchSize = null)
     {
         services.AddSingleton(sp =>
             new PendingIndexProcessor(
-                sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PendingIndexProcessor>>(),
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<ILogger<PendingIndexProcessor>>(),
                 interval,
                 batchSize));
         services.AddHostedService(sp => sp.GetRequiredService<PendingIndexProcessor>());

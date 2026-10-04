@@ -5,6 +5,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
   </ItemGroup>
 
   <ItemGroup>

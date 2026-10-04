@@ -9,6 +9,7 @@
     <ProjectReference Include="..\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <!-- The fresh checkpoint event is signed the way every event is (EventSignature, EventTypes). -->
     <ProjectReference Include="..\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
   </ItemGroup>
 
   <ItemGroup>

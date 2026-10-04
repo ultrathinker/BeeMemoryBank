@@ -8,6 +8,8 @@
   <ItemGroup>
     <!-- KeyDerivation.SaturateForTests: lets the test observe the saturated KDF gate. -->
     <InternalsVisibleTo Include="BeeMemoryBank.Crypto.Tests" />
+    <!-- AesGcmHelper and HeavyDerivationQueue.IsOnWorker: used by the master-key / content encryptors of BeeMemoryBank.Vault. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Vault" />
   </ItemGroup>
 
 </Project>

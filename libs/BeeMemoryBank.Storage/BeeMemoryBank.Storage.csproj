@@ -37,6 +37,8 @@
   <ItemGroup>
     <!-- FtsQueryBuilder (WP-07) is internal; the Storage test project exercises it directly. -->
     <InternalsVisibleTo Include="BeeMemoryBank.Storage.Tests" />
+    <!-- BlobRepository.StoreOnAsync (the full-node ArticleVersionRepository stores a version body in the same transaction). -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Vault" />
   </ItemGroup>
 
 </Project>

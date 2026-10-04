@@ -29,6 +29,10 @@
          surface at compile time, not just by convention. -->
     <InternalsVisibleTo Include="BeeMemoryBank.Storage" />
     <InternalsVisibleTo Include="BeeMemoryBank.Sync" />
+    <!-- The full-node layer (BeeMemoryBank.Vault) holds FolderService and the join/phone-seal code that used these internals while they were
+         in this assembly: IArticleRepository.ClearFolderIdUnscopedAsync (folder delete) and CodeText. Like Storage and Sync, a library
+         with no route of its own; Api and Web stay unlisted. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Vault" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The full-node layer of the libraries (BMB-99). Core / Storage / Sync / Crypto / Search hold what EVERY node needs: storing,
+    relaying and applying ciphertext, the sync protocol, the external-key identity of a blind node, pairing, TLS pinning, backups,
+    the recovery set a node receives and serves. This project holds what only a node that keeps the master key needs: sessions,
+    master-key handling, content encryption and decryption, recovery creation and opening, the search index of the content, full snapshot
+    encrypt and restore, and the node's management services. A blind node (BeeMemoryBank.BlindNode, BlindCli, the Android blind app)
+    references the shared libraries only, so this code is not in its binaries at all - the shared libraries cannot reference this project.
+
+    The files keep the namespaces they had (BeeMemoryBank.Core.Services, BeeMemoryBank.Crypto, ...): the folder names below mirror
+    the project each file came from, the assembly is the only thing that changed. docs/vault-split/SEAM.md explains what is where and why.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="DiffPlex" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="System.IO.Hashing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The internals the test projects reached while the code was in Core / Sync / Search (SearchService.MaxContentResults,
+         SessionService.PostUnlockCatchUp, RecoveryKeyResolver.KeyOpened, IndexBuilder.SearchRankedReference). -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Core.Tests" />
+    <InternalsVisibleTo Include="BeeMemoryBank.Integration.Tests" />
+    <InternalsVisibleTo Include="BeeMemoryBank.Sync.Tests" />
+    <InternalsVisibleTo Include="BeeMemoryBank.Search.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <ProjectReference Include="..\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -5,28 +5,26 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace BeeMemoryBank.Core;
 
+/// <summary>
+/// The full node's Core registrations: everything every node needs (<see cref="NodeDependencyInjection.AddNodeCore"/>, in the shared
+/// Core) plus the session and the services that open, create, search and manage content. Every full host (Api, Web, Cli, desktop node,
+/// Mobile, Migrator, SeedGen) calls this one, so none of them changed when the shared part was split off (BMB-99).
+/// </summary>
 public static class DependencyInjection
 {
     public static IServiceCollection AddCore(this IServiceCollection services)
     {
         services.AddSingleton<SessionService>();
-        services.AddSingleton<InvisibleModeService>();
-        services.AddSingleton<MaintenanceModeService>();
+        services.AddNodeCore();
 
         // Singleton: the query cache is shared across all requests/scopes so concurrent identical
         // searches coalesce onto one in-flight task and near-repeat hits are served from the TTL
         // cache. ACL safety comes from the scope fingerprint embedded in each cache key.
         services.AddSingleton<SearchQueryCache>();
 
-        // Singleton so the rolling latency/result-count windows are process-wide and every request
-        // feeds the same admin-visible numbers. Records only timings + coarse result-count buckets
-        // + fixed labels -- never query text or content (see SearchMetrics doc comment).
-        services.AddSingleton<SearchMetrics>();
-
         // Null implementations are replaced with real ones when BeeMemoryBank.Sync / Api / Cli is registered
         services.TryAddSingleton<ILamportClock, NullLamportClock>();
         services.TryAddScoped<IEventLogger, NullEventLogger>();
-        services.TryAddSingleton<IActorProvider>(new NullActorProvider());
         services.TryAddScoped<IRecoveryBoxPublisher, NullRecoveryBoxPublisher>();
 
         services.AddScoped<RestoreBootstrapMarker>();
@@ -40,11 +38,8 @@ public static class DependencyInjection
         services.AddScoped<CopyService>();
         services.AddScoped<CommentService>();
         services.AddScoped<MediaService>();
-        services.AddScoped<MediaBlobBackfillService>();
         services.AddScoped<UserService>();
-        services.AddScoped<FolderAccessService>();
         services.AddScoped<RoleService>();
-        services.AddScoped<ConceptTagService>();
         services.AddScoped<ObsidianImportService>();
         services.AddScoped<BeeImportService>();
         services.AddScoped<RestoreService>();
