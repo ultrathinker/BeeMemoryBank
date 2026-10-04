@@ -21,6 +21,7 @@ public static class BlindWorkScheduler
     private const string SyncWork = "bmb_blind_sync";
     private const string HeavyWork = "bmb_blind_heavy";
     private const string HeavyNowWork = "bmb_blind_heavy_now";
+    private const string SyncNowWork = "bmb_blind_sync_now";
 
     public static void Ensure(Context context)
     {
@@ -53,6 +54,19 @@ public static class BlindWorkScheduler
         WorkManager.GetInstance(context).EnqueueUniqueWork(HeavyNowWork, ExistingWorkPolicy.Keep!, once);
     }
 
+    /// <summary>
+    /// One sync round now, from the "Sync now" button: the periodic job cannot be asked to run early (WorkManager's shortest period is
+    /// 15 minutes and it delays a periodic job that is started before its time). Same worker, same network rule; a second request
+    /// while one is queued or running is dropped.
+    /// </summary>
+    public static void SyncNow(Context context)
+    {
+        var once = new OneTimeWorkRequest.Builder(Java.Lang.Class.FromType(typeof(BlindSyncWorker)))
+            .SetConstraints(new Constraints.Builder().SetRequiredNetworkType(NetworkType.Connected!).Build())
+            .Build();
+        WorkManager.GetInstance(context).EnqueueUniqueWork(SyncNowWork, ExistingWorkPolicy.Keep!, once);
+    }
+
     private static Constraints HeavyConstraints() => new Constraints.Builder()
         .SetRequiredNetworkType(NetworkType.Unmetered!)
         .SetRequiresCharging(true)
@@ -65,6 +79,7 @@ public static class BlindWorkScheduler
         wm.CancelUniqueWork(SyncWork);
         wm.CancelUniqueWork(HeavyWork);
         wm.CancelUniqueWork(HeavyNowWork);
+        wm.CancelUniqueWork(SyncNowWork);
     }
 }
 

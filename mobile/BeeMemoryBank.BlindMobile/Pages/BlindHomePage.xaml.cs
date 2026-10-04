@@ -103,6 +103,7 @@ public partial class BlindHomePage : ContentPage
         var keyLost = _pairing.BackupKeyLost;
         KeyLostLabel.IsVisible = keyLost;
         BackupNowButton.IsEnabled = _state.CallCode != null && !keyLost;
+        SyncNowButton.IsEnabled = _state.CallCode != null && _state.InitialLoadDone;
 
         LogLabel.Text = string.Join("\n", _log.Latest(30).Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}"));
     }
@@ -161,6 +162,15 @@ public partial class BlindHomePage : ContentPage
             return;
         _pairing.StartRePair();
         ShowPhoneCode();
+        Refresh();
+    }
+
+    private void OnSyncNowClicked(object? sender, EventArgs e)
+    {
+#if ANDROID
+        Platforms.Android.BlindWorkScheduler.SyncNow(Platform.AppContext);
+#endif
+        _log.Add("sync", "Sync asked for.");
         Refresh();
     }
 

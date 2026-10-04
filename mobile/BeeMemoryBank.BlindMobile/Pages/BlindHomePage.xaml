@@ -17,6 +17,7 @@
                     <Label x:Name="PairLabel" LineBreakMode="WordWrap" />
                     <Label x:Name="LoadLabel" LineBreakMode="WordWrap" />
                     <Label x:Name="SyncLabel" />
+                    <Button x:Name="SyncNowButton" Text="Sync now" Style="{StaticResource PrimaryButton}" Clicked="OnSyncNowClicked" />
                     <Label x:Name="BackupLabel" />
                     <Label x:Name="ConditionLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
                     <ProgressBar x:Name="JobProgress" IsVisible="False" ProgressColor="{StaticResource PrimaryColor}" />

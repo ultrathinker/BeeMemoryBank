@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 2.0.2: Sync now in the Android blind app (2026-10-04)
+
+Android blind app only; nothing on a server, the sync protocol (still 3) or the database changes.
+
+- **"Sync now" button.** The phone synced by itself every 15 minutes, the shortest period Android's WorkManager accepts, and a periodic job cannot be
+  started early. The button queues one sync round with the same worker and the same network rule and the "Last sync" line changes within seconds. A second
+  press while a round is queued or running is dropped.
+- The full-node route list golden no longer contains the debugger attribute that only a Debug build adds, so it is the same in Debug and Release.
+
 #### 2.0.1: the code that can read is not in a blind node (2026-10-04)
 
 No sync protocol (still 3), database format, migration or ciphertext change; nothing on the wire depends on the application version, so
