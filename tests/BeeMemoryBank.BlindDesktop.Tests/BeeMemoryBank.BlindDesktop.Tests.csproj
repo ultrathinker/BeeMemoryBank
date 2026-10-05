@@ -45,11 +45,13 @@
   <ItemGroup Condition="'$(BlindTestsMac)' != 'true'">
     <Compile Remove="MacOs\**" />
   </ItemGroup>
-  <!-- The boundary test publishes the head of the machine it runs on, and the self-check runs that head's platform; without a head
+  <!-- The boundary test publishes the head of the machine it runs on, and the self-check and the start-up path run that head's platform; without a head
        (a build on neither Windows nor macOS) there is nothing to publish or to run. -->
   <ItemGroup Condition="'$(BlindTestsWindows)' != 'true' and '$(BlindTestsMac)' != 'true'">
     <Compile Remove="AppBoundaryTests.cs" />
     <Compile Remove="HeadlessSelfCheckTests.cs" />
+    <Compile Remove="ProgramStartupTests.cs" />
+    <Compile Remove="SelfCheckFolderTests.cs" />
   </ItemGroup>
 
   <ItemGroup>
