@@ -9,6 +9,8 @@
     <!-- Acme types moved to Infrastructure.Acme; this project now references it
          directly (and pulls the Certes package transitively via Infrastructure.csproj). -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Infrastructure\BeeMemoryBank.Infrastructure.csproj" />
+    <!-- The Keychain secret store lives in Infrastructure over this neutral Apple layer; the Mac-only ACME tests build a throwaway keychain with it. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Platforms.Apple\BeeMemoryBank.Platforms.Apple.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
@@ -25,6 +27,11 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The throwaway keychain FILE of the Mac-only tests (created and removed by the fixture; never the login keychain). -->
+    <Compile Include="..\shared\ThrowawayKeychain.cs" Link="Shared\ThrowawayKeychain.cs" />
   </ItemGroup>
 
 </Project>

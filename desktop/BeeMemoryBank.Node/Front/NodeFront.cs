@@ -70,6 +70,13 @@ public class NodeFront
     public LanControl? Lan { get; init; }
 
     /// <summary>
+    /// <c>POST /node/lock</c>, the shell's "lock the vault now" (sleep). Null when the node's internal key is not known to the front
+    /// (it always is in a packaged node): the route then stays the 501 stub it was, which the shell's sleep handler already treats
+    /// as "this node does not offer lock-on-sleep".
+    /// </summary>
+    public NodeLockControl? Lock { get; init; }
+
+    /// <summary>
     /// Registers Kestrel body limits and YARP proxy services. When
     /// <paramref name="enableHttps"/> is true (and on Windows, with a usable
     /// <paramref name="dataPath"/>), additionally registers an ADDITIVE HTTPS listener on
@@ -91,9 +98,10 @@ public class NodeFront
         // cert once at startup) so the 90-day leaf rotation "just works" without a process restart:
         // GetOrCreateLeafCertificate is cheap (reloads the on-disk cert, only re-mints on expiry/SAN
         // change). CachedLeafCert wraps that with caching of a SChannel-usable copy (see its doc).
-        var caService = (enableHttps && OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(dataPath))
+        var requestedCaService = (enableHttps && !string.IsNullOrWhiteSpace(dataPath))
             ? new LocalCaService(dataPath)
             : null;
+        var caService = requestedCaService?.IsSupported == true ? requestedCaService : null;
         var leafProvider = caService != null ? new CachedLeafCert(caService) : null;
         // When HTTPS is active, also create a challenge persister so the cert selector can read
         // the shared challenge file written by the Api process during a TLS-ALPN-01 validation.
@@ -337,15 +345,25 @@ public class NodeFront
 
         Lan?.Map(nodeGroup);
 
-        nodeGroup.MapPost("/lock", () =>
+        if (Lock != null)
         {
-            // TODO: Needs real wiring later when the internal-key client is implemented.
-            return Results.StatusCode(StatusCodes.Status501NotImplemented);
-        });
+            // Mapped on the app, not in the group above: an off-machine caller gets 404 here, the group answers it with 403.
+            Lock.Map(endpoints);
+        }
+        else
+        {
+            nodeGroup.MapPost("/lock", () =>
+            {
+                // No internal key reached the front, so it cannot authenticate to the Api: it says so the way it always did.
+                return Results.StatusCode(StatusCodes.Status501NotImplemented);
+            });
+        }
 
         nodeGroup.MapPost("/sync-now", () =>
         {
-            // TODO: Needs real wiring later when the internal-key client is implemented.
+            // Stays a stub on purpose. The shell does not call it, and the Api has no HTTP route that runs a sync cycle now: the
+            // SyncScheduler is a background loop woken only by saves (ISyncTrigger, internal) and by its own timer. Adding a trigger
+            // would be new Api surface, not wiring of an existing one.
             return Results.StatusCode(StatusCodes.Status501NotImplemented);
         });
 
@@ -441,7 +459,7 @@ public class NodeFront
                 return new X509Certificate2(
                     pfx,
                     (string?)null,
-                    X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);
+                    CertificateKeyStorageFlags.ForCurrentPlatform(persistKeySet: true));
             }
             catch
             {
@@ -462,17 +480,19 @@ public static class NodeFrontBuilder
     /// <param name="enableHttps">See <see cref="NodeFront.RegisterServices"/>.</param>
     /// <param name="dataPath">See <see cref="NodeFront.RegisterServices"/>.</param>
     /// <param name="lan">See <see cref="NodeFront.Lan"/>.</param>
+    /// <param name="lockControl">See <see cref="NodeFront.Lock"/>.</param>
     public static NodeFront Build(
         WebApplicationBuilder builder,
         IReadOnlyDictionary<string, ReadyFileInfo> children,
         bool enableHttps = false,
         string? dataPath = null,
-        LanControl? lan = null)
+        LanControl? lan = null,
+        NodeLockControl? lockControl = null)
     {
         if (builder == null) throw new ArgumentNullException(nameof(builder));
         if (children == null) throw new ArgumentNullException(nameof(children));
 
-        var front = new NodeFront(children) { Lan = lan };
+        var front = new NodeFront(children) { Lan = lan, Lock = lockControl };
         front.RegisterServices(builder.Services, enableHttps, dataPath);
         builder.Services.AddSingleton(front);
 

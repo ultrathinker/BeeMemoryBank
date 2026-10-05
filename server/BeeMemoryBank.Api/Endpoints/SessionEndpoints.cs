@@ -6,6 +6,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.OsAutoUnlock;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -160,17 +161,29 @@ public static class SessionEndpoints
                 .ToList();
 
             // Resolved from RequestServices rather than declared as a handler parameter for the
-            // reason spelled out in AutoUnlockEndpoints: the service is only registered on
-            // Windows, and minimal-API binding would silently infer [FromBody] for it elsewhere.
+            // reason spelled out in AutoUnlockEndpoints: the service is only registered where the
+            // OS has a secret store (Windows, macOS), and minimal-API binding would silently
+            // infer [FromBody] for it elsewhere.
             var osEnabled = false;
-            if (OperatingSystem.IsWindows())
+            var osSvc = ctx.RequestServices.GetService<OsAutoUnlockService>();
+            if (osSvc is { IsSupported: true })
             {
-                var osSvc = ctx.RequestServices.GetService<OsAutoUnlockService>();
-                if (osSvc != null)
+                try
+                {
                     osEnabled = await osSvc.IsEnabledAsync();
+                }
+                catch (UserSecretStoreException ex)
+                {
+                    // A secret store that cannot answer (a locked Keychain) must not turn the lock warning into an error page: the answer
+                    // stays "not enabled" (the state this endpoint can prove), and the reason is logged once, without any secret detail.
+                    ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("BeeMemoryBank.Api.Endpoints.SessionEndpoints")
+                        .LogWarning("The OS secret store could not tell whether auto-unlock is enabled ({FailureKind}); lock-impact reports it as not enabled.", ex.FailureKind);
+                }
             }
 
-            return Results.Ok(new LockImpactResponse(agents, osEnabled, OperatingSystem.IsWindows()));
+            // Where the service is registered it knows whether its store works; where it is not (Linux,
+            // Docker, a blind node) the answer stays the platform's: true only on Windows, as before.
+            return Results.Ok(new LockImpactResponse(agents, osEnabled, osSvc?.IsSupported ?? OperatingSystem.IsWindows()));
         }).RequireSuperadmin().RequireNonAgent();
 
         // Admin-configurable web login cookie lifetime (Web project applies these to its

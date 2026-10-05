@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
-using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Infrastructure.OsAutoUnlock;
 
@@ -14,7 +14,8 @@ namespace BeeMemoryBank.Infrastructure.OsAutoUnlock;
 ///
 /// <para>Right before the desktop app stops the node to apply an update, it asks the running API
 /// to <see cref="WriteAsync"/>: the master DEK goes to <c>&lt;dataPath&gt;/update-unlock.dat</c>,
-/// DPAPI-protected (current user, application entropy) together with an expiry a few minutes
+/// protected by the platform's <see cref="IUserSecretStore"/> (Windows DPAPI for the current user
+/// with application entropy; a macOS Keychain item) together with an expiry a few minutes
 /// ahead. The next API start calls <see cref="TryConsumeAsync"/> before anything else can unlock:
 /// the file is deleted first and used only if the delete succeeded, then decrypted, checked for
 /// expiry and verified against the sentinel.</para>
@@ -27,9 +28,9 @@ namespace BeeMemoryBank.Infrastructure.OsAutoUnlock;
 /// moment earlier. A handoff that is never consumed (the app is not started again) stays on disk
 /// DPAPI-protected and expires; the next start deletes it.</para>
 /// </summary>
-[SupportedOSPlatform("windows")]
-public sealed class UpdateUnlockHandoff(SessionService session, string dataPath, Func<DateTime>? utcNow = null)
+public sealed class UpdateUnlockHandoff(SessionService session, string dataPath, Func<DateTime>? utcNow = null, IUserSecretStore? secretStore = null)
 {
+    private readonly IUserSecretStore _secretStore = secretStore ?? UserSecretStores.CreateDefault(dataPath);
     /// <summary>How long a handoff stays usable. An update restart takes about a minute.</summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(10);
 
@@ -40,6 +41,7 @@ public sealed class UpdateUnlockHandoff(SessionService session, string dataPath,
     private readonly Func<DateTime> _utcNow = utcNow ?? (() => DateTime.UtcNow);
 
     public string FilePath => Path.Combine(dataPath, "update-unlock.dat");
+    public bool IsSupported => _secretStore.IsSupported;
 
     /// <summary>
     /// Writes the handoff for the next start. Returns <c>false</c> (and writes nothing) when the
@@ -47,7 +49,7 @@ public sealed class UpdateUnlockHandoff(SessionService session, string dataPath,
     /// </summary>
     public async Task<bool> WriteAsync()
     {
-        if (!session.IsUnlocked) return false;
+        if (!_secretStore.IsSupported || !session.IsUnlocked) return false;
 
         byte[] dek;
         try { dek = session.GetMasterDek(); }
@@ -59,8 +61,7 @@ public sealed class UpdateUnlockHandoff(SessionService session, string dataPath,
             payload[0] = FormatVersion;
             BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(1), (_utcNow() + Lifetime).Ticks);
             dek.CopyTo(payload, HeaderLength);
-            var protectedBytes = ProtectedData.Protect(payload, Entropy, DataProtectionScope.CurrentUser);
-            await File.WriteAllBytesAsync(FilePath, protectedBytes);
+            _secretStore.Write("update-unlock", "default", payload);
             return true;
         }
         finally
@@ -76,30 +77,23 @@ public sealed class UpdateUnlockHandoff(SessionService session, string dataPath,
     /// </summary>
     public async Task<bool> TryConsumeAsync(INodeIdentityRepository nodeRepo)
     {
-        if (!File.Exists(FilePath)) return false;
+        if (!_secretStore.IsSupported) return false;
 
-        byte[] protectedBytes;
+        byte[]? payload;
         try
         {
-            protectedBytes = await File.ReadAllBytesAsync(FilePath);
-            File.Delete(FilePath);
+            payload = _secretStore.Read("update-unlock", "default");
+            if (payload is null) return false;
+            // One-use means delete before inspecting or unlocking; a delete failure is fail-closed.
+            _secretStore.Delete("update-unlock", "default");
         }
         catch
         {
+            try { _secretStore.Delete("update-unlock", "default"); } catch { }
             return false;
         }
 
         if (session.IsUnlocked) return true;
-
-        byte[] payload;
-        try
-        {
-            payload = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.CurrentUser);
-        }
-        catch (CryptographicException)
-        {
-            return false;
-        }
 
         try
         {

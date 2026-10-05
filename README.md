@@ -237,6 +237,21 @@ Open `http://localhost:5301` in your browser and log in with your master passwor
 
 Data is stored in `./data` on the host (including `model.onnx`). To customize ports, copy `.env.example` to `.env` and edit as needed.
 
+### macOS app, blind-copy apps and the Android blind app
+
+Every release page also carries these downloads:
+
+| File | What it is |
+|---|---|
+| `BeeMemoryBank-<version>-macos-arm64.zip` | The full app for Macs with Apple silicon: unzip, drag `Bee Memory Bank.app` to **Applications**, open it. Signed with a Developer ID and notarized by Apple, so macOS opens it without a warning. |
+| `BeeMemoryBank-Blind-<version>-macos-arm64.zip` | The blind copy for macOS: a menu-bar app that keeps an encrypted copy of a memory bank (it never has the master password). Same signing. |
+| `BeeMemoryBank-Blind-<version>-win-x64.zip` | The blind copy for Windows: unzip anywhere and run `BeeMemoryBank.BlindDesktop.exe`; it lives in the tray. Not code-signed yet, so SmartScreen may warn: choose **More info → Run anyway**. |
+| `BeeMemoryBank-Blind-<version>-android.apk` | The blind copy for Android, signed with the project's release key. Allow installing from this source once when Android asks. |
+
+A blind copy is paired with a node in two steps shown in its window: it shows a code, the node (the full app or the web page "Blind nodes")
+answers with a call code, and you paste that back. The first load starts right after pairing and does not wait for the charger or a particular network.
+Where each app keeps its data and what it sends over the network: [PRIVACY.md](PRIVACY.md).
+
 ### Windows Desktop App and Service (native, no NSSM needed)
 
 Windows has two native install modes, built on a small orchestrator (`bmbd`) that manages the

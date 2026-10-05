@@ -329,7 +329,7 @@ public class NodeFrontTests : IAsyncDisposable
         var resNonLoopback = await client.SendAsync(reqNonLoopback);
         resNonLoopback.StatusCode.Should().Be(HttpStatusCode.Forbidden);
 
-        // 3. POST /node/lock -> 501
+        // 3. POST /node/lock -> 501 while the front has no internal key to lock with (wired: NodeLockControlTests)
         var reqLock = new HttpRequestMessage(HttpMethod.Post, $"{proxyUrl}/node/lock");
         reqLock.Headers.Add("X-Test-Remote-IP", "127.0.0.1");
         var resLock = await client.SendAsync(reqLock);

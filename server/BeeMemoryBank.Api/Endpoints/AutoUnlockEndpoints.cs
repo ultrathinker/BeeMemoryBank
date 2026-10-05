@@ -3,6 +3,7 @@ using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.OsAutoUnlock;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -22,7 +23,8 @@ public static class AutoUnlockEndpoints
 
         // GET /api/keys/auto-unlock/status  — returns whether the feature is enabled
         //
-        // OsAutoUnlockService is only registered in DI on Windows (see Program.cs). Declaring it
+        // OsAutoUnlockService is only registered in DI where the OS has a secret store (Windows,
+        // macOS; see ApiServices). Declaring it
         // as a raw nullable handler parameter is fragile: ASP.NET Core's minimal-API parameter
         // binding infers a complex-type parameter as [FromServices] only when
         // IServiceProviderIsService reports it as registered — on a platform where it ISN'T
@@ -34,19 +36,29 @@ public static class AutoUnlockEndpoints
         group.MapGet("/status", async (HttpContext ctx) =>
         {
             var svc = ctx.RequestServices.GetService<OsAutoUnlockService>();
-            if (svc == null || !OperatingSystem.IsWindows())
+            if (svc == null || !svc.IsSupported)
                 return Results.Ok(new AutoUnlockStatusResponse(false, false));
 
-            var enabled = await svc.IsEnabledAsync();
-            return Results.Ok(new AutoUnlockStatusResponse(enabled, OperatingSystem.IsWindows()));
+            // A secret store that cannot answer (a locked Keychain, a refused or damaged item) is not "auto-unlock is off": say that it
+            // is unavailable, with a plain text that names no purpose and no secret.
+            bool enabled;
+            try
+            {
+                enabled = await svc.IsEnabledAsync();
+            }
+            catch (UserSecretStoreException)
+            {
+                return Results.Json(new ErrorResponse("The OS secret store is locked or unavailable."), statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            return Results.Ok(new AutoUnlockStatusResponse(enabled, svc.IsSupported));
         });
 
-        // POST /api/keys/auto-unlock/enable  — creates the os_auto_unlock slot + DPAPI secret
+        // POST /api/keys/auto-unlock/enable  — creates the os_auto_unlock slot + the OS-protected secret (DPAPI / Keychain)
         group.MapPost("/enable", async (HttpContext ctx, SessionService session) =>
         {
             var svc = ctx.RequestServices.GetService<OsAutoUnlockService>();
-            if (!OperatingSystem.IsWindows() || svc == null)
-                return Results.Json(new ErrorResponse("OS auto-unlock is only supported on Windows."), statusCode: 400);
+            if (svc == null || !svc.IsSupported)
+                return Results.Json(new ErrorResponse("OS auto-unlock is unavailable on this platform."), statusCode: 400);
 
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked. Unlock first."), statusCode: 403);
@@ -59,12 +71,12 @@ public static class AutoUnlockEndpoints
             return Results.Ok(new AutoUnlockStatusResponse(true, true));
         }).RequireSuperadmin().RequireNonAgent();
 
-        // POST /api/keys/auto-unlock/disable  — removes the os_auto_unlock slot + DPAPI secret
+        // POST /api/keys/auto-unlock/disable  — removes the os_auto_unlock slot + the OS-protected secret
         group.MapPost("/disable", async (HttpContext ctx, SessionService session) =>
         {
             var svc = ctx.RequestServices.GetService<OsAutoUnlockService>();
-            if (!OperatingSystem.IsWindows() || svc == null)
-                return Results.Json(new ErrorResponse("OS auto-unlock is only supported on Windows."), statusCode: 400);
+            if (svc == null || !svc.IsSupported)
+                return Results.Json(new ErrorResponse("OS auto-unlock is unavailable on this platform."), statusCode: 400);
 
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked. Unlock first."), statusCode: 403);

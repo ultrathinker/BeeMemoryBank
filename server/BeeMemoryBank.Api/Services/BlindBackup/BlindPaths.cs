@@ -1,3 +1,5 @@
+using BeeMemoryBank.AppPaths;
+
 namespace BeeMemoryBank.Api.Services.BlindBackup;
 
 /// <summary>
@@ -9,7 +11,7 @@ namespace BeeMemoryBank.Api.Services.BlindBackup;
 public static class BlindPaths
 {
     private static StringComparison Cmp =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        BeeMemoryBank.AppPaths.PathComparison.ForCurrentPlatform();
 
     /// <summary>
     /// Null when <paramref name="path"/> is outside the node's data path; otherwise the reason,

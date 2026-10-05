@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using BeeMemoryBank.Infrastructure.Acme;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Core.Acme.Tests;
 
@@ -29,8 +30,8 @@ public class AcmeServiceStorageTests : IDisposable
         try { Directory.Delete(_dataDir, recursive: true); } catch { /* best effort */ }
     }
 
-    private AcmeCertificateService NewService(AcmeOptions? options = null) =>
-        new(_dataDir, options ?? new AcmeOptions(), _responder);
+    private AcmeCertificateService NewService(AcmeOptions? options = null, IUserSecretStore? secretStore = null) =>
+        new(_dataDir, options ?? new AcmeOptions(), _responder, secretStore: secretStore);
 
     // ────────────────────── StoredCertificate.NeedsRenewal ──────────────────
 
@@ -116,6 +117,60 @@ public class AcmeServiceStorageTests : IDisposable
         using var loaded = stored.LoadCertificate();
         loaded.HasPrivateKey.Should().BeTrue();
         loaded.GetNameInfo(X509NameType.DnsName, forIssuer: false).Should().Be("node.example.com");
+    }
+
+    [Fact]
+    public void StoreBackedPfxPassword_UsesLocator_RoundTrips_AndFailsClosedWhenLost()
+    {
+        var domain = "node.example.com";
+        var (pfxPath, password) = WriteSelfSignedPfx(domain);
+        var store = new InMemoryUserSecretStore();
+        store.Write("acme-pfx-password", domain, System.Text.Encoding.UTF8.GetBytes(password));
+        var stored = new StoredCertificate
+        {
+            Domain = domain,
+            PfxPath = pfxPath,
+            ChainPemPath = pfxPath + ".chain.pem",
+            PfxPassword = "secret:" + domain,
+            NotBefore = DateTime.UtcNow.AddDays(-1),
+            NotAfter = DateTime.UtcNow.AddDays(89),
+            IssuedAt = DateTime.UtcNow.AddDays(-1),
+        };
+
+        JsonSerializer.Serialize(stored).Should().Contain("secret:" + domain).And.NotContain(password);
+        using (var loaded = stored.LoadCertificate(store)) loaded.HasPrivateKey.Should().BeTrue();
+        store.Delete("acme-pfx-password", domain);
+
+        var action = () => stored.LoadCertificate(store);
+        action.Should().Throw<UserSecretStoreException>();
+    }
+
+    [Fact]
+    public async Task StoreBackedAccountKey_GeneratesSavesAndReloadsWithoutTheAccountFile()
+    {
+        var store = new InMemoryUserSecretStore();
+        var first = NewService(secretStore: store);
+        var firstKey = await first.LoadOrCreateAccountKeyAsync();
+        await first.SaveAccountKeyAsync(firstKey);
+
+        File.Exists(Path.Combine(_acmeDir, "account.pem")).Should().BeFalse();
+        var secondKey = await NewService(secretStore: store).LoadOrCreateAccountKeyAsync();
+
+        ((Certes.IEncodable)secondKey).ToPem().Should().Be(((Certes.IEncodable)firstKey).ToPem());
+    }
+
+    [Fact]
+    public async Task StoreBackedAccountKey_LockedStore_ThrowsInsteadOfGenerating()
+    {
+        var store = new InMemoryUserSecretStore
+        {
+            ReadFailure = new UserSecretStoreException(UserSecretStoreFailureKind.Locked, "locked")
+        };
+
+        var action = () => NewService(secretStore: store).LoadOrCreateAccountKeyAsync();
+
+        await action.Should().ThrowAsync<UserSecretStoreException>()
+            .Where(e => e.FailureKind == UserSecretStoreFailureKind.Locked);
     }
 
     // ────────────────── AcmeCertificateService metadata listing ─────────────

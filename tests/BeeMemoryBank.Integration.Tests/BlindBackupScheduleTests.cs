@@ -210,7 +210,7 @@ public class BlindJobManagerTests : IDisposable
     [Fact]
     public async Task Pause_StopsEveryLiveChild_WhenAnotherInvocationEnded()
     {
-        if (OperatingSystem.IsWindows()) return; // SIGSTOP/SIGCONT are Linux mechanics (the container)
+        if (!OperatingSystem.IsLinux()) return; // SIGSTOP/SIGCONT and /proc are Linux mechanics (the container)
         using var backup = StartSleep();
         using var list = StartSleep();
         var m = NewManager();

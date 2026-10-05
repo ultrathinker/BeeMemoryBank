@@ -4,40 +4,44 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
-using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Infrastructure.Tls;
 
 /// <summary>
 /// Service to manage local CA generation, leaf certificate issuance, and Windows trust store integration.
-/// The entire service is Windows-only: CA/leaf private keys are encrypted at rest via Windows DPAPI
-/// (current-user scope) and the trust-store install targets <c>CurrentUser\Root</c>. Every public
-/// method additionally guards with an <see cref="OperatingSystem.IsWindows"/> runtime check that
-/// returns a safe default (null/false) on other platforms, matching <c>AutostartService</c>'s pattern.
+/// The CA/leaf private keys are kept in the platform's <see cref="IUserSecretStore"/> (Windows DPAPI,
+/// current-user scope; a macOS Keychain item), so generation and reload work wherever the OS has one
+/// and return a safe default (null/false) where it does not (<see cref="IsSupported"/>), matching
+/// <c>AutostartService</c>'s pattern. Only the trust-store install and removal are Windows-only
+/// (<c>CurrentUser\Root</c>): they check <see cref="OperatingSystem.IsWindows"/> themselves.
 /// </summary>
-[SupportedOSPlatform("windows")]
 public class LocalCaService
 {
     private readonly string _certsDirectory;
+    private readonly IUserSecretStore _secretStore;
 
-    public LocalCaService(string dataPath)
+    public LocalCaService(string dataPath, IUserSecretStore? secretStore = null)
     {
         if (string.IsNullOrWhiteSpace(dataPath))
         {
             throw new ArgumentNullException(nameof(dataPath));
         }
         _certsDirectory = Path.Combine(dataPath, "certs");
+        _secretStore = secretStore ?? UserSecretStores.CreateDefault(dataPath);
     }
+
+    public bool IsSupported => _secretStore.IsSupported;
 
     /// <summary>
     /// Gets the CA certificate if it exists, or generates and stores a new one if it does not.
     /// </summary>
     public X509Certificate2? GetOrCreateCaCertificate()
     {
-        if (!OperatingSystem.IsWindows())
+        if (!_secretStore.IsSupported)
         {
             return null;
         }
@@ -46,15 +50,14 @@ public class LocalCaService
         {
             Directory.CreateDirectory(_certsDirectory);
             var certPath = Path.Combine(_certsDirectory, "ca.crt");
-            var keyPath = Path.Combine(_certsDirectory, "ca.key");
-
-            if (File.Exists(certPath) && File.Exists(keyPath))
+            if (File.Exists(certPath))
             {
+                byte[]? decryptedKey = null;
                 try
                 {
                     var certBytes = File.ReadAllBytes(certPath);
-                    var encryptedKey = File.ReadAllBytes(keyPath);
-                    var decryptedKey = ProtectedData.Unprotect(encryptedKey, null, DataProtectionScope.CurrentUser);
+                    decryptedKey = _secretStore.Read("local-ca", "default");
+                    if (decryptedKey is null) throw new CryptographicException("The CA secret is missing.");
 
                     var caCert = X509CertificateLoader.LoadCertificate(certBytes);
                     using var ecdsa = ECDsa.Create();
@@ -69,9 +72,14 @@ public class LocalCaService
                         return caCert.CopyWithPrivateKey(ecdsa);
                     }
                 }
-                catch
+                catch (UserSecretStoreException ex) when (IsTransientStoreFailure(ex))
                 {
-                    // Fallback to regeneration if loading/decryption fails
+                    return null;
+                }
+                catch { /* corrupt/missing data is recoverable by regenerating the local CA */ }
+                finally
+                {
+                    if (decryptedKey is not null) CryptographicOperations.ZeroMemory(decryptedKey);
                 }
             }
 
@@ -88,7 +96,7 @@ public class LocalCaService
     /// </summary>
     public X509Certificate2? GetOrCreateLeafCertificate(bool forceReissue = false)
     {
-        if (!OperatingSystem.IsWindows())
+        if (!_secretStore.IsSupported)
         {
             return null;
         }
@@ -103,21 +111,21 @@ public class LocalCaService
 
             Directory.CreateDirectory(_certsDirectory);
             var leafCertPath = Path.Combine(_certsDirectory, "leaf.crt");
-            var leafKeyPath = Path.Combine(_certsDirectory, "leaf.key");
             var leafSanPath = Path.Combine(_certsDirectory, "leaf.san");
 
             var currentSans = GetExpectedSans();
 
-            if (!forceReissue && File.Exists(leafCertPath) && File.Exists(leafKeyPath) && File.Exists(leafSanPath))
+            if (!forceReissue && File.Exists(leafCertPath) && File.Exists(leafSanPath))
             {
+                byte[]? decryptedKey = null;
                 try
                 {
                     var savedSans = File.ReadAllLines(leafSanPath).OrderBy(s => s).ToList();
                     if (savedSans.SequenceEqual(currentSans))
                     {
                         var certBytes = File.ReadAllBytes(leafCertPath);
-                        var encryptedKey = File.ReadAllBytes(leafKeyPath);
-                        var decryptedKey = ProtectedData.Unprotect(encryptedKey, null, DataProtectionScope.CurrentUser);
+                        decryptedKey = _secretStore.Read("local-leaf", "default");
+                        if (decryptedKey is null) throw new CryptographicException("The leaf secret is missing.");
 
                         var leafCert = X509CertificateLoader.LoadCertificate(certBytes);
                         using var ecdsa = ECDsa.Create();
@@ -131,9 +139,14 @@ public class LocalCaService
                         }
                     }
                 }
-                catch
+                catch (UserSecretStoreException ex) when (IsTransientStoreFailure(ex))
                 {
-                    // Fallback to regeneration if validation fails
+                    return null;
+                }
+                catch { /* corrupt/missing data is recoverable by regenerating the leaf */ }
+                finally
+                {
+                    if (decryptedKey is not null) CryptographicOperations.ZeroMemory(decryptedKey);
                 }
             }
 
@@ -225,10 +238,37 @@ public class LocalCaService
     }
 
     /// <summary>
-    /// Exports the CA certificate public bytes in DER format.
+    /// Exports the CA certificate public bytes in DER format. An existing, parseable <c>certs/ca.crt</c> is returned as it is WITHOUT
+    /// touching the secret store (no private key is read, so a locked or refusing store, or another executable than the one that holds
+    /// the key's access rights, does not matter); this does not check the certificate's validity period or that the stored key still
+    /// matches it - <see cref="GetOrCreateCaCertificate"/>, which the node front calls, owns the regeneration rules. Only when there is
+    /// no usable file does it fall back to <see cref="GetOrCreateCaCertificate"/> (the CA is created lazily, as before).
     /// </summary>
     public byte[]? GetCaCertificateDer()
     {
+        if (!_secretStore.IsSupported)
+        {
+            return null;
+        }
+
+        // The public certificate is a file; serving it needs no key. Reading it through GetOrCreateCaCertificate would fetch the CA PRIVATE
+        // key from the secret store just to hand out the public half - and on a Mac the Web app, another executable than the one that
+        // created the key, would be refused or prompted by the Keychain. So an existing, parseable ca.crt is returned as it is, and the
+        // store is not touched. Only when there is no usable file does this fall back to the full path (create the CA lazily, as before).
+        var certPath = Path.Combine(_certsDirectory, "ca.crt");
+        if (File.Exists(certPath))
+        {
+            try
+            {
+                using var published = X509CertificateLoader.LoadCertificate(File.ReadAllBytes(certPath));
+                return published.RawData;
+            }
+            catch
+            {
+                // unreadable or not a certificate: the regeneration rules of GetOrCreateCaCertificate decide, unchanged
+            }
+        }
+
         var caCert = GetOrCreateCaCertificate();
         return caCert?.RawData;
     }
@@ -284,14 +324,16 @@ public class LocalCaService
 
         using var selfSigned = request.CreateSelfSigned(notBefore, notAfter);
 
+        // Save the private key in the OS secret store FIRST (DPAPI file / Keychain item): the public ca.crt must exist only if its key was
+        // kept. GetCaCertificateDer serves ca.crt without touching the store, so a certificate left behind by a refused key write (a locked
+        // Keychain) would be handed to devices as a CA that has no key.
+        var privKeyBytes = ecdsa.ExportECPrivateKey();
+        try { _secretStore.Write("local-ca", "default", privKeyBytes); }
+        finally { Array.Clear(privKeyBytes); }
+
         // Save public certificate
         var certBytes = selfSigned.Export(X509ContentType.Cert);
         File.WriteAllBytes(Path.Combine(_certsDirectory, "ca.crt"), certBytes);
-
-        // Save private key encrypted using DPAPI
-        var privKeyBytes = ecdsa.ExportECPrivateKey();
-        var encryptedKey = ProtectedData.Protect(privKeyBytes, null, DataProtectionScope.CurrentUser);
-        File.WriteAllBytes(Path.Combine(_certsDirectory, "ca.key"), encryptedKey);
 
         // Re-load and return to ensure consistency
         var caCert = X509CertificateLoader.LoadCertificate(certBytes);
@@ -368,8 +410,8 @@ public class LocalCaService
 
         // Save private key encrypted using DPAPI
         var privKeyBytes = leafEcdsa.ExportECPrivateKey();
-        var encryptedKey = ProtectedData.Protect(privKeyBytes, null, DataProtectionScope.CurrentUser);
-        File.WriteAllBytes(Path.Combine(_certsDirectory, "leaf.key"), encryptedKey);
+        _secretStore.Write("local-leaf", "default", privKeyBytes);
+        Array.Clear(privKeyBytes);
 
         // Save SAN metadata
         File.WriteAllLines(Path.Combine(_certsDirectory, "leaf.san"), sortedSans);
@@ -397,6 +439,11 @@ public class LocalCaService
 
         return expected.Distinct().OrderBy(s => s).ToList();
     }
+
+    private static bool IsTransientStoreFailure(UserSecretStoreException exception) =>
+        exception.FailureKind is UserSecretStoreFailureKind.Denied
+            or UserSecretStoreFailureKind.Locked
+            or UserSecretStoreFailureKind.Unavailable;
 
     private static List<IPAddress> GetLanIPv4Addresses()
     {

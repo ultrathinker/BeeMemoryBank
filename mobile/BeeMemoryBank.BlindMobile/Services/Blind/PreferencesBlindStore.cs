@@ -3,7 +3,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
 /// <summary><see cref="IBlindPhoneStore"/> over MAUI Preferences. Holds nothing secret.</summary>
-public sealed class PreferencesBlindStore : IBlindPhoneStore
+public sealed class PreferencesBlindStore : IBlindStateStore
 {
     private readonly Func<string, string?> _getter;
     private readonly Action<string, string> _setter;

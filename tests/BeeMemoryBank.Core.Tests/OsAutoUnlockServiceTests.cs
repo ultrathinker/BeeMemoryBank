@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.OsAutoUnlock;
+using BeeMemoryBank.Infrastructure.Secrets;
 using BeeMemoryBank.Storage.Sqlite;
 
 namespace BeeMemoryBank.Core.Tests;
@@ -120,5 +121,75 @@ public class OsAutoUnlockServiceTests : TestFixture
         var result = await Session.UnlockAsync("correctPassword");
         result.Should().BeTrue();
         Session.IsUnlocked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Enable_WithAStoreThatHasNoFile_SucceedsAndIsEnabled()
+    {
+        await Session.UnlockAsync("correctPassword");
+        var store = new InMemoryUserSecretStore();
+        var svc = new OsAutoUnlockService(_keySlotRepo, Session, _tempDataDir, store);
+
+        var result = await svc.EnableAsync();
+
+        result.Should().BeEmpty();
+        File.Exists(svc.SecretFilePath).Should().BeFalse();
+        (await svc.IsEnabledAsync()).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MissingSecretForExistingSlot_DoesNotMintAReplacement()
+    {
+        await Session.UnlockAsync("correctPassword");
+        var store = new InMemoryUserSecretStore();
+        var svc = new OsAutoUnlockService(_keySlotRepo, Session, _tempDataDir, store);
+        await svc.EnableAsync();
+        var before = (await _keySlotRepo.GetAllAsync()).Single(s => s.SlotType == "os_auto_unlock").SlotId;
+        store.Delete("os-auto-unlock", "default");
+        Session.Lock();
+
+        (await svc.TryAutoUnlockAsync(_nodeRepo)).Should().BeFalse();
+        store.Read("os-auto-unlock", "default").Should().BeNull();
+        (await _keySlotRepo.GetAllAsync()).Single(s => s.SlotType == "os_auto_unlock").SlotId.Should().Be(before);
+    }
+
+    [Fact]
+    public async Task StoreWriteFailure_RollsBackTheCreatedSlot()
+    {
+        await Session.UnlockAsync("correctPassword");
+        var store = new InMemoryUserSecretStore
+        {
+            WriteFailure = new UserSecretStoreException(UserSecretStoreFailureKind.Unavailable, "test")
+        };
+        var svc = new OsAutoUnlockService(_keySlotRepo, Session, _tempDataDir, store);
+
+        var action = () => svc.EnableAsync();
+
+        await action.Should().ThrowAsync<UserSecretStoreException>();
+        (await _keySlotRepo.GetAllAsync()).Should().NotContain(s => s.SlotType == "os_auto_unlock");
+    }
+
+    [Fact]
+    public async Task Disable_AttemptsSecretDeletion_WhenSecretReadIsMalformed()
+    {
+        var store = new MalformedReadStore();
+        var svc = new OsAutoUnlockService(_keySlotRepo, Session, _tempDataDir, store);
+
+        await svc.DisableAsync();
+
+        store.DeleteCalled.Should().BeTrue();
+    }
+
+    private sealed class MalformedReadStore : IUserSecretStore
+    {
+        public bool IsSupported => true;
+        public bool DeleteCalled { get; private set; }
+
+        public byte[]? Read(string purpose, string account) =>
+            throw new UserSecretStoreException(UserSecretStoreFailureKind.Malformed, "malformed");
+
+        public void Write(string purpose, string account, ReadOnlySpan<byte> value) { }
+
+        public void Delete(string purpose, string account) => DeleteCalled = true;
     }
 }

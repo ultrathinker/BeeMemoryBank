@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tests of the Apple platform layer (libs/BeeMemoryBank.Platforms.Apple): the Keychain backend over Security.framework, the LaunchAgent
+    plist text, the status values, and the boundary of the library (it references nothing of the product). The pure logic and the "does
+    not run off a Mac" contract run on every OS; the real Security.framework calls run on a Mac against a throwaway keychain file with
+    user interaction disabled and are skipped elsewhere. It never touches the login keychain.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Platforms.Apple\BeeMemoryBank.Platforms.Apple.csproj" />
+    <!-- The Vault is referenced by the TESTS only, for the control "the scan finds the Vault when it is given the Vault". The library
+         under test does not reference it, and its own output (the folder the boundary test scans) does not contain it. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The assembly-boundary scanner and the vault boundary: one source in tests/shared, linked into every project that proves the boundary. -->
+    <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
+    <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+    <!-- The throwaway keychain file of the Mac-only tests: one source, also used by BeeMemoryBank.BlindDesktop.MacOS.Tests. -->
+    <Compile Include="..\shared\ThrowawayKeychain.cs" Link="Shared\ThrowawayKeychain.cs" />
+  </ItemGroup>
+
+</Project>

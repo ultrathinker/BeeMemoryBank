@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the hardened runtime of "BeeMemoryBank Blind.app" (used only by the optional signing branch of
+  scripts/pack-macos-blind.sh; an unsigned build ignores this file).
+
+  The .NET runtime compiles code at run time, which the hardened runtime forbids unless it is allowed explicitly:
+    allow-jit                        the JIT compiler (CoreCLR)
+    allow-unsigned-executable-memory executable memory the runtime writes itself (stubs, tiered compilation)
+  The app is NOT sandboxed on purpose: it keeps its keys in the user's Keychain, writes its own LaunchAgent for "start when I sign in",
+  and shows notifications with the system's osascript tool; none of that works inside the App Sandbox.
+  Every library in the bundle is signed with the same identity as the app, so library validation can stay ON; if a future native
+  dependency is only signed by its vendor, add com.apple.security.cs.disable-library-validation here and say why.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

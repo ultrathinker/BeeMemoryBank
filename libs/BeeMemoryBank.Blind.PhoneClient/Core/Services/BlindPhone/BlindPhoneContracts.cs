@@ -82,11 +82,6 @@ public interface IRecoverySetJsonSource
     Task<string> BuildJsonAsync(CancellationToken ct);
 }
 
-/// <summary>Network, charger and battery, as the phone sees them now.</summary>
-public interface IDeviceStateProvider
-{
-    BlindPhoneDeviceState Current();
-}
 
 /// <summary>A piece not wired to the phone yet (see the TODOs above).</summary>
 public sealed class BlindFeaturePendingException(string contractItem)

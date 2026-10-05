@@ -133,6 +133,7 @@
         </Border>
 
         <TextBlock Grid.Row="3"
+                   Name="AutostartNote"
                    Text="Which profile opens when Windows starts is set in Settings."
                    FontSize="11"
                    Foreground="#6B6B7B"

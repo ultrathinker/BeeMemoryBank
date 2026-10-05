@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.ServiceProcess;
@@ -271,11 +272,33 @@ public static class Program
         WebApplication? app = null;
         LanJoinListener? lanListener = null;
         var tcs = new TaskCompletionSource<int>();
+        // The front is only ever stopped through this gate. A stop (EOF, SIGTERM, Ctrl+C, the service token, a
+        // critical failure) that arrives while the front is still starting waits for that start to finish
+        // instead of stopping the host under its own StartAsync - Kestrel's heartbeat thread then throws on a
+        // foreign thread and the whole process aborts (exit 134). A start that begins after the stop was
+        // requested does not run at all. See FrontStartStopGate.
+        var frontGate = new FrontStartStopGate<WebApplication>(
+            async front =>
+            {
+                try
+                {
+                    Console.WriteLine("[Node] Stopping front app...");
+                    using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await front.StopAsync(stopCts.Token);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
+                }
+            },
+            FrontStartStopGate<WebApplication>.DefaultStartWaitBound,
+            Console.WriteLine);
+        var stopCoordinator = new NodeStopCoordinator(
+            () => frontGate.StopAsync(),
+            () => orchestrator.StopAsync(),
+            tcs);
 
-        using var registration = stopToken.Register(() =>
-        {
-            tcs.TrySetResult(0);
-        });
+        using var registration = stopToken.Register(() => _ = stopCoordinator.RequestStopAsync());
 
         StdinLifeline? lifeline = null;
         if (Environment.GetEnvironmentVariable("BMB_STDIN_LIFELINE") == "1")
@@ -284,34 +307,7 @@ public static class Program
             lifeline = StdinLifeline.Start(() =>
             {
                 Console.WriteLine("[Node] Stdin lifeline triggered EOF. Initiating graceful shutdown...");
-                Task.Run(async () =>
-                {
-                    if (app != null)
-                    {
-                        try
-                        {
-                            Console.WriteLine("[Node] Stopping front app...");
-                            // Bounded: the outer `finally` also stops/disposes `app` once this
-                            // method's main flow unblocks (tcs.TrySetResult below) - a bare,
-                            // un-timed StopAsync here has no ceiling if that second, overlapping
-                            // stop/dispose ever contends with this one (observed: the whole
-                            // process occasionally failing to exit within a test's patience).
-                            // Racing two IHost lifecycles on the same instance shouldn't be
-                            // necessary at all, but bounding this call keeps a stuck Kestrel
-                            // shutdown from hanging the whole node instead of just skipping ahead
-                            // to the orchestrator/child shutdown, which is the part that actually
-                            // matters for data safety.
-                            using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                            await app.StopAsync(stopCts.Token);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
-                        }
-                    }
-                    await orchestrator.StopAsync();
-                    tcs.TrySetResult(0);
-                });
+                _ = stopCoordinator.RequestStopAsync();
             });
         }
 
@@ -323,43 +319,29 @@ public static class Program
         orchestrator.OnCriticalFailure += (reason) =>
         {
             Console.Error.WriteLine($"[Node] CRITICAL FAILURE: {reason}");
-            if (app != null)
-            {
-                try
-                {
-                    Console.WriteLine("[Node] Stopping front app due to critical failure...");
-                    app.StopAsync().GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
-                }
-            }
-            tcs.TrySetResult(2);
+            _ = stopCoordinator.RequestStopAsync(2);
         };
 
         if (!stopToken.CanBeCanceled)
         {
-            Console.CancelKeyPress += async (sender, e) =>
+            Console.CancelKeyPress += (sender, e) =>
             {
                 Console.WriteLine("[Node] Cancel key pressed. Stopping orchestrator...");
                 e.Cancel = true; // Prevent process from immediately terminating
-                if (app != null)
-                {
-                    try
-                    {
-                        Console.WriteLine("[Node] Stopping front app first...");
-                        await app.StopAsync();
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.Error.WriteLine($"[Node] Error stopping front: {ex.Message}");
-                    }
-                }
-                await orchestrator.StopAsync();
-                tcs.TrySetResult(0);
+                _ = stopCoordinator.RequestStopAsync();
             };
         }
+
+        // launchd/logout use SIGTERM rather than a console Ctrl+C. Cancel the default signal
+        // termination so the same ordered graceful stop runs before this process exits.
+        using var sigtermRegistration = !OperatingSystem.IsWindows()
+            ? PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+            {
+                Console.WriteLine("[Node] SIGTERM received. Stopping orchestrator...");
+                context.Cancel = true;
+                _ = stopCoordinator.RequestStopAsync();
+            })
+            : null;
 
         try
         {
@@ -407,7 +389,7 @@ public static class Program
             {
                 Console.WriteLine("[Node] BMB_HTTPS_ENABLED=1: additive HTTPS listener will be started on :5311.");
             }
-            if (tcs.Task.IsCompleted)
+            if (frontGate.StopRequested)
             {
                 return await tcs.Task;
             }
@@ -415,10 +397,26 @@ public static class Program
             // "Connect a device" (plan section 10): unless the LAN listener is permanently on, the
             // Connect page opens it on demand — see LanJoinListener. Needs the internal key (the
             // page authenticates with it) and the local CA (Windows only).
+            // The node's own internal key: the one the Api child was started with (auto mode generates it, or takes the one
+            // the Desktop shell put in this process's environment), else this process's environment.
+            string? ResolveInternalKey() => apiConfig?.EnvironmentVariables?.GetValueOrDefault("BMB_INTERNAL_KEY")
+                ?? Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
+
+            // POST /node/lock: the shell asks the front to lock the vault when the computer sleeps; the front asks the Api, with
+            // the internal key. On every OS (unlike the LAN control). Null (the route stays a 501 stub) when there is no key.
+            NodeLockControl? BuildLock()
+            {
+                var internalKey = ResolveInternalKey();
+                if (string.IsNullOrEmpty(internalKey)) return null;
+                if (!orchestrator.ReadyChildren.TryGetValue("BeeMemoryBank.Api", out var api)
+                    || api.Urls.FirstOrDefault() is not { } apiUrl)
+                    return null;
+                return new NodeLockControl(apiUrl, internalKey);
+            }
+
             LanControl? BuildLan(bool permanent)
             {
-                var internalKey = apiConfig?.EnvironmentVariables?.GetValueOrDefault("BMB_INTERNAL_KEY")
-                    ?? Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
+                var internalKey = ResolveInternalKey();
                 if (!OperatingSystem.IsWindows() || string.IsNullOrEmpty(internalKey)) return null;
 
                 var leaf = new NodeFront.CachedLeafCert(new LocalCaService(resolvedDataDirectory));
@@ -432,41 +430,41 @@ public static class Program
                 return new LanControl(lanListener, null, new NetshLanFirewall(), internalKey);
             }
 
+            // Every start goes through the gate: it builds the front and starts it only if no stop has been
+            // requested, a stop that arrives meanwhile waits for the start to finish, and a front whose start
+            // failed is disposed by the gate itself. It returns null when the stop came first - then the front
+            // never starts and the run is over (the stop completes the run wait).
+            Task<WebApplication?> StartFrontAsync(string url, bool https) => frontGate.StartAsync(
+                () => BuildFront(
+                    new[] { "--urls", url },
+                    orchestrator.ReadyChildren,
+                    https,
+                    resolvedDataDirectory,
+                    BuildLan(https),
+                    BuildLock()),
+                front => front.StartAsync());
+
             try
             {
-                app = BuildFront(
-                    new[] { "--urls", $"http://127.0.0.1:{preferredFrontPort}" },
-                    orchestrator.ReadyChildren,
-                    httpsEnabled,
-                    resolvedDataDirectory,
-                    BuildLan(httpsEnabled));
-                await app.StartAsync();
+                app = await StartFrontAsync($"http://127.0.0.1:{preferredFrontPort}", httpsEnabled);
+                if (app == null) return await tcs.Task;
             }
             catch (IOException)
             {
-                if (tcs.Task.IsCompleted)
+                if (frontGate.StopRequested)
                 {
                     return await tcs.Task;
                 }
 
                 Console.WriteLine($"[Node] Port {preferredFrontPort} is unavailable, falling back to an OS-assigned port...");
-                if (app != null)
-                {
-                    try { await app.DisposeAsync(); } catch { }
-                }
                 try
                 {
-                    app = BuildFront(
-                        new[] { "--urls", "http://127.0.0.1:0" },
-                        orchestrator.ReadyChildren,
-                        httpsEnabled,
-                        resolvedDataDirectory,
-                        BuildLan(httpsEnabled));
-                    await app.StartAsync();
+                    app = await StartFrontAsync("http://127.0.0.1:0", httpsEnabled);
+                    if (app == null) return await tcs.Task;
                 }
                 catch (IOException) when (httpsEnabled)
                 {
-                    if (tcs.Task.IsCompleted)
+                    if (frontGate.StopRequested)
                     {
                         return await tcs.Task;
                     }
@@ -479,18 +477,9 @@ public static class Program
                     Console.WriteLine(
                         $"[Node] WARNING: could not bind the opt-in HTTPS listener on :{NodeFront.HttpsPort} " +
                         "(port unavailable) — starting with HTTPS disabled for this session.");
-                    if (app != null)
-                    {
-                        try { await app.DisposeAsync(); } catch { }
-                    }
                     httpsEnabled = false;
-                    app = BuildFront(
-                        new[] { "--urls", "http://127.0.0.1:0" },
-                        orchestrator.ReadyChildren,
-                        httpsEnabled,
-                        resolvedDataDirectory,
-                        BuildLan(httpsEnabled));
-                    await app.StartAsync();
+                    app = await StartFrontAsync("http://127.0.0.1:0", httpsEnabled);
+                    if (app == null) return await tcs.Task;
                 }
             }
 
@@ -560,15 +549,8 @@ public static class Program
                 try { await lanListener.DisposeAsync(); } catch { }
             }
 
-            if (app != null)
-            {
-                try
-                {
-                    await app.StopAsync();
-                }
-                catch { }
-                await app.DisposeAsync();
-            }
+            await stopCoordinator.RequestStopAsync();
+            if (app != null) await app.DisposeAsync();
         }
     }
 
@@ -577,10 +559,11 @@ public static class Program
         IReadOnlyDictionary<string, ReadyFileInfo> readyChildren,
         bool enableHttps = false,
         string? dataPath = null,
-        LanControl? lan = null)
+        LanControl? lan = null,
+        NodeLockControl? lockControl = null)
     {
         var builder = WebApplication.CreateBuilder(webArgs);
-        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath, lan);
+        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath, lan, lockControl);
         var app = builder.Build();
         front.MapEndpoints(app);
         return app;
@@ -615,6 +598,53 @@ public static class Program
             }
         );
         Console.WriteLine(JsonSerializer.Serialize(example, new JsonSerializerOptions { WriteIndented = true }));
+    }
+}
+
+/// <summary>
+/// Serializes every graceful shutdown trigger. The first request owns the complete stop
+/// sequence, so overlapping EOF, Ctrl+C, and SIGTERM notifications cannot stop the front or
+/// orchestrator twice or complete the run wait prematurely.
+/// </summary>
+public sealed class NodeStopCoordinator
+{
+    private readonly Func<Task> _stopFrontAsync;
+    private readonly Func<Task> _stopOrchestratorAsync;
+    private readonly TaskCompletionSource<int> _completion;
+    private readonly object _gate = new();
+    private Task? _stopTask;
+
+    public NodeStopCoordinator(
+        Func<Task> stopFrontAsync,
+        Func<Task> stopOrchestratorAsync,
+        TaskCompletionSource<int> completion)
+    {
+        _stopFrontAsync = stopFrontAsync;
+        _stopOrchestratorAsync = stopOrchestratorAsync;
+        _completion = completion;
+    }
+
+    public Task RequestStopAsync(int exitCode = 0)
+    {
+        lock (_gate)
+        {
+            return _stopTask ??= StopAsync(exitCode);
+        }
+    }
+
+    private async Task StopAsync(int exitCode)
+    {
+        try
+        {
+            await _stopFrontAsync();
+            await _stopOrchestratorAsync();
+            _completion.TrySetResult(exitCode);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Node] Error during graceful shutdown: {ex.Message}");
+            _completion.TrySetResult(exitCode);
+        }
     }
 }
 

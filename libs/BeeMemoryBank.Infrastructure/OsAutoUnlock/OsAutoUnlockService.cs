@@ -1,9 +1,9 @@
-using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Infrastructure.OsAutoUnlock;
 
@@ -41,18 +41,21 @@ namespace BeeMemoryBank.Infrastructure.OsAutoUnlock;
 ///     (<c>.internal-key</c>, <c>ddns-state.json</c>, <c>.runtime.json</c>).
 ///   </item>
 ///   <item>
-///     This class is <c>[SupportedOSPlatform("windows")]</c>. All public methods perform an
-///     <see cref="OperatingSystem.IsWindows"/> runtime check and return a safe default
-///     (null / false) on other platforms, mirroring <see cref="LocalCaService"/>'s pattern.
+///     The secret lives in the platform's <see cref="IUserSecretStore"/> (Windows DPAPI, macOS
+///     Keychain). All public methods check <see cref="IUserSecretStore.IsSupported"/> and return a
+///     safe default (null / false) on a platform without one, mirroring <see cref="LocalCaService"/>'s
+///     pattern. A secret that is unreadable for any reason other than "not found" is an exception,
+///     never a missing secret, so nothing here mints a replacement over a secret that still exists.
 ///   </item>
 /// </list>
 /// </summary>
-[SupportedOSPlatform("windows")]
 public class OsAutoUnlockService(
     IKeySlotRepository keySlotRepo,
     SessionService session,
-    string dataPath)
+    string dataPath,
+    IUserSecretStore? secretStore = null)
 {
+    private readonly IUserSecretStore _secretStore = secretStore ?? UserSecretStores.CreateDefault(dataPath);
     /// <summary>
     /// DPAPI optional entropy for the auto-unlock secret file. Fixed and versioned
     /// rather than random/per-install: DPAPI folds this byte string into the derivation, so it
@@ -65,6 +68,7 @@ public class OsAutoUnlockService(
 
     /// <summary>File that holds the DPAPI-encrypted 32-byte auto-unlock secret.</summary>
     public string SecretFilePath => Path.Combine(dataPath, "os-auto-unlock.dat");
+    public bool IsSupported => _secretStore.IsSupported;
 
     /// <summary>
     /// Returns <c>true</c> if an <c>os_auto_unlock</c> slot exists in the key-slot table
@@ -72,10 +76,14 @@ public class OsAutoUnlockService(
     /// </summary>
     public async Task<bool> IsEnabledAsync()
     {
-        if (!OperatingSystem.IsWindows()) return false;
+        if (!_secretStore.IsSupported) return false;
 
         var slot = await GetSlotAsync();
-        return slot != null && File.Exists(SecretFilePath);
+        if (slot == null) return false;
+        var secret = _secretStore.Read("os-auto-unlock", "default");
+        if (secret is null) return false;
+        Array.Clear(secret);
+        return true;
     }
 
     /// <summary>
@@ -90,8 +98,8 @@ public class OsAutoUnlockService(
     /// <exception cref="InvalidOperationException">Session is locked.</exception>
     public async Task<byte[]> EnableAsync()
     {
-        if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException("OS auto-unlock is only supported on Windows.");
+        if (!_secretStore.IsSupported)
+            throw new PlatformNotSupportedException("OS auto-unlock is unavailable on this platform.");
 
         var masterDek = session.GetMasterDek(); // throws if locked
         byte[] secret = SecureRandom.GetBytes(32);
@@ -131,9 +139,10 @@ public class OsAutoUnlockService(
             {
                 // Protect the raw secret with DPAPI (current-user scope) using application-specific
                 // optional entropy (see Entropy) and persist it next to the vault.
-                var dpapi = ProtectedData.Protect(secret, Entropy, DataProtectionScope.CurrentUser);
-                await File.WriteAllBytesAsync(SecretFilePath, dpapi);
-                return dpapi;
+                _secretStore.Write("os-auto-unlock", "default", secret);
+                return File.Exists(SecretFilePath)
+                    ? await File.ReadAllBytesAsync(SecretFilePath)
+                    : Array.Empty<byte>();
             }
             catch
             {
@@ -163,7 +172,7 @@ public class OsAutoUnlockService(
     /// </summary>
     public async Task<bool> TryAutoUnlockAsync(INodeIdentityRepository nodeRepo)
     {
-        if (!OperatingSystem.IsWindows()) return false;
+        if (!_secretStore.IsSupported) return false;
 
         if (session.IsUnlocked) return true; // already unlocked — nothing to do
 
@@ -172,10 +181,8 @@ public class OsAutoUnlockService(
             var slot = await GetSlotAsync();
             if (slot == null) return false;
 
-            if (!File.Exists(SecretFilePath)) return false;
-
-            var dpapi = await File.ReadAllBytesAsync(SecretFilePath);
-            var secret = ProtectedData.Unprotect(dpapi, Entropy, DataProtectionScope.CurrentUser);
+            var secret = _secretStore.Read("os-auto-unlock", "default");
+            if (secret is null) return false;
             try
             {
                 var masterDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, secret);
@@ -217,7 +224,7 @@ public class OsAutoUnlockService(
     /// </summary>
     public async Task<bool> DisableAsync()
     {
-        if (!OperatingSystem.IsWindows()) return false;
+        if (!_secretStore.IsSupported) return false;
 
         bool didAnything = false;
 
@@ -228,11 +235,19 @@ public class OsAutoUnlockService(
             didAnything = true;
         }
 
-        if (File.Exists(SecretFilePath))
+        try
         {
-            try { File.Delete(SecretFilePath); } catch { /* best-effort */ }
-            didAnything = true;
+            var secret = _secretStore.Read("os-auto-unlock", "default");
+            if (secret is not null)
+            {
+                Array.Clear(secret);
+                didAnything = true;
+            }
         }
+        catch { /* best-effort */ }
+
+        try { _secretStore.Delete("os-auto-unlock", "default"); }
+        catch { /* best-effort */ }
 
         return didAnything;
     }

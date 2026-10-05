@@ -19,7 +19,6 @@
                     <Label x:Name="SyncLabel" />
                     <Button x:Name="SyncNowButton" Text="Sync now" Style="{StaticResource PrimaryButton}" Clicked="OnSyncNowClicked" />
                     <Label x:Name="BackupLabel" />
-                    <Label x:Name="ConditionLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
                     <ProgressBar x:Name="JobProgress" IsVisible="False" ProgressColor="{StaticResource PrimaryColor}" />
                     <Label x:Name="JobLabel" IsVisible="False" FontSize="12" />
                 </VerticalStackLayout>
@@ -48,7 +47,7 @@
             <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="8">
                     <Label Text="Backups" FontAttributes="Bold" />
-                    <Label Text="Encrypted with this phone's backup key; the computer can open them with the master password. Made only on Wi-Fi, on the charger, at 20 % battery or more."
+                    <Label Text="Encrypted with this phone's backup key; the computer can open them with the master password."
                            FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
                     <Label x:Name="KeyLostLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap"
                            Text="This phone's backup key is lost, so it cannot make backups the computer could open. Use Disconnect and wipe below, then pair the phone again." />

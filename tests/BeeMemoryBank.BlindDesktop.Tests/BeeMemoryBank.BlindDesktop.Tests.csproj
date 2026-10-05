@@ -1,0 +1,76 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tests of the desktop blind app, for the operating system they are built on: the view model, the timer scheduler (fake clock, fake
+    conditions), the headless self-check, the platform composition over the real adapters, and the boundary of the published app (no Vault,
+    no web server, no child process, no second program).
+      - Windows: the Windows adapters (DPAPI, the atomic state file, the Run key, the conditions), the composition over them, the
+        end-to-end tests, and the boundary of the win-x64 publish.
+      - macOS: the macOS platform (single instance, self-check, folders) and the boundary of the osx publish; the adapters themselves
+        are tested by BeeMemoryBank.BlindDesktop.MacOS.Tests.
+      - Anywhere else (a Linux CI machine): only the parts that do not depend on a platform head (view model, scheduler).
+  -->
+  <PropertyGroup>
+    <BlindTestsWindows Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</BlindTestsWindows>
+    <BlindTestsMac Condition="$([MSBuild]::IsOSPlatform('OSX'))">true</BlindTestsMac>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <TargetFramework Condition="'$(BlindTestsWindows)' == 'true'">net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework Condition="'$(BlindTestsWindows)' != 'true'">net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\desktop\BeeMemoryBank.BlindDesktop\BeeMemoryBank.BlindDesktop.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
+    <!-- The Vault is referenced by the TESTS only, for the control "the scan finds the Vault when it is given the Vault" (as the Android
+         tests do). It is not in the app: the published output is scanned for it. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(BlindTestsWindows)' == 'true'">
+    <ProjectReference Include="..\..\desktop\BeeMemoryBank.BlindDesktop.Windows\BeeMemoryBank.BlindDesktop.Windows.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BlindTestsMac)' == 'true'">
+    <ProjectReference Include="..\..\desktop\BeeMemoryBank.BlindDesktop.MacOS\BeeMemoryBank.BlindDesktop.MacOS.csproj" />
+  </ItemGroup>
+
+  <!-- What belongs to one operating system is compiled only there. -->
+  <ItemGroup Condition="'$(BlindTestsWindows)' != 'true'">
+    <Compile Remove="Windows\**" />
+    <Compile Remove="E2E\**" />
+    <Compile Remove="WindowsCompositionTests.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BlindTestsMac)' != 'true'">
+    <Compile Remove="MacOs\**" />
+  </ItemGroup>
+  <!-- The boundary test publishes the head of the machine it runs on, and the self-check runs that head's platform; without a head
+       (a build on neither Windows nor macOS) there is nothing to publish or to run. -->
+  <ItemGroup Condition="'$(BlindTestsWindows)' != 'true' and '$(BlindTestsMac)' != 'true'">
+    <Compile Remove="AppBoundaryTests.cs" />
+    <Compile Remove="HeadlessSelfCheckTests.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The assembly-boundary scanner and the vault boundary: one source in tests/shared, linked into every project that proves the boundary. -->
+    <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
+    <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+    <!-- The receive-only guard of the Android tests: the repositories EventApplier needs are named by the composition class and by nobody else. -->
+    <Compile Include="..\BeeMemoryBank.BlindMobile.Tests\BoundaryScanner.cs" Link="Shared\BoundaryScanner.cs" />
+    <Compile Include="..\BeeMemoryBank.BlindMobile.Tests\ReceiveOnlyTypes.cs" Link="Shared\ReceiveOnlyTypes.cs" />
+  </ItemGroup>
+
+</Project>

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Certes;
 using Certes.Acme;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Infrastructure.Acme;
 
@@ -53,6 +54,7 @@ public sealed class AcmeCertificateService
     private readonly TlsAlpnChallengeResponder _responder;
     private readonly AcmeChallengePersister? _challengePersister;
     private readonly Action<string>? _trace;
+    private readonly IUserSecretStore? _secretStore;
 
     private string AcmeDir => Path.Combine(_dataDir, "certs", "acme");
     private string AccountKeyPath => Path.Combine(AcmeDir, "account.pem");
@@ -75,7 +77,8 @@ public sealed class AcmeCertificateService
         AcmeOptions options,
         TlsAlpnChallengeResponder responder,
         AcmeChallengePersister? challengePersister = null,
-        Action<string>? trace = null)
+        Action<string>? trace = null,
+        IUserSecretStore? secretStore = null)
     {
         if (string.IsNullOrWhiteSpace(dataDir))
             throw new ArgumentException("dataDir must not be empty.", nameof(dataDir));
@@ -84,6 +87,7 @@ public sealed class AcmeCertificateService
         _responder = responder ?? throw new ArgumentNullException(nameof(responder));
         _challengePersister = challengePersister;
         _trace = trace;
+        _secretStore = secretStore;
     }
 
     /// <summary>
@@ -209,7 +213,41 @@ public sealed class AcmeCertificateService
     {
         EnsureDir();
 
-        IKey accountKey;
+        var accountKey = await LoadOrCreateAccountKeyAsync(ct);
+
+        var acme = new AcmeContext(new Uri(_options.DirectoryUri), accountKey);
+
+        // ACME newAccount is idempotent: for an existing key the CA returns the existing account
+        // rather than creating a duplicate. So calling it on every run is safe and verifies the key.
+        var contacts = BuildContacts();
+        await acme.NewAccount(contacts, termsOfServiceAgreed: true);
+
+        // Persist the key only after the account is known-good.
+        await SaveAccountKeyAsync(accountKey, ct);
+
+        return acme;
+    }
+
+    /// <summary>Loads or creates the account key without making an ACME network request.</summary>
+    internal async Task<IKey> LoadOrCreateAccountKeyAsync(CancellationToken ct = default)
+    {
+        if (_secretStore?.IsSupported == true)
+        {
+            var decrypted = _secretStore.Read("acme-account", "default");
+            if (decrypted is not null)
+            {
+                try
+                {
+                    _trace?.Invoke("ACME: loaded existing account key");
+                    return KeyFactory.FromPem(Encoding.UTF8.GetString(decrypted));
+                }
+                finally { CryptographicOperations.ZeroMemory(decrypted); }
+            }
+
+            _trace?.Invoke("ACME: generated new account key");
+            return KeyFactory.NewKey(KeyAlgorithm.ES256);
+        }
+
         if (File.Exists(AccountKeyPath))
         {
             string pem;
@@ -231,27 +269,27 @@ public sealed class AcmeCertificateService
             {
                 pem = await File.ReadAllTextAsync(AccountKeyPath, ct);
             }
-            accountKey = KeyFactory.FromPem(pem);
             _trace?.Invoke("ACME: loaded existing account key");
-        }
-        else
-        {
-            accountKey = KeyFactory.NewKey(KeyAlgorithm.ES256);
-            _trace?.Invoke("ACME: generated new account key");
+            return KeyFactory.FromPem(pem);
         }
 
-        var acme = new AcmeContext(new Uri(_options.DirectoryUri), accountKey);
+        _trace?.Invoke("ACME: generated new account key");
+        return KeyFactory.NewKey(KeyAlgorithm.ES256);
+    }
 
-        // ACME newAccount is idempotent: for an existing key the CA returns the existing account
-        // rather than creating a duplicate. So calling it on every run is safe and verifies the key.
-        var contacts = BuildContacts();
-        await acme.NewAccount(contacts, termsOfServiceAgreed: true);
-
-        // Persist the key only after the account is known-good.
+    /// <summary>Persists a verified account key without making an ACME network request.</summary>
+    internal async Task SaveAccountKeyAsync(IKey accountKey, CancellationToken ct = default)
+    {
         if (accountKey is IEncodable encodable)
         {
             var pem = encodable.ToPem();
-            if (OperatingSystem.IsWindows())
+            if (_secretStore?.IsSupported == true)
+            {
+                var pemBytes = Encoding.UTF8.GetBytes(pem);
+                try { _secretStore.Write("acme-account", "default", pemBytes); }
+                finally { CryptographicOperations.ZeroMemory(pemBytes); }
+            }
+            else if (OperatingSystem.IsWindows())
             {
                 var pemBytes = Encoding.UTF8.GetBytes(pem);
                 var encryptedBytes = ProtectedData.Protect(pemBytes, null, DataProtectionScope.CurrentUser);
@@ -268,8 +306,6 @@ public sealed class AcmeCertificateService
                 "ACME account key does not implement IEncodable; cannot persist. " +
                 "This indicates a Certes API change.");
         }
-
-        return acme;
     }
 
     private IList<string> BuildContacts()
@@ -338,7 +374,7 @@ public sealed class AcmeCertificateService
         // Read validity window from the freshly-issued PFX so the metadata is authoritative.
         DateTimeOffset notBefore, notAfter;
         using (var parsed = X509CertificateLoader.LoadPkcs12(
-                   pfxBytes, password, X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable))
+                   pfxBytes, password, CertificateKeyStorageFlags.ForCurrentPlatform(persistKeySet: false)))
         {
             notBefore = new DateTimeOffset(parsed.NotBefore, TimeSpan.Zero);
             notAfter = new DateTimeOffset(parsed.NotAfter, TimeSpan.Zero);
@@ -349,7 +385,9 @@ public sealed class AcmeCertificateService
             Domain = domain,
             PfxPath = pfxPath,
             ChainPemPath = chainPemPath,
-            PfxPassword = OperatingSystem.IsWindows() ? StoredCertificate.EncryptPassword(password) : password,
+            PfxPassword = _secretStore?.IsSupported == true
+                ? StorePfxPassword(domain, password)
+                : OperatingSystem.IsWindows() ? StoredCertificate.EncryptPassword(password) : password,
             NotBefore = notBefore.UtcDateTime,
             NotAfter = notAfter.UtcDateTime,
             IssuedAt = DateTime.UtcNow,
@@ -362,6 +400,14 @@ public sealed class AcmeCertificateService
     }
 
     private string MetaPath(string domain) => Path.Combine(AcmeDir, domain + ".meta.json");
+
+    private string StorePfxPassword(string domain, string password)
+    {
+        var bytes = Encoding.UTF8.GetBytes(password);
+        try { _secretStore!.Write("acme-pfx-password", domain, bytes); }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+        return "secret:" + domain;
+    }
 
     private static StoredCertificate? ReadMeta(string path)
     {

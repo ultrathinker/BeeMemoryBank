@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BeeMemoryBank.AppPaths;
 
 namespace BeeMemoryBank.Api.Services.BlindBackup;
 
@@ -254,7 +255,7 @@ public sealed partial class BlindBackupSettings
     // (case-insensitive), port (the scheme's default when absent) and the path segments without empty ones; a
     // folder without a trailing separator, and without case on Windows.
     private static bool SameRepository(string a, string b) =>
-        string.Equals(Canonical(a), Canonical(b), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        string.Equals(Canonical(a), Canonical(b), PathComparison.ForCurrentPlatform());
 
     private static string Canonical(string key) =>
         key.StartsWith("s3:", StringComparison.Ordinal) && Uri.TryCreate(key[3..], UriKind.Absolute, out var u)

@@ -11,6 +11,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Embeddings;
 using BeeMemoryBank.Hosting.AspNetCore;
 using BeeMemoryBank.Infrastructure;
+using BeeMemoryBank.Infrastructure.Secrets;
 using BeeMemoryBank.Media;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
@@ -165,22 +166,27 @@ if (!role.IsBlind)
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<McpResponseManager>(sp, dataPath));
 builder.Services.AddSingleton<DownloadTokenService>();
 builder.Services.AddSingleton<BeeMemoryBank.Api.Services.ProtectedUnlockCache>();
-// OsAutoUnlockService is Windows-only; registered as a conditional singleton so other code can
-// resolve it as OsAutoUnlockService? (nullable) and safely get null on non-Windows platforms.
+// OsAutoUnlockService needs an OS-backed secret store (Windows DPAPI, macOS Keychain); registered as
+// a conditional singleton so other code can resolve it as OsAutoUnlockService? (nullable) and safely
+// get null on a platform without one (Linux/Docker).
 // Both put the master DEK back into the session without anyone typing a password — which is why
 // a blind node (plan 3.4) must not have them at all.
-if (OperatingSystem.IsWindows() && !role.IsBlind)
+var platformSecretStore = UserSecretStores.CreateDefault(dataPath);
+if (platformSecretStore.IsSupported && !role.IsBlind)
 {
+    builder.Services.AddSingleton<IUserSecretStore>(_ => platformSecretStore);
     builder.Services.AddSingleton(sp =>
         new BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService(
             sp.GetRequiredService<BeeMemoryBank.Core.Interfaces.IKeySlotRepository>(),
             sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
-            dataPath));
+            dataPath,
+            sp.GetRequiredService<IUserSecretStore>()));
     // Keeps the vault open across the restart of a desktop app update (see the class).
     builder.Services.AddSingleton(sp =>
         new BeeMemoryBank.Infrastructure.OsAutoUnlock.UpdateUnlockHandoff(
             sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
-            dataPath));
+            dataPath,
+            secretStore: sp.GetRequiredService<IUserSecretStore>()));
 }
 builder.Services.AddHostedService<DownloadCleanupHostedService>();
 builder.Services.AddHostedService<AuditLogPruningHostedService>();

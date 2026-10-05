@@ -24,7 +24,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <MauiIcon Include="Resources\AppIcon\appicon.svg" />
+    <MauiIcon Include="Resources\AppIcon\appicon.svg" Color="#FFFFFF" ForegroundScale="0.62" />
     <MauiImage Include="Resources\Images\*.svg" />
     <!-- The ONNX model (~87 MB) is gitignored and fetched at build time (see CI / docs).
          Keep this asset conditional so a clean clone without the model still builds;

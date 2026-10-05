@@ -18,6 +18,9 @@ public class ForbiddenReferencesTests
     [
         "BeeMemoryBank.Embeddings",
         "BeeMemoryBank.Media",
+        // macOS only (Keychain, LaunchAgent): not in the Android app's graph, csproj or output
+        "BeeMemoryBank.Platforms.Apple",
+        "BeeMemoryBank.BlindDesktop",
         "Microsoft.ML.OnnxRuntime",
         "Microsoft.ML.Tokenizers",
         "Markdig",
@@ -109,7 +112,7 @@ public class ForbiddenReferencesTests
         own.Should().BeEquivalentTo(new[]
             {
                 "BeeMemoryBank.Core", "BeeMemoryBank.Crypto", "BeeMemoryBank.Search", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync",
-                "BeeMemoryBank.Blind.PhoneClient", "BeeMemoryBank.BlindMobile"
+                "BeeMemoryBank.Blind.PhoneClient", "BeeMemoryBank.Blind.AppCore", "BeeMemoryBank.BlindMobile"
             },
             "the app may carry its own assembly, the shared libraries and the phone's client, and no other BeeMemoryBank library (Vault least of all)");
     }
@@ -123,7 +126,7 @@ public class ForbiddenReferencesTests
         references.Should().BeEquivalentTo(new[]
         {
             "BeeMemoryBank.Core", "BeeMemoryBank.Crypto", "BeeMemoryBank.Search", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync",
-            "BeeMemoryBank.Blind.PhoneClient"
+            "BeeMemoryBank.Blind.PhoneClient", "BeeMemoryBank.Blind.AppCore"
         });
     }
 
@@ -167,7 +170,7 @@ public class ForbiddenReferencesTests
     public void BlindMobileServices_OutsideTheCompositionClass_NeverMentionReceiveOnlyTypes()
     {
         var findings = BoundaryScanner.Scan(
-            typeof(ForbiddenReferencesTests).Assembly.Location,
+            typeof(BlindMobileServices).Assembly.Location,
             owner => owner.StartsWith("BeeMemoryBank.BlindMobile.", StringComparison.Ordinal)
                      && !owner.StartsWith("BeeMemoryBank.BlindMobile.Tests.", StringComparison.Ordinal)
                      && owner != CompositionClass,
@@ -185,7 +188,9 @@ public class ForbiddenReferencesTests
     [Fact]
     public void BlindMobileAssembly_OutsideTheCompositionClass_NeverMentionsReceiveOnlyTypes()
     {
-        var findings = BoundaryScanner.Scan(FindAppDll(), owner => owner != CompositionClass, ReceiveOnlyTypes.RestrictedNames);
+        var appFindings = BoundaryScanner.Scan(FindAppDll(), owner => owner != CompositionClass, ReceiveOnlyTypes.RestrictedNames);
+        var coreFindings = BoundaryScanner.Scan(typeof(BlindMobileServices).Assembly.Location, owner => owner != CompositionClass, ReceiveOnlyTypes.RestrictedNames);
+        var findings = appFindings.Concat(coreFindings).ToList();
 
         findings.Should().BeEmpty(
             "pages, platform classes and services must not take, hold, resolve or construct a repository " +
@@ -222,10 +227,10 @@ public class ForbiddenReferencesTests
 
         // Platform dependencies needed for blind background services
         var dummyKeys = new DummyKeys();
-        services.AddSingleton<IBlindPhoneStore>(new PreferencesBlindStore(_ => null, (_, _) => { }, _ => { }));
+        services.AddSingleton<IBlindStateStore>(new PreferencesBlindStore(_ => null, (_, _) => { }, _ => { }));
         services.AddSingleton<IBlindNodeKeys>(dummyKeys);
-        services.AddSingleton<IBlindPhoneKeys>(dummyKeys);
-        services.AddSingleton<IDeviceStateProvider>(new DummyDeviceState());
+        services.AddSingleton<IBlindSecretStore>(dummyKeys);
+        services.AddSingleton<IBlindLifecycle, DummyLifecycle>();
 
         // Full names, not typeof(): most of these types are no longer IN the blind assemblies at all (the libraries are
         // linked into BeeMemoryBank.Blind only as far as a blind node uses them), and a type that does not exist can
@@ -391,7 +396,7 @@ public class ForbiddenReferencesTests
     private static readonly string[] AllowedLibraryAssemblies =
     [
         "BeeMemoryBank.Core", "BeeMemoryBank.Crypto", "BeeMemoryBank.Search", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync",
-        "BeeMemoryBank.Blind.PhoneClient"
+        "BeeMemoryBank.Blind.PhoneClient", "BeeMemoryBank.Blind.AppCore"
     ];
 
     /// <summary>
@@ -404,6 +409,16 @@ public class ForbiddenReferencesTests
         if (!AllowedLibraryAssemblies.Contains(assemblyName, StringComparer.OrdinalIgnoreCase))
             return false;
 
+        if (assemblyName.Equals("BeeMemoryBank.Blind.AppCore", StringComparison.OrdinalIgnoreCase))
+            return typeNs.Equals("BeeMemoryBank.BlindMobile.Services.Blind", StringComparison.Ordinal) && typeName is
+                "BlindMobileServices" or "BlindAppController" or "BlindStartup" or "BlindMobilePairing" or
+                "BlindRunReport" or "BlindBackupExport" or "BlindPhoneReset" or "IBlindNodeKeys" or
+                "IBlindSecretStore" or "IBlindStateStore" or "IBlindLifecycle" or
+                "IBlindPaths" or "IBlindBackupExporter"
+                || typeNs.Equals("BeeMemoryBank.Core.Services.BlindPhone", StringComparison.Ordinal) && typeName is
+                "BlindPhoneState" or "BlindPhoneLog" or "BlindPhoneLog.Entry" or "BlindHeavyWork" or
+                "BlindBackupSchedule" or "BlindPhoneBackupRunner";
+
         if (typeNs.StartsWith("BeeMemoryBank.Core", StringComparison.Ordinal))
         {
             // All types in BlindPhone seam are allowed (including nested types like BlindPhoneLog.Entry)
@@ -414,7 +429,7 @@ public class ForbiddenReferencesTests
             // Models allowed for blind node operation
             if (typeNs.Equals("BeeMemoryBank.Core.Models", StringComparison.Ordinal))
             {
-                return typeName is "BlindCallCode" or "BlindNodeId" or "BlindPairingSecret" or "BlindPhoneCode" or "BlindPhoneDeviceState" or "BlindPhoneWork" or "BlindPhoneJob" or "NodeIdentity" or "SyncPosition";
+                return typeName is "BlindCallCode" or "BlindNodeId" or "BlindPairingSecret" or "BlindPhoneCode" or "NodeIdentity" or "SyncPosition";
             }
 
             // Minimal repository and factory interfaces
@@ -484,8 +499,10 @@ public class ForbiddenReferencesTests
         public void Clear() { }
     }
 
-    private sealed class DummyDeviceState : IDeviceStateProvider
+    private sealed class DummyLifecycle : IBlindLifecycle
     {
-        public BlindPhoneDeviceState Current() => new(true, true, true, 100);
+        public void StopBackgroundWork() { }
+        public void StopBackupService() { }
+        public void RestartAfterWipe() { }
     }
 }

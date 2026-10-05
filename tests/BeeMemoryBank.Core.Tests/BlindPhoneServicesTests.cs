@@ -7,8 +7,7 @@ namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
 /// The Android blind node's platform-free logic (plan section 10): making the identity, pairing only
-/// with a code made for this phone, and backups that wait for Wi-Fi and the charger, resume, and keep a
-/// bounded number of files.
+/// with a code made for this phone, and backups that are resumable and keep a bounded number of files.
 /// </summary>
 public sealed class BlindPhoneServicesTests : IDisposable
 {
@@ -19,7 +18,6 @@ public sealed class BlindPhoneServicesTests : IDisposable
     private readonly MemoryKeys _keys = new();
     private readonly Recorder _recorder = new();
     private readonly Package _package = new();
-    private readonly Device _device = new();
     private readonly RecoverySet _recoverySet;
     private readonly SteppingTime _time = new();
     private readonly BlindPhoneState _state;
@@ -36,9 +34,9 @@ public sealed class BlindPhoneServicesTests : IDisposable
         _log = new BlindPhoneLog(Path.Combine(_dir, "log.jsonl"), _time);
         _pairing = new BlindPhonePairing(_state, _keys, _recorder, _log);
         _recoverySet = new RecoverySet(() => _state.NodeId);
-        _runner = new BlindPhoneBackupRunner(_state, _keys, _package, _recoverySet, _device, _log,
+        _runner = new BlindPhoneBackupRunner(_state, _keys, _package, _recoverySet, _log,
             Path.Combine(_dir, "backups"), _time);
-        _heavy = new BlindHeavyWork(_state, _replica, _runner, _device, _log, Path.Combine(_dir, "replica"), _time);
+        _heavy = new BlindHeavyWork(_state, _replica, _runner, _log, Path.Combine(_dir, "replica"), _time);
     }
 
     public void Dispose()
@@ -141,19 +139,6 @@ public sealed class BlindPhoneServicesTests : IDisposable
     }
 
     // ─── Backups ────────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task Backup_WaitsForWifiAndTheCharger_WithoutTouchingThePackage()
-    {
-        await _pairing.CreateIdentityAsync("Phone");
-        _device.State = _device.State with { Charging = false };
-
-        var outcome = await _runner.RunAsync();
-
-        outcome.Kind.Should().Be(BlindBackupOutcomeKind.Waiting);
-        outcome.Message.Should().Contain("charger");
-        _package.Calls.Should().Be(0);
-    }
 
     [Fact]
     public async Task Backup_WaitsUntilTheSealedBackupKeyHasArrived_SoEveryFileCanBeRestored()
@@ -261,41 +246,6 @@ public sealed class BlindPhoneServicesTests : IDisposable
         _replica.Calls.Should().Be(1);
         _state.InitialLoadDone.Should().BeTrue();
         _runner.Backups().Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task HeavyWork_FirstLoad_WaitsForWifi()
-    {
-        await PairAsync();
-        _device.State = _device.State with { Unmetered = false };
-
-        (await _heavy.RunAsync(forceBackup: true, CancellationToken.None)).Should().Contain("Wi-Fi");
-        _replica.Calls.Should().Be(0, "the first load moves the whole network's data");
-        _runner.Backups().Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task HeavyWork_UnpluggedMidBackup_Pauses_AndResumesOnTheCharger()
-    {
-        await PairAsync();
-        _state.InitialLoadDone = true;
-        _package.Size = AndroidBackupFile.DefaultChunkSize * 4;
-        var unplugged = false;
-        _heavy.Progress += (_, p) =>
-        {
-            if (unplugged || p <= 0.3) return;
-            unplugged = true;
-            _device.State = _device.State with { Charging = false };
-        };
-
-        (await _heavy.RunAsync(forceBackup: true, CancellationToken.None)).Should().ContainEquivalentOf("paused");
-        _runner.Backups().Should().BeEmpty();
-        _log.Latest(5).Should().Contain(e => e.Message.Contains("charger"), "the screen's log says why it stopped");
-
-        _device.State = _device.State with { Charging = true };
-        (await _heavy.RunAsync(forceBackup: true, CancellationToken.None)).Should().Be("Backup made.");
-        _runner.Backups().Should().ContainSingle();
-        _package.Calls.Should().Be(1);
     }
 
     [Fact]
@@ -411,12 +361,6 @@ public sealed class BlindPhoneServicesTests : IDisposable
             "{\"format\":\"bmb-recovery-set-v1\",\"boxes\":[],\"links\":[],\"anchors\":[],\"sealed_secrets\":["
             + (HoldsBackupKey ? $"{{\"name\":\"android-backup:{nodeId()}\",\"dek_fingerprint\":\"f\",\"wrapped\":\"AA==\",\"iv\":\"AA==\",\"updated_at\":\"x\"}}" : "")
             + "],\"created_at\":\"x\"}");
-    }
-
-    private sealed class Device : IDeviceStateProvider
-    {
-        public BlindPhoneDeviceState State = new(true, true, true, 90);
-        public BlindPhoneDeviceState Current() => State;
     }
 
     private sealed class SteppingTime : TimeProvider

@@ -6,7 +6,7 @@ namespace BeeMemoryBank.Desktop.Services;
 /// <summary>
 /// Service to manage application autostart on Windows user login.
 /// </summary>
-public class AutostartService
+public class AutostartService : IAutostartService
 {
     private const string RegistryKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string AppName = "BeeMemoryBank";

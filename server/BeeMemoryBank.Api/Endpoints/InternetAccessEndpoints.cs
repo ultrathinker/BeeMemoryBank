@@ -13,6 +13,7 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.Acme;
 using BeeMemoryBank.Infrastructure.Ddns;
 using BeeMemoryBank.Infrastructure.Network;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -85,7 +86,7 @@ public static class InternetAccessEndpoints
         // POST /api/internet-access/ddns/config — persist the chosen provider + credentials +
         // IP-detection mode so a later "check now" can rebuild the provider without re-prompting.
         group.MapPost("/ddns/config", async (
-            IConfiguration config, DdnsConfigRequest req) =>
+            HttpContext context, IConfiguration config, DdnsConfigRequest req) =>
         {
             if (string.IsNullOrWhiteSpace(req.Provider)
                 || !DdnsProviders.All.Contains(req.Provider, StringComparer.OrdinalIgnoreCase))
@@ -120,7 +121,13 @@ public static class InternetAccessEndpoints
             }
 
             var dataPath = ResolveDataPath(config);
-            if (OperatingSystem.IsWindows())
+            var secretStore = context.RequestServices.GetService<IUserSecretStore>();
+            if (secretStore?.IsSupported == true)
+            {
+                req.Token = StoreDdnsSecret(secretStore, "token", req.Token);
+                req.ApiToken = StoreDdnsSecret(secretStore, "api-token", req.ApiToken);
+            }
+            else if (OperatingSystem.IsWindows())
             {
                 req.Token = EncryptSecret(req.Token);
                 req.ApiToken = EncryptSecret(req.ApiToken);
@@ -133,7 +140,7 @@ public static class InternetAccessEndpoints
         // and run one DdnsUpdater.CheckAndUpdateAsync cycle. Returns the raw result fields so the
         // wizard can show success / no-change / failure with the underlying message.
         group.MapPost("/ddns/check", async (
-            IConfiguration config, HttpClient http, ILoggerFactory loggerFactory) =>
+            HttpContext context, IConfiguration config, HttpClient http, ILoggerFactory loggerFactory) =>
         {
             var dataPath = ResolveDataPath(config);
             var cfg = await ReadAsync<DdnsConfigRequest>(DdnsConfigPath(dataPath));
@@ -141,7 +148,13 @@ public static class InternetAccessEndpoints
                 return Results.Json(new ErrorResponse(
                     "No DDNS provider configured yet. Save your provider settings first."), statusCode: 409);
 
-            if (OperatingSystem.IsWindows())
+            var secretStore = context.RequestServices.GetService<IUserSecretStore>();
+            if (secretStore?.IsSupported == true)
+            {
+                cfg.Token = ReadDdnsSecret(secretStore, "token", cfg.Token);
+                cfg.ApiToken = ReadDdnsSecret(secretStore, "api-token", cfg.ApiToken);
+            }
+            else if (OperatingSystem.IsWindows())
             {
                 cfg.Token = DecryptSecret(cfg.Token);
                 cfg.ApiToken = DecryptSecret(cfg.ApiToken);
@@ -189,7 +202,7 @@ public static class InternetAccessEndpoints
         // service ad-hoc (it is not a fixed DI service). Real issuance requires the TLS-ALPN-01
         // challenge responder to be shared with the live TLS listener — see the class summary.
         group.MapPost("/acme/request", async (
-            IConfiguration config, ILoggerFactory loggerFactory,
+            HttpContext context, IConfiguration config, ILoggerFactory loggerFactory,
             System.Threading.CancellationToken ct, AcmeRequestRequest? req) =>
         {
             var dataPath = ResolveDataPath(config);
@@ -225,7 +238,8 @@ public static class InternetAccessEndpoints
             var persister = new AcmeChallengePersister(dataPath);
             var service = new AcmeCertificateService(
                 dataPath, options, responder, persister,
-                trace: msg => { traceLines.Add(msg); logger.LogInformation("{Trace}", msg); });
+                trace: msg => { traceLines.Add(msg); logger.LogInformation("{Trace}", msg); },
+                secretStore: context.RequestServices.GetService<IUserSecretStore>());
 
             try
             {
@@ -360,6 +374,25 @@ public static class InternetAccessEndpoints
     private static string InternetAccessDir(string dataPath) => Path.Combine(dataPath, "internet-access");
     private static string DdnsConfigPath(string dataPath) => Path.Combine(InternetAccessDir(dataPath), "ddns-config.json");
     private static string AcmeConfigPath(string dataPath) => Path.Combine(InternetAccessDir(dataPath), "acme-config.json");
+
+    internal static string? StoreDdnsSecret(IUserSecretStore store, string account, string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return value;
+        var bytes = Encoding.UTF8.GetBytes(value);
+        try { store.Write("ddns-token", account, bytes); }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+        return "secret:" + account;
+    }
+
+    internal static string? ReadDdnsSecret(IUserSecretStore store, string account, string? value)
+    {
+        if (string.IsNullOrEmpty(value) || !value.Equals("secret:" + account, StringComparison.Ordinal))
+            return OperatingSystem.IsWindows() ? DecryptSecret(value) : value;
+        var bytes = store.Read("ddns-token", account)
+            ?? throw new UserSecretStoreException(UserSecretStoreFailureKind.Unavailable, "The DDNS token is unavailable.");
+        try { return Encoding.UTF8.GetString(bytes); }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
 
     private static async Task<T?> ReadAsync<T>(string path) where T : class
     {

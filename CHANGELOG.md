@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 2.1.0: blind copies for Windows and macOS, the macOS app, lock on sleep (2026-10-05)
+
+No sync protocol (still 3), database format or ciphertext change; nodes of 2.0.x and 2.1.0 keep syncing with each other in both directions.
+
+- **A blind copy for Windows and macOS.** A quiet tray (Windows) or menu-bar (macOS) app that keeps an encrypted copy of a memory bank and never holds the
+  master password: pairing with a node, sync, backups and "Disconnect and wipe", with the same rules as the Android blind app. All three are built on
+  one shared core library (`BeeMemoryBank.Blind.AppCore`); only the thin platform parts differ (DPAPI or the Keychain for secrets, a registry entry or
+  a login item for autostart). None of them contains the vault code: the assembly scan of the boundary tests covers the publish folders of all three.
+- **The full app for macOS** (Apple silicon): the desktop shell, the node and the web UI as `Bee Memory Bank.app`, signed with a Developer ID and
+  notarized by Apple, with its secrets in the Keychain (`IUserSecretStore`: DPAPI on Windows, Keychain on macOS), a login-item autostart, keep-awake,
+  Cmd+Q and lock on sleep.
+- **Lock on sleep works.** The desktop app asked its node to lock the vault when the computer went to sleep, but `POST /node/lock` was a stub, so the vault
+  was never locked. It now locks: loopback only and only with the node's own internal key. Like the Lock button it is advisory (see SECURITY.md).
+- **Stopping the node is safe right after it starts.** A stop that arrived while the front was still starting could abort `bmbd` (exit code 134, about one
+  fast stop in four); a stop now waits for the start in flight.
+- **The blind apps never wait for the charger, the battery, Wi-Fi or a metered network, and nothing interrupts a running job** (Android, Windows, macOS).
+  The first load starts right after pairing. A real failure is shown with its real reason and retried. On Android only WorkManager's "network connected"
+  hint is kept; a phone that already has the app picks the new rule up when it is updated.
+- **Android blind app:** moved onto the shared core, with the pairing, keys and schedule kept across an update. APKs are signed with the project's release key
+  from this release on; earlier builds were never published.
+- **A new app icon** (the bee on a stack of database discs) in every app: the Windows apps and installer, the macOS apps, the Android apps, the web site (favicon and touch icons) and the README. The macOS menu-bar image stays a plain black shape, as the menu bar needs.
+- **Downloads:** the release carries the macOS app, the macOS and Windows blind copies and the Android blind app (see the README). The Windows and
+  Android downloads are not signed by a vendor certificate of the platform; the macOS apps are signed and notarized.
+
 #### 2.0.2: Sync now in the Android blind app (2026-10-04)
 
 Android blind app only; nothing on a server, the sync protocol (still 3) or the database changes.

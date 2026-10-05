@@ -26,7 +26,7 @@ public class AppBoundaryTests
         foreach (var folder in folders)
         {
             var files = AssemblyBoundaryScanner.ApplicationAssemblies(folder);
-            files.Select(Path.GetFileNameWithoutExtension).Should().Contain(["BeeMemoryBank.BlindMobile", "BeeMemoryBank.Core", "BeeMemoryBank.Sync"],
+            files.Select(Path.GetFileNameWithoutExtension).Should().Contain(["BeeMemoryBank.BlindMobile", "BeeMemoryBank.Blind.AppCore", "BeeMemoryBank.Core", "BeeMemoryBank.Sync"],
                 "the scan must see the app and the shared libraries it carries: " + folder);
             files.Select(Path.GetFileNameWithoutExtension).Should().NotContain("BeeMemoryBank.Vault", folder);
             AssemblyBoundaryScanner.Scan(files, VaultBoundary.Forbidden()).Should().BeEmpty(folder);

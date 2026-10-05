@@ -12,29 +12,15 @@
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
     <!-- The PC's side of pairing a phone (BlindPhoneBackupSeal, BlindPhoneEnrollment) is a full node's code and lives in the Vault; the tests
          play the PC, the app never does, so Vault is referenced by the TESTS only and is not in the app. -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindIdentityRecord.cs" Link="Shared\BlindIdentityRecord.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\IBlindNodeKeys.cs" Link="Shared\IBlindNodeKeys.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindMobilePairing.cs" Link="Shared\BlindMobilePairing.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindKeystoreNodeAuthSigner.cs" Link="Shared\BlindKeystoreNodeAuthSigner.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindReplicaSource.cs" Link="Shared\BlindReplicaSource.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPhoneSync.cs" Link="Shared\BlindPhoneSync.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPackageFetcher.cs" Link="Shared\BlindPackageFetcher.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindRunReport.cs" Link="Shared\BlindRunReport.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindBackupExport.cs" Link="Shared\BlindBackupExport.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPhoneReset.cs" Link="Shared\BlindPhoneReset.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\PreferencesBlindStore.cs" Link="Shared\PreferencesBlindStore.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindHttpHandler.cs" Link="Shared\BlindHttpHandler.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindHttpClientProvider.cs" Link="Shared\BlindHttpClientProvider.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\SqliteBlindIdentityRecorder.cs" Link="Shared\SqliteBlindIdentityRecorder.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindStartup.cs" Link="Shared\BlindStartup.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindMobileServices.cs" Link="Shared\BlindMobileServices.cs" />
-    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\MaintenanceDetectingHandler.cs" Link="Shared\MaintenanceDetectingHandler.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Platforms\Android\BlindWorkPlan.cs" Link="Shared\BlindWorkPlan.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -44,7 +44,7 @@ public sealed class BlindPhonePullClient(
         OperationCanceledException? stopped = null;
         foreach (var evt in events)
         {
-            // The worker is told to stop (charger unplugged, Wi-Fi gone): leave between two events, with
+            // A caller may stop the worker: leave between two events, with
             // the cursor where the last applied one put it.
             if (ct.IsCancellationRequested)
             {

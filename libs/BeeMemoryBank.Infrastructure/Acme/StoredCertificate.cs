@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Infrastructure.Acme;
 
@@ -47,10 +48,17 @@ public sealed class StoredCertificate
     /// Loads the PFX into an <see cref="X509Certificate2"/> with an exportable, ephemeral private
     /// key suitable for use as an SslStream server certificate.
     /// </summary>
-    public X509Certificate2 LoadCertificate()
+    public X509Certificate2 LoadCertificate(IUserSecretStore? secretStore = null)
     {
         var password = PfxPassword;
-        if (OperatingSystem.IsWindows())
+        if (password.StartsWith("secret:", StringComparison.Ordinal))
+        {
+            var bytes = secretStore?.Read("acme-pfx-password", password[7..])
+                ?? throw new UserSecretStoreException(UserSecretStoreFailureKind.Unavailable, "The PFX password is unavailable.");
+            try { password = Encoding.UTF8.GetString(bytes); }
+            finally { CryptographicOperations.ZeroMemory(bytes); }
+        }
+        else if (OperatingSystem.IsWindows())
         {
             password = DecryptPassword(password);
         }
@@ -58,7 +66,7 @@ public sealed class StoredCertificate
         return X509CertificateLoader.LoadPkcs12FromFile(
             PfxPath,
             password,
-            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+            CertificateKeyStorageFlags.ForCurrentPlatform(persistKeySet: false));
     }
 
     [SupportedOSPlatform("windows")]

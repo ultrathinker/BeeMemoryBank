@@ -55,6 +55,7 @@ public partial class ManageStoragesWindow : Window
         _owner = owner ?? throw new ArgumentNullException(nameof(owner));
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         InitializeComponent();
+        AutostartNote.Text = Services.ShellPlatforms.Current.AutostartProfileNote;
 
         // Keep the list live if the user switches profiles from the TRAY while this window
         // stays open, rather than only refreshing on this window's own actions. The safety
@@ -279,7 +280,7 @@ public partial class ManageStoragesWindow : Window
         if (!await ask.ShowDialog<bool>(this)) return;
 
         // Never delete a folder some profile still points at, or one that is not a vault.
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var comparison = PathComparison.ForCurrentPlatform();
         if (_profiles.GetAll().Any(p => string.Equals(p.DataPath, oldPath, comparison))
             || VaultFiles.Inspect(oldPath) != VaultFolderState.Vault)
         {
@@ -363,37 +364,8 @@ public partial class ManageStoragesWindow : Window
         try { profile = _profiles.GetById(id); }
         catch (KeyNotFoundException) { RefreshProfileList(); return; }
 
-        OpenFolder(profile.DataPath);
-    }
-
-    private static void OpenFolder(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return;
-
-        // Windows-only as the rest of the shell, but still guarded: matches PowerEventsService
-        // / other Windows hooks. On other OSes the call silently no-ops (we don't have a
-        // cross-platform "open folder" abstraction in this app yet).
-        if (!OperatingSystem.IsWindows()) return;
-
-        // Ensure the dir exists so Explorer does not error out on a vault that was never
-        // started (ProfileService.AddProfile creates the auto path, but an explicit path or
-        // a forgotten-but-not-deleted profile might not).
-        try { Directory.CreateDirectory(path); }
-        catch { /* best-effort; let explorer.exe handle whatever it can */ }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "explorer.exe",
-                Arguments = $"\"{path}\"",
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Failed to open folder '{path}': {ex.Message}");
-        }
+        // Explorer on Windows, Finder on a Mac; the platform decides (the folder is created first when it is missing).
+        Services.ShellPlatforms.Current.FileManager.OpenFolder(profile.DataPath);
     }
 
     private async Task ShowMessageAsync(string title, string body)

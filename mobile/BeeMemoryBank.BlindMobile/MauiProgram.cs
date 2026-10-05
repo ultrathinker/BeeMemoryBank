@@ -36,8 +36,10 @@ public static class MauiProgram
         builder.Services
             .AddSingleton<KeystoreBlindPhoneKeys>()
             .AddSingleton<IBlindNodeKeys>(sp => sp.GetRequiredService<KeystoreBlindPhoneKeys>())
+            .AddSingleton<IBlindSecretStore>(sp => sp.GetRequiredService<KeystoreBlindPhoneKeys>())
             .AddSingleton<IBlindPhoneKeys>(sp => sp.GetRequiredService<KeystoreBlindPhoneKeys>())
-            .AddSingleton<IDeviceStateProvider, AndroidDeviceState>();
+            .AddSingleton<IBlindStateStore, PreferencesBlindStore>()
+            .AddSingleton<IBlindLifecycle, AndroidBlindLifecycle>();
 #endif
 
         builder.Services.AddTransient<BlindHomePage>();

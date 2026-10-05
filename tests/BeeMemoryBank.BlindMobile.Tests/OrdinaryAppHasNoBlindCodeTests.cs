@@ -23,7 +23,6 @@ public sealed class OrdinaryAppHasNoBlindCodeTests
     [
         "BeeMemoryBank.Mobile.Pages.ModeChoicePage",       // the first-start choice between an ordinary and a blind copy
         "BeeMemoryBank.Mobile.Platforms.Android.SafExport", // "Save to..." of a blind backup
-        "BeeMemoryBank.Mobile.Platforms.Android.AndroidDeviceState", // Wi-Fi/charger/battery gate of the blind jobs
     ];
 
     // Types the ordinary app must still have: without them an empty or wrong file would pass the tests below.
@@ -90,7 +89,7 @@ public sealed class OrdinaryAppHasNoBlindCodeTests
     [Fact]
     public void TheMergedManifest_DeclaresNoBlindComponent()
     {
-        var path = OrdinaryAppFile("obj/Release/net10.0-android/android/AndroidManifest.xml");
+        var path = OrdinaryAppFile("obj/Release/net10.0-android/AndroidManifest.xml");
         var manifest = XDocument.Load(path);
         var android = (XNamespace)"http://schemas.android.com/apk/res/android";
 

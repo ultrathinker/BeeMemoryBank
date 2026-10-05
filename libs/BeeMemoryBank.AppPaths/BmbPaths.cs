@@ -153,9 +153,7 @@ public static class BmbPaths
         string fullVaultsDir = Path.GetFullPath(vaultsDir);
         string fullVaultDir = Path.GetFullPath(vaultDir);
 
-        var comparison = System.OperatingSystem.IsWindows() 
-            ? StringComparison.OrdinalIgnoreCase 
-            : StringComparison.Ordinal;
+        var comparison = PathComparison.ForCurrentPlatform();
 
         string? parentDir = Path.GetDirectoryName(fullVaultDir);
         if (parentDir == null || !string.Equals(parentDir, fullVaultsDir, comparison))

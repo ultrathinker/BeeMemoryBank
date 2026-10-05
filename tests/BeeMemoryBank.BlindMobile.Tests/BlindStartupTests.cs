@@ -78,7 +78,7 @@ public sealed class BlindStartupTests
     [Fact]
     public void TheWipe_RestartsThroughAHelperActivity_NotByStartingTheLauncherItselfAndKillingTheProcess()
     {
-        var calls = MemberCalls(FindAppDll(), "BeeMemoryBank.BlindMobile.Services.Blind.BlindPhoneReset");
+        var calls = MemberCalls(FindAppDll(), "BeeMemoryBank.BlindMobile.Platforms.Android.AndroidBlindLifecycle");
 
         calls.Should().Contain(c => c.StartsWith("BeeMemoryBank.BlindMobile.Platforms.Android.ProcessRestart.", StringComparison.Ordinal));
         calls.Should().NotContain(c => c.EndsWith(".GetLaunchIntentForPackage", StringComparison.Ordinal),

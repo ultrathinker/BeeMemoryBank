@@ -207,15 +207,15 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-// ── OS auto-unlock (opt-in, Windows-only) ──────────────────────────────────────────────────
-// Attempt to auto-unlock the session using the DPAPI-protected secret, if the feature was
+// ── OS auto-unlock (opt-in; where the OS has a secret store: Windows DPAPI, macOS Keychain) ──
+// Attempt to auto-unlock the session using the OS-protected secret, if the feature was
 // previously enabled by the admin. This runs in-process (Api's SessionService is the
 // authoritative singleton), after all migrations so the tbl_key_slot table is fully ready.
 // No new HTTP endpoint is needed: SessionService lives in-process and UnlockWithDek/
 // TryAutoUnlockAsync are direct method calls. If auto-unlock fails for any reason (file absent,
-// DPAPI decryption error, sentinel mismatch) we log a warning and continue — the admin can still
+// secret-store error, sentinel mismatch) we log a warning and continue — the admin can still
 // unlock manually via /Login.
-if (OperatingSystem.IsWindows() && !isBlind)
+if (!isBlind && app.Services.GetService<BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService>()?.IsSupported == true)
 {
     using var autoUnlockScope = app.Services.CreateScope();
     var autoUnlockLogger = autoUnlockScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
@@ -240,7 +240,7 @@ if (OperatingSystem.IsWindows() && !isBlind)
             var nodeRepo = autoUnlockScope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.INodeIdentityRepository>();
             var unlocked = await autoUnlockSvc.TryAutoUnlockAsync(nodeRepo);
             if (unlocked)
-                autoUnlockLogger.LogInformation("Session auto-unlocked via OS auto-unlock slot (DPAPI).");
+                autoUnlockLogger.LogInformation("Session auto-unlocked via OS auto-unlock slot (OS secret store).");
             else
                 autoUnlockLogger.LogDebug("OS auto-unlock: slot or secret file not present, or unlock failed — manual unlock required.");
         }

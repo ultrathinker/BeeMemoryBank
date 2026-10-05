@@ -1,7 +1,5 @@
 using System;
-using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -18,12 +16,12 @@ namespace BeeMemoryBank.Node;
 /// </summary>
 public sealed class LanControl
 {
-    public const string InternalKeyHeader = "X-Internal-Key";
+    public const string InternalKeyHeader = NodeInternalKey.HeaderName;
 
     private readonly LanJoinListener? _listener;
     private readonly Func<X509Certificate2?>? _permanentCertificate;
     private readonly ILanFirewall _firewall;
-    private readonly byte[] _internalKey;
+    private readonly NodeInternalKey _internalKey;
 
     /// <param name="listener">The on-demand listener; null when the LAN listener is permanently on.</param>
     /// <param name="permanentCertificate">The certificate of the permanent listener, for its pin.</param>
@@ -34,18 +32,15 @@ public sealed class LanControl
         _listener = listener;
         _permanentCertificate = permanentCertificate;
         _firewall = firewall ?? throw new ArgumentNullException(nameof(firewall));
-        _internalKey = Encoding.UTF8.GetBytes(internalKey);
+        _internalKey = new NodeInternalKey(internalKey);
     }
 
     public void Map(RouteGroupBuilder nodeGroup)
     {
         var lan = nodeGroup.MapGroup("/lan").AddEndpointFilter(async (context, next) =>
-        {
-            var presented = Encoding.UTF8.GetBytes(context.HttpContext.Request.Headers[InternalKeyHeader].ToString());
-            return CryptographicOperations.FixedTimeEquals(presented, _internalKey)
+            _internalKey.IsPresentedBy(context.HttpContext.Request)
                 ? await next(context)
-                : Results.StatusCode(StatusCodes.Status403Forbidden);
-        });
+                : Results.StatusCode(StatusCodes.Status403Forbidden));
 
         lan.MapGet("", () => Results.Json(Status()));
 

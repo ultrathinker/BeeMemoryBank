@@ -24,7 +24,9 @@ public sealed record AndroidBackupOpened(Guid NodeId, string RecoverySetJson, st
 /// </summary>
 public static class AndroidBackupRestore
 {
-    public const string Extension = BlindPhoneBackupRunner.Extension;
+// Format contract retained here because full-node restore also consumes these files; AppCore owns the
+// runner policy but must not become a dependency of this lower protocol library.
+public const string Extension = ".bmbbackup";
 
     /// <summary>True if <paramref name="path"/> is a file that starts like an Android backup.</summary>
     public static bool LooksLikeBackup(string path)

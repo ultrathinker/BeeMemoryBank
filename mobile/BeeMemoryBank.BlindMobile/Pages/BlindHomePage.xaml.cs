@@ -19,13 +19,12 @@ public partial class BlindHomePage : ContentPage
     private readonly BlindPhoneBackupRunner _backups;
     private readonly BlindHeavyWork _work;
     private readonly BlindPhoneLog _log;
-    private readonly IDeviceStateProvider _device;
     private readonly IServiceProvider _services;
     private readonly BlindStartup _startup;
     private IDispatcherTimer? _timer;
 
     public BlindHomePage(BlindPhoneState state, BlindMobilePairing pairing, BlindPhoneBackupRunner backups,
-        BlindHeavyWork work, BlindPhoneLog log, IDeviceStateProvider device, IServiceProvider services, BlindStartup startup)
+        BlindHeavyWork work, BlindPhoneLog log, IServiceProvider services, BlindStartup startup)
     {
         InitializeComponent();
         _startup = startup;
@@ -34,7 +33,6 @@ public partial class BlindHomePage : ContentPage
         _backups = backups;
         _work = work;
         _log = log;
-        _device = device;
         _services = services;
         SchedulePicker.ItemsSource = new[] { "Off", "Daily", "Weekly" };
     }
@@ -87,12 +85,9 @@ public partial class BlindHomePage : ContentPage
             : "Not paired yet: do steps 1 and 2 below.";
         LoadLabel.Text = _state.InitialLoadDone
             ? "First load: done."
-            : "First load: waits for Wi-Fi and the charger after pairing.";
+            : "First load: starts after pairing.";
         SyncLabel.Text = $"Last sync: {When(_state.LastSyncAt)}";
         BackupLabel.Text = $"Last backup: {When(_state.LastBackupAt)}";
-        ConditionLabel.Text = BlindPhoneWork.WhyNot(BlindPhoneJob.Backup, _device.Current()) is { } wait
-            ? $"A backup would wait now: {wait}"
-            : "Wi-Fi and charger present: backups can run.";
 
         SchedulePicker.SelectedIndex = Array.IndexOf(Schedules, _state.Schedule);
         var files = _backups.Backups();
@@ -146,7 +141,7 @@ public partial class BlindHomePage : ContentPage
         {
             CallCodeEntry.Text = "";
 #if ANDROID
-            // Paired: the first load starts as soon as Wi-Fi and the charger allow, not at the next hourly slot.
+            // Paired: request the first load without waiting for the next hourly slot.
             Platforms.Android.BlindWorkScheduler.RunHeavyNow(Platform.AppContext);
 #endif
         }

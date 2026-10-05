@@ -1,0 +1,91 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The quiet blind app for a desktop: a tray icon and one small window over Blind.AppCore (all pairing, sync, backup and wipe
+    rules live there). This project is the cross-platform part - window, view model, tray, timer scheduler - and both desktop apps
+    are built from it. What depends on the operating system lives in a platform assembly per OS that implements the AppCore seams
+    and the way "only one copy runs" is kept (desktop/BeeMemoryBank.BlindDesktop.Windows, desktop/BeeMemoryBank.BlindDesktop.MacOS);
+    the host picks the one of the OS it is built for: the RID when one is given (win-*, osx-*), otherwise the build machine.
+
+    It does NOT reference the Vault, Hosting, desktop/BeeMemoryBank.Desktop or desktop/BeeMemoryBank.Node, starts no web server and
+    no child process, and listens on no port: it only calls the paired computer over pinned HTTPS (AppBoundaryTests proves it on the
+    published output).
+  -->
+
+  <PropertyGroup>
+    <!-- Which operating system this build is for: the RID when one is given (dotnet publish -r win-x64), otherwise the build machine. -->
+    <BlindWindowsHead Condition="'$(RuntimeIdentifier)' != '' and $(RuntimeIdentifier.StartsWith('win'))">true</BlindWindowsHead>
+    <BlindWindowsHead Condition="'$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">true</BlindWindowsHead>
+    <BlindMacHead Condition="'$(RuntimeIdentifier)' != '' and $(RuntimeIdentifier.StartsWith('osx'))">true</BlindMacHead>
+    <BlindMacHead Condition="'$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">true</BlindMacHead>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework Condition="'$(BlindWindowsHead)' == 'true'">net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework Condition="'$(BlindWindowsHead)' != 'true'">net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- A windowed app has no console to read errors from; the app writes its own start-up failures to its log folder. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(BlindWindowsHead)' == 'true'">
+    <DefineConstants>$(DefineConstants);BLIND_WINDOWS</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(BlindMacHead)' == 'true'">
+    <DefineConstants>$(DefineConstants);BLIND_MACOS</DefineConstants>
+    <!-- Everything this head calls (Unix file modes, Keychain, launchd) is macOS-only on purpose; the platform analyzer would only repeat that on every call. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- The same QR library the Android blind app uses (PNG output, no System.Drawing). -->
+    <PackageReference Include="QRCoder" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
+  </ItemGroup>
+
+  <!-- The Windows adapters exist only in a Windows build: a macOS build never compiles them. -->
+  <ItemGroup Condition="'$(BlindWindowsHead)' == 'true'">
+    <ProjectReference Include="..\BeeMemoryBank.BlindDesktop.Windows\BeeMemoryBank.BlindDesktop.Windows.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BlindWindowsHead)' != 'true'">
+    <Compile Remove="Platform\Windows\**" />
+  </ItemGroup>
+
+  <!-- The macOS adapters exist only in a macOS build (RID osx-*, or a build on a Mac): a Windows build never compiles or carries them. -->
+  <ItemGroup Condition="'$(BlindMacHead)' == 'true'">
+    <ProjectReference Include="..\BeeMemoryBank.BlindDesktop.MacOS\BeeMemoryBank.BlindDesktop.MacOS.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BlindMacHead)' != 'true'">
+    <Compile Remove="Platform\MacOs\**" />
+  </ItemGroup>
+
+  <!--
+    A self-contained macOS publish carries the runtime's crash-dump helper (createdump), a second native program next to the app. The app
+    is one program: it is left out (without it the runtime simply writes no crash dump), so that the publish folder and the .app hold
+    exactly one executable and nothing extra has to be signed. The boundary test counts the executables.
+  -->
+  <Target Name="BlindLeaveOutCrashDumpHelper" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(BlindMacHead)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'createdump'" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+    <InternalsVisibleTo Include="BeeMemoryBank.BlindDesktop.Tests" />
+  </ItemGroup>
+
+</Project>

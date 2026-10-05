@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The Windows side of the desktop blind app: DPAPI secrets, the atomic state file, AC power and network cost from the Windows
+       APIs, the HKCU Run entry. It implements the seams of Blind.AppCore and nothing else; the cross-platform host
+       (desktop/BeeMemoryBank.BlindDesktop) picks it on Windows only, so a macOS build never compiles this project. The 10.0.19041.0
+       target is what the WinRT network-cost API needs. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BeeMemoryBank.BlindDesktop.Tests" />
+  </ItemGroup>
+
+</Project>

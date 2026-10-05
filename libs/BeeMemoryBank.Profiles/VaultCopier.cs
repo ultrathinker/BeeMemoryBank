@@ -105,7 +105,7 @@ public static class VaultCopier
     private static int Percent(long done, long total) => total == 0 ? 100 : (int)(done * 100 / total);
 
     private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        BeeMemoryBank.AppPaths.PathComparison.ForCurrentPlatform();
 
     private static string Normalize(string path) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));

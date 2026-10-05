@@ -81,6 +81,24 @@ public sealed class BlindPhoneResetTests
     }
 
     [Fact]
+    public async Task LifecycleStopsBeforeKeysAndFiles_AndAStopFailureDoesNotSkipTheWipe()
+    {
+        var t = await WipeRig.NewAsync();
+        var lifecycle = new RecordingLifecycle(t.Keys, () => File.Exists(BlindPaths.Log(t.Dir))) { ThrowOnStop = true };
+        var services = new ServiceCollection();
+        services.AddSingleton<IBlindPhoneKeys>(t.Keys);
+        services.AddSingleton(t.State);
+        services.AddSingleton<IBlindLifecycle>(lifecycle);
+        var act = () => BlindPhoneReset.Wipe(services.BuildServiceProvider(), t.Dir);
+
+        act.Should().Throw<AggregateException>().Which.Message.Should().Contain("stopping the background work");
+        lifecycle.StoppedBeforeKeys.Should().BeTrue();
+        lifecycle.StoppedBeforeFiles.Should().BeTrue();
+        t.Keys.IdentitySeed.Should().BeNull();
+        File.Exists(BlindPaths.Log(t.Dir)).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task EveryValueTheStateCanHold_IsClearedByTheWipe()
     {
         var t = await WipeRig.NewAsync();
@@ -169,6 +187,7 @@ public sealed class BlindPhoneResetTests
             var services = new ServiceCollection();
             services.AddSingleton<IBlindPhoneKeys>(keys);
             services.AddSingleton(state);
+            services.AddSingleton<IBlindLifecycle, NoopLifecycle>();
             return new WipeRig
             {
                 Dir = dir, DbPath = dbPath, Provider = services.BuildServiceProvider(), Keys = keys, Store = store, State = state,
@@ -187,6 +206,28 @@ public sealed class BlindPhoneResetTests
             if (value is null) Values.Remove(key);
             else Values[key] = value;
         }
+    }
+
+    private sealed class NoopLifecycle : IBlindLifecycle
+    {
+        public void StopBackgroundWork() { }
+        public void StopBackupService() { }
+        public void RestartAfterWipe() { }
+    }
+
+    private sealed class RecordingLifecycle(MemoryKeys keys, Func<bool> filesExist) : IBlindLifecycle
+    {
+        public bool ThrowOnStop { get; init; }
+        public bool StoppedBeforeKeys { get; private set; }
+        public bool StoppedBeforeFiles { get; private set; }
+        public void StopBackgroundWork()
+        {
+            StoppedBeforeKeys = keys.IdentitySeed is not null;
+            StoppedBeforeFiles = filesExist();
+            if (ThrowOnStop) throw new IOException("stop failed");
+        }
+        public void StopBackupService() { }
+        public void RestartAfterWipe() { }
     }
 
     private sealed class MemoryKeys : IBlindNodeKeys

@@ -38,6 +38,12 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
     public string DataPath => _tempDir;
 
     /// <summary>
+    /// Changes every test host makes to its container after the app's own registrations (installed once by the project that references the
+    /// types involved; null where nothing is installed). It exists so that a test node on a Mac never reaches the user's own login Keychain.
+    /// </summary>
+    public static Action<IServiceCollection>? HostSafety { get; set; }
+
+    /// <summary>
     /// Routes ALL of this node's outbound <see cref="IHttpClientFactory"/> clients — the default
     /// unnamed client (used by e.g. InitEndpoints' /api/init/join) AND any named one (e.g.
     /// RestoreInitiatorService's "SyncClient") — through <paramref name="handler"/> instead of a
@@ -68,6 +74,10 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
         // make whole test classes exhaust the login budget between each other.
         builder.ConfigureServices(services =>
             services.AddSingleton<IStartupFilter, LoopbackRemoteIpStartupFilter>());
+
+        // This file is also compiled into projects that must not reference Infrastructure (the blind node tests), so it names no Infrastructure
+        // type: the Integration project installs the hook (MacHostSafety).
+        if (HostSafety is { } safety) builder.ConfigureTestServices(services => safety(services));
 
         if (_outboundHandler is { } handler)
         {

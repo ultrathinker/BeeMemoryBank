@@ -5,6 +5,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
+    <!-- The macOS adapters of the blind app: part of the boundary the shared-types golden and the scanner lists guard. -->
+    <ProjectReference Include="..\..\desktop\BeeMemoryBank.BlindDesktop.MacOS\BeeMemoryBank.BlindDesktop.MacOS.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Platforms.Apple\BeeMemoryBank.Platforms.Apple.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
     <!-- Core.Tests covers types that moved to Embeddings and Infrastructure; the
          fixture-driven tests still touch Storage + Sync like before the split. -->
@@ -38,6 +42,8 @@
     <!-- The assembly-boundary scanner and the vault boundary (BMB-99): one source in tests/shared, linked into every project that proves the boundary. -->
     <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
     <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+    <!-- The throwaway keychain FILE of the Mac-only secret-store tests (created and removed by the fixture; never the login keychain). -->
+    <Compile Include="..\shared\ThrowawayKeychain.cs" Link="Shared\ThrowawayKeychain.cs" />
   </ItemGroup>
 
 </Project>

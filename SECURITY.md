@@ -175,6 +175,8 @@ Treat the master password as a root credential shared by every machine in the me
 
 Lock is therefore a real operation with a short half-life unless you also remove what can undo it: revoke or delete the superadmin-owned agent keys, and disable OS auto-unlock if a restart must stay locked.
 
+**Lock on sleep (desktop app).** The desktop app locks the node it started when the computer goes to sleep (Windows and macOS). The shell calls `POST /node/lock` on its node's front — loopback only (an off-machine caller gets 404), and only with the node's internal key in `X-Internal-Key` — and the front calls the Api's `POST /api/session/lock` as the node itself (internal key and superadmin role, bounded to a few seconds). It is the same Lock as the button, with the same limits: a superadmin-owned agent key re-unlocks the process on its next request, and a node the app merely attached to (one it did not start, so it holds no key for) is not locked by it.
+
 ## Reporting a Vulnerability
 
 We take security vulnerabilities seriously. If you discover a vulnerability in BeeMemoryBank, please report it responsibly.

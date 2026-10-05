@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\desktop\BeeMemoryBank.BlindDesktop.MacOS\BeeMemoryBank.BlindDesktop.MacOS.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Platforms.Apple\BeeMemoryBank.Platforms.Apple.csproj" />
+    <!-- The Vault is referenced by the TESTS only: the boundary control needs the real Vault assembly to prove that the scan flags it.
+         The library under test does not reference it, and its own output (the folder the boundary test scans) does not contain it. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The assembly-boundary scanner and the vault boundary (BMB-99): one source in tests/shared, linked into every project that proves the boundary. -->
+    <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
+    <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+    <!-- The throwaway keychain file of the Mac-only tests: one source, also used by BeeMemoryBank.Platforms.Apple.Tests. -->
+    <Compile Include="..\shared\ThrowawayKeychain.cs" Link="Shared\ThrowawayKeychain.cs" />
+  </ItemGroup>
+
+</Project>

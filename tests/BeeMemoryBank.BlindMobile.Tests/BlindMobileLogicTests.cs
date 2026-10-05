@@ -86,7 +86,7 @@ public class BlindMobileLogicTests
         var act = () => sync.SyncOnceAsync(target, CancellationToken.None);
 
         await act.Should().ThrowAsync<SnapshotRequiredException>();
-        state.InitialLoadDone.Should().BeFalse("the next Wi-Fi-and-charger heavy pass must fetch a new replica");
+        state.InitialLoadDone.Should().BeFalse("the next heavy pass must fetch a new replica");
     }
 
     private sealed class InMemoryBlindPhoneStore : IBlindPhoneStore
@@ -156,6 +156,7 @@ public class BlindMobileLogicTests
 
         services.AddSingleton<IBlindPhoneKeys>(keys);
         services.AddSingleton(state);
+        services.AddSingleton<IBlindLifecycle, TestLifecycle>();
 
         var provider = services.BuildServiceProvider();
 
@@ -1449,6 +1450,7 @@ public class BlindMobileLogicTests
 
             // Register blind keys as IBlindNodeKeys — the blind app's real registration
             services.AddSingleton<IBlindNodeKeys>(blindKeys);
+            services.AddSingleton<IBlindSecretStore>(blindKeys);
             // Register the ordinary spy as IBlindPhoneKeys — if BlindMobilePairing resolved
             // IBlindPhoneKeys instead of IBlindNodeKeys, it would reach this spy
             services.AddSingleton<IBlindPhoneKeys>(ordinarySpy);
@@ -1701,6 +1703,13 @@ public class BlindMobileLogicTests
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         }
     }
+}
+
+internal sealed class TestLifecycle : IBlindLifecycle
+{
+    public void StopBackgroundWork() { }
+    public void StopBackupService() { }
+    public void RestartAfterWipe() { }
 }
 
 internal sealed class MockOrdinaryIngestKeyStore

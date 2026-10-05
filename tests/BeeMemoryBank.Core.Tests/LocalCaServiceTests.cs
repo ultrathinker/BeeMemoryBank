@@ -5,6 +5,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.Tls;
+using BeeMemoryBank.Infrastructure.Secrets;
 using Xunit.Abstractions;
 
 namespace BeeMemoryBank.Core.Tests;
@@ -42,6 +43,58 @@ public class LocalCaServiceTests : IDisposable
         Directory.CreateDirectory(dir);
         _tempDirs.Add(dir);
         return (new LocalCaService(dir), dir);
+    }
+
+    private (LocalCaService Service, string TempDir, InMemoryUserSecretStore Store) CreateStoreBackedService()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "BmbLocalCaStore_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        var store = new InMemoryUserSecretStore();
+        return (new LocalCaService(dir, store), dir, store);
+    }
+
+    [Fact]
+    public void HealthyStore_ReturnsTheSameCaTwice()
+    {
+        var (svc, _, _) = CreateStoreBackedService();
+        using var first = svc.GetOrCreateCaCertificate();
+        using var second = svc.GetOrCreateCaCertificate();
+
+        first.Should().NotBeNull();
+        second.Should().NotBeNull();
+        second!.Thumbprint.Should().Be(first!.Thumbprint);
+    }
+
+    [Fact]
+    public void ExistingCa_WithMissingSecret_RegeneratesAndStoresANewKey()
+    {
+        var (svc, _, store) = CreateStoreBackedService();
+        using var first = svc.GetOrCreateCaCertificate();
+        store.Delete("local-ca", "default");
+
+        using var regenerated = svc.GetOrCreateCaCertificate();
+
+        regenerated.Should().NotBeNull();
+        regenerated!.Thumbprint.Should().NotBe(first!.Thumbprint);
+        store.Read("local-ca", "default").Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(UserSecretStoreFailureKind.Denied)]
+    [InlineData(UserSecretStoreFailureKind.Locked)]
+    [InlineData(UserSecretStoreFailureKind.Unavailable)]
+    public void ExistingCa_WithTransientStoreFailure_RemainsUnavailableWithoutChangingFiles(UserSecretStoreFailureKind kind)
+    {
+        var (svc, dir, store) = CreateStoreBackedService();
+        using var first = svc.GetOrCreateCaCertificate();
+        var certPath = Path.Combine(dir, "certs", "ca.crt");
+        var before = File.ReadAllBytes(certPath);
+        store.ReadFailure = new UserSecretStoreException(kind, "test failure");
+
+        svc.GetOrCreateCaCertificate().Should().BeNull();
+
+        File.ReadAllBytes(certPath).Should().Equal(before);
     }
 
     /// <summary>

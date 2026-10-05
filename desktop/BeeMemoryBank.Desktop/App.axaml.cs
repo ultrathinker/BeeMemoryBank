@@ -17,8 +17,8 @@ public partial class App : Application
 {
     private TrayIcon? _trayIcon;
     private readonly Services.DesktopSettingsStore _settingsStore = new();
-    private Services.AutostartService? _autostartService;
-    private Services.PreventSleepService? _preventSleepService;
+    private Services.IAutostartService? _autostartService;
+    private Services.IPreventSleepService? _preventSleepService;
     private Services.DesktopUpdateController? _updates;
     // Single-instance references so re-clicking "Manage…" / "Settings…" focuses the
     // already-open window instead of stacking duplicates.
@@ -38,28 +38,43 @@ public partial class App : Application
             var mainWindow = new MainWindow();
             desktop.MainWindow = mainWindow;
 
+            // Every way out of the app - the tray menu's Quit, the macOS application menu's Quit (Cmd+Q), the Dock menu's Quit - stops
+            // the node gracefully (MainWindow.RealClose: the node's stdin is closed, it shuts down and closes the database) before the
+            // application shuts down. Closing the window only hides it.
+            var quit = new Services.QuitCoordinator(mainWindow.RealClose, () => desktop.Shutdown());
+            if (Services.ShellPlatforms.Current.InterceptsApplicationQuit)
+            {
+                // The system's own Quit does not ask the shell: it asks the application lifetime to shut down, which would end the shell
+                // while the node still runs. Catch the request and stop the node first; the request itself is not cancelled, so a Quit
+                // from the menu or a logout is not held up. With the main window gone the lifetime must not end by itself either: this
+                // is a menu-bar app, it ends through the coordinator or through the lifetime's own request.
+                desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                desktop.ShutdownRequested += (s, e) => quit.OnShutdownRequested();
+            }
+
             // Setup tray icon
-            CreateTrayIcon(mainWindow, desktop);
+            CreateTrayIcon(mainWindow, desktop, quit);
 
             // Hook application exit to dispose the tray icon properly and release sleep prevention
             desktop.Exit += (s, e) =>
             {
                 _trayIcon?.Dispose();
-                if (OperatingSystem.IsWindows() && _preventSleepService != null)
-                {
-                    _preventSleepService.DisableSleepPreventionOnly();
-                }
+                _preventSleepService?.DisableSleepPreventionOnly();
             };
         }
 
         base.OnFrameworkInitializationCompleted();
     }
 
-    private void CreateTrayIcon(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)
+    private void CreateTrayIcon(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop, Services.QuitCoordinator quit)
     {
         try
         {
-            using var stream = AssetLoader.Open(new Uri("avares://BeeMemoryBank.Desktop/Assets/icon.png"));
+            var platform = Services.ShellPlatforms.Current;
+
+            // The tray / menu-bar image is chosen by the platform in this one place: the colored icon on Windows, a monochrome template
+            // image (black with alpha, 18 pt + @2x) in the macOS menu bar, which the system tints for the light and dark menu bar.
+            using var stream = AssetLoader.Open(new Uri(platform.TrayIconAsset));
             var icon = new WindowIcon(stream);
 
             _trayIcon = new TrayIcon
@@ -67,6 +82,7 @@ public partial class App : Application
                 ToolTipText = "BeeMemoryBank",
                 Icon = icon
             };
+            if (platform.TrayIconIsTemplate) MacOSProperties.SetIsTemplateIcon(_trayIcon, true);
 
             var menu = new NativeMenu();
 
@@ -99,12 +115,9 @@ public partial class App : Application
 
             // Settings live in their own window (autostart, sleep prevention, updates); the
             // services are created here once so the window and the app share one state.
-            _autostartService = new Services.AutostartService();
-            if (OperatingSystem.IsWindows())
-            {
-                _preventSleepService = new Services.PreventSleepService(_settingsStore);
-                _preventSleepService.ApplyState();
-            }
+            _autostartService = platform.CreateAutostart();
+            _preventSleepService = platform.CreatePreventSleep(_settingsStore);
+            _preventSleepService?.ApplyState();
             _updates = new Services.DesktopUpdateController(new Services.DesktopUpdateService(), _settingsStore);
 
             var settingsItem = new NativeMenuItem("Settings...");
@@ -123,14 +136,10 @@ public partial class App : Application
                 Dispatcher.UIThread.Post(() => CheckForUpdates(mainWindow, desktop));
             };
 
-            var exitItem = new NativeMenuItem("Exit");
+            var exitItem = new NativeMenuItem(platform.QuitMenuText);
             exitItem.Click += (s, e) =>
             {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    mainWindow.RealClose();
-                    desktop.Shutdown();
-                });
+                Dispatcher.UIThread.Post(quit.Quit);
             };
 
             // Update status line: "Version X" while idle (disabled), "Restart to update to Y"

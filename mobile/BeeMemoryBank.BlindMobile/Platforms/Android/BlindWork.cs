@@ -13,8 +13,8 @@ namespace BeeMemoryBank.BlindMobile.Platforms.Android;
 
 /// <summary>
 /// Background work of the Android blind node (plan section 10): sync every 15 minutes on any network
-/// (<see cref="BlindSyncWorker"/>), and the long jobs — first load, backups — only on Wi-Fi and the
-/// charger (<see cref="BlindHeavyWorker"/>, run as a foreground job with a notification).
+/// (<see cref="BlindSyncWorker"/>), and the long jobs — first load and backups — on any connected
+/// network (<see cref="BlindHeavyWorker"/>, run as a foreground job with a notification).
 /// </summary>
 public static class BlindWorkScheduler
 {
@@ -31,46 +31,43 @@ public static class BlindWorkScheduler
             .SetConstraints(new Constraints.Builder().SetRequiredNetworkType(NetworkType.Connected!).Build())
             .SetBackoffCriteria(BackoffPolicy.Exponential!, 30, TimeUnit.Seconds!)
             .Build();
-        wm.EnqueueUniquePeriodicWork(SyncWork, ExistingPeriodicWorkPolicy.Keep!, sync);
+        wm.EnqueueUniquePeriodicWork(SyncWork, BlindWorkPlan.UpdateExistingPeriodicWork ? ExistingPeriodicWorkPolicy.Update! : ExistingPeriodicWorkPolicy.Keep!, sync);
 
-        // WorkManager's constraints are a first filter; BlindPhoneWork (>= 20 %, checked after every
-        // chunk) is the rule. WorkManager stops the job when a constraint goes away; it resumes later.
+        // A connected network is the only heavy-work constraint. Power, battery, and network cost never gate it.
         var heavy = new PeriodicWorkRequest.Builder(Java.Lang.Class.FromType(typeof(BlindHeavyWorker)), 1, TimeUnit.Hours!)
             .SetConstraints(HeavyConstraints())
             .Build();
-        wm.EnqueueUniquePeriodicWork(HeavyWork, ExistingPeriodicWorkPolicy.Keep!, heavy);
+        wm.EnqueueUniquePeriodicWork(HeavyWork, BlindWorkPlan.UpdateExistingPeriodicWork ? ExistingPeriodicWorkPolicy.Update! : ExistingPeriodicWorkPolicy.Keep!, heavy);
     }
 
     /// <summary>
-    /// Runs the heavy job as soon as Wi-Fi and the charger allow, instead of at the next hourly slot: right after
-    /// pairing the first load should not wait up to an hour. Same constraints; one at a time (a second request
-    /// while one is queued or running is dropped).
+    /// Runs the heavy job as soon as possible instead of at the next hourly slot. Repeated requests preserve
+    /// queued or running work.
     /// </summary>
     public static void RunHeavyNow(Context context)
     {
         var once = new OneTimeWorkRequest.Builder(Java.Lang.Class.FromType(typeof(BlindHeavyWorker)))
             .SetConstraints(HeavyConstraints())
             .Build();
-        WorkManager.GetInstance(context).EnqueueUniqueWork(HeavyNowWork, ExistingWorkPolicy.Keep!, once);
+        WorkManager.GetInstance(context).EnqueueUniqueWork(HeavyNowWork, BlindWorkPlan.KeepExistingOneTimeWork ? ExistingWorkPolicy.Keep! : ExistingWorkPolicy.Replace!, once);
     }
 
     /// <summary>
     /// One sync round now, from the "Sync now" button: the periodic job cannot be asked to run early (WorkManager's shortest period is
-    /// 15 minutes and it delays a periodic job that is started before its time). Same worker, same network rule; a second request
-    /// while one is queued or running is dropped.
+    /// 15 minutes and it delays a periodic job that is started before its time). Repeated requests preserve queued or running work.
     /// </summary>
     public static void SyncNow(Context context)
     {
         var once = new OneTimeWorkRequest.Builder(Java.Lang.Class.FromType(typeof(BlindSyncWorker)))
             .SetConstraints(new Constraints.Builder().SetRequiredNetworkType(NetworkType.Connected!).Build())
             .Build();
-        WorkManager.GetInstance(context).EnqueueUniqueWork(SyncNowWork, ExistingWorkPolicy.Keep!, once);
+        WorkManager.GetInstance(context).EnqueueUniqueWork(SyncNowWork, BlindWorkPlan.KeepExistingOneTimeWork ? ExistingWorkPolicy.Keep! : ExistingWorkPolicy.Replace!, once);
     }
 
-    private static Constraints HeavyConstraints() => new Constraints.Builder()
-        .SetRequiredNetworkType(NetworkType.Unmetered!)
-        .SetRequiresCharging(true)
-        .SetRequiresBatteryNotLow(true)
+    internal static Constraints HeavyConstraints() => new Constraints.Builder()
+        .SetRequiredNetworkType(BlindWorkPlan.RequiresConnectedNetwork ? NetworkType.Connected! : NetworkType.NotRequired!)
+        .SetRequiresCharging(BlindWorkPlan.RequiresCharging)
+        .SetRequiresBatteryNotLow(BlindWorkPlan.RequiresBatteryNotLow)
         .Build();
 
     public static void Cancel(Context context)
@@ -154,7 +151,7 @@ public class BlindHeavyWorker(Context context, WorkerParameters parameters) : Wo
         }
     }
 
-    // Charger unplugged or Wi-Fi lost: WorkManager stops us; the job pauses and resumes next time.
+    // WorkManager or the user can stop the worker; cancellation is handled as an interrupted run.
     public override void OnStopped()
     {
         _stop.Cancel();

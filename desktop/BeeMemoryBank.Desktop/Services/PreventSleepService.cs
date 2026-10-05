@@ -8,7 +8,7 @@ namespace BeeMemoryBank.Desktop.Services;
 /// Service to prevent Windows from entering sleep mode while enabled.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public class PreventSleepService
+public class PreventSleepService : IPreventSleepService
 {
     private const uint ES_CONTINUOUS = 0x80000000;
     private const uint ES_SYSTEM_REQUIRED = 0x00000001;

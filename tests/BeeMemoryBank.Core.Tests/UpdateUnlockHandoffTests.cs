@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.OsAutoUnlock;
+using BeeMemoryBank.Infrastructure.Secrets;
 using BeeMemoryBank.Storage.Sqlite;
 
 namespace BeeMemoryBank.Core.Tests;
@@ -35,7 +36,7 @@ public class UpdateUnlockHandoffTests : TestFixture
         return base.DisposeAsync();
     }
 
-    private UpdateUnlockHandoff For(SessionService session) => new(session, _dataDir, () => _now);
+    private UpdateUnlockHandoff For(SessionService session, IUserSecretStore? store = null) => new(session, _dataDir, () => _now, store);
 
     [Fact]
     public async Task WrittenHandoff_UnlocksTheRestartedSession_WithTheSameDek_AndIsGone()
@@ -136,5 +137,29 @@ public class UpdateUnlockHandoffTests : TestFixture
 
         var onDisk = await File.ReadAllBytesAsync(handoff.FilePath);
         onDisk.AsSpan().IndexOf(dek).Should().Be(-1);
+    }
+
+    [Fact]
+    public async Task DeleteFailure_PreventsConsumeAndLeavesTheSessionLocked()
+    {
+        await Session.UnlockAsync("correctPassword");
+        var store = new InMemoryUserSecretStore();
+        (await For(Session, store).WriteAsync()).Should().BeTrue();
+        store.DeleteFailure = new UserSecretStoreException(UserSecretStoreFailureKind.Unavailable, "test");
+        var restarted = new SessionService(_keySlotRepo);
+
+        (await For(restarted, store).TryConsumeAsync(_nodeRepo)).Should().BeFalse();
+        restarted.IsUnlocked.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task StoreBackedHandoff_IsOneUse()
+    {
+        await Session.UnlockAsync("correctPassword");
+        var store = new InMemoryUserSecretStore();
+        (await For(Session, store).WriteAsync()).Should().BeTrue();
+
+        (await For(new SessionService(_keySlotRepo), store).TryConsumeAsync(_nodeRepo)).Should().BeTrue();
+        (await For(new SessionService(_keySlotRepo), store).TryConsumeAsync(_nodeRepo)).Should().BeFalse();
     }
 }

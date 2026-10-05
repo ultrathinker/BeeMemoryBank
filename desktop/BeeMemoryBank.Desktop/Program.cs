@@ -92,7 +92,7 @@ class Program
     {
         try
         {
-            var autostart = new Services.AutostartService();
+            var autostart = Services.ShellPlatforms.Current.CreateAutostart();
             if (enable) autostart.Enable(); else autostart.Disable();
         }
         catch (Exception ex)

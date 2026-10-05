@@ -292,7 +292,7 @@ public sealed class ProfileService
     // Caller holds _lock.
     private void ThrowIfDataPathTaken(string finalDataPath, string? exceptId, string paramName)
     {
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var comparison = PathComparison.ForCurrentPlatform();
         var collision = _registry.Profiles.FirstOrDefault(p =>
             p.Id != exceptId && string.Equals(p.DataPath, finalDataPath, comparison));
         if (collision != null)

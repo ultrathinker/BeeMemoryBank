@@ -17,8 +17,8 @@ public partial class SettingsWindow : Window
 {
     private readonly MainWindow _owner;
     private readonly ProfileService _profiles;
-    private readonly Services.AutostartService _autostart;
-    private readonly Services.PreventSleepService? _preventSleep;
+    private readonly Services.IAutostartService _autostart;
+    private readonly Services.IPreventSleepService? _preventSleep;
     private readonly Services.DesktopUpdateController _updates;
     private readonly Action _checkForUpdates;
     private readonly Action _restartToUpdate;
@@ -38,8 +38,8 @@ public partial class SettingsWindow : Window
 
     public SettingsWindow(
         MainWindow owner,
-        Services.AutostartService autostart,
-        Services.PreventSleepService? preventSleep,
+        Services.IAutostartService autostart,
+        Services.IPreventSleepService? preventSleep,
         Services.DesktopUpdateController updates,
         Action checkForUpdates,
         Action restartToUpdate)
@@ -52,6 +52,7 @@ public partial class SettingsWindow : Window
         _checkForUpdates = checkForUpdates;
         _restartToUpdate = restartToUpdate;
         InitializeComponent();
+        AutostartCheck.Content = Services.ShellPlatforms.Current.AutostartCheckText;
 
         AutostartCheck.IsCheckedChanged += OnAutostartChanged;
         AutostartLastUsedRadio.IsCheckedChanged += OnAutostartProfileModeChanged;
@@ -111,6 +112,9 @@ public partial class SettingsWindow : Window
         _loading = true;
         AutostartCheck.IsChecked = _autostart.IsEnabled;
         _loading = false;
+
+        // The change worked but not entirely as asked (for example the system declined to load the login item right now).
+        if (_autostart.LastWarning is { } warning) AutostartHint.Text = warning;
     }
 
     private void LoadAutostartProfile()
@@ -218,7 +222,7 @@ public partial class SettingsWindow : Window
 
     private void OnPreventSleepChanged(object? sender, RoutedEventArgs e)
     {
-        if (_loading || _preventSleep == null || !OperatingSystem.IsWindows()) return;
+        if (_loading || _preventSleep == null) return;
         _preventSleep.IsEnabled = PreventSleepCheck.IsChecked == true;
     }
 

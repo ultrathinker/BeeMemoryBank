@@ -181,7 +181,7 @@ public sealed class AcmeChallengePersister
             // PersistKeySet so Windows SChannel can acquire credentials.
             loaded = X509CertificateLoader.LoadPkcs12(
                 pfxBytes, (string?)null,
-                X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);
+                CertificateKeyStorageFlags.ForCurrentPlatform(persistKeySet: true));
         }
         catch
         {

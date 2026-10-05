@@ -21,6 +21,7 @@ public class VaultBoundaryNamesTests
         typeof(BeeMemoryBank.Search.DefaultTokenizer).Assembly,
         typeof(BeeMemoryBank.Core.Services.SessionService).Assembly,
         typeof(BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneState).Assembly,
+        typeof(BeeMemoryBank.Sync.Blind.BlindPhonePullClient).Assembly,
         typeof(BeeMemoryBank.Embeddings.PendingEmbeddingProcessor).Assembly,
     ];
 

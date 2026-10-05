@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The macOS side of the desktop blind app: the implementations of the Blind.AppCore host seams (Keychain secrets, an atomic state file,
+    Application Support paths, power and network conditions, a per-user LaunchAgent, notifications, lifecycle). A plain class library: no
+    Avalonia, no UI. The native calls (Security, CoreFoundation, IOKit, libc) are P/Invoke declarations that are resolved the first time they
+    run, so the assembly compiles and its pure logic is tested on any OS; the native parts are exercised on a Mac.
+    It references Blind.AppCore (and, through it, the shared libraries and the phone client) and the neutral Apple platform library
+    (BeeMemoryBank.Platforms.Apple) and nothing else of the application: never the Vault, Hosting, the full Desktop or the Node (the boundary
+    tests read the compiled output and this file to prove it).
+  -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
+    <!-- Security.framework Keychain items, the CoreFoundation / Security P/Invoke declarations and the LaunchAgent plist text: shared with the
+         full macOS app, which is why they live in a library of their own that references nothing of the product. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Platforms.Apple\BeeMemoryBank.Platforms.Apple.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BeeMemoryBank.BlindDesktop.MacOS.Tests" />
+  </ItemGroup>
+
+</Project>

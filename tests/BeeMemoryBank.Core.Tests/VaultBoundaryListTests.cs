@@ -12,6 +12,10 @@ namespace BeeMemoryBank.Core.Tests;
 public class VaultBoundaryListTests
 {
     private static readonly Assembly Vault = typeof(SessionService).Assembly;
+    private static readonly Assembly AppCore = typeof(BeeMemoryBank.BlindMobile.Services.Blind.BlindAppController).Assembly;
+    private static readonly Assembly MacOsHost = typeof(BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindPaths).Assembly;
+    // the Apple platform layer (Keychain, LaunchAgent text) that the macOS blind host and the full macOS app share
+    private static readonly Assembly AppleLayer = typeof(BeeMemoryBank.Platforms.Apple.Keychain.IKeychainBackend).Assembly;
 
     private static string Location(Assembly a) => a.Location;
 
@@ -60,8 +64,8 @@ public class VaultBoundaryListTests
     [Fact]
     public void TheTypesOfTheSharedAssembliesAreExactlyTheListedOnes()
     {
-        var phone = typeof(BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneState).Assembly;
-        var actual = Shared.Append(phone)
+        var phone = typeof(BeeMemoryBank.Core.Services.BlindPhone.AndroidBackupRestore).Assembly;
+        var actual = Shared.Append(phone).Append(AppCore).Append(MacOsHost).Append(AppleLayer)
             .SelectMany(a => AssemblyBoundaryScanner.DefinedTypes(Location(a)).Select(n => a.GetName().Name + " " + n))
             .OrderBy(x => x, StringComparer.Ordinal).ToList();
         actual.Should().HaveCountGreaterThan(300);
@@ -101,11 +105,23 @@ public class VaultBoundaryListTests
     {
         // The phone's client is what the Android blind app adds to the shared libraries: it must not hold or reach the vault either,
         // and none of its types may also be defined by a shared assembly or the vault.
-        var phone = typeof(BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneState).Assembly;
+        var phone = typeof(BeeMemoryBank.Core.Services.BlindPhone.AndroidBackupRestore).Assembly;
         phone.GetName().Name.Should().Be("BeeMemoryBank.Blind.PhoneClient");
         AssemblyBoundaryScanner.Scan([Location(phone)], VaultBoundary.Forbidden()).Should().BeEmpty();
         AssemblyBoundaryScanner.DuplicatedTypes(Shared.Append(phone).Append(Vault).Select(Location)).Should().BeEmpty();
         AssemblyBoundaryScanner.DefinedTypes(Location(phone)).Should().NotBeEmpty();
+        AppCore.GetName().Name.Should().Be("BeeMemoryBank.Blind.AppCore");
+        AssemblyBoundaryScanner.Scan([Location(AppCore)], VaultBoundary.Forbidden()).Should().BeEmpty();
+        AssemblyBoundaryScanner.DuplicatedTypes(Shared.Append(phone).Append(AppCore).Append(Vault).Select(Location)).Should().BeEmpty();
+        // the macOS adapters of the desktop blind app sit on AppCore and are part of every macOS blind binary: same rules
+        MacOsHost.GetName().Name.Should().Be("BeeMemoryBank.BlindDesktop.MacOS");
+        AssemblyBoundaryScanner.Scan([Location(MacOsHost)], VaultBoundary.Forbidden()).Should().BeEmpty();
+        AssemblyBoundaryScanner.DuplicatedTypes(Shared.Append(phone).Append(AppCore).Append(MacOsHost).Append(Vault).Select(Location)).Should().BeEmpty();
+        // the Apple platform layer is in every macOS blind binary and in the full macOS app: it must hold no vault code and name none
+        AppleLayer.GetName().Name.Should().Be("BeeMemoryBank.Platforms.Apple");
+        AssemblyBoundaryScanner.Scan([Location(AppleLayer)], VaultBoundary.Forbidden()).Should().BeEmpty();
+        AssemblyBoundaryScanner.DefinedTypes(Location(AppleLayer)).Should().NotBeEmpty();
+        AssemblyBoundaryScanner.DuplicatedTypes(Shared.Append(phone).Append(AppCore).Append(MacOsHost).Append(AppleLayer).Append(Vault).Select(Location)).Should().BeEmpty();
     }
 
     // ---- controls: the scanner must find what is there -------------------------------------------------------------------

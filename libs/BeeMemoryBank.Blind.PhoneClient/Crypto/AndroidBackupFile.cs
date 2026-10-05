@@ -33,7 +33,7 @@ public sealed record AndroidBackupHeader(
 /// short (no chunk marked final) all fail to open — never decrypt to something else.</para>
 ///
 /// <para>Chunks make the writer resumable (<see cref="AndroidBackupWriter"/>): a backup interrupted
-/// by a lost charger or Wi-Fi continues from its last whole chunk.</para>
+/// after an interruption continues from its last whole chunk.</para>
 /// </summary>
 public static class AndroidBackupFile
 {

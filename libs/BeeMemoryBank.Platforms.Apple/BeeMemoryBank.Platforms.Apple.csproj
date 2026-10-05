@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Apple platform layer both macOS apps use (the blind app and the full app): Security.framework generic-password Keychain items
+    (IKeychainBackend / SecurityFrameworkKeychain), the CoreFoundation and Security P/Invoke declarations under them, and the text of a
+    per-user LaunchAgent plist. A plain class library. The native calls are P/Invoke declarations that are resolved the first time they
+    run, and every entry point that needs macOS says so with PlatformNotSupportedException, so the assembly compiles, loads and has its
+    pure logic tested on Windows and Linux; the native parts are exercised on a Mac (tests/BeeMemoryBank.Platforms.Apple.Tests).
+
+    It references NOTHING of the product: no application, no Vault, no Blind.AppCore or other blind project, no Avalonia, no Hosting, no
+    package. Each app keeps its own secret store, its own envelope format and its own autostart on top of these types, so that the blind
+    apps stay Vault-free and the full app does not depend on a blind project. The boundary tests read this file and the compiled output.
+  -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

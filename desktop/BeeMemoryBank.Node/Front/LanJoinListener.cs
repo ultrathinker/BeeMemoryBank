@@ -70,6 +70,7 @@ public sealed class LanJoinListener : IAsyncDisposable
     private LanJoinSession? _session;
     private byte[] _tokenBytes = [];
     private int _tokenState;
+    private bool _disposed;   // guarded by _gate
 
     /// <param name="apiUrl">The Api child's loopback URL the joins are forwarded to.</param>
     /// <param name="certificate">The node's TLS leaf (the one the Connect page pins).</param>
@@ -87,13 +88,17 @@ public sealed class LanJoinListener : IAsyncDisposable
 
     /// <summary>
     /// Opens the listener with a fresh token, or returns the session already open. Throws
-    /// <see cref="InvalidOperationException"/> when the node has no TLS certificate to serve.
+    /// <see cref="InvalidOperationException"/> when the node has no TLS certificate to serve, and
+    /// <see cref="ObjectDisposedException"/> (an <see cref="InvalidOperationException"/> too) once the node has
+    /// disposed the listener on its way out: a late request of the Connect page must not open a network
+    /// listener after the shutdown has closed it.
     /// </summary>
     public async Task<LanJoinSession> EnableAsync()
     {
         await _gate.WaitAsync();
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_session != null) return _session;
 
             var probe = _certificate()
@@ -147,7 +152,16 @@ public sealed class LanJoinListener : IAsyncDisposable
         finally { _gate.Release(); }
     }
 
-    public async ValueTask DisposeAsync() => await DisableAsync();
+    public async ValueTask DisposeAsync()
+    {
+        // Behind the gate, so an enable that is opening the listener right now finishes first and is closed
+        // below, and every enable after this one is refused.
+        await _gate.WaitAsync();
+        try { _disposed = true; }
+        finally { _gate.Release(); }
+
+        await DisableAsync();
+    }
 
     private WebApplication Build()
     {

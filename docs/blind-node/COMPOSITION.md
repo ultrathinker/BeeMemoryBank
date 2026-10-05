@@ -8,6 +8,8 @@ the host's own services. A registration that is not there is not "switched off":
 so nothing can resolve it. The shared modules deliberately register no event logger, node-auth signer, restore initiator or DEK rotation applier:
 the full node takes them from `AddSync` (Vault), the blind host registers its own, and a host that registers none fails when the container resolves it.
 
+`BeeMemoryBank.Blind.AppCore` is the Android and future desktop application's separate composition boundary. It owns the narrow receive-only graph and blind-app rules; the MAUI host supplies only Keystore, committed SharedPreferences, WorkManager and device-condition adapters. AppCore depends only on Core, Crypto, Storage, Sync and `Blind.PhoneClient`, never Vault or host UI APIs.
+
 ## Kept (library half)
 
 | Group | Registrations | Why a blind node needs them |

@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Layout and boundary tests of the packaged full macOS app ("Bee Memory Bank.app", built by scripts/pack-macos-full.sh).
+    The tests that look at a real app run only when BMB_FULL_SCAN_DIR names the staged .app (they are SKIPPED otherwise, and FAIL when
+    BMB_REQUIRE_SCAN is set and the variable is not, like the blind boundary tests). The controls (a listing without the Vault, with a
+    .pdb, with a second runtime ...) work on in-memory file lists, run everywhere and create no file.
+    This project references no application code on purpose: it reads the package as files.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The assembly-boundary scanner and the vault boundary (BMB-99): one source in tests/shared. Here they prove the opposite of the
+         blind tests: the Vault assembly in the full app is the real Vault (it defines the vault types the blind apps must not contain). -->
+    <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
+    <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+  </ItemGroup>
+
+</Project>

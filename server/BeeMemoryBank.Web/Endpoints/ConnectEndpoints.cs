@@ -14,18 +14,12 @@ public static class ConnectEndpoints
     {
         app.MapGet("/connect/ca.crt", () =>
         {
-            // The CA cert is Windows-only (LocalCaService returns null off-Windows). Keep the
-            // guard here both to short-circuit cleanly and to satisfy the analyzer that the
-            // [SupportedOSPlatform("windows")] LocalCaService is only touched on Windows.
-            if (!OperatingSystem.IsWindows())
-            {
-                return Results.NotFound("CA certificate is only available on Windows nodes.");
-            }
-
             var dataPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH")
                 ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
 
             var caService = new LocalCaService(dataPath);
+            if (!caService.IsSupported)
+                return Results.NotFound("CA certificate is unavailable on this node.");
             var der = caService.GetCaCertificateDer();
             if (der is null || der.Length == 0)
             {

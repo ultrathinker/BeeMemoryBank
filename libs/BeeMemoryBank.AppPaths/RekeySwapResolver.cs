@@ -242,7 +242,7 @@ public static class RekeySwapResolver
         try { full = RekeySwapJournal.Normalize(candidate); }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
         var name = Path.GetFileName(d);
-        return string.Equals(Path.GetDirectoryName(full), Path.GetDirectoryName(d), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+        return string.Equals(Path.GetDirectoryName(full), Path.GetDirectoryName(d), PathComparison.ForCurrentPlatform())
                && Path.GetFileName(full).StartsWith(name, StringComparison.Ordinal)
                && ParkedSuffix.IsMatch(Path.GetFileName(full)[name.Length..]);
     }

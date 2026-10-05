@@ -28,6 +28,11 @@ public static class RekeySwap
         // Not .internal-key: it is the Web-to-Api trust credential, and an old copy of it must not open the new
         // vault; KeyMaterialStep writes a fresh one into the new vault (L-2).
         "certs", "tls", "internet-access", "ddns-state.json", "wipe-audit.log", "reset-audit.log",
+        // The id that scopes this vault's secrets in the macOS Keychain (MacOsKeychainUserSecretStore.ScopeFileName; a literal here because
+        // this library does not reference Infrastructure - a test compares the two). The re-keyed vault takes over the old data
+        // directory's place, so without the id the CA key, the ACME keys and the DDNS tokens kept in the Keychain would be unreachable
+        // and the local CA would be minted again. Not secret, and absent on Windows and Linux (nothing is copied then).
+        ".secret-scope",
     ];
 
     /// <summary>The fault points of the swap, for the brick tests.</summary>

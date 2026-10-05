@@ -1,0 +1,123 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:BeeMemoryBank.BlindDesktop.ViewModels"
+        x:Class="BeeMemoryBank.BlindDesktop.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Bee Memory Bank - blind copy"
+        Width="600" Height="780" MinWidth="460" MinHeight="480"
+        WindowStartupLocation="CenterScreen">
+
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="20" Spacing="10">
+
+      <!-- Who this is -->
+      <TextBlock Text="Bee Memory Bank - blind copy" FontSize="20" FontWeight="SemiBold" />
+      <TextBlock Text="{Binding IdentityText}" FontSize="16" />
+      <TextBlock Text="{Binding NodeText}" Opacity="0.7" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding PairText}" TextWrapping="Wrap" />
+
+      <Border IsVisible="{Binding HasStartError}" Background="#33CC4444" Padding="10" CornerRadius="4">
+        <TextBlock Text="{Binding StartErrorText}" TextWrapping="Wrap" />
+      </Border>
+      <Border IsVisible="{Binding HasKeyStoreNotice}" Background="#33D4A017" Padding="10" CornerRadius="4">
+        <TextBlock Text="{Binding KeyStoreNoticeText}" TextWrapping="Wrap" />
+      </Border>
+      <Border IsVisible="{Binding HasKeyLost}" Background="#33CC4444" Padding="10" CornerRadius="4">
+        <TextBlock Text="{Binding KeyLostText}" TextWrapping="Wrap" />
+      </Border>
+
+      <!-- Pairing, step 1: this copy shows its code -->
+      <StackPanel IsVisible="{Binding ShowPairingCode}" Spacing="6">
+        <TextBlock Text="Step 1. On the computer, add this blind copy with this code" FontWeight="SemiBold" TextWrapping="Wrap" />
+        <Image x:Name="QrImage" Width="220" Height="220" HorizontalAlignment="Left" />
+        <TextBox Text="{Binding PairingCodeText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="90" />
+        <Button Content="Copy the code" Command="{Binding CopyPairingCodeCommand}" HorizontalAlignment="Left" />
+      </StackPanel>
+      <StackPanel IsVisible="{Binding !ShowPairingCode}" Spacing="6">
+        <TextBlock Text="{Binding PairingMessage}" TextWrapping="Wrap" />
+        <Button Content="Re-pair" Command="{Binding RePairCommand}" IsVisible="{Binding CanRePair}" HorizontalAlignment="Left" />
+      </StackPanel>
+
+      <!-- Pairing, step 2: the computer's answer -->
+      <StackPanel IsVisible="{Binding CanConnect}" Spacing="6">
+        <TextBlock Text="Step 2. Paste the code the computer shows back" FontWeight="SemiBold" TextWrapping="Wrap" />
+        <TextBox Text="{Binding CallCodeInput}" PlaceholderText="bmb-blind-call:?..." AcceptsReturn="False" />
+        <TextBlock Text="{Binding ConnectError}" IsVisible="{Binding HasConnectError}" Foreground="#CC4444" TextWrapping="Wrap" />
+        <Button Content="Connect" Command="{Binding ConnectCommand}" HorizontalAlignment="Left" />
+      </StackPanel>
+
+      <Separator />
+
+      <!-- State -->
+      <TextBlock Text="{Binding LoadText}" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding SyncText}" />
+      <TextBlock Text="{Binding BackupText}" />
+      <StackPanel IsVisible="{Binding JobVisible}" Spacing="4">
+        <TextBlock Text="{Binding JobText}" />
+        <ProgressBar Minimum="0" Maximum="1" Value="{Binding JobProgress}" />
+      </StackPanel>
+
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button Content="Sync now" Command="{Binding SyncNowCommand}" />
+        <Button Content="Back up now" Command="{Binding BackupNowCommand}" />
+      </StackPanel>
+      <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap" FontStyle="Italic" />
+
+      <Separator />
+
+      <!-- Backups -->
+      <TextBlock Text="Backups" FontWeight="SemiBold" />
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="Make one on its own:" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding ScheduleOptions}" SelectedIndex="{Binding ScheduleIndex}" MinWidth="110" />
+      </StackPanel>
+      <TextBlock Text="No backups on this computer yet." IsVisible="{Binding !HasBackups}" Opacity="0.7" />
+      <ItemsControl ItemsSource="{Binding Backups}" IsVisible="{Binding HasBackups}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:BackupRow">
+            <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,2">
+              <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+              <TextBlock Grid.Column="1" Text="{Binding SizeText}" VerticalAlignment="Center" Margin="10,0" Opacity="0.7" />
+              <Button Grid.Column="2" Content="Save to..." Command="{Binding SaveCommand}" />
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <Separator />
+
+      <!-- Settings -->
+      <CheckBox Content="{Binding AutostartText}" IsChecked="{Binding AutostartOn}" IsEnabled="{Binding AutostartKnown}" />
+      <TextBlock Text="The start-up setting cannot be read on this computer." IsVisible="{Binding !AutostartKnown}" Opacity="0.7" />
+
+      <!-- Log -->
+      <TextBlock Text="Log" FontWeight="SemiBold" />
+      <TextBox Text="{Binding LogText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+               FontFamily="Consolas, Menlo, monospace" FontSize="12" Height="180" />
+
+      <Separator />
+
+      <!-- Wipe -->
+      <Button Content="Disconnect and wipe..." Command="{Binding OpenWipeCommand}" IsVisible="{Binding !WipePanelOpen}" HorizontalAlignment="Left" />
+      <Border IsVisible="{Binding WipePanelOpen}" Background="#33CC4444" Padding="10" CornerRadius="4">
+        <StackPanel Spacing="8">
+          <TextBlock Text="{Binding WipePrompt}" TextWrapping="Wrap" />
+          <TextBox Text="{Binding WipeTyped}" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Wipe" Command="{Binding ConfirmWipeCommand}" />
+            <Button Content="Cancel" Command="{Binding CancelWipeCommand}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <Separator />
+
+      <!-- Quit -->
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <Button Content="Quit" Command="{Binding QuitCommand}" />
+        <TextBlock Text="{Binding CloseHintText}" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" />
+      </StackPanel>
+
+    </StackPanel>
+  </ScrollViewer>
+</Window>

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using BeeMemoryBank.AppPaths;
 using Microsoft.Data.Sqlite;
 
 namespace BeeMemoryBank.Api.Services;
@@ -438,7 +439,7 @@ public sealed class BlindSeedCutover
     // is a plain entry of the expected kind, directly under the data root, and refuses otherwise.
 
     private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        BeeMemoryBank.AppPaths.PathComparison.ForCurrentPlatform();
 
     /// <summary>A path that exists and is a link (symbolic link, junction, other reparse point).</summary>
     private static bool IsLink(string path)

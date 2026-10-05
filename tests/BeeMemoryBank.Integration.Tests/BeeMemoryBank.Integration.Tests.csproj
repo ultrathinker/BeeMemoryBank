@@ -5,7 +5,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
     <ProjectReference Include="..\..\server\BeeMemoryBank.Api\BeeMemoryBank.Api.csproj" />
+    <!-- NodeLockEndToEndTests: the real front's POST /node/lock in front of the real Api (the desktop node, in this process). -->
+    <ProjectReference Include="..\..\desktop\BeeMemoryBank.Node\BeeMemoryBank.Node.csproj" />
     <!-- Aliased: Api and Web both declare a global-namespace `Program`, which would make
          WebApplicationFactory<Program> ambiguous; the unaliased Program stays the API's. Web types are
          reached via `extern alias WebApp;` / `extern alias WebProject;` in the files that need them

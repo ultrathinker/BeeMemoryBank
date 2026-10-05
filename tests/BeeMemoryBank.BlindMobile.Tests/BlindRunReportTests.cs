@@ -40,11 +40,11 @@ public sealed class BlindRunReportTests
     {
         var log = NewLog();
 
-        BlindRunReport.Record(log, "backup", "Backup: waiting for the charger.");
-        BlindRunReport.Record(log, "backup", "Backup: waiting for the charger.");
+        BlindRunReport.Record(log, "backup", "Backup: package not available.");
+        BlindRunReport.Record(log, "backup", "Backup: package not available.");
         log.Latest(10).Should().HaveCount(1, "an hourly retry of the same wait is not news");
         log.Add("load", "First load finished.");
-        BlindRunReport.Record(log, "backup", "Backup: waiting for the charger.");
+        BlindRunReport.Record(log, "backup", "Backup: package not available.");
 
         log.Latest(10).Should().HaveCount(3);
     }

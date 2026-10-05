@@ -51,11 +51,12 @@ internal static class DiSnapshot
     }
 
     /// <summary>
-    /// Registrations that exist only on some operating systems (the OS auto-unlock is Windows-only): left out, so the golden file is the same
-    /// on the Windows machine it was written on and on the Linux test boxes. Everything else is compared exactly.
+    /// Registrations that exist only on some operating systems (the OS auto-unlock and its secret-store implementation are Windows-only): left out,
+    /// so the golden file is the same on the Windows machine it was written on and on the Linux test boxes. Everything else is compared exactly.
     /// </summary>
     private static bool IsOperatingSystemSpecific(Type service) =>
-        service.Namespace == "BeeMemoryBank.Infrastructure.OsAutoUnlock";
+        service.Namespace == "BeeMemoryBank.Infrastructure.OsAutoUnlock"
+        || service.Namespace == "BeeMemoryBank.Infrastructure.Secrets";
 
     /// <summary>The hosted services the host really runs (factory registrations hide their type in the container list).</summary>
     public static string Hosted(IEnumerable<Microsoft.Extensions.Hosting.IHostedService> services) =>

@@ -29,10 +29,13 @@ public partial class MainWindow : Window
     // doing with the SAME token, aborting it mid-operation instead of letting the service's
     // own gate reject the new call cleanly.
     private readonly CancellationTokenSource _switchLifetimeCts = new();
+    // The request the power-events services make when the computer goes to sleep (see LockNodeOnSleepAsync). Set in the constructor,
+    // where _nodeLifecycle exists.
+    private readonly Services.NodeLockRequest _lockOnSleep;
     private bool _startMinimized = Program.StartMinimized;
     private string? _frontUrl;
     private string? _activeProfileId;
-    private Services.PowerEventsService? _powerEventsService;
+    private Services.IPowerEventsService? _powerEventsService;
 
     public string? FrontUrl => _frontUrl;
 
@@ -66,6 +69,12 @@ public partial class MainWindow : Window
         // declared last, so this is safe). It uses the same _nodeLifecycle instance that
         // HostOrAttachAsync will later call into, which is the contract it relies on.
         _profileSwitch = new Services.ProfileSwitchService(_profiles, _nodeLifecycle);
+        // The key is the one NodeLifecycleService generated for the node it STARTED (it also sets it in this process's environment).
+        // A node this app merely attached to is not its to authenticate to: the environment may still hold the key of a node it
+        // hosted before, so the attached case is excluded here rather than sending a stale key.
+        _lockOnSleep = new Services.NodeLockRequest(
+            () => _frontUrl,
+            () => _nodeLifecycle.IsAttachedToExternalNode ? null : Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"));
         InitializeComponent();
         BmbWebView.EnvironmentRequested += OnWebViewEnvironmentRequested;
         Opened += MainWindow_Opened;
@@ -380,7 +389,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var comparison = BeeMemoryBank.AppPaths.PathComparison.ForCurrentPlatform();
         var fullFolder = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(folder));
         foreach (var p in _profiles.GetAll())
         {
@@ -550,13 +559,11 @@ public partial class MainWindow : Window
 
     private void StartPowerEventsMonitoring()
     {
-        if (!OperatingSystem.IsWindows()) return;
-
         try
         {
             _powerEventsService?.Dispose();
-            _powerEventsService = new Services.PowerEventsService(HandleSystemSleep);
-            _powerEventsService.Start();
+            _powerEventsService = Services.ShellPlatforms.Current.CreatePowerEvents(LockNodeOnSleepAsync);
+            _powerEventsService?.Start();
         }
         catch (Exception ex)
         {
@@ -564,26 +571,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private void HandleSystemSleep()
-    {
-        var url = _frontUrl;
-        if (string.IsNullOrEmpty(url)) return;
-
-        // Fire-and-forget: /node/lock is currently a 501 stub pending the internal-key
-        // client wiring, so failures here are expected for now - don't crash the app.
-        Task.Run(async () =>
-        {
-            try
-            {
-                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-                await client.PostAsync($"{url.TrimEnd('/')}/node/lock", null);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Failed to POST /node/lock on sleep: {ex.Message}");
-            }
-        });
-    }
+    /// <summary>
+    /// The request the power-events services make when the computer goes to sleep: POST /node/lock of the open node, with the
+    /// internal key of the node this app started (<see cref="Services.NodeLockRequest"/> has the details: what is sent, to whom,
+    /// what each answer means, and why "locked" is advisory). The Windows monitor fires it in the background; the macOS monitor
+    /// waits for it (briefly) before it lets the Mac sleep. Failures are reported in the result and never crash the app.
+    /// </summary>
+    private Task<Services.SleepLockResult> LockNodeOnSleepAsync(CancellationToken cancellationToken) =>
+        _lockOnSleep.RequestAsync(cancellationToken);
 
     private async Task PickBackupFileAsync()
     {

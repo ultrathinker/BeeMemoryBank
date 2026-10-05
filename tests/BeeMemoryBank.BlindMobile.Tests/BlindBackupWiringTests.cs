@@ -40,10 +40,10 @@ public sealed class BlindBackupWiringTests
         var services = new ServiceCollection();
         BlindMobileServices.ConfigureServices(services, dir, Path.Combine(dir, "beememorybank.db"));
         var keys = new NoKeys();
-        services.AddSingleton<IBlindPhoneStore>(new PreferencesBlindStore(_ => null, (_, _) => { }, _ => { }));
+        services.AddSingleton<IBlindStateStore>(new PreferencesBlindStore(_ => null, (_, _) => { }, _ => { }));
         services.AddSingleton<IBlindNodeKeys>(keys);
-        services.AddSingleton<IBlindPhoneKeys>(keys);
-        services.AddSingleton<IDeviceStateProvider>(new Idle());
+        services.AddSingleton<IBlindSecretStore>(keys);
+        services.AddSingleton<IBlindLifecycle, TestLifecycle>();
         return services.BuildServiceProvider();
     }
 
@@ -59,8 +59,4 @@ public sealed class BlindBackupWiringTests
         public void Clear() { }
     }
 
-    private sealed class Idle : IDeviceStateProvider
-    {
-        public BlindPhoneDeviceState Current() => new(true, true, true, 100);
-    }
 }

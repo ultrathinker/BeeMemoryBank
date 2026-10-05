@@ -116,11 +116,11 @@ public sealed class BlindStartupGateTests
         BlindMobileServices.ConfigureServices(services, dir, Path.Combine(dir, "beememorybank.db"));
         var keys = new MemoryKeys();
         var preferences = new Dictionary<string, string>();
-        services.AddSingleton<IBlindPhoneStore>(new PreferencesBlindStore(
+        services.AddSingleton<IBlindStateStore>(new PreferencesBlindStore(
             k => preferences.GetValueOrDefault(k), (k, v) => preferences[k] = v, k => preferences.Remove(k)));
         services.AddSingleton<IBlindNodeKeys>(keys);
-        services.AddSingleton<IBlindPhoneKeys>(keys);
-        services.AddSingleton<IDeviceStateProvider>(new FixedDevice());
+        services.AddSingleton<IBlindSecretStore>(keys);
+        services.AddSingleton<IBlindLifecycle, TestLifecycle>();
         return services.BuildServiceProvider();
     }
 
@@ -146,8 +146,4 @@ public sealed class BlindStartupGateTests
         public void Clear() => _seed = _backup = _secret = null;
     }
 
-    private sealed class FixedDevice : IDeviceStateProvider
-    {
-        public BlindPhoneDeviceState Current() => new(true, true, true, 100);
-    }
 }

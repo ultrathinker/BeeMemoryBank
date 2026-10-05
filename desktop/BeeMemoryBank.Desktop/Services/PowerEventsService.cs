@@ -8,7 +8,7 @@ namespace BeeMemoryBank.Desktop.Services;
 /// Service to monitor Windows power events (specifically system sleep)
 /// using a hidden native message window and a dedicated background message pump.
 /// </summary>
-public sealed class PowerEventsService : IDisposable
+public sealed class PowerEventsService : IPowerEventsService
 {
     private const int WM_POWERBROADCAST = 0x0218;
     private const int PBT_APMSUSPEND = 0x0004;

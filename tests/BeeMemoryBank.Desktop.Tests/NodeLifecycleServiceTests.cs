@@ -25,6 +25,24 @@ namespace BeeMemoryBank.Desktop.Tests;
 /// </summary>
 public class NodeLifecycleServiceTests
 {
+    [Fact]
+    public void NodeExeCandidates_UseThePlatformExecutableName_WithoutTouchingTheFileSystem()
+    {
+        var baseDir = Path.Combine(Path.GetPathRoot(Path.GetTempPath())!, "bmb-base");
+        var developmentRoot = Path.Combine(Path.GetPathRoot(Path.GetTempPath())!, "bmb-dev");
+        var expectedName = OperatingSystem.IsWindows() ? "BeeMemoryBank.Node.exe" : "BeeMemoryBank.Node";
+
+        var candidates = NodeLifecycleService.TestOnly_GetNodeExeCandidates(baseDir, developmentRoot);
+
+        candidates.Should().HaveCount(4);
+        candidates.Should().OnlyContain(path => Path.GetFileName(path) == expectedName);
+        candidates[0].Should().Be(Path.GetFullPath(Path.Combine(baseDir, "..", "bmbd", expectedName)));
+        candidates[1].Should().Be(Path.GetFullPath(Path.Combine(baseDir, "bmbd", expectedName)));
+        candidates[2].Should().Be(Path.GetFullPath(Path.Combine(
+            developmentRoot, "desktop", "BeeMemoryBank.Node", "bin", "Debug", "net10.0", expectedName)));
+        candidates[3].Should().Be(Path.GetFullPath(Path.Combine(baseDir, expectedName)));
+    }
+
     private static readonly string StubDllPath = Path.Combine(
         AppContext.BaseDirectory, "BeeMemoryBank.Node.Tests.StubProcess.dll");
 

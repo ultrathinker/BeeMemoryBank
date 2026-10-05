@@ -117,13 +117,13 @@ public static class UpdateEndpoints
         // POST /node/update/unlock-handoff — called by the desktop app right before it stops the
         // node to apply an update: keeps the vault open across that restart so the user is not
         // asked for the password again (UpdateUnlockHandoff). 204 when written, 409 when the vault
-        // is locked (nothing to hand over), 404 off Windows. Reaches the API only through the
+        // is locked (nothing to hand over), 404 where the OS has no secret store (the handoff is
+        // not registered there: Linux, Docker, a blind node). Reaches the API only through the
         // front's loopback-only /node/update route with the tray's internal key.
         group.MapPost("/unlock-handoff", async (HttpContext ctx) =>
         {
-            if (!OperatingSystem.IsWindows()) return Results.NotFound();
             var handoff = ctx.RequestServices.GetService<BeeMemoryBank.Infrastructure.OsAutoUnlock.UpdateUnlockHandoff>();
-            if (handoff == null) return Results.NotFound();
+            if (handoff is not { IsSupported: true }) return Results.NotFound();
             return await handoff.WriteAsync()
                 ? Results.NoContent()
                 : Results.Json(new ErrorResponse("The vault is locked; there is nothing to hand over."), statusCode: 409);

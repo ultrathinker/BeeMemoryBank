@@ -31,7 +31,7 @@ public sealed class BlindManifestTests
     /// <summary>
     /// Nothing in the blind app asks the user to exempt it from battery optimisation (searched: no use of
     /// ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS), so the permission is dead weight copied from the ordinary app.
-    /// WorkManager's constraints (Wi-Fi, charger) are what lets the jobs run.
+    /// WorkManager uses the connected-network constraint for the blind jobs.
     /// </summary>
     [Fact]
     public void TheBuiltManifest_AsksForNothingTheAppNeverUses()

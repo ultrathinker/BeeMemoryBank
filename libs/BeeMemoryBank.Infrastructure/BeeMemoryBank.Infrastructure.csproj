@@ -3,7 +3,16 @@
   <ItemGroup>
     <ProjectReference Include="..\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <!-- The macOS Keychain secret store (Secrets/MacOsKeychainUserSecretStore) sits on the neutral Apple platform layer: it references nothing
+         of the product and loads on every OS (its native calls run only on a Mac). -->
+    <ProjectReference Include="..\BeeMemoryBank.Platforms.Apple\BeeMemoryBank.Platforms.Apple.csproj" />
     <ProjectReference Include="..\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BeeMemoryBank.Core.Acme.Tests" />
+    <!-- MacOsKeychainUserSecretStore.ScopeForDataPath(path, patience): the tests shorten the wait for an unfinished scope file. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Core.Tests" />
   </ItemGroup>
 
   <ItemGroup>

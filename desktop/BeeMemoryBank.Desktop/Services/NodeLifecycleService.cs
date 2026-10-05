@@ -65,6 +65,10 @@ public sealed record NodeLifecycleResult
 /// </summary>
 public sealed class NodeLifecycleService : INodeLifecycleService
 {
+    private static readonly string NodeExeName = OperatingSystem.IsWindows()
+        ? "BeeMemoryBank.Node.exe"
+        : "BeeMemoryBank.Node";
+
     private Process? _nodeProcess;
 
     // Ownership + graceful-stop state. We only ever Kill / close stdin on a process we
@@ -596,51 +600,61 @@ public sealed class NodeLifecycleService : INodeLifecycleService
         _attachedExternal = true;
     }
 
+    internal static IReadOnlyList<string> TestOnly_GetNodeExeCandidates(string baseDir, string developmentRoot)
+        => GetNodeExeCandidates(baseDir, developmentRoot);
+
+    private static IReadOnlyList<string> GetNodeExeCandidates(string baseDir, string? developmentRoot)
+    {
+        var candidates = new List<string>
+        {
+            // Production published layout: sibling to desktop.
+            Path.GetFullPath(Path.Combine(baseDir, "..", "bmbd", NodeExeName)),
+            // Packaged (Velopack) layout: bmbd alongside Desktop.
+            Path.GetFullPath(Path.Combine(baseDir, "bmbd", NodeExeName))
+        };
+
+        if (developmentRoot != null)
+        {
+            candidates.Add(Path.GetFullPath(Path.Combine(
+                developmentRoot, "desktop", "BeeMemoryBank.Node", "bin", "Debug", "net10.0", NodeExeName)));
+        }
+
+        // Current folder fallback.
+        candidates.Add(Path.GetFullPath(Path.Combine(baseDir, NodeExeName)));
+        return candidates;
+    }
+
     private static string ResolveNodeExePath()
     {
         var baseDir = AppContext.BaseDirectory;
+        string? developmentRoot = null;
 
-        // 1. Production published layout: sibling to desktop
-        var prodPath = Path.GetFullPath(Path.Combine(baseDir, "..", "bmbd", "BeeMemoryBank.Node.exe"));
-        if (File.Exists(prodPath))
-        {
-            return prodPath;
-        }
-
-        // 1b. Packaged (Velopack) layout: vpk requires the main exe at the root of
-        // --packDir, so bmbd/api/web/cli ship as subfolders alongside Desktop.exe
-        // itself rather than as siblings of a desktop/ folder one level up.
-        var packagedPath = Path.GetFullPath(Path.Combine(baseDir, "bmbd", "BeeMemoryBank.Node.exe"));
-        if (File.Exists(packagedPath))
-        {
-            return packagedPath;
-        }
-
-        // 2. Development tree: search up for solution file then down
+        // Development tree: search up for the solution file.
         var currentDir = new DirectoryInfo(baseDir);
         while (currentDir != null)
         {
             var slnxFile = Path.Combine(currentDir.FullName, "BeeMemoryBank.slnx");
             if (File.Exists(slnxFile))
             {
-                var devPath = Path.Combine(currentDir.FullName, "desktop", "BeeMemoryBank.Node", "bin", "Debug", "net10.0", "BeeMemoryBank.Node.exe");
-                if (File.Exists(devPath))
-                {
-                    return Path.GetFullPath(devPath);
-                }
+                developmentRoot = currentDir.FullName;
                 break;
             }
             currentDir = currentDir.Parent;
         }
 
-        // 3. Current folder fallback
-        var siblingPath = Path.GetFullPath(Path.Combine(baseDir, "BeeMemoryBank.Node.exe"));
-        if (File.Exists(siblingPath))
+        var candidates = GetNodeExeCandidates(baseDir, developmentRoot);
+        foreach (var candidate in candidates)
         {
-            return siblingPath;
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
         }
 
-        throw new FileNotFoundException($"Could not locate BeeMemoryBank.Node.exe. Looked in:\n- {prodPath}\n- (development layout root)\n- {siblingPath}");
+        // Keep the detailed resolver error used by callers; the development probe remains
+        // described rather than exposing a guessed path when no solution root was found.
+        throw new FileNotFoundException(
+            $"Could not locate {NodeExeName}. Looked in:\n- {candidates[0]}\n- (development layout root)\n- {candidates[^1]}");
     }
 }
 

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -186,8 +187,10 @@ public class EndToEndIntegrationTests : IDisposable
         File.Exists(runtimePath).Should().BeFalse();
     }
 
-    [Fact]
-    public async Task E2E_GracefulStop_ViaStdinLifeline()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task E2E_GracefulStop_ViaStdinLifelineOrUnixSigterm(bool sendSigterm)
     {
         // TODO(linux-ci): reliably reproduces node.status.json still present immediately after
         // the child process reports HasExited==true on Linux CI, even though the in-process
@@ -202,7 +205,10 @@ public class EndToEndIntegrationTests : IDisposable
         // area). Needs a dedicated instrumented repro (capture stdout/stderr unconditionally,
         // not just on failure) rather than a guess - skipping on non-Windows for now rather than
         // fixing blind under a CI-unblocking pass. Runs normally on Windows.
-        if (!OperatingSystem.IsWindows())
+        // Stdin EOF remains covered on Windows. SIGTERM is a Unix-only process test: it
+        // launches the normal node with StubProcess children, waits for readiness, sends the
+        // real signal, and verifies the node exits through Program's graceful-stop path.
+        if (sendSigterm == OperatingSystem.IsWindows())
         {
             return;
         }
@@ -317,8 +323,15 @@ public class EndToEndIntegrationTests : IDisposable
         }).ToList();
         runningChildren.Should().OnlyContain(p => p != null && !p.HasExited);
 
-        // 5. Close the Node's stdin to trigger EOF and graceful shutdown
-        nodeProcess.StandardInput.Close();
+        // 5. Trigger graceful shutdown through the platform-specific lifecycle signal.
+        if (sendSigterm)
+        {
+            UnixSignals.SendSigterm(nodeProcess.Id).Should().Be(0, "SIGTERM must be delivered to bmbd");
+        }
+        else
+        {
+            nodeProcess.StandardInput.Close();
+        }
 
         // 6. Wait for the Node process to exit
         var sw = Stopwatch.StartNew();
@@ -344,7 +357,7 @@ public class EndToEndIntegrationTests : IDisposable
             catch { }
         }
 
-        exited.Should().BeTrue("Node process should have exited gracefully after stdin was closed.");
+        exited.Should().BeTrue("Node process should have exited gracefully after the shutdown signal.");
         nodeProcess.ExitCode.Should().Be(0, "Node process should exit with code 0 on graceful shutdown.");
 
         // 7. Verify that children processes also exited gracefully
@@ -358,4 +371,14 @@ public class EndToEndIntegrationTests : IDisposable
         File.Exists(statusPath).Should().BeFalse("node.status.json should be deleted.");
         File.Exists(Path.Combine(_testDataDir, ".runtime.json")).Should().BeFalse(".runtime.json should be deleted.");
     }
+}
+
+internal static class UnixSignals
+{
+    private const int Sigterm = 15;
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int kill(int pid, int signal);
+
+    public static int SendSigterm(int pid) => kill(pid, Sigterm);
 }

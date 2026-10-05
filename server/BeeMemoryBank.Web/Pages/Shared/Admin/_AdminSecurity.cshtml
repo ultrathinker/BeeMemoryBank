@@ -169,16 +169,27 @@
 
 @if (Model.OsAutoUnlockSupported)
 {
+    // The node runs on the machine it is served from, so the platform is this process's own.
+    var onMac = OperatingSystem.IsMacOS();
     <h3 style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> OS Auto-Unlock</h3>
     <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
         <p class="text-muted text-sm" style="margin-bottom:12px;">
-            Lets this node unlock itself automatically on startup — no password prompt — using a
-            secret protected by Windows DPAPI under this Windows user account. Useful for a
-            server node that runs unattended.
+            @if (onMac)
+            {
+                <text>Lets this node unlock itself automatically on startup — no password prompt — using a
+                secret kept in the macOS Keychain under this macOS user account. Useful for a
+                server node that runs unattended.</text>
+            }
+            else
+            {
+                <text>Lets this node unlock itself automatically on startup — no password prompt — using a
+                secret protected by Windows DPAPI under this Windows user account. Useful for a
+                server node that runs unattended.</text>
+            }
         </p>
         <sl-alert variant="warning" open style="margin-bottom:16px;">
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-            <strong>Anyone with access to this Windows user account will be able to open the
+            <strong>Anyone with access to this @(onMac ? "macOS" : "Windows") user account will be able to open the
             vault without a password</strong> once this is enabled. Only enable it on a machine
             you trust and control physically.
         </sl-alert>
@@ -198,7 +209,7 @@
             <sl-badge variant="neutral" pill style="margin-bottom:12px;">not configured</sl-badge>
             <form method="post" asp-page-handler="EnableAutoUnlock">
                 <sl-button type="submit" variant="primary" size="small" class="btn-confirm-click"
-                           data-confirm="Enable OS auto-unlock? Anyone with access to this Windows account will be able to open the vault without a password.">
+                           data-confirm="Enable OS auto-unlock? Anyone with access to this @(onMac ? "macOS" : "Windows") account will be able to open the vault without a password.">
                     <sl-icon slot="prefix" name="key"></sl-icon> Enable auto-unlock
                 </sl-button>
             </form>

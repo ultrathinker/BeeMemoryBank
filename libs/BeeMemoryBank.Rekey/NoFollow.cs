@@ -1,3 +1,5 @@
+using BeeMemoryBank.AppPaths;
+
 namespace BeeMemoryBank.Rekey;
 
 /// <summary>
@@ -29,7 +31,7 @@ public static class NoFollow
         for (var current = full; !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current))
         {
             if (root != null && string.Equals(Path.TrimEndingDirectorySeparator(current), Path.TrimEndingDirectorySeparator(root),
-                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    PathComparison.ForCurrentPlatform()))
                 break;
             if (IsLink(current)) return true;
         }

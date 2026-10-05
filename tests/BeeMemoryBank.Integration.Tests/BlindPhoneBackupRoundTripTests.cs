@@ -157,7 +157,7 @@ public sealed class BlindPhoneBackupRoundTripTests : IAsyncLifetime
             var fetcher = new TestFetcher(replica, http, call!, Path.Combine(_work, "replica"));
             var source = new BlindPhonePackageSource(fetcher, _phoneHost.Services.GetRequiredService<IServiceScopeFactory>());
             var recovery = new BlindPhoneRecoverySetSource(factory);
-            var runner = new BlindPhoneBackupRunner(state, new FixedKeys(backupKey), source, recovery, new WifiAndCharger(),
+            var runner = new BlindPhoneBackupRunner(state, new FixedKeys(backupKey), source, recovery,
                 new BlindPhoneLog(Path.Combine(_work, "log.jsonl"), TimeProvider.System), Path.Combine(_work, "backups"), TimeProvider.System);
             return new Phone(phoneIdentity.NodeId, backupKey, call!, listenerPin, http, replica, factory, runner, requests);
         }
@@ -249,8 +249,4 @@ public sealed class BlindPhoneBackupRoundTripTests : IAsyncLifetime
         public void Clear() { }
     }
 
-    private sealed class WifiAndCharger : IDeviceStateProvider
-    {
-        public BlindPhoneDeviceState Current() => new(true, true, true, 100);
-    }
 }

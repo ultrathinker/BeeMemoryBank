@@ -185,6 +185,36 @@ public class LanJoinListenerTests : IAsyncLifetime
             "a code from a closed session must not open a new one");
     }
 
+    [Fact]
+    public async Task EnableAfterDispose_IsRefused_AndOpensNoListener()
+    {
+        // The node disposes the listener while it shuts down; the front can still be serving the Connect
+        // page's request for a moment. That late request must not open a LAN listener nobody will close.
+        await _listener.DisposeAsync();
+
+        await FluentActions.Awaiting(() => _listener.EnableAsync())
+            .Should().ThrowAsync<ObjectDisposedException>();
+
+        _listener.Current.Should().BeNull();
+        using var client = PinnedClient(SpkiPin.Of(_cert));
+        await FluentActions.Awaiting(() => client.PostAsync("/api/sync/challenge", null))
+            .Should().ThrowAsync<HttpRequestException>("nothing may listen on the LAN after the node has shut the listener down");
+    }
+
+    [Fact]
+    public async Task DisposeWhileOpen_ClosesTheListener_AndTwiceIsHarmless()
+    {
+        await _listener.EnableAsync();
+
+        await _listener.DisposeAsync();
+        await _listener.DisposeAsync();
+
+        _listener.Current.Should().BeNull();
+        using var client = PinnedClient(SpkiPin.Of(_cert));
+        await FluentActions.Awaiting(() => client.PostAsync("/api/sync/challenge", null))
+            .Should().ThrowAsync<HttpRequestException>();
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────
 
     private HttpClient PinnedClient(string pin) =>
