@@ -35,8 +35,6 @@ public sealed class RecoveryAttemptBudget(
     public int HeavyUsed { get; private set; }
     public int LightUsed { get; private set; }
 
-    public bool Exhausted => HeavyUsed >= maxHeavy && LightUsed >= maxLight;
-
     /// <summary>
     /// A class ran into its limit: its last attempt was taken, or an attempt was refused. Even when no box
     /// is left over, the search stood at its bound, so it proves nothing about what lies past it; a

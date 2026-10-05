@@ -157,6 +157,70 @@ public class TwoNodeSyncTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task PushEvents_SkippedEventBeforeAcceptedEvent_ReportsOnlyTheContiguousPrefix()
+    {
+        // Re-send a real event that NodeA already holds after the deliberately-invalid
+        // predecessor. EventApplier accepts the duplicate idempotently; SequenceNum is transport
+        // ordering, not part of the signed event payload.
+        Guid nodeBId;
+        SyncEvent acceptedEvent;
+        using (var nodeAScope = _nodeA.Services.CreateScope())
+        {
+            var eventLog = nodeAScope.ServiceProvider.GetRequiredService<IEventLogRepository>();
+            acceptedEvent = (await eventLog.GetRecentAsync(1)).Single();
+        }
+        using (var nodeBScope = _nodeB.Services.CreateScope())
+        {
+            nodeBId = (await nodeBScope.ServiceProvider.GetRequiredService<INodeIdentityRepository>()
+                .GetAsync())!.NodeId;
+        }
+
+        var skippedEvent = new SyncEvent
+        {
+            SequenceNum = 10,
+            EventId = Guid.NewGuid(),
+            NodeId = nodeBId,
+            LamportTs = 1,
+            EventType = "article_create",
+            Payload = "{}",
+            Signature = new byte[64],
+            ProtocolVersion = 1,
+            CreatedAt = DateTime.UtcNow
+        };
+        acceptedEvent.SequenceNum = 11;
+        var token = await AuthNodeOnServerAsync(_nodeB, _clientA);
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/api/sync/events")
+        {
+            Content = JsonContent.Create(new[] { skippedEvent, acceptedEvent })
+        };
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        var resp = await _clientA.SendAsync(req);
+        resp.EnsureSuccessStatusCode();
+        var result = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+
+        result.GetProperty("skipped").GetInt32().Should().Be(1);
+        result.GetProperty("applied").GetInt32().Should().Be(1);
+        result.GetProperty("lastAppliedSequence").ValueKind.Should().Be(JsonValueKind.Null,
+            "an accepted successor cannot advance past an earlier skipped event");
+
+        // The accepted successor can be re-sent safely: EventApplier recognizes its event id and
+        // reports Applied without applying its data a second time, so a repaired predecessor does
+        // not create a cursor stall loop.
+        acceptedEvent.SequenceNum = 12;
+        using var retry = new HttpRequestMessage(HttpMethod.Post, "/api/sync/events")
+        {
+            Content = JsonContent.Create(new[] { acceptedEvent })
+        };
+        retry.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        var retryResp = await _clientA.SendAsync(retry);
+        retryResp.EnsureSuccessStatusCode();
+        var retryResult = await retryResp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
+        retryResult.GetProperty("applied").GetInt32().Should().Be(1);
+        retryResult.GetProperty("lastAppliedSequence").GetInt64().Should().Be(12);
+    }
+
     // ─── SyncClient ──────────────────────────────────────────────────────────
 
     [Fact]

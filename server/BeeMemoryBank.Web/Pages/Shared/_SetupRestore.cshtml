@@ -53,7 +53,12 @@
 
 <!-- ═══ Restore running / finished ═══ -->
 <div class="wizard-panel @(step == "restoring" ? "active" : "")" id="panel-restoring">
-    @if (progress == null || progress.State == "running")
+    @if (step != "restoring")
+    {
+        @* The panel is only filled while a restore runs. It used to refresh the whole page every 2 seconds on EVERY visit of the
+           setup page (no restore means no progress, which counted as running), so the welcome form blinked and lost what was typed. *@
+    }
+    else if (progress == null || progress.State == "running")
     {
         <meta http-equiv="refresh" content="2" />
         <div class="done-icon"><sl-spinner style="font-size:2.5rem;"></sl-spinner></div>

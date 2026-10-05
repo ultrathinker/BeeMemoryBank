@@ -50,12 +50,12 @@ public class BrandingTests : IAsyncLifetime
     [Fact]
     public async Task Superadmin_CanSetAndClearTheName()
     {
-        var set = await _admin.PutAsJsonAsync("/api/branding", new { name = "  Acme Knowledge  " });
+        var set = await _admin.PutAsJsonAsync("/api/branding", new { name = "  Example Knowledge  " });
         var (name, isCustom, _) = await ReadAsync(set);
-        name.Should().Be("Acme Knowledge", "surrounding whitespace is trimmed before storing");
+        name.Should().Be("Example Knowledge", "surrounding whitespace is trimmed before storing");
         isCustom.Should().BeTrue();
 
-        (await ReadAsync(await _admin.GetAsync("/api/branding"))).Name.Should().Be("Acme Knowledge");
+        (await ReadAsync(await _admin.GetAsync("/api/branding"))).Name.Should().Be("Example Knowledge");
 
         // Blank means "no override" — back to the built-in name rather than an empty header.
         await _admin.PutAsJsonAsync("/api/branding", new { name = "   " });
@@ -77,7 +77,7 @@ public class BrandingTests : IAsyncLifetime
     [Fact]
     public async Task Name_WithControlCharacters_IsRejected()
     {
-        var resp = await _admin.PutAsJsonAsync("/api/branding", new { name = "Acme\nKnowledge" });
+        var resp = await _admin.PutAsJsonAsync("/api/branding", new { name = "Example\nKnowledge" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }

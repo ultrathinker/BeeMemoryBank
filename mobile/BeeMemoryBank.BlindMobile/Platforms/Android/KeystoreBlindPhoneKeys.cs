@@ -41,8 +41,6 @@ public sealed class KeystoreBlindPhoneKeys : IBlindNodeKeys
 /// </summary>
 internal sealed class KeystoreBlob(string alias, string fileName, byte[] aad)
 {
-    private const int IvLength = 12;
-
     private string FilePath =>
         Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), fileName);
 
@@ -53,9 +51,7 @@ internal sealed class KeystoreBlob(string alias, string fileName, byte[] aad)
         cipher.UpdateAAD(aad);
         var encrypted = cipher.DoFinal(secret)!;
         var iv = cipher.GetIV()!;
-        var blob = new byte[iv.Length + encrypted.Length];
-        iv.CopyTo(blob, 0);
-        encrypted.CopyTo(blob, iv.Length);
+        var blob = BlindKeystoreBlobLayout.Join(iv, encrypted);
 
         var tmp = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllBytes(tmp, blob);
@@ -65,11 +61,13 @@ internal sealed class KeystoreBlob(string alias, string fileName, byte[] aad)
     public byte[]? Load()
     {
         if (!File.Exists(FilePath)) return null;
+        // A cut-off or damaged file is an error with a sentence (the screen reports it as "key storage unavailable"), not a slicing exception.
         var blob = File.ReadAllBytes(FilePath);
+        var (iv, offset, length) = BlindKeystoreBlobLayout.Split(blob);
         var cipher = Cipher.GetInstance("AES/GCM/NoPadding")!;
-        cipher.Init(CipherMode.DecryptMode, GetOrCreateKey(), new GCMParameterSpec(128, blob[..IvLength]));
+        cipher.Init(CipherMode.DecryptMode, GetOrCreateKey(), new GCMParameterSpec(128, iv));
         cipher.UpdateAAD(aad);
-        return cipher.DoFinal(blob, IvLength, blob.Length - IvLength);
+        return cipher.DoFinal(blob, offset, length);
     }
 
     public void Clear()

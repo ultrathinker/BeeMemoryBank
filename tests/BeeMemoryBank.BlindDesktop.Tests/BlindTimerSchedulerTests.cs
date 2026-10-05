@@ -347,6 +347,51 @@ public sealed class BlindTimerSchedulerTests
     }
 
     [Fact]
+    public async Task AStopThatTimesOutOnASlowJob_DoesNotDisposeTheSourceTheLoopStillRunsOn()
+    {
+        // The job ignores the cancellation until it is released, so the stop must time out; the loop is then
+        // left winding down on that very token, and the token has to keep working until the loop is done.
+        var app = new FakeApp();
+        var jobStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseJob = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenStillWorks = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.HeavyBody = async ct =>
+        {
+            jobStarted.TrySetResult();
+            await releaseJob.Task;
+            // The stop has given up, but the source the loop still runs on must be alive: most uses of a
+            // disposed source's token happen to work on the current runtime, the contract does not promise
+            // it, and ct.WaitHandle is the member that demonstrably breaks (ObjectDisposedException).
+            var sourceAlive = true;
+            try { _ = ct.WaitHandle; }
+            catch (ObjectDisposedException) { sourceAlive = false; }
+            sourceAlive.Should().BeTrue("the loop and its job still run on this token after the stop timed out");
+            using (ct.Register(() => tokenStillWorks.TrySetResult()))
+                await Task.Delay(Timeout.Infinite, ct);
+            return "unreachable";
+        };
+        var scheduler = new BlindTimerScheduler(app, TimeProvider.System, new BlindSchedulerOptions
+        {
+            Tick = TimeSpan.FromMilliseconds(20),
+            StopTimeout = TimeSpan.FromMilliseconds(100),
+        });
+
+        scheduler.EnsureScheduled();
+        await jobStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await scheduler.StopAsync().WaitAsync(TimeSpan.FromSeconds(10));   // gave up waiting after 100 ms
+
+        releaseJob.SetResult();
+        await tokenStillWorks.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await WaitUntil(() => !scheduler.IsRunning);   // the loop left running finishes on the token the stop stopped waiting for
+
+        scheduler.EnsureScheduled(); // a fresh loop can still be started afterwards
+        scheduler.IsRunning.Should().BeTrue();
+        app.HeavyBody = null;
+        await scheduler.StopAsync();
+    }
+
+    [Fact]
     public async Task ALongJob_RunsToItsEnd_NothingButTheLoopsOwnStopCancelsIt_WhateverTheTicksDo()
     {
         // The owner's rule: no charger, battery, Wi-Fi or network rule may interrupt a job that has started. The loop keeps ticking while

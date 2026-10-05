@@ -16,7 +16,7 @@ internal sealed class UnsupportedShellPlatform : IShellPlatform
 
     public IPreventSleepService? CreatePreventSleep(DesktopSettingsStore settings) => null;
 
-    public IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode) => null;
+    public IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode, Func<bool> lockOnSleepEnabled) => null;
 
     public IFileManagerReveal FileManager { get; } = new NoFileManager();
 

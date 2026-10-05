@@ -10,16 +10,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="BeeMemoryBank.Core.Acme.Tests" />
     <!-- MacOsKeychainUserSecretStore.ScopeForDataPath(path, patience): the tests shorten the wait for an unfinished scope file. -->
     <InternalsVisibleTo Include="BeeMemoryBank.Core.Tests" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- ACME / mDNS / DPAPI surface. ImageSharp and AddImageTranscoder moved to
+    <!-- mDNS / DPAPI surface. ImageSharp and AddImageTranscoder moved to
          BeeMemoryBank.Media so consumers that only need image transcoding (the Mobile MAUI
          app) don't pull in any of these packages. -->
-    <PackageReference Include="Certes" />
     <PackageReference Include="Makaretu.Dns.Multicast" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />

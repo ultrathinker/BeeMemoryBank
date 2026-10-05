@@ -41,6 +41,36 @@ public class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Migration035_PreservesEveryLegacyAutoUnlockSlotUntilTheServiceCanVerifyTheSecret()
+    {
+        using (var conn = _factory.CreateConnection())
+        {
+            var older = DateTime.UtcNow.AddMinutes(-1).ToString("o");
+            var newer = DateTime.UtcNow.ToString("o");
+            await conn.ExecuteAsync(@"INSERT INTO tbl_key_slot
+                (slot_type, encrypted_master_dek, iv, created_at)
+                VALUES ('os_auto_unlock', @dek, @iv, @createdAt)",
+                new { dek = new byte[] { 1 }, iv = new byte[] { 2 }, createdAt = older });
+            await conn.ExecuteAsync(@"INSERT INTO tbl_key_slot
+                (slot_type, encrypted_master_dek, iv, created_at)
+                VALUES ('os_auto_unlock', @dek, @iv, @createdAt)",
+                new { dek = new byte[] { 3 }, iv = new byte[] { 4 }, createdAt = newer });
+            await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 35");
+        }
+
+        await _runner.RunMigrationsAsync();
+
+        using var check = _factory.CreateConnection();
+        (await check.QueryAsync<byte[]>("SELECT encrypted_master_dek FROM tbl_key_slot WHERE slot_type = 'os_auto_unlock' ORDER BY slot_id"))
+            .Should().HaveCount(2);
+        var insertDuplicate = () => check.ExecuteAsync(@"INSERT INTO tbl_key_slot
+            (slot_type, encrypted_master_dek, iv, created_at)
+            VALUES ('os_auto_unlock', @dek, @iv, @createdAt)",
+            new { dek = new byte[] { 5 }, iv = new byte[] { 6 }, createdAt = DateTime.UtcNow.ToString("o") });
+        await insertDuplicate.Should().NotThrowAsync("the migration cannot choose the slot matching the OS secret");
+    }
+
+    [Fact]
     public async Task Schema_AllTablesExist()
     {
         using var conn = _factory.CreateConnection();

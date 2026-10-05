@@ -486,6 +486,172 @@ public class SyncClientTests : IAsyncLifetime
         after.UpdatedAt.Should().BeAfter(before, "we did pull from this peer, and that is what the anchor reads");
     }
 
+    [Fact]
+    public async Task Push_WhenAChunkIsEntirelyDropped_AdvancesPastItAndPushesTheNextChunk()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var initialSequence = (await _node.EventLogRepo.GetMaxSequenceAsync());
+        var dropped = await AppendOutgoingEventAsync(new string('x', 8 * 1024 * 1024 + 1));
+        var applied = await AppendOutgoingEventAsync("{}");
+        var positions = new SyncPushPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPushPosition
+        {
+            RemoteNodeId = _remoteNodeId,
+            LastPushedSeq = initialSequence,
+            PushedAt = DateTime.UtcNow
+        });
+
+        var postCount = 0;
+        _mockHandler.MapRoute("/api/sync/events", request =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return JsonResponse("[]");
+
+            postCount++;
+            return postCount == 1
+                ? JsonResponse(JsonSerializer.Serialize(new
+                {
+                    applied = 0, skipped = 0, dropped = 1, lastAppliedSequence = dropped.SequenceNum
+                }))
+                : JsonResponse(JsonSerializer.Serialize(new
+                {
+                    applied = 1, skipped = 0, dropped = 0, lastAppliedSequence = applied.SequenceNum
+                }));
+        });
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        postCount.Should().Be(2, "the deliberately dropped chunk must not stall the next chunk");
+        (await positions.GetAsync(_remoteNodeId))!.LastPushedSeq.Should().Be(applied.SequenceNum);
+    }
+
+    [Fact]
+    public async Task Push_WhenOneEventIsTooLarge_QuarantinesItAndPushesTheNextEvent()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var initialSequence = await _node.EventLogRepo.GetMaxSequenceAsync();
+        var oversized = await AppendOutgoingEventAsync(new string('x', 8 * 1024 * 1024 + 1));
+        var next = await AppendOutgoingEventAsync("{}");
+        var positions = new SyncPushPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPushPosition
+        {
+            RemoteNodeId = _remoteNodeId,
+            LastPushedSeq = initialSequence,
+            PushedAt = DateTime.UtcNow
+        });
+
+        var postCount = 0;
+        _mockHandler.MapRoute("/api/sync/events", request =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return JsonResponse("[]");
+
+            postCount++;
+            if (postCount == 1)
+                return new HttpResponseMessage(System.Net.HttpStatusCode.RequestEntityTooLarge);
+            return JsonResponse(JsonSerializer.Serialize(new
+            {
+                applied = 1, skipped = 0, dropped = 0, lastAppliedSequence = next.SequenceNum
+            }));
+        });
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        postCount.Should().Be(2, "the oversized event must be sent once, then skipped permanently");
+        (await positions.GetAsync(_remoteNodeId))!.LastPushedSeq.Should().Be(next.SequenceNum);
+        var quarantineEntry = (await SyncEventQuarantine.ListAllAsync(_node.QuarantineRepo)).Single(entry =>
+            entry.EventId == oversized.EventId && entry.LastError.Contains("too large", StringComparison.OrdinalIgnoreCase));
+        quarantineEntry.Quarantined.Should().BeTrue(
+            "a single-event 413 is permanently consumed and will not receive later retries");
+    }
+
+    [Fact]
+    public async Task Push_WhenAChunkContainsASkippedEvent_DoesNotAdvancePastIt()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var initialSequence = await _node.EventLogRepo.GetMaxSequenceAsync();
+        var applied = await AppendOutgoingEventAsync("{}");
+        var skipped = await AppendOutgoingEventAsync("{}");
+        var positions = new SyncPushPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPushPosition
+        {
+            RemoteNodeId = _remoteNodeId,
+            LastPushedSeq = initialSequence,
+            PushedAt = DateTime.UtcNow
+        });
+
+        _mockHandler.MapRoute("/api/sync/events", request => request.Method == HttpMethod.Get
+            ? JsonResponse("[]")
+            : JsonResponse(JsonSerializer.Serialize(new
+            {
+                applied = 1, skipped = 1, dropped = 0, lastAppliedSequence = applied.SequenceNum
+            })));
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        (await positions.GetAsync(_remoteNodeId))!.LastPushedSeq.Should().Be(applied.SequenceNum,
+            "a skipped event must remain eligible for a later retry");
+        skipped.SequenceNum.Should().BeGreaterThan(applied.SequenceNum);
+    }
+
+    [Fact]
+    public async Task Push_WhenASkippedEventPrecedesAnAppliedEvent_DoesNotAdvancePastTheSkip()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var initialSequence = await _node.EventLogRepo.GetMaxSequenceAsync();
+        var skipped = await AppendOutgoingEventAsync("{}");
+        var laterApplied = await AppendOutgoingEventAsync("{}");
+        var positions = new SyncPushPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPushPosition
+        {
+            RemoteNodeId = _remoteNodeId,
+            LastPushedSeq = initialSequence,
+            PushedAt = DateTime.UtcNow
+        });
+
+        _mockHandler.MapRoute("/api/sync/events", request => request.Method == HttpMethod.Get
+            ? JsonResponse("[]")
+            : JsonResponse(JsonSerializer.Serialize(new
+            {
+                applied = 1, skipped = 1, dropped = 0, lastAppliedSequence = (long?)null
+            })));
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        (await positions.GetAsync(_remoteNodeId))!.LastPushedSeq.Should().Be(initialSequence,
+            "a contiguous-prefix response with an initial skip must leave it eligible for retry");
+        laterApplied.SequenceNum.Should().BeGreaterThan(skipped.SequenceNum);
+    }
+
+    [Fact]
+    public async Task Push_WhenASkippedEventPrecedesADroppedEvent_DoesNotAdvancePastTheSkip()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var initialSequence = await _node.EventLogRepo.GetMaxSequenceAsync();
+        var skipped = await AppendOutgoingEventAsync("{}");
+        var laterDropped = await AppendOutgoingEventAsync("{}");
+        var positions = new SyncPushPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPushPosition
+        {
+            RemoteNodeId = _remoteNodeId,
+            LastPushedSeq = initialSequence,
+            PushedAt = DateTime.UtcNow
+        });
+
+        _mockHandler.MapRoute("/api/sync/events", request => request.Method == HttpMethod.Get
+            ? JsonResponse("[]")
+            : JsonResponse(JsonSerializer.Serialize(new
+            {
+                applied = 0, skipped = 1, dropped = 1, lastAppliedSequence = (long?)null
+            })));
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        (await positions.GetAsync(_remoteNodeId))!.LastPushedSeq.Should().Be(initialSequence,
+            "a dropped successor cannot consume an earlier skipped event");
+        laterDropped.SequenceNum.Should().BeGreaterThan(skipped.SequenceNum);
+    }
+
     /// <summary>
     /// Codex round 2, security #2. The node id rides on the wire and is not covered by the signature,
     /// so an event that merely <i>claims</i> to come from this node proves nothing — and the F5 skip
@@ -604,6 +770,29 @@ public class SyncClientTests : IAsyncLifetime
                 protocolVersion
             }), Encoding.UTF8, "application/json")
         });
+
+    private async Task<SyncEvent> AppendOutgoingEventAsync(string payload)
+    {
+        var identity = (await _node.NodeRepo.GetAsync())!;
+        var evt = new SyncEvent
+        {
+            EventId = Guid.NewGuid(),
+            NodeId = identity.NodeId,
+            LamportTs = await _node.EventLogRepo.GetMaxLamportTimestampAsync() + 1,
+            EventType = "test_event",
+            Payload = payload,
+            Signature = [],
+            ProtocolVersion = SyncProtocolVersion.Current,
+            CreatedAt = DateTime.UtcNow
+        };
+        await _node.EventLogRepo.AppendAsync(evt);
+        return (await _node.EventLogRepo.GetByIdAsync(evt.EventId.ToString()))!;
+    }
+
+    private static HttpResponseMessage JsonResponse(string json) => new(System.Net.HttpStatusCode.OK)
+    {
+        Content = new StringContent(json, Encoding.UTF8, "application/json")
+    };
 
     private class ConcreteFixture : SyncTestFixture { }
 

@@ -7,6 +7,7 @@ BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindAppOpt
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindAppPaths
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindAppStatus
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindBackupExport
+BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindHomeView
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindHttpClientProvider
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindHttpClientProvider+NonDisposingDelegatingHandler
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindHttpHandler
@@ -34,17 +35,21 @@ BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.IBlindState
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.SqliteBlindIdentityRecorder
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.SqliteBlindIdentityRecorder+NodeIdentityRow
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.MaintenanceDetectingHandler
+BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindActivity
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindBackupOutcome
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindBackupOutcomeKind
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindBackupSchedule
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindHeavyFailure
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindHeavyWork
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindHeavyWork+InlineProgress
+BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindKeystoreBlobLayout
+BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindOperation
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneBackupRunner
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneLog
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneLog+Entry
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindPhonePairing
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindPhoneState
+BeeMemoryBank.Blind.AppCore BeeMemoryBank.Core.Services.BlindPhone.BlindSingleRun
 BeeMemoryBank.Blind.PhoneClient BeeMemoryBank.Core.Services.BlindPhone.AndroidBackupOpened
 BeeMemoryBank.Blind.PhoneClient BeeMemoryBank.Core.Services.BlindPhone.AndroidBackupRestore
 BeeMemoryBank.Blind.PhoneClient BeeMemoryBank.Core.Services.BlindPhone.BlindFeaturePendingException
@@ -255,6 +260,7 @@ BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Keychain.KeychainSta
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Keychain.SecurityFrameworkKeychain
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.LaunchAgents.LaunchAgentInfo
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.LaunchAgents.LaunchAgentPlist
+BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Processes.ProcessTreeKill
 BeeMemoryBank.Search BeeMemoryBank.Search.DefaultStemmer
 BeeMemoryBank.Search BeeMemoryBank.Search.DefaultTokenizer
 BeeMemoryBank.Search BeeMemoryBank.Search.DetectedLanguage

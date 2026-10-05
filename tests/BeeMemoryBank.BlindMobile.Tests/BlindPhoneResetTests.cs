@@ -98,6 +98,79 @@ public sealed class BlindPhoneResetTests
         File.Exists(BlindPaths.Log(t.Dir)).Should().BeFalse();
     }
 
+    /// <summary>
+    /// F-03: a sync, first load or backup in flight holds files, database handles and key material. The wipe stops it, WAITS until it has
+    /// really ended, and only then forgets the keys and deletes the files; the order is recorded, not assumed.
+    /// </summary>
+    [Fact]
+    public async Task TheWipe_StopsTheWork_WaitsForARunningOperation_ThenWipes_InThatOrder()
+    {
+        var t = await WipeRig.NewAsync();
+        var activity = new BlindActivity();
+        var events = new List<string>();
+        var lifecycle = new OrderLifecycle(events, activity);
+        var services = Services(t, activity, lifecycle);
+        var operation = activity.TryBegin(BlindActivity.Sync)!;
+        operation.Token.Register(() => events.Add("operation-cancelled"));
+
+        var wipe = BlindPhoneReset.WipeAsync(services, t.Dir, quiesceTimeout: TimeSpan.FromSeconds(30));
+        await Task.Delay(300);
+
+        wipe.IsCompleted.Should().BeFalse("a sync is still running");
+        t.Keys.IdentitySeed.Should().NotBeNull("the keys are not forgotten while the sync may still sign with them");
+        File.Exists(BlindPaths.Log(t.Dir)).Should().BeTrue("no file is deleted beneath a running operation");
+        events.Should().Equal("operation-cancelled", "stop-background", "stop-service");
+        lifecycle.NewWorkRefusedDuringStop.Should().BeTrue("a worker WorkManager starts a moment too late gets nothing to hold");
+
+        events.Add("operation-ended");
+        operation.Dispose();
+        await wipe.WaitAsync(TimeSpan.FromSeconds(20));
+
+        events.Should().Equal("operation-cancelled", "stop-background", "stop-service", "operation-ended");
+        t.Keys.IdentitySeed.Should().BeNull();
+        File.Exists(BlindPaths.Log(t.Dir)).Should().BeFalse();
+        (await activity.WaitIdleAsync(TimeSpan.Zero)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AnOperationThatDoesNotEndWithinTheBound_AbortsTheWipe_BeforeAnythingIsTouched_AndTheWipeCanBeRepeated()
+    {
+        var t = await WipeRig.NewAsync();
+        var activity = new BlindActivity();
+        var events = new List<string>();
+        var services = Services(t, activity, new OrderLifecycle(events, activity));
+        var operation = activity.TryBegin(BlindActivity.BackupService)!;
+
+        var first = () => BlindPhoneReset.WipeAsync(services, t.Dir, quiesceTimeout: TimeSpan.FromMilliseconds(200));
+
+        var failure = (await first.Should().ThrowAsync<AggregateException>()).Which;
+        failure.Message.Should().Contain("did not stop in time").And.Contain(BlindActivity.BackupService).And.Contain("Nothing was deleted");
+        t.Keys.IdentitySeed.Should().NotBeNull();
+        t.Keys.BackupKey.Should().NotBeNull();
+        t.Store.Values.Should().NotBeEmpty("the state is still there");
+        foreach (var owned in t.Owned)
+            (File.Exists(owned) || Directory.Exists(owned)).Should().BeTrue($"{Path.GetRelativePath(t.Dir, owned)} is untouched by an aborted wipe");
+        activity.IsClosed.Should().BeFalse("the work is allowed again so that nothing is left half stopped");
+        events.Should().Equal(["stop-background", "stop-service", "resume-background"],
+            "the host gives back the schedule the stop took away (the periodic WorkManager jobs), after the stops");
+
+        operation.Dispose();
+        await BlindPhoneReset.WipeAsync(services, t.Dir, quiesceTimeout: TimeSpan.FromSeconds(20));
+        events.Count(e => e == "resume-background").Should().Be(1, "a wipe that completes does not resume the schedule");
+        t.Keys.IdentitySeed.Should().BeNull("pressing it again finishes the wipe");
+        t.Store.Values.Should().BeEmpty();
+    }
+
+    private static IServiceProvider Services(WipeRig t, BlindActivity activity, IBlindLifecycle lifecycle)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IBlindPhoneKeys>(t.Keys);
+        services.AddSingleton(t.State);
+        services.AddSingleton(activity);
+        services.AddSingleton(lifecycle);
+        return services.BuildServiceProvider();
+    }
+
     [Fact]
     public async Task EveryValueTheStateCanHold_IsClearedByTheWipe()
     {
@@ -212,6 +285,19 @@ public sealed class BlindPhoneResetTests
     {
         public void StopBackgroundWork() { }
         public void StopBackupService() { }
+        public void RestartAfterWipe() { }
+    }
+
+    private sealed class OrderLifecycle(List<string> events, BlindActivity activity) : IBlindLifecycle
+    {
+        public bool NewWorkRefusedDuringStop { get; private set; }
+        public void StopBackgroundWork()
+        {
+            events.Add("stop-background");
+            NewWorkRefusedDuringStop = activity.TryBegin(BlindActivity.Heavy) is null;
+        }
+        public void StopBackupService() => events.Add("stop-service");
+        public void ResumeBackgroundWork() => events.Add("resume-background");
         public void RestartAfterWipe() { }
     }
 

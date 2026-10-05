@@ -262,7 +262,7 @@ public sealed class MacOsKeychainUserSecretStore : IUserSecretStore, IDisposable
 
     private static UserSecretStoreException ScopeMalformed() =>
         new(UserSecretStoreFailureKind.Malformed,
-            "The secret scope file of this data folder is damaged and is not replaced: a new scope would orphan the secrets kept under the old one.");
+            "The secret scope file of this data folder is damaged and is not replaced: a new scope would orphan the secrets kept under the old one. Delete the scope file only to start a new scope; the secrets kept under the old scope become unrecoverable.");
 
     private static UserSecretStoreException ScopeUnavailable(Exception? inner) =>
         new(UserSecretStoreFailureKind.Unavailable, "The secret scope of this data folder cannot be read or created.", inner);

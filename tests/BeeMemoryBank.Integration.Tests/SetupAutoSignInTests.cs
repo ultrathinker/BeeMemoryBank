@@ -43,6 +43,7 @@ public sealed class SetupAutoSignInTests : IAsyncLifetime
         html.Should().Contain($"value=\"{Environment.MachineName}\"", "the computer's own name is the suggested name");
         html.Should().NotContain("step-dot", "there is no step indicator any more");
         html.Should().Contain(".mode-card {", "the three start cards keep their styling");
+        html.Should().NotContain("http-equiv=\"refresh\"", "the welcome page must not reload itself (the restore panel refreshes only while a restore runs)");
 
         using var post = new HttpRequestMessage(HttpMethod.Post, "/Setup?handler=Standalone")
         {

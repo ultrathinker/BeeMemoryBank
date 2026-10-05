@@ -19,7 +19,12 @@ public interface IMediaRepository
     Task<List<Media>> GetDeletedOlderThanAsync(DateTime cutoff);
     Task<List<Media>> GetOrphanedOlderThanAsync(DateTime cutoff);
     Task DeleteByIdAsync(Guid id);
-    Task SoftDeleteAsync(Guid id);
+    /// <summary>
+    /// Soft-deletes one media row. With a transaction, the ACL guard and update run on the
+    /// caller's connection and commit with its related writes; otherwise this method owns its
+    /// transaction as before.
+    /// </summary>
+    Task SoftDeleteAsync(Guid id, IDbTransaction? transaction = null);
     Task UpdateLamportTsAsync(Guid id, long lamportTs, Guid? sourceNodeId);
     Task<List<Guid>> LinkOrphansToArticleAsync(IEnumerable<Guid> mediaIds, Guid articleId, long lamportTs, Guid? sourceNodeId);
 

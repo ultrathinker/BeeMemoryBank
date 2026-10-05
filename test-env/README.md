@@ -20,7 +20,7 @@ route and the single-article route disagreed about the same article.
 ## Where it lives
 
 ```
-Hetzner:/home/evgeny/bmb-test/
+Hetzner:/home/<user>/bmb-test/
 ├── docker-compose.yml     ← copy of this directory's file
 ├── seed.sh                ← copy of this directory's file
 ├── models/model.onnx      ← one shared copy, mounted read-only into both nodes

@@ -37,7 +37,7 @@ public sealed class BlindAppController(
     BlindStartup startup, BlindPhoneState state, BlindMobilePairing pairing, BlindHeavyWork heavy,
     BlindPhoneBackupRunner backups, BlindPhoneLog log, IBlindPhoneSync sync,
     IBlindPaths paths, IServiceProvider services, TimeProvider time, IBlindBackupExporter? exporter = null,
-    BlindAppOptions? options = null) : IBlindAppController
+    BlindAppOptions? options = null, BlindActivity? activity = null) : IBlindAppController
 {
     private const string DefaultDisplayName = "Blind copy";
 
@@ -154,8 +154,12 @@ public sealed class BlindAppController(
     {
         await _gate.WaitAsync(ct);
         SetActive("Sync", null);
+        // Registered, so that "Disconnect and wipe" can stop this round and wait for it; refused while the wipe runs.
+        using var operation = activity?.TryBegin(BlindActivity.Sync, ct);
         try
         {
+            if (activity is not null && operation is null) return "The copy is being wiped; nothing was started.";
+            ct = operation?.Token ?? ct;
             if (state.CallCode is not { } target) return "Not paired yet.";
             if (!state.InitialLoadDone) return "The first load is not done yet.";
             try
@@ -204,14 +208,14 @@ public sealed class BlindAppController(
 
     /// <summary>
     /// Disconnect and wipe: the host stops its work, the keys, state and every file of the blind copy are removed, then
-    /// the host returns to the first-run state (<see cref="IBlindLifecycle.RestartAfterWipe"/>). Throws an
-    /// <see cref="AggregateException"/> naming what is left when a step failed; call it again to finish.
+    /// the host returns to the first-run state (<see cref="IBlindLifecycle.RestartAfterWipe"/>). The running work is stopped and waited for
+    /// first (<see cref="BlindPhoneReset.WipeAsync"/>). Throws an <see cref="AggregateException"/> naming what is left when the work did not
+    /// stop in time (nothing deleted) or a step failed; call it again to finish.
     /// </summary>
-    public Task DisconnectAndWipeAsync(CancellationToken ct = default)
+    public async Task DisconnectAndWipeAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        BlindPhoneReset.WipeAndRestart(services, paths.DataDirectory);
-        return Task.CompletedTask;
+        await BlindPhoneReset.WipeAndRestartAsync(services, paths.DataDirectory, ct: ct).ConfigureAwait(false);
     }
 
     public BlindAppStatus GetStatus()
@@ -219,6 +223,8 @@ public sealed class BlindAppController(
         string? activeJob;
         double? progress;
         lock (_jobLock) { activeJob = _activeJob; progress = _jobProgress; }
+        // A round the host's scheduler runs on its own (the Android sync worker registers in BlindActivity) is shown too.
+        if (activeJob is null && activity?.IsActive(BlindActivity.Sync) == true) activeJob = "Sync";
 
         var paired = state.CallCode is not null;
 

@@ -59,6 +59,9 @@ public partial class SettingsWindow : Window
         AutostartFixedRadio.IsCheckedChanged += OnAutostartProfileModeChanged;
         AutostartProfileCombo.SelectionChanged += OnAutostartProfileChanged;
         PreventSleepCheck.IsCheckedChanged += OnPreventSleepChanged;
+        LockOnSleepCheck.Content = Services.LockOnSleepSetting.Label;
+        LockOnSleepHint.Text = Services.LockOnSleepSetting.Hint;
+        LockOnSleepCheck.IsCheckedChanged += OnLockOnSleepChanged;
         AutoUpdateCheck.IsCheckedChanged += OnAutoUpdateChanged;
 
         _updates.Changed += OnUpdatesChanged;
@@ -81,6 +84,8 @@ public partial class SettingsWindow : Window
 
             PreventSleepCheck.IsEnabled = _preventSleep != null;
             PreventSleepCheck.IsChecked = _preventSleep?.IsEnabled ?? false;
+
+            LockOnSleepCheck.IsChecked = _owner.LockOnSleep.IsEnabled;
 
             AutoUpdateCheck.IsEnabled = _updates.IsAvailable;
             AutoUpdateCheck.IsChecked = _updates.AutoCheck;
@@ -224,6 +229,23 @@ public partial class SettingsWindow : Window
     {
         if (_loading || _preventSleep == null) return;
         _preventSleep.IsEnabled = PreventSleepCheck.IsChecked == true;
+    }
+
+    private void OnLockOnSleepChanged(object? sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        try
+        {
+            _owner.LockOnSleep.IsEnabled = LockOnSleepCheck.IsChecked == true;
+        }
+        catch (Exception ex)
+        {
+            // Not saved: show what is really stored instead of a switch that would not hold.
+            Console.Error.WriteLine($"[SettingsWindow] Error saving the lock-on-sleep setting: {ex.Message}");
+            _loading = true;
+            try { LockOnSleepCheck.IsChecked = _owner.LockOnSleep.IsEnabled; }
+            finally { _loading = false; }
+        }
     }
 
     // ── Updates ──────────────────────────────────────────────────────────────────

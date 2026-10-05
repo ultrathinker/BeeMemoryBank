@@ -5,8 +5,6 @@ BeeMemoryBank.Core.Exceptions.DekRotationPreconditionException
 BeeMemoryBank.Core.Interfaces.IAgentRepository
 BeeMemoryBank.Core.Interfaces.IArticleChunkEmbeddingRepository
 BeeMemoryBank.Core.Interfaces.IArticleVersionRepository
-BeeMemoryBank.Core.Interfaces.IDdnsProvider
-BeeMemoryBank.Core.Interfaces.IExternalIpProvider
 BeeMemoryBank.Core.Interfaces.IFavoriteRepository
 BeeMemoryBank.Core.Interfaces.IProjectionMatrixRepository
 BeeMemoryBank.Core.Interfaces.IRetiredMasterDekStore

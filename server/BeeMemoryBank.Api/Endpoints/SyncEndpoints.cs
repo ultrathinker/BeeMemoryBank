@@ -503,6 +503,7 @@ public static class SyncEndpoints
             var logger = loggerFactory.CreateLogger("SyncEndpoints");
             int applied = 0, skipped = 0, dropped = 0;
             long? lastAppliedSeq = null;
+            var acceptedPrefixEnded = false;
             await scopeHolder.RunAsSystemAsync(async () =>
             {
                 foreach (var evt in events)
@@ -513,11 +514,13 @@ public static class SyncEndpoints
                         if (result == EventApplyResult.SilentlyDropped)
                         {
                             dropped++;
-                            lastAppliedSeq = evt.SequenceNum;
                         }
                         else
                         {
                             applied++;
+                        }
+                        if (!acceptedPrefixEnded)
+                        {
                             lastAppliedSeq = evt.SequenceNum;
                         }
                         // Applied (or deliberately dropped) cleanly — forget any failure streak the
@@ -569,6 +572,7 @@ public static class SyncEndpoints
                         else
                             logger.LogWarning(ex, "Skipped event {EventId} of type {EventType}", evt.EventId, evt.EventType);
                         skipped++;
+                        acceptedPrefixEnded = true;
                     }
                 }
             });
@@ -843,8 +847,8 @@ public static class SyncEndpoints
             return Results.NoContent();
         }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
 
-        // ─── Reachability self-test: probe (local wizard call, internal-key-gated) ──
-        // The originating node (running the internet-access wizard) calls THIS endpoint on
+        // ─── Reachability self-test: probe (local call, internal-key-gated) ──
+        // The originating node (an admin tool or script) calls THIS endpoint on
         // itself. It picks one active whitelisted peer, authenticates to it (reusing the same
         // challenge/sign/authenticate flow as SyncClient via PeerAuthenticator), and asks that
         // peer to relay-fetch the candidate URL — because a node can't prove its OWN public

@@ -82,7 +82,9 @@ public class StrongBoxService(
         {
             var identity = await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync();
             if (identity == null) return;
-            var dek = session.GetMasterDek();
+            byte[] dek;
+            try { dek = session.GetMasterDek(); }
+            catch (SessionLockedException) { return; }
             string fingerprint;
             try { fingerprint = DekFingerprint.Of(dek); }
             finally { Array.Clear(dek); }

@@ -216,6 +216,56 @@ public class UpdateServiceTests : IAsyncLifetime
         _svc.GetProgress().CurrentStep.Should().Be(UpdateFlowStep.Idle);
     }
 
+    // ── Cancellation is never recorded as a failed check ──────────────────────
+    // The catch filter in CheckAsync must let OperationCanceledException through
+    // untouched (is not (InvalidOperationException or OperationCanceledException)):
+    // a cancelled check rethrows and leaves the state machine where it was — never Failed.
+
+    [Fact]
+    public async Task CheckAsync_OceInsideCheckBody_DoesNotTransitionToFailed()
+    {
+        // CheckAsync's body is synchronous, so the only seam through which an
+        // OperationCanceledException can surface mid-check is the progress logger:
+        // the stub throws OCE on LogInformation, the same way a real async check
+        // would surface an aborted request. The bug this guards against: the filter
+        // caught OCE, ran SetFailed(...), and only then rethrew — wedging the flow
+        // in Failed (and SetFailed itself logs with LogError, which the stub allows).
+        var cancelThrowingLogger = new OceThrowingLogger();
+        var svc = new UpdateService(
+            [_releasePublicKey, _rotatedPublicKey],
+            _services.GetRequiredService<SnapshotService>(), _maintenance,
+            ActivatorUtilities.CreateInstance<DekRotationService>(_services, _tempDir),
+            ActivatorUtilities.CreateInstance<RestoreInitiatorService>(_services, _tempDir),
+            _session, _tempDir,
+            cancelThrowingLogger,
+            _artifactSource,
+            new AlwaysHealthyHealthCheck());
+
+        var (json, sig) = BuildSignedManifest(NewerVersion, "package.bin", "deadbeef", 1);
+
+        var act = async () => await svc.CheckAsync(json, sig);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        var p = svc.GetProgress();
+        p.CurrentStep.Should().NotBe(UpdateFlowStep.Failed,
+            "a cancelled check must not be recorded as a failed check");
+        p.ErrorMessage.Should().BeNull();
+        cancelThrowingLogger.InformationLogCalls.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task CheckAsync_PreCancelledToken_DoesNotTransitionToFailed()
+    {
+        // An already-cancelled token throws from the semaphore wait (before the try
+        // body); the state machine must stay Idle — never Failed.
+        var (json, sig) = BuildSignedManifest(NewerVersion, "package.bin", "deadbeef", 1);
+
+        var act = async () => await _svc.CheckAsync(json, sig, new CancellationToken(canceled: true));
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        _svc.GetProgress().CurrentStep.Should().NotBe(UpdateFlowStep.Failed);
+    }
+
     // ── (c) Wrong-SHA256 artifact is rejected before Apply ─────────────────────
 
     [Fact]
@@ -430,6 +480,31 @@ public class UpdateServiceTests : IAsyncLifetime
 
         var p = _svc.GetProgress();
         p.ErrorMessage.Should().NotContain("is inside a Velopack-managed 'current' folder");
+    }
+
+    /// <summary>
+    /// Logger stub that throws OperationCanceledException from Information-level logs,
+    /// simulating cancellation surfacing mid-check (aborted request) inside CheckAsync's body.
+    /// Error-level logs (SetFailed's LogError) are swallowed, so a wrongly-caught OCE would
+    /// still manage to record Failed — which is exactly what the tests above assert must not happen.
+    /// </summary>
+    private sealed class OceThrowingLogger : ILogger<UpdateService>
+    {
+        public int InformationLogCalls { get; private set; }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Information)
+            {
+                InformationLogCalls++;
+                throw new OperationCanceledException("update check cancelled while logging progress");
+            }
+        }
     }
 }
 

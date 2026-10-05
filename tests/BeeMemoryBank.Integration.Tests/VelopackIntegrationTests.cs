@@ -27,6 +27,7 @@ public class VelopackIntegrationTests : IAsyncLifetime
     private string _tempDir = null!;
     private string _releasesDir = null!;
     private string _packagesDir = null!;
+    private string _packVersion = null!;
     private ServiceProvider _services = null!;
     private UpdateService _svc = null!;
     private MaintenanceModeService _maintenance = null!;
@@ -81,7 +82,15 @@ public class VelopackIntegrationTests : IAsyncLifetime
 
         (_releasePublicKey, _releasePrivateKey) = Ed25519Signer.GenerateKeyPair();
 
-        // 3. Build & pack dummy console app version 1.1.0 using dotnet and vpk
+        // 3. Build & pack a dummy console app one patch version above the running app.
+        // CheckAsync compares the manifest's stable version against AppVersion.Current - the
+        // compiled-in version of the Api assembly (from the repo VERSION file), NOT against the
+        // locator's mock - so the offered update must be derived from that version. A hardcoded
+        // pack version rots on every repo release: with it left at 1.1.0, both check-gated
+        // scenarios silently turned into "already on latest" once VERSION moved to 2.x.
+        var running = Version.Parse(AppVersion.Current);
+        _packVersion = new Version(running.Major, running.Minor, running.Build + 1).ToString();
+
         var dummySrcDir = Path.Combine(_tempDir, "dummy_src");
         var dummyPubDir = Path.Combine(_tempDir, "dummy_pub");
         Directory.CreateDirectory(dummySrcDir);
@@ -103,7 +112,7 @@ public class VelopackIntegrationTests : IAsyncLifetime
         var pPub = System.Diagnostics.Process.Start(psiPub);
         await pPub!.WaitForExitAsync();
 
-        var psiPack = new System.Diagnostics.ProcessStartInfo("vpk", $"pack --packId TestApp --packVersion 1.1.0 --packDir \"{dummyPubDir}\" --mainExe dummy_src.exe --outputDir \"{_releasesDir}\" --skipVeloAppCheck -y")
+        var psiPack = new System.Diagnostics.ProcessStartInfo("vpk", $"pack --packId TestApp --packVersion {_packVersion} --packDir \"{dummyPubDir}\" --mainExe dummy_src.exe --outputDir \"{_releasesDir}\" --skipVeloAppCheck -y")
         {
             CreateNoWindow = true,
             UseShellExecute = false
@@ -111,11 +120,12 @@ public class VelopackIntegrationTests : IAsyncLifetime
         var pPack = System.Diagnostics.Process.Start(psiPack);
         await pPack!.WaitForExitAsync();
 
-        // Set up the TestVelopackLocator to mock our running app's environment as "TestApp" version "1.0.0"
+        // Set up the TestVelopackLocator to mock our running app's environment as "TestApp"
+        // at the version it really runs as - the compiled-in one, exactly what production reads
         var updateExePath = Path.Combine(_tempDir, "Update.exe");
         var locator = new TestVelopackLocator(
             "TestApp",
-            "1.0.0",
+            AppVersion.Current,
             _packagesDir,
             _tempDir,
             _tempDir,
@@ -186,21 +196,21 @@ public class VelopackIntegrationTests : IAsyncLifetime
             return;
         }
 
-        // 1. Get the package info of the produced package TestApp-1.1.0-full.nupkg
-        var packagePath = Path.Combine(_releasesDir, "TestApp-1.1.0-full.nupkg");
+        // 1. Get the package info of the produced package TestApp-<packVersion>-full.nupkg
+        var packagePath = Path.Combine(_releasesDir, $"TestApp-{_packVersion}-full.nupkg");
         File.Exists(packagePath).Should().BeTrue();
         var packageBytes = await File.ReadAllBytesAsync(packagePath);
         var packageSha256 = Sha256Hex(packageBytes);
 
         // 2. Build the signed manifest for BMB UpdateService
-        var (json, sig) = BuildSignedManifest("1.1.0", "TestApp-1.1.0-full.nupkg", packageSha256, packageBytes.Length);
+        var (json, sig) = BuildSignedManifest(_packVersion, $"TestApp-{_packVersion}-full.nupkg", packageSha256, packageBytes.Length);
 
         // Mock the ApplyUpdatesAndRestart action to verify it gets called
         bool applyCalled = false;
         _svc.ApplyUpdatesAndRestartAction = (mgr, asset) =>
         {
             applyCalled = true;
-            asset.Version.Should().Be(SemanticVersion.Parse("1.1.0"));
+            asset.Version.Should().Be(SemanticVersion.Parse(_packVersion));
             asset.PackageId.Should().Be("TestApp");
         };
 
@@ -238,13 +248,13 @@ public class VelopackIntegrationTests : IAsyncLifetime
             return;
         }
 
-        // 1. Get the package info of the produced package TestApp-1.1.0-full.nupkg
-        var packagePath = Path.Combine(_releasesDir, "TestApp-1.1.0-full.nupkg");
+        // 1. Get the package info of the produced package TestApp-<packVersion>-full.nupkg
+        var packagePath = Path.Combine(_releasesDir, $"TestApp-{_packVersion}-full.nupkg");
         var packageBytes = await File.ReadAllBytesAsync(packagePath);
         
         // 2. Build the signed manifest but with a tampered SHA-256 hash
         var tamperedSha256 = Sha256Hex(new byte[] { 0, 1, 2 }); // Guarantees a mismatch
-        var (json, sig) = BuildSignedManifest("1.1.0", "TestApp-1.1.0-full.nupkg", tamperedSha256, packageBytes.Length);
+        var (json, sig) = BuildSignedManifest(_packVersion, $"TestApp-{_packVersion}-full.nupkg", tamperedSha256, packageBytes.Length);
 
         // Mock the ApplyUpdatesAndRestart action (should not be called)
         _svc.ApplyUpdatesAndRestartAction = (mgr, asset) =>

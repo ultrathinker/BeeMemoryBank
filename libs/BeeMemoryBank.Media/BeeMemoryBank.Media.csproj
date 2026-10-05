@@ -6,7 +6,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Single dependency: SixLabors.ImageSharp. Everything else (Certes, Makaretu,
+    <!-- Single dependency: SixLabors.ImageSharp. Everything else (Makaretu,
          DPAPI) stays in BeeMemoryBank.Infrastructure, so consumers that only need
          image transcoding (the Mobile MAUI app, in particular) do not pay for any of
          those packages. -->

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using BeeMemoryBank.Platforms.Apple.Processes;
 
 namespace BeeMemoryBank.BlindDesktop.MacOS;
 
@@ -52,7 +53,8 @@ internal sealed class ProcessCommandRunner : ICommandRunner
             process.BeginErrorReadLine();
             if (!process.WaitForExit(timeout))
             {
-                try { process.Kill(entireProcessTree: true); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+                // tree-kill, then a bounded wait: on macOS the SIGKILLs are only sent, not waited for
+                ProcessTreeKill.KillTreeAndWait(process);
                 return new CommandResult(-1, "", "timed out", TimedOut: true);
             }
             process.WaitForExit();   // lets the asynchronous readers drain

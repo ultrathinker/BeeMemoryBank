@@ -20,7 +20,8 @@ public sealed class BlindHeavyWork(
     BlindPhoneBackupRunner backups,
     BlindPhoneLog log,
     string replicaWorkDirectory,
-    TimeProvider time)
+    TimeProvider time,
+    BlindActivity? activity = null)
 {
     private static readonly SemaphoreSlim OneAtATime = new(1, 1);
     private BlindHeavyFailure? _lastFailure;
@@ -38,6 +39,11 @@ public sealed class BlindHeavyWork(
     /// <summary>Runs what is due. <paramref name="forceBackup"/> is the "Back up now" button.</summary>
     public async Task<string> RunAsync(bool forceBackup, CancellationToken ct)
     {
+        // Registered before anything is touched: "Disconnect and wipe" waits for this job to end, and a job that starts while it runs is refused.
+        using var operation = activity?.TryBegin(BlindActivity.Heavy, ct);
+        if (activity is not null && operation is null) return "The copy is being wiped; nothing was started.";
+        ct = operation?.Token ?? ct;
+
         if (!await OneAtATime.WaitAsync(0, ct)) return "Already running.";
         try
         {

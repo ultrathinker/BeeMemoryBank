@@ -225,6 +225,8 @@ public class SecretScopeTests
         var thrown = scope.Should().Throw<UserSecretStoreException>(what).Which;
         thrown.FailureKind.Should().Be(UserSecretStoreFailureKind.Malformed);
         thrown.Message.Should().NotContain(dir).And.NotContain(Path.GetFileName(dir));
+        thrown.Message.Should().Contain("Delete the scope file only to start a new scope")
+            .And.Contain("secrets kept under the old scope become unrecoverable");
         File.ReadAllBytes(file).Should().Equal(content, "a new id would orphan the secrets kept under the old one");
         Directory.GetFileSystemEntries(dir).Should().ContainSingle();
     }

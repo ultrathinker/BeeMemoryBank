@@ -25,9 +25,6 @@ Everything else listens on your own computer (`127.0.0.1`) only.
 | Joining an existing network | The node address you enter | Your master password, the new node's id, name and public key |
 | Remote accounts | The remote node you add | Username and password once, then a token |
 | AI chat | [OpenRouter](https://openrouter.ai), with your own API key | The conversation, including article text the chat tools read for it, and attached images |
-| Internet access: dynamic DNS | DuckDNS, deSEC or Cloudflare, whichever you choose | Your domain, the provider token and your public IP |
-| Internet access: router port mapping | Your router (UPnP) | A discovery request and an external-IP query |
-| Internet access: HTTPS certificate | Let's Encrypt | An account key, your domain and optionally a contact email |
 | Server update feed | The feed URL an operator configures | A plain download request |
 | "Scan my network" when joining | Your local network (mDNS) | A standard discovery query |
 

@@ -36,7 +36,9 @@ public sealed class BlindStartupTests
     /// <summary>
     /// Every entry point that reads or writes the database waits for it to be open: the page (creates the identity),
     /// the app's start-up, and the three background entry points (a worker can be the first thing to run after a
-    /// reboot or an update). Read from the built assembly; a type that names <c>BlindStartup</c> is one that awaits it.
+    /// reboot or an update). Read from the built assembly; a type that names <c>BlindStartup</c> is one that awaits it. The page does
+    /// not open the database itself: it asks the shared controller's <c>InitializeAsync</c>, which awaits <c>BlindStartup</c> (the
+    /// controller's own test in the AppCore tests, <c>Initialize_MakesTheIdentityWithTheHostsName_AndStatusShowsItAwaitingAnAnswer</c>).
     /// </summary>
     [Theory]
     [InlineData("BeeMemoryBank.BlindMobile.App")]
@@ -46,11 +48,14 @@ public sealed class BlindStartupTests
     [InlineData("BeeMemoryBank.BlindMobile.Platforms.Android.BlindBackupService")]
     public void EveryEntryPointThatTouchesTheDatabase_WaitsForItToBeOpen(string entryPoint)
     {
-        var startup = new HashSet<string>(StringComparer.Ordinal) { "BeeMemoryBank.BlindMobile.Services.Blind.BlindStartup" };
+        var awaited = entryPoint == "BeeMemoryBank.BlindMobile.Pages.BlindHomePage"
+            ? "BeeMemoryBank.BlindMobile.Services.Blind.IBlindAppController"
+            : "BeeMemoryBank.BlindMobile.Services.Blind.BlindStartup";
+        var startup = new HashSet<string>(StringComparer.Ordinal) { awaited };
 
         var mentions = BoundaryScanner.Scan(FindAppDll(), owner => owner == entryPoint, startup);
 
-        mentions.Should().NotBeEmpty($"{entryPoint} must await BlindStartup.EnsureReadyAsync() before it uses the database");
+        mentions.Should().NotBeEmpty($"{entryPoint} must await {awaited.Split('.')[^1]} (which opens the database) before it uses the database");
     }
 
     /// <summary>
@@ -112,6 +117,9 @@ public sealed class BlindStartupTests
                     // call (0x28) / callvirt (0x6F) / newobj (0x73) followed by a method token; a false positive only adds a name.
                     if (il[i] is not (0x28 or 0x6F or 0x73)) continue;
                     var token = BitConverter.ToInt32(il, i + 1);
+                    // A byte pattern that only looks like a call (the Release build's IL has plenty) can name a row that does not exist.
+                    var row = token & 0xFFFFFF;
+                    if (row == 0 || row > md.GetTableRowCount(token >> 24 == 0x0A ? TableIndex.MemberRef : TableIndex.MethodDef)) continue;
                     switch (token >> 24)
                     {
                         case 0x0A: // member reference (another assembly)

@@ -341,7 +341,7 @@ public class SyncClient(
 
         var pushPosition = await pushPositionRepo.GetAsync(remoteIdentity.NodeId);
         long pushAfter = pushPosition?.LastPushedSeq ?? 0;
-        int totalApplied = 0, totalSkipped = 0;
+        int totalApplied = 0, totalSkipped = 0, totalDropped = 0;
         long localMaxSeq = await eventLogRepo.GetMaxSequenceAsync();
 
         // Gap detector (plan 5.1): relaying "everything after pushAfter" would start at the oldest
@@ -379,6 +379,7 @@ public class SyncClient(
                     await PushChunkWithSplitAsync(http, remoteApiBase, token, chunk, ct);
                 totalApplied += applied;
                 totalSkipped += skipped;
+                totalDropped += dropped;
 
                 // Advance the cursor only as far as the remote actually applied. If the remote
                 // skipped event N (signature, schema, replay shield, etc.) and applied N+1,
@@ -386,10 +387,10 @@ public class SyncClient(
                 // permanently — the remote would never see it again.
                 //
                 // Three cases:
-                //   1. New server, Applied > 0 → use LastAppliedSequence. Stops past the last
-                //      successfully-applied event. Skipped events stay in our outbox until either
-                //      they get applied on the remote or admin intervenes.
-                //   2. New server, Applied == 0 → LastAppliedSequence is null AND nothing landed.
+                //   1. New server → LastAppliedSequence is the end of its contiguous accepted
+                //      prefix. Skipped events stay in our outbox until either they get applied on
+                //      the remote or admin intervenes.
+                //   2. New server, Applied == 0 and Dropped == 0 → LastAppliedSequence is null AND nothing landed.
                 //      Don't advance; break to surface the stall via /api/sync/status.
                 //   3. Older server (LastAppliedSequence absent in JSON, deserializes to null) but
                 //      Applied > 0 → no per-event detail available; treat "got something, no
@@ -404,15 +405,29 @@ public class SyncClient(
                     stalled = true;
                     break;
                 }
+                if (skipped > 0 && !lastAppliedSeq.HasValue)
+                {
+                    // A current server reports null when the first item was skipped, even if it
+                    // later accepted items in this batch. Do not mistake that for the old-server
+                    // fallback below: advancing to the chunk end would lose that first event.
+                    logger.LogWarning(
+                        "Push to {Remote}: the accepted prefix is empty (skipped={Skipped}); leaving cursor at {After}",
+                        remoteIdentity.NodeId, skipped, pushAfter);
+                    stalled = true;
+                    break;
+                }
                 if (lastAppliedSeq.HasValue)
                 {
                     if (lastAppliedSeq.Value > pushAfter)
                         pushAfter = lastAppliedSeq.Value;
-                    if (applied < chunk.Count) { stalled = true; break; } // some skipped — stop, re-push next cycle
+                    if (applied + dropped < chunk.Count) { stalled = true; break; } // some skipped — stop, re-push next cycle
                 }
                 else
                 {
                     // Older server: no per-event detail (case 3). Advance to the end of the chunk.
+                    // An older peer which sends the historical, non-contiguous value cannot be
+                    // recognized per event on protocol 3, so its reported position must still be
+                    // trusted. Upgrading that peer is required to close that legacy limitation.
                     pushAfter = chunk[^1].SequenceNum;
                 }
             }
@@ -421,7 +436,7 @@ public class SyncClient(
             if (page.Count < PushFetchSize) break;
         }
 
-        if (totalApplied + totalSkipped > 0)
+        if (totalApplied + totalDropped > 0)
         {
             await pushPositionRepo.UpsertAsync(new SyncPushPosition
             {
@@ -429,8 +444,8 @@ public class SyncClient(
                 LastPushedSeq = pushAfter,
                 PushedAt = DateTime.UtcNow
             });
-            logger.LogInformation("Push: applied {Applied}, skipped {Skipped} on {NodeId}",
-                totalApplied, totalSkipped, remoteIdentity.NodeId);
+            logger.LogInformation("Push: applied {Applied}, dropped {Dropped}, skipped {Skipped} on {NodeId}",
+                totalApplied, totalDropped, totalSkipped, remoteIdentity.NodeId);
         }
 
         return appliedCount;
@@ -574,18 +589,29 @@ public class SyncClient(
                 "forever. This needs operator attention (server per-request cap and actual event size " +
                 "are mismatched). See GET /api/sync/quarantine.",
                 evt.SequenceNum, evt.EventId, evt.EventType, evt.Payload?.Length ?? 0);
-            await SyncEventQuarantine.RecordFailureAsync(quarantineRepo, evt.EventId, evt.EventType, evt.NodeId, "Rejected as too large to push (413), even alone.");
-            return (0, 1, 0, evt.SequenceNum);
+            var quarantined = await SyncEventQuarantine.RecordPermanentFailureUntilQuarantinedAsync(
+                quarantineRepo, evt.EventId, evt.EventType, evt.NodeId,
+                "Rejected as too large to push (413), even alone.");
+
+            // A 413 for a one-event request cannot be resolved by retrying. It is deliberately
+            // consumed immediately, even though the generic failure tracker has not yet reached
+            // its retry threshold; otherwise the push cursor would remain before this event and
+            // block every later event forever.
+            logger.LogDebug("Push: too-large event {EventId} recorded as quarantined={Quarantined}",
+                evt.EventId, quarantined);
+            return (0, 0, 1, evt.SequenceNum);
         }
 
         var mid = chunk.Count / 2;
         var a = await PushChunkWithSplitAsync(http, baseUrl, token, chunk[..mid], ct);
         var b = await PushChunkWithSplitAsync(http, baseUrl, token, chunk[mid..], ct);
-        // The second half's LastAppliedSequence wins when present — it covers the later-sequenced
-        // half. If it 413'd down to nothing (Dropped/Skipped only, no LastAppliedSequence) but the
-        // first half made progress, keep the first half's position instead of losing it.
+        // The second half can extend the prefix only after the first half accepted every item. If
+        // the first half skipped an item, returning B's later position would jump the cursor over
+        // that skipped item. Re-sending B is safe: EventApplier reports an existing event as
+        // Applied without applying its data again.
+        var firstHalfAccepted = a.Applied + a.Dropped == mid;
         return (a.Applied + b.Applied, a.Skipped + b.Skipped, a.Dropped + b.Dropped,
-            b.LastAppliedSequence ?? a.LastAppliedSequence);
+            firstHalfAccepted ? b.LastAppliedSequence ?? a.LastAppliedSequence : a.LastAppliedSequence);
     }
 
     /// <summary>

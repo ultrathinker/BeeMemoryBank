@@ -55,8 +55,8 @@ BMB_API_URL=http://localhost:5300 ASPNETCORE_URLS=http://localhost:5301 ./BeeMem
 
 ```
 server/
-├── BeeMemoryBank.Api/       — REST API (33 endpoint groups) + MCP server
-│   ├── Endpoints/           — 39 files, 33 groups: Activity, Admin, Agent, Article, AutoUnlock, BeeImport, Chat (split across 7 files), Comment, Compaction, ConceptTag, Copy, DekRotation, Download, Folder, HardDelete, Init, InternetAccess, Join, Key, Media, ObsidianImport, RemoteAccount, RemoteAuth, Restriction, Search, Session, Snapshot, Sync, Tree, Update, User, Version, Whitelist
+├── BeeMemoryBank.Api/       — REST API (32 endpoint groups) + MCP server
+│   ├── Endpoints/           — 38 files, 32 groups: Activity, Admin, Agent, Article, AutoUnlock, BeeImport, Chat (split across 7 files), Comment, Compaction, ConceptTag, Copy, DekRotation, Download, Folder, HardDelete, Init, Join, Key, Media, ObsidianImport, RemoteAccount, RemoteAuth, Restriction, Search, Session, Snapshot, Sync, Tree, Update, User, Version, Whitelist
 │   ├── McpTools/            — 7 tool groups: Search (2 tools), Read (8), Write (10), Session (2), Upload (2), Audit (1), Concept (8) — 33 tools total
 │   ├── Middleware/           — AgentAuthMiddleware (bearer → auto-unlock)
 │   ├── Services/            — SyncTokenStore, SnapshotService, HttpActorProvider, DekRotationService, LazySlotRewrapService
@@ -71,7 +71,7 @@ server/
 │   └── CliActorProvider     — IActorProvider for CLI (actor_type = "cli")
 │
 libs/
-├── BeeMemoryBank.Core/      — Domain kernel. No ONNX, ACME, mDNS, DPAPI, ImageSharp.
+├── BeeMemoryBank.Core/      — Domain kernel. No ONNX, mDNS, DPAPI, ImageSharp.
 │   ├── Models/              — Article, Comment, Agent, Folder, FolderInfo, Media, NodeIdentity, AuditLog,
 │   │                          ArticleVersion, FolderAclEntry...
 │   │                          (models in BeeMemoryBank.Core/Models/)
@@ -87,20 +87,18 @@ libs/
 │   ├── Models/sentencepiece.bpe.model  (embedded)
 │   └── DependencyInjection    — AddOnnxEmbeddings / AddEmbeddingServices (HybridSearchService moved here)
 │
-├── BeeMemoryBank.Infrastructure/ — ACME, mDNS, DPAPI, UPnP, firewall, local CA. Carved out of
+├── BeeMemoryBank.Infrastructure/ — mDNS, DPAPI, firewall, local CA. Carved out of
 │                                    Core in wave 2 A2 so hosts that only need the kernel no longer pull
 │                                    any of these.
-│   ├── Acme/                 — AcmeCertificateService, AcmeChallengePersister, AcmeDirectories, TlsAlpn*…
 │   ├── Mdns/                 — MdnsAnnouncer (+Options), MdnsBrowser, MdnsConstants, MdnsNodeRecord
-│   ├── Ddns/                 — DdnsUpdater, CloudflareProvider/Config, DesecProvider/Config, DuckDnsProvider/Config
-│   ├── Network/              — StaticExternalIpProvider, UpnpExternalIpProvider, FirewallService
+│   ├── Network/              — FirewallService
 │   ├── OsAutoUnlock/         — OsAutoUnlockService (DPAPI-backed, Windows-only)
-│   ├── Tls/                  — LocalCaService (Windows trust store + DPAPI leaf/CA keys)
+│   ├── Tls/                  — LocalCaService (Windows trust store + DPAPI leaf/CA keys), CertificateKeyStorageFlags
 │   └── DependencyInjection    — AddMdnsBrowser / AddMdnsAnnouncer
 │
 ├── BeeMemoryBank.Media/     — ImageSharp transcoder + AddImageTranscoder(). Carved out of
 │                                Infrastructure so consumers that only need transcoding (Mobile, Api)
-│                                do not pull ACME / mDNS / DPAPI through the larger project.
+│                                do not pull mDNS / DPAPI through the larger project.
 │   └── ImageSharpImageTranscoder (the only consumer of the IImageTranscoder interface)
 │
 ├── BeeMemoryBank.Crypto/    — Cryptographic primitives (~450 LOC)
@@ -137,7 +135,7 @@ mobile/
 Core ← Crypto
 Core ← Search
 Core ← Embeddings   (Embeddings owns IEmbeddingGenerator's concrete impl + ProjectionMatrix + HybridSearchService; Core stays free of ONNX/Tokenizers)
-Core ← Infrastructure  (Infrastructure owns the ACME/mDNS/ImageSharp/DPAPI/UPnP/firewall/local-CA surface; Core stays free of all of those)
+Core ← Infrastructure  (Infrastructure owns the mDNS/ImageSharp/DPAPI/firewall/local-CA surface; Core stays free of all of those)
 Core, Embeddings, Infrastructure, Storage, Crypto ← Sync
 Core, Embeddings, Infrastructure, Storage, Crypto, Sync ← Api
 Core, Embeddings, Infrastructure, Storage, Sync ← Cli
@@ -145,7 +143,7 @@ Core, Embeddings, Infrastructure ← Web
 Core, Embeddings, Infrastructure, Storage, Crypto, Sync ← Mobile
 ```
 
-No circular dependencies. After wave 2 A2 Core no longer references ONNX, ACME, mDNS, DPAPI, ImageSharp or Makaretu.Dns.Multicast — every consumer that needs them now depends on Embeddings (for ONNX/Tokenizers) or Infrastructure (for the rest), keeping the kernel light.
+No circular dependencies. After wave 2 A2 Core no longer references ONNX, mDNS, DPAPI, ImageSharp or Makaretu.Dns.Multicast — every consumer that needs them now depends on Embeddings (for ONNX/Tokenizers) or Infrastructure (for the rest), keeping the kernel light.
 
 ## Node Topology
 

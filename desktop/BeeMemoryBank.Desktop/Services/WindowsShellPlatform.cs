@@ -19,11 +19,11 @@ internal sealed class WindowsShellPlatform : IShellPlatform
         return new PreventSleepService(settings);
     }
 
-    public IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode)
+    public IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode, Func<bool> lockOnSleepEnabled)
     {
         if (!OperatingSystem.IsWindows()) return null;
         // The Windows monitor shows its own balloon and does not wait for the callback: the lock request goes out in the background.
-        return new PowerEventsService(() => { _ = Task.Run(() => lockNode(CancellationToken.None)); });
+        return new PowerEventsService(() => { _ = Task.Run(() => lockNode(CancellationToken.None)); }, lockOnSleepEnabled);
     }
 
     public IFileManagerReveal FileManager { get; } = new WindowsFileManager();

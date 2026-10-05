@@ -78,8 +78,8 @@ public sealed class VelopackArtifactSource : IUpdateArtifactSource
 
         await mgr.DownloadUpdatesAsync(updateInfo).ConfigureAwait(false);
 
-        var locator = _locator ?? VelopackLocator.CreateDefaultForPlatform();
-        var packagePath = Path.Combine(locator.PackagesDir, updateInfo.TargetFullRelease.FileName);
+        var packagePath = Path.Combine(
+            GetPackagesDirOrThrow(_locator), updateInfo.TargetFullRelease.FileName);
 
         if (!File.Exists(packagePath))
         {
@@ -87,6 +87,25 @@ public sealed class VelopackArtifactSource : IUpdateArtifactSource
         }
 
         return await File.ReadAllBytesAsync(packagePath, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the Velopack packages directory for the effective locator. Outside a Velopack
+    /// deployment (dev runs, tests, unsupported platforms) the default locator or its
+    /// <c>PackagesDir</c> is null — used to surface as a confusing NullReferenceException /
+    /// ArgumentNullException from <see cref="Path.Combine"/>, now it is a clear error instead.
+    /// </summary>
+    public static string GetPackagesDirOrThrow(IVelopackLocator? locator)
+    {
+        var packagesDir = (locator ?? VelopackLocator.CreateDefaultForPlatform())?.PackagesDir;
+        if (packagesDir is null)
+        {
+            throw new InvalidOperationException(
+                "Velopack packages directory is not available: this process is not running inside a " +
+                "Velopack deployment. Package retrieval requires an installed (deployed) application " +
+                "or an explicitly provided IVelopackLocator.");
+        }
+        return packagesDir;
     }
 }
 

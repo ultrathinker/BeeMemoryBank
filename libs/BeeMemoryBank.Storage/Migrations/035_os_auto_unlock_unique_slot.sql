@@ -1,0 +1,4 @@
+-- A race in an earlier build could leave several auto-unlock slots. This migration cannot safely
+-- pick one: the OS secret belongs to the last writer, which is not necessarily the newest slot.
+-- Leave every candidate intact. OsAutoUnlockService finds the one the stored secret opens,
+-- removes the others, and only then creates the partial unique index.

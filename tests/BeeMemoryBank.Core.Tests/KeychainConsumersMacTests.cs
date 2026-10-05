@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using BeeMemoryBank.Core.Services;
-using BeeMemoryBank.Infrastructure.Acme;
 using BeeMemoryBank.Infrastructure.OsAutoUnlock;
 using BeeMemoryBank.Infrastructure.Secrets;
 using BeeMemoryBank.Infrastructure.Tls;
@@ -16,7 +15,7 @@ namespace BeeMemoryBank.Core.Tests;
 /// FILE (never the login keychain) goes into <see cref="OsAutoUnlockService"/>, <see cref="UpdateUnlockHandoff"/> and
 /// <see cref="LocalCaService"/> through their constructors, and the fail-closed rules of the design are exercised against the real thing:
 /// a slot whose secret is missing mints nothing, a locked or damaged Keychain never unlocks the vault and never reads as "not enabled",
-/// a handoff is used once. The ACME account key and PFX password are in the Acme tests project (their seams are internal there). A Mac
+/// a handoff is used once. A Mac
 /// only; skipped, not failed, elsewhere.
 /// </summary>
 public class OsAutoUnlockOnTheMacKeychainTests(ITestOutputHelper output) : TestFixture

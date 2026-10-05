@@ -49,6 +49,19 @@
     <PackageReference Include="Xamarin.AndroidX.Core.Core.Ktx" />
     <PackageReference Include="Xamarin.AndroidX.Biometric" />
     <PackageReference Include="Xamarin.AndroidX.Work.Runtime" />
+    <!-- The AndroidX bindings MAUI pulls at an older train than Work.Runtime needs: same versions as Directory.Packages.props, so NU1608 is gone. -->
+    <PackageReference Include="Xamarin.AndroidX.Activity.Ktx" />
+    <PackageReference Include="Xamarin.AndroidX.Collection.Ktx" />
+    <PackageReference Include="Xamarin.AndroidX.Fragment.Ktx" />
+    <PackageReference Include="Xamarin.AndroidX.Lifecycle.Process" />
+    <PackageReference Include="Xamarin.AndroidX.Lifecycle.Runtime.Ktx" />
+    <PackageReference Include="Xamarin.AndroidX.Lifecycle.Runtime.Ktx.Android" />
+    <PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModel" />
+    <PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModel.Android" />
+    <PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModel.Ktx" />
+    <PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModelSavedState" />
+    <PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModelSavedState.Android" />
+    <PackageReference Include="Xamarin.AndroidX.SavedState.SavedState.Ktx" />
     <PackageReference Include="Markdig" />
     <!-- BeeMemoryBank.Storage references SQLitePCLRaw.lib.e_sqlite3 directly, to force the native
          SQLite above the vulnerable 2.1.11 (CVE-2025-6965). That package ships desktop RIDs only
@@ -66,7 +79,7 @@
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
     <!-- OnnxEmbeddingGenerator for offline semantic search; the camera-roll upload path needs
          the IImageTranscoder from Media (separately carved out from Infrastructure so this app
-         does not pull in ACME / mDNS / DPAPI). -->
+         does not pull in mDNS / DPAPI). -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Embeddings\BeeMemoryBank.Embeddings.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Media\BeeMemoryBank.Media.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />

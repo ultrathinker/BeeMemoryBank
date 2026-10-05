@@ -725,6 +725,35 @@ public class DekRotationFlowTests : IAsyncLifetime
             timeout: TimeSpan.FromSeconds(60));
     }
 
+    [Fact]
+    public async Task ProposeWithWrongPassword_FailsWith403AndLeavesTheFlowUsable()
+    {
+        // A wrong password must come back as 403 with the exact wrong-password message
+        // (UnauthorizedAccessException per ExceptionStatusMap - a CryptographicException escaping
+        // the propose path would surface as a 500 instead), and the failed propose must leave no
+        // pending state behind: the very next propose with the correct password succeeds.
+        // (The KEK/DEK buffers wiped on that failure path are verified by reading the code -
+        // ProposeRotationAsync clears them in a single finally covering every path.)
+        var wrongPassword = await _client.PostAsJsonAsync("/api/dek-rotation/propose",
+            new { masterPassword = Password + "-typo" });
+
+        wrongPassword.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await wrongPassword.Content.ReadAsStringAsync()).Should().Contain("Wrong master password.");
+
+        var retry = await _client.PostAsJsonAsync("/api/dek-rotation/propose",
+            new { masterPassword = Password });
+        retry.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await retry.Content.ReadFromJsonAsync<JsonElement>();
+
+        // Clean up: accept the retried proposal so the fixture node is left in a sane state.
+        var acceptResp = await _client.PostAsJsonAsync("/api/dek-rotation/accept",
+            new { commitEventId = body.GetProperty("commitEventId").GetGuid(), masterPassword = Password });
+        acceptResp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        await PollProgressAsync(
+            step => step == DekRotationFlowStep.Completed || step == DekRotationFlowStep.Failed,
+            timeout: TimeSpan.FromSeconds(60));
+    }
+
     /// <summary>
     /// Logs in, retrying while the node still reports maintenance mode (503). Any other status —
     /// including a genuine failure — is returned immediately so the caller's assertion sees it.

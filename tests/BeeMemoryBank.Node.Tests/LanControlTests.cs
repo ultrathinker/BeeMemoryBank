@@ -84,6 +84,26 @@ public class LanControlTests : IAsyncLifetime
         _listener.Current.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("X-Forwarded-For", "203.0.113.9")]
+    [InlineData("X-Forwarded-Host", "bee.example.com")]
+    [InlineData("X-Forwarded-Proto", "https")]
+    [InlineData("Forwarded", "for=203.0.113.9;proto=https")]
+    [InlineData("X-Real-IP", "203.0.113.9")]
+    public async Task FromAProxyOnThisMachine_404_EvenWithTheKey_AndTheListenerStaysOff(string header, string value)
+    {
+        using var req = Request(HttpMethod.Post, "/node/lan/enable");
+        req.Headers.Add("X-Test-Remote-IP", "127.0.0.1");
+        req.Headers.Add(header, value);
+
+        (await _client.SendAsync(req)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        _listener.Current.Should().BeNull();
+
+        using var status = Request(HttpMethod.Get, "/node/lan");
+        status.Headers.Add(header, value);
+        (await _client.SendAsync(status)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     [Fact]
     public async Task Enable_ReturnsTokenAndPin_AndNeverTouchesTheFirewall()
     {

@@ -69,6 +69,7 @@
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Swap.cs" Link="Api\Services\SnapshotService.Swap.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.cs" Link="Api\Services\SnapshotService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SyncTokenStore.cs" Link="Api\Services\SyncTokenStore.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Startup\BlindRoleServices.cs" Link="Api\Startup\BlindRoleServices.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Startup\BlindRoleStartup.cs" Link="Api\Startup\BlindRoleStartup.cs" />
   </ItemGroup>
 </Project>

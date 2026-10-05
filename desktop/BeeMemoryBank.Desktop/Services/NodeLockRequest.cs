@@ -16,7 +16,8 @@ namespace BeeMemoryBank.Desktop.Services;
 /// internal key in <c>X-Internal-Key</c>. The key is the one <see cref="NodeLifecycleService"/> generated when it started this node
 /// (it also puts it in this process's <c>BMB_INTERNAL_KEY</c>, where <see cref="NodeSessionHandoff"/> reads it for the update
 /// handoff). It is sent only to a loopback address, over a connection that does not use a proxy and does not follow redirects, and it
-/// is never part of any text this class returns or logs.</para>
+/// is never part of any text this class returns or logs. Those guards are the ones every call to the node's front gets from
+/// <see cref="NodeFrontClient"/>.</para>
 ///
 /// <para><b>A node this app did not start.</b> When the shell attached to a node that was already running (a service, the command
 /// line, another app) it has no key for it, and the one in its environment, if any, belongs to a node it hosted earlier. Nothing is
@@ -34,15 +35,14 @@ namespace BeeMemoryBank.Desktop.Services;
 public sealed class NodeLockRequest
 {
     public const string Route = "/node/lock";
-    public const string InternalKeyHeader = "X-Internal-Key";
+    public const string InternalKeyHeader = NodeFrontClient.InternalKeyHeader;
 
     /// <summary>How long the shell waits for the node's answer. The node bounds its own call to the Api at 3 s, so it answers first.</summary>
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan DefaultTimeout = NodeFrontClient.DefaultTimeout;
 
     private readonly Func<string?> _frontUrl;
     private readonly Func<string?> _internalKey;
-    private readonly HttpMessageHandler? _handler;
-    private readonly TimeSpan _timeout;
+    private readonly NodeFrontClient _client;
     private readonly Action<string> _log;
 
     /// <param name="frontUrl">The open node's address, read at the moment of the request; null or empty when no node is open.</param>
@@ -54,8 +54,7 @@ public sealed class NodeLockRequest
     {
         _frontUrl = frontUrl ?? throw new ArgumentNullException(nameof(frontUrl));
         _internalKey = internalKey ?? throw new ArgumentNullException(nameof(internalKey));
-        _handler = handler;
-        _timeout = timeout ?? DefaultTimeout;
+        _client = new NodeFrontClient(handler, timeout ?? DefaultTimeout);
         _log = log ?? Console.Error.WriteLine;
     }
 
@@ -73,36 +72,21 @@ public sealed class NodeLockRequest
                 return Logged(new SleepLockResult(false,
                     "This app did not start the open node, so it has no key to lock it with; the vault was not locked.", LogOnly: true), key);
 
-            if (!Uri.TryCreate($"{url.TrimEnd('/')}{Route}", UriKind.Absolute, out var target)
-                || (target.Scheme != Uri.UriSchemeHttp && target.Scheme != Uri.UriSchemeHttps)
-                || !target.IsLoopback)
-                return Logged(new SleepLockResult(false, "The node is not on this computer, so the lock request was not sent."), key);
-
-            using var client = _handler is not null
-                ? new HttpClient(_handler, disposeHandler: false)
-                : new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false });
-            client.Timeout = _timeout;
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, target);
-            request.Headers.TryAddWithoutValidation(InternalKeyHeader, key);
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            return Logged(FromStatus(response.StatusCode), key);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return Logged(new SleepLockResult(false, "The lock request was cancelled before the node answered."), key);
-        }
-        catch (OperationCanceledException)
-        {
-            return Logged(new SleepLockResult(false, $"The node did not answer the lock request within {_timeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} seconds."), key);
-        }
-        catch (HttpRequestException ex)
-        {
-            // The kind of failure only: an exception's own text is not trusted to be free of the request's details.
-            return Logged(new SleepLockResult(false, $"The node could not be reached ({ex.HttpRequestError})."), key);
+            var reply = await _client.SendAsync(HttpMethod.Post, url, Route, key, cancellationToken: cancellationToken).ConfigureAwait(false);
+            return Logged(reply.Failure switch
+            {
+                NodeFrontFailure.None => FromStatus(reply.Status!.Value),
+                NodeFrontFailure.NotLoopback => new SleepLockResult(false, "The node is not on this computer, so the lock request was not sent."),
+                NodeFrontFailure.Cancelled => new SleepLockResult(false, "The lock request was cancelled before the node answered."),
+                NodeFrontFailure.TimedOut => new SleepLockResult(false, $"The node did not answer the lock request within {_client.Timeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} seconds."),
+                // The kind of failure only: an exception's own text is not trusted to be free of the request's details.
+                NodeFrontFailure.Unreachable => new SleepLockResult(false, $"The node could not be reached ({reply.ErrorKind})."),
+                _ => new SleepLockResult(false, $"The lock request failed ({reply.ErrorKind})."),
+            }, key);
         }
         catch (Exception ex)
         {
+            // The client itself does not throw; this covers the address and key callbacks above.
             return Logged(new SleepLockResult(false, $"The lock request failed ({ex.GetType().Name})."), key);
         }
     }
@@ -120,7 +104,7 @@ public sealed class NodeLockRequest
     private SleepLockResult Logged(SleepLockResult result, string? key)
     {
         if (!string.IsNullOrEmpty(key) && result.Detail is { } detail && detail.Contains(key, StringComparison.Ordinal))
-            result = result with { Detail = detail.Replace(key, "[key]", StringComparison.Ordinal) };
+            result = result with { Detail = NodeFrontClient.Scrub(detail, key) };
         if (!result.Succeeded && result.Detail is { } reason)
         {
             try { _log($"[NodeLockRequest] {reason}"); }

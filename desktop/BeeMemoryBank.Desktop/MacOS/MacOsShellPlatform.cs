@@ -17,7 +17,7 @@ internal sealed class MacOsShellPlatform : IShellPlatform
 
     public IPreventSleepService? CreatePreventSleep(DesktopSettingsStore settings) => new MacOsPreventSleep(settings);
 
-    public IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode) => new MacOsSleepMonitor(lockNode, _notifier);
+    public IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode, Func<bool> lockOnSleepEnabled) => new MacOsSleepMonitor(lockNode, _notifier, lockOnSleepEnabled);
 
     public IFileManagerReveal FileManager { get; } = new MacOsFileManager();
 

@@ -83,6 +83,8 @@ public static class BlindWorkScheduler
 /// <summary>One sync round with the listening node.</summary>
 public class BlindSyncWorker(Context context, WorkerParameters parameters) : Worker(context, parameters)
 {
+    private readonly CancellationTokenSource _stop = new();
+
     public override Result DoWork()
     {
         var services = IPlatformApplication.Current?.Services;
@@ -90,11 +92,16 @@ public class BlindSyncWorker(Context context, WorkerParameters parameters) : Wor
         var state = services.GetRequiredService<BlindPhoneState>();
         if (state.CallCode is not { } target || !state.InitialLoadDone) return Result.InvokeSuccess()!;
 
+        // Registered before the database or the keys are touched: "Disconnect and wipe" cancels this token and waits for the round to end;
+        // while the wipe runs no new round starts. OnStopped (WorkManager or the wipe cancelled the work) fires the same token.
+        using var operation = services.GetRequiredService<BlindActivity>().TryBegin(BlindActivity.Sync, _stop.Token);
+        if (operation is null) return Result.InvokeSuccess()!;
+        var token = operation.Token;
         try
         {
             // A worker can be the first thing to run after a reboot or an update: open (migrate) the database first.
-            services.GetRequiredService<BlindStartup>().EnsureReadyAsync().GetAwaiter().GetResult();
-            Task.Run(() => services.GetRequiredService<IBlindPhoneSync>().SyncOnceAsync(target, CancellationToken.None))
+            services.GetRequiredService<BlindStartup>().EnsureReadyAsync().WaitAsync(token).GetAwaiter().GetResult();
+            Task.Run(() => services.GetRequiredService<IBlindPhoneSync>().SyncOnceAsync(target, token))
                 .GetAwaiter().GetResult();
             state.LastSyncAt = DateTimeOffset.UtcNow;
             return Result.InvokeSuccess()!;
@@ -103,11 +110,23 @@ public class BlindSyncWorker(Context context, WorkerParameters parameters) : Wor
         {
             return Result.InvokeSuccess()!;
         }
+        catch (System.OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Stopped on purpose: WorkManager runs it again when it is due, the wipe does not want it back.
+            return Result.InvokeSuccess()!;
+        }
         catch (Exception ex)
         {
             services.GetRequiredService<BlindPhoneLog>().Add("sync", $"Sync failed: {ex.Message}");
             return RunAttemptCount < 3 ? Result.InvokeRetry()! : Result.InvokeSuccess()!;
         }
+    }
+
+    // WorkManager (a constraint is gone, the work was cancelled by the wipe) stops the worker: the round ends at its next await.
+    public override void OnStopped()
+    {
+        _stop.Cancel();
+        base.OnStopped();
     }
 }
 
@@ -124,6 +143,11 @@ public class BlindHeavyWorker(Context context, WorkerParameters parameters) : Wo
         var services = IPlatformApplication.Current?.Services;
         if (services == null) return Result.InvokeSuccess()!;
 
+        // Registered first (see BlindSyncWorker): the wipe waits for this worker, and refuses it while it runs.
+        using var operation = services.GetRequiredService<BlindActivity>().TryBegin(BlindActivity.Heavy, _stop.Token);
+        if (operation is null) return Result.InvokeSuccess()!;
+        var token = operation.Token;
+
         var work = services.GetRequiredService<BlindHeavyWork>();
         var notifications = new BlindNotifications(ApplicationContext!);
         void OnProgress(string title, double p) => notifications.Show(title, p);
@@ -134,14 +158,18 @@ public class BlindHeavyWorker(Context context, WorkerParameters parameters) : Wo
             var log = services.GetRequiredService<BlindPhoneLog>();
             try
             {
-                services.GetRequiredService<BlindStartup>().EnsureReadyAsync().GetAwaiter().GetResult();
-                var result = Task.Run(() => work.RunAsync(forceBackup: false, _stop.Token)).GetAwaiter().GetResult();
+                services.GetRequiredService<BlindStartup>().EnsureReadyAsync().WaitAsync(token).GetAwaiter().GetResult();
+                var result = Task.Run(() => work.RunAsync(forceBackup: false, token)).GetAwaiter().GetResult();
                 BlindRunReport.Record(log, "run", result);
             }
             catch (Exception ex) when (ex is not System.OperationCanceledException)
             {
                 // An unplanned error: the log tells it, the next hourly slot tries again.
                 BlindRunReport.RecordFailure(log, "run", ex);
+            }
+            catch (System.OperationCanceledException)
+            {
+                // Stopped before the job began (WorkManager or the wipe): nothing to report.
             }
             return Result.InvokeSuccess()!;
         }
@@ -162,11 +190,16 @@ public class BlindHeavyWorker(Context context, WorkerParameters parameters) : Wo
 /// <summary>
 /// "Back up now": the same job started by the user while the app is open, as our own foreground
 /// service so it survives leaving the screen.
+/// <para>One service, one task, one <see cref="CancellationTokenSource"/> (<see cref="BlindSingleRun"/>): a start while the task runs is
+/// coalesced (it only refreshes the notification and remembers its start id) BEFORE anything is replaced, and the service stops itself only
+/// when its own task ends. The task is registered in <see cref="BlindActivity"/> from its first line, so "Disconnect and wipe" cancels it
+/// through that token and waits for it.</para>
 /// </summary>
 [Service(ForegroundServiceType = ForegroundService.TypeDataSync, Exported = false)]
 public class BlindBackupService : Service
 {
-    private CancellationTokenSource? _cts;
+    private readonly BlindSingleRun _run = new();
+    private bool _destroyed;
 
     public static void Start(Context context) =>
         context.StartForegroundService(new Intent(context, typeof(BlindBackupService)));
@@ -176,39 +209,59 @@ public class BlindBackupService : Service
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
     {
         var notifications = new BlindNotifications(this);
-        StartForeground(BlindNotifications.Id, notifications.Build("Backup", 0), ForegroundService.TypeDataSync);
+        _run.TryStart(startId,
+            token => RunAsync(notifications, token),
+            ended =>
+            {
+                if (_destroyed) return;
+                StopForeground(StopForegroundFlags.Remove);
+                // The latest start id: a start that arrived after the task ended keeps the service alive for its own task.
+                StopSelf(ended);
+            },
+            // Every start must reach StartForeground (startForegroundService gives the service five seconds to do it), a repeated one too.
+            inLock: () => StartForeground(BlindNotifications.Id, notifications.Build("Backup", 0), ForegroundService.TypeDataSync));
+        return StartCommandResult.NotSticky;
+    }
 
-        _cts = new CancellationTokenSource();
-        var token = _cts.Token;
-        Task.Run(async () =>
+    private static async Task RunAsync(BlindNotifications notifications, CancellationToken token)
+    {
+        BlindOperation? operation = null;
+        BlindHeavyWork? work = null;
+        BlindPhoneLog? log = null;
+        void OnProgress(string title, double p) => notifications.Show(title, p);
+        try
         {
             var services = IPlatformApplication.Current!.Services;
-            var work = services.GetRequiredService<BlindHeavyWork>();
-            void OnProgress(string title, double p) => notifications.Show(title, p);
+            log = services.GetRequiredService<BlindPhoneLog>();
+            // The whole task, start-up included, is one registered operation (the wipe waits for it); null while the wipe runs.
+            operation = services.GetRequiredService<BlindActivity>().TryBegin(BlindActivity.BackupService, token);
+            if (operation is null) return;
+
+            work = services.GetRequiredService<BlindHeavyWork>();
             work.Progress += OnProgress;
-            try
-            {
-                await services.GetRequiredService<BlindStartup>().EnsureReadyAsync();
-                var result = await work.RunAsync(forceBackup: true, token);
-                BlindRunReport.Record(services.GetRequiredService<BlindPhoneLog>(), "backup", result);
-            }
-            catch (Exception ex) when (ex is not System.OperationCanceledException)
-            {
-                BlindRunReport.RecordFailure(services.GetRequiredService<BlindPhoneLog>(), "backup", ex);
-            }
-            finally
-            {
-                work.Progress -= OnProgress;
-                StopForeground(StopForegroundFlags.Remove);
-                StopSelf(startId);
-            }
-        });
-        return StartCommandResult.NotSticky;
+            await services.GetRequiredService<BlindStartup>().EnsureReadyAsync().WaitAsync(operation.Token);
+            var result = await work.RunAsync(forceBackup: true, operation.Token);
+            BlindRunReport.Record(log, "backup", result);
+        }
+        catch (Exception ex) when (ex is not System.OperationCanceledException)
+        {
+            if (log != null) BlindRunReport.RecordFailure(log, "backup", ex);
+        }
+        catch (System.OperationCanceledException)
+        {
+            // The service was stopped (the wipe, the system): the job paused itself and says so.
+        }
+        finally
+        {
+            if (work != null) work.Progress -= OnProgress;
+            operation?.Dispose();
+        }
     }
 
     public override void OnDestroy()
     {
-        _cts?.Cancel();
+        _destroyed = true;
+        _run.Cancel();
         base.OnDestroy();
     }
 }

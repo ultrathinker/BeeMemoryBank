@@ -92,26 +92,32 @@ public partial class DekRotationService
                 slot.ArgonIterations.Value,
                 slot.ArgonParallelism.Value);
 
-            byte[] unwrappedDek;
+            // One try/finally so every derived buffer is wiped on every path. The old shape
+            // cleared only after a successful Unwrap + GetMasterDek: a wrong password threw
+            // UnauthorizedAccessException with the KEK still in memory, and a GetMasterDek
+            // failure leaked both the KEK and the unwrapped DEK. Same rule as the
+            // pre-validation cleanup in AcceptCommitCoreAsync.
+            byte[]? unwrappedDek = null;
+            byte[]? currentDek = null;
             try
             {
-                unwrappedDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, kek);
-            }
-            catch (CryptographicException)
-            {
-                throw new UnauthorizedAccessException("Wrong master password.");
-            }
+                try
+                {
+                    unwrappedDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, kek);
+                }
+                catch (CryptographicException)
+                {
+                    throw new UnauthorizedAccessException("Wrong master password.");
+                }
 
-            var currentDek = _sessionService.GetMasterDek();
-            try
-            {
+                currentDek = _sessionService.GetMasterDek();
                 if (!CryptographicOperations.FixedTimeEquals(unwrappedDek, currentDek))
                     throw new UnauthorizedAccessException("Wrong master password.");
             }
             finally
             {
-                Array.Clear(unwrappedDek);
-                Array.Clear(currentDek);
+                if (unwrappedDek != null) Array.Clear(unwrappedDek);
+                if (currentDek != null) Array.Clear(currentDek);
                 Array.Clear(kek);
             }
 

@@ -1,4 +1,3 @@
-using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using QRCoder;
@@ -9,220 +8,358 @@ namespace BeeMemoryBank.BlindMobile.Pages;
 /// The blind node's only screen (plan section 10): state, the two pairing codes, backups (now, "Save
 /// to…", schedule), the log, and "Disconnect and wipe". There is no unlock: a blind copy has no
 /// master password.
+/// <para>The page holds no blind logic and never reads a key itself: it shows <see cref="BlindHomeView"/>, built from the status of the
+/// shared <see cref="IBlindAppController"/> (the same one the desktop hosts use), whose reads of the AndroidKeyStore cannot throw into the
+/// screen. Only what is Android's own stays here: WorkManager and service requests, the file picker, the clipboard, the QR picture. Every
+/// callback of the page is guarded: a failure becomes a sentence on the screen, never an unhandled exception on the UI thread.</para>
 /// </summary>
 public partial class BlindHomePage : ContentPage
 {
-    private static readonly BlindBackupSchedule[] Schedules = [BlindBackupSchedule.Off, BlindBackupSchedule.Daily, BlindBackupSchedule.Weekly];
+    private static readonly BlindBackupSchedule[] Schedules = BlindHomeView.Schedules;
 
-    private readonly BlindPhoneState _state;
-    private readonly BlindMobilePairing _pairing;
-    private readonly BlindPhoneBackupRunner _backups;
+    private readonly IBlindAppController _app;
     private readonly BlindHeavyWork _work;
-    private readonly BlindPhoneLog _log;
-    private readonly IServiceProvider _services;
-    private readonly BlindStartup _startup;
+    private readonly BlindActivity _activity;
+    private readonly IBlindPaths _paths;
     private IDispatcherTimer? _timer;
+    private bool _applying;
+    private bool _refreshPending;
+    private string? _qrFor;
+    private string _wipeName = "";
+    private DateTimeOffset _backupAskedAt = DateTimeOffset.MinValue;
 
-    public BlindHomePage(BlindPhoneState state, BlindMobilePairing pairing, BlindPhoneBackupRunner backups,
-        BlindHeavyWork work, BlindPhoneLog log, IServiceProvider services, BlindStartup startup)
+    public BlindHomePage(IBlindAppController app, BlindHeavyWork work, BlindActivity activity, IBlindPaths paths)
     {
         InitializeComponent();
-        _startup = startup;
-        _state = state;
-        _pairing = pairing;
-        _backups = backups;
+        _app = app;
         _work = work;
-        _log = log;
-        _services = services;
+        _activity = activity;
+        _paths = paths;
         SchedulePicker.ItemsSource = new[] { "Off", "Daily", "Weekly" };
     }
 
     protected override async void OnAppearing()
     {
         base.OnAppearing();
-        _work.Progress += OnJobProgress;
-
-        // The database must be open before the identity is read or written: on the first start the migrations are
-        // still running here, and the insert used to fail into a swallowed catch ("No identity" until the next start).
-        string? startError = null;
         try
         {
-            await _startup.EnsureReadyAsync();
-            if (!_pairing.HasIdentity)
+            _work.Progress += OnJobProgress;
+            _app.Changed += OnAppChanged;
+
+            // Opens the database and makes the identity; a failure is kept in the status (StartError), it is not thrown.
+            await _app.InitializeAsync();
+            Refresh();
+
+            if (_timer is null)
             {
-                var deviceName = DeviceInfo.Current.Name;
-                var name = string.IsNullOrWhiteSpace(deviceName) ? "Blind copy" : deviceName;
-                await _pairing.CreateIdentityAsync(name);
+                _timer = Dispatcher.CreateTimer();
+                _timer.Interval = TimeSpan.FromSeconds(5);
+                _timer.Tick += (_, _) => Refresh();
             }
+            _timer.Start();
         }
         catch (Exception ex)
         {
-            startError = ex.Message;
-            _log.Add("start", $"Could not set the phone up: {ex.Message}");
+            ShowProblem(ex);
         }
-
-        ShowPhoneCode(startError);
-        Refresh();
-        _timer = Dispatcher.CreateTimer();
-        _timer.Interval = TimeSpan.FromSeconds(5);
-        _timer.Tick += (_, _) => Refresh();
-        _timer.Start();
     }
 
     protected override void OnDisappearing()
     {
         _work.Progress -= OnJobProgress;
+        _app.Changed -= OnAppChanged;
         _timer?.Stop();
         base.OnDisappearing();
     }
 
+    /// <summary>The controller says something changed (any thread): one refresh on the UI thread, however many events come.</summary>
+    private void OnAppChanged()
+    {
+        if (_refreshPending) return;
+        _refreshPending = true;
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            _refreshPending = false;
+            Refresh();
+        });
+    }
+
+    /// <summary>Reads the status again and shows it. Never throws: the 5-second timer and every handler call it.</summary>
     private void Refresh()
     {
-        NameLabel.Text = _state.DisplayName ?? "(no name)";
-        NodeLabel.Text = _state.NodeId is { } id ? $"Node {id}" : "No identity";
-        PairLabel.Text = _state.CallCode is { } call
-            ? $"Calls {call.Address} (node {call.NodeId.ToString()[..8]}…)"
-            : "Not paired yet: do steps 1 and 2 below.";
-        LoadLabel.Text = _state.InitialLoadDone
-            ? "First load: done."
-            : "First load: starts after pairing.";
-        SyncLabel.Text = $"Last sync: {When(_state.LastSyncAt)}";
-        BackupLabel.Text = $"Last backup: {When(_state.LastBackupAt)}";
-
-        SchedulePicker.SelectedIndex = Array.IndexOf(Schedules, _state.Schedule);
-        var files = _backups.Backups();
-        BackupsLabel.Text = files.Count == 0
-            ? "No backups on the phone yet."
-            : string.Join("\n", files.Select(f => $"{f.Name}  ({f.Length / 1024} KiB)"));
-        SaveToButton.IsEnabled = files.Count > 0;
-        var keyLost = _pairing.BackupKeyLost;
-        KeyLostLabel.IsVisible = keyLost;
-        BackupNowButton.IsEnabled = _state.CallCode != null && !keyLost;
-        SyncNowButton.IsEnabled = _state.CallCode != null && _state.InitialLoadDone;
-
-        LogLabel.Text = string.Join("\n", _log.Latest(30).Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}"));
+        try
+        {
+            var status = _app.GetStatus();
+            var code = status.AwaitingAnswer ? _app.PairingCode() : null;
+            var backupRunning = _activity.IsActive(BlindActivity.Heavy) || _activity.IsActive(BlindActivity.BackupService)
+                || DateTimeOffset.UtcNow - _backupAskedAt < TimeSpan.FromSeconds(10);
+            Show(BlindHomeView.Build(status, code, backupRunning), status.DisplayName);
+        }
+        catch (Exception ex)
+        {
+            ShowProblem(ex);
+        }
     }
 
-    private void ShowPhoneCode(string? startError = null)
+    private void Show(BlindHomeView view, string? displayName)
     {
-        var code = _pairing.PhoneCodeText();
-        PhoneCodeImage.IsVisible = code != null;
-        RePairButton.IsVisible = code == null && _pairing.IsPaired;
-        PhoneCodeLabel.Text = code
-            ?? (_pairing.IsPaired
-                ? "Paired. The code was used up; to connect this phone to another computer, choose Re-pair."
-                : startError != null
-                    ? $"Could not set the phone up: {startError}. Close the app and open it again."
-                    : "No identity. Wipe and set the phone up again.");
-        if (code == null) return;
-        using var generator = new QRCodeGenerator();
-        var png = new PngByteQRCode(generator.CreateQrCode(code, QRCodeGenerator.ECCLevel.Q)).GetGraphic(10);
-        PhoneCodeImage.Source = ImageSource.FromStream(() => new MemoryStream(png));
+        _wipeName = displayName ?? "";
+        StatusErrorLabel.IsVisible = false;
+        NameLabel.Text = view.Name;
+        NodeLabel.Text = view.Node;
+        PairLabel.Text = view.Pair;
+        LoadLabel.Text = view.Load;
+        SyncLabel.Text = view.Sync;
+        BackupLabel.Text = view.Backup;
+        if (view.Job != null) ShowJob(view.Job, view.JobProgress);
+        else JobProgress.IsVisible = JobLabel.IsVisible = false;
+
+        KeyLostLabel.Text = view.KeyLostText;
+        KeyLostLabel.IsVisible = view.KeyLostText != null;
+        KeyStoreLabel.Text = view.KeyStoreText;
+        KeyStoreLabel.IsVisible = view.KeyStoreText != null;
+        StartErrorLabel.Text = view.StartErrorText;
+        StartErrorLabel.IsVisible = view.StartErrorText != null;
+
+        ShowPhoneCode(view);
+        _applying = true;
+        try { SchedulePicker.SelectedIndex = view.ScheduleIndex; }
+        finally { _applying = false; }
+        BackupsLabel.Text = view.Backups;
+        SaveToButton.IsEnabled = view.CanSaveTo;
+        BackupNowButton.Text = view.BackupNowText;
+        BackupNowButton.IsEnabled = view.CanBackupNow;
+        SyncNowButton.IsEnabled = view.CanSyncNow;
+        ConnectButton.IsEnabled = view.CanConnect;
+        LogLabel.Text = view.Log;
     }
 
+    private void ShowPhoneCode(BlindHomeView view)
+    {
+        PhoneCodeImage.IsVisible = view.ShowPairingCode;
+        CopyCodeButton.IsEnabled = view.ShowPairingCode;
+        RePairButton.IsVisible = view.CanRePair;
+        PhoneCodeLabel.Text = view.PairingMessage;
+        if (view.PairingCode == _qrFor) return;
+
+        // The picture is a convenience: a failing QR library must not take the rest of the screen with it, and it is made once per code.
+        _qrFor = view.PairingCode;
+        try
+        {
+            if (view.PairingCode is { } code)
+            {
+                using var generator = new QRCodeGenerator();
+                var png = new PngByteQRCode(generator.CreateQrCode(code, QRCodeGenerator.ECCLevel.Q)).GetGraphic(10);
+                PhoneCodeImage.Source = ImageSource.FromStream(() => new MemoryStream(png));
+            }
+            else
+            {
+                PhoneCodeImage.Source = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            PhoneCodeImage.IsVisible = false;
+            PhoneCodeLabel.Text = $"The QR picture could not be made ({ex.Message}). Copy the code with the button below instead.";
+        }
+    }
+
+    /// <summary>Even the status could not be read: say so with the way out, and keep the wipe button usable.</summary>
+    private void ShowProblem(Exception ex)
+    {
+        try
+        {
+            StatusErrorLabel.Text = BlindHomeView.StatusFailedText(ex);
+            StatusErrorLabel.IsVisible = true;
+        }
+        catch (Exception)
+        {
+            // the controls are gone (the page is closing); nothing is left to tell
+        }
+    }
+
+    private void ShowJob(string title, double? progress) => MainThread.BeginInvokeOnMainThread(() =>
+    {
+        JobProgress.IsVisible = JobLabel.IsVisible = true;
+        JobProgress.Progress = progress ?? 0;
+        JobLabel.Text = progress is { } p ? $"{title}: {p:P0}" : title;
+    });
+
+    /// <summary>Progress of the scheduled worker and the backup service, which the controller does not run (it only shows jobs it started).</summary>
     private void OnJobProgress(string title, double progress) => MainThread.BeginInvokeOnMainThread(() =>
     {
-        JobProgress.IsVisible = JobLabel.IsVisible = progress < 1;
-        JobProgress.Progress = progress;
-        JobLabel.Text = $"{title}: {progress:P0}";
+        try
+        {
+            JobProgress.IsVisible = JobLabel.IsVisible = progress < 1;
+            JobProgress.Progress = progress;
+            JobLabel.Text = $"{title}: {progress:P0}";
+        }
+        catch (Exception ex)
+        {
+            ShowProblem(ex);
+        }
     });
 
     private async void OnCopyPhoneCodeClicked(object? sender, EventArgs e)
     {
-        if (_pairing.PhoneCodeText() is { } code) await Clipboard.Default.SetTextAsync(code);
+        try
+        {
+            if (_app.PairingCode() is { } code) await Clipboard.Default.SetTextAsync(code);
+        }
+        catch (Exception ex)
+        {
+            await TellAsync("Copy this phone's code", ex.Message);
+        }
     }
 
-    private void OnConnectClicked(object? sender, EventArgs e)
+    private async void OnConnectClicked(object? sender, EventArgs e)
     {
-        var error = _pairing.AcceptCallCode(CallCodeEntry.Text ?? "");
-        CallErrorLabel.Text = error;
-        CallErrorLabel.IsVisible = error != null;
-        if (error == null)
+        try
         {
-            CallCodeEntry.Text = "";
+            var error = _app.AcceptCallCode(CallCodeEntry.Text ?? "");
+            CallErrorLabel.Text = error;
+            CallErrorLabel.IsVisible = error != null;
+            if (error == null)
+            {
+                CallCodeEntry.Text = "";
 #if ANDROID
-            // Paired: request the first load without waiting for the next hourly slot.
-            Platforms.Android.BlindWorkScheduler.RunHeavyNow(Platform.AppContext);
+                // Paired: request the first load without waiting for the next hourly slot.
+                Platforms.Android.BlindWorkScheduler.RunHeavyNow(Platform.AppContext);
 #endif
+            }
+            Refresh();
         }
-        ShowPhoneCode();
-        Refresh();
+        catch (Exception ex)
+        {
+            await TellAsync("Connect", ex.Message);
+        }
     }
 
     private async void OnRePairClicked(object? sender, EventArgs e)
     {
-        if (!await DisplayAlertAsync("Re-pair",
-                "This makes a new phone code for adding the phone on a computer again. The current connection stays until the computer's new answer is accepted.",
-                "Make a new code", "Cancel"))
-            return;
-        _pairing.StartRePair();
-        ShowPhoneCode();
-        Refresh();
+        try
+        {
+            if (!await DisplayAlertAsync("Re-pair",
+                    "This makes a new phone code for adding the phone on a computer again. The current connection stays until the computer's new answer is accepted.",
+                    "Make a new code", "Cancel"))
+                return;
+            _app.StartRePair();
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            await TellAsync("Re-pair", ex.Message);
+        }
     }
 
-    private void OnSyncNowClicked(object? sender, EventArgs e)
+    private async void OnSyncNowClicked(object? sender, EventArgs e)
     {
+        try
+        {
 #if ANDROID
-        Platforms.Android.BlindWorkScheduler.SyncNow(Platform.AppContext);
+            Platforms.Android.BlindWorkScheduler.SyncNow(Platform.AppContext);
 #endif
-        _log.Add("sync", "Sync asked for.");
-        Refresh();
+            NoticeLabel.Text = "Sync asked for.";
+            NoticeLabel.IsVisible = true;
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            await TellAsync("Sync now", ex.Message);
+        }
     }
 
-    private void OnBackupNowClicked(object? sender, EventArgs e)
+    private async void OnBackupNowClicked(object? sender, EventArgs e)
     {
+        try
+        {
+            // Off at once and until the service shows up in BlindActivity: a second tap cannot start a second job (the service
+            // also ignores a start while its task runs).
+            _backupAskedAt = DateTimeOffset.UtcNow;
+            BackupNowButton.IsEnabled = false;
 #if ANDROID
-        Platforms.Android.BlindBackupService.Start(Platform.AppContext);
+            Platforms.Android.BlindBackupService.Start(Platform.AppContext);
 #endif
-        _log.Add("backup", "Backup asked for.");
-        Refresh();
+            NoticeLabel.Text = "Backup asked for.";
+            NoticeLabel.IsVisible = true;
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            _backupAskedAt = DateTimeOffset.MinValue;
+            await TellAsync("Back up now", ex.Message);
+            Refresh();
+        }
     }
 
     private async void OnSaveToClicked(object? sender, EventArgs e)
     {
-        if (_backups.Backups().FirstOrDefault() is not { } latest) return;
         try
         {
+            if (_app.GetStatus().Backups.FirstOrDefault() is not { } latest) return;
 #if ANDROID
-            if (await Platforms.Android.SafExport.SaveAsync(latest.FullName))
-                _log.Add("backup", $"Saved {latest.Name} to the chosen place.");
+            // The picker and its cut-off-file cleanup are Android's (SafExport); the file is one of the backup folder, by name.
+            var path = Path.Combine(BlindPaths.Backups(_paths.DataDirectory), Path.GetFileName(latest.Name));
+            if (await Platforms.Android.SafExport.SaveAsync(path))
+            {
+                NoticeLabel.Text = $"Saved {latest.Name} to the chosen place.";
+                NoticeLabel.IsVisible = true;
+            }
 #endif
         }
         catch (Exception ex)
         {
-            await DisplayAlertAsync("Save to…", ex.Message, "OK");
+            await TellAsync("Save to…", ex.Message);
         }
         Refresh();
     }
 
     private void OnScheduleChanged(object? sender, EventArgs e)
     {
-        if (SchedulePicker.SelectedIndex >= 0) _state.Schedule = Schedules[SchedulePicker.SelectedIndex];
+        try
+        {
+            if (!_applying && SchedulePicker.SelectedIndex >= 0) _app.SetSchedule(Schedules[SchedulePicker.SelectedIndex]);
+        }
+        catch (Exception ex)
+        {
+            ShowProblem(ex);
+        }
     }
 
     private async void OnWipeClicked(object? sender, EventArgs e)
     {
-        var name = _state.DisplayName ?? "";
-        var typed = await DisplayPromptAsync("Disconnect and wipe",
-            $"This deletes the blind copy from this phone. Type its name \"{name}\" to confirm.",
-            "Wipe", "Cancel");
-        if (typed == null) return;
-        if (typed.Trim() != name)
-        {
-            await DisplayAlertAsync("Disconnect and wipe", "The name does not match. Nothing was deleted.", "OK");
-            return;
-        }
         try
         {
-            BlindPhoneReset.WipeAndRestart(_services);
+            var name = _wipeName;
+            var typed = await DisplayPromptAsync("Disconnect and wipe",
+                $"This deletes the blind copy from this phone. Type its name \"{name}\" to confirm.",
+                "Wipe", "Cancel");
+            if (typed == null) return;
+            if (typed.Trim() != name)
+            {
+                await DisplayAlertAsync("Disconnect and wipe", "The name does not match. Nothing was deleted.", "OK");
+                return;
+            }
+            // Off the UI thread: the wipe waits (bounded) for a running sync, first load or backup to end before it deletes anything.
+            await Task.Run(() => _app.DisconnectAndWipeAsync());
         }
         catch (AggregateException ex)
         {
-            // Not restarted over a half-wiped copy: say what is left and let the user press it again.
-            await DisplayAlertAsync("Disconnect and wipe", $"{ex.Message}{System.Environment.NewLine}{System.Environment.NewLine}Press Disconnect and wipe again to finish.", "OK");
+            // Not restarted over a half-wiped copy (or the work did not stop in time and nothing was deleted): say what is left and let
+            // the user press it again.
+            await TellAsync("Disconnect and wipe", $"{ex.Message}{System.Environment.NewLine}{System.Environment.NewLine}Press Disconnect and wipe again to finish.");
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            await TellAsync("Disconnect and wipe", $"Could not wipe: {ex.Message}");
             Refresh();
         }
     }
 
-    private static string When(DateTimeOffset? at) => at is { } t ? t.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "never";
+    private async Task TellAsync(string title, string message)
+    {
+        try { await DisplayAlertAsync(title, message, "OK"); }
+        catch (Exception) { /* the page is closing */ }
+    }
 }

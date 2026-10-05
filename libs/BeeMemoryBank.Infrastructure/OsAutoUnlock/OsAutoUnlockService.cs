@@ -38,7 +38,7 @@ namespace BeeMemoryBank.Infrastructure.OsAutoUnlock;
 ///   <item>
 ///     The DPAPI-protected secret is stored at <c>&lt;dataPath&gt;/os-auto-unlock.dat</c>,
 ///     matching the naming style of other top-level data-directory files
-///     (<c>.internal-key</c>, <c>ddns-state.json</c>, <c>.runtime.json</c>).
+///     (<c>.internal-key</c>, <c>.runtime.json</c>).
 ///   </item>
 ///   <item>
 ///     The secret lives in the platform's <see cref="IUserSecretStore"/> (Windows DPAPI, macOS
@@ -56,6 +56,7 @@ public class OsAutoUnlockService(
     IUserSecretStore? secretStore = null)
 {
     private readonly IUserSecretStore _secretStore = secretStore ?? UserSecretStores.CreateDefault(dataPath);
+    private readonly SemaphoreSlim _mutationLock = new(1, 1);
     /// <summary>
     /// DPAPI optional entropy for the auto-unlock secret file. Fixed and versioned
     /// rather than random/per-install: DPAPI folds this byte string into the derivation, so it
@@ -78,12 +79,24 @@ public class OsAutoUnlockService(
     {
         if (!_secretStore.IsSupported) return false;
 
-        var slot = await GetSlotAsync();
-        if (slot == null) return false;
-        var secret = _secretStore.Read("os-auto-unlock", "default");
-        if (secret is null) return false;
-        Array.Clear(secret);
-        return true;
+        await _mutationLock.WaitAsync();
+        try
+        {
+            var secret = _secretStore.Read("os-auto-unlock", "default");
+            if (secret is null) return false;
+            try
+            {
+                return await FindSlotMatchingSecretAndRepairAsync(secret) is not null;
+            }
+            finally
+            {
+                Array.Clear(secret);
+            }
+        }
+        finally
+        {
+            _mutationLock.Release();
+        }
     }
 
     /// <summary>
@@ -101,20 +114,22 @@ public class OsAutoUnlockService(
         if (!_secretStore.IsSupported)
             throw new PlatformNotSupportedException("OS auto-unlock is unavailable on this platform.");
 
-        var masterDek = session.GetMasterDek(); // throws if locked
-        byte[] secret = SecureRandom.GetBytes(32);
+        await _mutationLock.WaitAsync();
+        var masterDek = Array.Empty<byte>();
+        var secret = Array.Empty<byte>();
         try
         {
+            masterDek = session.GetMasterDek(); // throws if locked
+            secret = SecureRandom.GetBytes(32);
+
             // Enforce at most one os_auto_unlock slot: remove any existing one first (matching
             // DisableAsync's own cleanup) so re-enabling is idempotent rather than accumulating
             // duplicate slots. Without this, a retried Enable (or a crash between CreateAsync and
             // the DPAPI file write below) could leave an orphan slot that GetSlotAsync's
             // FirstOrDefault picks over the real one, permanently breaking auto-unlock.
-            var existing = await GetSlotAsync();
-            if (existing != null)
-            {
+            foreach (var existing in await GetSlotsAsync())
                 await keySlotRepo.DeleteAsync(existing.SlotId);
-            }
+            await keySlotRepo.EnsureOsAutoUnlockUniqueIndexAsync();
 
             // Use the secret directly as the KEK: no Argon2 (DPAPI provides the OS-level
             // protection; the secret is high-entropy random, not user-typed low-entropy text).
@@ -157,6 +172,7 @@ public class OsAutoUnlockService(
         {
             Array.Clear(masterDek);
             Array.Clear(secret);
+            _mutationLock.Release();
         }
     }
 
@@ -174,17 +190,18 @@ public class OsAutoUnlockService(
     {
         if (!_secretStore.IsSupported) return false;
 
+        await _mutationLock.WaitAsync();
+
         if (session.IsUnlocked) return true; // already unlocked — nothing to do
 
         try
         {
-            var slot = await GetSlotAsync();
-            if (slot == null) return false;
-
             var secret = _secretStore.Read("os-auto-unlock", "default");
             if (secret is null) return false;
             try
             {
+                var slot = await FindSlotMatchingSecretAndRepairAsync(secret);
+                if (slot is null) return false;
                 var masterDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, secret);
                 try
                 {
@@ -215,6 +232,10 @@ public class OsAutoUnlockService(
         {
             return false;
         }
+        finally
+        {
+            _mutationLock.Release();
+        }
     }
 
     /// <summary>
@@ -226,37 +247,79 @@ public class OsAutoUnlockService(
     {
         if (!_secretStore.IsSupported) return false;
 
+        await _mutationLock.WaitAsync();
         bool didAnything = false;
-
-        var slot = await GetSlotAsync();
-        if (slot != null)
-        {
-            await keySlotRepo.DeleteAsync(slot.SlotId);
-            didAnything = true;
-        }
-
         try
         {
-            var secret = _secretStore.Read("os-auto-unlock", "default");
-            if (secret is not null)
+            foreach (var slot in await GetSlotsAsync())
             {
-                Array.Clear(secret);
+                await keySlotRepo.DeleteAsync(slot.SlotId);
                 didAnything = true;
             }
+            await keySlotRepo.EnsureOsAutoUnlockUniqueIndexAsync();
+
+            try
+            {
+                var secret = _secretStore.Read("os-auto-unlock", "default");
+                if (secret is not null)
+                {
+                    Array.Clear(secret);
+                    didAnything = true;
+                }
+            }
+            catch { /* best-effort */ }
+
+            try { _secretStore.Delete("os-auto-unlock", "default"); }
+            catch { /* best-effort */ }
+
+            return didAnything;
         }
-        catch { /* best-effort */ }
-
-        try { _secretStore.Delete("os-auto-unlock", "default"); }
-        catch { /* best-effort */ }
-
-        return didAnything;
+        finally
+        {
+            _mutationLock.Release();
+        }
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    private async Task<MasterKeyStore?> GetSlotAsync()
+    private async Task<MasterKeyStore?> FindSlotMatchingSecretAndRepairAsync(byte[] secret)
     {
-        var all = await keySlotRepo.GetAllAsync();
-        return all.FirstOrDefault(s => s.SlotType == "os_auto_unlock");
+        var slots = await GetSlotsAsync();
+        MasterKeyStore? matchingSlot = null;
+        foreach (var slot in slots)
+        {
+            try
+            {
+                var masterDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, secret);
+                Array.Clear(masterDek);
+                matchingSlot = slot;
+                break;
+            }
+            catch (CryptographicException)
+            {
+                // Try every legacy candidate before deciding the stored secret is stale.
+            }
+        }
+
+        if (matchingSlot is null)
+        {
+            // A single stale candidate cannot conflict with the index. Several candidates must
+            // remain available: this process cannot know which secret will be restored later.
+            if (slots.Count <= 1)
+                await keySlotRepo.EnsureOsAutoUnlockUniqueIndexAsync();
+            return null;
+        }
+
+        foreach (var slot in slots.Where(slot => slot.SlotId != matchingSlot.SlotId))
+            await keySlotRepo.DeleteAsync(slot.SlotId);
+        await keySlotRepo.EnsureOsAutoUnlockUniqueIndexAsync();
+        return matchingSlot;
     }
+
+    private async Task<List<MasterKeyStore>> GetSlotsAsync() =>
+        (await keySlotRepo.GetAllAsync())
+            .Where(s => s.SlotType == "os_auto_unlock")
+            .OrderByDescending(s => s.CreatedAt)
+            .ThenByDescending(s => s.SlotId)
+            .ToList();
 }

@@ -30,7 +30,8 @@ public static class MauiProgram
         var dataDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var dbPath = Path.Combine(dataDir, "beememorybank.db");
 
-        BlindMobileServices.ConfigureServices(builder.Services, dataDir, dbPath);
+        // The page asks the shared controller to make the identity; the device name is the phone's (Android's own part of it).
+        BlindMobileServices.AddBlindAppCore(builder.Services, new BlindAppOptions(dataDir, dbPath, DisplayNameFactory: () => DeviceInfo.Current.Name));
 
 #if ANDROID
         builder.Services

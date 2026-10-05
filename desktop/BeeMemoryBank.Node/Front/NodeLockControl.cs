@@ -82,6 +82,7 @@ public sealed class NodeLockControl
         endpoints.MapPost(Route, (Func<HttpContext, Task<IResult>>)LockAsync)
             .AddEndpointFilter(async (context, next) =>
                 LoopbackIpMatcher.IsLoopback(context.HttpContext.Connection.RemoteIpAddress)
+                    && !ForwardingHeaders.IsPresentOn(context.HttpContext.Request)
                     ? await next(context)
                     : Results.StatusCode(StatusCodes.Status404NotFound))
             .AddEndpointFilter(async (context, next) =>

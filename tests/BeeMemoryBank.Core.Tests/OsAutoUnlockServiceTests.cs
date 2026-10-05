@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Infrastructure.OsAutoUnlock;
 using BeeMemoryBank.Infrastructure.Secrets;
 using BeeMemoryBank.Storage.Sqlite;
@@ -138,6 +140,110 @@ public class OsAutoUnlockServiceTests : TestFixture
     }
 
     [Fact]
+    public async Task ConcurrentEnable_LeavesOneSlotThatMatchesTheStoredSecret()
+    {
+        await Session.UnlockAsync("correctPassword");
+        var store = new BlockingFirstWriteStore();
+        var svc = new OsAutoUnlockService(_keySlotRepo, Session, _tempDataDir, store);
+
+        var first = Task.Run(() => svc.EnableAsync());
+        await store.FirstWriteEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = Task.Run(async () =>
+        {
+            secondEntered.SetResult();
+            return await svc.EnableAsync();
+        });
+        await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        try
+        {
+            var completed = await Task.WhenAny(store.SecondWriteEntered.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+            completed.Should().NotBe(store.SecondWriteEntered.Task,
+                "the second enable must stay outside the write path until the first one releases its mutation lock");
+        }
+        finally
+        {
+            store.ReleaseFirstWrite.SetResult();
+        }
+        await Task.WhenAll(first, second);
+
+        (await _keySlotRepo.GetAllAsync()).Should().ContainSingle(slot => slot.SlotType == "os_auto_unlock");
+        var restarted = new SessionService(_keySlotRepo);
+        (await new OsAutoUnlockService(_keySlotRepo, restarted, _tempDataDir, store)
+            .TryAutoUnlockAsync(_nodeRepo)).Should().BeTrue();
+        var duplicate = () => _keySlotRepo.CreateAsync(new MasterKeyStore
+        {
+            SlotType = "os_auto_unlock",
+            EncryptedMasterDek = new byte[] { 1 },
+            IV = new byte[] { 2 },
+            CreatedAt = DateTime.UtcNow
+        });
+        await duplicate.Should().ThrowAsync<Exception>("the repaired schema must reject a second slot");
+    }
+
+    [Fact]
+    public async Task NoAutoUnlockSlot_IsDisabledAndCannotUnlock()
+    {
+        var store = new InMemoryUserSecretStore();
+        var service = new OsAutoUnlockService(_keySlotRepo, Session, _tempDataDir, store);
+
+        (await service.IsEnabledAsync()).Should().BeFalse();
+        (await service.TryAutoUnlockAsync(_nodeRepo)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task OneMatchingAutoUnlockSlot_IsEnabledAndCanUnlock()
+    {
+        await Session.UnlockAsync("correctPassword");
+        var store = new InMemoryUserSecretStore();
+        var secret = SecureRandom.GetBytes(32);
+        var slotId = await AddAutoUnlockSlotAsync(secret, DateTime.UtcNow);
+        store.Write("os-auto-unlock", "default", secret);
+        Array.Clear(secret);
+        Session.Lock();
+
+        var restarted = new SessionService(_keySlotRepo);
+        var service = new OsAutoUnlockService(_keySlotRepo, restarted, _tempDataDir, store);
+        (await service.IsEnabledAsync()).Should().BeTrue();
+        (await service.TryAutoUnlockAsync(_nodeRepo)).Should().BeTrue();
+        (await _keySlotRepo.GetAllAsync()).Should().ContainSingle(slot => slot.SlotId == slotId);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DuplicateAutoUnlockSlots_KeepTheSlotMatchingTheStoredSecret(bool storedSecretMatchesOlderSlot)
+    {
+        await Session.UnlockAsync("correctPassword");
+        var olderSecret = SecureRandom.GetBytes(32);
+        var newerSecret = SecureRandom.GetBytes(32);
+        var olderId = await AddAutoUnlockSlotAsync(olderSecret, DateTime.UtcNow.AddMinutes(-1));
+        var newerId = await AddAutoUnlockSlotAsync(newerSecret, DateTime.UtcNow);
+        var store = new InMemoryUserSecretStore();
+        store.Write("os-auto-unlock", "default", storedSecretMatchesOlderSlot ? olderSecret : newerSecret);
+        Array.Clear(olderSecret);
+        Array.Clear(newerSecret);
+        Session.Lock();
+
+        var restarted = new SessionService(_keySlotRepo);
+        var service = new OsAutoUnlockService(_keySlotRepo, restarted, _tempDataDir, store);
+        (await service.TryAutoUnlockAsync(_nodeRepo)).Should().BeTrue();
+
+        var expectedId = storedSecretMatchesOlderSlot ? olderId : newerId;
+        (await _keySlotRepo.GetAllAsync()).Should().ContainSingle(slot =>
+            slot.SlotType == "os_auto_unlock" && slot.SlotId == expectedId);
+        var duplicate = () => _keySlotRepo.CreateAsync(new MasterKeyStore
+        {
+            SlotType = "os_auto_unlock",
+            EncryptedMasterDek = new byte[] { 1 },
+            IV = new byte[] { 2 },
+            CreatedAt = DateTime.UtcNow
+        });
+        await duplicate.Should().ThrowAsync<Exception>("repair must install the partial unique index");
+    }
+
+    [Fact]
     public async Task MissingSecretForExistingSlot_DoesNotMintAReplacement()
     {
         await Session.UnlockAsync("correctPassword");
@@ -191,5 +297,55 @@ public class OsAutoUnlockServiceTests : TestFixture
         public void Write(string purpose, string account, ReadOnlySpan<byte> value) { }
 
         public void Delete(string purpose, string account) => DeleteCalled = true;
+    }
+
+    private sealed class BlockingFirstWriteStore : IUserSecretStore
+    {
+        private readonly InMemoryUserSecretStore _inner = new();
+        private int _writeCount;
+
+        public TaskCompletionSource FirstWriteEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondWriteEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstWrite { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsSupported => true;
+
+        public byte[]? Read(string purpose, string account) => _inner.Read(purpose, account);
+
+        public void Write(string purpose, string account, ReadOnlySpan<byte> value)
+        {
+            if (Interlocked.Increment(ref _writeCount) == 1)
+            {
+                FirstWriteEntered.SetResult();
+                ReleaseFirstWrite.Task.GetAwaiter().GetResult();
+            }
+            else
+            {
+                SecondWriteEntered.SetResult();
+            }
+
+            _inner.Write(purpose, account, value);
+        }
+
+        public void Delete(string purpose, string account) => _inner.Delete(purpose, account);
+    }
+
+    private async Task<int> AddAutoUnlockSlotAsync(byte[] secret, DateTime createdAt)
+    {
+        var masterDek = Session.GetMasterDek();
+        try
+        {
+            var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, secret);
+            return await _keySlotRepo.CreateAsync(new MasterKeyStore
+            {
+                SlotType = "os_auto_unlock",
+                EncryptedMasterDek = encryptedDek,
+                IV = iv,
+                CreatedAt = createdAt
+            });
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
     }
 }

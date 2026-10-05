@@ -32,6 +32,12 @@ public partial class MainWindow : Window
     // The request the power-events services make when the computer goes to sleep (see LockNodeOnSleepAsync). Set in the constructor,
     // where _nodeLifecycle exists.
     private readonly Services.NodeLockRequest _lockOnSleep;
+
+    /// <summary>
+    /// "Lock the vault when this computer sleeps" (off by default, per app like the other flags in desktop-settings.json). The sleep
+    /// monitors ask it at each sleep, so the settings window changing it takes effect at once.
+    /// </summary>
+    public Services.LockOnSleepSetting LockOnSleep { get; } = new(new Services.DesktopSettingsStore());
     private bool _startMinimized = Program.StartMinimized;
     private string? _frontUrl;
     private string? _activeProfileId;
@@ -562,7 +568,7 @@ public partial class MainWindow : Window
         try
         {
             _powerEventsService?.Dispose();
-            _powerEventsService = Services.ShellPlatforms.Current.CreatePowerEvents(LockNodeOnSleepAsync);
+            _powerEventsService = Services.ShellPlatforms.Current.CreatePowerEvents(LockNodeOnSleepAsync, () => LockOnSleep.IsEnabled);
             _powerEventsService?.Start();
         }
         catch (Exception ex)

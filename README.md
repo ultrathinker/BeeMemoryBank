@@ -632,6 +632,10 @@ and ignored rather than taking the node down.
 Make sure the proxy actually sends the header — nginx needs the `proxy_set_header X-Forwarded-For`
 line shown above (Caddy and Apache `mod_proxy` send it by default).
 
+Want to reach your node from outside your home network (router port forwarding, Caddy or nginx with
+automatic certificates, Cloudflare Tunnel or Tailscale instead of an open port)? See
+[Opening your node to the internet yourself](docs/internet-access.md).
+
 #### Updating
 
 | Method | Commands |

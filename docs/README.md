@@ -12,6 +12,7 @@ This folder contains technical documentation for the BeeMemoryBank project.
 | [mcp.md](mcp.md) | MCP server for AI agent integration: 33 tools in 7 groups, transport, truncation, configuration examples |
 | [compaction.md](compaction.md) | Event log compaction and snapshot lifecycle |
 | [deployment.md](deployment.md) | Deployment guide: environment variables, systemd, Docker, reverse proxy, maintenance page, new node setup, audit log retention |
+| [internet-access.md](internet-access.md) | Opening your node to the internet yourself: ports, router forwarding, Caddy / nginx with automatic certificates, tunnels and VPNs, security warnings |
 
 ## Other Project Files
 
@@ -39,6 +40,7 @@ For someone new to the project:
 - "Work on encryption" → [encryption.md](encryption.md)
 - "Add an MCP tool" → [mcp.md](mcp.md)
 - "Deploy to a new server" → [deployment.md](deployment.md)
+- "Reach my node from outside my network" → [internet-access.md](internet-access.md)
 - "Set up Docker" → [deployment.md](deployment.md) (Docker Deployment section)
 - "Configure an AI agent" → [mcp.md](mcp.md) (Configuration Examples section)
 - "Write mobile UI tests" → [CONTRIBUTING.md](../CONTRIBUTING.md) (Mobile UI Tests section)

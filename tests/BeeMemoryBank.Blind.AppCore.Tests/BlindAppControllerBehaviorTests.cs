@@ -182,6 +182,94 @@ public sealed class BlindAppControllerBehaviorTests
     }
 
     [Fact]
+    public async Task Wipe_WhileTheFirstLoadRuns_CancelsIt_WaitsUntilItReallyEnded_AndOnlyThenWipes()
+    {
+        var rig = new Rig();
+        await rig.Controller.InitializeAsync();
+        rig.Pair();
+        rig.Replica.IgnoreCancel = true; // a job that is slow to react: the wipe must not run over it
+        var job = rig.Controller.RunHeavyAsync(false);
+        await rig.Replica.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var wipe = rig.Controller.DisconnectAndWipeAsync();
+        await Task.Delay(300);
+
+        wipe.IsCompleted.Should().BeFalse("the first load is still running: nothing may be deleted beneath it");
+        rig.Secrets.IdentitySeed.Should().NotBeNull("the keys stay while a job may still use them");
+        rig.Lifecycle.Calls.Should().NotContain("RestartAfterWipe");
+        File.Exists(Path.Combine(rig.Dir, "beememorybank.db")).Should().BeTrue();
+        rig.Lifecycle.Calls.Should().Contain("StopBackgroundWork", "the host is told to stop first");
+
+        rig.Replica.Finish.TrySetResult();
+        await wipe.WaitAsync(TimeSpan.FromSeconds(20));
+        await job.WaitAsync(TimeSpan.FromSeconds(10));
+
+        rig.Secrets.IdentitySeed.Should().BeNull();
+        rig.Lifecycle.Calls.Should().Equal("StopBackgroundWork", "StopBackupService", "RestartAfterWipe");
+    }
+
+    [Fact]
+    public async Task Wipe_WhileASyncRuns_CancelsItsToken_AndRefusesNewWorkUntilTheWipeIsOver()
+    {
+        var rig = new Rig();
+        await rig.Controller.InitializeAsync();
+        rig.Pair();
+        rig.MarkFirstLoadDone();
+        rig.Sync.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sync = rig.Controller.RequestSyncAsync();
+        await rig.Sync.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var wipe = rig.Controller.DisconnectAndWipeAsync();
+        await rig.Sync.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10)); // the wipe fired the round's token
+        var act = async () => await sync.WaitAsync(TimeSpan.FromSeconds(10));
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        await wipe.WaitAsync(TimeSpan.FromSeconds(20));
+
+        (await rig.Controller.RequestSyncAsync()).Should().Contain("wiped", "no round starts while or after the wipe");
+        rig.Secrets.IdentitySeed.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ASyncRoundOfTheHostsOwnWorker_ShowsAsSyncInTheStatus()
+    {
+        var rig = new Rig();
+        await rig.Controller.InitializeAsync();
+        rig.Controller.GetStatus().ActiveJob.Should().BeNull();
+
+        // the Android sync worker registers in BlindActivity itself; the controller did not start this round
+        var activity = rig.Provider.GetRequiredService<BlindActivity>();
+        using (activity.TryBegin(BlindActivity.Sync))
+            rig.Controller.GetStatus().ActiveJob.Should().Be("Sync");
+
+        rig.Controller.GetStatus().ActiveJob.Should().BeNull("the round ended");
+    }
+
+    [Fact]
+    public async Task Wipe_ThatCannotStopTheWork_InTime_DeletesNothing_AndAllowsAnotherTry()
+    {
+        var rig = new Rig();
+        await rig.Controller.InitializeAsync();
+        rig.Pair();
+        rig.Replica.IgnoreCancel = true;
+        var job = rig.Controller.RunHeavyAsync(false);
+        await rig.Replica.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var act = () => BlindPhoneReset.WipeAndRestartAsync(rig.Provider, rig.Dir, TimeSpan.FromMilliseconds(200));
+        var failure = (await act.Should().ThrowAsync<AggregateException>()).Which;
+
+        failure.Message.Should().Contain("did not stop in time").And.Contain("Nothing was deleted");
+        rig.Lifecycle.Calls.Should().Contain("ResumeBackgroundWork", "the schedule the stop cancelled is given back");
+        rig.Secrets.IdentitySeed.Should().NotBeNull();
+        rig.Lifecycle.Calls.Should().NotContain("RestartAfterWipe");
+        File.Exists(Path.Combine(rig.Dir, "beememorybank.db")).Should().BeTrue();
+
+        rig.Replica.Finish.TrySetResult();
+        await job.WaitAsync(TimeSpan.FromSeconds(10));
+        await BlindPhoneReset.WipeAndRestartAsync(rig.Provider, rig.Dir, TimeSpan.FromSeconds(10));
+        rig.Secrets.IdentitySeed.Should().BeNull("the second try finishes the wipe");
+    }
+
+    [Fact]
     public async Task ASecretStoreThatThrows_IsNotALostKey_StatusDoesNotThrow_AndRecoversWhenItAnswersAgain()
     {
         var rig = new Rig();
@@ -290,6 +378,7 @@ public sealed class BlindAppControllerBehaviorTests
         public ManualClock Clock { get; } = new();
         public BlindAppController Controller { get; }
         private readonly ServiceProvider _services;
+        public IServiceProvider Provider => _services;
 
         public Rig(string? dir = null, IBlindBackupExporter? exporter = null)
         {
@@ -356,6 +445,7 @@ public sealed class BlindAppControllerBehaviorTests
         public List<string> Calls { get; } = [];
         public void StopBackgroundWork() => Calls.Add("StopBackgroundWork");
         public void StopBackupService() => Calls.Add("StopBackupService");
+        public void ResumeBackgroundWork() => Calls.Add("ResumeBackgroundWork");
         public void RestartAfterWipe() => Calls.Add("RestartAfterWipe");
     }
 
@@ -364,6 +454,9 @@ public sealed class BlindAppControllerBehaviorTests
     {
         private IProgress<double>? _progress;
         public int Starts;
+
+        /// <summary>A job slow to react to its cancellation: it ends only when the test says so.</summary>
+        public bool IgnoreCancel { get; set; }
 
         /// <summary>When set, a start fails with it at once (a refused or broken first load).</summary>
         public Exception? Failure { get; set; }
@@ -377,7 +470,8 @@ public sealed class BlindAppControllerBehaviorTests
             if (Failure is { } failure) throw failure;
             _progress = progress;
             Started.TrySetResult();
-            await Finish.Task.WaitAsync(ct);
+            if (IgnoreCancel) await Finish.Task;
+            else await Finish.Task.WaitAsync(ct);
         }
 
         public void ReportProgress(double value) => _progress!.Report(value);
@@ -388,10 +482,21 @@ public sealed class BlindAppControllerBehaviorTests
         public int Calls;
         public Exception? Failure { get; set; }
 
-        public Task SyncOnceAsync(BlindCallCode target, CancellationToken ct)
+        /// <summary>When set, a round waits here (and notes its token firing in <see cref="Cancelled"/>).</summary>
+        public TaskCompletionSource? Hold { get; set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task SyncOnceAsync(BlindCallCode target, CancellationToken ct)
         {
             Interlocked.Increment(ref Calls);
-            return Failure is { } failure ? Task.FromException(failure) : Task.CompletedTask;
+            if (Hold is { } hold)
+            {
+                ct.Register(() => Cancelled.TrySetResult());
+                Entered.TrySetResult();
+                await hold.Task.WaitAsync(ct);
+            }
+            if (Failure is { } failure) throw failure;
         }
     }
 

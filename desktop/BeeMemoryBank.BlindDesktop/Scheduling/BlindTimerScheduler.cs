@@ -168,6 +168,11 @@ public sealed class BlindTimerScheduler : IBlindScheduler, IBlindWorkRequests, I
         catch (TimeoutException)
         {
             // A job that does not pause in time is left to finish on its own; the cancellation has been sent.
+            // The loop still runs on this token, so the source is disposed when the loop is done - never here:
+            // a token of a disposed source is not usable, and the winding-down loop would keep failing on it.
+            _ = loop!.ContinueWith(_ => cts.Dispose(), CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return;
         }
         catch (OperationCanceledException)
         {

@@ -30,7 +30,9 @@ internal interface IPowerNotificationSession : IDisposable
 }
 
 /// <summary>
-/// Lock the vault when the Mac goes to sleep. <c>IORegisterForSystemPower</c> on a thread of its own that runs a CFRunLoop; on
+/// Lock the vault when the Mac goes to sleep, if the person turned that on (the setting is read at each sleep, see
+/// <see cref="LockOnSleepSetting"/>; off means no request, no notice and one log line, and the Mac sleeps as always).
+/// <c>IORegisterForSystemPower</c> on a thread of its own that runs a CFRunLoop; on
 /// <c>kIOMessageSystemWillSleep</c> it asks the node to lock (the shell's own request, the same one the Windows monitor makes), waits for
 /// it for at most <see cref="DefaultLockTimeout"/>, shows a notice (a warning when the lock did not happen), and then - always, exactly
 /// once, whatever the request did - calls <c>IOAllowPowerChange</c>. Exactly an HTTP 501 answer ("this node does not offer lock-on-sleep
@@ -54,6 +56,7 @@ public sealed class MacOsSleepMonitor : IPowerEventsService
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly SleepLockRequest _lockNode;
+    private readonly Func<bool> _lockOnSleepEnabled;
     private readonly IUserNotifier _notifier;
     private readonly IPowerNotificationSource _source;
     private readonly TimeSpan _lockTimeout;
@@ -66,12 +69,15 @@ public sealed class MacOsSleepMonitor : IPowerEventsService
     private bool _disposed;
     private bool _registered;
 
-    public MacOsSleepMonitor(SleepLockRequest lockNode, IUserNotifier notifier)
-        : this(lockNode, notifier, new IoKitPowerNotificationSource(), DefaultLockTimeout, Console.Error.WriteLine) { }
+    /// <param name="lockOnSleepEnabled">Asked at each sleep event: whether the person wants the vault locked on sleep. Null means yes (tests).</param>
+    public MacOsSleepMonitor(SleepLockRequest lockNode, IUserNotifier notifier, Func<bool>? lockOnSleepEnabled = null)
+        : this(lockNode, notifier, new IoKitPowerNotificationSource(), DefaultLockTimeout, Console.Error.WriteLine, lockOnSleepEnabled) { }
 
-    internal MacOsSleepMonitor(SleepLockRequest lockNode, IUserNotifier notifier, IPowerNotificationSource source, TimeSpan lockTimeout, Action<string> log)
+    internal MacOsSleepMonitor(SleepLockRequest lockNode, IUserNotifier notifier, IPowerNotificationSource source, TimeSpan lockTimeout, Action<string> log,
+        Func<bool>? lockOnSleepEnabled = null)
     {
         _lockNode = lockNode ?? throw new ArgumentNullException(nameof(lockNode));
+        _lockOnSleepEnabled = lockOnSleepEnabled ?? (() => true);
         _notifier = notifier ?? throw new ArgumentNullException(nameof(notifier));
         _source = source;
         _lockTimeout = lockTimeout;
@@ -122,7 +128,8 @@ public sealed class MacOsSleepMonitor : IPowerEventsService
         catch (Exception ex)
         {
             _log($"[MacOsSleepMonitor] Could not watch for sleep: {ex.Message}");
-            if (!_stopRequested)
+            // The warning is about the vault not being locked on sleep: it means something only while the person wants that.
+            if (!_stopRequested && IsLockOnSleepEnabled())
                 SafeNotify("Bee Memory Bank", "The vault will NOT be locked when this Mac sleeps: the sleep notification could not be set up (" + ex.Message + ").");
         }
         finally
@@ -151,7 +158,11 @@ public sealed class MacOsSleepMonitor : IPowerEventsService
                     break;
 
                 case IOKitPower.MessageSystemWillSleep:
-                    try { LockForSleep(); }
+                    try
+                    {
+                        if (IsLockOnSleepEnabled()) LockForSleep();
+                        else _log("[MacOsSleepMonitor] Lock on sleep is off: no lock request is made and no notice is shown.");
+                    }
                     catch (Exception ex) { _log($"[MacOsSleepMonitor] The sleep handler failed: {ex.Message}"); }
                     finally { Allow(argument); }
                     break;
@@ -160,6 +171,17 @@ public sealed class MacOsSleepMonitor : IPowerEventsService
         catch (Exception ex)
         {
             _log($"[MacOsSleepMonitor] Error while handling power message 0x{messageType:X}: {ex.Message}");
+        }
+    }
+
+    /// <summary>The setting, read now. A setting that cannot be read counts as off: nothing is sent on a guess.</summary>
+    private bool IsLockOnSleepEnabled()
+    {
+        try { return _lockOnSleepEnabled(); }
+        catch (Exception ex)
+        {
+            _log($"[MacOsSleepMonitor] The lock-on-sleep setting could not be read: {ex.Message}");
+            return false;
         }
     }
 

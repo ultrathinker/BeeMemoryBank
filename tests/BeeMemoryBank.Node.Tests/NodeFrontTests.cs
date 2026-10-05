@@ -342,6 +342,47 @@ public class NodeFrontTests : IAsyncDisposable
         resSync.StatusCode.Should().Be(HttpStatusCode.NotImplemented);
     }
 
+    [Theory]
+    [InlineData("X-Forwarded-For", "203.0.113.9")]
+    [InlineData("X-Forwarded-Host", "bee.example.com")]
+    [InlineData("X-Forwarded-Proto", "https")]
+    [InlineData("Forwarded", "for=203.0.113.9;proto=https")]
+    [InlineData("X-Real-IP", "203.0.113.9")]
+    public async Task NodeEndpoints_AnswerA404_WhenAProxyOnThisMachineRelayedTheRequest(string header, string value)
+    {
+        // A reverse proxy on this machine makes every internet visitor arrive from 127.0.0.1, so "the caller is on this machine" cannot be
+        // judged by the address alone. A request that carries a forwarding header was relayed and gets the answer of a route that does not
+        // exist (404, not 403), on the group (/node/status, /node/sync-now, /node/lan) and on the /node/update/* passthrough.
+        var apiStub = await StartStubServerAsync(app =>
+            app.MapGet("/node/update/status", () => Results.Ok(new { server = "api" })));
+        var dummyChildren = new Dictionary<string, ReadyFileInfo>
+        {
+            { "Api", new ReadyFileInfo(111, apiStub.Urls.ToList(), "BeeMemoryBank.Api", "1.0.0", DateTime.UtcNow) },
+            { "Web", new ReadyFileInfo(222, new[] { "http://localhost:5002" }, "BeeMemoryBank.Web", "1.0.0", DateTime.UtcNow) }
+        };
+        var (_, proxyUrl) = await StartProxyServerAsync(apiStub.Urls.First(), "http://localhost:5002", dummyChildren);
+        using var client = new HttpClient();
+
+        async Task<HttpStatusCode> Call(HttpMethod method, string path, string? relayHeader)
+        {
+            using var req = new HttpRequestMessage(method, $"{proxyUrl}{path}");
+            req.Headers.Add("X-Test-Remote-IP", "127.0.0.1");
+            if (relayHeader != null) req.Headers.Add(relayHeader, value);
+            return (await client.SendAsync(req)).StatusCode;
+        }
+
+        // Without the header the same calls keep working from loopback, exactly as before.
+        (await Call(HttpMethod.Get, "/node/status", null)).Should().Be(HttpStatusCode.OK);
+        (await Call(HttpMethod.Post, "/node/sync-now", null)).Should().Be(HttpStatusCode.NotImplemented);
+        (await Call(HttpMethod.Post, "/node/lock", null)).Should().Be(HttpStatusCode.NotImplemented);
+        (await Call(HttpMethod.Get, "/node/update/status", null)).Should().Be(HttpStatusCode.OK);
+
+        (await Call(HttpMethod.Get, "/node/status", header)).Should().Be(HttpStatusCode.NotFound);
+        (await Call(HttpMethod.Post, "/node/sync-now", header)).Should().Be(HttpStatusCode.NotFound);
+        (await Call(HttpMethod.Post, "/node/lock", header)).Should().Be(HttpStatusCode.NotFound);
+        (await Call(HttpMethod.Get, "/node/update/status", header)).Should().Be(HttpStatusCode.NotFound);
+    }
+
     [Fact]
     public async Task LargeRequestBodySize_PassesThroughSuccessfully()
     {

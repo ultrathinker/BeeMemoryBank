@@ -38,8 +38,8 @@
 .EXAMPLE
     # Specify paths explicitly:
     .\rescue-velopack-data.ps1 `
-        -LegacyDir "C:\Users\evgeny\AppData\Local\BeeMemoryBank\current\data" `
-        -TargetVaultDir "C:\Users\evgeny\AppData\Local\BeeMemoryBankData\vaults\default"
+        -LegacyDir "$env:LOCALAPPDATA\BeeMemoryBank\current\data" `
+        -TargetVaultDir "$env:LOCALAPPDATA\BeeMemoryBankData\vaults\default"
 
 .NOTES
     Run this BEFORE applying a Velopack update or reinstalling.

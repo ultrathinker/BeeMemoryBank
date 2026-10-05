@@ -21,11 +21,13 @@ public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed255
 /// <param name="Applied">Count of events successfully persisted via ApplyAsync.</param>
 /// <param name="Skipped">Count of events rejected (signature, schema, replay shield, etc.).</param>
 /// <param name="LastAppliedSequence">
-/// Sequence_num of the highest event in this batch that was successfully applied.
+/// Sequence_num of the last event in the contiguous batch prefix that was successfully applied or
+/// deliberately dropped. It never advances past a skipped event, even if later events in the same
+/// request are accepted.
 /// The pusher MUST use this — not batch[^1].SequenceNum — when advancing its push cursor.
 /// Otherwise events that the remote skipped get permanently lost: the cursor steps over
-/// them and the pusher will never re-send. null means no events applied (all-skipped or
-/// empty batch); pusher should leave its cursor unchanged.
+/// them and the pusher will never re-send. null means the accepted prefix is empty (all-skipped,
+/// a first-item skip, or an empty batch); pusher should leave its cursor unchanged.
 /// </param>
 public record SyncApplyResult(int Applied, int Skipped, long? LastAppliedSequence = null, int Dropped = 0);
 

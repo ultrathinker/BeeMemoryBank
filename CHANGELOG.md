@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+#### 2.2.0: the Internet Access wizard, Let's Encrypt and DDNS are gone (2026-10-05)
+
+- **The "Access from the Internet" wizard, the built-in Let's Encrypt (ACME) client and the dynamic DNS (DDNS) updater.** They were a half-finished
+  spike: an issued certificate was never served by any listener and never renewed, the Docker image has no HTTPS listener at all, the wizard showed port
+  5311 but told the user to forward 5443, and on Linux the account key and PFX password were written with ordinary file modes. This removes the Internet
+  page and its Admin shortcut, the `/api/internet-access/*` endpoints, the DuckDNS, deSEC and Cloudflare providers, the UPnP and static external-IP
+  helpers, the TLS-ALPN-01 hook of the node front and the `Certes` package. The node's local CA (the home-network, phone and blind-node-pairing
+  certificate), the LAN join listener, the LAN firewall helper and `POST /api/sync/probe` stay. To open a node to the internet use your own router
+  forwarding and a reverse proxy, a tunnel or a VPN: see [docs/internet-access.md](docs/internet-access.md). Nothing is deleted from an existing
+  installation: leftover `internet-access/`, `ddns-state.json` and `certs/acme/` entries are no longer read, and a re-key still carries them over.
+
 ### Added
 
 #### 2.1.0: blind copies for Windows and macOS, the macOS app, lock on sleep (2026-10-05)
@@ -373,6 +386,37 @@ revoke rows that predate the row-versioning migration above and never got their 
 `whitelist_revoke` event to anchor a version against.
 
 ### Fixed
+
+#### 2.2.0: fixes after the 2.1.0 review, the macOS sign-in loop (2026-10-05)
+
+No sync protocol change (still 3) and no ciphertext change; nodes of 2.0.x, 2.1.0 and 2.2.0 keep syncing with each other in both directions. One schema
+migration (035, a unique index for the OS auto-unlock slot, created by a repair on first use). Each fix below has a test that fails without it.
+
+- **macOS app: signing in no longer loops back to the login page.** The app shows the web UI in WebKit at `http://127.0.0.1`, and WebKit drops a `Secure`
+  cookie from there, so a correct sign-in redirected to `/Tree` and straight back to `/Login`. The session cookie now loses `Secure` only for plain HTTP
+  from this machine itself (a loopback peer, a loopback host name, no forwarding header left over from another proxy); HTTPS, any other address and
+  anything that came through a proxy keep `Secure`.
+- **The setup page no longer reloads itself every two seconds** (the restore panel's refresh tag was emitted on every visit).
+- **Lock on sleep is now an option, off by default.** The 2.1.0 desktop apps locked the vault every time the computer slept, which sent you back to the
+  login page after every wake-up. The setting "Lock the vault when this computer sleeps" (Settings, Power; Windows and macOS) is off unless you turn it
+  on, is read at the moment of each sleep, and sends nothing while it is off. `SECURITY.md` describes it.
+- **Sync keeps the events it has not delivered.** The push cursor moves only over the contiguous run of applied or deliberately dropped events, so an event
+  that failed to apply is retried instead of being stepped over when a later event of the same chunk went through (both sides: upgrade the receiving
+  node too, an older receiver still reports the old, non-contiguous value). A chunk of events the peer drops no longer stalls the cursor. A single event
+  that is too large for the peer is skipped for good and now shows as quarantined. Deleting a media file is one transaction and wakes the sync loop.
+- **OS auto-unlock:** two concurrent enables can no longer leave two slots. Duplicates that 2.1.0 may have left are repaired on first use: the slot that
+  opens with the OS-stored secret is kept, the others are removed, then the unique index is added.
+- **Re-key:** the internal key file is flushed to disk and, on Linux and macOS, owner-only.
+- **Android blind app:** one run at a time (no repeated "Back up now"), the activity and the status screen go through the safe controller, "Disconnect and
+  wipe" waits for running work and an aborted wipe re-enqueues the jobs, sync is visible in the status, the blind role's services are registered in one
+  place, and the AndroidX package warnings are gone.
+- **Node and web:** the `/node/*` endpoints refuse any request that carries a forwarding header; the local CA keys on Windows are bound to a purpose
+  entropy (with a fallback for keys written by older versions); the node's lifecycle resources are released reliably; the strong-box check no longer throws
+  when the session locks during its identity lookup; a damaged secret scope explains what deleting it means.
+- **Updates, snapshots and tools:** a cancelled update check is no longer reported as failed, a missing Velopack locator is a clear error instead of a
+  null reference; an encrypted snapshot database over the 2 GiB in-memory limit is refused with a clear message instead of failing later; the DEK-rotation
+  proposal wipes the key-encryption key on every failure path; the macOS command runners kill the whole process tree on a timeout and wait for it; the
+  blind timer scheduler no longer disposes its cancellation source under a running loop; `scripts/pack-android-blind.ps1` always checks the signing identity.
 
 #### 1.0.12: fixes from the review rounds (2026-09-29)
 

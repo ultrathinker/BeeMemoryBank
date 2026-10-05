@@ -40,6 +40,8 @@ public static class BlindMobileServices
         services.TryAddSingleton(options.TimeProvider ?? TimeProvider.System);
         services.TryAddSingleton(options);
         services.TryAddSingleton<IBlindPaths>(new BlindAppPaths(dataDir, dbPath));
+        // What the copy is doing now (sync, first load, backup): the wipe stops it and waits for it (BlindPhoneReset).
+        services.TryAddSingleton<BlindActivity>();
 
         // Minimal SQLite infrastructure and blind-specific repositories:
         services.AddSingleton(_ => new DbConnectionFactory(dbPath));
@@ -150,7 +152,8 @@ public static class BlindMobileServices
                 sp.GetRequiredService<IBlindReplicaSource>(),
                 sp.GetRequiredService<BlindPhoneBackupRunner>(),
                 sp.GetRequiredService<BlindPhoneLog>(),
-                BlindPaths.Replica(sp.GetRequiredService<IBlindPaths>().DataDirectory), sp.GetRequiredService<TimeProvider>()));
+                BlindPaths.Replica(sp.GetRequiredService<IBlindPaths>().DataDirectory), sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<BlindActivity>()));
 
         services.AddSingleton<BlindAppController>();
         services.AddSingleton<IBlindAppController>(sp => sp.GetRequiredService<BlindAppController>());

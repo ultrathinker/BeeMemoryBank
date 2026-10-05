@@ -93,7 +93,8 @@ public class RecoveryBoxCryptoTests
         budget.TryTake(RecoveryBoxKdf.Resolve("s512t6")).Should().BeFalse();
         budget.TryTake(RecoveryBoxKdf.Resolve("d64t3")).Should().BeTrue();
         budget.TryTake(RecoveryBoxKdf.Resolve("d64t3")).Should().BeTrue();
-        budget.Exhausted.Should().BeTrue();
+        // what production reads (RecoveryKeyResolver): both classes stood at their bound
+        budget.AnyLimitReached.Should().BeTrue();
     }
 
     [Theory]

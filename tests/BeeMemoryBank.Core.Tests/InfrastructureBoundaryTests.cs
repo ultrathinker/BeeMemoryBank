@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
 /// The full app's secret stores (the DPAPI store, the Keychain store, <c>IUserSecretStore</c>) live in <c>BeeMemoryBank.Infrastructure</c>,
-/// which also holds ACME, the local CA, DDNS, mDNS and the vault-bound auto-unlock. None of that may reach a blind app. Proved three ways:
+/// which also holds the local CA, mDNS and the vault-bound auto-unlock. None of that may reach a blind app. Proved three ways:
 /// on the project graph (no blind project reaches Infrastructure through ProjectReference, however indirectly, and none compiles one of its
 /// files), on the compiled output of every blind project that has been built (no Infrastructure assembly, no reference to it, none of its
 /// secret-store types), and on the packaged folders the release process names in BMB_SCAN_DIRS (the blind .app, the Windows blind publish
@@ -28,7 +28,6 @@ public class InfrastructureBoundaryTests
         "BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService",
         "BeeMemoryBank.Infrastructure.OsAutoUnlock.UpdateUnlockHandoff",
         "BeeMemoryBank.Infrastructure.Tls.LocalCaService",
-        "BeeMemoryBank.Infrastructure.Acme.AcmeCertificateService",
     ];
 
     private static AssemblyBoundaryScanner.Forbidden ForbiddenInfrastructure() =>

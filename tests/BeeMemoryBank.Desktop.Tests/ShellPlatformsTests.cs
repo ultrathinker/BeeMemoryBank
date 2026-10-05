@@ -65,7 +65,7 @@ public sealed class ShellPlatformsTests
         sleep.Should().BeOfType<PreventSleepService>();
         sleep!.IsEnabled.Should().BeFalse("constructing the service applies nothing");
 
-        using var power = platform.CreatePowerEvents(NoLock);
+        using var power = platform.CreatePowerEvents(NoLock, () => true);
         power.Should().BeOfType<PowerEventsService>();
     }
 
@@ -80,7 +80,7 @@ public sealed class ShellPlatformsTests
         platform.FileManager.Should().BeOfType<MacOS.MacOsFileManager>();
         using var sleep = platform.CreatePreventSleep(new DesktopSettingsStore(Path.Combine(_dir, "settings.json"))) as IDisposable;
         sleep.Should().BeOfType<MacOS.MacOsPreventSleep>();
-        using var power = platform.CreatePowerEvents(NoLock);
+        using var power = platform.CreatePowerEvents(NoLock, () => true);
         power.Should().BeOfType<MacOS.MacOsSleepMonitor>();
         platform.TrayIconIsTemplate.Should().BeTrue();
         platform.TrayIconAsset.Should().EndWith("tray-template@2x.png");
@@ -97,7 +97,7 @@ public sealed class ShellPlatformsTests
         var platform = ShellPlatforms.For(os);
 
         platform.CreatePreventSleep(new DesktopSettingsStore(Path.Combine(_dir, "settings.json"))).Should().BeNull();
-        platform.CreatePowerEvents(NoLock).Should().BeNull();
+        platform.CreatePowerEvents(NoLock, () => true).Should().BeNull();
 
         var autostart = platform.CreateAutostart();
         autostart.IsEnabled.Should().BeFalse();

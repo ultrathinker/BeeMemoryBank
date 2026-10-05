@@ -111,7 +111,6 @@ with sync_playwright() as p:
         "Roles": "/Roles",
         "Activity": "/Activity",
         "Admin": "/Admin",
-        "InternetAccess": "/InternetAccess",
         "RemoteAccounts": "/RemoteAccounts",
         "Connect": "/Connect",
         "AI": "/AI",

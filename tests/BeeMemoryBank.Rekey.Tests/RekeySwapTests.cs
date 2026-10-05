@@ -26,6 +26,7 @@ public sealed class RekeySwapTests : IDisposable
         Write(_d, "os-auto-unlock.dat", "old-secret");
         Write(_d, "unknown.txt", "who knows");
         Write(_d, "certs/ca.pem", "ca");
+        // Legacy data of the removed internet-access wizard: an upgraded installation may still hold it, and it must survive a rekey.
         Write(_d, "certs/acme/account.json", "acme");
         Write(_d, "tls/server.pfx", "tls");
         Write(_d, "internet-access/state.json", "ia");

@@ -37,6 +37,13 @@ public interface IBlindLifecycle
     void StopBackgroundWork();
     void StopBackupService();
     void RestartAfterWipe();
+
+    /// <summary>
+    /// Called when "Disconnect and wipe" gave up because the running work did not stop in time and nothing was deleted: the host puts back what
+    /// <see cref="StopBackgroundWork"/> took away (Android: the periodic WorkManager jobs). The default does nothing (a host whose stop is
+    /// not undone, or that re-schedules by itself).
+    /// </summary>
+    void ResumeBackgroundWork() { }
 }
 public interface IBlindBackupExporter { Task<Stream> CreateAsync(string suggestedName, CancellationToken ct); }
 

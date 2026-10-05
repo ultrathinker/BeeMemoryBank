@@ -194,18 +194,29 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         await conn.ExecuteAsync("DELETE FROM tbl_media WHERE id = @id", new { id });
     }
 
-    public async Task SoftDeleteAsync(Guid id)
+    public async Task SoftDeleteAsync(Guid id, System.Data.IDbTransaction? transaction = null)
     {
         // SECURITY: same TOCTOU shape as CreateAsync/SoftDeleteByArticleIdAsync above -- the
         // owning-article lookup, the tree-path guard, and the UPDATE must share one transaction,
         // or a concurrent move of the owning article could land between the guard's read and
-        // this UPDATE. No IDbTransaction
-        // parameter is exposed on this method (nothing currently needs to compose it with
-        // another write), so it is fully self-contained: open one transaction, run the guard
-        // and the write against it, commit.
+        // this UPDATE. An optional IDbTransaction lets MediaService compose it
+        // with another write; without one, this method remains fully self-contained.
+        // MediaService now composes it with the corresponding event append; preserve the same guard when it supplies that
+        // transaction, and retain the old self-contained behavior for all other callers.
+        if (transaction != null)
+        {
+            await SoftDeleteAsync(id, transaction.Connection!, transaction);
+            return;
+        }
+
         using var conn = OpenConnection();
         using var tx = conn.BeginTransaction();
+        await SoftDeleteAsync(id, conn, tx);
+        tx.Commit();
+    }
 
+    private async Task SoftDeleteAsync(Guid id, System.Data.IDbConnection conn, System.Data.IDbTransaction tx)
+    {
         if (!_holder.Scope.IsSuperadmin)
         {
             var articleId = await conn.QuerySingleOrDefaultAsync<string?>(
@@ -217,8 +228,6 @@ public class MediaRepository(DbConnectionFactory factory, CallerScopeHolder scop
         await conn.ExecuteAsync(
             "UPDATE tbl_media SET status = 'D', deleted_at = @now WHERE id = @id AND status = 'A'",
             new { id, now }, tx);
-
-        tx.Commit();
     }
 
     public async Task UpdateLamportTsAsync(Guid id, long lamportTs, Guid? sourceNodeId)

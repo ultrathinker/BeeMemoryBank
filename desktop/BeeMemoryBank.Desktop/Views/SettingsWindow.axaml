@@ -94,6 +94,10 @@
                                   Content="Keep this computer awake while Bee Memory Bank is running" />
                         <TextBlock Classes="hint"
                                    Text="Useful when other devices sync through this computer. The screen can still turn off." />
+                        <CheckBox Name="LockOnSleepCheck"
+                                  Margin="0,8,0,0" />
+                        <TextBlock Name="LockOnSleepHint"
+                                   Classes="hint" />
                     </StackPanel>
                 </Border>
 

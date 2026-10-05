@@ -31,7 +31,19 @@ public sealed class WindowsDpapiUserSecretStore(string dataPath) : IUserSecretSt
         var entropy = EntropyFor(purpose);
         try
         {
-            return ProtectedData.Unprotect(blob, entropy, DataProtectionScope.CurrentUser);
+            try
+            {
+                return ProtectedData.Unprotect(blob, entropy, DataProtectionScope.CurrentUser);
+            }
+            catch (CryptographicException) when (IsWrittenWithoutEntropyByOlderVersions(purpose))
+            {
+                // Files of the local CA keys written by earlier versions were protected without entropy. Try that once; if it does not
+                // open either, the failure below is the one the strong attempt raised, exactly as before this fallback existed.
+                var plain = TryUnprotectWithoutEntropy(blob);
+                if (plain is null) throw;
+                MigrateToPurposeEntropy(path, plain, entropy);
+                return plain;
+            }
         }
         catch (CryptographicException ex)
         {
@@ -41,6 +53,42 @@ public sealed class WindowsDpapiUserSecretStore(string dataPath) : IUserSecretSt
         {
             if (entropy is not null) CryptographicOperations.ZeroMemory(entropy);
             CryptographicOperations.ZeroMemory(blob);
+        }
+    }
+
+    private static byte[]? TryUnprotectWithoutEntropy(byte[] blob)
+    {
+        try { return ProtectedData.Unprotect(blob, null, DataProtectionScope.CurrentUser); }
+        catch (CryptographicException) { return null; }
+    }
+
+    /// <summary>
+    /// Rewrites a legacy file with the purpose entropy so the next read takes the strong path. Best effort and never at the secret's
+    /// expense: the new blob is written to a temporary file next to it, checked by opening it again, and only then moved over the old
+    /// file in one step, so a crash, a full disk or a second process doing the same leaves either the old file or the new one, never a
+    /// torn one. Any failure is ignored: the secret has been read, and the legacy file still opens next time.
+    /// </summary>
+    private static void MigrateToPurposeEntropy(string path, byte[] plain, byte[]? entropy)
+    {
+        byte[]? blob = null;
+        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            blob = ProtectedData.Protect(plain, entropy, DataProtectionScope.CurrentUser);
+            var check = ProtectedData.Unprotect(blob, entropy, DataProtectionScope.CurrentUser);
+            var same = CryptographicOperations.FixedTimeEquals(check, plain);
+            CryptographicOperations.ZeroMemory(check);
+            if (!same) return;
+            File.WriteAllBytes(temp, blob);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best effort: only our own temporary file */ }
+        }
+        finally
+        {
+            if (blob is not null) CryptographicOperations.ZeroMemory(blob);
         }
     }
 
@@ -100,13 +148,15 @@ public sealed class WindowsDpapiUserSecretStore(string dataPath) : IUserSecretSt
 
     private static byte[] Entropy(string purpose) => Encoding.UTF8.GetBytes(EntropyPrefix + purpose);
 
-    private static byte[]? EntropyFor(string purpose) => purpose switch
+    private static byte[] EntropyFor(string purpose) => purpose switch
     {
         "os-auto-unlock" => "BeeMemoryBank.OsAutoUnlock.v1"u8.ToArray(),
         "update-unlock" => "BeeMemoryBank.UpdateUnlockHandoff.v1"u8.ToArray(),
-        "local-ca" or "local-leaf" or "acme-account" => null,
         _ => Entropy(purpose)
     };
+
+    /// <summary>The purposes whose files earlier versions protected with no entropy at all (still readable, see <see cref="Read"/>).</summary>
+    private static bool IsWrittenWithoutEntropyByOlderVersions(string purpose) => purpose is "local-ca" or "local-leaf";
 
     private string PathFor(string purpose, string account)
     {
@@ -116,7 +166,6 @@ public sealed class WindowsDpapiUserSecretStore(string dataPath) : IUserSecretSt
             ("update-unlock", "default") => Path.Combine(_dataPath, "update-unlock.dat"),
             ("local-ca", "default") => Path.Combine(_dataPath, "certs", "ca.key"),
             ("local-leaf", "default") => Path.Combine(_dataPath, "certs", "leaf.key"),
-            ("acme-account", "default") => Path.Combine(_dataPath, "certs", "acme", "account.pem"),
             _ => null
         };
         if (legacy is not null) return legacy;

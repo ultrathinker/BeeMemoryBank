@@ -82,14 +82,18 @@ builder.Services.AddAuthentication("BeeWebCookie")
         options.LoginPath = "/Login";
         options.LogoutPath = "/Logout";
         options.AccessDeniedPath = "/Login";
-        options.Cookie.Name = "bee_session";
-        options.Cookie.HttpOnly = true;
-        options.Cookie.SameSite = SameSiteMode.Strict;
-        // SameAsRequest would let the cookie travel over HTTP if a proxy ever
-        // terminated TLS in front (passive sniffing). Always require Secure;
-        // Development can still log in over http://localhost because Chrome
-        // exempts localhost from the Secure cookie restriction.
-        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        // Secure everywhere except a plain-HTTP request to the machine itself (see LoopbackAwareCookieBuilder): the desktop apps show
+        // the UI in an embedded browser at http://127.0.0.1, and WebKit (the macOS app) drops a Secure cookie from there, which turned
+        // every sign-in into an endless redirect back to the login page. SameAsRequest is not used: it would also drop Secure behind a
+        // proxy that terminates TLS without telling us; here such a request keeps Secure.
+        options.Cookie = new LoopbackAwareCookieBuilder
+        {
+            Name = "bee_session",
+            HttpOnly = true,
+            SameSite = SameSiteMode.Strict,
+            SecurePolicy = CookieSecurePolicy.Always,
+            IsEssential = true,
+        };
         // ExpireTimeSpan/SlidingExpiration are admin-configurable (default 48h, sliding ON): the
         // AddOptions<CookieAuthenticationOptions>.Configure<WebSessionSettingsService> registration
         // below runs AFTER this delegate and overrides both with the DB-backed values. Security-stamp

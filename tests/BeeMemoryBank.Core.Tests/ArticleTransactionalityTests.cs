@@ -2,6 +2,7 @@ using System.Data;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Media;
 using MediaModel = BeeMemoryBank.Core.Models.Media;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -28,6 +29,7 @@ public class ArticleTransactionalityTests : IAsyncLifetime
     private FailingEventLogRepository _eventLogRepo = null!;
     private ConceptTagService _conceptTagService = null!;
     private ArticleService _articleService = null!;
+    private MediaService _mediaService = null!;
 
     public async Task InitializeAsync()
     {
@@ -79,6 +81,9 @@ public class ArticleTransactionalityTests : IAsyncLifetime
             new NullActorProvider(),
             _conceptTagService,
             _factory);
+        _mediaService = new MediaService(
+            _mediaRepo, _articleRepo, _session, _nodeRepo, _clock, _eventLogger,
+            new MediaStorageOptions(Path.GetTempPath()), _factory, new ImageSharpImageTranscoder());
     }
 
     public Task DisposeAsync()
@@ -317,6 +322,42 @@ public class ArticleTransactionalityTests : IAsyncLifetime
         _syncTrigger.SignalCount.Should().Be(initialSignals, "Sync trigger must not signal on failed delete");
     }
 
+    [Fact]
+    public async Task DeleteMedia_WhenEventLogFails_RollsBackTheSoftDeleteAndDoesNotSignal()
+    {
+        var article = await _articleService.CreateAsync("Article With Media", "/media-test", [], "Body text");
+        var media = await CreateMediaAsync(article.Id);
+        var initialSignals = _syncTrigger.SignalCount;
+        _eventLogRepo.FailAppend = true;
+
+        var act = () => _mediaService.DeleteAsync(media.Id);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("Injected event log failure");
+        using var conn = _factory.CreateConnection();
+        (await conn.QuerySingleAsync<string>("SELECT status FROM tbl_media WHERE id = @id", new { id = media.Id }))
+            .Should().Be("A");
+        (await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM tbl_event WHERE event_type = @eventType",
+            new { eventType = EventTypes.MediaDelete })).Should().Be(0);
+        _syncTrigger.SignalCount.Should().Be(initialSignals);
+    }
+
+    [Fact]
+    public async Task DeleteMedia_CommitsTheEventAndSignalsAfterTheTransaction()
+    {
+        var article = await _articleService.CreateAsync("Article With Media", "/media-test", [], "Body text");
+        var media = await CreateMediaAsync(article.Id);
+        var initialSignals = _syncTrigger.SignalCount;
+
+        await _mediaService.DeleteAsync(media.Id);
+
+        using var conn = _factory.CreateConnection();
+        (await conn.QuerySingleAsync<string>("SELECT status FROM tbl_media WHERE id = @id", new { id = media.Id }))
+            .Should().Be("D");
+        (await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM tbl_event WHERE event_type = @eventType",
+            new { eventType = EventTypes.MediaDelete })).Should().Be(1);
+        _syncTrigger.SignalCount.Should().Be(initialSignals + 1);
+    }
+
     // Regression: a protected (second-layer passphrase) article must never gain attached media via
     // a body-embedded reference. Media is wrapped by the MASTER DEK, not the passphrase, so linking
     // it would make it readable without the passphrase — the same guarantee MediaService.CreateAsync
@@ -429,6 +470,26 @@ public class ArticleTransactionalityTests : IAsyncLifetime
                     "Outcome B: the append's new body must be the active content, not a mix of old and new");
             }
         }
+    }
+
+    private async Task<MediaModel> CreateMediaAsync(Guid articleId)
+    {
+        var media = new MediaModel
+        {
+            Id = Guid.NewGuid(),
+            ArticleId = articleId,
+            FileName = "attachment.bin",
+            ContentType = "application/octet-stream",
+            FileSize = 128,
+            EncryptedDek = new byte[32],
+            DekIV = new byte[12],
+            IV = new byte[12],
+            Status = "A",
+            LamportTs = 1,
+            CreatedAt = DateTime.UtcNow
+        };
+        await _mediaRepo.CreateAsync(media);
+        return media;
     }
 }
 

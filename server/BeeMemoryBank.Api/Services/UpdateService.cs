@@ -245,7 +245,7 @@ public sealed class UpdateService
                 $"Update available: {stableVersion} (current: {runningVersion})");
             return true;
         }
-        catch (Exception ex) when (ex is not InvalidOperationException or OperationCanceledException)
+        catch (Exception ex) when (ex is not (InvalidOperationException or OperationCanceledException))
         {
             SetFailed($"Check failed: {ex.Message}");
             throw;

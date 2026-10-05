@@ -414,10 +414,14 @@ public class ForbiddenReferencesTests
                 "BlindMobileServices" or "BlindAppController" or "BlindStartup" or "BlindMobilePairing" or
                 "BlindRunReport" or "BlindBackupExport" or "BlindPhoneReset" or "IBlindNodeKeys" or
                 "IBlindSecretStore" or "IBlindStateStore" or "IBlindLifecycle" or
-                "IBlindPaths" or "IBlindBackupExporter"
+                "IBlindPaths" or "IBlindBackupExporter" or
+                // the page shows the shared controller's status (BlindHomeView) and asks it, like the desktop hosts do
+                "IBlindAppController" or "BlindAppStatus" or "BlindAppBackup" or "BlindAppOptions" or "BlindHomeView" or "BlindPaths"
                 || typeNs.Equals("BeeMemoryBank.Core.Services.BlindPhone", StringComparison.Ordinal) && typeName is
                 "BlindPhoneState" or "BlindPhoneLog" or "BlindPhoneLog.Entry" or "BlindHeavyWork" or
-                "BlindBackupSchedule" or "BlindPhoneBackupRunner";
+                "BlindBackupSchedule" or "BlindPhoneBackupRunner" or
+                // what the sync worker, the backup service and the Keystore blobs register in / read through
+                "BlindActivity" or "BlindOperation" or "BlindKeystoreBlobLayout" or "BlindSingleRun";
 
         if (typeNs.StartsWith("BeeMemoryBank.Core", StringComparison.Ordinal))
         {

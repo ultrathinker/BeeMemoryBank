@@ -261,12 +261,15 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
     private static void WriteInternalKey(string path)
     {
         var key = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         using (var fs = new FileStream(path, options))
         using (var w = new StreamWriter(fs))
+        {
             w.Write(key);
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            w.Flush();
+            fs.Flush(flushToDisk: true);
+        }
     }
 
     /// <summary>The seed in the clear: a v=1 row under whichever old key seals it, a legacy v=0 row as it is.</summary>

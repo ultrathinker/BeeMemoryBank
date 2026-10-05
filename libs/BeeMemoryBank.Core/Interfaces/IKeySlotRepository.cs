@@ -20,4 +20,11 @@ public interface IKeySlotRepository
     /// <summary>Deletes a slot. See <see cref="CreateAsync"/> for the <paramref name="transaction"/> contract.</summary>
     Task DeleteAsync(int slotId, IDbTransaction? transaction = null);
     Task UpdateSlotKeyAsync(int slotId, byte[] encryptedDek, byte[] iv);
+
+    /// <summary>
+    /// Adds the partial uniqueness constraint for the OS auto-unlock slot after any legacy
+    /// duplicates have been repaired. Implementations without a relational schema may leave this
+    /// as a no-op.
+    /// </summary>
+    Task EnsureOsAutoUnlockUniqueIndexAsync() => Task.CompletedTask;
 }

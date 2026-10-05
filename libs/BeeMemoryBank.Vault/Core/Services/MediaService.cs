@@ -328,8 +328,22 @@ public class MediaService(
                 throw new UnauthorizedAccessException($"Write access denied for media {id} linked to an inaccessible article.");
         }
 
-        await mediaRepo.SoftDeleteAsync(id);
-        await eventLogger.LogMediaDeleteAsync(id);
+        using (var conn = connFactory.CreateConnection())
+        using (var tx = conn.BeginTransaction())
+        {
+            try
+            {
+                await mediaRepo.SoftDeleteAsync(id, tx);
+                await eventLogger.LogMediaDeleteAsync(id, tx);
+                tx.Commit();
+            }
+            catch
+            {
+                try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back */ }
+                throw;
+            }
+        }
+        eventLogger.SignalSync();
     }
 
 

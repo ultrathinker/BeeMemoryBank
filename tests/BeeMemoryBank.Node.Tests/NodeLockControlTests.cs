@@ -168,6 +168,26 @@ public class NodeLockControlTests : IAsyncLifetime
         _apiCalls.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("X-Forwarded-For", "203.0.113.9")]
+    [InlineData("X-Forwarded-Host", "bee.example.com")]
+    [InlineData("X-Forwarded-Proto", "https")]
+    [InlineData("Forwarded", "for=203.0.113.9;proto=https")]
+    [InlineData("X-Real-IP", "203.0.113.9")]
+    public async Task FromAProxyOnThisMachine_404_EvenWithTheRightKey_AndTheApiIsNeverCalled(string header, string value)
+    {
+        var api = await StartApiStubAsync();
+        using var client = await StartFrontAsync(api);
+
+        using var req = LockRequest(remoteIp: "127.0.0.1");
+        req.Headers.Add(header, value);
+        var response = await client.SendAsync(req);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "a relayed request is not a call from this machine");
+        (await response.Content.ReadAsStringAsync()).Should().BeEmpty();
+        _apiCalls.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task WhenTheApiRefuses_502_WithAFixedText_NotTheApisAnswer()
     {

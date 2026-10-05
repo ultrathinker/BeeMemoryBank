@@ -152,14 +152,14 @@ public class HardDeleteSyncTests : IAsyncLifetime
         // the fix, a folder purge never wrote a row keyed by the article's own GUID at all, so the
         // gate had literally nothing to compare against, regardless of timestamps.
         //
-        // 1. Create an article under /Clients/Acme on NodeA, sync it to NodeB.
-        var article = await _nodeA.ArticleService.CreateAsync("Target", "/Clients/Acme", new List<string>(), "Secret");
+        // 1. Create an article under /Clients/Example on NodeA, sync it to NodeB.
+        var article = await _nodeA.ArticleService.CreateAsync("Target", "/Clients/Example", new List<string>(), "Secret");
         foreach (var e in await _nodeA.EventLogRepo.GetAfterSequenceAsync(0))
             await _nodeB.ApplyFromAsync(_nodeA, e);
         (await _nodeB.ArticleRepo.GetByIdAsync(article.Id)).Should().NotBeNull();
 
-        // 2. NodeB hard-deletes the whole /Clients/Acme folder, purging the article.
-        await _nodeB.HardDeleteService.DeleteFolderAsync("/Clients/Acme", 1, null, CancellationToken.None);
+        // 2. NodeB hard-deletes the whole /Clients/Example folder, purging the article.
+        await _nodeB.HardDeleteService.DeleteFolderAsync("/Clients/Example", 1, null, CancellationToken.None);
         (await _nodeB.ArticleRepo.GetByIdAsync(article.Id)).Should().BeNull();
 
         // 3. NodeA, unaware of the purge, updates the article and queues the resulting event.
@@ -171,7 +171,7 @@ public class HardDeleteSyncTests : IAsyncLifetime
         await _nodeB.ApplyFromAsync(_nodeA, updateEvent);
 
         // 5. Before the fix in HardDeleteService.PurgeFolderSubtreeAsync: a folder purge only ever
-        // wrote ONE audit row, keyed by the folder's PATH ("/Clients/Acme") -- never by this
+        // wrote ONE audit row, keyed by the folder's PATH ("/Clients/Example") -- never by this
         // article's own GUID, which is what EventEntityId.Derive uses as an ordinary article
         // event's entity id (see EventEntityId.cs). IsHardDeletedAsync's
         // "entity_identifier = @entityId" lookup could therefore never match, NodeA's update sailed
@@ -185,7 +185,7 @@ public class HardDeleteSyncTests : IAsyncLifetime
 
         using var conn = _nodeB.Factory.CreateConnection();
         var folderCount = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM tbl_folder WHERE path = @path", new { path = "/Clients/Acme" });
+            "SELECT COUNT(*) FROM tbl_folder WHERE path = @path", new { path = "/Clients/Example" });
         folderCount.Should().Be(0, "the purged folder must not be re-vivified by the same resurrection attempt");
     }
 

@@ -4,7 +4,7 @@ namespace BeeMemoryBank.Rekey.Tests;
 
 /// <summary>
 /// On a Mac a vault's secrets in the Keychain are scoped by the id in <c>&lt;data&gt;/.secret-scope</c>. The re-keyed vault takes the old data
-/// directory's place, so the id must be carried over with the other "carried over" entries, or the CA key, the ACME keys and the DDNS tokens
+/// directory's place, so the id must be carried over with the other "carried over" entries, or the CA key and the other secrets
 /// kept in the Keychain become unreachable (and the local CA is minted again). The file is not secret, and on Windows and Linux it does
 /// not exist.
 /// </summary>

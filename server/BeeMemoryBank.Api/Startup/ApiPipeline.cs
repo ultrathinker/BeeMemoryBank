@@ -148,7 +148,6 @@ app.MapDownloadEndpoints();
     app.MapAdminEndpoints();
     app.MapSearchMetricsEndpoints();
     app.MapBlindNodeEndpoints(); // BMB-54: blind status, backups, console, wipe
-    app.MapInternetAccessEndpoints();
     app.MapAutoUnlockEndpoints();
     app.MapRekeyReportEndpoints();
     app.MapChatEndpoints();

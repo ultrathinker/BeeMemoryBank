@@ -172,12 +172,12 @@ public static class UserSecretStoreContract
         var account = "\u0437\u0430\u0434\u0430\u0447\u0430/账户 é / vault 1";
         var secret = RandomNumberGenerator.GetBytes(24);
 
-        h.Store.Write("ddns-token", account, secret);
+        h.Store.Write("sample-token", account, secret);
 
-        h.Store.Read("ddns-token", account).Should().Equal(secret);
-        h.Store.Read("ddns-token", "\u0437\u0430\u0434\u0430\u0447\u0430").Should().BeNull();
-        h.Store.Delete("ddns-token", account);
-        h.Store.Read("ddns-token", account).Should().BeNull();
+        h.Store.Read("sample-token", account).Should().Equal(secret);
+        h.Store.Read("sample-token", "\u0437\u0430\u0434\u0430\u0447\u0430").Should().BeNull();
+        h.Store.Delete("sample-token", account);
+        h.Store.Read("sample-token", account).Should().BeNull();
     }
 
     /// <summary>A payload that proves its own integrity: a torn or mixed value matches no (thread, round).</summary>

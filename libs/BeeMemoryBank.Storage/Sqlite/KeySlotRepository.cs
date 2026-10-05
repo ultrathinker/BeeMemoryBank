@@ -70,4 +70,12 @@ public class KeySlotRepository(DbConnectionFactory factory) : BaseRepository(fac
             "UPDATE tbl_key_slot SET encrypted_master_dek = @encryptedDek, iv = @iv WHERE slot_id = @slotId",
             new { slotId, encryptedDek, iv });
     }
+
+    public async Task EnsureOsAutoUnlockUniqueIndexAsync()
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(@"CREATE UNIQUE INDEX IF NOT EXISTS ux_key_slot_os_auto_unlock
+            ON tbl_key_slot(slot_type)
+            WHERE slot_type = 'os_auto_unlock'");
+    }
 }

@@ -72,11 +72,11 @@ public class MacOsKeychainUserSecretStoreTests
         var (plain, plainFake) = New();
         var (scoped, scopedFake) = New(scope: "0123456789abcdef");
 
-        plain.Write("acme-pfx-password", "node.example.com", [1]);
-        scoped.Write("acme-pfx-password", "node.example.com", [1]);
+        plain.Write("sample-password", "node.example.com", [1]);
+        scoped.Write("sample-password", "node.example.com", [1]);
 
-        plainFake.Keys.Should().ContainSingle().Which.Account.Should().Be("acme-pfx-password/node.example.com");
-        scopedFake.Keys.Should().ContainSingle().Which.Account.Should().Be("0123456789abcdef/acme-pfx-password/node.example.com");
+        plainFake.Keys.Should().ContainSingle().Which.Account.Should().Be("sample-password/node.example.com");
+        scopedFake.Keys.Should().ContainSingle().Which.Account.Should().Be("0123456789abcdef/sample-password/node.example.com");
     }
 
     [Theory]

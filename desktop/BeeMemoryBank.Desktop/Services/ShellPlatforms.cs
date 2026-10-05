@@ -18,8 +18,11 @@ public interface IShellPlatform
     /// <summary>Null when the system has no way to keep the computer awake (the setting is then shown disabled).</summary>
     IPreventSleepService? CreatePreventSleep(DesktopSettingsStore settings);
 
-    /// <summary>Null when the system has no sleep notification the shell can use. <paramref name="lockNode"/> asks the node to lock the vault.</summary>
-    IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode);
+    /// <summary>
+    /// Null when the system has no sleep notification the shell can use. <paramref name="lockNode"/> asks the node to lock the vault;
+    /// <paramref name="lockOnSleepEnabled"/> is asked at each sleep event and, when it says no, the monitor makes no request and shows no notice.
+    /// </summary>
+    IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode, Func<bool> lockOnSleepEnabled);
 
     IFileManagerReveal FileManager { get; }
 

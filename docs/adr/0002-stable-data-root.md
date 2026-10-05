@@ -43,10 +43,10 @@ Throwaway .NET-приложение `BmbProbeApp` (win-x64, self-contained), у�
 
 **Результат — решающий для §2.1 плана:**
 ```
-[INFO] Removing directory '"C:\Users\evgeny\AppData\Local\BmbProbeApp"'
+[INFO] Removing directory '"C:\Users\<user>\AppData\Local\BmbProbeApp"'
 ...
 [INFO] Scheduling removal of install directory...
-[INFO] Running: cmd.exe /C choice /C Y /N /D Y /T 3 & rmdir /s /q "C:\Users\evgeny\AppData\Local\BmbProbeApp"
+[INFO] Running: cmd.exe /C choice /C Y /N /D Y /T 3 & rmdir /s /q "C:\Users\<user>\AppData\Local\BmbProbeApp"
 ```
 Деинсталлятор выполняет **`rmdir /s /q` над ВСЕЙ корневой папкой установки безусловно** — не
 «удалить только известные файлы пакета». `myrootmarker.txt`, переживший update (P1), полностью

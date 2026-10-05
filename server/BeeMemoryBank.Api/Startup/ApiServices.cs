@@ -130,19 +130,13 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.Replace(ServiceDescriptor.Scoped<ICallerScopeStore, HttpContextCallerScopeStore>());
 
 builder.Services.AddScoped<IActorProvider, BeeMemoryBank.Api.Services.HttpActorProvider>();
-builder.Services.AddSingleton(sp =>
-    new SnapshotService(dataPath, sp.GetRequiredService<DbConnectionFactory>(),
-        sp.GetRequiredService<INodeIdentityRepository>(),
-        sp.GetRequiredService<ILamportClock>(),
-        sp.GetRequiredService<ILogger<SnapshotService>>(),
-        sp.GetRequiredService<IRestoreReplayShieldRepository>(),
-        sp.GetRequiredService<IWhitelistRepository>(),
-        // GetRequiredService, not GetService: a SnapshotService without a session has no way to
-        // encrypt, and CreateAsync then writes the vault out in the clear. That must not be
-        // reachable by silently resolving null at the composition root.
-        new SessionSnapshotKeyOperations(sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
-            // Only in the blind role: the key a blind node signs its packages with.
-            sp.GetService<IExternalNodeKey>())));
+BlindRoleServices.AddSnapshotService(builder.Services, dataPath, sp =>
+    // GetRequiredService, not GetService: a SnapshotService without a session has no way to
+    // encrypt, and CreateAsync then writes the vault out in the clear. That must not be
+    // reachable by silently resolving null at the composition root.
+    new SessionSnapshotKeyOperations(sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
+        // Only in the blind role: the key a blind node signs its packages with.
+        sp.GetService<IExternalNodeKey>()));
 // Singleton: RestoreInitiatorService holds in-memory progress state for /restore/progress polling.
 // Task.Run flows in EventApplier and SnapshotEndpoints fire-and-forget, so the service must outlive
 // the request scope. Scoped dependencies (repositories) are resolved via IServiceScopeFactory per
@@ -212,9 +206,7 @@ builder.Services.AddBlindNodeServices(dataPath);
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<BeeMemoryBank.Core.Services.NodeResetService>(sp, dataPath));
 builder.Services.AddScoped<BeeMemoryBank.Core.Services.INodeResetHook, ApiStateResetHook>();
 builder.Services.AddSingleton<SnapshotJoinCache>();
-var mediaDir = Path.Combine(dataPath, "media");
-Directory.CreateDirectory(mediaDir);
-builder.Services.AddSingleton(new BeeMemoryBank.Core.Services.MediaStorageOptions(mediaDir));
+BlindRoleServices.AddMediaStorage(builder.Services, dataPath);
 
 // ── AI chat ─────────────────────────────────────────────────────────────────────
 // chat.db is a SEPARATE SQLite DB from beememorybank.db, owned entirely by the Api. Its
@@ -249,26 +241,16 @@ builder.Services.AddSingleton<ChatDestructiveOpCounter>();
 // Curated read-only tool surface for the native AI chat. Scoped (depends on the
 // ambient CallerScope + SessionService, both request-scoped). See ChatToolDispatcher.
 builder.Services.AddScoped<ChatToolDispatcher>();
-builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
-{
-    o.MultipartBodyLengthLimit = 500L * 1024 * 1024;
-});
-builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(o =>
-{
-    o.Limits.MaxRequestBodySize = 500L * 1024 * 1024;
-});
+BlindRoleServices.AddLargeBodyLimits(builder.Services);
 builder.Services.AddOpenApi();
 
 // The blind package (CONTRACTS §2): a full node builds it to seed, reseed and hand out replicas; a
 // blind node builds it for an Android blind node.
-builder.Services.AddScoped<BlindPackageBuilder>();
-builder.Services.AddSingleton<BlindReplicaPackageCache>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<BlindReplicaPackageCache>());
-builder.Services.TryAddSingleton(TimeProvider.System);
+BlindRoleServices.AddBlindPackageServices(builder.Services);
 if (role.IsBlind)
 {
-    AddBlindRoleServices(builder.Services, dataPath);
-    UseBlindHttps(builder, dataPath);
+    BlindRoleServices.AddBlindRoleServices(builder.Services, dataPath);
+    BlindRoleServices.UseBlindHttps(builder);
 }
 else
 {
@@ -296,52 +278,6 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
 });
 
-    }
-
-    /// <summary>
-    /// What a blind node has instead of the DEK-bound services (plan 3.4, 3.5): its identity key in
-    /// a file, a rotation applier with nothing to re-wrap, and a restore initiator that only asks
-    /// for a reseed.
-    /// </summary>
-    private static void AddBlindRoleServices(IServiceCollection services, string dataPath)
-    {
-        services.AddSingleton(new FileNodeKey(Path.Combine(dataPath, FileNodeKey.FileName)));
-        services.AddSingleton<IExternalNodeKey>(sp => sp.GetRequiredService<FileNodeKey>());
-        services.AddSingleton<BeeMemoryBank.Sync.Blind.BlindState>();
-        services.AddSingleton<BeeMemoryBank.Sync.Blind.BlindRestoreInitiator>();
-        services.AddSingleton<BeeMemoryBank.Sync.IRestoreInitiator>(sp => sp.GetRequiredService<BeeMemoryBank.Sync.Blind.BlindRestoreInitiator>());
-        services.AddSingleton<IRestoreRetrier>(sp => sp.GetRequiredService<BeeMemoryBank.Sync.Blind.BlindRestoreInitiator>());
-        services.AddScoped<IDekRotationApplier, BeeMemoryBank.Sync.Blind.BlindDekRotationApplier>();
-
-        // Pairing and seed (plan 4.1-4.4): the self-signed certificate in the data volume, the pair
-        // code, and the receiver of the package that makes this node's database.
-        services.AddSingleton(new BlindTlsIdentity(BlindTlsCertificate.LoadOrCreate(dataPath)));
-        services.AddSingleton<BlindPairing>();
-        services.AddSingleton<BeeMemoryBank.Api.Services.BlindStatus.IBlindStatusContributor, PairingBlindStatusContributor>();
-        services.AddSingleton(sp => ActivatorUtilities.CreateInstance<BlindSeedService>(sp, dataPath));
-
-        // Log trimming without an event (plan 5.4) — a blind node has no compaction of its own.
-        services.AddSingleton<BlindLogTrimmer>();
-        services.AddHostedService(sp => sp.GetRequiredService<BlindLogTrimmer>());
-    }
-
-    /// <summary>
-    /// A blind node is dialled by every full device (plan 4.4), over HTTPS with its self-signed
-    /// certificate. BMB_BLIND_HTTPS_PORT opens that listener on all interfaces;
-    /// BMB_BLIND_LOCAL_PORT keeps a loopback HTTP port for the console next to it (internal key).
-    /// Without the variable the process listens wherever ASPNETCORE_URLS says, as every node does.
-    /// </summary>
-    private static void UseBlindHttps(WebApplicationBuilder builder, string dataPath)
-    {
-        if (!int.TryParse(builder.Configuration["BMB_BLIND_HTTPS_PORT"], out var httpsPort) || httpsPort <= 0)
-            return;
-        var localPort = int.TryParse(builder.Configuration["BMB_BLIND_LOCAL_PORT"], out var p) && p > 0 ? p : 5612;
-        builder.WebHost.ConfigureKestrel(kestrel =>
-        {
-            var certificate = kestrel.ApplicationServices.GetRequiredService<BlindTlsIdentity>().Certificate;
-            kestrel.ListenAnyIP(httpsPort, listen => listen.UseHttps(certificate));
-            kestrel.ListenLocalhost(localPort);
-        });
     }
 
     private static void AddMcp(IServiceCollection services)

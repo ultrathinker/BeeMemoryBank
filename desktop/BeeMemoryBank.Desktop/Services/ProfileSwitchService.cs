@@ -104,8 +104,8 @@ public sealed class ProfileSwitchService : IDisposable
 
     private readonly ProfileService _profiles;
     private readonly INodeLifecycleService _nodeLifecycle;
-    private readonly HttpClient _httpClient;
-    private readonly bool _ownsHttpClient;
+    private readonly NodeFrontClient _frontClient;
+    private readonly bool _ownsFrontClient;
 
     // Single-flight guard for the WHOLE switch operation. NodeLifecycleService itself
     // serializes its own StartOrAttachAsync/StopAsync calls, but that alone does not stop two
@@ -120,30 +120,30 @@ public sealed class ProfileSwitchService : IDisposable
     private readonly SemaphoreSlim _switchGate = new(1, 1);
 
     /// <summary>
-    /// Creates a switch service that owns its own <see cref="HttpClient"/> for the update
+    /// Creates a switch service that owns its own <see cref="NodeFrontClient"/> for the update
     /// guard. Use this in production wiring.
     /// </summary>
     public ProfileSwitchService(ProfileService profiles, INodeLifecycleService nodeLifecycle)
-        : this(profiles, nodeLifecycle, CreateDefaultHttpClient(), ownsHttpClient: true)
+        : this(profiles, nodeLifecycle, new NodeFrontClient(timeout: GuardTimeout), ownsFrontClient: true)
     {
     }
 
     /// <summary>
-    /// Creates a switch service with an explicit <see cref="HttpClient"/>. Intended for
-    /// tests (e.g. pointing at a local stub server) but also usable in production where a
+    /// Creates a switch service with an explicit <see cref="NodeFrontClient"/>. Intended for
+    /// tests (e.g. a client over a fake handler) but also usable in production where a
     /// shared, pre-configured client is preferred.
     /// </summary>
-    internal ProfileSwitchService(ProfileService profiles, INodeLifecycleService nodeLifecycle, HttpClient httpClient)
-        : this(profiles, nodeLifecycle, httpClient, ownsHttpClient: false)
+    internal ProfileSwitchService(ProfileService profiles, INodeLifecycleService nodeLifecycle, NodeFrontClient frontClient)
+        : this(profiles, nodeLifecycle, frontClient, ownsFrontClient: false)
     {
     }
 
-    private ProfileSwitchService(ProfileService profiles, INodeLifecycleService nodeLifecycle, HttpClient httpClient, bool ownsHttpClient)
+    private ProfileSwitchService(ProfileService profiles, INodeLifecycleService nodeLifecycle, NodeFrontClient frontClient, bool ownsFrontClient)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _nodeLifecycle = nodeLifecycle ?? throw new ArgumentNullException(nameof(nodeLifecycle));
-        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _ownsHttpClient = ownsHttpClient;
+        _frontClient = frontClient ?? throw new ArgumentNullException(nameof(frontClient));
+        _ownsFrontClient = ownsFrontClient;
     }
 
     /// <summary>
@@ -624,22 +624,21 @@ public sealed class ProfileSwitchService : IDisposable
         {
             var key = ResolveInternalKey(currentProfileId);
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{activeFrontUrl.TrimEnd('/')}/node/update/status");
-            if (!string.IsNullOrEmpty(key))
+            // No key is not a reason to skip the request: it is sent without the header and typically answers 401, which fails open.
+            var reply = await _frontClient.SendAsync(HttpMethod.Get, activeFrontUrl, "/node/update/status", key,
+                asSuperadmin: true, readBody: true, ct).ConfigureAwait(false);
+            if (reply.Failure != NodeFrontFailure.None)
             {
-                request.Headers.TryAddWithoutValidation("X-Internal-Key", key);
+                Debug.WriteLine($"ProfileSwitchService: update guard failed (failing open): {reply.ErrorMessage ?? reply.Failure.ToString()}");
+                return (false, null);
             }
-            request.Headers.TryAddWithoutValidation("X-User-Role", "superadmin");
-
-            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
+            if (!reply.IsSuccessStatus)
             {
-                Debug.WriteLine($"ProfileSwitchService: update guard returned {(int)response.StatusCode}; failing open.");
+                Debug.WriteLine($"ProfileSwitchService: update guard returned {(int)reply.Status!.Value}; failing open.");
                 return (false, null);
             }
 
-            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            using var doc = JsonDocument.Parse(body);
+            using var doc = JsonDocument.Parse(reply.Body ?? string.Empty);
             if (doc.RootElement.ValueKind == JsonValueKind.Object
                 && doc.RootElement.TryGetProperty("currentStep", out var stepEl)
                 && stepEl.ValueKind == JsonValueKind.String)
@@ -675,50 +674,35 @@ public sealed class ProfileSwitchService : IDisposable
     /// </summary>
     private string? ResolveInternalKey(string? currentProfileId)
     {
-        var key = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
-        if (!string.IsNullOrEmpty(key))
+        var fromEnvironment = NodeFrontClient.KeyFromEnvironment();
+        if (fromEnvironment is not null || string.IsNullOrEmpty(currentProfileId))
         {
-            return key;
+            return fromEnvironment;
         }
 
-        if (string.IsNullOrEmpty(currentProfileId))
-        {
-            return null;
-        }
-
+        string? dataPath = null;
         try
         {
-            var profile = _profiles.GetById(currentProfileId);
-            var keyFile = Path.Combine(profile.DataPath, ".internal-key");
-            if (File.Exists(keyFile))
-            {
-                return File.ReadAllText(keyFile).Trim();
-            }
+            dataPath = _profiles.GetById(currentProfileId).DataPath;
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"ProfileSwitchService: could not read .internal-key for guard: {ex.Message}");
         }
 
-        return null;
-    }
-
-    private static HttpClient CreateDefaultHttpClient()
-    {
-        var client = new HttpClient { Timeout = GuardTimeout };
-        return client;
+        return NodeFrontClient.ResolveInternalKey(dataPath);
     }
 
     /// <summary>
-    /// Disposes the <see cref="HttpClient"/> only when this instance created it (the
+    /// Disposes the <see cref="NodeFrontClient"/> only when this instance created it (the
     /// production constructor); an externally-supplied client (tests, or a shared client
     /// passed by the caller) is left for its owner to dispose.
     /// </summary>
     public void Dispose()
     {
-        if (_ownsHttpClient)
+        if (_ownsFrontClient)
         {
-            _httpClient.Dispose();
+            _frontClient.Dispose();
         }
     }
 }

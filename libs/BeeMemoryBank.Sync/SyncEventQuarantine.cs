@@ -104,6 +104,23 @@ public static class SyncEventQuarantine
         ISyncQuarantineRepository repo, Guid eventId, string eventType, Guid originNodeId, string error)
         => RecordFailureAsync(repo, eventId, eventType, originNodeId, error, SyncFailureKind.Permanent);
 
+    /// <summary>
+    /// Records an unrecoverable delivery failure as quarantined immediately. This is for an event
+    /// the sender has deliberately consumed (for example a one-event 413), so it will not receive
+    /// later retry attempts that could otherwise reach <see cref="QuarantineThreshold"/>.
+    /// </summary>
+    public static async Task<bool> RecordPermanentFailureUntilQuarantinedAsync(
+        ISyncQuarantineRepository repo, Guid eventId, string eventType, Guid originNodeId, string error)
+    {
+        for (var attempt = 0; attempt < QuarantineThreshold; attempt++)
+        {
+            if (await RecordFailureAsync(repo, eventId, eventType, originNodeId, error, SyncFailureKind.Permanent))
+                return true;
+        }
+
+        return false;
+    }
+
     private static async Task<bool> RecordFailureAsync(
         ISyncQuarantineRepository repo, Guid eventId, string eventType, Guid originNodeId, string error, SyncFailureKind kind)
     {

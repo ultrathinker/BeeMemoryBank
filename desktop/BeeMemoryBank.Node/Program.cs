@@ -580,19 +580,19 @@ public static class Program
         Console.WriteLine("  -h, --help              Show this help message.");
         Console.WriteLine("\nExample node.config.json:");
         var example = new NodeConfig(
-            DataDirectory: @"C:\Users\evgeny\AppData\Local\Temp\bmb-node-data",
+            DataDirectory: @"C:\ProgramData\BeeMemoryBank\data",
             Children: new List<ChildConfig>
             {
                 new ChildConfig(
                     ApplicationName: "BeeMemoryBank.Api",
                     ExecutablePath: "dotnet",
-                    WorkingDirectory: @"C:\VS_PROJECTS\_NonWork\BeeMemoryBank-wt-flash-c",
-                    ReadyFilePath: @"C:\Users\evgeny\AppData\Local\Temp\bmb-node-data\api.ready",
-                    Arguments: "run --project server/BeeMemoryBank.Api",
+                    WorkingDirectory: @"C:\Program Files\BeeMemoryBank\api",
+                    ReadyFilePath: @"C:\ProgramData\BeeMemoryBank\data\api.ready",
+                    Arguments: "BeeMemoryBank.Api.dll",
                     EnvironmentVariables: new Dictionary<string, string>
                     {
                         { "ASPNETCORE_URLS", "http://127.0.0.1:0" },
-                        { "BMB_READY_FILE", @"C:\Users\evgeny\AppData\Local\Temp\bmb-node-data\api.ready" }
+                        { "BMB_READY_FILE", @"C:\ProgramData\BeeMemoryBank\data\api.ready" }
                     }
                 )
             }

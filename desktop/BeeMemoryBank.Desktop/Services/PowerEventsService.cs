@@ -7,6 +7,8 @@ namespace BeeMemoryBank.Desktop.Services;
 /// <summary>
 /// Service to monitor Windows power events (specifically system sleep)
 /// using a hidden native message window and a dedicated background message pump.
+/// When the person has not turned on "lock the vault when this computer sleeps" (<see cref="LockOnSleepSetting"/>, asked at each sleep),
+/// a sleep makes no request and shows no balloon; it writes one log line.
 /// </summary>
 public sealed class PowerEventsService : IPowerEventsService
 {
@@ -15,6 +17,8 @@ public sealed class PowerEventsService : IPowerEventsService
     private const uint WM_CLOSE = 0x0010;
 
     private readonly Action _onSleep;
+    private readonly Func<bool> _lockOnSleepEnabled;
+    private readonly Action _showNotice;
     private Thread? _messageThread;
     private CancellationTokenSource? _cts;
     private IntPtr _hwnd;
@@ -101,9 +105,14 @@ public sealed class PowerEventsService : IPowerEventsService
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string? lpModuleName);
 
-    public PowerEventsService(Action onSleep)
+    /// <param name="onSleep">What to do when the computer goes to sleep and the setting is on (the lock request).</param>
+    /// <param name="lockOnSleepEnabled">Asked at each sleep event. Null means yes.</param>
+    /// <param name="showNotice">For tests: shows the "about to sleep" balloon; null means the real one.</param>
+    public PowerEventsService(Action onSleep, Func<bool>? lockOnSleepEnabled = null, Action? showNotice = null)
     {
         _onSleep = onSleep ?? throw new ArgumentNullException(nameof(onSleep));
+        _lockOnSleepEnabled = lockOnSleepEnabled ?? (() => true);
+        _showNotice = showNotice ?? ShowSleepWarningNotification;
     }
 
     public void Start()
@@ -278,23 +287,44 @@ public sealed class PowerEventsService : IPowerEventsService
         {
             if ((int)wParam == PBT_APMSUSPEND)
             {
-                Console.WriteLine("[PowerEventsService] System is going to sleep (PBT_APMSUSPEND)!");
-                
-                // Show warning notification
-                ShowSleepWarningNotification();
-
-                try
-                {
-                    _onSleep();
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[PowerEventsService] Error invoking sleep callback: {ex.Message}");
-                }
+                HandleSuspend();
             }
         }
 
         return DefWindowProc(hWnd, msg, wParam, lParam);
+    }
+
+    /// <summary>The computer is going to sleep. With the setting off nothing is sent and nothing is shown; one log line says so.</summary>
+    internal void HandleSuspend()
+    {
+        bool enabled;
+        try { enabled = _lockOnSleepEnabled(); }
+        catch (Exception ex)
+        {
+            // A setting that cannot be read counts as off: nothing is sent on a guess.
+            Console.Error.WriteLine($"[PowerEventsService] The lock-on-sleep setting could not be read: {ex.Message}");
+            enabled = false;
+        }
+
+        if (!enabled)
+        {
+            Console.WriteLine("[PowerEventsService] System is going to sleep (PBT_APMSUSPEND); lock on sleep is off, so nothing is sent and no notice is shown.");
+            return;
+        }
+
+        Console.WriteLine("[PowerEventsService] System is going to sleep (PBT_APMSUSPEND)!");
+
+        // Show warning notification
+        _showNotice();
+
+        try
+        {
+            _onSleep();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[PowerEventsService] Error invoking sleep callback: {ex.Message}");
+        }
     }
 
     public void Dispose()

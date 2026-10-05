@@ -618,12 +618,18 @@ public class NodeOrchestrator : IDisposable
 
     public void Dispose()
     {
-        StopAsync().GetAwaiter().GetResult();
-        _lifecycleCts?.Dispose();
-        if (_jobObject != null)
+        try
         {
-            _jobObject.Dispose();
-            _jobObject = null;
+            StopAsync().GetAwaiter().GetResult();
+        }
+        finally
+        {
+            _lifecycleCts?.Dispose();
+            if (_jobObject != null)
+            {
+                _jobObject.Dispose();
+                _jobObject = null;
+            }
         }
     }
 

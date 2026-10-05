@@ -17,8 +17,23 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 /// </summary>
 public static class BlindPhoneReset
 {
+    /// <summary>How long the wipe waits for a running sync, first load or backup to end before it gives up (and deletes nothing).</summary>
+    public static readonly TimeSpan DefaultQuiesceTimeout = TimeSpan.FromSeconds(20);
+
+    /// <inheritdoc cref="WipeAsync"/>
+    public static void Wipe(IServiceProvider services, string? dataDir = null, Action<string>? deletePath = null, TimeSpan? quiesceTimeout = null) =>
+        WipeAsync(services, dataDir, deletePath, quiesceTimeout).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Order: new work is refused and the running work is told to stop (<see cref="BlindActivity"/>, the scheduler, the backup service), then the
+    /// wipe WAITS, bounded, until every sync, first load and backup has really ended. Only then keys, state and files go. If something still
+    /// runs when the bound passes, nothing has been touched: the work is allowed again and an <see cref="AggregateException"/> says to press
+    /// the button again (a job that is still writing must never find its files and keys deleted beneath it).
+    /// </summary>
     /// <param name="deletePath">How a file or folder is removed; tests inject a failing one.</param>
-    public static void Wipe(IServiceProvider services, string? dataDir = null, Action<string>? deletePath = null)
+    /// <param name="quiesceTimeout">The bound of the wait; <see cref="DefaultQuiesceTimeout"/> when null.</param>
+    public static async Task WipeAsync(IServiceProvider services, string? dataDir = null, Action<string>? deletePath = null,
+        TimeSpan? quiesceTimeout = null, CancellationToken ct = default)
     {
         dataDir ??= System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);
         var failures = new List<Exception>();
@@ -28,8 +43,24 @@ public static class BlindPhoneReset
             catch (Exception ex) { failures.Add(new IOException($"{what}: {ex.Message}", ex)); }
         }
 
+        var activity = services.GetService<BlindActivity>();
+        activity?.Close();
+        activity?.CancelAll();
         Step("stopping the background work", () => services.GetRequiredService<IBlindLifecycle>().StopBackgroundWork());
         Step("stopping the backup service", () => services.GetRequiredService<IBlindLifecycle>().StopBackupService());
+
+        if (activity is not null && !await activity.WaitIdleAsync(quiesceTimeout ?? DefaultQuiesceTimeout, ct).ConfigureAwait(false))
+        {
+            var running = string.Join(", ", activity.ActiveKinds().Distinct());
+            activity.Reopen();
+            // The stop above cancelled the host's schedule: give it back, so the copy keeps syncing while the user tries again.
+            Step("resuming the background work", () => services.GetService<IBlindLifecycle>()?.ResumeBackgroundWork());
+            failures.Add(new IOException($"still running: {running}"));
+            throw new AggregateException(
+                "The wipe is not complete: the phone's work did not stop in time (" + running + "). Nothing was deleted and the keys are kept; "
+                + string.Join("; ", failures.Select(f => f.Message)), failures);
+        }
+
         Step("forgetting the keys", () => services.GetRequiredService<IBlindPhoneKeys>().Clear());
         Step("forgetting the state", () => services.GetRequiredService<BlindPhoneState>().Clear());
         Step("removing the state file", () => services.GetService<IBlindStateStore>()?.Erase());
@@ -71,9 +102,13 @@ public static class BlindPhoneReset
         else if (File.Exists(path)) File.Delete(path);
     }
 
-    public static void WipeAndRestart(IServiceProvider services, string? dataDir = null)
+    public static void WipeAndRestart(IServiceProvider services, string? dataDir = null) =>
+        WipeAndRestartAsync(services, dataDir).GetAwaiter().GetResult();
+
+    public static async Task WipeAndRestartAsync(IServiceProvider services, string? dataDir = null, TimeSpan? quiesceTimeout = null,
+        CancellationToken ct = default)
     {
-        Wipe(services, dataDir);
+        await WipeAsync(services, dataDir, null, quiesceTimeout, ct).ConfigureAwait(false);
         services.GetService<IBlindLifecycle>()?.RestartAfterWipe();
     }
 }
