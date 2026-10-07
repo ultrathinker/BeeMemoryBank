@@ -45,6 +45,9 @@ No sync protocol change (still 3) and no database migration: nodes of 2.0.x to 2
 
 Fixed in this release:
 
+- The Windows notification is actually shown. The balloon the app raises (the new blind-node alarms, and the "about to sleep" notice, which has been
+  silent since it was added) had no icon, and Windows 10 and 11 show nothing for a balloon without one; checked by hand on Windows 11. Notices that are due
+  at the same moment are now sent six seconds apart, because a second balloon replaces the first on screen.
 - A phone can join a new or small vault again: the join no longer stops with "Tar archive exceeds maximum extracted size (0MB)".
 - Search no longer fails now and then with "An item with the same key has already been added" while the index is being written to.
 - On Windows, a blind node's identity key, TLS key and backup credentials are readable only by the account that runs it (and SYSTEM); files an older version

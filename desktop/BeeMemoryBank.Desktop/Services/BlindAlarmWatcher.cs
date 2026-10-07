@@ -75,6 +75,12 @@ public sealed class BlindAlarmWatcher : IDisposable
     public static readonly TimeSpan StartGrace = TimeSpan.FromMinutes(10);
     public static readonly TimeSpan RemindEvery = TimeSpan.FromHours(24);
     public static readonly TimeSpan ResumeGap = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// The pause between the notices of one burst. A second balloon on the same icon within moments replaces the first on screen, so
+    /// notices sent back to back would show only the last; this lets each one be read.
+    /// </summary>
+    public static readonly TimeSpan NoticeGap = TimeSpan.FromSeconds(6);
     public const int PollsToRaise = 2;
     public const int PollsToClear = 2;
     public const int MaxNoticesPerBurst = 3;
@@ -95,6 +101,7 @@ public sealed class BlindAlarmWatcher : IDisposable
     private readonly Func<string?> _profileId;
     private readonly TimeProvider _time;
     private readonly Action<string> _log;
+    private readonly TimeSpan _noticeGap;
     private readonly Dictionary<string, Episode> _episodes = new();
     private readonly SemaphoreSlim _pollGate = new(1, 1);
     private CancellationTokenSource? _loop;
@@ -109,10 +116,12 @@ public sealed class BlindAlarmWatcher : IDisposable
     /// <param name="profileId">The open profile, read at each poll.</param>
     /// <param name="time">The clock; null means the system clock.</param>
     /// <param name="log">Where a failed notice is logged; null means the standard error stream.</param>
+    /// <param name="noticeGap">The pause between the notices of one burst; null means <see cref="NoticeGap"/>.</param>
     public BlindAlarmWatcher(
         Func<CancellationToken, Task<NodeAlarmsPoll>> poll, IUserNotifier? notifier, IBlindAlarmEpisodeStore store,
-        Func<string?> profileId, TimeProvider? time = null, Action<string>? log = null)
+        Func<string?> profileId, TimeProvider? time = null, Action<string>? log = null, TimeSpan? noticeGap = null)
     {
+        _noticeGap = noticeGap ?? NoticeGap;
         _poll = poll ?? throw new ArgumentNullException(nameof(poll));
         _notifier = notifier;
         _store = store ?? throw new ArgumentNullException(nameof(store));
@@ -194,9 +203,11 @@ public sealed class BlindAlarmWatcher : IDisposable
                     .OrderBy(e => e.Alarm.Kind, StringComparer.Ordinal).ThenBy(e => e.Alarm.NodeId).ToList();
                 if (due.Count > 0)
                 {
-                    Show(due.Select(e => e.Alarm).ToList());
+                    // Marked before the notices go out: a poll cut short in the pause between two of them must not send the first again.
                     foreach (var episode in due) episode.NotifiedAt = now;
                     changed = true;
+                    Save();
+                    await ShowAsync(due.Select(e => e.Alarm).ToList(), cancellationToken).ConfigureAwait(false);
                 }
             }
             if (changed) Save();
@@ -248,7 +259,7 @@ public sealed class BlindAlarmWatcher : IDisposable
         return changed;
     }
 
-    private void Show(IReadOnlyList<BlindAlarmEntry> due)
+    private async Task ShowAsync(IReadOnlyList<BlindAlarmEntry> due, CancellationToken cancellationToken)
     {
         var notices = due.Count <= MaxNoticesPerBurst
             ? due.Select(TextFor).ToList()
@@ -256,9 +267,10 @@ public sealed class BlindAlarmWatcher : IDisposable
                 .Append(("Blind nodes need attention",
                     $"{due.Count - (MaxNoticesPerBurst - 1)} more blind-node alarms. Open Bee Memory Bank, Blind nodes, to see them."))
                 .ToList();
-        foreach (var (title, message) in notices)
+        for (var i = 0; i < notices.Count; i++)
         {
-            try { _notifier?.Notify(title, message); }
+            if (i > 0 && _noticeGap > TimeSpan.Zero) await Task.Delay(_noticeGap, cancellationToken).ConfigureAwait(false);
+            try { _notifier?.Notify(notices[i].Item1, notices[i].Item2); }
             catch (Exception ex) { Log($"A notice could not be shown ({ex.GetType().Name})."); }
         }
     }

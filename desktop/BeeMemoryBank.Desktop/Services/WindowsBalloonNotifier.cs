@@ -158,14 +158,46 @@ public sealed class WindowsBalloonNotifier : IUserNotifier, IDisposable
 
     // ── Shell_NotifyIcon ────────────────────────────────────────────────────────────────────────────────
 
-    private sealed class NativeShell : IBalloonShell
+    internal sealed class NativeShell : IBalloonShell
     {
         private const uint NIM_ADD = 0x00000000;
         private const uint NIM_MODIFY = 0x00000001;
         private const uint NIM_DELETE = 0x00000002;
+        private const int NIF_ICON = 0x00000002;
         private const int NIF_TIP = 0x00000004;
         private const int NIF_INFO = 0x00000010;
         private const int NIIF_WARNING = 0x00000002;
+        private const int IDI_INFORMATION = 32516;
+
+        // One handle for the life of the process: the icon the balloon hangs from.
+        private static readonly Lazy<IntPtr> AppIcon = new(LoadAppIcon);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr ExtractIcon(IntPtr hInst, string file, int index);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr name);
+
+        /// <summary>The program's own icon, else the system's information icon (shared, never destroyed). Zero if neither can be had.</summary>
+        private static IntPtr LoadAppIcon()
+        {
+            try
+            {
+                var path = Environment.ProcessPath;
+                // ExtractIcon answers 0 for "no icon" and 1 for "not a file with icons".
+                if (!string.IsNullOrEmpty(path) && ExtractIcon(IntPtr.Zero, path, 0) is var own && own.ToInt64() > 1) return own;
+            }
+            catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { /* the stock icon below */ }
+            return LoadIcon(IntPtr.Zero, (IntPtr)IDI_INFORMATION);
+        }
+
+        /// <summary>
+        /// The flags of a balloon. Windows 10 and 11 turn a balloon into a toast only when its icon is shown, and an icon with no image
+        /// (no <c>NIF_ICON</c>) is not: the call succeeds and nothing appears. That was the state of the "about to sleep" notice before.
+        /// </summary>
+        internal static int FlagsFor(IntPtr icon) => NIF_INFO | NIF_TIP | (icon != IntPtr.Zero ? NIF_ICON : 0);
+
+        internal static IntPtr ApplicationIcon() => AppIcon.Value;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct NOTIFYICONDATA
@@ -196,11 +228,13 @@ public sealed class WindowsBalloonNotifier : IUserNotifier, IDisposable
         public bool Show(IntPtr window, int iconId, string title, string message, bool iconShown)
         {
             if (!OperatingSystem.IsWindows()) return false;
+            var icon = AppIcon.Value;
             var nid = new NOTIFYICONDATA
             {
                 hWnd = window,
                 uID = iconId,
-                uFlags = NIF_INFO | NIF_TIP,
+                uFlags = FlagsFor(icon),
+                hIcon = icon,
                 szTip = "BeeMemoryBank",
                 szInfo = message,
                 szInfoTitle = title,

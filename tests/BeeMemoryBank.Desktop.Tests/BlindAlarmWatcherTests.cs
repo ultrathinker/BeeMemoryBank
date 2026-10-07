@@ -50,7 +50,8 @@ public sealed class BlindAlarmWatcherTests
     private NodeAlarmsPoll _next = Judged();
     private string? _profile = "profile-a";
 
-    private BlindAlarmWatcher Make() => new(_ => Task.FromResult(_next), _notifier, _store, () => _profile, _clock, _ => { });
+    private BlindAlarmWatcher Make(TimeSpan? noticeGap = null) =>
+        new(_ => Task.FromResult(_next), _notifier, _store, () => _profile, _clock, _ => { }, noticeGap ?? TimeSpan.Zero);
 
     private static readonly Guid NodeA = Guid.Parse("b11d0000-0000-8000-8000-00000000000a");
     private static readonly Guid NodeB = Guid.Parse("b11d0000-0000-8000-8000-00000000000b");
@@ -157,6 +158,29 @@ public sealed class BlindAlarmWatcherTests
         _next = Judged();
         await PollAsync(watcher, 2);
         watcher.AttentionCount.Should().Be(0, "an alarm that is gone from a judged report still clears the episode");
+    }
+
+    [Fact]
+    public async Task TheNoticesOfOneBurst_AreSentApart_SoEachIsShownLongEnoughToRead()
+    {
+        // A second balloon on the same icon replaces the first on screen (checked on Windows 11): back to back, only the last is seen.
+        var times = new List<DateTime>();
+        var notifier = new TimedNotifier(times);
+        var watcher = new BlindAlarmWatcher(_ => Task.FromResult(_next), notifier, _store, () => _profile, _clock, _ => { },
+            noticeGap: TimeSpan.FromMilliseconds(120));
+        await PollAsync(watcher, (int)BlindAlarmWatcher.StartGrace.TotalMinutes + 1);
+        _next = Judged(Silent(NodeA), Silent(NodeB));
+        await PollAsync(watcher);
+
+        await PollAsync(watcher);
+
+        times.Should().HaveCount(2);
+        (times[1] - times[0]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(100));
+    }
+
+    private sealed class TimedNotifier(List<DateTime> times) : IUserNotifier
+    {
+        public void Notify(string title, string message) => times.Add(DateTime.UtcNow);
     }
 
     [Fact]

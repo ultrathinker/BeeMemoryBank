@@ -74,6 +74,23 @@ public sealed class WindowsBalloonNotifierTests
     }
 
     [Fact]
+    public void ABalloon_CarriesAnIcon_BecauseWithoutOneWindowsShowsNothing()
+    {
+        // NIF_INFO 0x10 | NIF_TIP 0x04, and NIF_ICON 0x02 when there is an icon: the call without an icon succeeds and no toast appears
+        // (checked by hand on Windows 11, BMB-77), which is how the "about to sleep" notice had always been silent.
+        WindowsBalloonNotifier.NativeShell.FlagsFor(new IntPtr(5)).Should().Be(0x10 | 0x04 | 0x02);
+        WindowsBalloonNotifier.NativeShell.FlagsFor(IntPtr.Zero).Should().Be(0x10 | 0x04);
+    }
+
+    [Fact]
+    public void OnWindows_AnIconCanAlwaysBeHad()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        WindowsBalloonNotifier.NativeShell.ApplicationIcon().Should().NotBe(IntPtr.Zero, "the program's own icon, else the system's");
+    }
+
+    [Fact]
     public void WithNoWindowYet_NothingIsShown()
     {
         var shell = new RecordingShell();
