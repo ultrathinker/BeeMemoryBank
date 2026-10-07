@@ -91,7 +91,7 @@ libs/
 │                                    Core in wave 2 A2 so hosts that only need the kernel no longer pull
 │                                    any of these.
 │   ├── Mdns/                 — MdnsAnnouncer (+Options), MdnsBrowser, MdnsConstants, MdnsNodeRecord
-│   ├── Network/              — FirewallService
+│   ├── Network/              — FirewallService, NodeNetworkSettingsStore (the per-profile "Devices on my network" setting)
 │   ├── OsAutoUnlock/         — OsAutoUnlockService (DPAPI-backed, Windows-only)
 │   ├── Tls/                  — LocalCaService (Windows trust store + DPAPI leaf/CA keys), CertificateKeyStorageFlags
 │   └── DependencyInjection    — AddMdnsBrowser / AddMdnsAnnouncer

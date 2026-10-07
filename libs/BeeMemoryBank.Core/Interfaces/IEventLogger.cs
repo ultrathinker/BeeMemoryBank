@@ -46,7 +46,9 @@ public interface IEventLogger
     Task<RowVersion> LogWhitelistRevokeAsync(Guid nodeId);
 
     /// <inheritdoc cref="LogWhitelistAddAsync"/>
-    Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null);
+    /// <param name="tlsSpki">Null = unchanged; "" = remove the pin (for an older node, see <c>WhitelistUpdatePayload</c>).</param>
+    /// <param name="tlsTrust">Null = unchanged; <see cref="BlindTrust"/> value to set the mode, <see cref="BlindTrust.None"/> to clear it.</param>
+    Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null);
     Task LogCommentCreateAsync(Comment comment);
     Task LogCommentDeleteAsync(Guid commentId);
     Task LogFolderCreateAsync(Folder folder);

@@ -1,9 +1,11 @@
 ﻿using System.Net.Http.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 
@@ -263,6 +265,142 @@ public static class WhitelistEndpoints
 
             return Results.Ok(WhitelistEntryResponse.From(entry));
         });
+
+        // PUT /api/whitelist/{nodeId}/hub — let blind copies call this node, or stop (ADR 0007)
+        //
+        // A blind copy (Windows, macOS, Android) never listens; it calls a node whose whitelist row says how to
+        // trust its TLS endpoint: "pin" (the key the node presents now, recorded) or "public-ca" (the system's
+        // chain must vouch for the certificate, name included). The row is verified before it is saved — the
+        // address answers as this very node (its id AND its Ed25519 key, which the call code will carry) and the
+        // TLS check of the mode passes — and then published as a whitelist_update, so every node and the pairing
+        // screen see the same row. Superadmin, not an agent, master password re-authentication: it decides
+        // which certificate every blind copy of this network will accept.
+        group.MapPut("/{nodeId:guid}/hub", async (
+            Guid nodeId,
+            SetHubRequest req,
+            IWhitelistRepository repo,
+            IEventLogger eventLogger,
+            SessionService session,
+            INodeIdentityRepository nodeIdentityRepo,
+            HubTrustProbe probe,
+            BeeMemoryBank.Sync.Blind.SpkiPinRegistry pins,
+            IAuditLogRepository auditRepo,
+            HttpContext ctx,
+            CancellationToken ct) =>
+        {
+            // Same re-authentication as the address change: the vault must be open (the event is signed with the
+            // node identity key) and the password is a plain proof, never an unlock.
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+            if (string.IsNullOrEmpty(req.Password) || !await session.VerifyMasterPasswordAsync(req.Password))
+                return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
+
+            var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
+            if (entry == null || entry.Status != "A")
+                return Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
+
+            var localIdentity = await nodeIdentityRepo.GetAsync();
+            if (localIdentity != null && localIdentity.NodeId == nodeId)
+                return Results.BadRequest(new ErrorResponse("This is your own node. Set this on a node that lists it as a trusted node."));
+            if (BlindNodeId.IsBlind(nodeId))
+                return Results.BadRequest(new ErrorResponse(
+                    "A blind node is called by the certificate pinned in its pair code. Add it again from its pair code to change that."));
+
+            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
+            var mode = req.Trust?.Trim().ToLowerInvariant();
+
+            if (mode == "off")
+            {
+                if (entry.EffectiveTlsTrust is null)
+                    return Results.Ok(new HubSetResponse(WhitelistEntryResponse.From(entry), null, false, null));
+
+                // "" takes the pin off for a node that predates the mode as well (WhitelistUpdatePayload).
+                var offVersion = await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: null, displayName: null,
+                    tlsSpki: "", tlsTrust: BlindTrust.None);
+                entry.TlsSpki = null;
+                entry.TlsTrust = null;
+                entry.UpdatedAt = DateTime.UtcNow;
+                entry.LamportTs = offVersion.LamportTs;
+                entry.SourceNodeId = offVersion.SourceNodeId;
+                await repo.UpdateAsync(entry);
+                pins.Invalidate();
+                eventLogger.SignalSync();
+                await auditRepo.LogAsync("whitelist", nodeId.ToString(), "hub_disabled", "web",
+                    $"Blind copies can no longer be told to call {entry.DisplayName} (set by user {actor})");
+                return Results.Ok(new HubSetResponse(WhitelistEntryResponse.From(entry), null, false,
+                    "Blind copies can no longer be paired to call this node. Copies already paired keep calling it until it stops answering them."));
+            }
+
+            if (mode != BlindTrust.Pin && mode != BlindTrust.PublicCa)
+                return Results.BadRequest(new ErrorResponse("Choose \"Pinned certificate\", \"Normal certificate\" or off."));
+
+            var address = req.Address;
+            if (string.IsNullOrWhiteSpace(address)) address = entry.ApiAddress;
+            address = address?.Trim();
+            if (!string.IsNullOrEmpty(address) && !address.Contains("://", StringComparison.Ordinal)) address = "https://" + address;
+            if (BlindListener.Origin(address) is not { } origin)
+                return Results.BadRequest(new ErrorResponse(
+                    "Blind copies call https only: give the address as https://host or https://host:port, without a path."));
+
+            string? expectedPin = null;
+            if (mode == BlindTrust.Pin && !string.IsNullOrWhiteSpace(req.ExpectedPin))
+            {
+                expectedPin = req.ExpectedPin.Trim();
+                if (!BeeMemoryBank.Api.Services.Recovery.RestoreTlsPin.IsWellFormed(expectedPin))
+                    return Results.BadRequest(new ErrorResponse("The pin is not well formed: it is 43 characters (A-Z, a-z, 0-9, - and _)."));
+            }
+
+            var conflict = (await repo.GetAllActiveAsync()).FirstOrDefault(e => e.NodeId != nodeId
+                && string.Equals(e.ApiAddress?.TrimEnd('/'), origin, StringComparison.OrdinalIgnoreCase));
+            if (conflict != null)
+                return Results.BadRequest(new ErrorResponse($"URL is already used by node {conflict.DisplayName}"));
+
+            HubProbeResult found;
+            try
+            {
+                found = await probe.ProbeAsync(origin, mode, expectedPin, ct);
+            }
+            catch (HubProbeException ex)
+            {
+                return Results.BadRequest(new ErrorResponse(ex.Message));
+            }
+
+            if (found.NodeId != nodeId)
+                return Results.BadRequest(new ErrorResponse(
+                    $"The node at {origin} is not the node you chose ({nodeId}). This is a different node!"));
+            if (found.Ed25519PublicKeyB64 != Convert.ToBase64String(entry.Ed25519PublicKey))
+                return Results.BadRequest(new ErrorResponse(
+                    $"The node at {origin} has the right id but another key than the one this network knows. Not trusting it."));
+
+            var pin = mode == BlindTrust.Pin ? found.PresentedPin : null;
+            if (!BlindListener.IsCallable(origin, pin, entry.Ed25519PublicKey, mode))
+                return Results.BadRequest(new ErrorResponse("Could not read a certificate key from the node."));
+
+            // Log first, like every whitelist write: the row carries the version the mesh is told. "" removes a pin
+            // an older node may hold when the new mode pins nothing.
+            var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: origin, displayName: null,
+                tlsSpki: pin ?? "", tlsTrust: mode);
+            entry.ApiAddress = origin;
+            entry.TlsSpki = pin;
+            entry.TlsTrust = mode;
+            entry.UpdatedAt = DateTime.UtcNow;
+            entry.LamportTs = version.LamportTs;
+            entry.SourceNodeId = version.SourceNodeId;
+            await repo.UpdateAsync(entry);
+            pins.Invalidate();
+            eventLogger.SignalSync();
+            await auditRepo.LogAsync("whitelist", nodeId.ToString(), "hub_enabled", "web",
+                $"Blind copies can be told to call {entry.DisplayName} at {origin} ({mode}) (set by user {actor})");
+
+            var notice = mode == BlindTrust.PublicCa
+                ? "Blind copies will accept this node only with a certificate a public authority vouches for. Anyone a public authority can be made to issue a certificate for this name to could impersonate it to a blind copy; \"Pinned certificate\" avoids that."
+                : expectedPin is null
+                    ? "The key was read from the connection just now and nothing else vouched for it. Compare it with the key the node shows for itself if you can."
+                    : "The key matches the pin you gave.";
+            if (mode == BlindTrust.Pin && found.PubliclyTrusted)
+                notice += " This certificate is also valid through a public authority: if it is renewed with a new key, the pin must be set again. \"Normal certificate\" does not have that problem.";
+            return Results.Ok(new HubSetResponse(WhitelistEntryResponse.From(entry), pin, found.PubliclyTrusted, notice));
+        }).RequireNonAgent();
 
         // PUT /api/whitelist/{nodeId}/auto-accept-restore — toggle auto-accept restore
         group.MapPut("/{nodeId:guid}/auto-accept-restore", async (

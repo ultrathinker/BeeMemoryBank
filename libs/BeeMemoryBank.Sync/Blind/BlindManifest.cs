@@ -56,7 +56,10 @@ public sealed record BlindManifestPeer(
     [property: JsonPropertyName("is_superadmin")] bool IsSuperadmin,
     [property: JsonPropertyName("tls_spki")] string? TlsSpki,
     [property: JsonPropertyName("lamport_ts")] long LamportTs,
-    [property: JsonPropertyName("source_node_id")] Guid? SourceNodeId);
+    [property: JsonPropertyName("source_node_id")] Guid? SourceNodeId,
+    // How blind copies trust this peer's TLS endpoint (BlindTrust, ADR 0007). Absent from an older package; an
+    // older reader ignores it, which is all it needs: a pin is a pin there.
+    [property: JsonPropertyName("tls_trust")] string? TlsTrust = null);
 
 public sealed record BlindManifestPosition(
     [property: JsonPropertyName("remote_node_id")] Guid RemoteNodeId,

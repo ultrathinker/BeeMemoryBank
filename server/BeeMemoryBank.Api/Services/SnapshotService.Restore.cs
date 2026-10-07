@@ -14,6 +14,12 @@ using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Services;
 
+/// <summary>What a restore did: whether this node became a new one and, if so, which.</summary>
+/// <param name="Standalone">The node left its network and took a new identity.</param>
+/// <param name="NewNodeId">The node id the node has now; null when it kept its identity.</param>
+/// <param name="NodeDisplayName">The display name of the node (kept from the snapshot); null when it kept its identity.</param>
+public sealed record SnapshotRestoreOutcome(bool Standalone, Guid? NewNodeId, string? NodeDisplayName);
+
 public partial class SnapshotService
 {
     /// <summary>
@@ -51,7 +57,13 @@ public partial class SnapshotService
         return names;
     }
 
-    public async Task RestoreAsync(string fileName, bool standaloneMode = false)
+    /// <summary>
+    /// Replaces this node's database with the snapshot's. <paramref name="standaloneMode"/> makes this a new node (new id, new key
+    /// pair, no peers); <paramref name="masterPassword"/> is the password the restore was confirmed with, used to find the master
+    /// key of the snapshot's database when the session's own key does not open it.
+    /// </summary>
+    public async Task<SnapshotRestoreOutcome> RestoreAsync(
+        string fileName, bool standaloneMode = false, string? masterPassword = null)
     {
         var safeName = Path.GetFileName(fileName);
         if (!safeName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
@@ -67,6 +79,7 @@ public partial class SnapshotService
         // poisoned $TMPDIR) cannot leak the semaphore.
         await HeavyOperationLock.Instance.WaitAsync();
         string? tempDir = null;
+        var outcome = new SnapshotRestoreOutcome(standaloneMode, null, null);
         try
         {
             tempDir = Path.Combine(Path.GetTempPath(), $"bmb-restore-{Guid.NewGuid():N}");
@@ -116,6 +129,34 @@ public partial class SnapshotService
                 var newNodeId = Guid.NewGuid();
                 var (pubKey, privKey) = Ed25519Signer.GenerateKeyPair();
 
+                // The new private key is stored the way initialization stores it: wrapped under the
+                // master DEK of THIS database (the one its key slots will hand out at the next
+                // unlock), with the new node id as AAD. A bare seed in a row that says "wrapped"
+                // leaves the node unable to sign — sync authentication, pairing, every signed event —
+                // while the restore itself reports success. Sealed before the write transaction
+                // below opens, because it reads the staged file through its own connection.
+                byte[] wrappedPrivKey, privKeyIv;
+                int privKeyVersion;
+                try
+                {
+                    if (_keys is null)
+                        throw new InvalidOperationException(
+                            "A standalone restore needs the node's key operations to store its new identity key.");
+                    (wrappedPrivKey, privKeyIv, privKeyVersion) =
+                        _keys.SealIdentitySeedForRestore(stagingPath, newNodeId, privKey, masterPassword);
+                }
+                catch
+                {
+                    // Nothing has been replaced yet; do not leave a half-prepared copy of the
+                    // snapshot's database next to the live one.
+                    try { File.Delete(stagingPath); } catch { }
+                    throw;
+                }
+                finally
+                {
+                    Array.Clear(privKey);
+                }
+
                 // Pooling=False — same reason as FilterSecretsFrom: the staging file is moved or
                 // deleted right after this block, and a pooled handle would keep it locked on
                 // Windows long after Dispose.
@@ -148,6 +189,8 @@ public partial class SnapshotService
                             UPDATE tbl_node_identity
                             SET node_id = @newNodeId,
                                 ed25519_private_key = @newPrivKey,
+                                ed25519_private_key_iv = @newPrivKeyIv,
+                                ed25519_private_key_v = @newPrivKeyV,
                                 ed25519_public_key = @newPubKey";
 
                         var p1 = identityCmd.CreateParameter();
@@ -157,7 +200,7 @@ public partial class SnapshotService
 
                         var p2 = identityCmd.CreateParameter();
                         p2.ParameterName = "newPrivKey";
-                        p2.Value = privKey;
+                        p2.Value = wrappedPrivKey;
                         identityCmd.Parameters.Add(p2);
 
                         var p3 = identityCmd.CreateParameter();
@@ -166,11 +209,22 @@ public partial class SnapshotService
                         identityCmd.Parameters.Add(p3);
 
                         var p4 = identityCmd.CreateParameter();
-                        p4.ParameterName = "updatedAt";
-                        p4.Value = DateTime.UtcNow.ToString("O");
+                        p4.ParameterName = "newPrivKeyIv";
+                        p4.Value = privKeyIv;
                         identityCmd.Parameters.Add(p4);
 
+                        var p5 = identityCmd.CreateParameter();
+                        p5.ParameterName = "newPrivKeyV";
+                        p5.Value = privKeyVersion;
+                        identityCmd.Parameters.Add(p5);
+
                          identityCmd.ExecuteNonQuery();
+
+                         using var nameCmd = stagingConn.CreateCommand();
+                         nameCmd.Transaction = tx;
+                         nameCmd.CommandText = "SELECT display_name FROM tbl_node_identity LIMIT 1";
+                         outcome = outcome with { NewNodeId = newNodeId, NodeDisplayName = nameCmd.ExecuteScalar() as string };
+
                          tx.Commit();
                      }
                     catch
@@ -293,6 +347,7 @@ public partial class SnapshotService
             // would be handed to whoever occupies those ids in the restored data. No restart
             // follows a restore, so nothing else clears it.
             BeeMemoryBank.Core.Services.FolderAccessService.InvalidateAll();
+            return outcome;
         }
         finally
         {

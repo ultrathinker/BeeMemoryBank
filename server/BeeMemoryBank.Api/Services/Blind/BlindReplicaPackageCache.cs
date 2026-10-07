@@ -1,3 +1,4 @@
+using BeeMemoryBank.Hosting.AspNetCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -18,11 +19,20 @@ public sealed class BlindReplicaPackageCache(
     // Its own directory next to snapshots/: listing, retention, delete and compaction only read the
     // snapshots directory, so a leased replica package can never be counted, pruned or listed there.
     private const string DirectoryName = "blind-replica";
+    // Who may ask for the package how often. A hub is reachable from the internet (ADR 0007): the package is cached and
+    // built once per Lifetime, so what a valid blind token can still cost is bandwidth, and that is bounded per peer. A
+    // first load with a few resumes of a flaky connection stays far below it.
+    private readonly SlidingWindowRateLimiter _admission = new(AdmissionsPerWindow, AdmissionWindow);
+    public const int AdmissionsPerWindow = 20;
+    public static readonly TimeSpan AdmissionWindow = TimeSpan.FromMinutes(10);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly List<Entry> _retired = [];
     private Entry? _entry;
     private ITimer? _expiryTimer;
     private int _disposed;
+
+    /// <summary>True if <paramref name="peer"/> may start another package download now; a refused ask is not counted against it.</summary>
+    public bool TryAdmit(Guid peer) => _admission.TryAcquire(peer.ToString("N"));
 
     public async Task StartAsync(CancellationToken ct)
     {

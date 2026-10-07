@@ -51,12 +51,153 @@ else
     </sl-alert>
 }
 
-<!-- Connect a device — join a phone to this computer over the LAN, without a hub -->
+<!-- Devices on my network — open this node to the local network, permanently, or leave it closed (the default) -->
+@{
+    var devices = Model.DevicesCard;
+}
+<h3 style="margin-bottom:12px;"><sl-icon name="wifi"></sl-icon> Devices on my network</h3>
+<div class="card mt-md" id="devices-on-my-network" style="margin-bottom:32px;max-width:640px;">
+    @if (devices.Kind == DevicesCardKind.NotADesktopNode)
+    {
+        <p class="text-muted text-sm" style="margin-bottom:8px;">
+            There is no switch here: this node is not the desktop app. Which computers can reach it is decided by how it was
+            started. With Docker, the published ports in <code>docker-compose.yml</code> decide: the web page is published on
+            this computer only (<code>127.0.0.1</code>) unless you set <code>BMB_WEB_BIND</code>, and the API port, which AI
+            assistants and other nodes use, is not published at all unless you add it. See <code>docs/deployment.md</code>.
+        </p>
+    }
+    else
+    {
+        <p class="text-muted text-sm" style="margin-bottom:8px;">
+            Off by default: this node answers this computer only. Switched on, it also serves its web page and API over
+            HTTPS on port 5311 and announces itself on your local network, so another computer running Bee Memory Bank can
+            find it and join, and a phone can open it in a browser.
+        </p>
+        <p class="text-muted text-sm" style="margin-bottom:8px;">
+            <strong>What this exposes:</strong> everything this node serves, not only a join page. Anyone on the same network can
+            reach the sign-in page and try passwords (the node limits attempts). The certificate comes from this node's own
+            certificate authority, not from a public one: a phone or another computer must trust it once
+            (<a href="/Connect">Connect a device</a> has the file and the steps), and until it does the browser warns.
+            Use it on a home or office network you trust, not on a public Wi-Fi.
+        </p>
+
+        @if (devices.Error != null)
+        {
+            <sl-alert variant="danger" open style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @devices.Error
+            </sl-alert>
+        }
+
+        @if (devices.Kind == DevicesCardKind.ForcedByEnvironment)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>On, set by <code>BMB_HTTPS_ENABLED=1</code>.</strong> This node was started with that environment variable,
+                which keeps the network listener open whatever is chosen here. Remove the variable and restart the node to
+                control it from this page.
+            </sl-alert>
+        }
+        else if (devices.ListenerFailed)
+        {
+            <sl-alert variant="danger" open style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                <strong>Switched on, but the node could not open port 5311.</strong> Another program may be using that port.
+                Close it and try again, or switch this off.
+            </sl-alert>
+            <div style="display:flex;gap:8px;">
+                <form method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                    <input type="hidden" name="enabled" value="true" />
+                    <sl-button type="submit" variant="primary" size="small">Try again</sl-button>
+                </form>
+                <form method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                    <input type="hidden" name="enabled" value="false" />
+                    <sl-button type="submit" variant="default" size="small">Switch off</sl-button>
+                </form>
+            </div>
+        }
+        else if (devices.On)
+        {
+            <p style="margin:0 0 8px;"><sl-badge variant="warning">On</sl-badge>
+                Other devices on this network can reach this node.</p>
+            <form method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                <input type="hidden" name="enabled" value="false" />
+                <sl-button type="submit" variant="default" size="small">Switch off</sl-button>
+            </form>
+        }
+        else
+        {
+            <p style="margin:0 0 8px;"><sl-badge variant="neutral">Off</sl-badge>
+                This node answers this computer only.</p>
+            <form method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                <input type="hidden" name="enabled" value="true" />
+                <sl-button type="submit" variant="primary" size="small">Switch on</sl-button>
+            </form>
+        }
+
+        @if (devices.Urls.Count > 0)
+        {
+            <p class="text-muted text-sm" style="margin:16px 0 4px;">Address to open on the other device:</p>
+            @foreach (var url in devices.Urls)
+            {
+                <div><code data-bmb-copy="@url" title="Click to copy">@url</code></div>
+            }
+        }
+        else if (devices.On)
+        {
+            <p class="text-muted text-sm" style="margin:16px 0 0;">No network address was found on this computer. Connect to a network first.</p>
+        }
+
+        @switch (devices.Firewall)
+        {
+            case DevicesFirewallStep.AddRule:
+                <div style="margin-top:16px;border:1px solid var(--sl-color-warning-600);border-radius:10px;padding:12px;">
+                    <p class="text-sm" style="margin:0 0 8px;"><strong>Windows Firewall will block other devices.</strong>
+                        One rule, for this computer's local network only on port 5311, lets them in. Windows asks for
+                        administrator permission; Bee Memory Bank never changes the firewall without asking.</p>
+                    <form method="post" asp-page-handler="DevicesFirewall">
+                        <input type="hidden" name="action" value="add" />
+                        <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-check"></sl-icon> Allow in Windows Firewall&hellip;</sl-button>
+                    </form>
+                </div>
+                break;
+            case DevicesFirewallStep.RuleInPlace:
+                <p class="text-muted text-sm" style="margin:16px 0 0;">The Windows Firewall rule for port 5311 is in place (local network only).</p>
+                break;
+            case DevicesFirewallStep.RemoveRule:
+                <div style="margin-top:16px;">
+                    <p class="text-muted text-sm" style="margin:0 0 8px;">The Windows Firewall rule for port 5311 is still in place. Nothing is listening now,
+                        but you can remove it. This also removes the rule the Connect a device page uses; it asks again when needed.</p>
+                    <form method="post" asp-page-handler="DevicesFirewall">
+                        <input type="hidden" name="action" value="remove" />
+                        <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-x"></sl-icon> Remove the Windows Firewall rule&hellip;</sl-button>
+                    </form>
+                </div>
+                break;
+            case DevicesFirewallStep.MacAsksOnFirstConnection:
+                <p class="text-muted text-sm" style="margin:16px 0 0;">
+                    <strong>On a Mac:</strong> macOS asks, when the first device connects, whether &ldquo;Bee Memory Bank&rdquo; may accept
+                    incoming network connections. Choose Allow. Bee Memory Bank does not change the firewall itself.
+                </p>
+                break;
+            case DevicesFirewallStep.ServiceInstaller:
+                <p class="text-muted text-sm" style="margin:16px 0 0;">
+                    <strong>Windows service:</strong> the firewall is not changed from here. The installer's
+                    &ldquo;Configure Windows Firewall Exception&rdquo; option opens port 5311; if you did not choose it, add an
+                    inbound rule for TCP 5311 yourself.
+                </p>
+                break;
+        }
+    }
+</div>
+
+<!-- Connect a device — join a phone or another computer to this one over the LAN, without a permanent setting -->
 <h3 style="margin-bottom:12px;"><sl-icon name="phone"></sl-icon> Connect a device</h3>
 <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
     <p class="text-muted text-sm" style="margin-bottom:12px;">
-        Let a phone on your local network join this computer for 15 minutes, with a join code
-        that also proves to the phone it reached this computer.
+        Let a phone or another computer on your local network join this one for 15 minutes, with a join code
+        that also proves to the other device it reached this computer. Nothing stays open afterwards. On a computer,
+        paste the code in <strong>Connect to another device</strong> on its first-run page.
     </p>
     <sl-button variant="primary" size="small" href="/Connect">
         <sl-icon slot="prefix" name="qr-code"></sl-icon> Connect a device
@@ -211,7 +352,7 @@ else
                     <th>Status</th>
                     <th>
                         Auto-restore
-                        <sl-tooltip content="When ON, snapshot restores initiated by this peer apply automatically without your confirmation. The peer can replace your articles, folders, and tags. Enable only for peers you fully trust (e.g. your own devices). For peers that belong to other people, leave OFF — you'll get a UI prompt before restore applies." placement="top">
+                        <sl-tooltip content="When ON, snapshot restores initiated by this peer apply automatically without your confirmation. The peer can replace your articles, folders, and tags. Enable only for peers you fully trust (e.g. your own devices). When OFF, a received restore remains pending; there is no UI prompt or manual approval path. If you later switch it on, the node applies the pending restore after its next sync or unlock." placement="top">
                             <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
                         </sl-tooltip>
                     </th>
@@ -249,6 +390,14 @@ else
                             {
                                 <sl-tooltip content="This peer can revoke other peers, hard-delete content across the whole network, and restore every node from its own snapshot. Every device that joins with the master password starts this way." placement="top">
                                     <sl-badge variant="warning" pill style="margin-left:4px;">superadmin</sl-badge>
+                                </sl-tooltip>
+                            }
+                            @if (entry.TlsTrust == "pin" || entry.TlsTrust == "public-ca")
+                            {
+                                var hubIsPinned = entry.TlsTrust == "pin";
+                                var hubHttps = entry.ApiAddress != null && entry.ApiAddress.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+                                <sl-tooltip content="@(!hubHttps ? "The address of this node is not https, so blind copies cannot be paired to it. Set an https address with the button next to this badge." : hubIsPinned ? "Blind copies can be told to call this node. They accept only the certificate key pinned for it (" + (entry.TlsSpki ?? "") + ")." : "Blind copies can be told to call this node. They accept only a certificate a public authority vouches for, for this name.")" placement="top">
+                                    <sl-badge variant="@(hubHttps ? "primary" : "warning")" pill style="margin-left:4px;" class="badge-blind-callable">blind copies: @(hubIsPinned ? "pinned certificate" : "normal certificate")@(hubHttps ? "" : " (address not https)")</sl-badge>
                                 </sl-tooltip>
                             }
                         </td>
@@ -299,6 +448,15 @@ else
                                     class="btn-open-change-url"
                                     data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress">
                                 </sl-icon-button>
+                                @* A blind node is called by the pin in its pair code; only a full node is set up here. *@
+                                @if (!BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(entry.NodeId))
+                                {
+                                <sl-icon-button name="broadcast-pin" label="Let blind copies call this node"
+                                    class="btn-open-hub"
+                                    data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress"
+                                    data-trust="@entry.TlsTrust">
+                                </sl-icon-button>
+                                }
                                 @* A blind node can never be promoted (the Api refuses it too); demoting one stays possible. *@
                                 @if (entry.IsSuperadmin || !BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(entry.NodeId))
                                 {
@@ -352,6 +510,55 @@ else
         <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-change-url">Cancel</sl-button>
         <sl-button type="submit" slot="footer" variant="primary">
             <sl-icon slot="prefix" name="link-45deg"></sl-icon> Change URL
+        </sl-button>
+    </form>
+</sl-dialog>
+
+<!-- Let blind copies call this node (ADR 0007) -->
+<sl-dialog id="dlg-hub" label="Let blind copies call this node">
+    <form method="post" asp-page-handler="SetBlindCallable" class="sl-form">
+        <input type="hidden" id="hub-node-id" name="nodeId" />
+        <p id="hub-node-name" style="margin:0 0 12px;color:var(--text-secondary);"></p>
+        <p class="text-muted text-sm" style="margin:0 0 16px;">
+            A blind copy (the Windows, macOS or Android app) never listens: it calls a node over https. Choose how it should trust
+            this node's certificate. This server checks the address and the certificate before it saves anything.
+        </p>
+        <div id="hub-address-row" style="margin-bottom:16px;">
+            <sl-input id="hub-address" name="address" label="Address (https)" placeholder="https://bmb.example.org"
+                      help-text="Replaces this node's address for every device in the network."></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-select id="hub-trust" name="trust" label="Certificate" value="public-ca" hoist>
+                <sl-option value="public-ca">Normal certificate (Let's Encrypt or another public authority)</sl-option>
+                <sl-option value="pin">Pinned certificate</sl-option>
+                <sl-option value="off">Do not let blind copies call this node</sl-option>
+            </sl-select>
+        </div>
+        <sl-alert id="hub-help-public-ca" variant="primary" open style="margin-bottom:16px;">
+            Use this for a node behind a reverse proxy with a real certificate. A blind copy accepts only a certificate that a public
+            authority vouches for, issued for exactly this name. Because anyone a public authority can be made to issue a certificate for
+            this name to could impersonate the node to a blind copy, "Pinned certificate" is stronger. Make sure the proxy forwards
+            <code>/api/sync/</code> and <code>/api/blind/replica</code> to this node (see the Internet Access guide).
+        </sl-alert>
+        <sl-alert id="hub-help-pin" variant="warning" open style="margin-bottom:16px;display:none;">
+            Use this for a node with a certificate of its own. This server connects once, reads the key the node presents and pins it:
+            every device then accepts only that key for this node. That key is taken on trust from this one connection, so compare it
+            with the key the node shows for itself if you can (paste it below). A certificate from a public authority that is renewed
+            with a new key breaks the pin; use "Normal certificate" for those.
+        </sl-alert>
+        <sl-alert id="hub-help-off" variant="neutral" open style="margin-bottom:16px;display:none;">
+            Blind copies can no longer be paired to call this node. Copies that are already paired keep calling it until it stops
+            answering them; revoke a lost copy under Trusted Nodes.
+        </sl-alert>
+        <div id="hub-pin-row" style="margin-bottom:16px;display:none;">
+            <sl-input name="expectedPin" label="Expected key pin (optional)" placeholder="43 characters" autocomplete="off"></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input name="password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+        </div>
+        <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-hub">Cancel</sl-button>
+        <sl-button type="submit" slot="footer" variant="primary">
+            <sl-icon slot="prefix" name="broadcast-pin"></sl-icon> Save
         </sl-button>
     </form>
 </sl-dialog>

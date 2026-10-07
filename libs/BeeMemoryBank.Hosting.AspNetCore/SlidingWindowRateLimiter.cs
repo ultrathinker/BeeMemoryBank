@@ -11,7 +11,9 @@ public enum RateLimitedRoute
     /// <summary>Ordinary sign-in.</summary>
     Login,
     /// <summary>Verifies the master password and, on a match, WIPES THE NODE.</summary>
-    NodeReset
+    NodeReset,
+    /// <summary>"Forgot your password": checks a recovery key (an Argon2id derivation per recovery slot) and, on a match, replaces a superadmin's password.</summary>
+    RecoverAccess
 }
 
 /// <summary>
@@ -22,6 +24,7 @@ public static class RateLimitPath
 {
     public const string LoginPath = "/login";
     public const string AdminPath = "/admin";
+    public const string RecoverAccessPath = "/recoveraccess";
 
     /// <summary>
     /// Which throttling class a Web request falls into. Pure and testable, because the two
@@ -47,6 +50,8 @@ public static class RateLimitPath
 
         if (normalizedPath == AdminPath)
             return IsHandler("ResetNode") ? RateLimitedRoute.NodeReset : RateLimitedRoute.None;
+
+        if (normalizedPath == RecoverAccessPath) return RateLimitedRoute.RecoverAccess;
 
         if (normalizedPath != LoginPath) return RateLimitedRoute.None;
 

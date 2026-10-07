@@ -35,15 +35,28 @@ public static class VaultFiles
 
     // Written by a running node and meaningless anywhere else: copying node.lock or a stale
     // status/runtime descriptor next to a vault could make the next start think a node is
-    // already running there.
+    // already running there. network.settings.json is not runtime state but follows the same rule for another
+    // reason: it records that THIS computer lets the network reach the node ("Devices on my network"), a choice
+    // made for one machine and one network, so a vault carried to another computer must start closed there.
     private static readonly HashSet<string> TransientFileNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "node.lock",
         ".runtime.json",
         "node.status.json",
+        NetworkSettingsFileName,
+        NetworkListenerStateFileName,
     };
 
-    /// <summary>True for runtime-only files (lock, status, runtime descriptor, *.ready).</summary>
+    /// <summary>
+    /// The per-profile "Devices on my network" setting, written by the node's network settings store
+    /// (Infrastructure, which cannot reference this library: a test keeps the two spellings equal).
+    /// </summary>
+    public const string NetworkSettingsFileName = "network.settings.json";
+
+    /// <summary>Whether the node's network listener is really up (runtime state the node writes and the Api's announcer reads); see <c>LanListenerState</c>.</summary>
+    public const string NetworkListenerStateFileName = "network.listening.json";
+
+    /// <summary>True for files that are never carried with a vault (lock, status, runtime descriptor, *.ready, the network setting).</summary>
     public static bool IsTransient(string fileName)
     {
         return TransientFileNames.Contains(fileName)

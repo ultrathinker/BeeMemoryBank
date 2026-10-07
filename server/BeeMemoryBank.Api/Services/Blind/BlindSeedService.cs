@@ -394,7 +394,8 @@ public sealed class BlindSeedService(
                     Ed25519PublicKey = Convert.FromBase64String(peer.PublicKeyB64),
                     ApiAddress = peer.ApiAddress,
                     IsSuperadmin = peer.NodeId == manifest.ProducerNodeId || peer.IsSuperadmin,
-                    TlsSpki = peer.TlsSpki,
+                    TlsSpki = BlindTrust.PinOf(peer.TlsTrust, peer.TlsSpki),
+                    TlsTrust = BlindTrust.Effective(peer.TlsTrust, peer.TlsSpki),
                     Status = "A",
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow,
@@ -647,7 +648,7 @@ public sealed class BlindSeedService(
             row.IsSuperadmin = true;
             row.Ed25519PublicKey = pairedKey;
             row.ApiAddress = claimed.ApiAddress ?? row.ApiAddress;
-            row.TlsSpki = claimed.TlsSpki ?? row.TlsSpki;
+            ApplyClaimedTrust(row, claimed);
             row.UpdatedAt = now;
             await whitelist.UpdateAsync(row);
         }
@@ -660,7 +661,8 @@ public sealed class BlindSeedService(
                 Ed25519PublicKey = pairedKey,
                 ApiAddress = claimed.ApiAddress,
                 IsSuperadmin = true,
-                TlsSpki = claimed.TlsSpki,
+                TlsSpki = BlindTrust.PinOf(claimed.TlsTrust, claimed.TlsSpki),
+                TlsTrust = BlindTrust.Effective(claimed.TlsTrust, claimed.TlsSpki),
                 Status = "A",
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -670,6 +672,20 @@ public sealed class BlindSeedService(
         }
         logger.LogInformation("Blind seed: {Producer} used this node's pair code; it manages this node from now on (superadmin)",
             manifest.ProducerNodeId);
+    }
+
+    /// <summary>
+    /// How the manifest says the producer's endpoint is trusted, onto the producer's row. The mode the manifest names is the
+    /// authority: the row takes it, and the pin only if that mode is <c>pin</c> — so a row moved to the normal certificate (or to a
+    /// mode this build does not know) does not keep the old key behind it. A manifest that says nothing usable (no mode and no
+    /// pin, or <c>pin</c> with no key) leaves the row's own trust as it is.
+    /// </summary>
+    internal static void ApplyClaimedTrust(WhitelistEntry row, BlindManifestPeer claimed)
+    {
+        var trust = BlindTrust.Effective(claimed.TlsTrust, claimed.TlsSpki);
+        if (trust is null || (trust == BlindTrust.Pin && string.IsNullOrEmpty(claimed.TlsSpki))) return;
+        row.TlsTrust = trust;
+        row.TlsSpki = BlindTrust.PinOf(trust, claimed.TlsSpki);
     }
 
     /// <summary>

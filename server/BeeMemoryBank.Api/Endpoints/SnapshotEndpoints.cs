@@ -15,6 +15,15 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static class SnapshotEndpoints
 {
+    // By file name when the request names one (a snapshot this node made carries no id in its name),
+    // by id otherwise (an uploaded one does). A name that is not a snapshot of this node resolves to null.
+    private static string? ResolveSnapshotFile(SnapshotService svc, RestoreInitiationRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.FileName)) return svc.FindSnapshotFileById(req.SnapshotFileId);
+        try { return svc.GetSnapshotPath(req.FileName); }
+        catch (Exception ex) when (ex is FileNotFoundException or ArgumentException) { return null; }
+    }
+
     public static void MapSnapshotEndpoints(this WebApplication app)
     {
         // Superadmin is attached per-route rather than to the group: /restore/{eventId}/file and
@@ -77,6 +86,19 @@ public static class SnapshotEndpoints
         group.MapPost("/restore", async (RestoreSnapshotRequest req, SnapshotService svc, SessionService session,
             MaintenanceModeService maintenance, HttpContext ctx, ILogger<Program> logger, IAuditLogRepository auditRepo) =>
         {
+            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
+
+            // The mode is named by the request and checked here, before the password is looked at:
+            // the dialog's choice is not the only gate. A mode this route does not serve (the
+            // network one has its own route and its own checks) or one nobody defined is refused,
+            // and the refusal is on the record.
+            if (!SnapshotRestoreModes.TryResolveLocal(req.Mode, req.StandaloneMode, out var mode, out var refusal))
+            {
+                await auditRepo.LogAsync("snapshot", req.FileName, "snapshot_restore_refused", "web",
+                    $"Mode={req.Mode}, by user {actor}: {refusal}");
+                return Results.BadRequest(new ErrorResponse(refusal!));
+            }
+
             // Re-authenticate. Only unlock the shared session when it is actually locked — an
             // encrypted snapshot needs the master DEK to apply, and the restore path locks again
             // when it is done. Calling UnlockAsync unconditionally (as this used to) also fired the
@@ -85,16 +107,19 @@ public static class SnapshotEndpoints
                 ? await session.VerifyMasterPasswordAsync(req.MasterPassword)
                 : await session.UnlockAsync(req.MasterPassword);
             if (!unlockOk)
+            {
+                await auditRepo.LogAsync("snapshot", req.FileName, "snapshot_restore_refused", "web",
+                    $"Mode={mode}, by user {actor}: wrong master password");
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
+            }
 
             // Audit the intent BEFORE we touch the DB. Restore replaces the
             // entire vault — including tbl_audit_log itself — so a post-action
             // log entry can be wiped out by the very operation it describes.
             // Logging up-front means at least the "started" record survives in
             // any later snapshot taken from the pre-restore state.
-            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
             await auditRepo.LogAsync("snapshot", req.FileName, "snapshot_restore_started", "web",
-                $"Standalone={req.StandaloneMode}, backupFirst={req.CreateBackupFirst}, by user {actor}");
+                $"Mode={mode}, backupFirst={req.CreateBackupFirst}, by user {actor}");
 
             string? backupFileName = null;
             try
@@ -125,11 +150,34 @@ public static class SnapshotEndpoints
                     logger.LogInformation("Backup created: {FileName}", backupFileName);
                 }
 
-                logger.LogInformation("Starting restore from {FileName}", req.FileName);
-                await svc.RestoreAsync(req.FileName, standaloneMode: req.StandaloneMode);
+                logger.LogInformation("Starting restore from {FileName} (mode {Mode})", req.FileName, mode);
+                var outcome = await svc.RestoreAsync(req.FileName,
+                    standaloneMode: mode == SnapshotRestoreModes.Standalone, masterPassword: req.MasterPassword);
                 logger.LogInformation("Restore completed successfully");
 
-                return Results.Ok(new { success = true, backupFileName });
+                // The database on disk is the restored one now, so this entry belongs to the node's
+                // new life; the "started" entry above lives on in the pre-restore backup. Never let
+                // the record decide the outcome of a restore that has already been done.
+                try
+                {
+                    await auditRepo.LogAsync("snapshot", req.FileName, "snapshot_restored", "web",
+                        outcome.Standalone
+                            ? $"Mode={mode}, new node id {outcome.NewNodeId}, backup {backupFileName ?? "none"}, by user {actor}"
+                            : $"Mode={mode}, backup {backupFileName ?? "none"}, by user {actor}");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Could not record the completed restore in the audit log");
+                }
+
+                return Results.Ok(new
+                {
+                    success = true,
+                    backupFileName,
+                    mode,
+                    newNodeId = outcome.NewNodeId,
+                    nodeName = outcome.NodeDisplayName
+                });
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
             {
@@ -138,6 +186,8 @@ public static class SnapshotEndpoints
                 // into the generic 500 below answered "check server logs" for the one class of
                 // failure the operator can actually act on without a shell on the server.
                 logger.LogWarning(ex, "Restore refused for {FileName}", req.FileName);
+                await auditRepo.LogAsync("snapshot", req.FileName, "snapshot_restore_refused", "web",
+                    $"Mode={mode}, by user {actor}: {ex.Message}");
                 return Results.BadRequest(new ErrorResponse(backupFileName != null
                     ? $"{ex.Message} (A backup was saved as {backupFileName}.)"
                     : ex.Message));
@@ -224,18 +274,34 @@ public static class SnapshotEndpoints
             INodeIdentityRepository nodeRepo,
             ILamportClock clock,
             IEventLogRepository eventLogRepo,
+            IAuditLogRepository auditRepo,
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
+            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
             if (!session.IsUnlocked) return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             if (req.Mode != RestoreMode.NetworkWide) return Results.BadRequest("Use /restore for standalone");
 
-            var filePath = snapshotSvc.FindSnapshotFileById(req.SnapshotFileId);
+            // The Admin page re-asks for the master password before it starts this — a restore for the
+            // whole network replaces the content of every node that accepts it. Only the session is
+            // verified, never unlocked, so a wrong password costs nothing but the refusal.
+            if (req.MasterPassword is not null && !await session.VerifyMasterPasswordAsync(req.MasterPassword))
+            {
+                await auditRepo.LogAsync("snapshot", req.FileName ?? req.SnapshotFileId.ToString(), "snapshot_restore_refused", "web",
+                    $"Mode={SnapshotRestoreModes.Network}, by user {actor}: wrong master password");
+                return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
+            }
+
+            var filePath = ResolveSnapshotFile(snapshotSvc, req);
             if (filePath == null || !File.Exists(filePath))
                 return Results.NotFound(new { error = "Snapshot file not found" });
 
             var identity = await nodeRepo.GetAsync();
             if (identity == null) return Results.BadRequest("Node identity not found");
+
+            // On the record before anything is distributed: peers act on the event appended below.
+            await auditRepo.LogAsync("snapshot", Path.GetFileName(filePath), "snapshot_restore_started", "web",
+                $"Mode={SnapshotRestoreModes.Network}, by user {actor}");
 
             var evtId = Guid.NewGuid();
             var pendingDir = Path.Combine(snapshotSvc.SnapshotsDir, "restore-pending");
@@ -299,7 +365,7 @@ public static class SnapshotEndpoints
                 }
             });
 
-            return Results.Accepted(value: new { eventId = evt.EventId.ToString() });
+            return Results.Accepted(value: new { eventId = evt.EventId.ToString(), mode = SnapshotRestoreModes.Network });
         })
         .RequireSuperadmin().RequireNonAgent()
         .WithName("InitiateNetworkRestore");

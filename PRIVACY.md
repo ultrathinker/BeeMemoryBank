@@ -15,7 +15,7 @@ A fresh Windows desktop install makes exactly one kind of outbound connection:
   goes to GitHub, not to the project. A newer release is downloaded in the background and installed
   only when you choose **Restart to update** in the tray menu, or at the next start of the app.
 
-Everything else listens on your own computer (`127.0.0.1`) only.
+Everything else listens on your own computer (`127.0.0.1`) only, until you open it yourself: see "Devices on my network" and "Connect a device" below.
 
 ## What happens only when you set it up
 
@@ -27,6 +27,8 @@ Everything else listens on your own computer (`127.0.0.1`) only.
 | AI chat | [OpenRouter](https://openrouter.ai), with your own API key | The conversation, including article text the chat tools read for it, and attached images |
 | Server update feed | The feed URL an operator configures | A plain download request |
 | "Scan my network" when joining | Your local network (mDNS) | A standard discovery query |
+| "Devices on my network" switched on (Admin > Nodes, off by default) | Everyone on your local network | The node announces its id, name, version and port (mDNS) and serves its web page and API over HTTPS on port 5311, so anyone on that network can reach the sign-in page |
+| "Connect a device" (Admin > Nodes) | The device that has the join code, for 15 minutes | The few calls a join needs on port 5311, behind a one-time token; the joining device sends the master password only to a server holding the key the code pins |
 
 ## Components by other vendors
 

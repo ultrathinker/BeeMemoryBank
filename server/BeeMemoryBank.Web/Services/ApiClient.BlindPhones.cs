@@ -2,8 +2,15 @@ using System.Text.Json;
 
 namespace BeeMemoryBank.Web.Services;
 
-/// <summary>A node an Android blind node can call (a blind node or a hub with a pinned certificate).</summary>
-public sealed record BlindPhoneListenerDto(Guid NodeId, string DisplayName, string Address, bool IsBlind);
+/// <summary>
+/// A node an Android blind node can call: a blind node, or a hub — a full node that was set up for it, with a pinned certificate
+/// (<c>pin</c>) or a normal one (<c>public-ca</c>), ADR 0007.
+/// </summary>
+public sealed record BlindPhoneListenerDto(Guid NodeId, string DisplayName, string Address, bool IsBlind, string Trust = "pin")
+{
+    /// <summary>The mode in the words of the screens.</summary>
+    public string TrustLabel => Trust == "public-ca" ? "normal certificate" : "pinned certificate";
+}
 
 /// <summary>The paired phone and the "where to call" code to show it.</summary>
 public sealed record BlindPhonePairedDto(Guid PhoneId, string DisplayName, string CallCode, Guid ListenerId);

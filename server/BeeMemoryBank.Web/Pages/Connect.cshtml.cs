@@ -1,6 +1,4 @@
 using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Web.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -11,19 +9,16 @@ using QRCoder;
 namespace BeeMemoryBank.Web.Pages;
 
 /// <summary>
-/// "Connect a device" page. On the Windows node it opens the LAN join listener on demand (no restart,
-/// so the vault stays unlocked), shows one join code per LAN IPv4 address — address, one-time token
-/// and the SPKI pin of the node's TLS key, as text and as a QR — and adds the firewall rule when the
-/// user asks for it (plan section 10). The phone pins the key from the code before it sends the
-/// master password.
+/// "Connect a device" page. On the desktop node (Windows app, Mac app, Windows service) it opens the LAN
+/// join listener on demand (no restart, so the vault stays unlocked), shows one join code per LAN IPv4
+/// address — address, one-time token and the SPKI pin of the node's TLS key, as text and as a QR — and,
+/// in the Windows app, adds the firewall rule when the user asks for it (plan section 10). A phone or
+/// another computer pins the key from the code before it sends the master password. While "Devices on
+/// my network" is on the node is open permanently and the code carries no token.
 /// </summary>
 /// <remarks>
-/// Superadmin only: opening a network listener and handing out join codes is administration.
-///
-/// The LAN-IP enumeration deliberately duplicates <c>LocalCaService.GetLanIPv4Addresses</c>'s logic
-/// rather than calling it, because that method is private on <c>LocalCaService</c>. Keep the two
-/// byte-for-byte consistent (same adapter filters) so the codes' hosts always match the leaf
-/// certificate's SAN list; a change to one must be made to the other.
+/// Superadmin only: opening a network listener and handing out join codes is administration. The LAN
+/// addresses come from <see cref="LanAddresses"/>, which must agree with the leaf certificate's SAN list.
 /// </remarks>
 [Authorize(Roles = UserRoles.Superadmin)]
 public class ConnectModel(IHttpClientFactory httpClientFactory) : PageModel
@@ -50,7 +45,7 @@ public class ConnectModel(IHttpClientFactory httpClientFactory) : PageModel
     private void Show(NodeLanClient.LanStatus status)
     {
         Lan = status;
-        Endpoints = BuildEndpoints(status, GetLanIPv4Addresses());
+        Endpoints = BuildEndpoints(status, LanAddresses.GetLanIPv4Addresses());
     }
 
     /// <summary>The join codes to show for <paramref name="status"/> — none unless the listener is on.</summary>
@@ -81,49 +76,6 @@ public class ConnectModel(IHttpClientFactory httpClientFactory) : PageModel
         var pngBytes = pngQrCode.GetGraphic(pixelsPerModule: 20);
         return "data:image/png;base64," + Convert.ToBase64String(pngBytes);
     }
-
-    /// <summary>
-    /// Enumerates this machine's LAN IPv4 addresses, skipping loopback, tunnel, and common
-    /// virtual adapters. Mirrors <c>LocalCaService.GetLanIPv4Addresses</c> exactly so the codes
-    /// target only hosts that are also present in the leaf certificate's SAN list.
-    /// </summary>
-    private static List<IPAddress> GetLanIPv4Addresses()
-    {
-        var addresses = new List<IPAddress>();
-        try
-        {
-            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (ni.OperationalStatus != OperationalStatus.Up) continue;
-                if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
-                    ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
-
-                var desc = ni.Description.ToLowerInvariant();
-                var name = ni.Name.ToLowerInvariant();
-                if (IsVirtualAdapter(desc) || IsVirtualAdapter(name)) continue;
-
-                var ipProperties = ni.GetIPProperties();
-                foreach (var unicast in ipProperties.UnicastAddresses)
-                {
-                    if (unicast.Address.AddressFamily == AddressFamily.InterNetwork &&
-                        !IPAddress.IsLoopback(unicast.Address))
-                    {
-                        addresses.Add(unicast.Address);
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // Fail-safe: return whatever was collected.
-        }
-        return addresses;
-    }
-
-    private static bool IsVirtualAdapter(string s) =>
-        s.Contains("virtual") || s.Contains("vpn") || s.Contains("pseudo") ||
-        s.Contains("docker") || s.Contains("hyper-v") || s.Contains("virtualbox") ||
-        s.Contains("vmware") || s.Contains("loopback") || s.Contains("vethernet");
 
     /// <summary>One reachable LAN endpoint with its join code and the code's QR rendering.</summary>
     public sealed record LanEndpoint(string Ip, string Url, string Code, string QrDataUri);

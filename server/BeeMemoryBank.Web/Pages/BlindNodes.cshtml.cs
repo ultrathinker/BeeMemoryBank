@@ -15,6 +15,9 @@ namespace BeeMemoryBank.Web.Pages;
 public class BlindNodesModel(ApiClient api) : PageModel
 {
     public List<BlindNodeDto>? Nodes { get; set; }
+
+    /// <summary>The full nodes blind copies can be told to call (a hub, ADR 0007), with the trust mode of each.</summary>
+    public List<BlindPhoneListenerDto>? Hubs { get; set; }
     public string? SuccessMessage { get; set; }
     public BlindNodeError? Error { get; set; }
     public string? WarningMessage { get; set; }
@@ -28,7 +31,11 @@ public class BlindNodesModel(ApiClient api) : PageModel
         WarningMessage = warn;
         if (!string.IsNullOrEmpty(err)) Error = BlindNodeError.Of(err, detail);
         Nodes = await api.ListBlindNodesAsync();
+        Hubs = await LoadHubsAsync();
     }
+
+    private async Task<List<BlindPhoneListenerDto>?> LoadHubsAsync() =>
+        (await api.ListBlindPhoneListenersAsync())?.Where(l => !l.IsBlind).ToList();
 
     public async Task<IActionResult> OnPostAddAsync(string code)
     {
@@ -73,6 +80,7 @@ public class BlindNodesModel(ApiClient api) : PageModel
         Error = error;
         Code = code;
         Nodes = await api.ListBlindNodesAsync();
+        Hubs = await LoadHubsAsync();
         return Page();
     }
 }

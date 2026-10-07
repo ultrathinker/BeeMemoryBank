@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.Mdns;
 using BeeMemoryBank.Web.Services;
@@ -130,12 +131,39 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
         return await SignInOrFinishAsync(adminUsername, password, "standalone");
     }
 
+    /// <summary>
+    /// Joins an existing network. <paramref name="joinCode"/> is the code the other computer's Connect a device card shows (its
+    /// address, a one-time token and the pin of its certificate): pasted, it replaces the address, and the join goes only to the
+    /// computer whose key it pins. Without it the address is typed and the certificate is checked the ordinary way, which is
+    /// for a node at a real name (a reverse proxy with a public certificate).
+    /// </summary>
     public async Task<IActionResult> OnPostJoinAsync(
-        string joinAdminUsername, string joinDisplayName, string remoteUrl, string joinPassword)
+        string joinAdminUsername, string joinDisplayName, string remoteUrl, string joinPassword, string? joinCode = null)
     {
         joinAdminUsername = joinAdminUsername?.Trim() ?? "";
         joinDisplayName = joinDisplayName?.Trim() ?? "";
         remoteUrl = remoteUrl?.Trim() ?? "";
+        joinCode = joinCode?.Trim() ?? "";
+
+        if (joinCode.Length > 0)
+        {
+            // Refused here, on the screen where it was pasted, not later as a puzzling failure of the join.
+            if (!JoinCode.TryParse(joinCode, out var parsed))
+            {
+                ErrorMessage = JoinCode.NotValidMessage;
+                Step = "form";
+                Mode = "join";
+                return Page();
+            }
+            remoteUrl = parsed.Address;
+        }
+        else if (remoteUrl.Length == 0)
+        {
+            ErrorMessage = "Paste the join code from the other computer, or type its address.";
+            Step = "form";
+            Mode = "join";
+            return Page();
+        }
 
         if (string.IsNullOrWhiteSpace(joinAdminUsername) ||
             string.IsNullOrWhiteSpace(joinDisplayName) ||
@@ -148,7 +176,8 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
             return Page();
         }
 
-        var (ok, error) = await api.InitJoinAsync(joinAdminUsername, joinDisplayName, remoteUrl, joinPassword);
+        var (ok, error) = await api.InitJoinAsync(joinAdminUsername, joinDisplayName, remoteUrl, joinPassword,
+            joinCode.Length > 0 ? joinCode : null);
         if (!ok)
         {
             ErrorMessage = error ?? "Join failed.";

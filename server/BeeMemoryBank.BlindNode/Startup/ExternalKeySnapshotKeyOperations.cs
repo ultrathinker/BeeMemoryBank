@@ -30,4 +30,9 @@ public sealed class ExternalKeySnapshotKeyOperations(IExternalNodeKey externalKe
             "Snapshot database is encrypted but the session is locked. Unlock the vault before restoring.");
 
     public Task ReEncryptDatabaseIfUnlockedAsync(string dbPath) => Task.CompletedTask;
+
+    public (byte[] Wrapped, byte[] Iv, int Version) SealIdentitySeedForRestore(
+        string stagedDbPath, Guid newNodeId, byte[] seed, string? masterPassword) =>
+        throw new InvalidOperationException(
+            "A blind node has no master key to seal a new identity under; it is reseeded from its pair, not restored from a snapshot.");
 }

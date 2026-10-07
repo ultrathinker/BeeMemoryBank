@@ -145,6 +145,13 @@ public class RepositoryWriteGuardrailTests
         new("server/BeeMemoryBank.Api/Endpoints/KeyEndpoints.cs", "INodeIdentityRepository", "SetMasterPasswordChangedLocallyAtAsync", NodeLocalSettingReason),
         new("server/BeeMemoryBank.Api/Endpoints/SearchMetricsEndpoints.cs", "INodeIdentityRepository", "SetCanGenerateEmbeddingsAsync", NodeLocalSettingReason),
         new("server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs", "INodeIdentityRepository", "SetSessionSettingsAsync", NodeLocalSettingReason),
+        // The recovery-key password reset (POST /api/session/recover-access and `bmb user reset-password`) does the same node-local
+        // bookkeeping as the Admin -> Security card in KeyEndpoints above: this node's own "password changed" notice and timestamp.
+        // The mesh is told separately, by the master_password_changed event (EventLogger, in the endpoint; deferred while locked).
+        new("server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs", "INodeIdentityRepository", "ClearMasterPasswordNoticeAsync", NodeLocalSettingReason),
+        new("server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs", "INodeIdentityRepository", "SetMasterPasswordChangedLocallyAtAsync", NodeLocalSettingReason),
+        new("server/BeeMemoryBank.Cli/Commands/UserCommand.cs", "INodeIdentityRepository", "ClearMasterPasswordNoticeAsync", NodeLocalSettingReason),
+        new("server/BeeMemoryBank.Cli/Commands/UserCommand.cs", "INodeIdentityRepository", "SetMasterPasswordChangedLocallyAtAsync", NodeLocalSettingReason),
 
         // ── Protocol a peer last declared (plan 3.1, migration 028): this node's own observation of
         // who it talked to, written after the peer authenticated. Never replicated, no event.
@@ -232,6 +239,8 @@ public class RepositoryWriteGuardrailTests
         new("server/BeeMemoryBank.Api/Endpoints/RoleEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/SnapshotEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/UserEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
+        new("server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
+        new("server/BeeMemoryBank.Cli/Commands/UserCommand.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/WhitelistEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/BlindRestoreEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Services/Recovery/BlindRestoreCodeService.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),

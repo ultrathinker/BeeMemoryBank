@@ -39,6 +39,11 @@ public class SessionService(
     // call UpdateSlotKeyAsync — wasted Argon2 work + last-writer-wins UPDATE on tbl_key_slot.
     private readonly SemaphoreSlim _unlockSemaphore = new(1, 1);
 
+    // Serializes recovery-key attempts among themselves (one at a time keeps the Argon2id memory they take
+    // bounded) but NOT against unlock: that endpoint is anonymous, and a flood of guesses at it must queue
+    // behind each other, never in front of an owner who is signing in.
+    private readonly SemaphoreSlim _recoverySemaphore = new(1, 1);
+
     private Task _postUnlockCatchUp = Task.CompletedTask;
 
     /// <summary>
@@ -129,6 +134,33 @@ public class SessionService(
         }
     }
 
+    /// <summary>
+    /// Opens ONLY a <c>recovery</c> key slot with <paramref name="recoveryKey"/> and hands the master
+    /// DEK it unwraps to the caller, WITHOUT unlocking the shared session. This is the building block
+    /// of the "forgot your password" flow: the caller needs the DEK for one purpose (to wrap it under
+    /// a new password in the user's key slot), and the session must not end up open for the web UI
+    /// and every agent just because someone proved they hold the recovery key — calling
+    /// <see cref="UnlockAsync"/> there would do exactly that.
+    /// <para>
+    /// Same sentinel check and the same "wrong key and no recovery slot are indistinguishable" property
+    /// as the real unlock; a key from another node's database unwraps nothing here. Only recovery
+    /// slots are tried, so a user's password offered as a "recovery key" is refused. The caller owns the
+    /// returned buffer and must wipe it. Returns null when no recovery slot accepts the key.
+    /// </para>
+    /// </summary>
+    public async Task<byte[]?> TryOpenWithRecoveryKeyAsync(string recoveryKey)
+    {
+        await _recoverySemaphore.WaitAsync();
+        try
+        {
+            return await TryDeriveAuthorizedMasterDekAsync(recoveryKey, recoveryOnly: true);
+        }
+        finally
+        {
+            _recoverySemaphore.Release();
+        }
+    }
+
     private async Task<bool> UnlockCoreAsync(string password)
     {
         LastMigrationResult = null;
@@ -159,10 +191,12 @@ public class SessionService(
     /// returned buffer and must wipe it. Shared by <see cref="UnlockCoreAsync"/> (which installs it
     /// as the session key) and <see cref="VerifyMasterPasswordAsync"/> (which only wants the yes/no).
     /// </summary>
-    private async Task<byte[]?> TryDeriveAuthorizedMasterDekAsync(string password)
+    private async Task<byte[]?> TryDeriveAuthorizedMasterDekAsync(string password, bool recoveryOnly = false)
     {
         var slots = await keySlotRepo.GetAllAsync();
-        var trySlots = slots.Where(s => s.Salt != null && s.ArgonMemory.HasValue).ToList();
+        var trySlots = slots
+            .Where(s => s.Salt != null && s.ArgonMemory.HasValue && (!recoveryOnly || s.SlotType == "recovery"))
+            .ToList();
 
         foreach (var slot in trySlots)
         {

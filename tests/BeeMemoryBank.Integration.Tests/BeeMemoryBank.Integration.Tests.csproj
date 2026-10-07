@@ -47,6 +47,8 @@
     <!-- The assembly-boundary scanner and the vault boundary (BMB-99): one source in tests/shared, linked into every project that proves the boundary. -->
     <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
     <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+    <!-- A throw-away CA and a loopback TLS server (public-CA trust mode, ADR 0007): one source in tests/shared. -->
+    <Compile Include="..\shared\TestPki.cs" Link="Shared\TestPki.cs" />
   </ItemGroup>
 
 </Project>

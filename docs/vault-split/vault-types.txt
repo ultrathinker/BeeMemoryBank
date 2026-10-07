@@ -58,11 +58,15 @@ BeeMemoryBank.Core.Services.NodeResetService
 BeeMemoryBank.Core.Services.NullLamportClock
 BeeMemoryBank.Core.Services.ObsidianImportService
 BeeMemoryBank.Core.Services.ReciprocalRankFusion
+BeeMemoryBank.Core.Services.RecoveryResetOutcome
+BeeMemoryBank.Core.Services.RecoveryResetResult
+BeeMemoryBank.Core.Services.RemoteAccountErrors
 BeeMemoryBank.Core.Services.RemoteAccountService
 BeeMemoryBank.Core.Services.RemoteAccountService+AccessibleFoldersResponse
 BeeMemoryBank.Core.Services.RemoteAccountService+TokenIssueResponse
 BeeMemoryBank.Core.Services.RemoteEventApplier
 BeeMemoryBank.Core.Services.RemoteFolderInfo
+BeeMemoryBank.Core.Services.RemoteRoute
 BeeMemoryBank.Core.Services.RemoteSnapshot
 BeeMemoryBank.Core.Services.RemoteSnapshotArticle
 BeeMemoryBank.Core.Services.RemoteSnapshotFolder

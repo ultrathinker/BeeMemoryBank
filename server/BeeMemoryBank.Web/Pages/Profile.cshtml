@@ -152,6 +152,14 @@
 
     <sl-divider></sl-divider>
 
+    <!-- Shown instead of the two snippets when no address an AI assistant could use is known (Docker
+         without a published API port): the text comes from McpAddressResolver, filled in by JS. -->
+    <sl-alert id="mcp-unavailable" variant="warning" open style="display:none;margin:16px 0 0;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <span id="mcp-unavailable-text"></span>
+    </sl-alert>
+
+    <div id="mcp-snippets">
     <p class="text-muted" style="font-size:0.85rem;margin:16px 0 12px;">
         <sl-icon name="plug"></sl-icon> These snippets already contain your key and server URL — paste them into your AI client now, while the key is visible.
     </p>
@@ -177,11 +185,12 @@
             </sl-icon-button>
         </div>
     </div>
+    </div>
 
     <sl-button slot="footer" variant="primary" id="btn-close-secret-dlg">I have copied it</sl-button>
 </sl-dialog>
 
 <script type="application/json" id="profile-page-data">
-    {"mcpBaseUrl":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.McpBaseUrl))}
+    {"mcpUrl":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Mcp.Url)),"mcpUnavailableMessage":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Mcp.Message))}
 </script>
 <script src="/js/pages/profile.js"></script>

@@ -122,7 +122,14 @@ public static class InitEndpoints
                 if (string.IsNullOrWhiteSpace(req.DisplayName))
                     return Results.BadRequest(new ErrorResponse("Display name is required."));
 
-                if (string.IsNullOrWhiteSpace(req.RemoteUrl))
+                // A join code from the other computer's "Connect a device" card replaces the address: it carries the address,
+                // the one-time token and the pin of the key that computer must present.
+                BeeMemoryBank.Core.Models.JoinCode? code = null;
+                if (!string.IsNullOrWhiteSpace(req.JoinCode)
+                    && !BeeMemoryBank.Core.Models.JoinCode.TryParse(req.JoinCode, out code))
+                    return Results.BadRequest(new ErrorResponse(BeeMemoryBank.Core.Models.JoinCode.NotValidMessage));
+
+                if (code == null && string.IsNullOrWhiteSpace(req.RemoteUrl))
                     return Results.BadRequest(new ErrorResponse("Remote URL is required."));
 
                 if (string.IsNullOrWhiteSpace(req.Password))
@@ -134,8 +141,9 @@ public static class InitEndpoints
                 try { Core.Services.UserService.ValidatePassword(req.Password); }
                 catch (ArgumentException ex) { return Results.BadRequest(new ErrorResponse(ex.Message)); }
 
-                if (!Uri.TryCreate(req.RemoteUrl, UriKind.Absolute, out var uri) ||
-                    (uri.Scheme != "http" && uri.Scheme != "https"))
+                if (code == null
+                    && (!Uri.TryCreate(req.RemoteUrl, UriKind.Absolute, out var uri) ||
+                        (uri.Scheme != "http" && uri.Scheme != "https")))
                 {
                     return Results.BadRequest(new ErrorResponse("Remote URL must be a valid HTTP(S) URL."));
                 }
@@ -143,9 +151,16 @@ public static class InitEndpoints
                 var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
                 var nodeId = Guid.NewGuid();
 
+                // Where every request of this join goes. With a code it is the code's address and nothing the caller typed.
+                var remoteBase = code?.Address ?? req.RemoteUrl.TrimEnd('/');
+
                 // No redirects: this request carries the master password, and a 307/308 would resend it to
                 // wherever the remote pointed. A 3xx then fails the join below like any non-success answer.
-                var http = httpClientFactory.CreateClient(SyncEndpoints.NoRedirectClientName);
+                // With a code the client also completes TLS only with the key the code pins (the other computer's certificate
+                // is from its own local CA, which nothing here trusts), and it is used for the join, the challenge, the
+                // authentication and the snapshot alike, so no step can go to an unpinned server.
+                using var pinnedHttp = code != null ? JoinHttp.CreateClient(code.SpkiPin) : null;
+                var http = pinnedHttp ?? httpClientFactory.CreateClient(SyncEndpoints.NoRedirectClientName);
                 http.Timeout = TimeSpan.FromSeconds(30);
 
                 var joinRequest = new
@@ -160,8 +175,28 @@ public static class InitEndpoints
                 HttpResponseMessage response;
                 try
                 {
-                    response = await http.PostAsJsonAsync(
-                        $"{req.RemoteUrl.TrimEnd('/')}/api/join", joinRequest, JsonOptions);
+                    using var joinMessage = new HttpRequestMessage(HttpMethod.Post, $"{remoteBase}/api/join")
+                    {
+                        Content = JsonContent.Create(joinRequest, options: JsonOptions)
+                    };
+                    // The one-time token of the code: without it the other computer's join door refuses before it looks at a password.
+                    if (code?.Token != null) joinMessage.Headers.Add(BeeMemoryBank.Core.Models.JoinCode.TokenHeader, code.Token);
+                    response = await http.SendAsync(joinMessage);
+                }
+                catch (HttpRequestException ex) when (code != null)
+                {
+                    return Results.Json(
+                        new ErrorResponse(BeeMemoryBank.Core.Models.JoinCode.DescribeConnectionFailure(ex)),
+                        statusCode: 502);
+                }
+                catch (HttpRequestException ex) when (ex.HttpRequestError == HttpRequestError.SecureConnectionError)
+                {
+                    // Typical for a desktop node on the local network: its certificate is from its own authority, which this
+                    // computer does not trust. The code shown on that computer is the way in (it pins the key), not a bypass.
+                    return Results.Json(
+                        new ErrorResponse("This computer does not trust the other one's certificate. If it is a computer on your own network, " +
+                            "paste its join code (Admin, then Connect a device, on that computer) instead of typing its address."),
+                        statusCode: 502);
                 }
                 catch (Exception ex)
                 {
@@ -175,8 +210,11 @@ public static class InitEndpoints
                     var errorBody = await response.Content.ReadAsStringAsync();
                     logger.LogWarning("Remote node rejected join request (HTTP {Status}): {Body}",
                         (int)response.StatusCode, errorBody);
+                    // Through a code the other computer is the pinned one, and its door says why in a sentence made for the person
+                    // ("not valid", "already used"); show that. Otherwise only the status, as before.
+                    var doorSaid = code != null ? BeeMemoryBank.Core.Models.JoinCode.ReadDoorError(errorBody) : null;
                     return Results.Json(
-                        new ErrorResponse($"Remote node rejected the join request (HTTP {(int)response.StatusCode})"),
+                        new ErrorResponse(doorSaid ?? $"Remote node rejected the join request (HTTP {(int)response.StatusCode})"),
                         statusCode: 502);
                 }
 
@@ -343,20 +381,23 @@ public static class InitEndpoints
                     NodeId = remote.NodeId,
                     DisplayName = remote.DisplayName,
                     Ed25519PublicKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64),
-                    ApiAddress = req.RemoteUrl.TrimEnd('/'),
+                    ApiAddress = remoteBase,
                     Status = "A",
                     CreatedAt = now,
                     UpdatedAt = now,
                     // The host just proved it holds the master password by handing over a slot it
                     // opens, and it records this node as a superadmin for the same reason
                     // (JoinAuthority, BMB-42).
-                    IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId)
+                    IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
+                    // The key the code pinned is the key this node dials it by from now on (SpkiPinRegistry): its certificate comes
+                    // from its own local CA, which no ordinary check here trusts, so the later sync would otherwise fail.
+                    TlsSpki = code?.SpkiPin
                 });
 
                 try
                 {
                     var challengeResp = await http.PostAsync(
-                        $"{req.RemoteUrl.TrimEnd('/')}/api/sync/challenge", null);
+                        $"{remoteBase}/api/sync/challenge", null);
                     challengeResp.EnsureSuccessStatusCode();
                     var challenge = await challengeResp.Content.ReadFromJsonAsync<ChallengeResponseDto>(JsonOptions)
                         ?? throw new InvalidOperationException("No challenge from remote");
@@ -376,7 +417,7 @@ public static class InitEndpoints
                     Array.Clear(privateKey);
 
                     var authResp = await http.PostAsJsonAsync(
-                        $"{req.RemoteUrl.TrimEnd('/')}/api/sync/authenticate",
+                        $"{remoteBase}/api/sync/authenticate",
                         new
                         {
                             NodeId = nodeId,
@@ -389,7 +430,7 @@ public static class InitEndpoints
                         ?? throw new InvalidOperationException("No token from remote");
 
                     using var snapReq = new HttpRequestMessage(HttpMethod.Get,
-                        $"{req.RemoteUrl.TrimEnd('/')}/api/sync/snapshot/for-join");
+                        $"{remoteBase}/api/sync/snapshot/for-join");
                     snapReq.Headers.Authorization =
                         new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken);
 

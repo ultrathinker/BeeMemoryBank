@@ -11,11 +11,15 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 /// Enforces:
 /// 1. Denying cleartext (HTTPS-only) in the client path.
 /// 2. Refusing redirects (3xx responses are treated as fatal errors, not followed).
-/// 3. SPKI public key pinning for TLS connections against the paired listening node.
+/// 3. The trust the paired node's call code names (<see cref="BlindTrust"/>): SPKI public key pinning for a pinned
+///    node, or the normal certificate chain — with the host name — for a node on a public CA, whose client may
+///    reach nothing but that node's own origin (the chain alone would accept any site a CA vouches for).
 /// </summary>
 public sealed class BlindHttpHandler : DelegatingHandler
 {
     public static readonly HttpRequestOptionsKey<string> ExplicitPin = new("bmb.tls-spki");
+
+    private readonly string? _onlyAuthority;
 
     public BlindHttpHandler()
     {
@@ -25,6 +29,13 @@ public sealed class BlindHttpHandler : DelegatingHandler
     {
     }
 
+    /// <param name="onlyAuthority">When set (host[:port], as <see cref="Uri.Authority"/> spells it), the only authority this
+    /// client sends to: a request for any other host is refused before a connection is made.</param>
+    public BlindHttpHandler(HttpMessageHandler inner, string? onlyAuthority) : base(inner)
+    {
+        _onlyAuthority = onlyAuthority;
+    }
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         // Enforce HTTPS in the client path
@@ -32,6 +43,13 @@ public sealed class BlindHttpHandler : DelegatingHandler
         {
             throw new HttpRequestException(
                 $"Cleartext HTTP is forbidden for blind node communications: {request.RequestUri}");
+        }
+
+        if (_onlyAuthority is not null
+            && !string.Equals(request.RequestUri.Authority, _onlyAuthority, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new HttpRequestException(
+                $"This connection only calls {_onlyAuthority}; a request to {request.RequestUri.Authority} was refused.");
         }
 
         var response = await base.SendAsync(request, ct);
@@ -69,6 +87,23 @@ public sealed class BlindHttpHandler : DelegatingHandler
 
     public static HttpClientHandler CreatePrimaryHandler(BlindPhoneState? state = null) =>
         CreatePrimaryHandler(state?.CallCode?.SpkiPin);
+
+    /// <summary>
+    /// The primary handler for a node on a public CA: the certificate must validate through the system's chain, name
+    /// included (<see cref="PublicCaTls"/>); no redirect is followed. Pinning plays no part — there is no pin.
+    /// </summary>
+    /// <param name="onCertificateRefused">Told the host:port of a node whose certificate was refused.</param>
+    /// <param name="anchors">Extra roots a test supplies; <c>null</c> (what every app passes) is the platform's trust alone.</param>
+    public static HttpClientHandler CreatePublicCaHandler(Action<string>? onCertificateRefused = null, TlsTrustAnchors? anchors = null) => new()
+    {
+        AllowAutoRedirect = false,
+        ServerCertificateCustomValidationCallback = (request, certificate, chain, errors) =>
+        {
+            var accepted = PublicCaTls.IsValid(certificate, chain, errors, anchors);
+            if (!accepted && request.RequestUri is { } uri) onCertificateRefused?.Invoke(uri.Authority);
+            return accepted;
+        }
+    };
 
     public static bool ValidateServerCertificate(
         HttpRequestMessage request,

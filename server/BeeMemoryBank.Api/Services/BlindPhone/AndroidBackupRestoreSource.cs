@@ -67,7 +67,8 @@ public sealed class AndroidBackupRestoreSource(
             // The node the phone calls becomes this device's first peer, dialed pinned as the pairing recorded it.
             return await restore.RestoreFromPackageAsync(parts.PackagePath, parts.Signature, seal.ProducerPublicKey, who,
                 new RestoreBlindPeer(seal.ProducerNodeId, "Listening node", seal.ProducerPublicKey, seal.ProducerAddress,
-                    CpSeq: 0, TlsSpki: seal.ProducerTlsSpki),
+                    CpSeq: 0, TlsSpki: string.IsNullOrEmpty(seal.ProducerTlsSpki) ? null : seal.ProducerTlsSpki,
+                    TlsTrust: seal.ProducerTrust),
                 events, ct, boxes);
         }
         finally

@@ -23,9 +23,28 @@ public static class JoinCommand
         string password,
         string displayName,
         bool allowInsecureHttp = false,
-        TextWriter? output = null)
+        TextWriter? output = null,
+        string? joinCode = null)
     {
         output ??= Console.Out;
+
+        // A join code from the other computer's Connect a device card (address, one-time token, certificate pin) replaces the
+        // address: the join goes only to the computer whose key the code pins, and /api/join carries the code's token.
+        JoinCode? code = null;
+        if (!string.IsNullOrWhiteSpace(joinCode))
+        {
+            if (!JoinCode.TryParse(joinCode, out code))
+            {
+                await output.WriteLineAsync($"Error: {JoinCode.NotValidMessage}");
+                return 2;
+            }
+            remoteUrl = code.Address;
+        }
+        else if (string.IsNullOrWhiteSpace(remoteUrl))
+        {
+            await output.WriteLineAsync("Error: give the other node's address (--remote) or the join code it shows (--code).");
+            return 2;
+        }
 
         // Reject plain http:// for non-loopback unless operator explicitly opts in.
         // Threat: a network attacker can MITM a plain-HTTP join, swap pubkeys in the
@@ -69,7 +88,9 @@ public static class JoinCommand
         await output.WriteLineAsync($"Connecting to {remoteUrl}...");
 
         // No redirects: the join carries the master password, and a 307/308 would resend it elsewhere.
-        using var http = JoinHttp.CreateClient();
+        // With a code, TLS completes only with the key the code pins (the other computer's certificate is from its own local
+        // authority, which nothing here trusts).
+        using var http = JoinHttp.CreateClient(code?.SpkiPin);
         http.Timeout = TimeSpan.FromSeconds(30);
         var joinRequest = new
         {
@@ -83,8 +104,17 @@ public static class JoinCommand
         HttpResponseMessage response;
         try
         {
-            response = await http.PostAsJsonAsync(
-                $"{remoteUrl.TrimEnd('/')}/api/join", joinRequest, JsonOptions);
+            using var joinMessage = new HttpRequestMessage(HttpMethod.Post, $"{remoteUrl.TrimEnd('/')}/api/join")
+            {
+                Content = JsonContent.Create(joinRequest, options: JsonOptions)
+            };
+            if (code?.Token != null) joinMessage.Headers.Add(JoinCode.TokenHeader, code.Token);
+            response = await http.SendAsync(joinMessage);
+        }
+        catch (HttpRequestException ex) when (code != null)
+        {
+            await output.WriteLineAsync($"Error: {JoinCode.DescribeConnectionFailure(ex)}");
+            return 1;
         }
         catch (Exception ex)
         {
@@ -95,7 +125,11 @@ public static class JoinCommand
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync();
-            await output.WriteLineAsync($"Error from remote node ({(int)response.StatusCode}): {errorBody}");
+            // Through a code the other computer is the pinned one, and its door says why in a sentence made for the person.
+            var doorSaid = code != null ? JoinCode.ReadDoorError(errorBody) : null;
+            await output.WriteLineAsync(doorSaid != null
+                ? $"Error from remote node ({(int)response.StatusCode}): {doorSaid}"
+                : $"Error from remote node ({(int)response.StatusCode}): {errorBody}");
             return 1;
         }
 
@@ -235,7 +269,9 @@ public static class JoinCommand
             UpdatedAt = now,
             // The host just proved it holds the master password by handing over a slot it opens,
             // and it records this node as a superadmin for the same reason (JoinAuthority, BMB-42).
-            IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId)
+            IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
+            // The key the code pinned is the key this node dials it by from now on (SpkiPinRegistry).
+            TlsSpki = code?.SpkiPin
         };
         await whitelistRepo.CreateAsync(remoteEntry);
 

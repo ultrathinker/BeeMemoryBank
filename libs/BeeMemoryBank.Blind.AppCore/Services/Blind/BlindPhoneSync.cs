@@ -13,7 +13,7 @@ public sealed class BlindPhoneSync(
     {
         try
         {
-            await client.SyncOnceAsync(http.GetClient(target.SpkiPin), target, ct);
+            await client.SyncOnceAsync(http.GetClient(target), target, ct);
         }
         catch (SnapshotRequiredException)
         {

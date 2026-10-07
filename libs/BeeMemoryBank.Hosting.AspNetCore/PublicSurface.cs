@@ -115,8 +115,12 @@ public static class PublicSurface
         // ── Remote accounts (read-only mirrors on someone else's node) ──────
         // Designed to be called BY another person's node using a bmbrt_ token it was issued, so
         // they cannot require the internal key either. Note that being listed here does not
-        // publish them: a reverse proxy still decides what it forwards, and the shipped
-        // configurations do not forward these.
+        // publish them: a reverse proxy still decides what it forwards. No shipped configuration
+        // forwards these by default; every recipe in docs/internet-access.md carries them as an
+        // OPTIONAL "guest accounts for other people" block that the owner has to add. Without it
+        // the owner's proxy answers 404/403/405 and the guest's node says so in words
+        // (RemoteAccountErrors.RoutesNotForwarded). The first route takes a user name and password
+        // and is rate-limited (RateLimitMiddleware); the other two need the token it issues.
         new("POST", "/api/auth/remote-token"),
         new("GET", "/api/folders/accessible"),
         new("GET", "/api/folders/by-path/snapshot"),

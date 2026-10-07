@@ -96,12 +96,12 @@ If you've ever wished your AI assistant could remember the work it did with you 
 | :dna: | **Emergent Semantic Graph** | Concept tags create automatic bidirectional links **through shared characteristics, not article-to-article pairs** — one tag connects a note to every article that shares it (topic, project, tech, status, year — any dimension you pick). No manual `[[wiki-links]]` to maintain, no dead-end pairs; add a tag and the graph rewires itself. D3.js force-directed graph with depth-controlled exploration; related articles ranked by shared-tag strength; semantic tag search via **ONNX multilingual-e5-small** (384-dim real ML embeddings, self-hosted, multilingual) |
 | :lock: | **E2E Encryption** | AES-256-GCM with per-article and per-image keys, Argon2id KDF (64 MB, 3 iterations), envelope encryption with 3-level key hierarchy |
 | :rotating_light: | **Online DEK Rotation** | Rotate the master encryption key without exporting/re-importing your vault. Single-transaction re-wrap of all article keys, automatic pre-rotation snapshot, peer-acceptance protocol so multi-node networks roll over together (auto-accept toggle per peer). Lazy slot rewrap migrates each user's password slot transparently on next login |
-| :floppy_disk: | **Snapshot & Restore** | One-click encrypted snapshots (full DB + media), upload to restore on any node, network-wide restore propagates via signed sync event with per-peer auto-accept toggle. Pre-rotation backups created automatically before destructive operations |
+| :floppy_disk: | **Snapshot & Restore** | One-click encrypted snapshots (full DB + media), upload to restore on any node of the same vault (a node that shares the master key; a different vault cannot open it). Two kinds of restore, chosen in the dialog: **this node only** (the default — the node leaves the network and becomes a *new* node: new identity, it forgets its trusted nodes, blind copies and sync history, and your other devices must be joined to it again) or **the whole network** (propagates via a signed sync event with a per-peer auto-accept toggle; every node keeps its identity). See [docs/snapshot-restore.md](docs/snapshot-restore.md). Pre-rotation backups created automatically before destructive operations |
 | :arrows_counterclockwise: | **Multi-Node Sync** | Event sourcing, Lamport clocks, Ed25519-signed events, near-realtime push-on-save sync between public nodes, works behind NAT |
 | :framed_picture: | **Encrypted Images** | Drag & drop, paste, or upload images in the editor — encrypted with per-image keys, decrypted on the fly |
 | :globe_with_meridians: | **Web UI** | Dark theme, Markdown editor (EasyMDE), folder tree, tag management, activity feed |
 | :iphone: | **Mobile App** | .NET MAUI, biometric unlock, offline-first — **Android available now; iOS coming** |
-| :keyboard: | **CLI** | `bmb` command-line tool for init, join, unlock, article management, snapshots |
+| :keyboard: | **CLI** | `bmb` command-line tool for init, join, unlock, article management, snapshots, `user reset-password` |
 | :jigsaw: | **REST API** | 33 endpoint groups, OpenAPI support, agent bearer auth with auto-unlock |
 | :file_zip: | **Data Export** | Download folders or articles as ZIP archives with all attached images |
 | :wastebasket: | **Hard Delete** | Superadmin-only permanent purge of articles/folders and their media, propagated to every synced node (no recovery) |
@@ -207,7 +207,7 @@ Agent runs: python bmb-upload.py --url https://your-server.example.com --bearer 
 The Desktop app can keep several completely separate memory banks side by side, called profiles.
 
 * **What is a profile?** Each profile is an independent vault with its own password, keys, articles and media, in its own data folder. Think of a "Personal" and a "Work" profile that never share anything. (The desktop app's own settings and the list of profiles — `desktop-settings.json` and `profiles.json` — live at the shared data root rather than inside any one vault; see [docs/deployment.md](docs/deployment.md).)
-* **Creating or adding one:** right-click the tray icon → **Profiles** → **New profile...**, or **Add existing profile...** to use a folder that already holds a vault.
+* **Creating or adding one:** right-click the tray icon → **Profiles** → **New profile...**, or **Add existing profile...** to use a folder that already holds a vault (on a Mac it is the menu-bar icon). The first-run welcome screen of the desktop apps has the same thing as an **Open an existing profile** card; a browser and Docker do not show it, because there is no folder picker on the node: with Docker, mount the folder as the data directory instead (`BMB_DATA_PATH`).
 * **Switching:** pick a profile in the same submenu. The app stops the current profile's backend, clears the window's session and starts the other one in a few seconds.
 * **Managing:** **Manage profiles...** renames a profile, moves its data to another folder, or "forgets" it. Forgetting only removes the profile from the list — its files are **never deleted from the disk**.
 
@@ -226,16 +226,18 @@ cd BeeMemoryBank
 mkdir -p data
 curl -L -o data/model.onnx "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx"
 
-# 3. Build and start (API on :5300, Web UI on :5301)
+# 3. Build and start (Web UI on :5301, this computer only)
 docker compose up -d --build
 
-# 4. Check health
-curl -f http://localhost:5300/health
+# 4. Check health (from inside the container: the API port is not published on the host)
+docker compose exec bmb curl -f http://localhost:5300/health
 ```
 
 Open `http://localhost:5301` in your browser and log in with your master password.
 
 Data is stored in `./data` on the host (including `model.onnx`). To customize ports, copy `.env.example` to `.env` and edit as needed.
+
+Docker publishes the Web port on `127.0.0.1` only, so the login page is reachable from this computer and nobody else. To expose it on purpose (a trusted LAN, behind TLS), set `BMB_WEB_BIND=0.0.0.0` in `.env`. The API port (5300, which also serves `/mcp` for AI assistants) is not published at all. To let AI assistants on this computer reach the node, uncomment the two marked lines in `docker-compose.yml`; for assistants on other computers use `docker-compose.reverse-proxy.yml` behind your own proxy. Until then the Profile page tells you that assistants cannot reach the node yet, rather than printing an address that does not work. Details: [docs/deployment.md](docs/deployment.md).
 
 ### macOS app, blind-copy apps and the Android blind app
 
@@ -251,6 +253,11 @@ Every release page also carries these downloads:
 A blind copy is paired with a node in two steps shown in its window: it shows a code, the node (the full app or the web page "Blind nodes")
 answers with a call code, and you paste that back. The first load starts right after pairing and does not wait for the charger or a particular network.
 Where each app keeps its data and what it sends over the network: [PRIVACY.md](PRIVACY.md).
+
+The node a blind copy calls can be a Docker blind node or an ordinary full node — for example your server behind a
+reverse proxy with a Let's Encrypt certificate. Mark it under Admin → Trusted Nodes → "Let blind copies call this node"
+(a normal or a pinned certificate) and forward `/api/blind/replica` as well; see
+[docs/internet-access.md](docs/internet-access.md#let-blind-copies-call-this-node).
 
 ### Windows Desktop App and Service (native, no NSSM needed)
 
@@ -272,6 +279,13 @@ It checks for updates on its own and offers "Restart to update" when a new relea
 **Check for updates...** in the tray checks right away and shows the progress. Data
 is kept in `%LOCALAPPDATA%\BeeMemoryBankData` and survives updates and uninstall.
 
+The app answers this computer only. To let other devices on your own network in, open **Admin → Nodes**:
+**Devices on my network** (off by default) serves the node over HTTPS on port 5311 and announces it on the
+network, so another computer can find it and a phone can open it; **Connect a device** opens a 15-minute
+door and shows a join code that a phone, or another computer's first-run page, pastes to join without
+trusting any certificate first. The Mac app has the same two. Details and what they expose:
+[docs/internet-access.md](docs/internet-access.md).
+
 To build the installer yourself (requires the [.NET 10 SDK](https://dotnet.microsoft.com/download)
 and `dotnet tool install -g vpk`):
 ```powershell
@@ -291,7 +305,7 @@ dotnet tool install --global wix --version 5.0.2
 msiexec /i installers\windows\msi\bin\x64\Release\BeeMemoryBank.ServerService.msi
 ```
 Data lives in `C:\ProgramData\BeeMemoryBank`; the service survives logoff/reboot. Check it with
-`Get-Service bmbd`. To also open the Windows Firewall for LAN access, select the "Configure
+`Get-Service bmbd`; restart it with `Restart-Service bmbd` (an elevated PowerShell). To also open the Windows Firewall for LAN access, select the "Configure
 Windows Firewall Exception" feature during install (e.g. `msiexec /i ... ADDLOCAL=ALL`).
 Uninstall via **Settings → Apps** or `msiexec /x installers\windows\msi\bin\x64\Release\BeeMemoryBank.ServerService.msi`
 (data in `ProgramData` is left in place).
@@ -580,6 +594,7 @@ In Development mode `BMB_INTERNAL_KEY` is not required — both processes auto-g
 3. **AI agent token** (optional): Admin → Agents → Create. Copy the bearer token (shown **once**).
 4. **MCP in your AI client** (Claude Code / Cursor / Windsurf): add `bee-memory-bank` with `Authorization: Bearer bee_xxxxx`.
 5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --password "MasterP" --name "OtherNode" --data ./data`. The new node downloads a signed encrypted snapshot, verifies it, and joins the sync mesh.
+6. **Keep a recovery key** (recommended): Admin → Security → **Issue new recovery key**, and store it offline. If the administrator password is ever forgotten, the Sign In page's **Forgot your password? Use a recovery key** sets a new one (or `bmb user reset-password --user NAME --recovery-key-stdin`). See [docs/account-recovery.md](docs/account-recovery.md).
 
 #### HTTPS Reverse Proxy
 
@@ -610,6 +625,10 @@ server {
 }
 ```
 Then `sudo certbot --nginx -d bee.example.com`.
+
+Both examples forward the web UI only. For AI assistants (`/mcp`), node-to-node sync and the optional guest
+accounts for other people (off unless you add them), use the path split in
+[docs/internet-access.md](docs/internet-access.md).
 
 **Tell the node whose `X-Forwarded-For` to believe.** Without this the node sees the *proxy* as the
 client for every request, so all your users share a single rate-limit bucket: one person fumbling
@@ -643,7 +662,7 @@ automatic certificates, Cloudflare Tunnel or Tailscale instead of an open port)?
 | Docker | `git pull && docker compose up -d --build` |
 | Linux/systemd | `git pull` → `dotnet publish ...` → `sudo systemctl restart beememorybank-api beememorybank-web` |
 | macOS/launchd | `git pull` → `dotnet publish ...` → `launchctl kickstart -k gui/$(id -u)/com.beememorybank.api` (and `.web`) |
-| Windows/NSSM | `git pull` → `dotnet publish ...` → `nssm restart BeeMemoryBankApi BeeMemoryBankWeb` |
+| Windows/NSSM | `git pull` → `dotnet publish ...` → `nssm stop BeeMemoryBankWeb` → `nssm restart BeeMemoryBankApi` → `nssm start BeeMemoryBankWeb` (`nssm restart` takes one service name; Web depends on Api, so it goes down first and comes up last) |
 | Windows Desktop | Automatic: the tray offers "Restart to update" when a release is out (or Tray icon → Check for updates...) |
 | Windows Server (MSI) | `git pull` → `.\scripts\pack-windows-msi.ps1` → `msiexec /i ...` (the stable `UpgradeCode` lets it upgrade in place; data in `ProgramData` is preserved) |
 
@@ -670,6 +689,10 @@ To add a second node (e.g., a VPS) to sync with your first:
 ```bash
 ./publish/cli/bmb join --remote https://first-node.example.com --password "your-master-password" --name "VPS-Node" --data /var/lib/beememorybank
 ```
+
+For a computer on your own network, use the join code that the other computer shows under **Admin → Nodes → Connect a device**
+instead of an address: `bmb join --code "bmb-join:?a=..." --password "your-master-password" --name "Laptop" --data ...`. The code
+carries the address, a one-time token and the pin of that computer's certificate, so nothing has to be trusted first.
 
 ---
 

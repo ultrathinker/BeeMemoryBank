@@ -114,7 +114,8 @@ public class EventLogger(
             ApiAddress: entry.ApiAddress,
             CanGenerateEmbeddings: entry.CanGenerateEmbeddings,
             IsSuperadmin: entry.IsSuperadmin,
-            TlsSpki: entry.TlsSpki);
+            TlsSpki: entry.TlsSpki,
+            TlsTrust: entry.TlsTrust);
 
         await AppendEventAsync(identity, EventTypes.WhitelistAdd, null, lamportTs,
             JsonSerializer.Serialize(payload));
@@ -136,13 +137,13 @@ public class EventLogger(
         return new RowVersion(lamportTs, identity.NodeId);
     }
 
-    public async Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null)
+    public async Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
 
         var lamportTs = clock.Tick();
-        var payload = new WhitelistUpdatePayload(NodeId: nodeId, ApiAddress: apiAddress, DisplayName: displayName, IsSuperadmin: isSuperadmin, TlsSpki: tlsSpki);
+        var payload = new WhitelistUpdatePayload(NodeId: nodeId, ApiAddress: apiAddress, DisplayName: displayName, IsSuperadmin: isSuperadmin, TlsSpki: tlsSpki, TlsTrust: tlsTrust);
 
         await AppendEventAsync(identity, EventTypes.WhitelistUpdate, null, lamportTs,
             JsonSerializer.Serialize(payload));

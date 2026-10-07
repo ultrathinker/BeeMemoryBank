@@ -43,7 +43,10 @@ root.AddCommand(initCmd);
 
 // ─── bmb join ──────────────────────────────────────────────────────────────
 
-var joinRemoteOpt = new Option<string>("--remote", "Remote node URL (e.g. https://bmb.example.com)") { IsRequired = true };
+var joinRemoteOpt = new Option<string>("--remote", "Remote node URL (e.g. https://bmb.example.com). Not needed with --code.");
+var joinCodeOpt = new Option<string?>("--code",
+    "The join code another computer shows under Admin > Connect a device (bmb-join:?a=...). It carries the address, a one-time " +
+    "token and the pin of that computer's certificate: the join goes only to the computer it belongs to. Replaces --remote.");
 var joinPasswordOpt = new Option<string>("--password", "Network master password") { IsRequired = true };
 var joinNameOpt = new Option<string>("--name", "Name of this node") { IsRequired = true };
 var joinAllowInsecureOpt = new Option<bool>("--allow-insecure-http",
@@ -52,13 +55,14 @@ var joinAllowInsecureOpt = new Option<bool>("--allow-insecure-http",
 
 var joinCmd = new Command("join", "Join a node to an existing BeeMemoryBank network");
 joinCmd.AddOption(joinRemoteOpt);
+joinCmd.AddOption(joinCodeOpt);
 joinCmd.AddOption(joinPasswordOpt);
 joinCmd.AddOption(joinNameOpt);
 joinCmd.AddOption(joinAllowInsecureOpt);
-joinCmd.SetHandler(async (data, remote, password, name, allowInsecure) =>
+joinCmd.SetHandler(async (data, remote, password, name, allowInsecure, code) =>
 {
-    Environment.Exit(await JoinCommand.HandleAsync(data, remote, password, name, allowInsecure));
-}, dataOption, joinRemoteOpt, joinPasswordOpt, joinNameOpt, joinAllowInsecureOpt);
+    Environment.Exit(await JoinCommand.HandleAsync(data, remote ?? "", password, name, allowInsecure, joinCode: code));
+}, dataOption, joinRemoteOpt, joinPasswordOpt, joinNameOpt, joinAllowInsecureOpt, joinCodeOpt);
 root.AddCommand(joinCmd);
 
 // ─── bmb status ─────────────────────────────────────────────────────────────
@@ -182,7 +186,7 @@ snapshotListCmd.SetHandler(async (data) =>
 snapshotCmd.AddCommand(snapshotListCmd);
 
 var fileIdArg = new Argument<string>("file-id-or-name", "File name or ID");
-var snapshotRestoreNetworkCmd = new Command("restore-network", "Restore a snapshot across the network");
+var snapshotRestoreNetworkCmd = new Command("restore-network", "Restore a snapshot from this vault across the network; a different vault cannot be opened by any password");
 snapshotRestoreNetworkCmd.AddArgument(fileIdArg);
 snapshotRestoreNetworkCmd.SetHandler(async (data, fileId) =>
 {
@@ -191,7 +195,7 @@ snapshotRestoreNetworkCmd.SetHandler(async (data, fileId) =>
 snapshotCmd.AddCommand(snapshotRestoreNetworkCmd);
 
 var fileArg = new Argument<string>("file-name", "Path or name of snapshot file");
-var snapshotRestoreStandaloneCmd = new Command("restore-standalone", "Restore a snapshot locally and wipe network identity");
+var snapshotRestoreStandaloneCmd = new Command("restore-standalone", "Restore a snapshot from this vault locally and wipe network identity; a different vault cannot be opened by any password");
 snapshotRestoreStandaloneCmd.AddArgument(fileArg);
 snapshotRestoreStandaloneCmd.SetHandler(async (data, fileName) =>
 {
@@ -257,6 +261,26 @@ restoreCmd.AddCommand(restoreStatusCmd);
 root.AddCommand(restoreCmd);
 
 // ────────────────────────────────────────────────────────────────────────────
+
+// ─── bmb user ───────────────────────────────────────────────────────────────
+
+// bmb user reset-password: "Forgot your password? Use a recovery key" from the host's command line.
+// Secrets are never arguments: stdin (--recovery-key-stdin: line 1 the key, line 2 the new password) or a
+// terminal prompt with no echo.
+var userNameOpt = new Option<string>("--user", "Username of the superadmin whose password to reset") { IsRequired = true };
+var recoveryKeyStdinOpt = new Option<bool>("--recovery-key-stdin",
+    "Read the recovery key (line 1) and the new password (line 2) from stdin instead of asking on the terminal");
+var userResetPasswordCmd = new Command("reset-password", "Set a new password for a superadmin, proving it with a recovery key");
+userResetPasswordCmd.AddOption(userNameOpt);
+userResetPasswordCmd.AddOption(recoveryKeyStdinOpt);
+userResetPasswordCmd.SetHandler(async (data, user, keyStdin) =>
+{
+    Environment.Exit(await UserCommand.HandleResetPasswordAsync(data, user, keyStdin));
+}, dataOption, userNameOpt, recoveryKeyStdinOpt);
+
+var userCmd = new Command("user", "User management");
+userCmd.AddCommand(userResetPasswordCmd);
+root.AddCommand(userCmd);
 
 // ─── bmb rekey ──────────────────────────────────────────────────────────────
 

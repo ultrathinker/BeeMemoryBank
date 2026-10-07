@@ -32,6 +32,10 @@ public sealed class BmbWebHostFactory : WebApplicationFactory<BmbWebProgram>
         Path.Combine(Path.GetTempPath(), "bmb_web_integration_" + Guid.NewGuid().ToString("N"));
 
     private HttpMessageHandler? _outboundHandler;
+    private readonly Dictionary<string, string> _settings = [];
+
+    /// <summary>A host setting (what an environment variable is to a real node), applied when the host is first built.</summary>
+    public void WithSetting(string key, string value) => _settings[key] = value;
 
     /// <summary>Same contract as the API factory: call before the host is first built.</summary>
     public void RouteOutboundHttpThrough(HttpMessageHandler handler) => _outboundHandler = handler;
@@ -48,6 +52,8 @@ public sealed class BmbWebHostFactory : WebApplicationFactory<BmbWebProgram>
         // Any absolute URI works — the routed handler ignores host and port. The value only has
         // to parse, so the ApiClient's BaseAddress assignment succeeds at startup.
         builder.UseSetting("BeeMemoryBank:ApiBaseUrl", "http://localhost:5300");
+
+        foreach (var (key, value) in _settings) builder.UseSetting(key, value);
 
         Environment.SetEnvironmentVariable("BMB_INTERNAL_KEY", BmbWebApplicationFactory.InternalKeyForTests);
 

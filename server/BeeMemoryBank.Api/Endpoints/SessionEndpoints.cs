@@ -12,6 +12,9 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static class SessionEndpoints
 {
+    /// <summary>The one answer to every refused recovery-key reset; the Web page shows it verbatim.</summary>
+    internal const string RecoverAccessRefusal = "The username or the recovery key is not correct.";
+
     public static void MapSessionEndpoints(this WebApplication app)
     {
         // Clear any cached protected-article passphrases the instant the vault
@@ -38,7 +41,8 @@ public static class SessionEndpoints
             return Results.Ok(new UnlockResponse(true, migratedSynthetic));
         }).RequireNonAgent().WithMetadata(new SkipInternalKey());
 
-        group.MapPost("/login", async (LoginRequest req, SessionService session, UserService userService, IUserRepository userRepo, RecoveryTriggers recovery) =>
+        group.MapPost("/login", async (LoginRequest req, SessionService session, UserService userService, IUserRepository userRepo, RecoveryTriggers recovery,
+            RecoveryAccessState recoveryAccess, IWhitelistRepository whitelistRepo, IEventLogger eventLogger) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.Json(new ErrorResponse("Username and password are required"), statusCode: 400);
@@ -90,6 +94,15 @@ public static class SessionEndpoints
                 // which case the next login retries.
                 if (isUnlocked)
                 {
+                    // A password reset with a recovery key done while the vault was locked could not
+                    // be announced to the mesh then (the event is signed with a key under the master
+                    // key). Now the vault is open and this very sign-in proves the new password.
+                    if (recoveryAccess.TakePendingAnnouncement() is { } pendingChange)
+                    {
+                        if (!await RecoveryAccessState.TryAnnounceAsync(pendingChange, session, whitelistRepo, eventLogger))
+                            recoveryAccess.MarkAnnouncementPending(pendingChange);
+                    }
+
                     await userService.ProvisionMissingKeySlotAsync(user, req.Password);
                     // The password is in memory: strong recovery box for the current key if this
                     // node has none, then cleanup of covered device boxes (plan 6.3). Background.
@@ -110,6 +123,82 @@ public static class SessionEndpoints
 
             return Results.Ok(new LoginResponse(user.Id, user.Username, user.DisplayName, user.Role, isUnlocked, migratedSynthetic, user.SecurityStamp));
         }).WithMetadata(new SkipInternalKey());
+
+        // POST /api/session/recover-access - "Forgot your password? Use a recovery key". The one way
+        // back into a node whose only superadmin has forgotten the password: the Sign In page cannot
+        // take a recovery key, and changing a password needs the old one or another superadmin.
+        //
+        // Called by the Web layer's /RecoverAccess page, never by a browser directly: unlike /login and
+        // /unlock it does NOT skip the internal-key check, and it is not in PublicSurface, so a caller
+        // without the key gets a 404 - this is a credential-guessing surface that has no business being
+        // published. Anonymous from the user's point of view all the same (nobody is signed in), which
+        // is why the throttle (RecoveryAccessState) and the "one generic refusal" rule matter:
+        //   - every way of saying no (unknown name, deactivated user, not a superadmin, wrong key, a
+        //     key from another node) is the same 401 with the same words, after the same Argon2id work;
+        //   - it signs nobody in and leaves the vault exactly as locked or unlocked as it found it
+        //     (UserService.ResetPasswordWithRecoveryKeyAsync never touches the session).
+        group.MapPost("/recover-access", async (
+            RecoverAccessRequest req,
+            UserService userService,
+            SessionService session,
+            RecoveryAccessState recoveryAccess,
+            IAuditLogRepository auditRepo,
+            INodeIdentityRepository nodeRepo,
+            IWhitelistRepository whitelistRepo,
+            IEventLogger eventLogger,
+            ILoggerFactory loggerFactory) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.RecoveryKey)
+                || string.IsNullOrWhiteSpace(req.NewPassword))
+                return Results.Json(new ErrorResponse("Username, recovery key and new password are required"), statusCode: 400);
+
+            // The password rules say nothing about the key or the account, so this answer is the same
+            // for every caller - and a typo in the new password does not spend an attempt.
+            try { UserService.ValidatePassword(req.NewPassword); }
+            catch (ArgumentException ex) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 400); }
+
+            var ip = RecoveryAccessState.NormalizeClientIp(req.ClientIp);
+            if (!recoveryAccess.TryAcquire(ip, req.Username))
+                return Results.Json(new ErrorResponse("Too many attempts. Try again later."), statusCode: 429);
+
+            RecoveryResetResult result;
+            try
+            {
+                result = await userService.ResetPasswordWithRecoveryKeyAsync(req.Username, req.RecoveryKey, req.NewPassword);
+            }
+            catch (System.Security.SecurityException ex)
+            {
+                // A recovery slot with tampered KDF parameters is refused by the unlock too. Say no
+                // like every other refusal; the operator reads the reason in the log (no secrets in it).
+                loggerFactory.CreateLogger("BeeMemoryBank.Api.Endpoints.SessionEndpoints")
+                    .LogWarning("Recovery-key password reset refused: {Reason}", ex.Message);
+                result = new RecoveryResetResult(RecoveryResetOutcome.WrongKey, null);
+            }
+
+            if (!result.Succeeded)
+            {
+                // Audit what the caller is not told, and never what they typed: no key, no password, and
+                // no username that does not belong to an account.
+                await auditRepo.LogAsync("user", result.UserId?.ToString() ?? "-", "user_password_recovery_refused", "web",
+                    $"Password reset with a recovery key refused from {ip} ({(result.Outcome == RecoveryResetOutcome.WrongKey ? "key" : "account")})");
+                return Results.Json(new ErrorResponse(RecoverAccessRefusal), statusCode: 401);
+            }
+
+            await auditRepo.LogAsync("user", result.UserId!.Value.ToString(), "user_password_recovery_reset", "web",
+                $"Password reset with a recovery key for user #{result.UserId} from {ip}");
+
+            // This node's own password changed, whoever typed it: the same bookkeeping as the Admin ->
+            // Security card. The peers' key slots are their own, so tell them (when the vault is
+            // open - the event is signed under the master key; see RecoveryAccessState).
+            await nodeRepo.ClearMasterPasswordNoticeAsync();
+            var changedAt = DateTime.UtcNow;
+            await nodeRepo.SetMasterPasswordChangedLocallyAtAsync(changedAt);
+            if (!await RecoveryAccessState.TryAnnounceAsync(changedAt, session, whitelistRepo, eventLogger))
+                recoveryAccess.MarkAnnouncementPending(changedAt);
+
+            recoveryAccess.Reset(ip, req.Username);
+            return Results.Ok(new RecoverAccessResponse(true));
+        }).RequireNonAgent();
 
         group.MapPost("/lock", (SessionService session) =>
         {

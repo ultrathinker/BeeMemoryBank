@@ -166,11 +166,18 @@ public class LanControlTests : IAsyncLifetime
     {
         private bool _rule;
         public int ConsentPrompts { get; private set; }
+        public bool CanManage { get; init; } = true;
         public bool RuleExists(int port) => _rule;
         public Task<bool> AddWithConsentAsync(int port)
         {
             ConsentPrompts++;
             _rule = true;
+            return Task.FromResult(true);
+        }
+        public Task<bool> RemoveWithConsentAsync(int port)
+        {
+            ConsentPrompts++;
+            _rule = false;
             return Task.FromResult(true);
         }
     }

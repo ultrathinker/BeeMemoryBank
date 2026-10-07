@@ -228,8 +228,8 @@ Agents, users, and folder ACL entries are node-local — they are created on the
 | `article_create` | title, treePath, tags (deprecated, empty), conceptTags, ciphertext, encrypted_dek, iv, dek_iv, timestamps | Yes |
 | `article_update` | same (full replacement, not diff) | Yes |
 | `article_delete` | deleted_at | Yes |
-| `whitelist_add` | nodeId, displayName, publicKeyB64, apiAddress, canGenerateEmbeddings, **isSuperadmin** | Yes |
-| `whitelist_update` | nodeId, displayName, apiAddress, canGenerateEmbeddings | Yes |
+| `whitelist_add` | nodeId, displayName, publicKeyB64, apiAddress, canGenerateEmbeddings, **isSuperadmin**, tls_spki, tls_trust | Yes |
+| `whitelist_update` | nodeId, displayName, apiAddress, canGenerateEmbeddings, isSuperadmin, tls_spki, tls_trust | Yes |
 | `whitelist_revoke` | nodeId | Yes |
 | `comment_create` | commentId, articleId, text, createdAt | Yes |
 | `comment_delete` | commentId | Yes |
@@ -244,9 +244,20 @@ Agents, users, and folder ACL entries are node-local — they are created on the
 | `concept_tag_delete` | name | Yes |
 | `hard_delete` | entityType ("article"/"folder"), entityIdentifier (articleId or folder path), occurredAt | Yes |
 | `snapshot_checkpoint` | cp_seq, events_removed, snapshot_file_name, snapshot_sha256, prev_checkpoint_sha256, produced_at | Yes |
-| `restore_network` | snapshot_file_name, sha256, originator_node_id, base_cp_seq, restored_at | Yes |
+| `restore_network` | snapshot_hash, restore_point_ts, file_size_bytes, expires_at, source_url, filter_secrets | Yes |
 | `dek_rotation_proposed` | encrypted_new_dek, iv, new_dek_epoch, rotation_ts, expires_at, originator_node_id | Yes |
 | `dek_rotation_commit` | proposed_event_id, encrypted_new_dek, iv, new_dek_epoch, rotation_ts, originator_node_id | Yes |
+
+**Callable nodes (`tls_spki`, `tls_trust`).** A blind copy calls a node the whitelist says it may call, and how it trusts that
+node's TLS endpoint travels with the row ([ADR 0007](adr/0007-blind-copies-call-a-full-node.md)). `tls_trust` is `pin` (the
+node's key is `tls_spki`: a Docker blind node, or a full node with a certificate of its own) or `public-ca` (no pin: the system's
+certificate chain must vouch for the https address, as for a Let's Encrypt certificate behind a reverse proxy); on an update
+`none` takes the mode and the pin away, and an absent `tls_trust` changes nothing. Both fields are optional and **sync protocol 3 is
+unchanged**: an older node ignores `tls_trust` and applies `tls_spki` as it always did, which is why an update that stops pinning
+also sends `tls_spki: ""` — the older node then drops the stale pin instead of failing every sync after a certificate renewal. A
+node that does not know the mode never lists the row for pairing. `public-ca` never keeps a pin, and a mode a build does not know
+is kept on the row as written, with no pin: the row is not callable there and is never read as `pin` (only an event with no `tls_trust`
+at all is read the old way, as a plain pin). Like every whitelist change it needs a superadmin originator and loses to a newer version of the row.
 
 **Important:** `article_update` sends the full ciphertext (not a diff). This is simpler and safer — diffs on encrypted data are meaningless.
 
@@ -450,21 +461,26 @@ projection across all peers with the same master DEK).
 
 ## Network-Wide Snapshot Restore
 
-When a superadmin restores from a snapshot in network-mode, the snapshot is broadcast to every whitelisted peer through a `restore_network` sync event. Peers either auto-apply or queue for manual review — the same peer-acceptance pattern later reused for DEK rotation.
+A network restore can use only a snapshot from this vault: this node's own snapshot, or one from another node in the same network that shares its master key. A snapshot from a different vault cannot be opened, whichever password is entered.
 
-**Initiator flow (`POST /api/snapshots/restore` with `mode=network`):**
+When a superadmin restores from a snapshot in network-mode, the snapshot is broadcast to every whitelisted peer through a `restore_network` sync event. Peers apply it unattended when auto-accept is on for the originator — the same peer-acceptance pattern later reused for DEK rotation. This is the "whole network" option of the Admin restore dialog; the other option, "this node only", is not a sync event at all: the node leaves the network and becomes a new node (new node id and key pair, empty `tbl_whitelist`, sync positions and event log) — see [snapshot-restore.md](snapshot-restore.md). The originator of a network restore keeps its identity.
 
-1. Verify master password, validate the local snapshot file (size + sha256).
-2. Apply the snapshot to the local DB (drops the same set of tables documented under "Initial Join", restores from the `.tar.gz`).
-3. Emit a `restore_network` event signed with the initiator's Ed25519 key. Payload includes `snapshot_file_name`, `sha256`, `originator_node_id`, `base_cp_seq`, `restored_at`.
-4. The snapshot file itself stays on the initiator at `data/snapshots/{file}` and is exposed at `/api/snapshots/restore/{eventId}/file` for peers to pull. Distributed-seeding endpoints (`/api/sync/challenge`, `/api/sync/authenticate`, the snapshot file download) are explicitly allowlisted in `MaintenanceMiddleware` so peers can authenticate and download even while the initiator is in maintenance mode.
+**Initiator flow (`POST /api/snapshots/restore-network`, `bmb snapshot restore-network`, or the Admin dialog's "Restore the whole network"):**
+
+1. Superadmin only (never an agent key), vault unlocked. The Admin page also sends the master password, which is re-checked. The snapshot is named by file name (a snapshot this node made) or by id (an uploaded one).
+2. Build a filtered copy of the snapshot — the identity, key slots, users and sync state are stripped — in `snapshots/restore-pending/{eventId}.bin`, and take its sha256.
+3. Emit a `restore_network` event signed with the initiator's Ed25519 key. Payload includes the sha256, `restore_point_ts`, the file size, an expiry 30 days out and the source URL.
+4. In the background the initiator takes a safety backup and applies the filtered copy to itself (the replicated tables only: users, key slots and the identity stay). The copy stays on the initiator and is exposed at `/api/snapshots/restore/{eventId}/file` for peers to pull. Distributed-seeding endpoints (`/api/sync/challenge`, `/api/sync/authenticate`, the snapshot file download) are explicitly allowlisted in `MaintenanceMiddleware` so peers can authenticate and download even while the initiator is in maintenance mode.
+
+The start is written to the audit log (`snapshot_restore_started`, `Mode=network`).
 
 **Peer flow (`EventApplier.ApplyRestoreNetworkAsync`):**
 
 1. On receiving the `restore_network` event, look up the originator's `tbl_whitelist.auto_accept_restore` flag.
 2. **Auto-accept = true** → enter maintenance mode, fetch the snapshot file from the originator, verify sha256 + Ed25519 signature, apply locally. Set `tbl_restore_event_state.state = Applied`. Set a replay-shield in `tbl_restore_replay_shield` so any pre-restore events from the originator that arrive late are silently dropped (they would otherwise be zombie state from the pre-restore world).
-3. **Auto-accept = false** → write `tbl_restore_event_state.state = Pending` and surface a banner in the peer's Admin UI with `Apply` / `Reject` buttons. The admin makes the call.
-4. **Reject** → `state = Cancelled`. The peer disconnects from the network for the originator's events going forward (incoming events from that peer would belong to a divergent timeline). To rejoin, the admin must wipe and re-join.
+3. **Auto-accept = false** → write `tbl_restore_event_state.state = Pending`. The restore is **not** applied; there is no Apply button in the Admin UI. Switching auto-accept on for the originator makes the peer pick the pending event up the next time it syncs or is unlocked (`RetryPendingRestoresAsync`).
+   There is no UI prompt, notification, or manual approval path while it is pending.
+4. **Cancel** (`POST /api/snapshots/restore/cancel`) → `state = Cancelled`; the pending download is dropped.
 
 **Crash recovery:** the startup sweep in `Program.cs` flips any `tbl_restore_event_state.state` row stuck in `Downloading` or `Applying` to `Failed` so the admin sees a clear "needs decision" indicator instead of a phantom in-progress restore. Network-wide restore also writes media files into `data/media/` BEFORE the SQL commit; orphan `*.enc` files from a crashed run get reconciled at startup.
 

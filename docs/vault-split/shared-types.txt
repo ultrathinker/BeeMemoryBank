@@ -162,6 +162,7 @@ BeeMemoryBank.Core BeeMemoryBank.Core.Models.Article
 BeeMemoryBank.Core BeeMemoryBank.Core.Models.BlindCallCode
 BeeMemoryBank.Core BeeMemoryBank.Core.Models.BlindNodeId
 BeeMemoryBank.Core BeeMemoryBank.Core.Models.BlindPhoneCode
+BeeMemoryBank.Core BeeMemoryBank.Core.Models.BlindTrust
 BeeMemoryBank.Core BeeMemoryBank.Core.Models.CodeText
 BeeMemoryBank.Core BeeMemoryBank.Core.Models.Comment
 BeeMemoryBank.Core BeeMemoryBank.Core.Models.ConceptGraphEdge
@@ -246,11 +247,13 @@ BeeMemoryBank.Crypto BeeMemoryBank.Crypto.KeyDerivation
 BeeMemoryBank.Crypto BeeMemoryBank.Crypto.KeyDerivation+SaturationRelease
 BeeMemoryBank.Crypto BeeMemoryBank.Crypto.KeyDerivation+UnitsRelease
 BeeMemoryBank.Crypto BeeMemoryBank.Crypto.NodeIdentityCrypto
+BeeMemoryBank.Crypto BeeMemoryBank.Crypto.PublicCaTls
 BeeMemoryBank.Crypto BeeMemoryBank.Crypto.RecoveryBoxKdf
 BeeMemoryBank.Crypto BeeMemoryBank.Crypto.RecoveryBoxPreset
 BeeMemoryBank.Crypto BeeMemoryBank.Crypto.RedirectRefusingHandler
 BeeMemoryBank.Crypto BeeMemoryBank.Crypto.SecureRandom
 BeeMemoryBank.Crypto BeeMemoryBank.Crypto.SpkiPin
+BeeMemoryBank.Crypto BeeMemoryBank.Crypto.TlsTrustAnchors
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Interop.CF
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Interop.CfScope
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Interop.NativeLibraries

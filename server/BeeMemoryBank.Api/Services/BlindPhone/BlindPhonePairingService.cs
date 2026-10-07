@@ -7,8 +7,11 @@ using BeeMemoryBank.Sync.Recovery;
 
 namespace BeeMemoryBank.Api.Services.BlindPhone;
 
-/// <summary>A node an Android blind node can call: it listens on https and the network knows its TLS pin.</summary>
-public sealed record BlindPhoneListener(Guid NodeId, string DisplayName, string Address, bool IsBlind);
+/// <summary>
+/// A node an Android blind node can call: it listens on https and the network knows how to trust its TLS endpoint
+/// (<paramref name="Trust"/>: <c>pin</c>, or <c>public-ca</c> for a hub behind a real certificate).
+/// </summary>
+public sealed record BlindPhoneListener(Guid NodeId, string DisplayName, string Address, bool IsBlind, string Trust = BlindTrust.Pin);
 
 /// <summary>What Windows shows the phone after pairing: the "where to call" code.</summary>
 public sealed record BlindPhonePaired(Guid PhoneId, string DisplayName, string CallCode, Guid ListenerId);
@@ -37,7 +40,7 @@ public sealed class BlindPhonePairingService(
         using var scope = scopeFactory.CreateScope();
         var rows = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetAllActiveAsync();
         return rows.Where(CanBeCalled)
-            .Select(r => new BlindPhoneListener(r.NodeId, r.DisplayName, r.ApiAddress!, BlindNodeId.IsBlind(r.NodeId)))
+            .Select(r => new BlindPhoneListener(r.NodeId, r.DisplayName, r.ApiAddress!, BlindNodeId.IsBlind(r.NodeId), r.EffectiveTlsTrust!))
             .OrderByDescending(l => l.IsBlind).ThenBy(l => l.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -54,11 +57,12 @@ public sealed class BlindPhonePairingService(
         var listener = await whitelist.GetByNodeIdAsync(listenerId);
         if (listener == null || !CanBeCalled(listener))
             throw new BlindPhonePairingException(
-                "The phone can only call a node that listens on https with a pinned certificate — a blind node or a hub. " +
-                "Add one first; this PC alone cannot serve a phone.");
+                "The phone can only call a node that listens on https with a pinned or a publicly valid certificate — a blind node or a hub. " +
+                "Add one first (Admin, Trusted Nodes: \"Let blind copies call this node\"); this PC alone cannot serve a phone.");
 
         var enrollment = BlindPhoneEnrollment.Prepare(phoneCode, listener.ApiAddress!, listener.NodeId,
-            listener.TlsSpki!, listener.Ed25519PublicKey, time.GetUtcNow().UtcDateTime, out var error)
+            listener.TlsSpki ?? "", listener.Ed25519PublicKey, time.GetUtcNow().UtcDateTime, out var error,
+            listener.EffectiveTlsTrust!)
             ?? throw new FormatException(error);
         try
         {
@@ -110,8 +114,9 @@ public sealed class BlindPhonePairingService(
         }
     }
 
-    // The phone pins the listener by the key the network recorded for it; without an https origin and a
-    // well-formed pin there is nothing to pin, and a row the call code would not carry must not be offered.
+    // The phone trusts the listener the way the network recorded it: by its pinned key, or by the system's
+    // certificate chain for a hub on a public CA. Without an https origin and that, there is nothing to trust, and a
+    // row the call code would not carry must not be offered.
     private static bool CanBeCalled(WhitelistEntry row) =>
-        row.Status == "A" && BlindListener.IsCallable(row.ApiAddress, row.TlsSpki, row.Ed25519PublicKey);
+        row.Status == "A" && BlindListener.IsCallable(row.ApiAddress, row.TlsSpki, row.Ed25519PublicKey, row.TlsTrust);
 }

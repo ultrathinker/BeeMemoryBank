@@ -274,6 +274,12 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         // Credential exchange — username + password in the body is the authentication.
         "POST /api/auth/remote-token",
 
+        // "Forgot your password? Use a recovery key" (BMB-156): nobody is signed in, the recovery key in
+        // the body is the authentication, and the handler itself refuses everyone who is not a superadmin
+        // account. It still requires the internal key (only the Web layer reaches it) and is NOT in
+        // PublicSurface.
+        "POST /api/session/recover-access",
+
         // Peer-to-peer sync. Authenticated by the Ed25519 challenge/response bearer token issued
         // by /api/sync/authenticate; a browser user never calls these.
         "POST /api/sync/blobs",

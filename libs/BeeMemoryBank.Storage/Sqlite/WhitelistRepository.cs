@@ -30,7 +30,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 source_node_id             AS SourceNodeId,
                 last_protocol_version      AS LastProtocolVersion,
                 last_protocol_seen_at      AS LastProtocolSeenAt,
-                tls_spki                   AS TlsSpki
+                tls_spki                   AS TlsSpki,
+                tls_trust                  AS TlsTrust
               FROM tbl_whitelist WHERE node_id = @nodeId"
             : @"SELECT
                 node_id                    AS NodeId,
@@ -49,7 +50,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 source_node_id             AS SourceNodeId,
                 last_protocol_version      AS LastProtocolVersion,
                 last_protocol_seen_at      AS LastProtocolSeenAt,
-                tls_spki                   AS TlsSpki
+                tls_spki                   AS TlsSpki,
+                tls_trust                  AS TlsTrust
               FROM tbl_whitelist WHERE node_id = @nodeId COLLATE NOCASE AND status = 'A'";
         return Normalized(await conn.QuerySingleOrDefaultAsync<WhitelistEntry>(sql, new { nodeId }));
     }
@@ -92,7 +94,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 source_node_id             AS SourceNodeId,
                 last_protocol_version      AS LastProtocolVersion,
                 last_protocol_seen_at      AS LastProtocolSeenAt,
-                tls_spki                   AS TlsSpki
+                tls_spki                   AS TlsSpki,
+                tls_trust                  AS TlsTrust
               FROM tbl_whitelist WHERE status = 'A' ORDER BY (substr(display_name,1,1)='_') DESC, display_name"))
             .Select(e => Normalized(e)!).ToList();
     }
@@ -102,8 +105,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_whitelist
-              (node_id, display_name, ed25519_public_key, api_address, can_generate_embeddings, status, created_at, updated_at, is_superadmin, lamport_ts, source_node_id, tls_spki)
-              VALUES (@NodeId, @DisplayName, @Ed25519PublicKey, @ApiAddress, @CanGenerateEmbeddings, @Status, @CreatedAt, @UpdatedAt, @IsSuperadmin, @LamportTs, @SourceNodeId, @TlsSpki)",
+              (node_id, display_name, ed25519_public_key, api_address, can_generate_embeddings, status, created_at, updated_at, is_superadmin, lamport_ts, source_node_id, tls_spki, tls_trust)
+              VALUES (@NodeId, @DisplayName, @Ed25519PublicKey, @ApiAddress, @CanGenerateEmbeddings, @Status, @CreatedAt, @UpdatedAt, @IsSuperadmin, @LamportTs, @SourceNodeId, @TlsSpki, @TlsTrust)",
             new
             {
                 entry.NodeId,
@@ -117,7 +120,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 IsSuperadmin = entry.IsSuperadmin ? 1 : 0,
                 entry.LamportTs,
                 entry.SourceNodeId,
-                entry.TlsSpki
+                entry.TlsSpki,
+                entry.TlsTrust
             });
     }
 
@@ -135,7 +139,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                   updated_at = @UpdatedAt,
                   lamport_ts = @LamportTs,
                   source_node_id = @SourceNodeId,
-                  tls_spki = @TlsSpki
+                  tls_spki = @TlsSpki,
+                  tls_trust = @TlsTrust
               WHERE node_id = @NodeId",
             new
             {
@@ -149,7 +154,8 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 entry.UpdatedAt,
                 entry.LamportTs,
                 entry.SourceNodeId,
-                entry.TlsSpki
+                entry.TlsSpki,
+                entry.TlsTrust
             });
     }
 

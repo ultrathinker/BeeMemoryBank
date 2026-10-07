@@ -91,17 +91,40 @@ public partial class ApiClient
         return await resp.Content.ReadFromJsonAsync<SnapshotUploadDto>(JsonOpts);
     }
 
-    public async Task<(bool ok, string? eventId, string? error)> InitiateNetworkRestoreAsync(Guid snapshotFileId)
+    /// <summary>
+    /// Starts a restore of the whole network from a snapshot of this node, by file name. The master password
+    /// is re-checked by the API; on failure the error is the API's own sentence, not its JSON.
+    /// </summary>
+    public async Task<(bool ok, string? eventId, string? error)> InitiateNetworkRestoreAsync(string fileName, string masterPassword)
     {
         var resp = await http.PostAsJsonAsync("/api/snapshots/restore-network", new {
-            SnapshotFileId = snapshotFileId,
+            SnapshotFileId = Guid.Empty,
             Mode = "NetworkWide",
-            ForeignMasterPassword = (string?)null
+            ForeignMasterPassword = (string?)null,
+            MasterPassword = masterPassword,
+            FileName = fileName
         }, JsonOpts);
         if (!resp.IsSuccessStatusCode)
-            return (false, null, await resp.Content.ReadAsStringAsync());
+            return (false, null, ErrorTextOf(await resp.Content.ReadAsStringAsync()) ?? "Failed to initiate network restore");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
         return (true, body.GetProperty("eventId").GetString(), null);
+    }
+
+    // The "error" of an API error body ({"error":"..."}), or the body itself when it is plain text.
+    private static string? ErrorTextOf(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String)
+                return e.GetString();
+            if (doc.RootElement.ValueKind == JsonValueKind.String)
+                return doc.RootElement.GetString();
+        }
+        catch (JsonException) { }
+        return body;
     }
 
     public async Task<RestoreProgressDto?> GetRestoreProgressAsync()
@@ -142,11 +165,12 @@ public partial class ApiClient
         catch { return null; }
     }
 
+    /// <param name="mode">What the restore does to this node's identity: see <see cref="RestoreModes"/>.</param>
     public async Task<(bool ok, string? error, string? backupFileName)> RestoreSnapshotAsync(
-        string fileName, string masterPassword, bool createBackupFirst = true, bool standaloneMode = false)
+        string fileName, string masterPassword, bool createBackupFirst = true, string mode = RestoreModes.Standalone)
     {
         var resp = await http.PostAsync("/api/snapshots/restore",
-            Body(new { fileName, masterPassword, createBackupFirst, standaloneMode }));
+            Body(new { fileName, masterPassword, createBackupFirst, mode }));
         if (resp.IsSuccessStatusCode)
         {
             var body = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);

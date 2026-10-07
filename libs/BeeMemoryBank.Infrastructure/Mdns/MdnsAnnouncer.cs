@@ -82,8 +82,23 @@ public sealed class MdnsAnnouncer : BackgroundService
         StopAdvertising(reason: "shutdown");
     }
 
-    private async Task EvaluateAsync(CancellationToken ct)
+    /// <summary>True while the announcement is up (for the tests: the real thing needs a multicast network).</summary>
+    internal bool IsAdvertising => _advertising;
+
+    internal async Task EvaluateAsync(CancellationToken ct)
     {
+        // Network-setting gate: a node that is not open to the network announces nothing, and withdraws what it announced when
+        // the setting goes off. Checked first: it needs no database and no multicast socket is opened while it says no.
+        if (_options.AnnounceGate is { } gate && !gate())
+        {
+            if (_advertising)
+            {
+                _logger.LogInformation("Devices on my network is OFF — withdrawing mDNS announcement");
+                StopAdvertising(reason: "network setting off");
+            }
+            return;
+        }
+
         Guid nodeId;
         string name;
         using (var scope = _scopeFactory.CreateScope())

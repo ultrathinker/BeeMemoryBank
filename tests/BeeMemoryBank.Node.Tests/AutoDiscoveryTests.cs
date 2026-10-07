@@ -232,22 +232,28 @@ public class AutoDiscoveryTests : IDisposable
         webEnvForKey.Should().NotBeNull();
         webEnvForKey!["BMB_TRUST_LOOPBACK_FORWARDED_HEADERS"].Should().Be("true");
 
+        // The Profile page prints the browse address as the MCP address only behind the front (which serves
+        // /mcp itself); in Docker or from source it has no such flag and says assistants cannot reach it.
+        webEnvForKey["BMB_BEHIND_LOOPBACK_PROXY"].Should().Be("1");
+
         // Web must receive the SAME internal key as Api — it's the shared secret
         // InternalKeyHandler attaches to every Web-to-Api request.
         webEnvForKey["BMB_INTERNAL_KEY"].Should().Be(apiEnv["BMB_INTERNAL_KEY"]);
     }
 
     /// <summary>
-    /// Api announces on the LAN only when the front has a listener the network can reach — the
-    /// opt-in HTTPS one. The HTTP listener is loopback-only, so without HTTPS (the default desktop
-    /// install) there is nothing to announce, and the multicast socket would only make Windows
-    /// Firewall prompt the user right after installation.
+    /// What Api is told about announcing itself on the LAN: to follow the "Devices on my network" setting, on the HTTPS port.
     /// </summary>
     [Theory]
-    [InlineData(null, "false")]
-    [InlineData("1", "true")]
-    public void Discover_EnablesMdns_OnlyWhenTheFrontIsReachableFromTheNetwork(string? httpsEnabled, string expected)
+    [InlineData(null)]
+    [InlineData("1")]
+    public void Discover_RegistersTheAnnouncerToFollowTheNetworkSetting_OnTheHttpsPort(string? httpsEnabled)
     {
+        // The announcer is registered whatever the environment says and follows the profile's "Devices on my network" setting
+        // (BMB_MDNS_FOLLOWS_NETWORK_SETTING): it announces the HTTPS port 5311, and only while the setting or BMB_HTTPS_ENABLED=1
+        // is on, which its gate reads. With both off (the default desktop install) the gate keeps the multicast socket closed,
+        // which would otherwise make Windows Firewall prompt the user right after installation.
+        const string expected = "true";
         var baseDir = Path.Combine(_tempTestDir, "bmbd");
         var apiDir = Path.Combine(_tempTestDir, "api");
         var webDir = Path.Combine(_tempTestDir, "web");
@@ -264,6 +270,9 @@ public class AutoDiscoveryTests : IDisposable
             var configs = AutoDiscovery.Discover(baseDir, Path.Combine(_tempTestDir, "data"));
             var apiEnv = configs.First(c => c.ApplicationName == "BeeMemoryBank.Api").EnvironmentVariables;
             apiEnv!["BMB_MDNS_ENABLED"].Should().Be(expected);
+            apiEnv["BMB_MDNS_FOLLOWS_NETWORK_SETTING"].Should().Be("1");
+            apiEnv["BMB_MDNS_PORT"].Should().Be("5311", "the only listener the network can reach is the HTTPS one");
+            apiEnv["BMB_MDNS_HTTPS"].Should().Be("true");
         }
         finally
         {

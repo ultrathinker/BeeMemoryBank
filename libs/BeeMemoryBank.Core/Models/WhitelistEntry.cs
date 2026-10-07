@@ -67,4 +67,18 @@ public class WhitelistEntry
     /// pin, ordinary certificate validation.
     /// </summary>
     public string? TlsSpki { get; set; }
+
+    /// <summary>
+    /// How blind copies trust this node's TLS endpoint (<see cref="BlindTrust"/>, migration 036, ADR 0007):
+    /// <c>pin</c> (with <see cref="TlsSpki"/>), <c>public-ca</c> (no pin: the system's chain decides) or null =
+    /// not set. Replicated with the row. A row with a pin and no mode — written by an older build — stands as
+    /// <c>pin</c> (<see cref="EffectiveTlsTrust"/>).
+    /// </summary>
+    public string? TlsTrust { get; set; }
+
+    /// <summary>The mode this row stands in: <see cref="TlsTrust"/>, or <c>pin</c> for a pin without one, or null.</summary>
+    public string? EffectiveTlsTrust => BlindTrust.Effective(TlsTrust, TlsSpki);
+
+    /// <summary>The pin this row holds as far as it counts: only a row in <c>pin</c> mode has one (<see cref="BlindTrust.PinOf"/>).</summary>
+    public string? EffectivePin => BlindTrust.PinOf(TlsTrust, TlsSpki);
 }

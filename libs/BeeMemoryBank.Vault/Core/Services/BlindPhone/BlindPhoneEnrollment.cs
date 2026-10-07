@@ -18,14 +18,21 @@ public sealed record BlindPhoneEnrollment(WhitelistEntry Entry, string SealedSec
     /// and shows <see cref="CallCode"/>.
     /// </summary>
     /// <param name="listeningAddress">https address of the node the phone will call (hub or server blind node).</param>
-    /// <param name="listeningSpkiPin">SPKI pin of that node's TLS key.</param>
+    /// <param name="listeningSpkiPin">SPKI pin of that node's TLS key; ignored (the code carries none) for <see cref="BlindTrust.PublicCa"/>.</param>
     /// <param name="listeningPublicKey">Ed25519 key of that node — the phone checks the blind package with it.</param>
+    /// <param name="listeningTrust">How the phone trusts that node's TLS endpoint: <see cref="BlindTrust.Pin"/> (the default)
+    /// or <see cref="BlindTrust.PublicCa"/>.</param>
     public static BlindPhoneEnrollment? Prepare(string phoneCodeText, string listeningAddress, Guid listeningNodeId,
-        string listeningSpkiPin, byte[] listeningPublicKey, DateTime now, out string? error)
+        string listeningSpkiPin, byte[] listeningPublicKey, DateTime now, out string? error, string listeningTrust = BlindTrust.Pin)
     {
         if (!BlindPhoneCode.TryParse(phoneCodeText, out var phone))
         {
             error = "This is not the code of an Android blind copy. Copy it again from the phone.";
+            return null;
+        }
+        if (!BlindTrust.IsKnown(listeningTrust))
+        {
+            error = "This node has no way to be trusted by a phone that this version understands.";
             return null;
         }
 
@@ -39,11 +46,14 @@ public sealed record BlindPhoneEnrollment(WhitelistEntry Entry, string SealedSec
             UpdatedAt = now,
             IsSuperadmin = false,
         };
-        var call = BlindCallCode.Create(listeningAddress, listeningNodeId, listeningSpkiPin, listeningPublicKey, phone.Secret);
+        var publicCa = listeningTrust == BlindTrust.PublicCa;
+        var call = publicCa
+            ? BlindCallCode.CreatePublicCa(listeningAddress, listeningNodeId, listeningPublicKey, phone.Secret)
+            : BlindCallCode.Create(listeningAddress, listeningNodeId, listeningSpkiPin, listeningPublicKey, phone.Secret);
         error = null;
         // Unsigned here: the page's node signs it (PairedBy / PairingSignature) before sealing.
         var seal = new BlindPhoneBackupSeal(phone.BackupKey.ToArray(), listeningNodeId, listeningPublicKey.ToArray(),
-            call.Address, listeningSpkiPin, Guid.Empty, []);
+            call.Address, publicCa ? "" : listeningSpkiPin, Guid.Empty, [], listeningTrust);
         return new BlindPhoneEnrollment(entry, $"android-backup:{phone.NodeId}", seal, call);
     }
 }

@@ -98,7 +98,7 @@
 
       <!-- Opt-in Firewall Feature (Level 2 = off by default when INSTALLLEVEL=1) -->
       <Feature Id="FirewallFeature" Title="Configure Windows Firewall Exception" Level="2"
-               Description="Adds inbound Windows Firewall rules to allow other devices to connect to BeeMemoryBank on HTTP (5310) and HTTPS (5311) ports.">
+               Description="Opens inbound firewall ports 5310 and 5311. The service answers only this computer by default; other computers reach it when Devices on my network is on (Admin, Nodes), through Connect a device, or behind a reverse proxy you set up.">
         <ComponentRef Id="FirewallRulesComponent" />
       </Feature>
     </Feature>

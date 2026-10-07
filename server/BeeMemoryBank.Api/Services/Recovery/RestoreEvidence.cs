@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Api.Services.Recovery;
 /// the source held without a version (0, null — e.g. the producer's own row in its package) stays unversioned:
 /// then there is nothing newer to protect.</param>
 public sealed record RestorePeer(Guid NodeId, string DisplayName, byte[] PublicKey, string? ApiAddress, bool IsSuperadmin, string? TlsSpki,
-    long LamportTs = 0, Guid? SourceNodeId = null);
+    long LamportTs = 0, Guid? SourceNodeId = null, string? TlsTrust = null);
 
 /// <summary>
 /// What a restore takes over besides the replicated state (CONTRACTS §2 blind-manifest.json): who the
@@ -53,7 +53,7 @@ public static class RestoreEvidenceFromManifest
             .Select(p => (p, Key: TryBase64(p.PublicKeyB64)))
             .Where(x => x.Key is { Length: 32 })
             .Select(x => new RestorePeer(x.p.NodeId, x.p.DisplayName, x.Key!, x.p.ApiAddress, x.p.IsSuperadmin, x.p.TlsSpki,
-                x.p.LamportTs, x.p.SourceNodeId))
+                x.p.LamportTs, x.p.SourceNodeId, x.p.TlsTrust))
             .ToList(),
         manifest.Positions.GroupBy(p => p.RemoteNodeId).ToDictionary(g => g.Key, g => g.Max(p => p.LastSequence)),
         manifest.IncludesUpTo,
@@ -90,13 +90,13 @@ public static class DatabaseRestoreEvidence
                 var columns = (await conn.QueryAsync<string>("SELECT name FROM pragma_table_info('tbl_whitelist')"))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 string Col(string name) => columns.Contains(name) ? name : "NULL";
-                peers.AddRange((await conn.QueryAsync<(string Id, string Name, byte[] Key, string? Address, long Super, string? Pin, long? Lamport, string? Source)>(
+                peers.AddRange((await conn.QueryAsync<(string Id, string Name, byte[] Key, string? Address, long Super, string? Pin, long? Lamport, string? Source, string? Trust)>(
                         $@"SELECT node_id, display_name, ed25519_public_key, api_address, is_superadmin, {Col("tls_spki")},
-                                  {Col("lamport_ts")}, {Col("source_node_id")}
+                                  {Col("lamport_ts")}, {Col("source_node_id")}, {Col("tls_trust")}
                            FROM tbl_whitelist WHERE status = 'A'"))
                     .Where(r => Guid.TryParse(r.Id, out _))
                     .Select(r => new RestorePeer(Guid.Parse(r.Id), r.Name, r.Key, r.Address, r.Super != 0, r.Pin,
-                        Math.Max(0, r.Lamport ?? 0), Guid.TryParse(r.Source, out var s) ? s : null)));
+                        Math.Max(0, r.Lamport ?? 0), Guid.TryParse(r.Source, out var s) ? s : null, r.Trust)));
             }
 
             if (tables.Contains("tbl_node_identity"))

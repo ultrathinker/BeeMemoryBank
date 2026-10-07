@@ -49,6 +49,11 @@ public static class CliServiceProvider
             .AddOnnxEmbeddings(dataPath)
             .AddSync()
             .AddSingleton<IActorProvider>(new CliActorProvider())
+            // Where the API keeps media (its AddMediaStorage: {data}/media). Not used by any CLI verb itself; it
+            // is here so that services which take it (HardDeleteService, behind the recovery-box publisher that
+            // UserService and KeyManagementService take) can be built at all — without it
+            // `bmb user reset-password` could not resolve UserService. The folder is not created.
+            .AddSingleton(new BeeMemoryBank.Core.Services.MediaStorageOptions(Path.Combine(dataPath, "media")))
             // `bmb init reset` shares Core's NodeResetService with the API endpoint so the two
             // cannot drift on what "wipe" means. No INodeResetHook here — chat.db is an Api-side
             // concern and does not exist for CLI-only deployments.

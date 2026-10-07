@@ -11,18 +11,35 @@ services:
     # since Docker's port publishing writes iptables/nftables DNAT rules directly. Web reaches the
     # API over the container's own network namespace, so nothing internal changes.
     # If you need the sync/join endpoints reachable from another node, put a reverse proxy in front
-    # that path-filters to /mcp, /api/sync, /api/join and publish the port bound to the HOST's
+    # that path-filters to /mcp, /api/sync, /api/join (and /api/blind/replica for blind copies) and publish the port bound to the HOST's
     # loopback ("127.0.0.1:5004:5300") — see docs/deployment.md. Control exposure on the host side:
     # do NOT try to harden this by binding the API process to 127.0.0.1 inside the container, which
     # would break exactly that reverse-proxied setup (see docker-entrypoint.sh).
+    #
+    # The Web port is published on this computer's loopback only (127.0.0.1), which is what "local
+    # node" means. Docker's port publishing skips ufw, so a bare "5301:5301" would put the login page
+    # on every network interface of the host. To expose it on purpose (a trusted LAN), set
+    # BMB_WEB_BIND=0.0.0.0 in .env, and put TLS in front of it: the session cookie is Secure.
     ports:
-      - "${BMB_WEB_PORT:-5301}:5301"
+      - "${BMB_WEB_BIND:-127.0.0.1}:${BMB_WEB_PORT:-5301}:5301"
+      # OPTIONAL: let AI assistants on THIS computer reach the node. It takes two lines in this
+      # file, both commented out: this one, and BMB_API_PUBLISHED_PORT under "environment:" below.
+      # Loopback only, never 0.0.0.0. For assistants on other computers use
+      # docker-compose.reverse-proxy.yml (see docs/deployment.md).
+      # - "127.0.0.1:${BMB_API_PORT:-5300}:5300"
     volumes:
       - ${BMB_DATA_PATH:-./data}:/app/data
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - BMB_DATA_PATH=/app/data
       - BMB_ONNX_MODEL_PATH=/app/data/model.onnx
+      # OPTIONAL, goes with the API port line above: tells the Profile page which host port the API
+      # is on, so the snippet for an AI assistant prints http://127.0.0.1:<port>/mcp. Without it the
+      # page says that assistants cannot reach this node yet.
+      # - BMB_API_PUBLISHED_PORT=${BMB_API_PORT:-5300}
+      # To print one fixed address instead (for example one behind your own proxy), set BMB_MCP_URL
+      # in .env, e.g. https://bee.example.com/mcp. Empty = not set.
+      - BMB_MCP_URL=${BMB_MCP_URL:-}
       # Uncomment when a reverse proxy (Caddy, nginx, Apache) sits in front of the Web port — which
       # it must, on anything but localhost, because the session cookie is Secure and needs TLS.
       # Docker publishes the port by DNAT through the bridge, so the node sees the BRIDGE GATEWAY as

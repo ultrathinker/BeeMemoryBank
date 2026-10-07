@@ -1,7 +1,9 @@
 (function () {
     var dataEl = document.getElementById('profile-page-data');
     var pageData = dataEl ? JSON.parse(dataEl.textContent || '{}') : {};
-    var mcpBaseUrl = pageData.mcpBaseUrl || '';
+    // The full MCP address an AI assistant can use, or empty when none is known (then the dialog shows
+    // pageData.mcpUnavailableMessage instead of the two snippets). Decided on the server.
+    var mcpUrl = pageData.mcpUrl || '';
 
     function escapeHtml(text) {
         return String(text == null ? '' : text)
@@ -203,17 +205,29 @@
                 document.getElementById('agent-desc').value = '';
 
                 var key = data.apiKey;
-                var mcpUrl = mcpBaseUrl + '/mcp';
 
                 document.getElementById('secret-key-code').textContent = key;
                 document.getElementById('secret-autounlock-note').variant = data.canAutoUnlock ? 'warning' : 'neutral';
                 document.getElementById('secret-autounlock-text').textContent = data.canAutoUnlock
                     ? 'This key can wake a locked node by itself, the same as your own login.'
                     : 'This key cannot unlock a locked node by itself — it only works while the vault is already unlocked by someone else.';
-                document.getElementById('mcp-cli-code').textContent =
-                    'claude mcp add --transport http bee-memory-bank ' + mcpUrl + ' --header "Authorization: Bearer ' + key + '"';
-                document.getElementById('mcp-cursor-code').textContent =
-                    '{\n  "mcpServers": {\n    "bee-memory-bank": {\n      "type": "http",\n      "url": "' + mcpUrl + '",\n      "headers": {\n        "Authorization": "Bearer ' + key + '"\n      }\n    }\n  }\n}';
+                var snippets = document.getElementById('mcp-snippets');
+                var unavailable = document.getElementById('mcp-unavailable');
+                if (mcpUrl) {
+                    document.getElementById('mcp-cli-code').textContent =
+                        'claude mcp add --transport http bee-memory-bank ' + mcpUrl + ' --header "Authorization: Bearer ' + key + '"';
+                    document.getElementById('mcp-cursor-code').textContent =
+                        '{\n  "mcpServers": {\n    "bee-memory-bank": {\n      "type": "http",\n      "url": "' + mcpUrl + '",\n      "headers": {\n        "Authorization": "Bearer ' + key + '"\n      }\n    }\n  }\n}';
+                    snippets.style.display = '';
+                    unavailable.style.display = 'none';
+                } else {
+                    // No address an assistant could use: say so instead of printing a dead URL.
+                    document.getElementById('mcp-cli-code').textContent = '';
+                    document.getElementById('mcp-cursor-code').textContent = '';
+                    document.getElementById('mcp-unavailable-text').textContent = pageData.mcpUnavailableMessage || '';
+                    snippets.style.display = 'none';
+                    unavailable.style.display = 'block';
+                }
 
                 document.getElementById('dlg-show-secret').show();
                 loadAgents();

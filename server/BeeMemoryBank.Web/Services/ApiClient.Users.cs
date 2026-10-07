@@ -73,6 +73,20 @@ public partial class ApiClient
         return (false, body);
     }
 
+    /// <summary>
+    /// "Let blind copies call this node" (ADR 0007): <paramref name="trust"/> is <c>pin</c>, <c>public-ca</c> or <c>off</c>. The Api
+    /// checks the address and the certificate before it saves; its own sentence is the error.
+    /// </summary>
+    public async Task<(HubSetDto? Result, string? Error)> SetBlindCallableAsync(
+        Guid nodeId, string trust, string? address, string password, string? expectedPin)
+    {
+        var resp = await http.PutAsync($"/api/whitelist/{nodeId}/hub",
+            Body(new { trust, address, password, expectedPin }));
+        if (resp.IsSuccessStatusCode)
+            return (await resp.Content.ReadFromJsonAsync<HubSetDto>(JsonOpts), null);
+        return (null, await ReadErrorAsync(resp));
+    }
+
     public async Task<(bool ok, string? error)> SetAutoAcceptRestoreAsync(Guid nodeId, bool autoAccept)
     {
         var resp = await http.PutAsync($"/api/whitelist/{nodeId}/auto-accept-restore",

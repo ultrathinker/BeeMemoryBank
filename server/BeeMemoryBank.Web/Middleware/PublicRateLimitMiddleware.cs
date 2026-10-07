@@ -26,6 +26,12 @@ namespace BeeMemoryBank.Web.Middleware;
 /// guesses at it. There is deliberately no anonymous route onto this wipe (no
 /// <c>/Login?handler=Reset</c>, no <c>/api-proxy/init/reset</c>); do not add one.
 /// </description></item>
+/// <item><description>
+/// <c>POST /RecoverAccess</c> — "Forgot your password?": checks a recovery key and, on a match,
+/// replaces a superadmin's password. Anonymous by necessity (the person cannot sign in), and each
+/// attempt is an Argon2id derivation per recovery slot, so it has a budget of its own, small and
+/// not shared with sign-in: nobody mistypes a 44-character key twenty times in good faith.
+/// </description></item>
 /// </list>
 ///
 /// <para>
@@ -44,6 +50,10 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
 
     // Node reset: destructive and never routine. A legitimate admin needs one or two tries.
     private static readonly SlidingWindowRateLimiter ResetLimiter = new(5, TimeSpan.FromMinutes(15));
+
+    // Forgot-password: a legitimate owner needs a try or two (a mistyped key, a password the rules
+    // refuse), and the node keeps its own per-username budget behind this per-IP one.
+    private static readonly SlidingWindowRateLimiter RecoverAccessLimiter = new(5, TimeSpan.FromMinutes(15));
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -66,6 +76,7 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
         {
             RateLimitedRoute.NodeReset => (ResetLimiter, "node reset", "reset"),
             RateLimitedRoute.Login => (LoginLimiter, "login", "login"),
+            RateLimitedRoute.RecoverAccess => (RecoverAccessLimiter, "recovery-key reset", "recover"),
             _ => (null, "", "")
         };
         if (limiter == null)
@@ -94,13 +105,19 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
     }
 
     /// <summary>
+    /// TEST-ONLY: drops every recorded /RecoverAccess attempt. The limiters are process-wide statics, so
+    /// without this a test that burns the budget would starve every later test of the same process.
+    /// </summary>
+    internal static void ResetRecoverAccessForTests() => RecoverAccessLimiter.ResetAll();
+
+    /// <summary>
     /// Whether the completed request actually got in — the signal that this IP is a legitimate
     /// user rather than a guesser, so its window can be forgiven.
     /// </summary>
     /// <remarks>
     /// A failed Razor login re-renders the page as 200 with an error message; only success
     /// redirects (to the return URL). So for /Login a 3xx is the only success signal and 200
-    /// explicitly is not. The Admin reset handler always redirects — to /Setup on success, back to
+    /// explicitly is not (/RecoverAccess works the same way). The Admin reset handler always redirects — to /Setup on success, back to
     /// /Admin with an <c>err</c> query value on a wrong password — so a status code cannot tell the
     /// two apart, and its bucket is deliberately never reset: five wipe attempts per 15 minutes is
     /// already far above what a legitimate admin needs.
@@ -108,6 +125,9 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
     private static bool IsSuccess(string path, int statusCode) => path switch
     {
         RateLimitPath.LoginPath => statusCode is >= 300 and < 400,
+        // Like /Login: a refused attempt re-renders the page as 200, a changed password redirects
+        // to the "done" screen, so only a 3xx forgives the address.
+        RateLimitPath.RecoverAccessPath => statusCode is >= 300 and < 400,
         _ => false
     };
 }

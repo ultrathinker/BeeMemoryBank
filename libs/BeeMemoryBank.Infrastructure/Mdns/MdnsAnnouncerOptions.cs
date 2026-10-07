@@ -32,6 +32,14 @@ public sealed class MdnsAnnouncerOptions
     public TimeSpan RefreshInterval { get; set; } = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// When set, the node announces itself only while this returns true, and withdraws the announcement as soon as it
+    /// returns false: the desktop node's "Devices on my network" setting (<c>BMB_MDNS_FOLLOWS_NETWORK_SETTING</c>). Read on
+    /// every refresh cycle, so a change takes effect within <see cref="RefreshInterval"/> without a restart. Null (servers,
+    /// Docker): the announcement is decided by the deployment alone, as before.
+    /// </summary>
+    public Func<bool>? AnnounceGate { get; set; }
+
+    /// <summary>
     /// Optional explicit version string override. When null, the announcer reads
     /// <c>AssemblyInformationalVersion</c> (compiled from the repo-root VERSION file) at runtime.
     /// </summary>

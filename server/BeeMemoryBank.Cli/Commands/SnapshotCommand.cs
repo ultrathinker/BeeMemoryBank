@@ -273,13 +273,15 @@ public static class SnapshotCommand
         try
         {
             using var http = CreateClient(dataPath);
-            Guid fileId = Guid.Empty;
-            Guid.TryParse(fileIdOrName, out fileId);
-            
+            // An uploaded snapshot is found by the id in its name, one this node made by its file name.
+            var isId = Guid.TryParse(fileIdOrName, out var fileId);
+
             var req = new
             {
-                snapshotFileId = fileId,
-                mode = 1 // NetworkWide
+                snapshotFileId = isId ? fileId : Guid.Empty,
+                fileName = isId ? null : fileIdOrName,
+                // By name: 1 is the numeric value of Standalone, which the endpoint refuses ("Use /restore for standalone").
+                mode = "NetworkWide"
             };
             
             var content = new StringContent(JsonSerializer.Serialize(req), Encoding.UTF8, "application/json");

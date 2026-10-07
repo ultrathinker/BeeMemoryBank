@@ -95,6 +95,11 @@ public partial class MainWindow : Window
     {
         if (e is Avalonia.Platform.WindowsWebView2EnvironmentRequestedEventArgs webView2)
             webView2.UserDataFolder = System.IO.Path.Combine(BeeMemoryBank.AppPaths.BmbPaths.Root, "webview2");
+
+        // WKWebView (the Mac app) has no window.chrome.webview for the Setup page to recognise the app by, so it is
+        // named in the user agent instead. That is what shows the page's shell-only buttons (the native pickers).
+        if (e is Avalonia.Platform.AppleWKWebViewEnvironmentRequestedEventArgs apple)
+            apple.ApplicationNameForUserAgent = BeeMemoryBank.Hosting.DesktopShellCommands.UserAgentToken;
     }
 
     private void MainWindow_Opened(object? sender, EventArgs e)

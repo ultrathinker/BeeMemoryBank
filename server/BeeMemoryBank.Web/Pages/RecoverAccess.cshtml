@@ -1,0 +1,74 @@
+@page
+@model RecoverAccessModel
+@{
+    ViewData["Title"] = "Recover access";
+}
+
+<div class="login-wrapper">
+@if (Model.Done)
+{
+    <div class="login-card">
+        <h2><sl-icon name="check-circle" style="margin-right:6px;"></sl-icon> Password changed</h2>
+
+        <sl-alert variant="success" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="check2-circle"></sl-icon>
+            Sign in with the new password.
+        </sl-alert>
+
+        <p class="text-muted text-sm">
+            Older recovery keys still work. If the card or the paper with a recovery key was lost, issue a
+            new one after you sign in: Admin &rarr; Security &rarr; Issue new recovery key.
+        </p>
+
+        <sl-button href="/Login?recovered=1" variant="primary" style="width:100%;margin-top:8px;">
+            <sl-icon slot="prefix" name="box-arrow-in-right"></sl-icon> Go to Sign In
+        </sl-button>
+    </div>
+}
+else
+{
+    <div class="login-card">
+        <h2><sl-icon name="key" style="margin-right:6px;"></sl-icon> Recover access</h2>
+
+        <partial name="_HttpsRequiredAlert" />
+
+        <p class="text-muted text-sm" style="margin-bottom:16px;">
+            Forgot the password of an administrator account? Enter the username, a recovery key of this
+            node and a new password. Only administrator (superadmin) accounts can be recovered this way.
+        </p>
+
+        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <sl-alert variant="danger" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @Model.ErrorMessage
+            </sl-alert>
+        }
+
+        <form method="post" class="sl-form" autocomplete="off">
+            <div style="margin-bottom:16px;">
+                <sl-input name="username" label="Login" value="@Model.Username" required autofocus></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="recoveryKey" label="Recovery key" type="password" required password-toggle
+                          autocomplete="off" spellcheck="false"></sl-input>
+            </div>
+            <div style="margin-bottom:16px;">
+                <sl-input name="newPassword" label="New password" type="password" required password-toggle
+                          autocomplete="new-password"></sl-input>
+            </div>
+            <div style="margin-bottom:20px;">
+                <sl-input name="confirmPassword" label="Repeat the new password" type="password" required password-toggle
+                          autocomplete="new-password"></sl-input>
+            </div>
+            <sl-button type="submit" variant="primary" style="width:100%;">
+                <sl-icon slot="prefix" name="key"></sl-icon> Set new password
+            </sl-button>
+        </form>
+
+        <p class="text-sm" style="margin-top:20px;text-align:center;">
+            <a href="/Login">Back to Sign In</a>
+        </p>
+    </div>
+}
+</div>

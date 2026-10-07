@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- A throw-away CA and a loopback TLS server (public-CA trust mode, ADR 0007): one source in tests/shared. -->
+    <Compile Include="..\shared\TestPki.cs" Link="Shared\TestPki.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="FluentAssertions" />
   </ItemGroup>

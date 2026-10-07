@@ -88,6 +88,9 @@ public record AutoUnlockAgentItem(int Id, string Name, int OwnerUserId, string? 
 /// </summary>
 public record ErrorResponse(string Error, string? Code = null);
 
+/// <summary>The password was replaced. Says nothing else: the caller signs in normally afterwards.</summary>
+public record RecoverAccessResponse(bool PasswordChanged);
+
 /// <summary>The <see cref="ErrorResponse.Code"/> values callers are allowed to branch on.</summary>
 public static class ErrorCodes
 {
@@ -212,7 +215,12 @@ public record WhitelistEntryResponse(
     bool AutoAcceptDekRotation,
     // Exposed so the Nodes page can show which peers hold cluster-modifying authority, and offer
     // to take it away. Every peer that joined with the master password has it.
-    bool IsSuperadmin = false)
+    bool IsSuperadmin = false,
+    // How blind copies trust this node's TLS endpoint (BlindTrust: "pin" / "public-ca", null = not set). The pin itself is
+    // public (the hash of a certificate's key) and is what the Nodes page shows next to "Pinned certificate". Whether a
+    // blind copy can really be told to call the node is the pairing list's decision (BlindListener.IsCallable).
+    string? TlsTrust = null,
+    string? TlsSpki = null)
 {
     public static WhitelistEntryResponse From(BeeMemoryBank.Core.Models.WhitelistEntry e) => new(
         e.NodeId,
@@ -225,8 +233,16 @@ public record WhitelistEntryResponse(
         e.UpdatedAt,
         e.AutoAcceptRestore,
         e.AutoAcceptDekRotation,
-        e.IsSuperadmin);
+        e.IsSuperadmin,
+        e.EffectiveTlsTrust,
+        e.EffectivePin);
 }
+
+/// <summary>The answer to PUT /api/whitelist/{nodeId}/hub: the row, and what the administrator should know about the trust just set.</summary>
+/// <param name="Pin">The pin recorded (pin mode).</param>
+/// <param name="PubliclyTrusted">Pin mode: the certificate would also validate through the system's chain.</param>
+/// <param name="Notice">Plain words about the trade-off of the mode chosen, for the page to show.</param>
+public record HubSetResponse(WhitelistEntryResponse Entry, string? Pin, bool PubliclyTrusted, string? Notice);
 
 public enum RestoreFlowStep
 {

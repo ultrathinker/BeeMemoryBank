@@ -75,7 +75,7 @@ public partial class EventApplier
                 existing.ApiAddress = p.ApiAddress;
                 existing.CanGenerateEmbeddings = p.CanGenerateEmbeddings;
                 existing.IsSuperadmin = p.IsSuperadmin && !BlindNodeId.IsBlind(p.NodeId);
-                existing.TlsSpki = p.TlsSpki;
+                ApplyTlsTrust(existing, p.TlsTrust, p.TlsSpki, isAdd: true);
                 existing.Status = "A";
                 existing.UpdatedAt = DateTime.UtcNow;
                 existing.LamportTs = incoming.LamportTs;
@@ -86,7 +86,7 @@ public partial class EventApplier
         }
 
         var now = DateTime.UtcNow;
-        await whitelistRepoWrite.CreateAsync(new WhitelistEntry
+        var created = new WhitelistEntry
         {
             NodeId = p.NodeId,
             DisplayName = p.DisplayName,
@@ -96,13 +96,55 @@ public partial class EventApplier
             // A blind node is never a superadmin, whatever the event says (plan 3.2, BMB-42): it holds no
             // DEK, and a peer that marked it so — by mistake or on purpose — must not hand it authority here.
             IsSuperadmin = p.IsSuperadmin && !BlindNodeId.IsBlind(p.NodeId),
-            TlsSpki = p.TlsSpki,
             Status = "A",
             CreatedAt = now,
             UpdatedAt = now,
             LamportTs = incoming.LamportTs,
             SourceNodeId = incoming.SourceNodeId
-        });
+        };
+        ApplyTlsTrust(created, p.TlsTrust, p.TlsSpki, isAdd: true);
+        await whitelistRepoWrite.CreateAsync(created);
+    }
+
+    /// <summary>
+    /// The pin and the trust mode a whitelist event carries, onto <paramref name="row"/> (ADR 0007). The mode is
+    /// the authority: <c>public-ca</c> never keeps a pin, <c>none</c> clears both, <c>pin</c> needs a key in the event,
+    /// and a mode this build does not know is kept as written (so it travels on to builds that know it) with no pin —
+    /// the row is then not callable here, and never read as <c>pin</c>. Only an event without a mode at all (an older
+    /// sender) is read as before the mode existed: a pin sets a pin (so the row stands as <c>pin</c>), "" removes it,
+    /// and on an update null leaves everything as it is.
+    /// </summary>
+    private const int MaxUnknownTrustLength = 32;
+
+    private static void ApplyTlsTrust(WhitelistEntry row, string? trust, string? tlsSpki, bool isAdd)
+    {
+        switch (trust)
+        {
+            case BlindTrust.PublicCa:
+                row.TlsSpki = null;
+                row.TlsTrust = BlindTrust.PublicCa;
+                return;
+            case BlindTrust.None:
+                row.TlsSpki = null;
+                row.TlsTrust = null;
+                return;
+            case BlindTrust.Pin when !string.IsNullOrEmpty(tlsSpki):
+                row.TlsSpki = tlsSpki;
+                row.TlsTrust = BlindTrust.Pin;
+                return;
+        }
+
+        if (!string.IsNullOrEmpty(trust) && trust != BlindTrust.Pin)
+        {
+            row.TlsSpki = null;
+            row.TlsTrust = trust.Length <= MaxUnknownTrustLength ? trust : "unknown";
+            return;
+        }
+
+        if (tlsSpki == null && !isAdd) return;
+        row.TlsSpki = string.IsNullOrEmpty(tlsSpki) ? null : tlsSpki;
+        if (row.TlsSpki != null) row.TlsTrust = BlindTrust.Pin;
+        else if (isAdd || row.TlsTrust == BlindTrust.Pin) row.TlsTrust = null;
     }
 
     private async Task ApplyWhitelistRevokeAsync(SyncEvent evt)
@@ -157,7 +199,7 @@ public partial class EventApplier
 
         if (p.ApiAddress != null) existing.ApiAddress = p.ApiAddress;
         if (p.DisplayName != null) existing.DisplayName = p.DisplayName;
-        if (p.TlsSpki != null) existing.TlsSpki = p.TlsSpki;
+        ApplyTlsTrust(existing, p.TlsTrust, p.TlsSpki, isAdd: false);
 
         if (p.IsSuperadmin is { } isSuperadmin)
         {

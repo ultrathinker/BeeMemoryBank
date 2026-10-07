@@ -22,6 +22,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 2.3.0: the product does what the website promised (2026-10-07)
+
+No sync protocol change (still 3). One database migration (036) adds the trust mode of a trusted node; nodes of 2.0.x to 2.2.0 keep syncing with 2.3.0
+in both directions and ignore the new optional field. A blind copy that is paired through a hub with a normal certificate needs the 2.3.0 apps; update the
+blind copies and the pairing computer first.
+
+- **Forgot your password? Use a recovery key.** The Sign In page has a new link. An administrator enters the user name, a recovery key and a new password; the
+  password is replaced without signing in, the vault is not unlocked by it, the sessions of that user end, attempts are limited and audited, and the other
+  nodes are told. The command line does the same: `bmb user reset-password --user NAME --recovery-key-stdin`. The Admin > Security text no longer promises
+  that a recovery key "unlocks the vault" without saying how.
+- **Restore: a restored node signs again, and you choose what to restore.** A restore of this node alone stored the new node key unwrapped and the node could
+  not authenticate or sign afterwards; it is now stored wrapped under the master key like at the first start. The restore dialog asks **What should be
+  restored?** (this node only, or the whole network) and says what each does; after a node-only restore the sign-in page says the node is new. A snapshot of
+  another vault (another master key) is refused with a plain message and nothing is changed. The Auto-restore texts now say what the code does.
+- **Devices on my network.** A per-profile setting (Admin > Nodes, off by default) serves the node over HTTPS on port 5311 and announces it on the local
+  network, without a restart; it works in the Windows app, the Mac app and the Windows service. The Windows firewall rule can be added and removed from the
+  same card. The announcement follows the real state of the listener (nothing is announced when the port is taken), and switching on and off at the same
+  time can no longer leave the file and the listener disagreeing. `BMB_HTTPS_ENABLED=1` still works as an override.
+- **Join by code, and Connect a device on macOS.** The code of **Connect a device** can be pasted on another computer's first-run page ("Connect to another
+  device") or given to `bmb join --code`: the joiner sends the master password only to the computer whose key the code pins. The page works on macOS too.
+  **Find devices on my network** finds the computers that have the setting on and says so when it finds nothing.
+- **A full node can be called by blind copies (a hub).** Admin > Trusted Nodes > **Let blind copies call this node** takes an https address and a trust mode:
+  a pinned certificate, or a normal certificate such as Let's Encrypt behind a reverse proxy. The server checks the identity and the certificate before it
+  saves. The Android, Windows and macOS blind copies follow the mode in the connection code (old codes keep working). The trust mode is authoritative: an
+  unknown mode is refused, and a stale pin cannot override a normal-certificate row. The probe refuses loopback, link-local, unspecified and multicast
+  targets. The blind-copy download route is limited to 20 starts per 10 minutes per blind copy, and revoking a lost blind copy ends its access at once.
+  The reverse-proxy recipes (Caddy, nginx, Apache, Cloudflare Tunnel, compose files) carry the routes blind copies need.
+- **Docker is closed by default.** The compose file publishes the web port on `127.0.0.1` only (`BMB_WEB_BIND=0.0.0.0` opens it on purpose); the Profile page
+  prints an MCP address that works in Docker (`BMB_MCP_URL`, `BMB_API_PUBLISHED_PORT`) or says that assistants cannot reach the node yet.
+- **Setup:** "Open an existing profile" appears only in the desktop apps (Windows and Mac); browsers and Docker no longer get a form that always refused.
+- **Guest accounts for other people (remote accounts):** an optional block in every reverse-proxy recipe forwards the three routes; the failure messages say
+  what is wrong (the proxy does not forward the routes, an `http://` or private-IP address).
+- **Texts made true:** the macOS local-network prompt, the MSI firewall feature, the LAN listener paragraph, the Windows NSSM restart commands.
+
 #### 2.1.0: blind copies for Windows and macOS, the macOS app, lock on sleep (2026-10-05)
 
 No sync protocol (still 3), database format or ciphertext change; nodes of 2.0.x and 2.1.0 keep syncing with each other in both directions.

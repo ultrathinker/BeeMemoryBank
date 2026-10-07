@@ -55,13 +55,15 @@ public class UserService(
     // "user" key slot, returning its id. Every superadmin needs one: UnlockAsync walks every
     // slot and tries the entered password against each, so a slot's password IS that user's
     // unlock password. Requires an unlocked session — the master DEK only exists in memory
-    // while the vault is open, and there is no other way to obtain it.
-    private async Task<int> CreateUserKeySlotAsync(string password)
+    // while the vault is open, and there is no other way to obtain it — unless the caller already
+    // holds the unwrapped DEK (the recovery-key reset, which proves it without opening the session).
+    // A DEK passed in stays the caller's: it is neither cloned nor wiped here.
+    private async Task<int> CreateUserKeySlotAsync(string password, byte[]? providedDek = null)
     {
-        if (!session.IsUnlocked)
+        if (providedDek == null && !session.IsUnlocked)
             throw new InvalidOperationException("Session must be unlocked to create a key slot");
 
-        var masterDek = session.GetMasterDek();
+        var masterDek = providedDek ?? session.GetMasterDek();
         byte[]? kek = null;
         try
         {
@@ -91,7 +93,7 @@ public class UserService(
         }
         finally
         {
-            Array.Clear(masterDek);
+            if (providedDek == null) Array.Clear(masterDek);
             Array.Clear(kek);
         }
     }
@@ -169,18 +171,34 @@ public class UserService(
     // promoted user's next login would (see ProvisionMissingKeySlotAsync). A locked session is
     // only fatal when a real slot has to be rewrapped — provisioning simply waits for the
     // next opportunity rather than blocking the password change.
-    private async Task RewrapOrProvisionKeySlotAsync(User user, string newPassword)
+    private async Task RewrapOrProvisionKeySlotAsync(User user, string newPassword, byte[]? providedDek = null)
     {
         if (user.KeySlotId.HasValue)
         {
-            var newSlotId = await CreateUserKeySlotAsync(newPassword);
+            var newSlotId = await CreateUserKeySlotAsync(newPassword, providedDek);
             await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
             user.KeySlotId = newSlotId;
         }
-        else if (user.Role == UserRoles.Superadmin && session.IsUnlocked)
+        else if (user.Role == UserRoles.Superadmin && (providedDek != null || session.IsUnlocked))
         {
-            user.KeySlotId = await CreateUserKeySlotAsync(newPassword);
+            user.KeySlotId = await CreateUserKeySlotAsync(newPassword, providedDek);
         }
+    }
+
+    // The tail every password REPLACEMENT shares (self-service change, admin reset, recovery-key
+    // reset): new login hash, the user's key slot re-pointed at the new password, then the
+    // revocations that make the old password stop meaning anything — security stamp (every web
+    // cookie of this user is rejected at its next revalidation) and remote API tokens.
+    private async Task ReplacePasswordAsync(User user, string newPassword, byte[]? providedDek = null)
+    {
+        ValidatePassword(newPassword);
+        user.PasswordHash = HashPassword(newPassword);
+
+        await RewrapOrProvisionKeySlotAsync(user, newPassword, providedDek);
+
+        await userRepo.UpdateAsync(user);
+        await userRepo.BumpSecurityStampAsync(user.Id);
+        await RevokeRemoteTokensAsync(user.Id);
     }
 
     /// <summary>
@@ -253,17 +271,10 @@ public class UserService(
         if (!VerifyPassword(oldPassword, user.PasswordHash))
             throw new UnauthorizedAccessException("Incorrect current password");
 
-        ValidatePassword(newPassword);
-        user.PasswordHash = HashPassword(newPassword);
-
-        await RewrapOrProvisionKeySlotAsync(user, newPassword);
-
-        await userRepo.UpdateAsync(user);
-        // Bump the security stamp: any outstanding Web cookie (this user's other sessions,
+        // Bumps the security stamp: any outstanding Web cookie (this user's other sessions,
         // and this session too) is rejected on next revalidation. Self-service password
         // change therefore forces a re-login — intended.
-        await userRepo.BumpSecurityStampAsync(userId);
-        await RevokeRemoteTokensAsync(userId);
+        await ReplacePasswordAsync(user, newPassword);
     }
 
     public async Task AdminChangePasswordAsync(int userId, string newPassword)
@@ -271,15 +282,79 @@ public class UserService(
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
 
-        ValidatePassword(newPassword);
-        user.PasswordHash = HashPassword(newPassword);
-
-        await RewrapOrProvisionKeySlotAsync(user, newPassword);
-
-        await userRepo.UpdateAsync(user);
         // Admin reset bumps the stamp — logs out every session for this user (intended).
-        await userRepo.BumpSecurityStampAsync(userId);
-        await RevokeRemoteTokensAsync(userId);
+        await ReplacePasswordAsync(user, newPassword);
+    }
+
+    /// <summary>
+    /// "Forgot your password": proves the recovery key opens THIS node's master key, then — for a
+    /// superadmin only — replaces that user's password the way an admin reset does (login hash, key
+    /// slot, security stamp, remote tokens). Reachable without signing in, so everything about it is
+    /// built to say "no" in one voice:
+    /// <list type="bullet">
+    /// <item><description>The recovery key is checked FIRST and always at full cost, before the user is
+    /// even looked up, so an unknown name, an ordinary user and a wrong key all cost the same Argon2id
+    /// work and come back as the same refusal.</description></item>
+    /// <item><description>The session is never touched: the DEK the key unwraps goes straight into the
+    /// new key slot and is wiped. The vault is left exactly as locked or unlocked as it was, and the
+    /// caller is not signed in.</description></item>
+    /// <item><description>Only a superadmin qualifies. A recovery key is the owner's tool; it is
+    /// not a way for the holder to take over an ordinary account.</description></item>
+    /// </list>
+    /// Other slots — other superadmins' passwords, every recovery key — are not touched.
+    /// </summary>
+    /// <exception cref="ArgumentException">The new password breaks the password rules (says nothing
+    /// about the key or the user).</exception>
+    public async Task<RecoveryResetResult> ResetPasswordWithRecoveryKeyAsync(
+        string username, string recoveryKey, string newPassword)
+    {
+        ValidatePassword(newPassword);
+
+        // A key copied from a printout or an email tends to arrive with a line break or a space at
+        // either end (or wrapped in the middle). The key itself is Base64 and holds no whitespace.
+        recoveryKey = string.Concat((recoveryKey ?? "").Where(c => !char.IsWhiteSpace(c)));
+
+        var dek = await session.TryOpenWithRecoveryKeyAsync(recoveryKey);
+        try
+        {
+            // A successful reset performs two more costly operations after opening the recovery
+            // slot: hashing the new login password and deriving the KEK for its replacement slot.
+            // Every refusal must pay those two operations too. Otherwise a wrong key would finish
+            // after just the slot attempt, while an unknown or ordinary user with a valid key
+            // would take roughly three derivations -- a username oracle for someone holding a
+            // recovery card. With no recovery slots at all, pay the missing slot attempt as well.
+            var hasRecoverySlot = (await keySlotRepo.GetAllAsync()).Any(s => s.SlotType == "recovery");
+            if (dek == null)
+            {
+                if (!hasRecoverySlot) BurnPasswordVerification(recoveryKey);
+                BurnPasswordVerification(recoveryKey);
+                BurnPasswordVerification(recoveryKey);
+            }
+
+            var user = await userRepo.GetByUsernameAsync((username ?? "").Trim());
+            var eligible = user is { Role: UserRoles.Superadmin };
+
+            if (dek == null || user == null || !eligible)
+            {
+                // A VALID key with an ineligible name still pays the two derivations a real reset
+                // does (new login hash, new slot), so it does not come back faster than the others.
+                if (dek != null)
+                {
+                    BurnPasswordVerification(recoveryKey);
+                    BurnPasswordVerification(recoveryKey);
+                }
+                return new RecoveryResetResult(
+                    dek == null ? RecoveryResetOutcome.WrongKey : RecoveryResetOutcome.NotEligible,
+                    user?.Id);
+            }
+
+            await ReplacePasswordAsync(user, newPassword, dek);
+            return new RecoveryResetResult(RecoveryResetOutcome.Reset, user.Id);
+        }
+        finally
+        {
+            if (dek != null) Array.Clear(dek);
+        }
     }
 
     public async Task DeleteUserAsync(int userId)
@@ -510,4 +585,20 @@ public class UserService(
             Array.Clear(expectedHash);
         }
     }
+}
+
+/// <summary>Why a recovery-key password reset did, or did not, happen. For the audit log only: callers must answer all refusals alike.</summary>
+public enum RecoveryResetOutcome
+{
+    Reset,
+    /// <summary>No recovery slot of this node opens with the key.</summary>
+    WrongKey,
+    /// <summary>The key is right, but the name is unknown, inactive, or not a superadmin.</summary>
+    NotEligible,
+}
+
+/// <param name="UserId">The account that was reset, or the one that refused (null when no such user).</param>
+public sealed record RecoveryResetResult(RecoveryResetOutcome Outcome, int? UserId)
+{
+    public bool Succeeded => Outcome == RecoveryResetOutcome.Reset;
 }

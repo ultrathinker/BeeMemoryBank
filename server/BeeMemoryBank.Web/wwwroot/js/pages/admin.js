@@ -629,6 +629,24 @@
         if (dlg) dlg.hide();
     }
 
+    // Restore snapshot: the choice between "this node only" and "the whole network"
+    var restoreModeEl = document.getElementById('restore-mode');
+    function currentRestoreMode() {
+        // "standalone" (this node only, the safe default) unless the network option is chosen
+        return restoreModeEl && restoreModeEl.value === 'network' ? 'network' : 'standalone';
+    }
+    function showRestoreMode() {
+        var mode = currentRestoreMode();
+        var standaloneInfo = document.getElementById('restore-mode-standalone');
+        var networkInfo = document.getElementById('restore-mode-network');
+        var backupRow = document.getElementById('restore-backup-row');
+        if (standaloneInfo) standaloneInfo.hidden = mode !== 'standalone';
+        if (networkInfo) networkInfo.hidden = mode !== 'network';
+        // A network restore always takes its own safety backup, so the checkbox does not apply to it
+        if (backupRow) backupRow.hidden = mode === 'network';
+    }
+    if (restoreModeEl) restoreModeEl.addEventListener('sl-change', showRestoreMode);
+
     // Restore snapshot confirmation
     var restoreBtn = document.getElementById('btn-restore-confirm');
     if (restoreBtn) {
@@ -638,20 +656,25 @@
             var password = passwordInput ? passwordInput.value : '';
             var backupCheckbox = document.getElementById('restore-backup-checkbox');
             var createBackup = backupCheckbox ? backupCheckbox.checked : true;
-            var modeEl = document.getElementById('restore-mode');
-            var mode = modeEl ? modeEl.value : 'standalone';
+            var mode = currentRestoreMode();
+            var token = document.querySelector('input[name="__RequestVerificationToken"]') ? document.querySelector('input[name="__RequestVerificationToken"]').value : '';
+
+            if (!password) {
+                alert('Master Password is required to restore a snapshot.');
+                return;
+            }
 
             if (mode === 'network') {
-                if (!confirm('Distribute snapshot state to entire network? This will affect all peers.')) return;
+                if (!confirm('Restore the whole network from this snapshot?\n\nEvery node that accepts it will replace its articles, folders, tags and media with the snapshot content.')) return;
 
                 restoreBtn.loading = true;
-                var restoreDlg = document.getElementById('dlg-restore-snapshot');
-                if (restoreDlg) restoreDlg.hide();
-                showProgress('Initiating network restore\u2026', 'Please wait.');
+                var networkDlg = document.getElementById('dlg-restore-snapshot');
+                if (networkDlg) networkDlg.hide();
+                showProgress('Initiating network restore…', 'Please wait.');
 
                 var fd = new FormData();
                 fd.append('fileName', fileName);
-                var token = document.querySelector('input[name="__RequestVerificationToken"]') ? document.querySelector('input[name="__RequestVerificationToken"]').value : '';
+                fd.append('masterPassword', password);
                 fetch('/Admin?handler=InitiateNetworkRestore', {
                     method: 'POST',
                     headers: {
@@ -660,41 +683,35 @@
                     body: fd
                 })
                 .then(function (r) {
-                    if (r.ok) return r.json();
-                    throw new Error('Failed to initiate network restore');
+                    return r.json().catch(function () { return {}; }).then(function (j) {
+                        if (r.ok && j && j.eventId) return j;
+                        throw new Error((j && j.error) || 'Failed to initiate network restore');
+                    });
                 })
-                .then(function (j) {
-                    if (j && j.eventId) {
-                        window.location.href = '/Login?restore=true';
-                    } else {
-                        hideProgress();
-                        alert('Restore failed.');
-                    }
+                .then(function () {
+                    window.location.href = '/Login?restore=true';
                 })
                 .catch(function (e) {
                     hideProgress();
-                    alert(e);
+                    alert(e && e.message ? e.message : 'Failed to initiate network restore');
                 })
                 .finally(function () { restoreBtn.loading = false; });
                 return;
             }
 
-            if (!password) {
-                alert('Master Password is required for standalone restore.');
-                return;
-            }
+            if (!confirm('Restore this node only?\n\nIt becomes a new node: new identity, and it forgets its trusted nodes, blind copies and sync history. Your other devices must be joined to it again.')) return;
+
             restoreBtn.loading = true;
 
             var restoreDlg = document.getElementById('dlg-restore-snapshot');
             if (restoreDlg) restoreDlg.hide();
 
-            var label = 'Restoring snapshot\u2026';
+            var label = 'Restoring snapshot…';
             var detail = createBackup
-                ? 'Creating safety backup first, then restoring\u2026'
-                : 'Restoring snapshot without backup\u2026';
+                ? 'Creating safety backup first, then restoring…'
+                : 'Restoring snapshot without backup…';
             showProgress(label, detail);
 
-            var token = document.querySelector('input[name="__RequestVerificationToken"]') ? document.querySelector('input[name="__RequestVerificationToken"]').value : '';
             fetch('/Admin?handler=RestoreSnapshot', {
                 method: 'POST',
                 headers: {
@@ -704,13 +721,14 @@
                 body: 'fileName=' + encodeURIComponent(fileName) +
                       '&masterPassword=' + encodeURIComponent(password) +
                       '&createBackupFirst=' + (createBackup ? 'true' : 'false') +
-                      '&standaloneMode=' + (mode === 'standalone' ? 'true' : 'false')
+                      '&mode=' + encodeURIComponent(mode)
             })
             .then(function (r) {
                 if (r.redirected) {
+                    // The page answers with a redirect: to the sign-in page, which says what happened, or back here with the error
                     window.location.href = r.url;
                 } else if (r.ok) {
-                    window.location.href = '/Login?restore=true';
+                    window.location.href = '/Login?restored=standalone';
                 } else {
                     hideProgress();
                     alert('Restore failed');
@@ -790,6 +808,13 @@
             var dlg = document.getElementById('dlg-restore-snapshot');
             if (inputFn) inputFn.value = fname;
             if (disp) disp.textContent = fname;
+            // Every opening starts from the default: this node only, backup first, nothing typed
+            if (restoreModeEl) restoreModeEl.value = 'standalone';
+            var backupDefault = document.getElementById('restore-backup-checkbox');
+            if (backupDefault) backupDefault.checked = true;
+            var passwordDefault = document.getElementById('restore-master-password');
+            if (passwordDefault) passwordDefault.value = '';
+            showRestoreMode();
             if (dlg) dlg.show();
             return;
         }
@@ -811,6 +836,29 @@
                 setTimeout(function () { urlInput.value = curl; }, 50);
             }
             if (dlgUrl) dlgUrl.show();
+            return;
+        }
+
+        // Let blind copies call this node (ADR 0007)
+        var hubBtn = e.target.closest('.btn-open-hub');
+        if (hubBtn) {
+            var hubIdInput = document.getElementById('hub-node-id');
+            var hubNameEl = document.getElementById('hub-node-name');
+            var hubAddr = document.getElementById('hub-address');
+            var hubTrust = document.getElementById('hub-trust');
+            var hubDlg = document.getElementById('dlg-hub');
+            var hubUrl = hubBtn.dataset.currentUrl || '';
+            if (hubIdInput) hubIdInput.value = hubBtn.dataset.nodeId;
+            if (hubNameEl) hubNameEl.textContent = 'Node: ' + hubBtn.dataset.nodeName;
+            if (hubAddr) {
+                hubAddr.value = /^https:\/\//i.test(hubUrl) ? hubUrl : '';
+                setTimeout(function () { if (!hubAddr.value && /^https:\/\//i.test(hubUrl)) hubAddr.value = hubUrl; }, 50);
+            }
+            if (hubTrust) {
+                hubTrust.value = hubBtn.dataset.trust || 'public-ca';
+                setHubMode(hubTrust.value);
+            }
+            if (hubDlg) hubDlg.show();
             return;
         }
 
@@ -937,8 +985,27 @@
         }
     }, pageOpts);
 
+    // Which explanation and fields the "Let blind copies call this node" dialog shows for the mode chosen.
+    function setHubMode(mode) {
+        var show = function (id, on) {
+            var el = document.getElementById(id);
+            if (el) el.style.display = on ? '' : 'none';
+        };
+        show('hub-help-public-ca', mode === 'public-ca');
+        show('hub-help-pin', mode === 'pin');
+        show('hub-help-off', mode === 'off');
+        show('hub-address-row', mode !== 'off');
+        show('hub-pin-row', mode === 'pin');
+    }
+
     // Delegated Shoelace switch changes
     document.addEventListener('sl-change', function (e) {
+        var hubSelect = e.target.closest ? e.target.closest('#hub-trust') : null;
+        if (hubSelect) {
+            setHubMode(hubSelect.value);
+            return;
+        }
+
         // Auto accept restore toggle
         var autoAcceptSwitch = e.target.closest('.switch-auto-accept');
         if (autoAcceptSwitch) {

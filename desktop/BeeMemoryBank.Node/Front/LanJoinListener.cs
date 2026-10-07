@@ -224,7 +224,7 @@ public sealed class LanJoinListener : IAsyncDisposable
     {
         if (!TokenMatches(ctx.Request.Headers[TokenHeader].ToString()))
         {
-            await RefuseAsync(ctx, "This connection code is not valid. Open Connect a device on the computer and use the code shown there.");
+            await RefuseAsync(ctx, "This join code is not valid. Open Connect a device on the computer and use the code shown there.");
             return;
         }
 
@@ -236,7 +236,7 @@ public sealed class LanJoinListener : IAsyncDisposable
                 await RefuseAsync(ctx, "Another device is joining with this code right now. Try again in a moment.", StatusCodes.Status409Conflict);
                 return;
             case TokenState.Spent:
-                await RefuseAsync(ctx, "This connection code has already been used. Start Connect a device again for a new one.");
+                await RefuseAsync(ctx, "This join code has already been used. Start Connect a device again for a new one.");
                 return;
         }
 

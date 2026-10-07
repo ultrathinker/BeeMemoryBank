@@ -54,10 +54,11 @@ public partial class ApiClient(HttpClient http)
         return (false, error);
     }
 
-    public async Task<(bool Ok, string? Error)> InitJoinAsync(string adminUsername, string displayName, string remoteUrl, string password)
+    /// <param name="joinCode">The join code from the other computer's "Connect a device" card; when given it replaces <paramref name="remoteUrl"/>.</param>
+    public async Task<(bool Ok, string? Error)> InitJoinAsync(string adminUsername, string displayName, string remoteUrl, string password, string? joinCode = null)
     {
         var resp = await http.PostAsync("/api/init/join",
-            Body(new { adminUsername, displayName, remoteUrl, password }));
+            Body(new { adminUsername, displayName, remoteUrl, password, joinCode }));
         if (resp.IsSuccessStatusCode)
             return (true, null);
         var body = await resp.Content.ReadAsStringAsync();
@@ -117,6 +118,45 @@ public partial class ApiClient(HttpClient http)
         }
         var result = await resp.Content.ReadFromJsonAsync<LoginResponse>(JsonOpts);
         return new LoginResult(true, null, false, result!.Username, result.DisplayName, result.Role, result.UserId.ToString(), result.MigratedSyntheticUsername, result.SecurityStamp);
+    }
+
+    /// <summary>
+    /// "Forgot your password": asks the node to replace a superadmin's password, proving it with a
+    /// recovery key. Anonymous on purpose (nobody can sign in yet); the node answers every refusal
+    /// with the same 401, so this does not tell "no such user" from "wrong key". The key and the
+    /// passwords travel in the body only, never in a URL or a log line. <paramref name="clientIp"/> is
+    /// the browser's address for the node's per-IP throttle and its audit log.
+    /// </summary>
+    public async Task<RecoverAccessResult> RecoverAccessAsync(
+        string username, string recoveryKey, string newPassword, string? clientIp)
+    {
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await http.PostAsync("/api/session/recover-access",
+                Body(new { username, recoveryKey, newPassword, clientIp }));
+        }
+        catch (HttpRequestException)
+        {
+            return new RecoverAccessResult(RecoverAccessOutcome.Unavailable);
+        }
+
+        using (resp)
+        {
+            switch (resp.StatusCode)
+            {
+                case System.Net.HttpStatusCode.OK:
+                    return new RecoverAccessResult(RecoverAccessOutcome.Changed);
+                case System.Net.HttpStatusCode.Unauthorized:
+                    return new RecoverAccessResult(RecoverAccessOutcome.Refused);
+                case System.Net.HttpStatusCode.TooManyRequests:
+                    return new RecoverAccessResult(RecoverAccessOutcome.TooManyAttempts);
+                case System.Net.HttpStatusCode.BadRequest:
+                    return new RecoverAccessResult(RecoverAccessOutcome.Invalid, await ReadErrorAsync(resp));
+                default:
+                    return new RecoverAccessResult(RecoverAccessOutcome.Unavailable);
+            }
+        }
     }
 
     public async Task LockAsync()

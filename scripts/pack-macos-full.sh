@@ -383,7 +383,7 @@ $UI_ELEMENT
   <key>NSSupportsSuddenTermination</key>
   <false/>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>Bee Memory Bank looks for your other nodes on the local network and lets your phone connect to this one.</string>
+  <string>Bee Memory Bank looks for other nodes on your local network, announces itself there when you switch on Devices on my network, and lets a phone or another computer join this Mac.</string>
   <key>NSBonjourServices</key>
   <array>
     <string>$BONJOUR_SERVICE</string>

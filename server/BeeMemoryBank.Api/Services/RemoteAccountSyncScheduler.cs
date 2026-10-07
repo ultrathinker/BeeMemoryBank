@@ -80,6 +80,14 @@ public class RemoteAccountSyncScheduler(
                         "Token rejected by owner (401). Re-enter credentials.", null);
                     continue;
                 }
+                // 403/404/405 with no JSON error from the owner's API: its reverse proxy (or its web
+                // page) answered, which means the guest routes are not forwarded. Say that, instead of
+                // "access lost", which would send the guest to detach a subscription that is fine.
+                if (await RemoteAccountErrors.AreRoutesNotForwardedAsync(resp, RemoteRoute.FolderSnapshot))
+                {
+                    await accountRepo.UpdateStatusAsync(account.Id, "error", RemoteAccountErrors.RoutesNotForwarded, null);
+                    continue;
+                }
                 if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden
                     || resp.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
@@ -92,6 +100,11 @@ public class RemoteAccountSyncScheduler(
                     await accountRepo.UpdateStatusAsync(account.Id, "access_lost",
                         $"Owner returned HTTP {(int)resp.StatusCode} for {sub.RemoteFolderPath}. " +
                         "If permanent, detach the subscription manually.", DateTime.UtcNow);
+                    continue;
+                }
+                if (resp.StatusCode == System.Net.HttpStatusCode.Locked)
+                {
+                    await accountRepo.UpdateStatusAsync(account.Id, "error", RemoteAccountErrors.OwnerLocked, null);
                     continue;
                 }
                 if (!resp.IsSuccessStatusCode)

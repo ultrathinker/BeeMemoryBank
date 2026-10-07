@@ -8,6 +8,13 @@ namespace BeeMemoryBank.Hosting;
 /// </summary>
 public static class DesktopShellCommands
 {
+    /// <summary>
+    /// How the app shell's web view names itself in its user agent. The Windows app is recognised by
+    /// <c>window.chrome.webview</c> (WebView2); WKWebView, which the Mac app hosts, has no such object, so the Mac
+    /// shell appends this to its user agent and the Setup page looks for it. A browser, and Docker, never carry it.
+    /// </summary>
+    public const string UserAgentToken = "BeeMemoryBankDesktop";
+
     /// <summary>"Open an existing profile": the native folder picker.</summary>
     public const string OpenExistingProfile = "https://bmb-desktop.invalid/open-existing-profile";
 

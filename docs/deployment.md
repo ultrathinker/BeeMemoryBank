@@ -8,6 +8,9 @@
 | `ASPNETCORE_URLS` | API, Web | Bind URL (e.g., `http://localhost:5300`) |
 | `ASPNETCORE_ENVIRONMENT` | API, Web | Production / Development |
 | `BMB_API_URL` | Web | Internal API URL (e.g., `http://localhost:5300`) |
+| `BMB_MCP_URL` | Web | Optional. The MCP address the Profile page prints in the connection snippet for an AI assistant (for example `https://bee.example.com/mcp`). A bare origin gets `/mcp` appended; it must be `http://` or `https://`, with no user name, query or fragment. Normally unset: the page works the address out itself (see *AI assistants and the MCP address* below). Set it when your reverse proxy forwards `/mcp` under a name the page cannot see, or to print one fixed address whatever the page is opened from. |
+| `BMB_API_PUBLISHED_PORT` | Web | Optional. The host port the API (5300) is published on, on the host's loopback. `docker-compose.reverse-proxy.yml` sets it; in `docker-compose.yml` it goes with the commented API port line. The Profile page then prints `http://127.0.0.1:<port>/mcp`, which is right for an AI assistant on the same computer. |
+| `BMB_WEB_BIND` | Docker host (`.env`) | Optional, default `127.0.0.1`. The host address `docker-compose.yml` publishes the Web port on. The default keeps the login page on this computer only; `0.0.0.0` exposes it on every network interface of the host, on purpose (see below). |
 | `BMB_INTERNAL_KEY` | API, Web | Shared secret for Web→API authentication. Every request from Web to API must carry this key in the `X-Internal-Key` header. **In Docker:** `docker-entrypoint.sh` auto-generates and exports the key before starting both processes — you do not need to set it manually. **From source (separate processes):** you must set it explicitly and pass the same value to both API and Web (see below). The API refuses to start in Production if the key is missing. |
 | `BMB_AUDIT_RETENTION_DAYS` | API | Optional. How long to keep `tbl_audit_log` rows. Default `90`. Set to `0` to disable pruning entirely. The pruning service runs ~24 h after process start and once a day after; it skips when the session is locked (no operator present to react to anomalies) and writes a meta-audit row recording the deletion so the prune itself shows up in the audit trail. |
 | `BMB_COMPACTION_KEEP_COUNT` | API | Optional. How many of the most recent events survive an event-log compaction. Default `1500`, minimum `100` (a lower value is ignored and the default used instead). This number is also how far a peer may fall behind before compacting would strand it, so it trades two things off against each other: raise it and `tbl_event` stays large but a phone that was off for a week can still resume; lower it and the log shrinks but a peer that misses a busy day has to wipe and rejoin. With ~20 active writers 1500 events is roughly a day or two. Compaction refuses outright while any peer would be stranded and names them; `acceptCuttingOffPeers` on `POST /api/admin/compact` is the deliberate override, and it logs which peers it stranded. |
@@ -18,14 +21,19 @@
 
 ```
 Container: bmb  (docker compose)
-Web:  localhost:5301  → container :5301   (published)
+Web:  127.0.0.1:5301  → container :5301   (published, this computer only)
 API:  container :5300                     (NOT published — see below)
 Data: /var/lib/beememorybank  (bind mount to /app/data)
 Image: multi-stage build from Dockerfile
 ```
 
-The shipped `docker-compose.yml` deliberately publishes only the Web port — the right choice for a
-purely local node. For a node that must be reachable from other nodes or MCP agents, use
+The shipped `docker-compose.yml` deliberately publishes only the Web port, and only on this
+computer's loopback (`127.0.0.1`) — the right choice for a purely local node. Docker's port
+publishing skips `ufw`, so a mapping without a host address would put the login page on every network
+interface of the host. (The desktop apps' "Devices on my network" switch, Admin → Nodes, does not apply to Docker: here the
+published ports are the whole answer; see [internet-access.md](internet-access.md#do-you-need-this).) To expose it on purpose (a trusted LAN), set `BMB_WEB_BIND=0.0.0.0` in `.env`
+and put TLS in front of it: the session cookie is `Secure`, so sign-in over plain HTTP from another
+computer does not work anyway. For a node that must be reachable from other nodes or MCP agents, use
 **`docker-compose.reverse-proxy.yml`** instead: it publishes both ports bound to the host's
 loopback, for a reverse proxy to sit in front of.
 
@@ -39,18 +47,42 @@ firewalled — and the API surface includes a master-password oracle (see below)
 per-server compose files live under `deploy/`, which is gitignored; keep them in step with the
 reverse-proxy reference file, because nothing in CI can check a file that isn't in the repository.
 
+### AI assistants and the MCP address
+
+`/mcp` is served by the API (port 5300), not by the Web page you browse. The Profile page shows a
+ready-to-paste connection snippet when you create an agent key, and it prints the address like this,
+first match wins:
+
+1. `BMB_MCP_URL`, if you set it.
+2. The address you browse from, when the page is served by the desktop app, the Windows service or
+   the Mac app: their front door serves `/mcp` on the same address as the page.
+3. The address you browse from, when the page is opened through a reverse proxy (it sent
+   `X-Forwarded-Host` or `X-Forwarded-Proto`): the recipes in
+   [internet-access.md](internet-access.md) forward `/mcp` to the API.
+4. `http://127.0.0.1:<BMB_API_PUBLISHED_PORT>/mcp`, when the API port is published on the host's
+   loopback (`docker-compose.reverse-proxy.yml` does; right for assistants on the same computer).
+5. Nothing: the page says that AI assistants cannot reach this node yet, instead of a dead address.
+   That is the case for the default `docker-compose.yml`, which does not publish the API port.
+
+To switch assistants on for a default Docker node, uncomment the two marked lines in
+`docker-compose.yml` (the loopback API port and `BMB_API_PUBLISHED_PORT`), or use
+`docker-compose.reverse-proxy.yml` and a proxy that forwards `/mcp`.
+
 ## Reverse Proxy — What Is Exposed
 
 Only the following endpoints should be publicly accessible:
 - `/mcp` — MCP server (authentication via Bearer token at the application level)
 - `/api/sync` — synchronization between nodes (Ed25519)
 - `/api/join` — join protocol
+- `/api/blind/replica` — only if blind copies (the Windows, macOS and Android blind apps) should be able to call this node
+  (see "Blind copies can call this node" below)
 
 Everything else (including `/api/articles`) should be restricted to trusted IPs or localhost.
 
 **How the application enforces this.** The node keeps its own list of what a caller without
 `BMB_INTERNAL_KEY` may reach — `PublicSurface` in the source, covering `/mcp`, `/api/sync/*`,
-`POST /api/join`, the snapshot-file and restore-progress routes, `/health` and `GET /api/version`.
+`POST /api/join`, `GET /api/blind/replica`, the snapshot-file and restore-progress routes, `/health` and
+`GET /api/version`.
 Anything else answers `404` to a keyless caller: not `403`, because "this endpoint exists but you may
 not use it" is itself worth knowing to someone probing your node. The web UI and the desktop tray
 present the internal key and are unaffected.
@@ -65,13 +97,53 @@ configuration was the only thing between them and the internet:
 - `POST /api/join` — master password grants mesh membership. This one is published on purpose; see the
   Trust Model section of [SECURITY.md](../SECURITY.md) for what a joined node can then do.
 
+**Optional: guest accounts for other people.** Three more routes are public by design but forwarded by no
+shipped configuration: `POST /api/auth/remote-token`, `GET /api/folders/accessible` and
+`GET /api/folders/by-path/snapshot`. They exist so that another person's node can mirror folders of this one with a
+user name and password (a "remote account"). They stay closed unless you add them to your proxy; what they mean
+for security, what the owner has to provide and which messages the guest sees are in
+[internet-access.md](internet-access.md#4-optional-guest-accounts-for-other-people). For Apache, add them before
+`ProxyPass /`:
+
+```apache
+# OPTIONAL: guest accounts for other people (off unless you add this)
+ProxyPassMatch "^/api/(auth/remote-token|folders/accessible|folders/by-path/snapshot)$" "http://127.0.0.1:5300/api/$1"
+```
+
+The "Forgot your password? Use a recovery key" flow adds no route to publish: `/RecoverAccess` is a page of the
+Web UI (it travels to the Web port with the rest of the pages), and the API route behind it,
+`POST /api/session/recover-access`, requires the internal key and is deliberately **not** in the node's public
+surface. Do not forward it from the proxy.
+
 **Keep the proxy path-filter anyway.** It is now the outer of two layers rather than the only one, and
 it is the layer that stops the request before it reaches the application at all. Restrict the API port
-to loopback and forward only `/mcp`, `/api/sync`, `/api/join` and `/api/snapshots/restore` over TLS.
+to loopback and forward only `/mcp`, `/api/sync`, `/api/join`, `/api/blind/replica` (if you use blind copies) and
+`/api/snapshots/restore` over TLS.
 
 A node that receives a network-wide snapshot restore needs `GET /api/snapshots/restore/{id}/file`
 forwarded (Bearer-authenticated with a sync token, like the rest of `/api/sync`). Without it the
 restore initiator can publish the event but no peer can fetch the snapshot.
+
+**Blind copies can call this node.** A blind copy never listens; it calls a node over https. For this node to be
+that node, forward `/api/sync/*` (already there for other nodes) and `GET /api/blind/replica` — the signed package
+of a copy's first load — and, in Admin on another node of the network, choose *Trusted Nodes → Let blind copies call
+this node*: the address (https), and **Normal certificate** (a real certificate, e.g. Let's Encrypt behind your
+proxy: the copy checks it through the system's certificate chain, name included) or **Pinned certificate** (the key
+the node presents is recorded; every device then accepts only that key). The node checks the address and the
+certificate before it saves. Apache:
+
+```apache
+# inside the VirtualHost, before "ProxyPass /": the API routes, then the Web UI
+ProxyPassMatch "^(/mcp(?:/.*)?|/api/sync/.*|/api/join|/api/snapshots/restore/[^/]+/file|/api/blind/replica)$" "http://127.0.0.1:5300$1"
+ProxyPass / http://127.0.0.1:5301/
+```
+
+Both blind routes need a sync token, which only a device that signed in with its own key (one you paired) gets, and
+the whole whitelist row is re-checked on every request. What they serve is ciphertext plus the plaintext metadata
+every node holds (titles, folder paths, tags; [ADR 0005](adr/0005-plaintext-metadata.md)) — never the master key. The
+replica route also limits each device to 20 requests per ten minutes. A lost blind copy is revoked in Admin
+(*Trusted Nodes → Revoke*), and its token stops working at once. Design and trade-offs:
+[ADR 0007](adr/0007-blind-copies-call-a-full-node.md).
 
 **Escape hatch.** `BMB_PUBLIC_SURFACE=off` disables the node-side gate if a deployment turns out to
 need an endpoint the list does not know about. It is meant for a bad afternoon, not as a setting — the

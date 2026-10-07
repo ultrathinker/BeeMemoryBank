@@ -38,7 +38,7 @@
             <sl-icon name="qr-code" style="font-size:1.4rem;vertical-align:middle;margin-right:6px;"></sl-icon>
             Connect a device
         </h2>
-        <p class="connect-subtitle">Join a phone to this computer's network, without a hub. <a href="/Admin">Back to Admin</a></p>
+        <p class="connect-subtitle">Join a phone or another computer to this one, without a hub. <a href="/Admin">Back to Admin</a></p>
 
         @if (Model.Lan.Error != null)
         {
@@ -53,12 +53,14 @@
             <sl-alert variant="warning" open style="margin-bottom:16px;">
                 <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
                 <strong>This node cannot open a LAN listener.</strong> Connecting a device this way
-                works in the BeeMemoryBank Windows app. Other devices can join through a hub.
+                works in the BeeMemoryBank desktop apps (Windows and Mac) and in the Windows service.
+                With Docker, the published ports in <code>docker-compose.yml</code> decide what other computers can reach
+                (see <code>docs/deployment.md</code>). Other devices can join through a hub.
             </sl-alert>
         }
         else
         {
-            @if (!Model.Lan.FirewallRule)
+            @if (Model.Lan.FirewallManaged && !Model.Lan.FirewallRule)
             {
                 <div class="firewall">
                     <p><strong>Windows Firewall will block the phone.</strong> To let devices on your
@@ -74,11 +76,36 @@
                 </div>
             }
 
-            @if (!Model.Lan.Active)
+            @if (Model.Lan.Platform == "macos")
+            {
+                <div class="firewall">
+                    <p><strong>On a Mac, macOS asks for permission.</strong> When the first device connects, macOS asks whether
+                       &ldquo;Bee Memory Bank&rdquo; may accept incoming network connections. Choose <strong>Allow</strong>.
+                       Bee Memory Bank does not change the firewall itself.</p>
+                </div>
+            }
+            else if (!Model.Lan.FirewallManaged && Model.Lan.Platform == "windows")
+            {
+                <div class="firewall">
+                    <p><strong>Windows service.</strong> The firewall is not changed from here: the installer's
+                       &ldquo;Configure Windows Firewall Exception&rdquo; option opens port @Model.Lan.Port. If you did not
+                       choose it, add an inbound rule for TCP @Model.Lan.Port yourself.</p>
+                </div>
+            }
+
+            @if (!Model.Lan.Active && Model.Lan.Setting == "on")
+            {
+                <sl-alert variant="danger" open style="margin-bottom:16px;">
+                    <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                    <strong>Devices on my network is on, but the node could not open port @Model.Lan.Port.</strong>
+                    Another program may be using it. See <a href="/Admin">Admin</a>.
+                </sl-alert>
+            }
+            else if (!Model.Lan.Active)
             {
                 <p class="instructions">This computer is not listening on the network right now.
-                   Opening it lets one phone join in the next 15 minutes; it closes by itself once
-                   the phone has joined or the time is up. The vault stays unlocked.</p>
+                   Opening it lets one device join in the next 15 minutes; it closes by itself once
+                   the device has joined or the time is up. The vault stays unlocked.</p>
                 <form method="post" asp-page-handler="Enable" class="action-row">
                     <sl-button type="submit" variant="primary">
                         <sl-icon slot="prefix" name="phone"></sl-icon>
@@ -90,7 +117,11 @@
             {
                 @if (Model.Lan.ExpiresAt is { } expiresAt)
                 {
-                    <p class="connect-subtitle">Open until @expiresAt.ToLocalTime().ToString("HH:mm"), or until a phone has joined.</p>
+                    <p class="connect-subtitle">Open until @expiresAt.ToLocalTime().ToString("HH:mm"), or until a device has joined.</p>
+                }
+                else if (Model.Lan.Mode == "permanent")
+                {
+                    <p class="connect-subtitle">These codes do not expire: Devices on my network is on (<a href="/Admin">Admin</a>).</p>
                 }
                 @foreach (var ep in Model.Endpoints)
                 {
@@ -102,13 +133,20 @@
                     </div>
                 }
                 <div class="instructions">
-                    <p>On the phone, choose <strong>Join</strong>, paste this join code (or scan the
+                    <p>On a phone, choose <strong>Join</strong>, paste this join code (or scan the
                        QR with the camera and copy its text), and enter the master password. The
                        phone checks this computer's key from the code before it sends the password
                        anywhere.</p>
+                    <p>On another computer running Bee Memory Bank, open its first-run page, choose
+                       <strong>Connect to another device</strong>, paste this join code and enter the master
+                       password. It checks this computer's key the same way. With <code>bmb join</code>, use
+                       <code>--code</code>.</p>
                 </div>
                 @if (Model.Lan.Mode == "on-demand")
                 {
+                    <p class="instructions">This door is for joining only, and closes afterwards. For another computer to keep
+                       syncing with this one it has to reach this computer again: switch on
+                       <strong>Devices on my network</strong> in <a href="/Admin">Admin</a>.</p>
                     <form method="post" asp-page-handler="Disable" class="action-row">
                         <sl-button type="submit" variant="default">Stop listening</sl-button>
                     </form>

@@ -77,8 +77,10 @@
             int currentStepNum = step == "done" ? 3 : (step == "form" ? 2 : 1);
         }
 
-        <!-- ═══ Open an existing profile, browser variant (reached solely via the "Open an existing
-             profile" card on step 1 outside the Windows app; never shown automatically) ═══ -->
+        <!-- ═══ Folder form behind the old browser variant of "Open an existing profile". No button leads here any
+             more (the card is desktop-only and uses the native picker); the panel stays only so that a direct
+             POST to the Migrate handler, which forwards a blind-backup folder to the restore wizard, can still
+             show its error instead of a blank page. ═══ -->
         <div class="wizard-panel @(step == "legacy" ? "active" : "")" id="panel-legacy">
             <a href="#" class="back-link" id="link-legacy-back">
                 <sl-icon name="arrow-left"></sl-icon> Back
@@ -112,15 +114,19 @@
                         <small>Use the notes you already keep on another computer or server.</small>
                     </div>
                 </button>
-                <!-- In the Windows app this card asks the app shell for a native folder picker and
-                     opens that folder as the profile; in a browser it shows the copy form above. -->
-                <button class="mode-card" id="btn-mode-existing" type="button">
-                    <sl-icon name="folder2-open"></sl-icon>
-                    <div class="mode-card-text">
-                        <strong>Open an existing profile</strong>
-                        <small>Use a folder that already holds your Bee Memory Bank data.</small>
-                    </div>
-                </button>
+                <!-- Desktop app only (setup.js reveals it, on Windows and on the Mac): the card asks the app
+                     shell for the native folder picker and opens that folder as the profile. In a browser
+                     and in Docker nothing could pick a folder on the node, and the old copy form always
+                     refused (the node is running), so there the card is never shown. -->
+                <div data-desktop-only hidden>
+                    <button class="mode-card" id="btn-mode-existing" type="button">
+                        <sl-icon name="folder2-open"></sl-icon>
+                        <div class="mode-card-text">
+                            <strong>Open an existing profile</strong>
+                            <small>Use a folder that already holds your Bee Memory Bank data.</small>
+                        </div>
+                    </button>
+                </div>
                 <a class="mode-card" href="/Setup?step=restore" style="text-decoration:none;color:inherit;">
                     <sl-icon name="life-preserver"></sl-icon>
                     <div class="mode-card-text">
@@ -129,6 +135,10 @@
                     </div>
                 </a>
             </div>
+            <!-- Desktop app only: the same thing as the "Open an existing profile" card, from the tray / menu bar. -->
+            <p data-desktop-only hidden class="text-muted" style="font-size:0.8rem;margin:14px 0 0;text-align:center;">
+                You can also add a folder with your data later: tray icon (menu-bar icon on a Mac) &rarr; Profiles &rarr; Add existing profile&hellip;
+            </p>
         </div>
 
         <partial name="_SetupRestore" model="Model" />
@@ -165,17 +175,32 @@
             <div id="form-join" style="display:@(mode == "join" ? "block" : "none");">
                 <form method="post" asp-page-handler="Join" class="tab-panel-form" data-setup-form="join">
                     @Html.AntiForgeryToken()
-                    <sl-input name="remoteUrl" id="join-remote-url" label="Address of the other device" required autofocus
-                              placeholder="https://bee.example.com" type="url"></sl-input>
+                    <!-- The code another computer shows under Admin > Connect a device: its address, a one-time token and
+                         the pin of its certificate. Pasted, it fills the address below and the join goes only to the computer
+                         the code belongs to; no certificate has to be trusted first. -->
+                    <sl-input name="joinCode" id="join-code" label="Join code from the other computer" autofocus
+                              placeholder="bmb-join:?a=https%3A%2F%2F192.168.1.20%3A5311&amp;t=&hellip;" autocomplete="off"
+                              help-text="On that computer open Admin, then Connect a device, and copy the code it shows. It is the easiest way to join a computer on your own network."></sl-input>
+                    <small id="join-code-status" class="text-muted" style="display:none;margin:-4px 0 4px;"></small>
+
+                    <sl-input name="remoteUrl" id="join-remote-url" label="Address of the other device"
+                              placeholder="https://bee.example.com" type="url"
+                              help-text="Only if you have no join code: the web address of a node that has a normal HTTPS certificate."></sl-input>
 
                     <!-- Optional, on request only: an mDNS scan (OnGetDiscoveredNodes) whose results
-                         pre-fill the address field above. Never runs by itself. -->
+                         pre-fill the address field above. Never runs by itself. It finds the computers that have
+                         "Devices on my network" switched on (Admin > Nodes); a computer that only opens Connect a device
+                         is not announced, and is joined by its code. -->
                     <div id="join-discovered" style="margin-bottom:4px;">
                         <sl-button variant="default" size="small" id="btn-scan-network" type="button" outline
                                    style="width:100%;">
                             <sl-icon slot="prefix" name="broadcast-pin"></sl-icon>
                             Find devices on my network
                         </sl-button>
+                        <small class="text-muted" style="display:block;margin-top:4px;">
+                            Finds computers that have &ldquo;Devices on my network&rdquo; switched on (Admin &rarr; Nodes). A computer you have
+                            not switched that on for is not found: use the join code from its Connect a device card.
+                        </small>
                         <div id="discovered-nodes" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
 

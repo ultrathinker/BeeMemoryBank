@@ -51,6 +51,7 @@ BeeMemoryBank uses a LUKS-style multi-slot key system stored in `tbl_key_slot`:
 - Each key slot contains: Argon2id salt, wrapped Master DEK ciphertext, IV, and iteration parameters
 - Passwords can be added or changed without re-encrypting any article content
 - A sentinel value (`AES-256-GCM("BeeMemoryBank", masterDEK)`) is used to verify correct password entry
+- A `recovery` slot opens with a recovery key a superadmin issued and keeps offline. Besides unlocking from the command line, it lets the owner of a forgotten superadmin password set a new one **without signing in** (Sign In page → *Forgot your password? Use a recovery key*, or `bmb user reset-password`). That path is built so it can only help the owner: it opens `recovery` slots only and checks the sentinel; it is limited to superadmin accounts; every refusal (unknown user, ordinary user, wrong or foreign key) is one identical answer after identical Argon2id work; it is throttled per client address and per username and audited (`user_password_recovery_reset` / `_refused`, never the key); it replaces only that user's key slot and ends their web sessions and remote tokens; and it never unlocks the shared session or signs anyone in. Whoever holds a recovery key is as powerful as an administrator who knows the password — keep the key as carefully as the password. See [docs/account-recovery.md](docs/account-recovery.md).
 
 ### Agent Key Encryption
 
@@ -149,7 +150,7 @@ The new peer is stored with `is_superadmin = 1`: whoever knows the master passwo
 
 - **Revoke another peer.** A `whitelist_revoke` event it signs is applied by every node that receives it and accepts it. A node never revokes *itself* on a remote event, so the revoked peer keeps its own copy of the vault — but every other node stops accepting its events, which is the same thing as being cut out.
 - **Hard-delete content network-wide.** `hard_delete` is not a tombstone: on every peer it physically purges the article (or the whole folder subtree) from the database and deletes the matching `.enc` media files from disk. Nothing is left to restore from except a snapshot taken beforehand.
-- **Initiate a network-wide restore.** A `restore_network` event replaces the vault on every peer with the initiator's snapshot. Peers with `tbl_whitelist.auto_accept_restore` set apply it unattended; the rest queue it for an admin, and rejecting it permanently disconnects them from the originator's timeline (wipe-and-rejoin to come back). Online DEK rotation propagates through the same peer-acceptance mechanism.
+- **Initiate a network-wide restore.** A `restore_network` event replaces the content of every peer (articles, folders, tags, media; not users, key slots or the node's identity) with the initiator's snapshot. Peers with `tbl_whitelist.auto_accept_restore` set apply it unattended; on every other peer the event remains Pending. There is no UI prompt, notification, or manual approval path: enabling auto-restore for the originator makes the peer apply it on its next sync or unlock. Online DEK rotation propagates through the same peer-acceptance mechanism.
 
 So a device that joined only to read notes can also revoke any other peer, hard-delete content network-wide, or trigger a destructive restore. If that is not wanted for a particular device, demote it (below); the web, CLI and mobile join flows all apply the same rule (`JoinAuthority`).
 
@@ -158,6 +159,24 @@ A node's Ed25519 identity key is pinned to its NodeId at join and there is no wa
 Authority is granted the same deliberate way it is taken away: `PUT /api/whitelist/{nodeId}/superadmin` (Admin → Trusted Nodes) sets or clears `is_superadmin`, and the flag travels in a `whitelist_update` event so the whole mesh agrees. Demoting removes the three powers above without cutting the peer off from content; promoting gives them back (and is how a peer recorded before BMB-42 gets them). Two limits are worth knowing. Each node enforces the flag from *its own* whitelist row, so a change that reaches only some nodes only takes effect on those nodes — and a node running a build older than this feature ignores the flag entirely and keeps treating every peer as it always has. The affected node itself is not told: it has no whitelist row for itself, so its own UI still offers actions that every other node may now reject (or, for a promotion issued by a node that is not itself superadmin anywhere else, that no other node will ever accept in the first place — see [docs/sync.md](docs/sync.md#trust-model) for which workflows that touches). Revoking (`DELETE /api/whitelist/{nodeId}`) remains the answer for a peer you no longer want syncing at all.
 
 **Bootstrapping a mesh still needs one trust anchor.** A node's own row is never present in its own whitelist, so there is no way for a joiner to *learn* whether the node it just dialed into is itself a superadmin — the join response has nothing to read that from. The CLI, mobile and web-based join flows all record the immediate bootstrap node as a superadmin: it handed over a key slot the master password opens. What the rest of the mesh thinks of the joiner is decided by each node from the bootstrap node's `whitelist_add`, which it accepts only if the bootstrap node is a superadmin in its own rows.
+
+### A node blind copies can call (a hub)
+
+A blind copy never listens; it calls a node whose whitelist row says it may be called and how to trust its TLS endpoint
+([ADR 0007](docs/adr/0007-blind-copies-call-a-full-node.md)). Setting that row (Admin → Trusted Nodes → "Let blind copies call
+this node") is superadmin-only, refused for agents, needs the master password again and is verified before it is saved: the address
+answers as that very node (id and Ed25519 key) and, for a **normal certificate**, the TLS handshake validates through the system's
+chain, name included. A **pinned certificate** records the key the node presents on that one connection (trust on first use; the
+dialog says so and accepts the expected pin), and warns when a public certificate would break the pin at its next renewal.
+
+What each choice protects against, and what it does not: a pin cannot be satisfied by a certificate a CA issues by mistake or under
+duress; a normal certificate can, so anyone a public authority issues the name's certificate to can impersonate the hub's TLS
+endpoint to a blind copy. What that gets them is limited: a blind copy authenticates by an Ed25519 challenge and verifies the Ed25519
+signature of every package under the key its call code carries, so a man in the middle cannot hand it forged data (it can withhold
+it), and what travels is ciphertext plus the plaintext metadata every node holds (ADR 0005), never the master key. A stolen
+blind-copy token (one hour) can pull exactly that and nothing more; the replica route limits each device to 20 requests per ten
+minutes, and revoking the copy in Admin stops its token at once. The blind apps accept a normal-certificate node only over https
+to the call code's own origin, with no redirect and no fall-back to http.
 
 ### The master password is the network, not the node
 

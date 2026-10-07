@@ -183,6 +183,32 @@ public class RateLimitRouteClassificationTests
         RateLimitPath.Classify("/api-proxy/init/reset", null).Should().Be(RateLimitedRoute.None);
     }
 
+    /// <summary>
+    /// "Forgot your password?" checks a recovery key (an Argon2id derivation per recovery slot) for a
+    /// caller nobody has signed in, so it has a budget of its own: not the sign-in one (20 tries would be
+    /// far too many guesses at a key), and not none. Every spelling the router resolves to the page must land
+    /// in it — the path is normalized first, exactly as for the other classes.
+    /// </summary>
+    [Theory]
+    [InlineData("/RecoverAccess")]
+    [InlineData("/recoveraccess/")]
+    [InlineData("//RECOVERACCESS")]
+    public void TheRecoveryPageHasABudgetOfItsOwn(string rawPath)
+    {
+        var route = RateLimitPath.Classify(RateLimitPath.Normalize(rawPath), null);
+
+        route.Should().Be(RateLimitedRoute.RecoverAccess);
+        route.Should().NotBe(RateLimitedRoute.Login);
+    }
+
+    [Fact]
+    public void ARecoveryHandlerNameCannotMoveItToAnotherBudget()
+    {
+        RateLimitPath.Classify("/recoveraccess", ["ResetNode"]).Should().Be(RateLimitedRoute.RecoverAccess);
+        RateLimitPath.Classify("/recoveraccessx", null).Should().Be(RateLimitedRoute.None);
+        RateLimitPath.Classify("/recoveraccess/done", null).Should().Be(RateLimitedRoute.None);
+    }
+
     [Fact]
     public void UnrelatedPathsAreNotThrottled()
     {

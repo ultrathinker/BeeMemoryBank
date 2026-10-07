@@ -32,8 +32,27 @@
 #   /api/sync                     -> API  (node-to-node synchronization, Ed25519-authenticated)
 #   /api/join                     -> API  (join protocol)
 #   /api/snapshots/restore/*/file -> API  (network-wide restore; sync-token authenticated)
+#   /api/blind/replica            -> API  (blind copies can call this node — see below)
 #   /                             -> Web
+#
+# OPTIONAL, off unless you add it to the proxy: guest accounts for other people. Three more routes,
+# forwarded to the API in exactly the same way:
+#   /api/auth/remote-token        -> API  (a user name and password for a token; the node rate-limits it)
+#   /api/folders/accessible       -> API  (the folders a guest may mirror; needs that token)
+#   /api/folders/by-path/snapshot -> API  (one folder and its articles; needs that token)
+# Without them, another node's remote account for this node fails with "The other node does not let
+# guest sign-ins through". Ready-to-paste blocks for Caddy, nginx, Apache and Cloudflare Tunnel, and
+# what it means for security: docs/internet-access.md ("Optional: guest accounts for other people").
+#
 # See docs/deployment.md ("Reverse Proxy — What Is Exposed") for the full rationale.
+#
+# Blind copies can call this node. A blind copy (the Windows, macOS or Android blind app) never listens: it
+# calls a node. To let it call this one, forward the two routes it uses — /api/sync/* (already above) and
+# /api/blind/replica (the signed package of its first load) — and mark the node under Admin > Trusted Nodes
+# (on another node of the network): "Let blind copies call this node". Both routes need a sync token
+# (a device you paired signs in with its own key); what they return is ciphertext plus the plaintext metadata
+# every node holds (titles, folder paths, tags — ADR 0005), never the master key. A lost blind copy is
+# revoked in Admin, and its token stops working at once. See docs/internet-access.md.
 #
 # The proxy must also pass X-Forwarded-For (mod_proxy and nginx do by default) and the node must be
 # told to believe it — see BMB_TRUSTED_PROXIES below.
@@ -63,6 +82,14 @@ services:
       # every peer, or the login budget for every user. Covers the default Docker bridge ranges;
       # narrow it to this stack's own network if you know its subnet.
       - BMB_TRUSTED_PROXIES=172.16.0.0/12
+      # The host port the API is published on above. The Profile page prints the snippet for an AI
+      # assistant from it (http://127.0.0.1:<port>/mcp, right for assistants on this computer) when
+      # the page is not opened through your proxy. Opened through the proxy it prints that address
+      # plus /mcp instead, which works because the proxy forwards /mcp (see above). To print one
+      # fixed address whatever the page is opened from, set BMB_MCP_URL in .env (for example
+      # BMB_MCP_URL=https://bee.example.com/mcp). Empty = not set.
+      - BMB_API_PUBLISHED_PORT=${BMB_API_PORT:-5300}
+      - BMB_MCP_URL=${BMB_MCP_URL:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5300/health"]
       interval: 30s

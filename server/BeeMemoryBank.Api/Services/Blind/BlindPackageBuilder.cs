@@ -51,9 +51,10 @@ public sealed class BlindPackageBuilder(
 
         var peers = (await whitelist.GetAllActiveAsync())
             .Select(r => new BlindManifestPeer(r.NodeId, r.DisplayName, Convert.ToBase64String(r.Ed25519PublicKey),
-                r.ApiAddress, r.IsSuperadmin, r.TlsSpki, r.LamportTs, r.SourceNodeId))
+                r.ApiAddress, r.IsSuperadmin, r.EffectivePin, r.LamportTs, r.SourceNodeId, r.EffectiveTlsTrust))
             .Prepend(new BlindManifestPeer(self.NodeId, self.DisplayName, Convert.ToBase64String(self.Ed25519PublicKey),
-                producerAddress, producerIsSuperadmin, producerSpki, LamportTs: 0, SourceNodeId: null))
+                producerAddress, producerIsSuperadmin, producerSpki, LamportTs: 0, SourceNodeId: null,
+                TlsTrust: producerSpki is null ? null : BlindTrust.Pin))
             .ToList();
         var pulled = (await positions.GetAllAsync())
             .Select(p => new BlindManifestPosition(p.RemoteNodeId, p.LastSequenceNum))

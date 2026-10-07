@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 namespace BeeMemoryBank.Web.Pages;
 
 [Authorize(Roles = "superadmin")]
-public class AdminModel(ApiClient api) : PageModel
+public class AdminModel(ApiClient api, IHttpClientFactory httpClientFactory) : PageModel
 {
     public string? SuccessMessage { get; set; }
     public string? ErrorMessage { get; set; }
@@ -41,6 +41,13 @@ public class AdminModel(ApiClient api) : PageModel
     /// is safe.
     /// </summary>
     public LockImpactDto? LockImpact { get; set; }
+
+    /// <summary>
+    /// The "Devices on my network" card (Admin > Nodes): what the desktop node says about its network listener, turned into what the
+    /// page offers. On a node that is not a desktop node (Docker) it says so, and the card explains what decides instead.
+    /// </summary>
+    public DevicesOnMyNetworkCard DevicesCard { get; set; } =
+        DevicesOnMyNetworkCard.From(NodeLanClient.LanStatus.Unavailable, []);
 
     public string? CurrentVersion { get; set; }
     public JsonElement? UpdateStatus { get; set; }
@@ -117,6 +124,32 @@ public class AdminModel(ApiClient api) : PageModel
             : RedirectToPage(new { err = "Failed to change the master password. Check the current password and that the vault is unlocked." });
     }
 
+    /// <summary>Switches "Devices on my network": the node opens or closes its HTTPS listener, no restart, the vault stays unlocked.</summary>
+    public async Task<IActionResult> OnPostSetDevicesOnMyNetworkAsync(bool enabled, CancellationToken ct)
+    {
+        var client = new NodeLanClient(httpClientFactory.CreateClient());
+        var answer = await client.SetDevicesOnMyNetworkAsync(enabled, ct);
+        if (answer.Error != null)
+            return RedirectToPage(new { err = answer.Error });
+        return RedirectToPage(new { msg = enabled
+            ? "Devices on my network is on: other devices on this network can now reach this node."
+            : "Devices on my network is off: this node answers this computer only." });
+    }
+
+    /// <summary>The Windows firewall step of the card: add the rule, or remove it. Each asks Windows for administrator permission.</summary>
+    public async Task<IActionResult> OnPostDevicesFirewallAsync(string action, CancellationToken ct)
+    {
+        var client = new NodeLanClient(httpClientFactory.CreateClient());
+        var add = string.Equals(action, "add", StringComparison.Ordinal);
+        var answer = add ? await client.AddFirewallRuleAsync(ct) : await client.RemoveFirewallRuleAsync(ct);
+        if (answer.Error != null)
+            return RedirectToPage(new { err = answer.Error });
+        var done = add ? answer.FirewallRule : !answer.FirewallRule;
+        return done
+            ? RedirectToPage(new { msg = add ? "The Windows Firewall rule is in place." : "The Windows Firewall rule is removed." })
+            : RedirectToPage(new { err = "Windows did not change the firewall (the permission prompt was declined or failed)." });
+    }
+
     public async Task<IActionResult> OnPostDismissPasswordNoticeAsync()
     {
         var ok = await api.DismissMasterPasswordNoticeAsync();
@@ -158,6 +191,15 @@ public class AdminModel(ApiClient api) : PageModel
             : RedirectToPage(new { err = error ?? "Failed to update node address" });
     }
 
+    /// <summary>"Let blind copies call this node": the Api verifies the address and the certificate and publishes the row.</summary>
+    public async Task<IActionResult> OnPostSetBlindCallableAsync(Guid nodeId, string trust, string? address, string password, string? expectedPin)
+    {
+        var (result, error) = await api.SetBlindCallableAsync(nodeId, trust, address, password, expectedPin);
+        if (result is null) return RedirectToPage(new { err = error ?? "Could not change how blind copies reach this node." });
+        var done = trust == "off" ? "Blind copies can no longer be paired to call this node." : "Blind copies can now be paired to call this node.";
+        return RedirectToPage(new { msg = string.IsNullOrEmpty(result.Notice) ? done : done + " " + result.Notice });
+    }
+
     public async Task<IActionResult> OnPostSetAutoAcceptRestoreAsync(Guid nodeId, bool autoAccept)
     {
         var (ok, error) = await api.SetAutoAcceptRestoreAsync(nodeId, autoAccept);
@@ -169,7 +211,7 @@ public class AdminModel(ApiClient api) : PageModel
         }
         SuccessMessage = autoAccept
             ? "Auto-accept restore enabled — restores from this peer will apply automatically."
-            : "Auto-accept restore disabled — restores from this peer will require manual approval.";
+            : "Auto-accept restore disabled — restores from this peer remain pending; there is no manual approval prompt.";
         await LoadDataAsync();
         return Page();
     }
@@ -213,14 +255,15 @@ public class AdminModel(ApiClient api) : PageModel
         return new JsonResult(result);
     }
 
-    public async Task<IActionResult> OnPostInitiateNetworkRestoreAsync(string fileName)
+    public async Task<IActionResult> OnPostInitiateNetworkRestoreAsync(string fileName, string? masterPassword)
     {
-        var snapshots = await api.GetSnapshotsAsync() ?? new();
-        var snap = snapshots.FirstOrDefault(s => s.FileName == fileName);
-        if (snap == null) return NotFound();
+        // Restoring every node is the most destructive thing this page offers: the password is asked for
+        // again, as it is for a restore of this node alone.
+        if (string.IsNullOrEmpty(masterPassword))
+            return new JsonResult(new { error = "Enter the master password to confirm the restore." }) { StatusCode = 400 };
 
-        var (ok, eventId, error) = await api.InitiateNetworkRestoreAsync(snap.FileId ?? Guid.Empty);
-        if (!ok) return BadRequest(error);
+        var (ok, eventId, error) = await api.InitiateNetworkRestoreAsync(fileName, masterPassword);
+        if (!ok) return new JsonResult(new { error }) { StatusCode = 400 };
         return new JsonResult(new { eventId });
     }
 
@@ -234,18 +277,23 @@ public class AdminModel(ApiClient api) : PageModel
         return new FileStreamResult(new DisposingStreamWrapper(stream, result), "application/gzip") { FileDownloadName = fileName };
     }
 
+    /// <summary>
+    /// Restores this node only: it becomes a new node (the network restore has its own handler). On success the
+    /// user lands on the sign-in page, which says what happened — the vault is locked after a restore, and the
+    /// node is a new one that the other devices have to be joined to again.
+    /// </summary>
     public async Task<IActionResult> OnPostRestoreSnapshotAsync(
-        string fileName, string masterPassword, bool createBackupFirst = true, bool standaloneMode = false)
+        string fileName, string? masterPassword, bool createBackupFirst = true, string? mode = null)
     {
-        var (ok, error, backupFileName) = await api.RestoreSnapshotAsync(
-            fileName, masterPassword, createBackupFirst, standaloneMode);
+        // Nothing but a restore of this node is served here, and a value nobody defined is refused rather than read as the default.
+        if (!RestoreModes.IsStandalone(mode))
+            return RedirectToPage(new { err = "Unknown restore mode. Restoring the whole network is started from the Restore dialog with that option chosen." });
+        if (string.IsNullOrEmpty(masterPassword))
+            return RedirectToPage(new { err = "Enter the master password to confirm the restore." });
+
+        var (ok, error, _) = await api.RestoreSnapshotAsync(fileName, masterPassword, createBackupFirst, RestoreModes.Standalone);
         if (ok)
-        {
-            var msg = "Snapshot restored successfully";
-            if (backupFileName != null)
-                msg += $" (backup: {backupFileName})";
-            return RedirectToPage(new { msg });
-        }
+            return RedirectToPage("/Login", new { restored = RestoreModes.Standalone });
         return RedirectToPage(new { err = error ?? "Restore failed" });
     }
 
@@ -379,6 +427,7 @@ public class AdminModel(ApiClient api) : PageModel
             api.GetUpdateStatusAsync().ContinueWith(t => UpdateStatus = t.Result),
             api.GetSearchMetricsAsync().ContinueWith(t => SearchMetrics = t.Result),
             api.GetLockImpactAsync().ContinueWith(t => LockImpact = t.Result),
+            LoadDevicesCardAsync(),
             api.GetAutoUnlockStatusAsync().ContinueWith(t =>
             {
                 OsAutoUnlockEnabled = t.Result.Enabled;
@@ -386,6 +435,12 @@ public class AdminModel(ApiClient api) : PageModel
             }),
         };
         await Task.WhenAll(tasks);
+    }
+
+    private async Task LoadDevicesCardAsync()
+    {
+        var status = await new NodeLanClient(httpClientFactory.CreateClient()).GetAsync();
+        DevicesCard = DevicesOnMyNetworkCard.From(status, LanAddresses.BrowserUrls(status.Port, LanAddresses.GetLanIPv4Addresses()));
     }
 
     public static string RelativeTime(DateTime? utc)

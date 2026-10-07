@@ -6,9 +6,16 @@ using System.Threading.Tasks;
 
 namespace BeeMemoryBank.Node;
 
-/// <summary>The inbound firewall rule the LAN join listener needs to be reachable from a phone.</summary>
+/// <summary>The inbound firewall rule the LAN listeners need to be reachable from another device.</summary>
 public interface ILanFirewall
 {
+    /// <summary>
+    /// True where the app can offer to change this computer's firewall for the user: the Windows desktop app. False on a Mac
+    /// (the system asks the user itself when the first connection arrives; the app changes nothing), under the Windows
+    /// service (no desktop to ask on; the installer's firewall option opens the ports) and everywhere else.
+    /// </summary>
+    bool CanManage { get; }
+
     /// <summary>True if the rule is already in place (reading needs no elevation).</summary>
     bool RuleExists(int port);
 
@@ -17,11 +24,29 @@ public interface ILanFirewall
     /// says it will ask for administrator rights; false if they declined or it failed.
     /// </summary>
     Task<bool> AddWithConsentAsync(int port);
+
+    /// <summary>
+    /// Removes the rule the same way, for the same reason: the user pressed a button that says it asks for
+    /// administrator rights. False if they declined or it failed.
+    /// </summary>
+    Task<bool> RemoveWithConsentAsync(int port);
+}
+
+/// <summary>
+/// The firewall where the app does not touch it (a Mac, the Windows service, Linux): nothing to add, nothing to remove. The
+/// pages read <see cref="ILanFirewall.CanManage"/> and say what applies on that system instead of offering a button.
+/// </summary>
+public sealed class NoLanFirewall : ILanFirewall
+{
+    public bool CanManage => false;
+    public bool RuleExists(int port) => false;
+    public Task<bool> AddWithConsentAsync(int port) => Task.FromResult(false);
+    public Task<bool> RemoveWithConsentAsync(int port) => Task.FromResult(false);
 }
 
 /// <summary>
 /// <see cref="ILanFirewall"/> over <c>netsh advfirewall</c>. The node runs unelevated, and an inbound
-/// rule has no per-user variant, so the rule is added by an elevated <c>netsh</c> the user approves
+/// rule has no per-user variant, so the rule is added (and removed) by an elevated <c>netsh</c> the user approves
 /// in the UAC dialog — once: afterwards <see cref="RuleExists"/> finds it and nobody is asked again.
 /// The rule admits the local subnet only; the listener is for devices in the same room.
 /// </summary>
@@ -30,6 +55,8 @@ public sealed class NetshLanFirewall : ILanFirewall
     public const string RuleName = "BeeMemoryBank device connect";
 
     private const int ErrorCancelled = 1223; // ERROR_CANCELLED: the user said no in the UAC dialog
+
+    public bool CanManage => OperatingSystem.IsWindows();
 
     public bool RuleExists(int port)
     {
@@ -50,10 +77,14 @@ public sealed class NetshLanFirewall : ILanFirewall
         return proc.ExitCode == 0 && output.Contains(port.ToString(), StringComparison.Ordinal);
     }
 
-    public async Task<bool> AddWithConsentAsync(int port)
+    public Task<bool> AddWithConsentAsync(int port) => RunElevatedAsync(AddRuleArguments(port), () => RuleExists(port));
+
+    public Task<bool> RemoveWithConsentAsync(int port) => RunElevatedAsync(RemoveRuleArguments(), () => !RuleExists(port));
+
+    private static async Task<bool> RunElevatedAsync(string arguments, Func<bool> succeeded)
     {
         if (!OperatingSystem.IsWindows()) return false;
-        var psi = new ProcessStartInfo(NetshPath, AddRuleArguments(port))
+        var psi = new ProcessStartInfo(NetshPath, arguments)
         {
             UseShellExecute = true,
             Verb = "runas",
@@ -64,7 +95,7 @@ public sealed class NetshLanFirewall : ILanFirewall
             using var proc = Process.Start(psi);
             if (proc == null) return false;
             await proc.WaitForExitAsync();
-            return proc.ExitCode == 0 && RuleExists(port);
+            return proc.ExitCode == 0 && succeeded();
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
         {
@@ -76,7 +107,10 @@ public sealed class NetshLanFirewall : ILanFirewall
     public static string AddRuleArguments(int port) =>
         $"advfirewall firewall add rule name=\"{RuleName}\" dir=in action=allow protocol=TCP " +
         $"localport={port} remoteip=localsubnet " +
-        "description=\"Lets a phone on this network join BeeMemoryBank while Connect a device is open.\"";
+        "description=\"Lets another device on this network reach BeeMemoryBank: Connect a device, and Devices on my network when it is switched on.\"";
+
+    /// <summary>The <c>netsh</c> command line that removes it again — public for the test that pins it.</summary>
+    public static string RemoveRuleArguments() => $"advfirewall firewall delete rule name=\"{RuleName}\"";
 
     private static string ShowRuleArguments() => $"advfirewall firewall show rule name=\"{RuleName}\"";
 

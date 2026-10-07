@@ -16,7 +16,10 @@ public sealed record RestoreIdentity(string AdminUsername, string DisplayName, s
 /// <summary>The blind node a network restore came from; it becomes this device's first peer.</summary>
 /// <param name="CpSeq">Its log head the package covers (the signed manifest's cp_sequence).</param>
 /// <param name="TlsSpki">The pin the user typed with the code: the blind node's row keeps it.</param>
-public sealed record RestoreBlindPeer(Guid NodeId, string DisplayName, byte[] PublicKey, string ApiAddress, long CpSeq, string? TlsSpki = null);
+/// <param name="TlsTrust">How this node's TLS endpoint is trusted (<see cref="BlindTrust"/>); null with a pin reads as <c>pin</c>.
+/// A hub on a public CA (an Android backup's listener) is <c>public-ca</c> with no pin.</param>
+public sealed record RestoreBlindPeer(Guid NodeId, string DisplayName, byte[] PublicKey, string ApiAddress, long CpSeq, string? TlsSpki = null,
+    string? TlsTrust = null);
 
 /// <summary>What a restore did.</summary>
 /// <param name="RemainingBoxes">Recovery boxes the user chose not to try (<see cref="RestoreBoxPolicy.SkipRemaining"/>).</param>
@@ -574,12 +577,15 @@ public class RecoveryRestoreService(
         foreach (var peer in peers)
         {
             var isBlindSource = blind != null && peer.NodeId == blind.NodeId;
+            var tlsSpki = isBlindSource ? blind!.TlsSpki ?? peer.TlsSpki : peer.TlsSpki;
+            var tlsTrust = isBlindSource ? blind!.TlsTrust ?? peer.TlsTrust : peer.TlsTrust;
             await whitelist.CreateAsync(new WhitelistEntry
             {
                 NodeId = peer.NodeId, DisplayName = peer.DisplayName, Ed25519PublicKey = peer.PublicKey,
                 ApiAddress = isBlindSource ? blind!.ApiAddress.TrimEnd('/') : peer.ApiAddress,
                 // The blind node we came from: the pin the user typed. Everyone else: the pin the manifest carries.
-                TlsSpki = isBlindSource ? blind!.TlsSpki ?? peer.TlsSpki : peer.TlsSpki,
+                TlsSpki = BlindTrust.PinOf(tlsTrust, tlsSpki),
+                TlsTrust = BlindTrust.Effective(tlsTrust, tlsSpki),
                 IsSuperadmin = peer.IsSuperadmin, Status = "A", CreatedAt = now, UpdatedAt = now,
                 // The row's LWW version as the source held it: an older whitelist_update must still lose.
                 LamportTs = peer.LamportTs, SourceNodeId = peer.SourceNodeId

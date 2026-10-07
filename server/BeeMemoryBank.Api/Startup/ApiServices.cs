@@ -59,6 +59,10 @@ builder.Services.AddRecoveryApi();
 builder.Services.AddSingleton<SyncTokenStore>();
 // Per-node, not per-process: see SyncChallengeRateLimiter.
 builder.Services.AddSingleton<BeeMemoryBank.Api.Endpoints.SyncEndpoints.SyncChallengeRateLimiter>();
+// The "forgot your password" endpoint's attempt buckets and pending announcement. A blind node has no
+// users, no session endpoints and nobody to reset, so it does not carry it.
+if (!role.IsBlind)
+    builder.Services.AddSingleton<BeeMemoryBank.Api.Services.RecoveryAccessState>();
 builder.Services.AddSingleton<BeeMemoryBank.Api.Services.IPublicHostValidator, BeeMemoryBank.Api.Services.DnsPublicHostValidator>();
 // BMB_SYNC_INTERVAL_SECONDS: override scheduler tick (default 60s). Useful for tests with
 // fast iteration; set to e.g. 5 to push/pull every 5s. Production should leave it unset.
@@ -107,6 +111,18 @@ if (!role.IsBlind && !string.Equals(builder.Configuration["BMB_MDNS_ENABLED"], "
             o.Port = port;
         if (bool.TryParse(Environment.GetEnvironmentVariable("BMB_MDNS_HTTPS"), out var https))
             o.Https = https;
+        // The desktop node (bmbd) hands the decision to the profile's "Devices on my network" setting: the announcer is
+        // registered, but announces (and opens its multicast socket) only while the setting, or BMB_HTTPS_ENABLED=1, is on, and
+        // withdraws when it goes off. The file is the one the node itself reads and writes, in the data folder.
+        if (string.Equals(builder.Configuration["BMB_MDNS_FOLLOWS_NETWORK_SETTING"], "1", StringComparison.Ordinal))
+        {
+            // Both: the setting (or BMB_HTTPS_ENABLED=1) says it is wanted, the node's listener state says it really listens. A port
+            // that could not be bound (another program has it) must not be announced, and the record is withdrawn when the listener stops.
+            var networkSettings = new BeeMemoryBank.Infrastructure.Network.NodeNetworkSettingsStore(dataPath);
+            var listenerState = new BeeMemoryBank.Infrastructure.Network.LanListenerState(dataPath);
+            o.AnnounceGate = () => networkSettings.Current().Enabled && listenerState.IsListening();
+            o.RefreshInterval = TimeSpan.FromSeconds(10);
+        }
     });
 }
 builder.Services.AddHttpClient();
@@ -266,6 +282,10 @@ else
     builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.IBlindPeerReseeder>(sp => sp.GetRequiredService<BlindNodeManager>());
     // Pairing an Android blind node, which calls one of the nodes above (plan section 10).
     builder.Services.AddSingleton<BeeMemoryBank.Api.Services.BlindPhone.BlindPhonePairingService>();
+    // "Let blind copies call this node" (ADR 0007): the check of the address and the certificate before the row is saved.
+    // No extra trust roots in production; a test registers its own after this (the same abstraction the blind apps use).
+    builder.Services.AddSingleton(BeeMemoryBank.Crypto.TlsTrustAnchors.None);
+    builder.Services.AddSingleton<HubTrustProbe>();
     AddMcp(builder.Services);
 }
 

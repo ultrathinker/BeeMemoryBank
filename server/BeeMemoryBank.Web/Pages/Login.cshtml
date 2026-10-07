@@ -92,7 +92,38 @@ else
     <div id="login-form-active" class="login-card">
         <h2><sl-icon name="shield-lock" style="margin-right:6px;"></sl-icon> Login</h2>
 
+        @if (Model.RestoredAsNewNode)
+        {
+            <sl-alert variant="warning" open id="restored-new-node-notice" style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                <strong>The snapshot was restored. This node is now a new node.</strong>
+                @if (Model.RestoredIdentity != null)
+                {
+                    <div style="margin-top:6px;">
+                        Node: <strong>@Model.RestoredIdentity.DisplayName</strong>
+                        <div class="text-sm">Node id: <code>@Model.RestoredIdentity.NodeId</code></div>
+                    </div>
+                }
+                <ul style="margin:8px 0 0 20px;">
+                    <li>Sign in with the master password the snapshot was made under.</li>
+                    <li><strong>Join your other devices again:</strong> they still know the old node, not this one.</li>
+                    <li>Pair the blind copies (PC, Mac, phone) again; the trusted nodes and the sync history were forgotten.</li>
+                </ul>
+                <div style="margin-top:8px;">
+                    <a href="https://github.com/ultrathinker/BeeMemoryBank/blob/main/docs/snapshot-restore.md" target="_blank" rel="noopener noreferrer">Read what a restore does</a>
+                </div>
+            </sl-alert>
+        }
+
         <partial name="_HttpsRequiredAlert" />
+
+        @if (Model.Recovered)
+        {
+            <sl-alert variant="success" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="check2-circle"></sl-icon>
+                The password was changed. Sign in with the new one.
+            </sl-alert>
+        }
 
         @if (!string.IsNullOrEmpty(Model.ErrorMessage))
         {
@@ -110,10 +141,18 @@ else
                 <sl-input name="password" label="Password" type="password" required password-toggle></sl-input>
             </div>
             <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+            @if (Model.Recovered)
+            {
+                <input type="hidden" name="recovered" value="true" />
+            }
             <sl-button type="submit" variant="primary" style="width:100%;">
                 <sl-icon slot="prefix" name="box-arrow-in-right"></sl-icon> Sign In
             </sl-button>
         </form>
+
+        <p class="text-sm" style="margin-top:16px;text-align:center;">
+            <a id="forgot-password-link" href="/RecoverAccess">Forgot your password? Use a recovery key</a>
+        </p>
 
     </div>
 }

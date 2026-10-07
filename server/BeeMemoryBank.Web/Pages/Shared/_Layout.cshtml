@@ -169,6 +169,13 @@
                 @migrationBanner
             </sl-alert>
         }
+        @if (TempData["RecoveryKeyReminder"] is string recoveryKeyReminder)
+        {
+            <sl-alert variant="warning" open closable style="margin:12px 16px 0;">
+                <sl-icon slot="icon" name="key"></sl-icon>
+                @recoveryKeyReminder <a href="/Admin">Open Admin</a>
+            </sl-alert>
+        }
         @RenderBody()
     </div>
 

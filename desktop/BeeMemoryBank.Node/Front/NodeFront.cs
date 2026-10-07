@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Forwarder;
 using Yarp.ReverseProxy.Model;
@@ -461,5 +462,35 @@ public static class NodeFrontBuilder
         builder.Services.AddSingleton(front);
 
         return front;
+    }
+
+    /// <summary>
+    /// The second front behind "Devices on my network" (<see cref="LanFrontListener"/>): the same routes as the loopback
+    /// front, served over HTTPS at <paramref name="endpoint"/> only, with the certificate <paramref name="certificate"/> returns
+    /// (resolved on every handshake, so the leaf's rotation needs no restart). It has no <c>/node/lan</c> and no <c>/node/lock</c>
+    /// control: those are for the page and the shell on this computer, and the <c>/node</c> group refuses everything that is not
+    /// loopback anyway. Not started.
+    /// </summary>
+    public static WebApplication BuildNetworkFront(
+        IReadOnlyDictionary<string, ReadyFileInfo> children,
+        IPEndPoint endpoint,
+        Func<X509Certificate2?> certificate)
+    {
+        if (children == null) throw new ArgumentNullException(nameof(children));
+        if (endpoint == null) throw new ArgumentNullException(nameof(endpoint));
+        if (certificate == null) throw new ArgumentNullException(nameof(certificate));
+
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
+        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        // Only this listener: no --urls, so Kestrel has no plain-HTTP address to fall back to.
+        builder.WebHost.ConfigureKestrel(options => options.Listen(endpoint, listen => listen.UseHttps(https =>
+        {
+            https.SslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13;
+            https.ServerCertificateSelector = (_, _) => certificate();
+        })));
+        var front = Build(builder, children);
+        var app = builder.Build();
+        front.MapEndpoints(app);
+        return app;
     }
 }

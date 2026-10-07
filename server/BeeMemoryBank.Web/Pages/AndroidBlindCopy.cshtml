@@ -11,8 +11,8 @@
     </h2>
     <p class="text-muted" style="margin-bottom:18px;max-width:720px;">
         A phone in "Blind copy" mode keeps an encrypted copy of this network and makes backups, but never
-        holds the master key. It does not listen for connections: it calls a blind node or a hub, which
-        must already be in this network.
+        holds the master key. It does not listen for connections: it calls a blind node or a hub (a full node
+        set up for it), which must already be in this network.
     </p>
 
     @if (Model.ErrorMessage != null)
@@ -39,8 +39,8 @@
     else if (Model.Listeners.Count == 0)
     {
         <sl-alert variant="warning" open style="max-width:720px;">
-            This network has no node a phone can call. Add a blind node first (or a hub with a pinned
-            certificate): this PC alone cannot serve a phone.
+            This network has no node a phone can call. Add a blind node first, or set up a hub: under Admin, Trusted Nodes,
+            "Let blind copies call this node" on the server a phone should call. This PC alone cannot serve a phone.
         </sl-alert>
     }
     else
@@ -53,7 +53,7 @@
                 <select id="listenerId" name="listenerId" required>
                     @foreach (var l in Model.Listeners)
                     {
-                        <option value="@l.NodeId">@l.DisplayName (@(l.IsBlind ? "blind node" : "hub"), @l.Address)</option>
+                        <option value="@l.NodeId">@l.DisplayName (@(l.IsBlind ? "blind node" : "hub"), @l.TrustLabel, @l.Address)</option>
                     }
                 </select>
                 <div style="margin-top:12px;">

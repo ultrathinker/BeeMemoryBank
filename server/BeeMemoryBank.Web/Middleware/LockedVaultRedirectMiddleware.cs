@@ -13,14 +13,14 @@ namespace BeeMemoryBank.Web.Middleware;
 /// makes it one consistent answer: locked means the login page, straight away.</para>
 ///
 /// <para>Only full-page GETs are checked: /api-proxy calls, static files and the anonymous pages
-/// (/Login, /Logout, /Setup, /Error) pass through untouched. An API that cannot be reached fails
+/// (/Login, /Logout, /RecoverAccess, /Setup, /Error) pass through untouched. An API that cannot be reached fails
 /// open, like the other API-dependent checks in this pipeline.</para>
 /// </summary>
 public sealed class LockedVaultRedirectMiddleware(RequestDelegate next, ILogger<LockedVaultRedirectMiddleware> logger)
 {
     private static readonly string[] PassThroughPrefixes =
     [
-        "/Login", "/Logout", "/Setup", "/Error", "/api-proxy", "/node",
+        "/Login", "/Logout", "/RecoverAccess", "/Setup", "/Error", "/api-proxy", "/node",
         "/lib", "/css", "/js", "/images", "/favicon",
     ];
 

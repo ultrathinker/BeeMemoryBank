@@ -278,7 +278,11 @@ public record WhitelistAddPayload(
     [property: JsonPropertyName("is_superadmin")]    bool IsSuperadmin = false,
     // The pinned TLS key of a peer with a self-signed certificate (a blind node, plan 4.4). Absent
     // from older senders, which never add such a peer.
-    [property: JsonPropertyName("tls_spki")]         string? TlsSpki = null
+    [property: JsonPropertyName("tls_spki")]         string? TlsSpki = null,
+    // How blind copies trust this node's TLS endpoint: "pin" or "public-ca" (BlindTrust, ADR 0007).
+    // Optional and ignored by an older node, which then reads the row as it always did (a pin is a
+    // pin; nothing else is callable) — sync protocol 3 is unchanged.
+    [property: JsonPropertyName("tls_trust")]        string? TlsTrust = null
 );
 
 /// <summary>Payload for revoking a node from the whitelist.</summary>
@@ -297,8 +301,13 @@ public record WhitelistUpdatePayload(
     // demoting every peer it renames. Only an explicit true/false changes anything.
     [property: JsonPropertyName("is_superadmin")] bool? IsSuperadmin = null,
     // Null = unchanged, same rule as above: a blind node's new certificate after its volume was
-    // recreated, or a pin set on a row that was added without one.
-    [property: JsonPropertyName("tls_spki")]      string? TlsSpki = null
+    // recreated, or a pin set on a row that was added without one. "" = remove the pin: sent when the
+    // mode below stops pinning, so an older node — which knows nothing of the mode and applies a
+    // present tls_spki as "set" — stores an empty value its pin registry skips.
+    [property: JsonPropertyName("tls_spki")]      string? TlsSpki = null,
+    // Null = unchanged. "pin" / "public-ca" set the mode (public-ca also clears the pin); "none" takes
+    // the mode and the pin away (BlindTrust, ADR 0007). A value this build does not know changes nothing.
+    [property: JsonPropertyName("tls_trust")]     string? TlsTrust = null
 );
 
 /// <summary>Payload for comment creation (supports both plaintext and encrypted).</summary>

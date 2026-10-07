@@ -90,6 +90,14 @@ public static class BlindEndpoints
             // which is what its own restore and key handling expect.
             if (!BlindNodeId.IsBlind(peer)) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
+            // A hub answers the internet (ADR 0007): one peer's token cannot pull the package in a loop. After the
+            // token and the blind mark are checked, so a caller without either learns nothing about the limit.
+            if (!packages.TryAdmit(peer))
+            {
+                ctx.Response.Headers.RetryAfter = ((int)BlindReplicaPackageCache.AdmissionWindow.TotalSeconds).ToString();
+                return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+            }
+
             // The producer's row in the package is what makes it a reseed authority on the receiving
             // blind node, so it says superadmin only where the network verifiably does: a blind node
             // never is, and a full node asks its full peers (review L-merge #2). The cache asks only

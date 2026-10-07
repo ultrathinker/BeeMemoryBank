@@ -185,7 +185,9 @@ row is moved, readers open it with the current or a retired Master DEK.
 empty table — a joiner creates its own key), wiped by a node reset. The unwrapped chat key is cached
 in memory while unlocked and wiped on `SessionService.Locked`.
 
-**Restores.** A local snapshot restore brings back the key row as it was when the snapshot was
+**Restores.** A local snapshot restore (the "this node only" kind, which also gives the node a new node id and
+Ed25519 key pair — the new identity key is wrapped under the restored database's master DEK, see
+[snapshot-restore.md](snapshot-restore.md)) brings back the key row as it was when the snapshot was
 taken — the same key if the snapshot post-dates its creation. Restoring a snapshot from before the
 key existed (or a database whose key row is damaged) makes the Api create a fresh key on next use;
 chat rows sealed under the previous key then read as `[unable to decrypt …]` placeholders (blank
@@ -252,7 +254,7 @@ After unification:
 
 - Each active user with login access owns one `tbl_key_slot` row of type `user`.
 - `KeyManagementService.ChangePasswordAsync` rotates a user's slot in place: derives a new KEK from the new password, wraps the existing Master DEK with it, swaps the slot's `encrypted_master_dek`/`iv`/`salt`. The Master DEK itself is unchanged. Other users' slots are untouched.
-- Recovery keys live as separate `slot_type='recovery'` rows. They're issued via the Admin UI; the user receives the key once and stores it offline. A recovery slot can be used like a password slot to unlock the vault, then the admin should rotate the master password and re-issue the recovery key.
+- Recovery keys live as separate `slot_type='recovery'` rows. They're issued via the Admin UI; the user receives the key once and stores it offline. A recovery slot can be used like a password slot to unlock the vault (the `bmb` command line), and — without signing in — to set a new password for a superadmin: the Sign In page's **Forgot your password? Use a recovery key** (`/RecoverAccess`) and `bmb user reset-password`. Both open only `recovery` slots, never touch the shared session, and re-wrap the master key under the new password in that user's own slot; other users' slots and every recovery key stay as they were. See [account-recovery.md](account-recovery.md).
 
 `AddPasswordSlotAsync` is whitelisted to `["user", "recovery"]` slot types only — it cannot create the legacy `password` type.
 

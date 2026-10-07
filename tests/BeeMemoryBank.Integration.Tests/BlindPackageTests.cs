@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync.Blind;
@@ -100,4 +101,33 @@ public class BlindPackageTests : IAsyncLifetime
         raw.AsSpan().IndexOf(sentinel).Should().Be(-1, "the projection must not survive in any page of the packaged database");
         sidecars.Should().BeEmpty("the package is one self-contained database file");
     }
+
+    /// <summary>
+    /// A blind copy takes the key a manifest names only for a row in pin mode (ADR 0007, review INT-03): a pin left beside the normal
+    /// certificate, or beside a mode this build does not know, is not handed on to the copy.
+    /// </summary>
+    [Fact]
+    public async Task Package_CarriesAPin_OnlyForARowInPinMode()
+    {
+        const string pin = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        var rows = new[] { (Id: Guid.NewGuid(), Trust: BlindTrust.Pin), (Id: Guid.NewGuid(), Trust: BlindTrust.PublicCa), (Id: Guid.NewGuid(), Trust: "future-mode") };
+        using var scope = _full.Services.CreateScope();
+        var whitelist = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
+        foreach (var (id, trust) in rows)
+            await whitelist.CreateAsync(new WhitelistEntry
+            {
+                NodeId = id, DisplayName = trust, Ed25519PublicKey = new byte[32], ApiAddress = $"https://{id:N}.example.org",
+                TlsSpki = pin, TlsTrust = trust, Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+
+        var package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+            .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: true);
+        await _full.Services.GetRequiredService<SnapshotService>().ExtractVerifiedAsync(package.FilePath, _extractDir);
+        var manifest = BlindManifest.Parse(await File.ReadAllBytesAsync(Path.Combine(_extractDir, BlindManifest.FileName)));
+
+        manifest.Whitelist.Where(p => p.NodeId == rows[0].Id).Select(p => (p.TlsTrust, p.TlsSpki)).Should().Equal((BlindTrust.Pin, pin));
+        manifest.Whitelist.Where(p => p.NodeId == rows[1].Id).Select(p => (p.TlsTrust, p.TlsSpki)).Should().Equal((BlindTrust.PublicCa, (string?)null));
+        manifest.Whitelist.Where(p => p.NodeId == rows[2].Id).Select(p => (p.TlsTrust, p.TlsSpki)).Should().Equal(("future-mode", (string?)null));
+    }
 }
+

@@ -87,9 +87,11 @@ public sealed class BlindNodeManager(
         {
             // Paired again (a recreated volume keeps the key, a renewed address or certificate
             // does not): update the row everyone dials instead of adding a second one.
-            var version = await eventLogger.LogWhitelistUpdateAsync(code.NodeId, code.Address, displayName: null, tlsSpki: code.TlsSpki);
+            var version = await eventLogger.LogWhitelistUpdateAsync(code.NodeId, code.Address, displayName: null,
+                tlsSpki: code.TlsSpki, tlsTrust: BlindTrust.Pin);
             entry.ApiAddress = code.Address;
             entry.TlsSpki = code.TlsSpki;
+            entry.TlsTrust = BlindTrust.Pin;
             entry.UpdatedAt = DateTime.UtcNow;
             entry.LamportTs = version.LamportTs;
             entry.SourceNodeId = version.SourceNodeId;
@@ -105,6 +107,7 @@ public sealed class BlindNodeManager(
                 Ed25519PublicKey = Convert.FromBase64String(code.PublicKeyB64),
                 ApiAddress = code.Address,
                 TlsSpki = code.TlsSpki,
+                TlsTrust = BlindTrust.Pin,
                 Status = "A",
                 // A blind node never authors anything, so the flag would never be read — and
                 // "superadmin" on a node that holds no key would only confuse the Nodes page.

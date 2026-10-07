@@ -77,6 +77,7 @@ public class BlindPhonePairingTests : IAsyncLifetime
         seal.ProducerNodeId.Should().Be(_listener, "a restore takes the package's producer from here, not from the file");
         seal.ProducerPublicKey.Should().Equal(_listenerKey);
         (seal.ProducerAddress, seal.ProducerTlsSpki).Should().Be((ListenerAddress, _listenerPin));
+        seal.ProducerTrust.Should().Be(BlindTrust.Pin, "a pinned listener is the record every pairing has been");
         var me = (await _api.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
         seal.PairedBy.Should().Be(me.NodeId, "the pairing node signs the binding a restore will check");
         Ed25519Signer.Verify(me.Ed25519PublicKey, seal.PairingStatement(phone.NodeId), seal.PairingSignature).Should().BeTrue();
@@ -137,6 +138,68 @@ public class BlindPhonePairingTests : IAsyncLifetime
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await RowAsync(phone.NodeId)).Should().BeNull();
         (await EventCountAsync()).Should().Be(before, "neither the row nor the seal may be published");
+        (await ListenersAsync()).Should().NotContain(hub);
+    }
+
+    /// <summary>
+    /// A hub with a real certificate (ADR 0007): the row says <c>public-ca</c>, with no pin. It is listed with its mode, and the phone
+    /// is told to trust it by the system's chain — the call code carries that, and so does the sealed record the pairing superadmin signs.
+    /// </summary>
+    [Fact]
+    public async Task AHubOnAPublicCa_IsListedWithItsMode_AndThePhoneIsToldToTrustTheNormalCertificate()
+    {
+        var hub = Guid.NewGuid();
+        var hubKey = Ed25519Signer.GenerateKeyPair().publicKey;
+        await AddRowAsync(hub, "https://bmb.example.org", tlsSpki: null, hubKey, trust: BlindTrust.PublicCa);
+        var phone = PhoneCode();
+
+        var listed = (await _client.GetFromJsonAsync<JsonElement>("/api/blind-nodes/android/listeners")).EnumerateArray().ToList();
+        listed.Should().Contain(l => l.GetProperty("nodeId").GetGuid() == hub);
+        listed.Single(l => l.GetProperty("nodeId").GetGuid() == hub).GetProperty("trust").GetString().Should().Be("public-ca");
+        listed.Single(l => l.GetProperty("nodeId").GetGuid() == _listener).GetProperty("trust").GetString().Should().Be("pin");
+
+        var resp = await _client.PostAsJsonAsync("/api/blind-nodes/android/", new { code = phone.ToString(), listenerId = hub });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var paired = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        BlindCallCode.TryParse(paired.GetProperty("callCode").GetString(), out var call).Should().BeTrue();
+        call!.Trust.Should().Be(BlindTrust.PublicCa);
+        call.SpkiPin.Should().BeEmpty();
+        (call.Address, call.NodeId).Should().Be(("https://bmb.example.org", hub));
+        call.PublicKey.Should().Equal(hubKey);
+        call.IsAuthenticBy(phone.Secret).Should().BeTrue();
+
+        var sealedSet = (await EventsAsync(EventTypes.SealedSecretSet)).Single(e => e.GetProperty("name").GetString() == $"android-backup:{phone.NodeId}");
+        var dek = _api.Services.GetRequiredService<SessionService>().GetMasterDek();
+        var opened = SealedSecretCrypto.TryOpen(sealedSet.GetProperty("name").GetString()!,
+            Convert.FromBase64String(sealedSet.GetProperty("wrapped").GetString()!),
+            Convert.FromBase64String(sealedSet.GetProperty("iv").GetString()!), dek);
+        BlindPhoneBackupSeal.TryDecode(opened, out var seal).Should().BeTrue();
+        (seal!.ProducerTrust, seal.ProducerTlsSpki, seal.ProducerNodeId).Should().Be((BlindTrust.PublicCa, "", hub));
+        var me = (await _api.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+        Ed25519Signer.Verify(me.Ed25519PublicKey, seal.PairingStatement(phone.NodeId), seal.PairingSignature).Should().BeTrue(
+            "the superadmin that paired the phone signs the mode too, so a restore knows how to dial the producer");
+    }
+
+    /// <summary>A row that says <c>public-ca</c> but would not give a call code a phone accepts is neither listed nor paired to.</summary>
+    [Theory]
+    [InlineData("http://hub.test:5300", null, "public-ca")]    // plain http
+    [InlineData("https://hub.test:5300/sync", null, "public-ca")] // not an origin
+    [InlineData("https://hub.test:5300", "pin", "public-ca")]  // two statements about one node
+    [InlineData("https://hub.test:5300", null, "future-mode")] // a mode this build does not know
+    [InlineData("https://hub.test:5300", "pin", "future-mode")]
+    public async Task AHubWithAnInconsistentTrust_IsRefused_AndNothingIsWritten(string address, string? pin, string trust)
+    {
+        var hub = Guid.NewGuid();
+        await AddRowAsync(hub, address, pin == "pin" ? _listenerPin : pin, Ed25519Signer.GenerateKeyPair().publicKey, trust: trust);
+        var phone = PhoneCode();
+        var before = await EventCountAsync();
+
+        var resp = await _client.PostAsJsonAsync("/api/blind-nodes/android/", new { code = phone.ToString(), listenerId = hub });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await RowAsync(phone.NodeId)).Should().BeNull();
+        (await EventCountAsync()).Should().Be(before);
         (await ListenersAsync()).Should().NotContain(hub);
     }
 
@@ -218,13 +281,13 @@ public class BlindPhonePairingTests : IAsyncLifetime
     private static BlindPhoneCode PhoneCode() => new(BlindNodeId.NewId(), Ed25519Signer.GenerateKeyPair().publicKey,
         BlindPairingSecret.New(), RandomNumberGenerator.GetBytes(32), "Pixel");
 
-    private async Task AddRowAsync(Guid nodeId, string? apiAddress, string? tlsSpki, byte[] publicKey)
+    private async Task AddRowAsync(Guid nodeId, string? apiAddress, string? tlsSpki, byte[] publicKey, string? trust = null)
     {
         using var scope = _api.Services.CreateScope();
         await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
         {
             NodeId = nodeId, DisplayName = nodeId.ToString("N")[..6], Ed25519PublicKey = publicKey,
-            ApiAddress = apiAddress, TlsSpki = tlsSpki, Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            ApiAddress = apiAddress, TlsSpki = tlsSpki, TlsTrust = trust, Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
         });
     }
 

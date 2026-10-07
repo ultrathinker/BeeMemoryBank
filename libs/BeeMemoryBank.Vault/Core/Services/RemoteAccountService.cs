@@ -40,7 +40,7 @@ public class RemoteAccountService(
         using var resp = await PostJsonAsync($"{baseUrl}/api/auth/remote-token",
             new { username, password, label });
         if (!resp.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Remote login failed (HTTP {(int)resp.StatusCode})");
+            throw new InvalidOperationException(await RemoteAccountErrors.DescribeAsync(resp, RemoteRoute.RemoteToken));
 
         var body = await ReadJsonAsync<TokenIssueResponse>(resp)
             ?? throw new InvalidOperationException("Remote token endpoint returned an empty body.");
@@ -72,7 +72,7 @@ public class RemoteAccountService(
         using var resp = await PostJsonAsync($"{account.BaseUrl}/api/auth/remote-token",
             new { username, password });
         if (!resp.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Remote login failed (HTTP {(int)resp.StatusCode})");
+            throw new InvalidOperationException(await RemoteAccountErrors.DescribeAsync(resp, RemoteRoute.RemoteToken));
 
         var body = await ReadJsonAsync<TokenIssueResponse>(resp)
             ?? throw new InvalidOperationException("Remote token endpoint returned an empty body.");
@@ -165,9 +165,9 @@ public class RemoteAccountService(
         var token = DecryptToken(account);
         using var req = new HttpRequestMessage(HttpMethod.Get, $"{account.BaseUrl}/api/folders/accessible");
         req.Headers.Add("Authorization", $"Bearer {token}");
-        using var resp = await httpClient.SendAsync(req);
+        using var resp = await SendAsync(req);
         if (!resp.IsSuccessStatusCode)
-            throw new InvalidOperationException($"List accessible folders failed (HTTP {(int)resp.StatusCode})");
+            throw new InvalidOperationException(await RemoteAccountErrors.DescribeAsync(resp, RemoteRoute.AccessibleFolders));
 
         var doc = await ReadJsonAsync<AccessibleFoldersResponse>(resp);
         return doc?.Folders ?? [];
@@ -276,33 +276,32 @@ public class RemoteAccountService(
     // is only accepted for localhost so dev/test setups still work; everything
     // else must be https to keep the bearer token and snapshot bodies (which
     // contain decrypted article content) off the wire in plaintext.
-    // Mitigates SSRF + plaintext-traffic risk.
+    // Mitigates SSRF + plaintext-traffic risk. The messages (RemoteAccountErrors) say what to type instead,
+    // and deliberately do not echo the address back.
     //
     // Additionally blocks private and link-local IP literals (10/8, 172.16/12,
     // 192.168/16, 169.254/16, etc.) to prevent the friend node's background
     // scheduler from being used as a probe / metadata-endpoint attacker once
     // an account is configured. Loopback stays allowed.
-    private static void ValidateBaseUrl(string baseUrl)
+    public static void ValidateBaseUrl(string baseUrl)
     {
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
-            throw new InvalidOperationException("Remote base URL must be an absolute http(s) URL.");
+            throw new InvalidOperationException(RemoteAccountErrors.InvalidAddress);
         if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            throw new InvalidOperationException($"Remote base URL scheme '{uri.Scheme}' not allowed; use http(s).");
+            throw new InvalidOperationException(RemoteAccountErrors.InvalidAddress);
 
         var host = uri.Host;
         var isLoopback = host is "localhost" or "127.0.0.1" or "::1";
 
         if (uri.Scheme == Uri.UriSchemeHttp && !isLoopback)
-            throw new InvalidOperationException(
-                "Plain http:// is only allowed for localhost. Use https:// for any remote host.");
+            throw new InvalidOperationException(RemoteAccountErrors.UseHttpsName);
 
         // Block private + link-local IP literals (DNS names are not blocked —
         // we cannot resolve from a service-layer call without re-introducing
         // an SSRF surface of its own; relying on TLS + admin-only RemoteAccount
         // creation as the next line of defence).
         if (!isLoopback && System.Net.IPAddress.TryParse(host, out var ip) && IsBlockedAddress(ip))
-            throw new InvalidOperationException(
-                $"Remote base URL host '{host}' is in a private / link-local / multicast range — refused.");
+            throw new InvalidOperationException(RemoteAccountErrors.PrivateAddress);
     }
 
     private static bool IsBlockedAddress(System.Net.IPAddress ip)
@@ -347,7 +346,21 @@ public class RemoteAccountService(
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
-        return await httpClient.SendAsync(req);
+        return await SendAsync(req);
+    }
+
+    // The other node not answering at all (name does not resolve, refused, TLS refused, timeout) is an
+    // answer the person can act on, not a server error of this node; the exception text is not passed on.
+    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req)
+    {
+        try
+        {
+            return await httpClient.SendAsync(req);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            throw new InvalidOperationException(RemoteAccountErrors.Unreachable);
+        }
     }
 
     private static async Task<T?> ReadJsonAsync<T>(HttpResponseMessage resp)

@@ -92,7 +92,13 @@ public record WhitelistEntryDto(
     DateTime UpdatedAt,
     bool AutoAcceptRestore = false,
     bool AutoAcceptDekRotation = false,
-    bool IsSuperadmin = false);
+    bool IsSuperadmin = false,
+    // How blind copies trust this node's TLS endpoint: "pin", "public-ca" or null (not callable by blind copies); ADR 0007.
+    string? TlsTrust = null,
+    string? TlsSpki = null);
+
+/// <summary>The answer to "Let blind copies call this node": the notice to show (the trade-off of the mode chosen) and the pin recorded.</summary>
+public record HubSetDto(WhitelistEntryDto? Entry, string? Pin, bool PubliclyTrusted, string? Notice);
 
 /// <summary>Whether another node changed the master password while this one kept the old slot.</summary>
 public record MasterPasswordNoticeDto(bool IsStale, DateTime? ChangedAt, string? ChangedByNode);
@@ -133,6 +139,12 @@ public record LoginResult(
     string? UserId,
     string? MigratedSyntheticUsername,
     string? SecurityStamp);
+
+/// <summary>How the node answered the forgot-password request. <see cref="Refused"/> covers every "no" alike.</summary>
+public enum RecoverAccessOutcome { Changed, Refused, TooManyAttempts, Invalid, Unavailable }
+
+/// <param name="Message">What to show for <see cref="RecoverAccessOutcome.Invalid"/> (a password-rule message from the node); null otherwise.</param>
+public record RecoverAccessResult(RecoverAccessOutcome Outcome, string? Message = null);
 
 public record LoginResponse(int UserId, string Username, string DisplayName, string Role, bool IsUnlocked, string? MigratedSyntheticUsername = null, string? SecurityStamp = null);
 

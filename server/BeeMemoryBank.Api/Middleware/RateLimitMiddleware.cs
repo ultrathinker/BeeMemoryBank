@@ -16,6 +16,9 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
     {
         "/api/session/unlock",
         "/api/session/login",
+        // The forgot-password flow: every attempt is an Argon2id derivation per recovery slot. The
+        // handler also keeps its own per-username and per-IP budget (RecoveryAccessState).
+        "/api/session/recover-access",
         "/api/join",
         // Cross-instance token issuance — same brute-force risk as
         // /login but bypasses InternalKeyValidator entirely.

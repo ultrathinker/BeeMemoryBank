@@ -251,19 +251,58 @@ else
 }
 
 <!-- Restore Snapshot Dialog -->
-<sl-dialog id="dlg-restore-snapshot" label="Restore Snapshot">
-    <sl-alert variant="danger" open style="margin-bottom:16px;">
-        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-        <strong>Warning:</strong> This will replace ALL data with the snapshot. Current data will be lost.
-        The server will be temporarily unavailable during restore.
-    </sl-alert>
+@{
+    var activePeers = (Model.Whitelist ?? new()).Count(w => w.Status == "A");
+    var autoRestorePeers = (Model.Whitelist ?? new()).Count(w => w.Status == "A" && w.AutoAcceptRestore);
+}
+<sl-dialog id="dlg-restore-snapshot" label="Restore Snapshot" style="--width: 640px;">
     <input type="hidden" name="fileName" id="restore-file-name" />
+    <p style="margin-top:0;">Snapshot: <code id="restore-snapshot-name-display"></code></p>
+    <p class="text-muted text-sm">A snapshot can be restored here only when it was made by this vault: this node, or another node in the same network that shares its master key. A snapshot from a different vault cannot be opened here, whichever password is entered.</p>
+
+    <sl-radio-group id="restore-mode" name="restoreMode" label="What should be restored?" value="standalone" style="margin-bottom:16px;">
+        <sl-radio value="standalone">Restore this node only <span class="text-muted">(it leaves the network and becomes a new node)</span></sl-radio>
+        <sl-radio value="network">Restore the whole network from this snapshot</sl-radio>
+    </sl-radio-group>
+
+    <div id="restore-mode-standalone">
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>This node becomes a new node.</strong> Everything on this node is replaced with the snapshot, and:
+            <ul style="margin:8px 0 0 20px;">
+                <li>It gets a <strong>new identity</strong>: a new node id and a new signing key (the name stays).</li>
+                <li>It <strong>forgets</strong> the nodes it trusted (@activePeers now), its <strong>blind copies</strong> (on a PC, a Mac or a phone) and its <strong>sync history</strong>.</li>
+                <li>Your other devices still know the old node: <strong>join them to this node again</strong>.</li>
+                <li><strong>Pair the blind copies again.</strong></li>
+                <li>The server is unavailable while it restores, and you sign in again afterwards.</li>
+            </ul>
+        </sl-alert>
+    </div>
+
+    <div id="restore-mode-network" hidden>
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Every node of the network is asked to restore this snapshot.</strong>
+            <ul style="margin:8px 0 0 20px;">
+                <li>This node keeps its identity, its users and the nodes it trusts; its articles, folders, tags and media are replaced with the snapshot's.</li>
+                <li>Each other node applies it when it next syncs, and <strong>only if</strong> it trusts this node as a superadmin and has <em>Auto-restore</em> switched on for this node (Admin &rarr; Nodes). Today @autoRestorePeers of @activePeers trusted node(s) have it on. A node without it does not apply the restore.</li>
+                <li>Keep this node running and reachable: the others download the snapshot from it (the offer is open for 30 days).</li>
+                <li>Blind copies are reseeded.</li>
+                <li>A safety backup of this node is always taken first.</li>
+            </ul>
+            <div style="margin-top:8px;">Only a superadmin can start it, and the vault must be unlocked.</div>
+        </sl-alert>
+    </div>
+
     <div style="margin-bottom:16px;">
         <sl-input name="masterPassword" id="restore-master-password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
     </div>
-    <div style="margin-bottom:16px;">
+    <div id="restore-backup-row" style="margin-bottom:8px;">
         <sl-checkbox name="createBackupFirst" id="restore-backup-checkbox" checked>Create backup before restore</sl-checkbox>
     </div>
+    <p class="text-muted text-sm" style="margin:0;">
+        <a href="https://github.com/ultrathinker/BeeMemoryBank/blob/main/docs/snapshot-restore.md" target="_blank" rel="noopener noreferrer">What a restore does</a>
+    </p>
     <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-restore-snapshot">Cancel</sl-button>
     <sl-button type="button" slot="footer" variant="danger" id="btn-restore-confirm">
         <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Restore

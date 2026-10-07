@@ -28,4 +28,14 @@ public interface ISnapshotKeyOperations
     /// was made from); does nothing when it is locked.
     /// </summary>
     Task ReEncryptDatabaseIfUnlockedAsync(string dbPath);
+
+    /// <summary>
+    /// Seals <paramref name="seed"/>, the Ed25519 seed of the identity a standalone restore is about to give the node, for storage in
+    /// the staged (already decrypted) database <paramref name="stagedDbPath"/> under <paramref name="newNodeId"/>. Returns what to write
+    /// into <c>tbl_node_identity</c>: the wrapped seed, its IV and the key version — the same shape initialization writes. Throws
+    /// <see cref="InvalidOperationException"/>, before anything is replaced, when no master key that opens the staged database can be found.
+    /// </summary>
+    /// <param name="masterPassword">The password the restore was confirmed with; opens the staged key slots when the session's own key does not match them.</param>
+    (byte[] Wrapped, byte[] Iv, int Version) SealIdentitySeedForRestore(
+        string stagedDbPath, Guid newNodeId, byte[] seed, string? masterPassword);
 }

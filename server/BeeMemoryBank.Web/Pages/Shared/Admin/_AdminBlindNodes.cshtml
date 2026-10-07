@@ -18,6 +18,35 @@
     </p>
 </div>
 
+<h3 style="margin-bottom:12px;"><sl-icon name="broadcast-pin"></sl-icon> Hubs for blind copies</h3>
+<div class="card" style="margin-bottom:24px;max-width:720px;" id="hubs">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        A blind copy (Windows, macOS, Android) calls a node; a full node you set up for it is a hub. Set one up under Admin,
+        Trusted Nodes, "Let blind copies call this node". A hub with a normal certificate is trusted by the system's list of
+        authorities; one with a pinned certificate only by its own key.
+    </p>
+    @if (Model.Hubs == null)
+    {
+        <p class="text-muted">Could not load the hubs. Check the API connection.</p>
+    }
+    else if (Model.Hubs.Count == 0)
+    {
+        <p class="text-muted" style="margin:0;">No hubs yet. <a href="/Admin">Set one up in Admin</a>.</p>
+    }
+    else
+    {
+        @foreach (var hub in Model.Hubs)
+        {
+            <div class="article-meta" style="margin-bottom:6px;">
+                <span><strong>@hub.DisplayName</strong></span>
+                <span>@hub.Address</span>
+                <sl-badge variant="primary" pill>@hub.TrustLabel</sl-badge>
+            </div>
+        }
+        <p class="text-sm" style="margin:8px 0 0;">Change or turn off a hub in <a href="/Admin">Admin</a>. A lost blind copy is revoked there too.</p>
+    }
+</div>
+
 <h3 style="margin-bottom:12px;"><sl-icon name="hdd-network"></sl-icon> Connected blind nodes</h3>
 @if (Model.Nodes == null)
 {

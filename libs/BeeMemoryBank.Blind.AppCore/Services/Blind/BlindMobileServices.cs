@@ -102,7 +102,9 @@ public static class BlindMobileServices
         services.AddSingleton(sp => new BlindHttpClientProvider(
             sp.GetRequiredService<BlindPhoneState>(),
             host => BlindRunReport.Record(sp.GetRequiredService<BlindPhoneLog>(), "pin",
-                $"Refused {host}: it answered with another key than the one pinned when this phone was paired. Nothing was sent.")));
+                $"Refused {host}: it answered with another key than the one pinned when this phone was paired. Nothing was sent."),
+            host => BlindRunReport.Record(sp.GetRequiredService<BlindPhoneLog>(), "certificate",
+                $"Refused {host}: its certificate is not valid (expired, issued for another name, self-signed or from an authority this device does not trust). Nothing was sent.")));
         services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
         services.AddTransient<HttpClient>(sp => sp.GetRequiredService<BlindHttpClientProvider>().GetClient());
 

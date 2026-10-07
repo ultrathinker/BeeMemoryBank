@@ -1,17 +1,23 @@
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Crypto;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Sync.Blind;
 
 /// <summary>
-/// Which sync peers must present a pinned TLS key (plan 4.4): every active whitelist row with a
-/// <c>tls_spki</c>, keyed by the host and port of its api_address. Consulted by the certificate
+/// Which sync peers must present a pinned TLS key (plan 4.4): every active whitelist row in <c>pin</c> mode
+/// (<see cref="BlindTrust.PinOf"/>: a pin that a <c>public-ca</c> or unknown mode left behind does not count), keyed by the host and port of its api_address. Consulted by the certificate
 /// check of every outbound sync client, so the phone pins the blind node exactly as the PC that
 /// paired it does.
+///
+/// <para>A peer without a pin — a hub on a public CA (ADR 0007), or any ordinary full node — is checked the
+/// ordinary way, through <see cref="PublicCaTls"/>: the platform's chain, name included. <paramref name="anchors"/>
+/// is for tests (a test CA's root as an extra anchor); a shipped build passes none.</para>
 /// </summary>
-public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory)
+public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustAnchors? anchors = null)
 {
     // Re-read at most this often. A new pin arrives with a whitelist event and is needed on the
     // next cycle, not the next second; a stale cache only ever delays trusting a new key.
@@ -49,11 +55,11 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory)
     /// the name mean nothing — and refused on any other key, whatever a CA says about it. Every
     /// other host gets the ordinary validation.
     /// </summary>
-    public bool Validate(HttpRequestMessage request, X509Certificate2? certificate, SslPolicyErrors errors)
+    public bool Validate(HttpRequestMessage request, X509Certificate2? certificate, SslPolicyErrors errors, X509Chain? chain = null)
     {
         var pin = request.Options.TryGetValue(ExplicitPin, out var explicitPin) ? explicitPin
             : request.RequestUri is { } uri ? PinFor(uri) : null;
-        if (pin is null) return errors == SslPolicyErrors.None;
+        if (pin is null) return PublicCaTls.IsValid(certificate, chain, errors, anchors);
         return certificate is not null && Spki.Equal(Spki.Of(certificate), pin);
     }
 
@@ -66,8 +72,8 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory)
         // A redirect would take the request to a host the pin never covered — an unpinned host
         // with any CA-valid certificate passes the ordinary check (review L-stage1 #5).
         AllowAutoRedirect = false,
-        ServerCertificateCustomValidationCallback = (request, certificate, _, errors) =>
-            Validate(request, certificate, errors)
+        ServerCertificateCustomValidationCallback = (request, certificate, chain, errors) =>
+            Validate(request, certificate, errors, chain)
     });
 
     /// <summary>True if this request goes to a pinned peer (by the request's own pin or the whitelist).</summary>
@@ -82,9 +88,10 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory)
         var pins = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var row in rows)
         {
-            if (string.IsNullOrEmpty(row.TlsSpki) || string.IsNullOrEmpty(row.ApiAddress)) continue;
+            var pin = BlindTrust.PinOf(row.TlsTrust, row.TlsSpki);
+            if (pin is null || string.IsNullOrEmpty(row.ApiAddress)) continue;
             if (Uri.TryCreate(row.ApiAddress, UriKind.Absolute, out var address))
-                pins[Key(address)] = row.TlsSpki;
+                pins[Key(address)] = pin;
         }
         _pins = pins;
         _loadedAt = DateTime.UtcNow;
